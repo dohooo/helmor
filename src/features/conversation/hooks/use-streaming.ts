@@ -15,6 +15,7 @@ import {
 } from "@/features/conversation/pending-user-input";
 import { stabilizeStreamingMessages } from "@/features/conversation/streaming-tail-collapse";
 import type {
+	ActiveStreamSummary,
 	AgentModelOption,
 	CodexGoalState,
 	ThreadMessageLike,
@@ -33,7 +34,6 @@ import {
 import type { ComposerCustomTag } from "@/lib/composer-insert";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
-	activeStreamsQueryOptions,
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 	sessionThreadMessagesQueryOptions,
@@ -140,6 +140,10 @@ type UseConversationStreamingArgs = {
 	/** App-level queue handle (read + mutate). Shared across session /
 	 *  workspace switches so the queue survives navigation. */
 	submitQueue: SubmitQueueApi;
+	/** Backend-truth active-streams snapshot, owned by App. Drives
+	 *  follow-up routing and the queue-drain trigger; survives this
+	 *  hook's unmount/remount. */
+	activeStreams: readonly ActiveStreamSummary[];
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
@@ -157,6 +161,7 @@ export function useConversationStreaming({
 	selectionPending,
 	followUpBehavior,
 	submitQueue,
+	activeStreams,
 	onInteractionSessionsChange,
 	onSessionCompleted,
 	onSessionAborted,
@@ -252,13 +257,16 @@ export function useConversationStreaming({
 	);
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
-	// Backend-truth list of in-flight streams. Used by `handleStopStream`
-	// so abort works even after the conversation container unmount/remount
-	// race that would clear `activeSessionByContext`. Stays in sync via
-	// `UiMutationEvent::ActiveStreamsChanged` → `helmorQueryKeys.activeStreams`
-	// invalidation in the ui-sync bridge.
-	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
-	const activeStreams = activeStreamsQuery.data ?? [];
+	// Value-stable fingerprint for effects that only care about the set
+	// of active session ids, not the array's reference.
+	const activeSessionIdsKey = useMemo(
+		() =>
+			activeStreams
+				.map((stream) => stream.sessionId)
+				.sort()
+				.join("\n"),
+		[activeStreams],
+	);
 	const selectedProvider = useMemo(() => {
 		if (!displayedSelectedModelId) return null;
 		const sections = modelSectionsQuery.data ?? [];
@@ -779,20 +787,24 @@ export function useConversationStreaming({
 
 			const contextKey = targetContextKey;
 
-			// Follow-up branch: if a stream is already running for this
-			// context, either inject mid-turn (`steer`) or stash locally
-			// to fire as a fresh turn when the agent finishes (`queue`).
-			// The choice is user-controlled via the Follow-up behavior
-			// setting. Plan-review takes precedence over both: submitting
-			// a free-form message while a plan is pending means "abandon
-			// the plan and start fresh," so fall through to normal send.
-			const liveStream = activeSessionByContext[contextKey];
+			// Follow-up branch: stream still alive → steer or queue.
+			// `activeStreams` is the source of truth (survives remount);
+			// `activeSessionByContext` is the optimistic fast-path for the
+			// in-flight register window. Plan-review = abandon plan.
+			const localLiveStream = activeSessionByContext[contextKey];
+			const backendLiveStream = activeStreams.find(
+				(stream) => stream.sessionId === targetSessionId,
+			);
+			const liveStream =
+				localLiveStream ??
+				(backendLiveStream
+					? {
+							stopSessionId: targetSessionId,
+							provider: backendLiveStream.provider,
+						}
+					: null);
 			const hasPlanReviewForContext = planReviewByContext[contextKey] ?? false;
-			if (
-				sendingContextKeys.has(contextKey) &&
-				liveStream &&
-				!hasPlanReviewForContext
-			) {
+			if (liveStream && !hasPlanReviewForContext) {
 				// `forceQueue` is a caller-supplied override that pins
 				// the routing to the queue regardless of the user's
 				// `followUpBehavior` setting — used for host-triggered
@@ -1285,41 +1297,43 @@ export function useConversationStreaming({
 			refreshSessionThreadFromDb,
 			setFastPreludeActive,
 			activeSessionByContext,
-			sendingContextKeys,
+			activeStreams,
 			planReviewByContext,
 			followUpBehavior,
 			submitQueue,
 		],
 	);
 
-	// Queue drain — pops the first queued entry for any session whose
-	// stream just terminated and replays it through `handleComposerSubmit`
-	// using the queued item's stored context (not the currently displayed
-	// one). Ref indirection keeps the effect dep list to sending-state
-	// only; `queueMicrotask` defers the replay so it doesn't call
-	// `setSendingContextKeys` inside a React commit phase.
+	// Queue drain — replay queued entries when a session's backend
+	// stream ends. Keys on `activeStreams` (not `sendingContextKeys`,
+	// which `userInputRequest` also clears) so pause doesn't trip it.
+	// Replay on `setTimeout(0)` so the Done-callback setStates commit
+	// first; otherwise the replayed submit reads a stale
+	// `activeSessionByContext` and routes back into steer/queue.
 	const handleComposerSubmitRef = useRef(handleComposerSubmit);
 	handleComposerSubmitRef.current = handleComposerSubmit;
-	const previousSendingRef = useRef<Set<string>>(new Set());
+	const activeStreamsRef = useRef(activeStreams);
+	activeStreamsRef.current = activeStreams;
+	const previousActiveSessionIdsRef = useRef<Set<string>>(new Set());
 	useEffect(() => {
-		const previous = previousSendingRef.current;
-		const current = sendingContextKeys;
-		const justFinished: string[] = [];
-		for (const key of previous) {
-			if (!current.has(key)) justFinished.push(key);
+		const previous = previousActiveSessionIdsRef.current;
+		const current = new Set(
+			activeStreamsRef.current.map((stream) => stream.sessionId),
+		);
+		const justEnded: string[] = [];
+		for (const sid of previous) {
+			if (!current.has(sid)) justEnded.push(sid);
 		}
-		previousSendingRef.current = new Set(current);
+		previousActiveSessionIdsRef.current = current;
 
-		for (const key of justFinished) {
-			if (!key.startsWith("session:")) continue;
-			const sessionId = key.slice("session:".length);
+		for (const sessionId of justEnded) {
 			const next = submitQueue.popNext(sessionId);
 			if (!next) continue;
-			queueMicrotask(() => {
+			setTimeout(() => {
 				handleComposerSubmitRef.current(next.payload, next.context);
-			});
+			}, 0);
 		}
-	}, [sendingContextKeys, submitQueue]);
+	}, [activeSessionIdsKey, submitQueue]);
 
 	// Row actions: Steer now / Remove. Both key off the item's stored
 	// context (NOT the currently displayed session) so row clicks from

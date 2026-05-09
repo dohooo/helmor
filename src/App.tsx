@@ -83,6 +83,7 @@ import {
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
+	type ActiveStreamSummary,
 	createAndCheckoutBranch,
 	createSession,
 	drainPendingCliSends,
@@ -174,6 +175,7 @@ const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "start";
 const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
 const EMPTY_STRING_LIST: readonly string[] = [];
+const EMPTY_ACTIVE_STREAMS: ActiveStreamSummary[] = [];
 
 function App() {
 	const e2eScenario =
@@ -492,12 +494,15 @@ function AppShell({
 	// StartPage's optimistic "creating workspace" marker on top so the
 	// panel can show a busy spinner before the real stream registers.
 	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	// Stable empty fallback so referential-equality consumers don't churn
+	// on undefined-data ticks.
+	const activeStreams = activeStreamsQuery.data ?? EMPTY_ACTIVE_STREAMS;
 	const effectiveSessionRunStates = useMemo<
 		ReadonlyMap<string, SessionRunState>
 	>(
 		() =>
 			buildSessionRunStates(
-				activeStreamsQuery.data ?? [],
+				activeStreams,
 				pendingCreatedWorkspaceSubmit
 					? {
 							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
@@ -505,7 +510,7 @@ function AppShell({
 						}
 					: null,
 			),
-		[activeStreamsQuery.data, pendingCreatedWorkspaceSubmit],
+		[activeStreams, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -2952,6 +2957,7 @@ function AppShell({
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
+														activeStreams={activeStreams}
 														busySessionIds={effectiveBusySessionIds}
 														stoppableSessionIds={effectiveStoppableSessionIds}
 														interactionRequiredSessionIds={
@@ -3011,6 +3017,7 @@ function AppShell({
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}
+													activeStreams={activeStreams}
 													busySessionIds={effectiveBusySessionIds}
 													stoppableSessionIds={effectiveStoppableSessionIds}
 													interactionRequiredSessionIds={

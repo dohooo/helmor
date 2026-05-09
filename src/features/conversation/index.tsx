@@ -12,7 +12,7 @@ import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import type { ChangeRequestInfo } from "@/lib/api";
+import type { ActiveStreamSummary, ChangeRequestInfo } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
@@ -78,6 +78,10 @@ type WorkspaceConversationContainerProps = {
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
 	) => void;
+	/** Backend-truth active-streams snapshot from App's
+	 *  `activeStreamsQuery`. Survives this container's unmount/remount,
+	 *  so follow-up routing/drain stays correct across start ↔ chat. */
+	activeStreams: readonly ActiveStreamSummary[];
 	busySessionIds?: Set<string>;
 	stoppableSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
@@ -162,6 +166,7 @@ export const WorkspaceConversationContainer = memo(
 		onSelectSession,
 		onResolveDisplayedSession,
 		onInteractionSessionsChange,
+		activeStreams,
 		busySessionIds,
 		stoppableSessionIds,
 		interactionRequiredSessionIds,
@@ -250,6 +255,7 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
+			activeStreams,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
