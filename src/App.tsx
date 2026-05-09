@@ -95,6 +95,7 @@ import {
 	moveLocalWorkspaceToWorktree,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
+	prewarmSlashCommandsForRepo,
 	prewarmSlashCommandsForWorkspace,
 	type RepositoryCreateOption,
 	syncWorkspaceWithTargetBranch,
@@ -2318,6 +2319,16 @@ function AppShell({
 		repositories.find((repository) => repository.id === startRepositoryId) ??
 		repositories[0] ??
 		null;
+	// Prewarm slash-commands for the start-page repo so the next `/` press
+	// hits warm cache (cold path otherwise has no cwd → misses project-level
+	// `.claude/commands/`). Gated on start view to avoid scheduling while the
+	// user is in workspace mode; deps key on `id` so a repositories refresh
+	// that doesn't change the selected repo doesn't re-fire.
+	useEffect(() => {
+		if (workspaceViewMode !== "start") return;
+		if (!startRepository) return;
+		void prewarmSlashCommandsForRepo(startRepository.id);
+	}, [workspaceViewMode, startRepository?.id]);
 	const selectedWorkspaceRepository =
 		repositories.find(
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,

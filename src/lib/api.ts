@@ -1203,6 +1203,19 @@ export async function prewarmSlashCommandsForWorkspace(
 	}
 }
 
+/** Fire-and-forget: prewarm the slash-command cache for a repo (start page). */
+export async function prewarmSlashCommandsForRepo(
+	repoId: string,
+): Promise<void> {
+	try {
+		await invoke<void>("prewarm_slash_commands_for_repo", {
+			repoId,
+		});
+	} catch {
+		// Best-effort; cache will still be populated lazily on first /.
+	}
+}
+
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
