@@ -1,6 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ExternalLink, RefreshCcw, X } from "lucide-react";
+import {
+	ChevronDown,
+	RefreshCcw,
+	SquareArrowOutUpRight,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -154,8 +159,8 @@ export function CursorProviderPanel() {
 							aria-label="Get Cursor API key"
 							onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
 						>
-							<ExternalLink className="size-3.5" />
 							Get your API key
+							<SquareArrowOutUpRight className="size-3.5" />
 						</Button>
 					)}
 				</div>

@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, LoaderCircle } from "lucide-react";
+import { LoaderCircle, SquareArrowOutUpRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -129,8 +129,8 @@ export function CursorApiKeyAction({
 					aria-label="Get Cursor API key"
 					onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
 				>
-					<ExternalLink className="size-3.5" />
 					Get your API key
+					<SquareArrowOutUpRight className="size-3.5" />
 				</Button>
 			) : null}
 		</div>
