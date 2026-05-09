@@ -12,6 +12,48 @@ export const MIN_SIDEBAR_WIDTH = 220;
 export const MAX_SIDEBAR_WIDTH = 520;
 export const SIDEBAR_RESIZE_STEP = 16;
 export const SIDEBAR_RESIZE_HIT_AREA = 20;
+export const MIN_CANVAS_WIDTH = 420;
+
+export function fitPanelsToWindow(
+	sidebarWidth: number,
+	inspectorWidth: number,
+	windowWidth: number,
+	{
+		sidebarCollapsed = false,
+		inspectorCollapsed = false,
+	}: { sidebarCollapsed?: boolean; inspectorCollapsed?: boolean } = {},
+) {
+	const sidebar = sidebarCollapsed ? 0 : sidebarWidth;
+	const inspector = inspectorCollapsed ? 0 : inspectorWidth;
+	const overflow = sidebar + inspector + MIN_CANVAS_WIDTH - windowWidth;
+
+	if (overflow <= 0) {
+		return { sidebarWidth, inspectorWidth };
+	}
+
+	const inspectorMin = inspectorCollapsed ? 0 : MIN_SIDEBAR_WIDTH;
+	const sidebarMin = sidebarCollapsed ? 0 : MIN_SIDEBAR_WIDTH;
+
+	let remaining = overflow;
+	let nextInspector = inspector;
+	let nextSidebar = sidebar;
+
+	const inspectorReducible = Math.max(0, inspector - inspectorMin);
+	const inspectorCut = Math.min(remaining, inspectorReducible);
+	nextInspector = inspector - inspectorCut;
+	remaining -= inspectorCut;
+
+	if (remaining > 0) {
+		const sidebarReducible = Math.max(0, sidebar - sidebarMin);
+		const sidebarCut = Math.min(remaining, sidebarReducible);
+		nextSidebar = sidebar - sidebarCut;
+	}
+
+	return {
+		sidebarWidth: sidebarCollapsed ? sidebarWidth : nextSidebar,
+		inspectorWidth: inspectorCollapsed ? inspectorWidth : nextInspector,
+	};
+}
 
 const WORKSPACE_NAVIGATION_ORDER = [
 	"done",

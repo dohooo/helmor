@@ -442,6 +442,7 @@ function AppShell({
 		},
 		[],
 	);
+	const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
 	const {
 		handleResizeKeyDown,
 		handleResizeStart,
@@ -451,8 +452,7 @@ function AppShell({
 		sidebarCollapsed,
 		sidebarWidth,
 		setSidebarCollapsed,
-	} = useShellPanels();
-	const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+	} = useShellPanels({ inspectorCollapsed });
 	const [rightSidebarMode, setRightSidebarMode] =
 		useState<WorkspaceRightSidebarMode>("inspector");
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(

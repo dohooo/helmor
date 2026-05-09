@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
 	clampSidebarWidth,
+	fitPanelsToWindow,
 	getInitialSidebarWidth,
 	INSPECTOR_WIDTH_STORAGE_KEY,
 	SIDEBAR_RESIZE_STEP,
@@ -21,13 +22,35 @@ type ResizeState = {
 	target: ResizeTarget;
 };
 
-export function useShellPanels() {
+export function useShellPanels({
+	inspectorCollapsed = false,
+}: {
+	inspectorCollapsed?: boolean;
+} = {}) {
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 	const [inspectorWidth, setInspectorWidth] = useState(() =>
 		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+	const [windowWidth, setWindowWidth] = useState(() =>
+		typeof window === "undefined" ? Infinity : window.innerWidth,
+	);
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		const handleResize = () => setWindowWidth(window.innerWidth);
+		window.addEventListener("resize", handleResize);
+		return () => window.removeEventListener("resize", handleResize);
+	}, []);
+
+	const {
+		sidebarWidth: effectiveSidebarWidth,
+		inspectorWidth: effectiveInspectorWidth,
+	} = fitPanelsToWindow(sidebarWidth, inspectorWidth, windowWidth, {
+		sidebarCollapsed,
+		inspectorCollapsed,
+	});
 
 	useEffect(() => {
 		try {
@@ -164,11 +187,11 @@ export function useShellPanels() {
 	return {
 		handleResizeKeyDown,
 		handleResizeStart,
-		inspectorWidth,
+		inspectorWidth: effectiveInspectorWidth,
 		isInspectorResizing: resizeState?.target === "inspector",
 		isSidebarResizing: resizeState?.target === "sidebar",
 		sidebarCollapsed,
-		sidebarWidth,
+		sidebarWidth: effectiveSidebarWidth,
 		setInspectorWidth,
 		setSidebarCollapsed,
 		setSidebarWidth,
