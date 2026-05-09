@@ -26,12 +26,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { ClaudeCustomProviderSettings } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
@@ -156,22 +150,18 @@ export function ClaudeCustomProvidersPanel() {
 								placeholder={`${builtinProvider.label} API key`}
 								className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
 							/>
-							<TooltipProvider>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											type="button"
-											variant="outline"
-											size="icon-sm"
-											aria-label={`Get ${builtinProvider.label} API key`}
-											onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
-										>
-											<ExternalLink className="size-3.5" />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent>Get API key</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>
+							{!draft.apiKey && (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									aria-label={`Get ${builtinProvider.label} API key`}
+									onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
+								>
+									<ExternalLink className="size-3.5" />
+									Get your API key
+								</Button>
+							)}
 						</div>
 					) : (
 						<div className="grid gap-2">
