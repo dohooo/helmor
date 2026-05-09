@@ -1,6 +1,9 @@
 import type { WorkspaceGroup, WorkspaceRow, WorkspaceSummary } from "@/lib/api";
 import { summaryToArchivedRow } from "@/lib/workspace-helpers";
 
+export const REPO_GROUP_PREFIX = "repo:";
+const UNKNOWN_REPO_GROUP_ID = `${REPO_GROUP_PREFIX}__unknown__`;
+
 export type PendingArchiveEntry = {
 	row: WorkspaceRow;
 	sourceGroupId: string;
@@ -91,6 +94,74 @@ export function projectSidebarLists({
 		groups: liveGroups,
 		archivedRows,
 	};
+}
+
+/**
+ * Re-groups status-bucketed sidebar groups into repo-bucketed ones.
+ *
+ * - "pinned" passes through unchanged at the front and "backlog" passes
+ *   through unchanged at the back — these two carry user intent that is
+ *   orthogonal to repo (workspaces the user has elevated, and workspaces
+ *   queued for later) and are worth preserving as their own buckets in
+ *   either grouping mode.
+ * - Everything else (in-flight creates, in-progress, in review, done,
+ *   canceled) flattens into per-repo buckets keyed by `repoId`. Each repo
+ *   group's title is the repository name.
+ * - Rows with no `repoId` (legacy / optimistic) fall into a single
+ *   "Unknown" bucket so they never silently disappear.
+ * - Repo bucket order follows first-seen order in the flattened input,
+ *   which inherits the server's status ordering (done → review → progress
+ *   → canceled), so recently-completed repos surface near the top.
+ */
+export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
+	const head: WorkspaceGroup[] = []; // pinned
+	const tail: WorkspaceGroup[] = []; // backlog
+	const repoOrder: string[] = [];
+	const repoBuckets = new Map<
+		string,
+		{ label: string; rows: WorkspaceRow[] }
+	>();
+
+	for (const group of groups) {
+		if (group.id === "pinned") {
+			head.push(group);
+			continue;
+		}
+		if (group.id === "backlog") {
+			tail.push(group);
+			continue;
+		}
+		for (const row of group.rows) {
+			const bucketId = row.repoId
+				? `${REPO_GROUP_PREFIX}${row.repoId}`
+				: UNKNOWN_REPO_GROUP_ID;
+			let bucket = repoBuckets.get(bucketId);
+			if (!bucket) {
+				bucket = { label: row.repoName ?? "Unknown", rows: [] };
+				repoBuckets.set(bucketId, bucket);
+				repoOrder.push(bucketId);
+			}
+			bucket.rows.push(row);
+		}
+	}
+
+	const repoGroups: WorkspaceGroup[] = repoOrder.map((bucketId) => {
+		const bucket = repoBuckets.get(bucketId);
+		if (!bucket) {
+			throw new Error(`regroupByRepo: missing bucket ${bucketId}`);
+		}
+		return {
+			id: bucketId,
+			label: bucket.label,
+			// Repo groups don't carry status semantics; reuse "pinned" as a
+			// neutral tone that won't render a status icon (the header will
+			// branch on group.id and render an avatar instead).
+			tone: "pinned",
+			rows: bucket.rows,
+		};
+	});
+
+	return [...head, ...repoGroups, ...tail];
 }
 
 export function shouldReconcilePendingArchive(

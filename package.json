@@ -41,10 +41,11 @@
 		"postinstall": "cd sidecar && bun install && node -e \"const{execSync}=require('child_process');try{execSync('sccache --version',{stdio:'pipe'})}catch{const p=process.platform;const hint=p==='win32'?'scoop install sccache  (or: choco install sccache / cargo install sccache)':p==='linux'?'cargo install sccache  (or use your distro package manager)':'brew install sccache';console.warn('\\n\\x1b[33m⚠  sccache not found.\\x1b[0m Rust builds will be slower without cross-worktree cache.\\n\\n  Install it:\\n\\n    '+hint+'\\n')}\"",
 		"prepare": "husky",
 		"release:notes": "node scripts/extract-release-notes.mjs",
+		"release:stamp": "bun run scripts/stamp-release-announcements.ts",
 		"release:sync-versions": "node scripts/sync-release-versions.mjs",
 		"release:tag": "node scripts/create-release-tag.mjs",
 		"release:verify": "node scripts/verify-release-config.mjs",
-		"release:version": "changeset version && bun run release:sync-versions",
+		"release:version": "changeset version && bun run release:stamp && bun run release:sync-versions",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build"
 	},

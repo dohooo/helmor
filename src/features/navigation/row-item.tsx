@@ -69,6 +69,12 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** Order of avatar / branch icon slots inside the row.
+	 *  - "avatar-first" (default, status grouping): avatar then branch icon.
+	 *  - "branch-first" (repo grouping): branch icon then avatar — the
+	 *    branch becomes the primary differentiator when every row in the
+	 *    group shares the same repo. */
+	layoutVariant?: "avatar-first" | "branch-first";
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -112,6 +118,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
+		layoutVariant = "avatar-first",
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -239,19 +246,20 @@ export const WorkspaceRowItem = memo(
 					!selected && row.state === "archived" && "opacity-50",
 				)}
 			>
-				<div className="flex min-w-0 flex-1 items-center gap-2">
-					<WorkspaceAvatar
-						repoIconSrc={row.repoIconSrc}
-						repoInitials={row.repoInitials ?? row.avatar ?? null}
-						repoName={row.repoName}
-						title={displayTitle}
-						badgeClassName={showStatusDot ? statusDotClassName : null}
-						badgeAriaLabel={statusDotLabel ?? undefined}
-						isRunning={isRunScriptRunning}
-					/>
-					{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
-					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
-						{isSending && !isInteractionRequired ? (
+				{(() => {
+					const avatarSlot = (
+						<WorkspaceAvatar
+							repoIconSrc={row.repoIconSrc}
+							repoInitials={row.repoInitials ?? row.avatar ?? null}
+							repoName={row.repoName}
+							title={displayTitle}
+							badgeClassName={showStatusDot ? statusDotClassName : null}
+							badgeAriaLabel={statusDotLabel ?? undefined}
+							isRunning={isRunScriptRunning}
+						/>
+					);
+					const branchSlot =
+						isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
 						) : row.mode === "local" ? (
 							<Laptop
@@ -269,26 +277,35 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
-						)}
-						<span
-							className={cn(
-								// leading-tight (1.25) instead of leading-none so descenders
-								// (g/j/p/q/y) aren't clipped by truncate's overflow:hidden
-								// when the page is zoomed out (Cmd+-).
-								"truncate leading-tight",
-								selected
-									? row.hasUnread
-										? "font-semibold text-foreground"
-										: "font-medium text-foreground"
-									: row.hasUnread
-										? "font-semibold text-foreground"
-										: "font-medium",
-							)}
-						>
-							<HyperText text={displayTitle} className="inline" />
-						</span>
-					</div>
-				</div>
+						);
+					const branchFirst = layoutVariant === "branch-first";
+					return (
+						<div className="flex min-w-0 flex-1 items-center gap-2">
+							{branchFirst ? branchSlot : avatarSlot}
+							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
+							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+								{branchFirst ? avatarSlot : branchSlot}
+								<span
+									className={cn(
+										// leading-tight (1.25) instead of leading-none so descenders
+										// (g/j/p/q/y) aren't clipped by truncate's overflow:hidden
+										// when the page is zoomed out (Cmd+-).
+										"truncate leading-tight",
+										selected
+											? row.hasUnread
+												? "font-semibold text-foreground"
+												: "font-medium text-foreground"
+											: row.hasUnread
+												? "font-semibold text-foreground"
+												: "font-medium",
+									)}
+								>
+									<HyperText text={displayTitle} className="inline" />
+								</span>
+							</div>
+						</div>
+					);
+				})()}
 
 				{hasActionHandler ? (
 					<span
@@ -483,6 +500,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
+			previous.layoutVariant === next.layoutVariant &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

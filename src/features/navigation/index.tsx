@@ -33,7 +33,9 @@ import {
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
+import type { SidebarGrouping } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import {
 	createInitialSectionOpenState,
@@ -46,6 +48,7 @@ import {
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
+import { REPO_GROUP_PREFIX } from "./sidebar-projection";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -83,6 +86,7 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
+	sidebarGrouping = "status",
 	addingRepository,
 	selectedWorkspaceId,
 	busyWorkspaceIds,
@@ -113,6 +117,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
+	sidebarGrouping?: SidebarGrouping;
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	busyWorkspaceIds?: Set<string>;
@@ -148,8 +153,21 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
 		...createInitialSectionOpenState(groups),
-		...readStoredSectionOpenState(),
+		...readStoredSectionOpenState(sidebarGrouping),
 	}));
+
+	// Re-hydrate open state from the per-grouping localStorage key when the
+	// user toggles between status/repo modes — each mode keeps its own
+	// expand/collapse memory so switching back doesn't lose state.
+	const previousGroupingRef = useRef(sidebarGrouping);
+	useEffect(() => {
+		if (previousGroupingRef.current === sidebarGrouping) return;
+		previousGroupingRef.current = sidebarGrouping;
+		setSectionOpenState({
+			...createInitialSectionOpenState(groups),
+			...readStoredSectionOpenState(sidebarGrouping),
+		});
+	}, [groups, sidebarGrouping]);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -179,8 +197,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}, [archivedRows, groups]);
 
 	useEffect(() => {
-		writeStoredSectionOpenState(sectionOpenState);
-	}, [sectionOpenState]);
+		writeStoredSectionOpenState(sidebarGrouping, sectionOpenState);
+	}, [sidebarGrouping, sectionOpenState]);
 
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
@@ -396,6 +414,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						: (sectionOpenState[item.groupId] ?? true);
 				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
 				const isEmptyGroup = item.group.rows.length === 0;
+				const isRepoGroup = item.groupId.startsWith(REPO_GROUP_PREFIX);
+				const repoSampleRow: WorkspaceRow | undefined = isRepoGroup
+					? item.group.rows[0]
+					: undefined;
 
 				return (
 					<button
@@ -414,6 +436,13 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								<Archive
 									className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
 									strokeWidth={1.9}
+								/>
+							) : isRepoGroup ? (
+								<WorkspaceAvatar
+									repoIconSrc={repoSampleRow?.repoIconSrc}
+									repoInitials={repoSampleRow?.repoInitials ?? null}
+									repoName={item.group.label}
+									title={item.group.label}
 								/>
 							) : (
 								<GroupIcon tone={item.group.tone} />
@@ -452,6 +481,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
+						layoutVariant={
+							sidebarGrouping === "repo" && !item.isArchived
+								? "branch-first"
+								: "avatar-first"
+						}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
@@ -478,6 +512,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		},
 		[
 			sectionOpenState,
+			sidebarGrouping,
 			toggleSection,
 			selectedWorkspaceId,
 			busyWorkspaceIds,

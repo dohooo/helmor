@@ -27,16 +27,26 @@ pub async fn prepare_workspace_from_repo(
     repo_id: String,
     source_branch: Option<String>,
     mode: Option<crate::workspace_state::WorkspaceMode>,
+    initial_status: Option<WorkspaceStatus>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let mode = mode.unwrap_or_default();
+    let initial_status = initial_status.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
         run_blocking(move || match mode {
             crate::workspace_state::WorkspaceMode::Worktree => {
-                workspaces::prepare_workspace_from_repo_impl(&repo_id, source_branch.as_deref())
+                workspaces::prepare_workspace_from_repo_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    initial_status,
+                )
             }
             crate::workspace_state::WorkspaceMode::Local => {
-                workspaces::prepare_local_workspace_impl(&repo_id, source_branch.as_deref())
+                workspaces::prepare_local_workspace_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    initial_status,
+                )
             }
         })
         .await?

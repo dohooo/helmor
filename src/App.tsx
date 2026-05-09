@@ -32,6 +32,10 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+	GITHUB_RELEASES_URL,
+	ReleaseAnnouncementToastHost,
+} from "@/features/announcements";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
@@ -323,8 +327,12 @@ function MainApp() {
 						 *  stuck on "Connect" indefinitely. */}
 						<ForgeAccountsHealthSentinel />
 						<AppShell
-							onOpenSettings={(workspaceId, workspaceRepoId) => {
-								setSettingsInitialSection(undefined);
+							onOpenSettings={(
+								workspaceId,
+								workspaceRepoId,
+								initialSection,
+							) => {
+								setSettingsInitialSection(initialSection);
 								setSettingsWorkspaceId(workspaceId);
 								setSettingsWorkspaceRepoId(workspaceRepoId);
 								setSettingsOpen(true);
@@ -356,6 +364,7 @@ function AppShell({
 	onOpenSettings: (
 		workspaceId: string | null,
 		workspaceRepoId: string | null,
+		initialSection?: SettingsSection,
 	) => void;
 }) {
 	useZoom();
@@ -831,6 +840,19 @@ function AppShell({
 		selectedWorkspaceDetailQuery.data?.repoId,
 		selectedWorkspaceId,
 	]);
+	const handleOpenAnnouncementSettings = useCallback(
+		(initialSection?: SettingsSection): void => {
+			onOpenSettings(null, null, initialSection);
+		},
+		[onOpenSettings],
+	);
+	const handleOpenReleaseChangelog = useCallback(() => {
+		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
+			toast.error("Unable to open GitHub changelog", {
+				description: String(error),
+			});
+		});
+	}, []);
 	const selectedWorkspaceDetail =
 		selectedWorkspaceDetailQuery.data ??
 		(selectedWorkspaceId
@@ -2717,6 +2739,20 @@ function AppShell({
 			void updateSettings({ workspaceRightSidebarMode: "context" });
 		}
 	}, [inspectorCollapsed, rightSidebarMode, updateSettings]);
+	const handleSetRightSidebarModeFromAnnouncement = useCallback(
+		(mode: WorkspaceRightSidebarMode) => {
+			setRightSidebarMode(mode);
+			if (mode === "context") {
+				setInspectorCollapsed(false);
+			}
+			if (workspaceViewModeRef.current === "start") {
+				void updateSettings({ startContextPanelOpen: mode === "context" });
+				return;
+			}
+			void updateSettings({ workspaceRightSidebarMode: mode });
+		},
+		[updateSettings],
+	);
 	useEffect(() => {
 		window.addEventListener(
 			"helmor:toggle-context-panel",
@@ -3430,6 +3466,11 @@ function AppShell({
 							theme={resolveTheme(appSettings.theme)}
 							position="bottom-right"
 							visibleToasts={6}
+						/>
+						<ReleaseAnnouncementToastHost
+							onOpenChangelog={handleOpenReleaseChangelog}
+							onOpenSettings={handleOpenAnnouncementSettings}
+							onSetRightSidebarMode={handleSetRightSidebarModeFromAnnouncement}
 						/>
 						{closeConfirmDialog}
 					</ComposerInsertProvider>

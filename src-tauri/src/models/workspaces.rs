@@ -211,6 +211,7 @@ pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_initializing_workspace_and_session(
     repository: &repos::RepositoryRecord,
     workspace_id: &str,
@@ -218,6 +219,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
     directory_name: &str,
     branch: &str,
     default_branch: &str,
+    status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
     insert_initializing_workspace_and_session_with_mode(
@@ -228,6 +230,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
         branch,
         default_branch,
         WorkspaceMode::Worktree,
+        status,
         timestamp,
     )
 }
@@ -241,6 +244,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     branch: &str,
     default_branch: &str,
     mode: WorkspaceMode,
+    status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
@@ -265,7 +269,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'in-progress', 0, ?10, ?10)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?11)
             "#,
             (
                 workspace_id,
@@ -277,6 +281,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 default_branch,
                 mode,
+                status,
                 timestamp,
             ),
         )

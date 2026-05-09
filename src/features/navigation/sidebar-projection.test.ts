@@ -4,6 +4,8 @@ import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	projectSidebarLists,
+	REPO_GROUP_PREFIX,
+	regroupByRepo,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "./sidebar-projection";
@@ -35,6 +37,7 @@ function makeArchivedSummary(id: string): WorkspaceSummary {
 		id,
 		title: `Archived ${id}`,
 		directoryName: id,
+		repoId: "repo-1",
 		repoName: "helmor",
 		state: "archived",
 		hasUnread: false,
@@ -219,5 +222,151 @@ describe("shouldReconcilePendingCreation", () => {
 				],
 			),
 		).toBe(true);
+	});
+});
+
+describe("regroupByRepo", () => {
+	const fixture: WorkspaceGroup[] = [
+		{
+			id: "pinned",
+			label: "Pinned",
+			tone: "pinned",
+			rows: [
+				{
+					id: "ws-pinned",
+					title: "Pinned ws",
+					state: "ready",
+					status: "in-progress",
+					repoId: "repo-A",
+					repoName: "alpha",
+				},
+			],
+		},
+		{
+			id: "progress",
+			label: "In progress",
+			tone: "progress",
+			rows: [
+				{
+					id: "ws-progress",
+					title: "In flight",
+					state: "initializing",
+					status: "in-progress",
+					repoId: "repo-A",
+					repoName: "alpha",
+				},
+			],
+		},
+		{
+			id: "done",
+			label: "Done",
+			tone: "done",
+			rows: [
+				{
+					id: "ws-done-A",
+					title: "Done A",
+					state: "ready",
+					status: "done",
+					repoId: "repo-A",
+					repoName: "alpha",
+				},
+				{
+					id: "ws-done-B",
+					title: "Done B",
+					state: "ready",
+					status: "done",
+					repoId: "repo-B",
+					repoName: "beta",
+				},
+			],
+		},
+		{
+			id: "review",
+			label: "In review",
+			tone: "review",
+			rows: [
+				{
+					id: "ws-review-A",
+					title: "Review A",
+					state: "ready",
+					status: "review",
+					repoId: "repo-A",
+					repoName: "alpha",
+				},
+			],
+		},
+		{
+			id: "backlog",
+			label: "Backlog",
+			tone: "backlog",
+			rows: [
+				{
+					id: "ws-backlog-A",
+					title: "Backlog A",
+					state: "ready",
+					status: "backlog",
+					repoId: "repo-A",
+					repoName: "alpha",
+				},
+			],
+		},
+	];
+
+	it("keeps pinned at the front and backlog at the back; repo buckets in between", () => {
+		const result = regroupByRepo(fixture);
+		expect(result.map((g) => g.id)).toEqual([
+			"pinned",
+			`${REPO_GROUP_PREFIX}repo-A`,
+			`${REPO_GROUP_PREFIX}repo-B`,
+			"backlog",
+		]);
+		expect(result[0]?.label).toBe("Pinned");
+		expect(result[3]?.label).toBe("Backlog");
+	});
+
+	it("buckets non-pinned/non-backlog rows by repoId, label = repoName", () => {
+		const result = regroupByRepo(fixture);
+		const repoGroups = result.filter((g) => g.id.startsWith(REPO_GROUP_PREFIX));
+		expect(repoGroups.map((g) => g.label)).toEqual(["alpha", "beta"]);
+		// progress (pendingCreation) + done + review rows for repo-A
+		// collapse into the alpha bucket. Pinned and backlog rows do NOT
+		// land here — they kept their own groups.
+		expect(repoGroups[0]?.rows.map((r) => r.id)).toEqual([
+			"ws-progress",
+			"ws-done-A",
+			"ws-review-A",
+		]);
+		expect(repoGroups[1]?.rows.map((r) => r.id)).toEqual(["ws-done-B"]);
+	});
+
+	it("collects rows missing repoId into a single Unknown bucket", () => {
+		const result = regroupByRepo([
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [
+					{
+						id: "ws-orphan-1",
+						title: "Orphan 1",
+						state: "ready",
+						status: "done",
+					},
+					{
+						id: "ws-orphan-2",
+						title: "Orphan 2",
+						state: "ready",
+						status: "done",
+					},
+				],
+			},
+		]);
+		expect(result).toHaveLength(1);
+		expect(result[0]?.id.startsWith(REPO_GROUP_PREFIX)).toBe(true);
+		expect(result[0]?.label).toBe("Unknown");
+		expect(result[0]?.rows.map((r) => r.id)).toEqual([
+			"ws-orphan-1",
+			"ws-orphan-2",
+		]);
 	});
 });

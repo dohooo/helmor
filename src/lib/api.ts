@@ -64,6 +64,7 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	repoId?: string;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -166,6 +167,7 @@ export type WorkspaceSummary = {
 	id: string;
 	title: string;
 	directoryName: string;
+	repoId: string;
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
@@ -2097,11 +2099,13 @@ export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
+	initialStatus?: WorkspaceStatus | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		initialStatus: initialStatus ?? null,
 	});
 }
 
