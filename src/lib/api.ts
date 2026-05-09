@@ -312,6 +312,11 @@ export type WorkspaceDetail = {
 	/** gh/glab account login bound to the parent repo. NULL means no
 	 * account is bound — UI shows the "Connect" prompt. */
 	forgeLogin?: string | null;
+	/** Set when this workspace's setup script last finished with exit
+	 * code 0. NULL means never run (or skipped because the repo had no
+	 * setup script). Drives the inspector's Setup tab "ran in another
+	 * session" notice and the default-tab heuristic on workspace switch. */
+	setupCompletedAt?: string | null;
 };
 
 export type WorkspaceSessionSummary = {

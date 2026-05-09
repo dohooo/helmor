@@ -156,6 +156,11 @@ pub struct WorkspaceDetail {
     /// has been bound (auto-detect didn't find one); the UI shows the
     /// "Connect" prompt in that case.
     pub forge_login: Option<String>,
+    /// Timestamp of the most recent successful setup-script run for
+    /// this workspace. NULL if setup has never been run (or the
+    /// workspace was created before this column existed). Drives the
+    /// inspector's Setup tab "ran in another session" notice.
+    pub setup_completed_at: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -847,6 +852,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         message_count: record.message_count,
         forge_provider: record.forge_provider,
         forge_login: record.forge_login,
+        setup_completed_at: record.setup_completed_at,
     }
 }
 
