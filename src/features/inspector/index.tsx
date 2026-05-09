@@ -148,6 +148,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"setup",
 		!!repoScripts?.setupScript?.trim(),
+		workspaceSetupCompletedAt ?? null,
 	);
 	const runScriptState = useScriptStatus(
 		workspaceId ?? null,

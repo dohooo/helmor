@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, Play, RotateCcw, Settings2, Square } from "lucide-react";
+import { CircleCheck, Play, RotateCcw, Settings2, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -207,12 +207,24 @@ export function SetupTab({
 					</Button>
 				</div>
 			) : setupCompletedAt ? (
-				<div className="flex h-full items-center justify-center">
-					<Check
+				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+					<CircleCheck
 						aria-label="Setup completed"
-						className="size-12 text-muted-foreground/50"
-						strokeWidth={1.5}
+						className="size-8 text-[var(--workspace-pr-open-accent)]"
+						strokeWidth={1.75}
 					/>
+					<p className="text-[13px] font-medium text-muted-foreground">
+						Setup completed
+					</p>
+					<Button
+						variant="outline"
+						size="sm"
+						className="mt-1 gap-1.5 text-[12px]"
+						onClick={handleRun}
+					>
+						<RotateCcw className="size-3" strokeWidth={2} />
+						Rerun setup
+					</Button>
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
