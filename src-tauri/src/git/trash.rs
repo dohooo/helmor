@@ -43,19 +43,7 @@ impl TrashCleanupQueue {
             .name("helmor-trash-cleanup".into())
             .spawn(move || {
                 while let Ok(path) = rx.recv() {
-                    let started = Instant::now();
-                    match fs::remove_dir_all(&path) {
-                        Ok(()) => tracing::debug!(
-                            path = %path.display(),
-                            elapsed_ms = started.elapsed().as_millis(),
-                            "trash dir cleaned",
-                        ),
-                        Err(error) => tracing::warn!(
-                            path = %path.display(),
-                            error = %error,
-                            "trash cleanup failed",
-                        ),
-                    }
+                    cleanup_path(&path);
                 }
             })
             .expect("spawn helmor-trash-cleanup thread");
@@ -86,23 +74,34 @@ impl TrashCleanupQueue {
     }
 }
 
+/// Recursively delete a single trash directory, logging the outcome.
+/// Pure — safe to call from any thread.
+fn cleanup_path(path: &Path) {
+    let started = Instant::now();
+    match fs::remove_dir_all(path) {
+        Ok(()) => tracing::debug!(
+            path = %path.display(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "trash dir cleaned",
+        ),
+        Err(error) => tracing::warn!(
+            path = %path.display(),
+            error = %error,
+            "trash cleanup failed",
+        ),
+    }
+}
+
 fn detached_cleanup(path: PathBuf) {
     thread::Builder::new()
         .name("helmor-trash-detached".into())
-        .spawn(move || {
-            if let Err(error) = fs::remove_dir_all(&path) {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "detached trash cleanup failed"
-                );
-            }
-        })
+        .spawn(move || cleanup_path(&path))
         .ok();
 }
 
-/// Enqueue every `.trash-*` entry directly under `parent`.
-pub fn sweep_dir(parent: &Path) -> usize {
+/// Find every `.trash-*` entry directly under `parent`. Pure — does not
+/// touch the queue. Returns empty on missing-dir / read errors.
+fn find_trash_dirs(parent: &Path) -> Vec<PathBuf> {
     let entries = match fs::read_dir(parent) {
         Ok(entries) => entries,
         Err(error) => {
@@ -113,28 +112,25 @@ pub fn sweep_dir(parent: &Path) -> usize {
                     "trash sweep: read_dir failed"
                 );
             }
-            return 0;
+            return Vec::new();
         }
     };
-    let q = queue();
-    let mut count = 0;
-    for entry in entries.flatten() {
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(TRASH_PREFIX)
-        {
-            q.enqueue(entry.path());
-            count += 1;
-        }
-    }
-    count
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(TRASH_PREFIX)
+        })
+        .map(|entry| entry.path())
+        .collect()
 }
 
-/// Walk one level into `<workspaces_root>/<repo>/` and sweep each repo dir.
-/// Trash siblings live next to workspace dirs, so the prefix never appears
-/// at the workspaces root itself.
-pub fn sweep_workspaces_root(workspaces_root: &Path) {
+/// Walk one level into `<workspaces_root>/<repo>/` and collect every
+/// `.trash-*` found. Trash siblings live next to workspace dirs, so the
+/// prefix never appears at the workspaces root itself.
+fn find_trash_dirs_under_workspaces_root(workspaces_root: &Path) -> Vec<PathBuf> {
     let entries = match fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
         Err(error) => {
@@ -145,21 +141,173 @@ pub fn sweep_workspaces_root(workspaces_root: &Path) {
                     "trash sweep: read_dir workspaces root failed"
                 );
             }
-            return;
+            return Vec::new();
         }
     };
-    let mut total = 0;
+    let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            total += sweep_dir(&path);
+            out.extend(find_trash_dirs(&path));
         }
     }
-    if total > 0 {
-        tracing::info!(
-            path = %workspaces_root.display(),
-            count = total,
-            "trash sweep enqueued leftover dirs"
+    out
+}
+
+/// Enqueue every `.trash-*` entry directly under `parent`.
+pub fn sweep_dir(parent: &Path) -> usize {
+    let dirs = find_trash_dirs(parent);
+    let q = queue();
+    for path in &dirs {
+        q.enqueue(path.clone());
+    }
+    dirs.len()
+}
+
+/// Sweep all repo subdirs under `<data_dir>/workspaces/`.
+pub fn sweep_workspaces_root(workspaces_root: &Path) {
+    let dirs = find_trash_dirs_under_workspaces_root(workspaces_root);
+    if dirs.is_empty() {
+        return;
+    }
+    let q = queue();
+    for path in &dirs {
+        q.enqueue(path.clone());
+    }
+    tracing::info!(
+        path = %workspaces_root.display(),
+        count = dirs.len(),
+        "trash sweep enqueued leftover dirs"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn touch_dir(parent: &Path, name: &str) -> PathBuf {
+        let p = parent.join(name);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn find_trash_dirs_picks_only_prefixed_entries() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        // Trash entries — should be picked.
+        let t1 = touch_dir(root, ".trash-foo-123-456-0");
+        let t2 = touch_dir(root, ".trash-bar-987-654-1");
+
+        // Decoys — should be ignored.
+        touch_dir(root, "regular-workspace");
+        touch_dir(root, ".not-trash"); // dotfile but wrong prefix
+        touch_dir(root, "trash-no-leading-dot"); // missing leading dot
+        fs::write(root.join(".trash-stray-file"), b"").unwrap(); // file, not dir — still picked
+                                                                 // (the worker handles non-dirs harmlessly via remove_dir_all err path)
+
+        let mut found = find_trash_dirs(root);
+        found.sort();
+        let mut expected = vec![t1, t2, root.join(".trash-stray-file")];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn find_trash_dirs_returns_empty_on_missing_parent() {
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(find_trash_dirs(&missing).is_empty());
+    }
+
+    #[test]
+    fn find_trash_dirs_returns_empty_on_empty_dir() {
+        let tmp = tempdir().unwrap();
+        assert!(find_trash_dirs(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn find_under_workspaces_root_descends_one_level() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        // workspaces_root/repo-a/
+        let repo_a = touch_dir(root, "repo-a");
+        let a1 = touch_dir(&repo_a, ".trash-x-1-1-0");
+        let a2 = touch_dir(&repo_a, ".trash-y-2-2-0");
+        touch_dir(&repo_a, "live-workspace");
+
+        // workspaces_root/repo-b/
+        let repo_b = touch_dir(root, "repo-b");
+        let b1 = touch_dir(&repo_b, ".trash-z-3-3-0");
+        // nested .trash one level too deep — should NOT be picked, sweep is one-level-only
+        let nested = touch_dir(&repo_b, "live-workspace/nested");
+        touch_dir(&nested, ".trash-too-deep");
+
+        // a `.trash-*` directly at the workspaces root — also should NOT be picked
+        // (the comment in the source says: "Trash siblings live next to workspace
+        // dirs, so the prefix never appears at the workspaces root itself.")
+        touch_dir(root, ".trash-misplaced");
+
+        let mut found = find_trash_dirs_under_workspaces_root(root);
+        found.sort();
+        let mut expected = vec![a1, a2, b1];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn find_under_workspaces_root_returns_empty_on_missing() {
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        assert!(find_trash_dirs_under_workspaces_root(&missing).is_empty());
+    }
+
+    #[test]
+    fn cleanup_path_removes_directory_recursively() {
+        let tmp = tempdir().unwrap();
+        let target = touch_dir(tmp.path(), ".trash-cleanup-1");
+        fs::write(target.join("a.txt"), b"hello").unwrap();
+        fs::create_dir_all(target.join("nested/deeper")).unwrap();
+        fs::write(target.join("nested/deeper/b.txt"), b"world").unwrap();
+
+        cleanup_path(&target);
+
+        assert!(!target.exists(), "cleanup_path must remove the directory");
+    }
+
+    #[test]
+    fn cleanup_path_is_silent_on_missing_target() {
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join(".trash-never-existed");
+        // Must not panic — failures are logged, not propagated.
+        cleanup_path(&missing);
+    }
+
+    #[test]
+    fn enqueue_then_worker_actually_deletes() {
+        // Real end-to-end test against the global queue. Use a uniquely
+        // named tmpdir so this can't collide with anything else.
+        let tmp = tempdir().unwrap();
+        let target = touch_dir(tmp.path(), ".trash-e2e-enqueue");
+        fs::write(target.join("payload.txt"), b"x").unwrap();
+
+        queue().enqueue(target.clone());
+
+        // Worker is async — poll with a deadline. The actual delete is
+        // microseconds for a tmpdir this size; 5s is paranoid headroom for
+        // CI under heavy load.
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while target.exists() && Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !target.exists(),
+            "worker should have deleted {}",
+            target.display()
         );
     }
 }
