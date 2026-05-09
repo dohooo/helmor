@@ -146,22 +146,18 @@ export function CursorProviderPanel() {
 						placeholder="Cursor API key"
 						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
 					/>
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									type="button"
-									variant="outline"
-									size="icon-sm"
-									aria-label="Get Cursor API key"
-									onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
-								>
-									<ExternalLink className="size-3.5" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>Get API key</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					{!keyDraft && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							aria-label="Get Cursor API key"
+							onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
+						>
+							<ExternalLink className="size-3.5" />
+							Get your API key
+						</Button>
+					)}
 				</div>
 			</SettingsRow>
 

@@ -45,6 +45,11 @@ export type InlineBadgeProps = {
 	/** Optional remove action — when set, a trailing X button is rendered. */
 	onRemove?: () => void;
 	removeLabel?: string;
+	/**
+	 * 启用 text-kind preview 的就地编辑。失焦时调用一次，commit 新文本后
+	 * popover 自动关闭。仅当 preview.kind === "text" 时生效，其它类型忽略。
+	 */
+	onEdit?: (nextText: string) => void;
 	/** Extra classes on the outer wrapper. */
 	className?: string;
 	/** Extra classes on the label span. */
@@ -76,6 +81,7 @@ export function InlineBadge({
 	className,
 	labelClassName,
 	nonSelectable = true,
+	onEdit,
 }: InlineBadgeProps) {
 	const [open, setOpen] = useState(false);
 	const [loaderState, setLoaderState] = useState<LoaderState>({
@@ -83,10 +89,31 @@ export function InlineBadge({
 	});
 	const closeTimerRef = useRef<number | null>(null);
 	const hasFetchedRef = useRef(false);
+	// 编辑期间锁住 popover：textarea focus 时设为 true,
+	// 让 hover-leave 不会把正在编辑的卡片关掉
+	const editingRef = useRef(false);
+
+	const editHandlers = useMemo(() => {
+		if (!onEdit) return null;
+		return {
+			onEditFocus: () => {
+				editingRef.current = true;
+				if (closeTimerRef.current !== null) {
+					window.clearTimeout(closeTimerRef.current);
+					closeTimerRef.current = null;
+				}
+			},
+			onEditBlur: (nextText: string) => {
+				editingRef.current = false;
+				onEdit(nextText);
+				setOpen(false);
+			},
+		};
+	}, [onEdit]);
 
 	const syncPreviewContent = useMemo(
-		() => renderInlineBadgePreview(preview ?? null),
-		[preview],
+		() => renderInlineBadgePreview(preview ?? null, editHandlers),
+		[preview, editHandlers],
 	);
 	const hasSyncPreview = syncPreviewContent !== null;
 	const hasAsyncPreview = !preview && typeof previewLoader === "function";
@@ -99,13 +126,20 @@ export function InlineBadge({
 			case "loading":
 				return <PreviewLoadingFrame title={label} />;
 			case "ready":
-				return renderInlineBadgePreview(loaderState.payload);
+				return renderInlineBadgePreview(loaderState.payload, editHandlers);
 			case "error":
 				return <PreviewErrorFrame title={label} />;
 			default:
 				return <PreviewLoadingFrame title={label} />;
 		}
-	}, [hasSyncPreview, syncPreviewContent, hasAsyncPreview, loaderState, label]);
+	}, [
+		hasSyncPreview,
+		syncPreviewContent,
+		hasAsyncPreview,
+		loaderState,
+		label,
+		editHandlers,
+	]);
 
 	const clearCloseTimer = useCallback(() => {
 		if (closeTimerRef.current !== null) {
@@ -132,6 +166,7 @@ export function InlineBadge({
 
 	const scheduleClose = useCallback(() => {
 		if (!canPreview) return;
+		if (editingRef.current) return; // 编辑中不关
 		clearCloseTimer();
 		closeTimerRef.current = window.setTimeout(() => {
 			setOpen(false);

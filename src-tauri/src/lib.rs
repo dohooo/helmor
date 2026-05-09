@@ -303,6 +303,7 @@ pub fn run() {
             commands::session_commands::delete_session,
             commands::session_commands::list_hidden_sessions,
             commands::session_commands::get_session_context_usage,
+            commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,

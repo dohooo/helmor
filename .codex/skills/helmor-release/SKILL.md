@@ -1,6 +1,6 @@
 ---
 name: helmor-release
-description: Prepare Helmor releases by inspecting the current branch, drafting a concise user-facing Changesets entry first (bump + body — a single sentence when one fits, or summary line + bullets when there are multiple distinct changes), writing it to `.changeset/`, and then showing the user the result with a short menu of adjustments they can pick from. Use when the user wants to cut a release, write a changeset, decide patch/minor/major, draft GitHub release notes, or summarize branch changes into release-ready language.
+description: Prepare Helmor releases by inspecting the current branch, drafting a concise user-facing Changesets entry first (bump + body — keep it as short as possible: a single sentence by default, summary + bullets only when there are multiple distinct user-visible items), writing it to `.changeset/`, and then showing the user the result with a short menu of adjustments they can pick from. Use when the user wants to cut a release, write a changeset, decide patch/minor/major, draft GitHub release notes, or summarize branch changes into release-ready language.
 ---
 
 # Helmor Release
@@ -21,7 +21,7 @@ Use this skill to turn a branch's real changes into a clean `.changeset/*.md` en
 
    Prefer a conservative bump (`patch` unless there is a clear new user-visible capability). If you genuinely cannot decide the bump from the diff alone, default to `patch` and flag it in the confirmation step.
 
-   **Brevity bias.** Do not pad. If the change is "fix X" or "give Y more room", a single sentence is the right answer — do not invent bullets to fill a template. Reserve the summary+bullets shape for releases that genuinely have ≥2 distinct user-visible items worth enumerating.
+   **Brevity bias.** Aim for the shortest sentence that names the user-visible change — if a clause can be dropped without losing meaning, drop it. Reserve summary+bullets for releases with ≥2 distinct user-visible items.
 4. Write the changeset to a single file under `.changeset/` right away. Do not wait for approval before creating the file — the user will adjust from a real draft, not a hypothetical one.
 5. Then, and only then, show the user what you created and offer the adjustment menu described in "Confirmation Style".
 
@@ -41,7 +41,7 @@ Example (Shape A — single sentence):
 I've written .changeset/brave-otters-smile.md:
 
   bump: patch
-  body: Give sidebar workspace titles the full row width at rest, and overlay archive/restore/delete buttons on hover with the title fading out beneath them.
+  body: Fix the context-usage ring resetting to zero when switching the active model.
 
 If you want to adjust anything, tell me which:
   1. Version bump (currently: patch — say "make it minor" / "make it major")
@@ -102,7 +102,7 @@ Do not:
 
 The body has **two allowed shapes**. Pick the smallest one that fits.
 
-**Shape A — single sentence.** Use this when one self-contained sentence captures the entire user-visible change. This is the default for most patch-level fixes and small polish PRs.
+**Shape A — single sentence.** Use this when one self-contained sentence captures the entire user-visible change. This is the default for most patch-level fixes and small polish PRs. Keep it as short as possible.
 
 **Shape B — summary line + bullets.** Use this only when there are ≥2 distinct user-visible changes worth enumerating. The first line is a prose summary (usually ending with `:`); each concrete change is a `- ` sub-item underneath.
 

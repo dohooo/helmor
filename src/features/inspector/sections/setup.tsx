@@ -47,10 +47,29 @@ export function SetupTab({
 	useEffect(() => {
 		if (!workspaceId) return;
 
+		// Only true when attach() ran before any entry existed — i.e. the
+		// auto-run case. Flipped off after the first lazy-mount replay (or
+		// when attach finds an existing entry) so subsequent status changes
+		// don't re-clear and re-write the whole buffer.
+		let needsLazyMount = true;
+
 		const existing = attach(workspaceId, "setup", {
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: (s) => {
 				setStatus(s);
+				if (s !== "idle" && needsLazyMount) {
+					needsLazyMount = false;
+					setHasRun(true);
+					// Replay chunks buffered before TerminalOutput mounted.
+					requestAnimationFrame(() => {
+						const entry = getScriptState(workspaceId, "setup");
+						const t = termRef.current;
+						if (!entry || !t) return;
+						t.clear();
+						if (entry.truncated) t.write(TRUNCATION_NOTICE);
+						for (const chunk of entry.chunks) t.write(chunk);
+					});
+				}
 				if (s === "exited") {
 					const state = getScriptState(workspaceId, "setup");
 					if (state?.exitCode === 0) {
@@ -63,6 +82,7 @@ export function SetupTab({
 		});
 
 		if (existing) {
+			needsLazyMount = false;
 			setHasRun(true);
 			setStatus(existing.status);
 			const replay = () => {
