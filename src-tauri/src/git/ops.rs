@@ -527,18 +527,11 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
     let repo_root_str = repo_root.display().to_string();
     if workspace_dir.exists() {
         // Rename to a sibling temp dir (instant O(1) on the same filesystem),
-        // then spawn a background thread for the slow recursive delete so the
-        // archive path returns immediately.
+        // then hand the slow recursive delete to the global serial queue.
+        // Serial — not per-call spawn — so N concurrent archives don't thrash
+        // disk IO deleting node_modules / target in parallel.
         let trash_dir = renamed_to_trash(workspace_dir)?;
-        std::thread::spawn(move || {
-            if let Err(e) = fs::remove_dir_all(&trash_dir) {
-                tracing::warn!(
-                    path = %trash_dir.display(),
-                    error = %e,
-                    "Background worktree cleanup failed"
-                );
-            }
-        });
+        crate::git::trash::queue().enqueue(trash_dir);
     }
     run_git(["-C", repo_root_str.as_str(), "worktree", "prune"], None)
         .map(|_| ())

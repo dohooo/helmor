@@ -101,6 +101,19 @@ pub fn run() {
                 "Helmor started"
             );
 
+            // Sweep `.trash-*` dirs left over from a prior run (worker killed
+            // mid-cleanup, OS crash). Hands them to the global serial queue so
+            // the slow recursive deletes happen one at a time in the
+            // background. Spawned so a slow `read_dir` can't stall startup.
+            if let Ok(workspaces_root) = data_dir::workspaces_dir() {
+                std::thread::Builder::new()
+                    .name("helmor-trash-sweep".into())
+                    .spawn(move || {
+                        git::trash::sweep_workspaces_root(&workspaces_root);
+                    })
+                    .ok();
+            }
+
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
             // (users can find the messages in the archive list and choose
