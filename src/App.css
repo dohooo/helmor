@@ -659,6 +659,17 @@ html[data-os="macos"] #root {
 	background-color: var(--background) !important;
 }
 
+/*
+ * fixedOverflowWidgets mounts the suggest/hover widgets on a body-attached
+ * container so they escape the editor's overflow:hidden. Monaco's default
+ * z-index on that container is low (~10), so it can still lose to the
+ * inspector layer (z-30) and the zoomed inspector (z-50). Bump it above both.
+ */
+.monaco-editor .overflowingContentWidgets,
+.monaco-editor .overflowingOverlayWidgets {
+	z-index: 60;
+}
+
 .scrollbar-stable {
 	scrollbar-gutter: stable;
 }

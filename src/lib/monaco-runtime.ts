@@ -5,6 +5,7 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { installTailwindCompletions } from "./monaco-tailwind";
 
 type MonacoModule = typeof Monaco;
 type StandaloneEditor = Monaco.editor.IStandaloneCodeEditor;
@@ -114,6 +115,10 @@ export async function createFileEditor(options: {
 	const editor = monaco.editor.create(options.container, {
 		automaticLayout: true,
 		bracketPairColorization: { enabled: true },
+		// Mount suggest/hover widgets on a body-attached layer so they can't be
+		// clipped by ancestor overflow:hidden (e.g. the right inspector panel)
+		// or pushed behind it by stacking-context boundaries.
+		fixedOverflowWidgets: true,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
@@ -222,6 +227,7 @@ export async function createDiffEditor(options: {
 	const editor = monaco.editor.createDiffEditor(options.container, {
 		automaticLayout: true,
 		enableSplitViewResizing: true,
+		fixedOverflowWidgets: true,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
@@ -288,6 +294,7 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 
 			installMonacoEnvironment();
 			installTypeScriptLanguageDefaults(monaco);
+			installTailwindCompletions(monaco);
 			installEditorTheme(monaco);
 			installThemeObserver(monaco);
 
