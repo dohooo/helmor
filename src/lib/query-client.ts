@@ -119,12 +119,14 @@ export const helmorQueryKeys = {
 		provider: AgentProvider,
 		workingDirectory: string | null,
 		workspaceId: string | null,
+		repoId: string | null,
 	) =>
 		[
 			"slashCommands",
 			provider,
 			workingDirectory ?? "",
 			workspaceId ?? "",
+			repoId ?? "",
 		] as const,
 	workspaceLinkedDirectories: (workspaceId: string) =>
 		["workspaceLinkedDirectories", workspaceId] as const,
@@ -580,6 +582,7 @@ export function slashCommandsQueryOptions(
 			provider,
 			workingDirectory,
 			workspaceId,
+			repoId,
 		),
 		queryFn: () =>
 			listSlashCommands({
