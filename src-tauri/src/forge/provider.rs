@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::forge::{github, gitlab};
 
-use super::types::{ChangeRequestInfo, ForgeActionStatus, ForgeProvider};
+use super::types::{ChangeRequestInfo, ForgeActionStatus, ForgeProvider, PrCommentInfo};
 
 pub(crate) trait WorkspaceForgeBackend {
     fn lookup_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>>;
@@ -18,6 +18,13 @@ pub(crate) trait WorkspaceForgeBackend {
         title: Option<&str>,
         body: Option<&str>,
     ) -> Result<Option<ChangeRequestInfo>>;
+    /// List PR comments + review summaries. Backends that don't
+    /// implement it yet (GitLab) return an empty list, so the
+    /// inspector's Review sub-tab degrades to an empty state instead
+    /// of erroring out.
+    fn list_change_request_comments(&self, _workspace_id: &str) -> Result<Vec<PrCommentInfo>> {
+        Ok(Vec::new())
+    }
 }
 
 struct GithubBackend;
@@ -51,6 +58,10 @@ impl WorkspaceForgeBackend for GithubBackend {
         body: Option<&str>,
     ) -> Result<Option<ChangeRequestInfo>> {
         github::update_workspace_pr(workspace_id, title, body)
+    }
+
+    fn list_change_request_comments(&self, workspace_id: &str) -> Result<Vec<PrCommentInfo>> {
+        github::lookup_workspace_pr_comments(workspace_id)
     }
 }
 

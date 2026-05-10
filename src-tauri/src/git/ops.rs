@@ -1109,6 +1109,152 @@ pub fn commits_ahead_of(workspace_dir: &Path, base_ref: &str) -> Result<u32> {
         .with_context(|| format!("Unexpected rev-list count output: {}", output))
 }
 
+/// One commit reachable from HEAD but not from `base_ref`. Used by the
+/// inspector's Diff sub-tab to render the per-commit accordion rows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCommitInfo {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub committed_at: String,
+    pub files_changed: u32,
+    pub insertions: u32,
+    pub deletions: u32,
+}
+
+/// List commits reachable from HEAD but not from `base_ref`, newest first.
+/// Each entry includes shortstat counts so the UI can render `+N -N` per
+/// commit without a second round-trip per row.
+pub fn commits_ahead_of_with_meta(
+    workspace_dir: &Path,
+    base_ref: &str,
+) -> Result<Vec<WorkspaceCommitInfo>> {
+    // `\x1f` (US) separates fields; `\x1e` (RS) separates records.
+    // Picked because they don't appear in commit metadata in practice
+    // (unlike newlines, which subjects routinely contain).
+    let format = "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ae%x1f%cI%x1e";
+    let workspace_dir_str = workspace_dir.display().to_string();
+    let range = format!("{base_ref}..HEAD");
+    let log_output = run_git(
+        [
+            "-C",
+            workspace_dir_str.as_str(),
+            "log",
+            "--shortstat",
+            "--no-merges",
+            format,
+            range.as_str(),
+        ],
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to list commits ahead of {} in {}",
+            base_ref, workspace_dir_str
+        )
+    })?;
+
+    let mut commits = Vec::new();
+    for record in log_output.split('\x1e') {
+        let record = record.trim_start_matches('\n');
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(6, '\x1f');
+        let sha = parts.next().unwrap_or("").trim().to_string();
+        let short_sha = parts.next().unwrap_or("").trim().to_string();
+        let subject = parts.next().unwrap_or("").trim().to_string();
+        let author_name = parts.next().unwrap_or("").trim().to_string();
+        let author_email = parts.next().unwrap_or("").trim().to_string();
+        let tail = parts.next().unwrap_or("");
+        let (committed_at, shortstat_line) = match tail.split_once('\n') {
+            Some((iso, rest)) => (iso.trim().to_string(), rest),
+            None => (tail.trim().to_string(), ""),
+        };
+        if sha.is_empty() {
+            continue;
+        }
+        let (files_changed, insertions, deletions) = parse_shortstat(shortstat_line);
+        commits.push(WorkspaceCommitInfo {
+            sha,
+            short_sha,
+            subject,
+            author_name,
+            author_email,
+            committed_at,
+            files_changed,
+            insertions,
+            deletions,
+        });
+    }
+    Ok(commits)
+}
+
+/// Resolve `git merge-base HEAD <ref>` to a commit SHA. Returns `None`
+/// when HEAD and `ref` share no ancestor (orphan branch). Used by the
+/// Diff sub-tab "Against main" accordion to anchor diffs at the same
+/// commit GitHub's PR view shows.
+pub fn merge_base(workspace_dir: &Path, other_ref: &str) -> Result<Option<String>> {
+    let workspace_dir_str = workspace_dir.display().to_string();
+    let output = match run_git(
+        [
+            "-C",
+            workspace_dir_str.as_str(),
+            "merge-base",
+            "HEAD",
+            other_ref,
+        ],
+        None,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            // `merge-base` exits 1 when there's no common ancestor; map
+            // that to `None` rather than bubbling.
+            let message = format!("{error:#}");
+            if message.contains("exited with status 1") {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+    };
+    let sha = output.trim();
+    if sha.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(sha.to_string()))
+    }
+}
+
+/// Parse a `git log --shortstat` summary line like
+/// `" 3 files changed, 12 insertions(+), 4 deletions(-)"`. Missing
+/// segments default to 0 — a commit that only inserts has no
+/// `deletions(-)` field.
+fn parse_shortstat(line: &str) -> (u32, u32, u32) {
+    let mut files = 0u32;
+    let mut ins = 0u32;
+    let mut del = 0u32;
+    for segment in line.split(',') {
+        let trimmed = segment.trim();
+        let Some((number, kind)) = trimmed.split_once(' ') else {
+            continue;
+        };
+        let Ok(value) = number.parse::<u32>() else {
+            continue;
+        };
+        if kind.starts_with("file") {
+            files = value;
+        } else if kind.starts_with("insertion") {
+            ins = value;
+        } else if kind.starts_with("deletion") {
+            del = value;
+        }
+    }
+    (files, ins, del)
+}
+
 /// Counts how many commits are reachable from `base_ref` but not from HEAD.
 /// Returns 0 if HEAD already contains everything in `base_ref`.
 pub fn commits_behind(workspace_dir: &Path, base_ref: &str) -> Result<u32> {

@@ -1,8 +1,18 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Maximize2, PanelRightClose } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
@@ -10,8 +20,14 @@ import {
 import type { FileTabOpener } from "@/features/tabs/types";
 import type { ChangeRequestInfo } from "@/lib/api";
 import type { DiffOpenOptions } from "@/lib/editor-session";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import {
+	type ChangesSubView,
+	type ReviewIndicator,
+	SubSectionTabs,
+} from "./components/sub-section-tabs";
 import {
 	TopSectionTabs,
 	type TopSectionView,
@@ -22,6 +38,7 @@ import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import {
 	getInitialTopView,
 	HorizontalResizeHandle,
+	INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
 	INSPECTOR_TOP_VIEW_STORAGE_KEY,
 	InspectorTabsSection,
 } from "./layout";
@@ -29,6 +46,9 @@ import type { ScriptStatus } from "./script-store";
 import { AllFilesSection } from "./sections/all-files";
 import { ChangesSection } from "./sections/changes";
 import { ChecksSection, useChecksIndicator } from "./sections/checks";
+import { DiffActionToolbar } from "./sections/diff/action-toolbar";
+import { DiffCommitFooter } from "./sections/diff/commit-footer";
+import { PrCommentsSection } from "./sections/review/pr-comments";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
 import { TerminalInstancePanel } from "./sections/terminal";
@@ -94,6 +114,15 @@ type WorkspaceInspectorSidebarProps = {
 	 * the file-tab store.
 	 */
 	onOpenFileTab?: (input: OpenFileInput, opener: FileTabOpener) => void;
+	/** Collapse the right (inspector) sidebar. The inspector is by
+	 *  definition visible while this component is mounted, so the button
+	 *  always closes — there's no in-inspector "expand right" affordance. */
+	onCollapseRightSidebar?: () => void;
+	/** Resolved hotkey string for `sidebar.right.toggle`. */
+	rightSidebarToggleShortcut?: string | null;
+	/** Open the Diff view as a full surface on the main canvas. Stub for
+	 *  now — the button renders disabled until this is wired. */
+	onExpandDiffsOnCanvas?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -119,12 +148,12 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	activeFileAbsolutePath = null,
 	onOpenFileTab,
+	onCollapseRightSidebar,
+	rightSidebarToggleShortcut = null,
+	onExpandDiffsOnCanvas,
 }: WorkspaceInspectorSidebarProps) {
 	const [topSectionView, setTopSectionView] = useState<TopSectionView>(() =>
-		getInitialTopView<TopSectionView>(
-			["files", "changes", "checks"] as const,
-			"changes",
-		),
+		getInitialTopView<TopSectionView>(["files", "changes"] as const, "changes"),
 	);
 	useEffect(() => {
 		try {
@@ -136,6 +165,30 @@ export function WorkspaceInspectorSidebar({
 			// non-fatal
 		}
 	}, [topSectionView]);
+	const queryClient = useQueryClient();
+	const [diffTreeView, setDiffTreeView] = useState(false);
+	const [changesSubView, setChangesSubView] = useState<ChangesSubView>(() => {
+		if (typeof window === "undefined") return "diff";
+		try {
+			const stored = window.localStorage.getItem(
+				INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
+			);
+			if (stored === "diff" || stored === "review") return stored;
+		} catch {
+			// fall through
+		}
+		return "diff";
+	});
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
+				changesSubView,
+			);
+		} catch {
+			// non-fatal
+		}
+	}, [changesSubView]);
 	const handleOpenFileTab = useMemo<
 		(input: OpenFileInput, opener: FileTabOpener) => void
 	>(() => onOpenFileTab ?? (() => {}), [onOpenFileTab]);
@@ -166,6 +219,19 @@ export function WorkspaceInspectorSidebar({
 		workspaceState ?? null,
 		changeRequest ?? null,
 	);
+	// Translate the existing tri-state checks indicator into the sub-tab's
+	// four-state pip. `none` upgrades to `success` once we have any change
+	// request to look at — the green tick communicates "review surface is
+	// clean / nothing demanding attention." Pre-PR (no change request) we
+	// stay at `none` to avoid false positives.
+	const reviewIndicator: ReviewIndicator =
+		checksIndicator === "failure"
+			? "failure"
+			: checksIndicator === "pending"
+				? "pending"
+				: changeRequest
+					? "success"
+					: "none";
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -436,13 +502,30 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<section className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-sidebar">
-				<div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/60 bg-muted/25 px-2">
-					<TopSectionTabs
-						value={topSectionView}
-						onChange={setTopSectionView}
-						changesCount={changes.length}
-						checksIndicator={checksIndicator}
-					/>
+				<div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/25 px-2">
+					<div className="flex min-w-0 flex-1 items-center">
+						<TopSectionTabs
+							value={topSectionView}
+							onChange={setTopSectionView}
+						/>
+					</div>
+					<div className="flex shrink-0 items-center gap-0.5">
+						<SidebarHeaderButton
+							label="Expand diffs on main canvas"
+							shortcut={null}
+							onClick={onExpandDiffsOnCanvas}
+							disabled={!onExpandDiffsOnCanvas}
+							icon={<Maximize2 className="size-4" strokeWidth={1.8} />}
+						/>
+						{onCollapseRightSidebar ? (
+							<SidebarHeaderButton
+								label="Close right sidebar"
+								shortcut={rightSidebarToggleShortcut}
+								onClick={onCollapseRightSidebar}
+								icon={<PanelRightClose className="size-4" strokeWidth={1.8} />}
+							/>
+						) : null}
+					</div>
 				</div>
 				{topSectionView === "files" ? (
 					<div
@@ -458,58 +541,115 @@ export function WorkspaceInspectorSidebar({
 							}
 						/>
 					</div>
-				) : topSectionView === "checks" ? (
+				) : (
 					<div
 						className="flex min-h-0 shrink-0 flex-col border-b border-border/60"
 						style={{ height: topBodyHeight }}
 					>
-						<ChecksSection
-							workspaceId={workspaceId ?? null}
-							workspaceState={workspaceState ?? null}
-							repoId={repoId ?? null}
-							workspaceRemote={workspaceRemote ?? null}
-							bodyHeight={topBodyHeight}
-							onCommitAction={onCommitAction}
-							onReviewAction={onReviewAction}
-							currentSessionId={currentSessionId ?? null}
-							onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-							commitButtonMode={commitButtonMode}
-							commitButtonState={commitButtonState}
-							changeRequest={changeRequest ?? null}
+						<SubSectionTabs
+							value={changesSubView}
+							onChange={setChangesSubView}
+							diffCount={changes.length}
+							reviewIndicator={reviewIndicator}
 						/>
+						{changesSubView === "review" ? (
+							<div className="flex min-h-0 flex-1 flex-col">
+								<ChecksSection
+									workspaceId={workspaceId ?? null}
+									workspaceState={workspaceState ?? null}
+									repoId={repoId ?? null}
+									workspaceRemote={workspaceRemote ?? null}
+									// Cap the checks rail at ~65% of the sub-tab body
+									// (min 160) so a long check list keeps scrolling
+									// without crowding the comments rail out below.
+									bodyHeight={Math.max(
+										Math.round((topBodyHeight - 28) * 0.65),
+										160,
+									)}
+									onCommitAction={onCommitAction}
+									onReviewAction={onReviewAction}
+									currentSessionId={currentSessionId ?? null}
+									onQueuePendingPromptForSession={
+										onQueuePendingPromptForSession
+									}
+									commitButtonMode={commitButtonMode}
+									commitButtonState={commitButtonState}
+									changeRequest={changeRequest ?? null}
+								/>
+								<PrCommentsSection
+									workspaceId={workspaceId ?? null}
+									hasChangeRequest={!!changeRequest}
+								/>
+							</div>
+						) : (
+							<>
+								<DiffActionToolbar
+									changeRequest={changeRequest ?? null}
+									workspaceBranch={workspaceBranch ?? null}
+									treeView={diffTreeView}
+									onToggleTreeView={() => setDiffTreeView((value) => !value)}
+									onRefreshChanges={() => {
+										if (workspaceRootPath) {
+											void queryClient.invalidateQueries({
+												queryKey:
+													helmorQueryKeys.workspaceChanges(workspaceRootPath),
+											});
+										}
+									}}
+									onOpenChangeRequest={
+										changeRequest
+											? () => void openUrl(changeRequest.url)
+											: undefined
+									}
+								/>
+								<DiffCommitFooter
+									workspaceId={workspaceId ?? null}
+									commitButtonMode={commitButtonMode ?? "create-pr"}
+									commitButtonState={commitButtonState ?? "idle"}
+									changeRequest={changeRequest ?? null}
+									hasUncommittedChanges={changes.length > 0}
+									changeRequestName="PR"
+									onCommitAction={onCommitAction}
+								/>
+								<ChangesSection
+									workspaceId={workspaceId ?? null}
+									workspaceRootPath={workspaceRootPath ?? null}
+									workspaceBranch={workspaceBranch ?? null}
+									workspaceRemoteUrl={workspaceRemoteUrl ?? null}
+									workspaceTargetBranch={workspaceTargetBranch ?? null}
+									changes={changes}
+									editorMode={editorMode}
+									activeEditorPath={activeEditorPath}
+									onOpenEditorFile={onOpenEditorFile}
+									onOpenChangedFile={(file, side, options) =>
+										handleOpenFileTab(
+											{
+												absolutePath: file.absolutePath,
+												relativePath: file.path,
+												fileName: file.name,
+												diffOptions: options,
+											},
+											{ kind: "changes", side },
+										)
+									}
+									flashingPaths={flashingPaths}
+									onCommitAction={onCommitAction}
+									commitButtonMode={commitButtonMode}
+									commitButtonState={commitButtonState}
+									changeRequest={changeRequest ?? null}
+									forgeIsRefreshing={forgeIsRefreshing}
+									// Sub-tab strip (28) + toolbar (36) + commit area
+									// (~150) trimmed off the sub-section's body budget;
+									// the file list now sits BELOW the commit area and
+									// scrolls in the remaining space.
+									bodyHeight={Math.max(topBodyHeight - 28 - 36 - 150, 0)}
+									animatePanelToggle={isPanelToggleAnimating}
+									isResizing={isResizing}
+									hideGitSectionHeader
+								/>
+							</>
+						)}
 					</div>
-				) : (
-					<ChangesSection
-						workspaceId={workspaceId ?? null}
-						workspaceRootPath={workspaceRootPath ?? null}
-						workspaceBranch={workspaceBranch ?? null}
-						workspaceRemoteUrl={workspaceRemoteUrl ?? null}
-						workspaceTargetBranch={workspaceTargetBranch ?? null}
-						changes={changes}
-						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
-						onOpenEditorFile={onOpenEditorFile}
-						onOpenChangedFile={(file, side, options) =>
-							handleOpenFileTab(
-								{
-									absolutePath: file.absolutePath,
-									relativePath: file.path,
-									fileName: file.name,
-									diffOptions: options,
-								},
-								{ kind: "changes", side },
-							)
-						}
-						flashingPaths={flashingPaths}
-						onCommitAction={onCommitAction}
-						commitButtonMode={commitButtonMode}
-						commitButtonState={commitButtonState}
-						changeRequest={changeRequest ?? null}
-						forgeIsRefreshing={forgeIsRefreshing}
-						bodyHeight={topBodyHeight}
-						animatePanelToggle={isPanelToggleAnimating}
-						isResizing={isResizing}
-					/>
 				)}
 			</section>
 			{tabsOpen ? (
@@ -564,5 +704,48 @@ export function WorkspaceInspectorSidebar({
 				))}
 			</InspectorTabsSection>
 		</div>
+	);
+}
+
+function SidebarHeaderButton({
+	label,
+	shortcut,
+	onClick,
+	icon,
+	disabled = false,
+}: {
+	label: string;
+	shortcut: string | null;
+	onClick?: () => void;
+	icon: React.ReactNode;
+	disabled?: boolean;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={label}
+					onClick={onClick}
+					disabled={disabled}
+					variant="ghost"
+					size="icon-xs"
+					className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+				>
+					{icon}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+			>
+				<span>{label}</span>
+				{shortcut ? (
+					<InlineShortcutDisplay
+						hotkey={shortcut}
+						className="text-background/60"
+					/>
+				) : null}
+			</TooltipContent>
+		</Tooltip>
 	);
 }

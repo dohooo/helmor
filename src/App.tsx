@@ -8,9 +8,7 @@ import {
 	ChevronDown,
 	CircleAlertIcon,
 	FolderOpen,
-	PanelLeftClose,
 	PanelLeftOpen,
-	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -47,6 +45,7 @@ import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
+import { ResourceUsagePill } from "@/features/navigation/resource-usage-pill";
 import { AppOnboarding } from "@/features/onboarding";
 import { ExportSessionImageButton } from "@/features/panel/export-session-image";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
@@ -3054,38 +3053,12 @@ function AppShell({
 														}
 														onMoveLocalToWorktree={handleMoveLocalToWorktree}
 														pushWorkspaceToast={pushWorkspaceToast}
+														onCollapseSidebar={() => setSidebarCollapsed(true)}
+														sidebarToggleShortcut={leftSidebarToggleShortcut}
 													/>
 												</div>
 												<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
 													<AppUpdateButton status={appUpdateStatus} />
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<Button
-																aria-label="Collapse left sidebar"
-																onClick={() => setSidebarCollapsed(true)}
-																variant="ghost"
-																size="icon-xs"
-																className="text-muted-foreground hover:text-foreground"
-															>
-																<PanelLeftClose
-																	className="size-4"
-																	strokeWidth={1.8}
-																/>
-															</Button>
-														</TooltipTrigger>
-														<TooltipContent
-															side="bottom"
-															className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-														>
-															<span>Collapse left sidebar</span>
-															{leftSidebarToggleShortcut ? (
-																<InlineShortcutDisplay
-																	hotkey={leftSidebarToggleShortcut}
-																	className="text-background/60"
-																/>
-															) : null}
-														</TooltipContent>
-													</Tooltip>
 												</div>
 												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
 													<SettingsButton
@@ -3095,6 +3068,7 @@ function AppShell({
 															"settings.open",
 														)}
 													/>
+													<ResourceUsagePill />
 												</div>
 											</div>
 										</aside>
@@ -3482,53 +3456,46 @@ function AppShell({
 																	<ExportSessionImageButton
 																		sessionId={selectedSessionId}
 																	/>
-																	<Tooltip>
-																		<TooltipTrigger asChild>
-																			<Button
-																				aria-label={
-																					inspectorCollapsed
-																						? "Expand right sidebar"
-																						: "Collapse right sidebar"
-																				}
-																				onClick={() =>
-																					setInspectorCollapsed(
-																						(collapsed) => !collapsed,
-																					)
-																				}
-																				variant="ghost"
-																				size="icon-xs"
-																				className="text-muted-foreground hover:text-foreground"
-																			>
-																				{inspectorCollapsed ? (
+																	{/*
+																	 * Only surface the panel-header inspector
+																	 * toggle when the inspector is collapsed —
+																	 * the inspector header carries its own close
+																	 * affordance, so showing both creates a
+																	 * redundant pair of close buttons. When
+																	 * collapsed, this is the only path back in.
+																	 */}
+																	{inspectorCollapsed ? (
+																		<Tooltip>
+																			<TooltipTrigger asChild>
+																				<Button
+																					aria-label="Expand right sidebar"
+																					onClick={() =>
+																						setInspectorCollapsed(false)
+																					}
+																					variant="ghost"
+																					size="icon-xs"
+																					className="text-muted-foreground hover:text-foreground"
+																				>
 																					<PanelRightOpen
 																						className="size-4"
 																						strokeWidth={1.8}
 																					/>
-																				) : (
-																					<PanelRightClose
-																						className="size-4"
-																						strokeWidth={1.8}
+																				</Button>
+																			</TooltipTrigger>
+																			<TooltipContent
+																				side="bottom"
+																				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+																			>
+																				<span>Expand right sidebar</span>
+																				{rightSidebarToggleShortcut ? (
+																					<InlineShortcutDisplay
+																						hotkey={rightSidebarToggleShortcut}
+																						className="text-background/60"
 																					/>
-																				)}
-																			</Button>
-																		</TooltipTrigger>
-																		<TooltipContent
-																			side="bottom"
-																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																		>
-																			<span>
-																				{inspectorCollapsed
-																					? "Expand right sidebar"
-																					: "Collapse right sidebar"}
-																			</span>
-																			{rightSidebarToggleShortcut ? (
-																				<InlineShortcutDisplay
-																					hotkey={rightSidebarToggleShortcut}
-																					className="text-background/60"
-																				/>
-																			) : null}
-																		</TooltipContent>
-																	</Tooltip>
+																				) : null}
+																			</TooltipContent>
+																		</Tooltip>
+																	) : null}
 																</div>
 															</div>
 														) : undefined
@@ -3696,6 +3663,12 @@ function AppShell({
 														onOpenSettings={handleOpenSettings}
 														activeFileAbsolutePath={activeFileAbsolutePath}
 														onOpenFileTab={handleOpenFileTab}
+														onCollapseRightSidebar={() =>
+															setInspectorCollapsed(true)
+														}
+														rightSidebarToggleShortcut={
+															rightSidebarToggleShortcut
+														}
 													/>
 												)}
 											</div>

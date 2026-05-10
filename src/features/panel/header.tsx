@@ -7,13 +7,10 @@ import {
 	Clock3,
 	Copy,
 	GitBranch,
-	History,
 	Laptop,
 	Layers,
 	Pencil,
 	Plus,
-	RotateCcw,
-	Trash2,
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -27,11 +24,6 @@ import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator"
 import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
 	HoverCard,
 	HoverCardContent,
 	HoverCardTrigger,
@@ -44,7 +36,6 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { clearPersistedDraft } from "@/features/composer/draft-storage";
 import { FileIcon } from "@/features/file-browser/file-icon";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { FileTab, TabId } from "@/features/tabs/types";
@@ -53,13 +44,10 @@ import {
 	type AgentProvider,
 	type ChangeRequestInfo,
 	createSession,
-	deleteSession,
 	listRemoteBranches,
-	loadHiddenSessions,
 	prefetchRemoteRefs,
 	renameSession,
 	renameWorkspaceBranch,
-	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
@@ -161,10 +149,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				: sessions[0]?.id
 					? tabIdToValue({ kind: "session", sessionId: sessions[0].id })
 					: undefined;
-	const [showHistory, setShowHistory] = useState(false);
-	const [hiddenSessions, setHiddenSessions] = useState<
-		WorkspaceSessionSummary[]
-	>([]);
 	const pushToast = useWorkspaceToast();
 	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
@@ -333,49 +317,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			sessions,
 			workspace,
 		],
-	);
-
-	const handleToggleHistory = useCallback(
-		async (open: boolean) => {
-			if (open && workspace) {
-				const hidden = await loadHiddenSessions(workspace.id);
-				setHiddenSessions(hidden);
-			}
-			setShowHistory(open);
-		},
-		[workspace],
-	);
-
-	const handleUnhide = useCallback(
-		async (sessionId: string) => {
-			await unhideSession(sessionId);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(sessionId);
-		},
-		[onSelectSession, onSessionsChanged],
-	);
-
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			await deleteSession(sessionId);
-			clearPersistedDraft(`session:${sessionId}`);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-		},
-		[onSessionsChanged],
 	);
 
 	const handleStartRename = useCallback(
@@ -972,77 +913,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						) : null}
 					</TooltipContent>
 				</Tooltip>
-
-				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
-					<DropdownMenuTrigger asChild>
-						<Button
-							aria-label="Session history"
-							variant="ghost"
-							size="icon-sm"
-							className={cn(
-								"ml-1 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0",
-								showHistory && "bg-accent/60 text-foreground",
-							)}
-						>
-							<History className="size-3.5" strokeWidth={1.8} />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent
-						align="end"
-						className="max-h-96 w-56 overscroll-contain"
-					>
-						{hiddenSessions.length > 0 ? (
-							hiddenSessions.map((session) => (
-								<Tooltip key={session.id}>
-									<TooltipTrigger asChild>
-										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
-											<div className="flex min-w-0 items-center gap-1.5">
-												<SessionProviderIcon
-													agentType={session.agentType}
-													active={false}
-												/>
-												<span className="truncate">
-													{displaySessionTitle(session)}
-												</span>
-											</div>
-											<div className="flex shrink-0 items-center gap-0.5">
-												<Button
-													aria-label="Restore session"
-													onClick={() => handleUnhide(session.id)}
-													variant="ghost"
-													size="icon-xs"
-													className="text-muted-foreground hover:text-foreground"
-												>
-													<RotateCcw className="size-3" strokeWidth={1.8} />
-												</Button>
-												<Button
-													aria-label="Delete session permanently"
-													onClick={() => handleDelete(session.id)}
-													variant="ghost"
-													size="icon-xs"
-													className="text-muted-foreground hover:text-destructive"
-												>
-													<Trash2 className="size-3" strokeWidth={1.8} />
-												</Button>
-											</div>
-										</div>
-									</TooltipTrigger>
-									<TooltipContent
-										side="left"
-										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-									>
-										<span>{displaySessionTitle(session)}</span>
-									</TooltipContent>
-								</Tooltip>
-							))
-						) : (
-							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
-								No hidden sessions
-							</div>
-						)}
-					</DropdownMenuContent>
-				</DropdownMenu>
 			</div>
 		</header>
 	);
@@ -1082,7 +952,7 @@ function SessionProviderIcon({
 	return <ClaudeIcon className="size-3 shrink-0 text-muted-foreground" />;
 }
 
-function displaySessionTitle(session: WorkspaceSessionSummary): string {
+export function displaySessionTitle(session: WorkspaceSessionSummary): string {
 	if (session.title && session.title !== "Untitled") {
 		return session.title;
 	}

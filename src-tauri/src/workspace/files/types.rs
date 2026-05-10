@@ -52,6 +52,20 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Total line additions/deletions across a workspace, used by the sidebar
+/// row to render the additions/deletions chip. Sums committed (vs target
+/// branch), staged, unstaged, and untracked. Computed lazily per workspace
+/// via the `get_workspace_diff_stats` command rather than denormalised onto
+/// the workspace row — the watcher only sees ref changes (not working-tree
+/// edits), so a cached field would force expensive recomputes on every list
+/// call.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDiffStats {
+    pub additions: u32,
+    pub deletions: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFilePrefetchItem {

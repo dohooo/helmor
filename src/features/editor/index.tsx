@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Columns2, Pin, X } from "lucide-react";
+import { Check, Columns2, Copy, Pin, X } from "lucide-react";
 import {
 	type MutableRefObject,
 	Suspense,
@@ -91,6 +91,7 @@ export function WorkspaceEditorSurface({
 	const [mtimeConflict, setMtimeConflict] = useState<MtimeConflict | null>(
 		null,
 	);
+	const [fileNameCopied, setFileNameCopied] = useState(false);
 	const { settings } = useSettings();
 	const queryClient = useQueryClient();
 	latestSessionRef.current = editorSession;
@@ -622,7 +623,7 @@ export function WorkspaceEditorSurface({
 			className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground"
 		>
 			<div
-				className="flex h-7 items-center border-y border-border/60 px-4"
+				className="flex h-7 items-center border-y border-border/60 bg-foreground/[0.025] px-4"
 				data-tauri-drag-region
 			>
 				<div className="flex min-w-0 items-center gap-1.5">
@@ -631,12 +632,42 @@ export function WorkspaceEditorSurface({
 						kind="file"
 						className="size-3"
 					/>
-					<span
-						className="truncate font-mono text-[11px] italic text-muted-foreground"
-						title={editorSession.path}
-					>
-						{fileBasename(editorSession.path)}
-					</span>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								onClick={() => {
+									const name = fileBasename(editorSession.path);
+									void navigator.clipboard.writeText(name);
+									setFileNameCopied(true);
+									setTimeout(() => setFileNameCopied(false), 1500);
+								}}
+								className="group/file-name flex min-w-0 cursor-pointer items-center gap-1 truncate rounded-[4px] px-1 py-0.5 font-mono text-[11px] italic text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+							>
+								<span className="truncate">
+									{fileBasename(editorSession.path)}
+								</span>
+								{fileNameCopied ? (
+									<Check
+										className="size-3 shrink-0 text-green-400"
+										strokeWidth={2}
+									/>
+								) : (
+									<Copy
+										className="size-3 shrink-0 opacity-0 transition-opacity group-hover/file-name:opacity-100"
+										strokeWidth={2}
+									/>
+								)}
+							</button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="bottom"
+							sideOffset={4}
+							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+						>
+							<span>{fileNameCopied ? "Copied" : "Copy file name"}</span>
+						</TooltipContent>
+					</Tooltip>
 				</div>
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />

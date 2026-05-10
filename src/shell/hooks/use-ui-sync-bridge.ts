@@ -22,6 +22,9 @@ function invalidateAllWorkspaceChanges(queryClient: QueryClient) {
 	void queryClient.invalidateQueries({
 		predicate: (query) => query.queryKey[0] === "workspacePathSearch",
 	});
+	void queryClient.invalidateQueries({
+		predicate: (query) => query.queryKey[0] === "workspaceDiffStats",
+	});
 }
 
 function handleUiMutation(

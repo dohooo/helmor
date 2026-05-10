@@ -17,6 +17,13 @@ type WorkspacesSidebarContainerProps = {
 	onOpenNewWorkspace?: () => void;
 	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
+	/** Collapse the sidebar from inside its own header (mirrors the
+	 *  inspector's right-close affordance). When omitted, the in-sidebar
+	 *  toggle button doesn't render. */
+	onCollapseSidebar?: () => void;
+	/** Resolved hotkey for `sidebar.left.toggle`, surfaced in the toggle
+	 *  button's tooltip. */
+	sidebarToggleShortcut?: string | null;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -40,6 +47,8 @@ export const WorkspacesSidebarContainer = memo(
 		onOpenNewWorkspace,
 		onAddRepositoryNeedsStart,
 		onMoveLocalToWorktree,
+		onCollapseSidebar,
+		sidebarToggleShortcut,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
@@ -113,6 +122,8 @@ export const WorkspacesSidebarContainer = memo(
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);
 				}}
+				onCollapseSidebar={onCollapseSidebar}
+				sidebarToggleShortcut={sidebarToggleShortcut}
 			/>
 		);
 	},

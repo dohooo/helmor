@@ -553,6 +553,7 @@ export const WorkspaceConversationContainer = memo(
 					className={cn(
 						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
 						composerWrapperClassName,
+						fileEditorVisible && !composerOnly && "hidden",
 					)}
 				>
 					<WorkspaceComposerContainer

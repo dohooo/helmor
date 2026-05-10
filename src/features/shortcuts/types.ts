@@ -40,7 +40,9 @@ export type ShortcutId =
 	| "terminal.previous"
 	| "inspector.toggleScripts"
 	| "inspector.focusTerminal"
-	| "fileBrowser.collapseAll";
+	| "fileBrowser.collapseAll"
+	| "navigation.back"
+	| "navigation.forward";
 
 export type ShortcutGroup =
 	| "Navigation"

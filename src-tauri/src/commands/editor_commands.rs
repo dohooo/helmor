@@ -1,6 +1,6 @@
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 
-use crate::{editor_files, git_ops, models::workspaces as workspace_models};
+use crate::{editor_files, git_ops, helpers, models::workspaces as workspace_models};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -53,6 +53,28 @@ pub async fn list_workspace_changes_with_content(
 ) -> CmdResult<editor_files::EditorFilesWithContentResponse> {
     run_blocking(move || editor_files::list_workspace_changes_with_content(&workspace_root_path))
         .await
+}
+
+/// Sidebar-row totals: `+additions / -deletions` across all areas. Resolved
+/// from a workspace ID (rather than a root path) because the row carries the
+/// ID, not the on-disk path. Returns zeros for archived / vanished
+/// workspaces so the row simply hides the chip instead of erroring out.
+#[tauri::command]
+pub async fn get_workspace_diff_stats(
+    workspace_id: String,
+) -> CmdResult<editor_files::WorkspaceDiffStats> {
+    run_blocking(move || {
+        let Some(record) = workspace_models::load_workspace_record_by_id(&workspace_id)? else {
+            return Ok(editor_files::WorkspaceDiffStats::default());
+        };
+        let path = helpers::workspace_path(&record)
+            .with_context(|| format!("Resolving path for workspace {workspace_id}"))?;
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| anyhow!("Workspace path is not valid UTF-8: {}", path.display()))?;
+        editor_files::compute_workspace_diff_stats(path_str)
+    })
+    .await
 }
 
 #[tauri::command]

@@ -111,6 +111,14 @@ type ChangesSectionProps = {
 	animatePanelToggle?: boolean;
 	/** Suppresses the height transition while the user is dragging a divider. */
 	isResizing?: boolean;
+	/** When true, suppress the legacy `<GitSectionHeader>` render. Used by
+	 *  the new Diff sub-tab where the toolbar + sticky commit footer
+	 *  replace the in-section header's commit button + change-request
+	 *  badge + bulk stage/unstage controls. Until the per-accordion
+	 *  bulk-action affordances land we lose stage-all / unstage-all in
+	 *  the Diff view — those will be re-introduced on the unstaged
+	 *  accordion in a follow-up. */
+	hideGitSectionHeader?: boolean;
 };
 
 export function ChangesSection({
@@ -133,6 +141,7 @@ export function ChangesSection({
 	bodyHeight,
 	animatePanelToggle = false,
 	isResizing,
+	hideGitSectionHeader = false,
 }: ChangesSectionProps) {
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
@@ -492,28 +501,30 @@ export function ChangesSection({
 			transition={panelTransition}
 			style={{ willChange: isResizing ? undefined : "height" }}
 		>
-			<GitSectionHeader
-				commitButtonMode={commitButtonMode}
-				commitButtonState={commitButtonState}
-				changeRequest={changeRequest}
-				changeRequestName={changeRequestName}
-				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
-				forgeDetection={forgeDetection}
-				workspaceId={workspaceId}
-				hasChanges={hasChanges}
-				changeCount={entries.length}
-				hasUnstaged={unstagedChanges.length > 0}
-				hasStaged={stagedChanges.length > 0}
-				onStageAll={stageAll}
-				onUnstageAll={unstageAll}
-				isRefreshing={isForgeRefreshing}
-				isContinuingWorkspace={isContinuingWorkspace}
-				onChangeRequestClick={
-					changeRequest ? () => void openUrl(changeRequest.url) : undefined
-				}
-				onCommit={handleCommitButtonClick}
-				onContinueWorkspace={handleContinueWorkspace}
-			/>
+			{hideGitSectionHeader ? null : (
+				<GitSectionHeader
+					commitButtonMode={commitButtonMode}
+					commitButtonState={commitButtonState}
+					changeRequest={changeRequest}
+					changeRequestName={changeRequestName}
+					forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
+					forgeDetection={forgeDetection}
+					workspaceId={workspaceId}
+					hasChanges={hasChanges}
+					changeCount={entries.length}
+					hasUnstaged={unstagedChanges.length > 0}
+					hasStaged={stagedChanges.length > 0}
+					onStageAll={stageAll}
+					onUnstageAll={unstageAll}
+					isRefreshing={isForgeRefreshing}
+					isContinuingWorkspace={isContinuingWorkspace}
+					onChangeRequestClick={
+						changeRequest ? () => void openUrl(changeRequest.url) : undefined
+					}
+					onCommit={handleCommitButtonClick}
+					onContinueWorkspace={handleContinueWorkspace}
+				/>
+			)}
 
 			<ScrollArea
 				aria-label="Changes panel body"

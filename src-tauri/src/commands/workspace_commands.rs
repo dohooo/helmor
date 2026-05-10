@@ -294,6 +294,108 @@ pub async fn trigger_workspace_fetch(workspace_id: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// List commits on the workspace's branch that are not yet on its target
+/// branch's remote-tracking ref (e.g. `origin/main`). Newest first.
+/// Returns an empty list if the target ref can't be resolved (no remote /
+/// no target branch / freshly created branch with no divergence).
+///
+/// Powers the inspector Diff sub-tab "Commits" accordion.
+#[tauri::command]
+pub async fn list_workspace_commits_ahead(
+    workspace_id: String,
+) -> CmdResult<Vec<crate::git_ops::WorkspaceCommitInfo>> {
+    run_blocking(
+        move || -> anyhow::Result<Vec<crate::git_ops::WorkspaceCommitInfo>> {
+            use anyhow::Context;
+            let record = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
+                .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+            let Some(workspace_root) = record.root_path.as_deref() else {
+                return Ok(Vec::new());
+            };
+            let workspace_dir = std::path::Path::new(workspace_root);
+            if !workspace_dir.is_dir() {
+                return Ok(Vec::new());
+            }
+            let repo = match crate::repos::load_repository_by_id(&record.repo_id)? {
+                Some(value) => value,
+                None => return Ok(Vec::new()),
+            };
+            let remote = repo.remote.as_deref().unwrap_or("origin").trim();
+            let target_branch = record
+                .intended_target_branch
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    repo.default_branch
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or("");
+            if remote.is_empty() || target_branch.is_empty() {
+                return Ok(Vec::new());
+            }
+            let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+            if !crate::git_ops::verify_remote_ref_exists(workspace_dir, remote, target_branch)
+                .unwrap_or(false)
+            {
+                return Ok(Vec::new());
+            }
+            crate::git_ops::commits_ahead_of_with_meta(workspace_dir, &target_ref)
+        },
+    )
+    .await
+}
+
+/// Resolve `git merge-base HEAD origin/<target-branch>` for the
+/// workspace. Returns `None` when the merge-base can't be computed
+/// (orphan branch, target ref missing, etc.). Powers the Diff sub-tab
+/// "Against main" accordion's diff base.
+#[tauri::command]
+pub async fn resolve_workspace_merge_base(workspace_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || -> anyhow::Result<Option<String>> {
+        use anyhow::Context;
+        let record = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+        let Some(workspace_root) = record.root_path.as_deref() else {
+            return Ok(None);
+        };
+        let workspace_dir = std::path::Path::new(workspace_root);
+        if !workspace_dir.is_dir() {
+            return Ok(None);
+        }
+        let repo = match crate::repos::load_repository_by_id(&record.repo_id)? {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        let remote = repo.remote.as_deref().unwrap_or("origin").trim();
+        let target_branch = record
+            .intended_target_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                repo.default_branch
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or("");
+        if remote.is_empty() || target_branch.is_empty() {
+            return Ok(None);
+        }
+        if !crate::git_ops::verify_remote_ref_exists(workspace_dir, remote, target_branch)
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        let target_ref = format!("refs/remotes/{remote}/{target_branch}");
+        crate::git_ops::merge_base(workspace_dir, &target_ref)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn prefetch_remote_refs(
     workspace_id: Option<String>,

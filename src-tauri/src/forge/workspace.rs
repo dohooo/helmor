@@ -16,7 +16,9 @@ use crate::{
 
 use super::detect::build_detection_for_remote;
 use super::provider::{backend_for, WorkspaceForgeBackend};
-use super::types::{ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider};
+use super::types::{
+    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, PrCommentInfo,
+};
 
 pub fn get_workspace_forge(workspace_id: &str) -> Result<ForgeDetection> {
     let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? else {
@@ -187,6 +189,31 @@ pub fn update_workspace_change_request(
         host = ?detection.host,
         number = result.as_ref().map(|pr| pr.number),
         "Forge update completed"
+    );
+    Ok(result)
+}
+
+pub fn list_workspace_change_request_comments(workspace_id: &str) -> Result<Vec<PrCommentInfo>> {
+    let Some((detection, backend)) = resolve_backend(workspace_id, "list_change_request_comments")?
+    else {
+        return Ok(Vec::new());
+    };
+    let result = backend
+        .list_change_request_comments(workspace_id)
+        .inspect_err(|error| {
+            log_forge_backend_error(
+                error,
+                workspace_id,
+                &detection,
+                "Forge change request comments lookup failed",
+            )
+        })?;
+    tracing::debug!(
+        workspace_id,
+        provider = ?detection.provider,
+        host = ?detection.host,
+        count = result.len(),
+        "Forge change request comments lookup completed"
     );
     Ok(result)
 }

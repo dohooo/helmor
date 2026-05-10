@@ -20,10 +20,12 @@ use anyhow::{bail, Context, Result};
 use crate::error::ErrorCode;
 use crate::forge::ChangeRequestInfo;
 use crate::forge::ForgeActionStatus;
+use crate::forge::PrCommentInfo;
 
 pub mod accounts;
 mod actions;
 mod api;
+mod comments;
 mod context;
 pub mod inbox;
 mod pull_request;
@@ -32,6 +34,7 @@ mod types;
 use self::actions::{
     build_check_insert_text, query_check_run_detail, query_workspace_pr_action_status,
 };
+use self::comments::fetch_pr_comments;
 use self::context::{load_github_context, GithubContext, GithubResolution, HostAuthCheck};
 use self::pull_request::{
     close_pull_request, fetch_open_pr_node_id, find_workspace_pr, merge_pull_request,
@@ -175,6 +178,18 @@ pub fn close_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequestInfo
     };
     close_pull_request(&context.login, &pr_node_id).context("closePullRequest failed")?;
     lookup_workspace_pr(workspace_id)
+}
+
+/// List the issue comments + review summaries on the workspace's PR.
+/// Newest-first. Returns an empty list when no PR exists / the bound
+/// account lost access — the inspector renders the empty state in
+/// either case.
+pub fn lookup_workspace_pr_comments(workspace_id: &str) -> Result<Vec<PrCommentInfo>> {
+    let context = match load_github_context(workspace_id, HostAuthCheck::Skip)? {
+        GithubResolution::Ready(ctx) if ctx.has_remote_tracking => ctx,
+        _ => return Ok(Vec::new()),
+    };
+    fetch_pr_comments(&context)
 }
 
 /// Update title and/or body on a workspace's open PR. Returns the

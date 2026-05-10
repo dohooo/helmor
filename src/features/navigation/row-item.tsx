@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { cva } from "class-variance-authority";
 import {
 	Archive,
@@ -12,7 +13,7 @@ import {
 	Split,
 	Trash2,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +38,8 @@ import {
 } from "@/features/inspector/script-store";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
+import { parsePrUrl } from "@/lib/pr-url";
+import { workspaceDiffStatsQueryOptions } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { getWorkspaceBranchTone } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
@@ -213,6 +216,29 @@ export const WorkspaceRowItem = memo(
 					? humanizeBranch(row.branch)
 					: row.title;
 
+		// Local workspaces share the user's repo HEAD; surfacing the PR# /
+		// diff totals at the row level would just duplicate the repo header
+		// label, so hide both for local mode (per spec).
+		const showRowMeta = row.mode !== "local";
+		const parsedPr = useMemo(
+			() => (showRowMeta ? parsePrUrl(row.prUrl) : null),
+			[row.prUrl, showRowMeta],
+		);
+		// Only fetch diff stats for non-local, non-archived rows. Archived
+		// workspaces are read-only history; their on-disk worktree may have
+		// been cleaned up, so the backend would just return zeros anyway.
+		const diffStatsEnabled =
+			showRowMeta && row.state !== "archived" && Boolean(row.id);
+		const diffStatsQuery = useQuery({
+			...workspaceDiffStatsQueryOptions(row.id),
+			enabled: diffStatsEnabled,
+		});
+		const diffStats = diffStatsQuery.data;
+		const showDiffStats =
+			diffStatsEnabled &&
+			diffStats !== undefined &&
+			(diffStats.additions > 0 || diffStats.deletions > 0);
+
 		const rowBody = (
 			<div
 				ref={rowRef}
@@ -295,6 +321,38 @@ export const WorkspaceRowItem = memo(
 						</span>
 					</div>
 				</div>
+
+				{showRowMeta && (showDiffStats || parsedPr) ? (
+					<div
+						className={cn(
+							"pointer-events-none ml-1 flex shrink-0 items-center gap-1.5 text-[10px] leading-none tabular-nums",
+							// Fade out when hover-action cluster shows so they don't overlap.
+							"transition-opacity",
+							hasActionHandler &&
+								"group-hover/row:opacity-0 group-focus-within/row:opacity-0",
+						)}
+						aria-hidden={hasActionHandler ? "true" : undefined}
+					>
+						{showDiffStats && diffStats ? (
+							<span className="flex items-center gap-0.5 font-medium">
+								{diffStats.additions > 0 ? (
+									<span className="text-chart-2">+{diffStats.additions}</span>
+								) : null}
+								{diffStats.deletions > 0 ? (
+									<span className="text-destructive">
+										−{diffStats.deletions}
+									</span>
+								) : null}
+							</span>
+						) : null}
+						{parsedPr ? (
+							<span className="flex items-center gap-0.5 text-muted-foreground/80">
+								<GitBranch className="size-2.5" strokeWidth={2} />#
+								{parsedPr.number}
+							</span>
+						) : null}
+					</div>
+				) : null}
 
 				{hasActionHandler ? (
 					<span

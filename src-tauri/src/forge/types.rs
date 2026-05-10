@@ -82,6 +82,35 @@ pub struct ChangeRequestInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum PrCommentKind {
+    /// Top-level conversation comment on the PR (issue comment).
+    Issue,
+    /// Review summary entry — `state` carries the review decision
+    /// (APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED). Inline
+    /// per-line review comments are intentionally not surfaced here.
+    Review,
+}
+
+/// One PR comment or review summary, normalised for the inspector's
+/// Review sub-tab. Issue comments and reviews share this shape so the
+/// frontend can render a single chronological list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCommentInfo {
+    pub id: String,
+    pub kind: PrCommentKind,
+    pub author_login: String,
+    pub author_avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub url: String,
+    /// For `Review` entries: the review state (APPROVED, CHANGES_REQUESTED,
+    /// COMMENTED, DISMISSED). `None` for `Issue` comments.
+    pub review_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ActionStatusKind {
     Success,
     Pending,

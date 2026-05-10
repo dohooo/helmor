@@ -5,7 +5,8 @@ use crate::forge::{
         self as github_inbox, GithubLabelOption, InboxFilters, InboxItemDetail, InboxPage,
         InboxSource, InboxToggles,
     },
-    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
+    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, PrCommentInfo,
+    RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
 // happens inside `forge::github::accounts` / `forge::gitlab::accounts`
@@ -383,6 +384,13 @@ pub async fn update_workspace_change_request(
         );
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn list_workspace_change_request_comments(
+    workspace_id: String,
+) -> CmdResult<Vec<PrCommentInfo>> {
+    run_blocking(move || forge::list_workspace_change_request_comments(&workspace_id)).await
 }
 
 async fn run_change_request_action(
