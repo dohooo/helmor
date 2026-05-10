@@ -10,6 +10,15 @@ export type RealtimeServerEvent = {
 
 type EventListener = (event: RealtimeServerEvent) => void;
 
+/** Client-side event posted back over the WebRTC data channel. Shape is
+ *  open-ended for the same reason as RealtimeServerEvent — every caller
+ *  pattern-matches against `type` and we don't want to copy the full
+ *  event schema. */
+export type RealtimeClientEvent = {
+	type: string;
+	[key: string]: unknown;
+};
+
 export type RealtimeVoiceSession = {
 	/** Tear down peer + mic + speaker + close audio context. Idempotent. */
 	stop: () => void;
@@ -18,6 +27,11 @@ export type RealtimeVoiceSession = {
 	 *  event (including `session.created`) because the listener fan-out
 	 *  is wired before `setLocalDescription`. */
 	onEvent: (listener: EventListener) => () => void;
+	/** Post a client event back to the model over the data channel.
+	 *  Used by the tool dispatcher to return `function_call_output`
+	 *  items and trigger follow-up responses. No-op (with a console
+	 *  warning) if the data channel isn't open yet. */
+	send: (event: RealtimeClientEvent) => void;
 	/** User's microphone stream. Stable for the whole session lifetime --
 	 *  safe to feed straight to an `AnalyserNode`. */
 	localStream: MediaStream;
@@ -112,6 +126,17 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 			return () => {
 				listeners.delete(listener);
 			};
+		},
+		send: (event) => {
+			if (stopped) return;
+			if (dataChannel.readyState !== "open") {
+				console.warn(
+					"[helmor] dropping Realtime client event sent before channel open",
+					event.type,
+				);
+				return;
+			}
+			dataChannel.send(JSON.stringify(event));
 		},
 		localStream: stream,
 		remoteStream,

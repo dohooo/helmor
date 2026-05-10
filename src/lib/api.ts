@@ -2458,6 +2458,35 @@ export async function createOpenAiRealtimeClientSecret(): Promise<OpenAiRealtime
 	);
 }
 
+/** Envelope returned by `helmor` CLI invocations made on behalf of the
+ *  voice agent. Mirrors `commands::voice_commands::HelmorCliResult` on
+ *  the Rust side. `ok=false` covers both non-zero exits and wrapper
+ *  errors (spawn / timeout); inspect `error` vs `exitCode` to tell which. */
+export type HelmorCliResult = {
+	ok: boolean;
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+	error: string | null;
+};
+
+/** Shell out to the `helmor` CLI from the voice-mode agent's tool
+ *  dispatcher.
+ *
+ *  - `detach=false` (default): wait for the child to finish, return the
+ *    full stdout/stderr.
+ *  - `detach=true`: spawn the child, return as soon as the first line
+ *    of stdout arrives (or after a ~2 s timeout) so long-running
+ *    commands like `helmor send` can be fired and forgotten. The child
+ *    keeps running in the background; subsequent state is fetched via
+ *    fresh CLI calls. */
+export async function runHelmorCli(
+	args: string[],
+	detach = false,
+): Promise<HelmorCliResult> {
+	return await invoke<HelmorCliResult>("run_helmor_cli", { args, detach });
+}
+
 export async function stopAgentStream(
 	sessionId: string,
 	provider?: string,

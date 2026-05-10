@@ -4,6 +4,7 @@ import {
 	type RealtimeVoiceSession,
 	startRealtimeVoiceSession,
 } from "./realtime-session";
+import { createToolDispatcher } from "./tool-dispatcher";
 import { useAudioLevel } from "./use-audio-level";
 import {
 	getMinHold,
@@ -199,6 +200,11 @@ export function useRealtimeSequence(active: boolean): VoiceUiState {
 						// just stay at level=0 for the speaking phase, which
 						// degrades gracefully.
 					});
+				// Wire the agent tool dispatcher first so it sees every
+				// function-call delta before our UI handler reacts. Both
+				// run for every event -- they're observers, not consumers.
+				const dispatcher = createToolDispatcher({ send: next.send });
+				next.onEvent((event) => dispatcher.handleEvent(event));
 				next.onEvent(handleEvent);
 			})
 			.catch((err) => {
