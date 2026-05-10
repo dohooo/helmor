@@ -95,6 +95,7 @@
 		"lexical": "^0.42.0",
 		"lottie-web": "^5.13.0",
 		"lucide-react": "^1.7.0",
+		"material-icon-theme": "^5.34.0",
 		"monaco-editor": "^0.55.1",
 		"motion": "^12.38.0",
 		"radix-ui": "^1.4.3",

@@ -1,8 +1,57 @@
+import { createReadStream } from "node:fs";
+import { copyFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+
+const MATERIAL_ICONS_SRC = path.resolve(
+	__dirname,
+	"./node_modules/material-icon-theme/icons",
+);
+const MATERIAL_ICONS_PUBLIC_PREFIX = "/material-icons/";
+
+// Serves the material-icon-theme SVG folder under /material-icons/* in dev,
+// and copies it into dist/material-icons/ on build. Avoids bundling 1200+ SVGs
+// through rolldown's tree-shaker, which prunes dynamically-keyed asset URLs.
+function materialIcons(): Plugin {
+	return {
+		name: "helmor:material-icons",
+		configureServer(server) {
+			server.middlewares.use((req, res, next) => {
+				if (!req.url?.startsWith(MATERIAL_ICONS_PUBLIC_PREFIX)) return next();
+				const file = decodeURIComponent(
+					req.url.slice(MATERIAL_ICONS_PUBLIC_PREFIX.length).split("?")[0],
+				);
+				if (!/^[a-zA-Z0-9._-]+\.svg$/.test(file)) return next();
+				const filePath = path.join(MATERIAL_ICONS_SRC, file);
+				res.setHeader("Content-Type", "image/svg+xml");
+				res.setHeader("Cache-Control", "public, max-age=86400");
+				const stream = createReadStream(filePath);
+				stream.on("error", () => {
+					res.statusCode = 404;
+					res.end();
+				});
+				stream.pipe(res);
+			});
+		},
+		async writeBundle(options) {
+			const outDir = options.dir ?? path.resolve(__dirname, "dist");
+			const target = path.join(outDir, "material-icons");
+			await mkdir(target, { recursive: true });
+			const files = await readdir(MATERIAL_ICONS_SRC);
+			await Promise.all(
+				files
+					.filter((f) => f.endsWith(".svg"))
+					.map((f) =>
+						copyFile(path.join(MATERIAL_ICONS_SRC, f), path.join(target, f)),
+					),
+			);
+		},
+	};
+}
 
 const host = process.env.TAURI_DEV_HOST;
 const WATCH_IGNORED = [
@@ -22,6 +71,7 @@ export default defineConfig(async () => ({
 			plugins: [["babel-plugin-react-compiler", {}]],
 		}),
 		tailwindcss(),
+		materialIcons(),
 	],
 	resolve: {
 		dedupe: ["react", "react-dom"],
