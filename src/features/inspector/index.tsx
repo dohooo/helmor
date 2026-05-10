@@ -13,6 +13,11 @@ import type { DiffOpenOptions } from "@/lib/editor-session";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
+	type ChangesSubView,
+	type ReviewIndicator,
+	SubSectionTabs,
+} from "./components/sub-section-tabs";
+import {
 	TopSectionTabs,
 	type TopSectionView,
 } from "./components/top-section-tabs";
@@ -22,6 +27,7 @@ import { useSetupAutoRun } from "./hooks/use-setup-auto-run";
 import {
 	getInitialTopView,
 	HorizontalResizeHandle,
+	INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
 	INSPECTOR_TOP_VIEW_STORAGE_KEY,
 	InspectorTabsSection,
 } from "./layout";
@@ -121,10 +127,7 @@ export function WorkspaceInspectorSidebar({
 	onOpenFileTab,
 }: WorkspaceInspectorSidebarProps) {
 	const [topSectionView, setTopSectionView] = useState<TopSectionView>(() =>
-		getInitialTopView<TopSectionView>(
-			["files", "changes", "checks"] as const,
-			"changes",
-		),
+		getInitialTopView<TopSectionView>(["files", "changes"] as const, "changes"),
 	);
 	useEffect(() => {
 		try {
@@ -136,6 +139,28 @@ export function WorkspaceInspectorSidebar({
 			// non-fatal
 		}
 	}, [topSectionView]);
+	const [changesSubView, setChangesSubView] = useState<ChangesSubView>(() => {
+		if (typeof window === "undefined") return "diff";
+		try {
+			const stored = window.localStorage.getItem(
+				INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
+			);
+			if (stored === "diff" || stored === "review") return stored;
+		} catch {
+			// fall through
+		}
+		return "diff";
+	});
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY,
+				changesSubView,
+			);
+		} catch {
+			// non-fatal
+		}
+	}, [changesSubView]);
 	const handleOpenFileTab = useMemo<
 		(input: OpenFileInput, opener: FileTabOpener) => void
 	>(() => onOpenFileTab ?? (() => {}), [onOpenFileTab]);
@@ -166,6 +191,19 @@ export function WorkspaceInspectorSidebar({
 		workspaceState ?? null,
 		changeRequest ?? null,
 	);
+	// Translate the existing tri-state checks indicator into the sub-tab's
+	// four-state pip. `none` upgrades to `success` once we have any change
+	// request to look at — the green tick communicates "review surface is
+	// clean / nothing demanding attention." Pre-PR (no change request) we
+	// stay at `none` to avoid false positives.
+	const reviewIndicator: ReviewIndicator =
+		checksIndicator === "failure"
+			? "failure"
+			: checksIndicator === "pending"
+				? "pending"
+				: changeRequest
+					? "success"
+					: "none";
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -441,7 +479,6 @@ export function WorkspaceInspectorSidebar({
 						value={topSectionView}
 						onChange={setTopSectionView}
 						changesCount={changes.length}
-						checksIndicator={checksIndicator}
 					/>
 				</div>
 				{topSectionView === "files" ? (
@@ -458,58 +495,66 @@ export function WorkspaceInspectorSidebar({
 							}
 						/>
 					</div>
-				) : topSectionView === "checks" ? (
+				) : (
 					<div
 						className="flex min-h-0 shrink-0 flex-col border-b border-border/60"
 						style={{ height: topBodyHeight }}
 					>
-						<ChecksSection
-							workspaceId={workspaceId ?? null}
-							workspaceState={workspaceState ?? null}
-							repoId={repoId ?? null}
-							workspaceRemote={workspaceRemote ?? null}
-							bodyHeight={topBodyHeight}
-							onCommitAction={onCommitAction}
-							onReviewAction={onReviewAction}
-							currentSessionId={currentSessionId ?? null}
-							onQueuePendingPromptForSession={onQueuePendingPromptForSession}
-							commitButtonMode={commitButtonMode}
-							commitButtonState={commitButtonState}
-							changeRequest={changeRequest ?? null}
+						<SubSectionTabs
+							value={changesSubView}
+							onChange={setChangesSubView}
+							diffCount={changes.length}
+							reviewIndicator={reviewIndicator}
 						/>
+						{changesSubView === "review" ? (
+							<ChecksSection
+								workspaceId={workspaceId ?? null}
+								workspaceState={workspaceState ?? null}
+								repoId={repoId ?? null}
+								workspaceRemote={workspaceRemote ?? null}
+								bodyHeight={Math.max(topBodyHeight - 28, 0)}
+								onCommitAction={onCommitAction}
+								onReviewAction={onReviewAction}
+								currentSessionId={currentSessionId ?? null}
+								onQueuePendingPromptForSession={onQueuePendingPromptForSession}
+								commitButtonMode={commitButtonMode}
+								commitButtonState={commitButtonState}
+								changeRequest={changeRequest ?? null}
+							/>
+						) : (
+							<ChangesSection
+								workspaceId={workspaceId ?? null}
+								workspaceRootPath={workspaceRootPath ?? null}
+								workspaceBranch={workspaceBranch ?? null}
+								workspaceRemoteUrl={workspaceRemoteUrl ?? null}
+								workspaceTargetBranch={workspaceTargetBranch ?? null}
+								changes={changes}
+								editorMode={editorMode}
+								activeEditorPath={activeEditorPath}
+								onOpenEditorFile={onOpenEditorFile}
+								onOpenChangedFile={(file, side, options) =>
+									handleOpenFileTab(
+										{
+											absolutePath: file.absolutePath,
+											relativePath: file.path,
+											fileName: file.name,
+											diffOptions: options,
+										},
+										{ kind: "changes", side },
+									)
+								}
+								flashingPaths={flashingPaths}
+								onCommitAction={onCommitAction}
+								commitButtonMode={commitButtonMode}
+								commitButtonState={commitButtonState}
+								changeRequest={changeRequest ?? null}
+								forgeIsRefreshing={forgeIsRefreshing}
+								bodyHeight={Math.max(topBodyHeight - 28, 0)}
+								animatePanelToggle={isPanelToggleAnimating}
+								isResizing={isResizing}
+							/>
+						)}
 					</div>
-				) : (
-					<ChangesSection
-						workspaceId={workspaceId ?? null}
-						workspaceRootPath={workspaceRootPath ?? null}
-						workspaceBranch={workspaceBranch ?? null}
-						workspaceRemoteUrl={workspaceRemoteUrl ?? null}
-						workspaceTargetBranch={workspaceTargetBranch ?? null}
-						changes={changes}
-						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
-						onOpenEditorFile={onOpenEditorFile}
-						onOpenChangedFile={(file, side, options) =>
-							handleOpenFileTab(
-								{
-									absolutePath: file.absolutePath,
-									relativePath: file.path,
-									fileName: file.name,
-									diffOptions: options,
-								},
-								{ kind: "changes", side },
-							)
-						}
-						flashingPaths={flashingPaths}
-						onCommitAction={onCommitAction}
-						commitButtonMode={commitButtonMode}
-						commitButtonState={commitButtonState}
-						changeRequest={changeRequest ?? null}
-						forgeIsRefreshing={forgeIsRefreshing}
-						bodyHeight={topBodyHeight}
-						animatePanelToggle={isPanelToggleAnimating}
-						isResizing={isResizing}
-					/>
 				)}
 			</section>
 			{tabsOpen ? (

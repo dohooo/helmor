@@ -66,6 +66,8 @@ export const INSPECTOR_TABS_HEIGHT_STORAGE_KEY =
 	"helmor.workspaceInspectorTabsHeight";
 export const INSPECTOR_TOP_VIEW_STORAGE_KEY =
 	"helmor.workspaceInspectorTopView";
+export const INSPECTOR_CHANGES_SUBVIEW_STORAGE_KEY =
+	"helmor.workspaceInspectorChangesSubview";
 
 export function getInitialTopView<T extends string>(
 	allowed: readonly T[],

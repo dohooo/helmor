@@ -45,8 +45,15 @@ import {
 // `GitSectionHeader` — see the top-right of the Changes section.
 import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
 import { cn } from "@/lib/utils";
-import type { ChecksIndicator } from "../components/top-section-tabs";
 import { PrFields } from "./pr-fields";
+
+/**
+ * Tri-state indicator surfaced by `useChecksIndicator` — `failure` (red dot),
+ * `pending` (amber), or `none`. The inspector's Review sub-tab pip widens
+ * this to a four-state by upgrading `none` → `success` (green tick) when
+ * a change request exists.
+ */
+export type ChecksIndicator = "none" | "pending" | "failure";
 
 interface GitStatusItem {
 	label: string;

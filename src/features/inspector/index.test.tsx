@@ -88,10 +88,11 @@ function renderInspector(
 			{...props}
 		/>,
 	);
-	// Tests in this file all assert against the Checks panel; the top-section
-	// tab defaults to "changes", so click "Checks" to surface its body.
+	// Tests in this file all assert against the Checks panel — now reachable
+	// as the Review sub-tab inside the Changes top-tab. Top-tab defaults to
+	// Changes; Review is the second underline sub-tab.
 	act(() => {
-		fireEvent.click(screen.getByRole("button", { name: /^Checks/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
 	});
 	return result;
 }
@@ -642,7 +643,10 @@ describe("WorkspaceInspectorSidebar Checks section", () => {
 		await screen.findByText("Preview");
 
 		expect(screen.getByText("Deployments")).toBeInTheDocument();
-		expect(screen.getByText("Checks")).toBeInTheDocument();
+		// The panel renders the CI checks under a "CI" header (not "Checks").
+		// Pre-refactor this test pointed at the top-tab button "Checks", which
+		// was renamed away when the top tabs collapsed to Changes | Files.
+		expect(screen.getByText("CI")).toBeInTheDocument();
 		expect(screen.getByLabelText("Running")).toHaveStyle({
 			color: "rgb(245, 158, 11)",
 		});
