@@ -236,6 +236,12 @@ fn repo_qualifier(filter: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+fn repo_filters_exact_reference(repo_filter: Option<&str>, reference_repo: &str) -> bool {
+    repo_filter
+        .and_then(sanitize_repo_filter)
+        .is_some_and(|repo| !repo.eq_ignore_ascii_case(reference_repo))
+}
+
 fn sanitize_search_query(query: &str) -> Option<String> {
     let cleaned = query
         .trim()
@@ -1117,10 +1123,7 @@ fn list_exact_issue_pr_reference(
     filters: Option<&InboxFilters>,
     reference: ExactIssuePrReference,
 ) -> Result<InboxPage> {
-    if repo_filter
-        .and_then(sanitize_repo_filter)
-        .is_some_and(|repo| repo != reference.repo_with_owner)
-    {
+    if repo_filters_exact_reference(repo_filter, &reference.repo_with_owner) {
         return Ok(InboxPage {
             items: Vec::new(),
             next_cursor: None,
@@ -1927,6 +1930,22 @@ mod tests {
         assert_eq!(repo_qualifier(Some("")), "");
         assert_eq!(repo_qualifier(Some("invalid")), "");
         assert_eq!(repo_qualifier(Some("dosu-ai/dosu")), "repo:dosu-ai/dosu ");
+    }
+
+    #[test]
+    fn exact_reference_repo_scope_is_case_insensitive() {
+        assert!(!repo_filters_exact_reference(
+            Some("dohooo/helmor"),
+            "Dohooo/Helmor",
+        ));
+        assert!(!repo_filters_exact_reference(
+            Some("Dohooo/Helmor"),
+            "dohooo/helmor",
+        ));
+        assert!(repo_filters_exact_reference(
+            Some("dohooo/helmor"),
+            "octocat/hello-world",
+        ));
     }
 
     #[test]
