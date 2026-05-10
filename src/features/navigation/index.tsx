@@ -182,6 +182,74 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		writeStoredSectionOpenState(sectionOpenState);
 	}, [sectionOpenState]);
 
+	// ── Highlight + slide animation for newly added workspaces ────────
+	// Track every workspace ID we've already seen. When `groups`/`archivedRows`
+	// produce IDs that weren't there before, flag them as "new" for ~1.3s so
+	// the wrapper around their virtual row gets a brief highlight animation
+	// AND the scroll container opts into a transform transition (which makes
+	// the rows below the insertion point slide down smoothly). The transition
+	// is scoped to this short window so unrelated re-layouts (section
+	// collapse/expand, status-change reorders) keep their existing snap
+	// behavior — minimum surface for regressions.
+	const seenWorkspaceIdsRef = useRef<Set<string> | null>(null);
+	const newWorkspaceTimersRef = useRef<Map<string, number>>(new Map());
+	const [newWorkspaceIds, setNewWorkspaceIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+
+	useEffect(() => {
+		const allIds = new Set<string>();
+		for (const group of groups) {
+			for (const row of group.rows) allIds.add(row.id);
+		}
+		for (const row of archivedRows) allIds.add(row.id);
+
+		const seen = seenWorkspaceIdsRef.current;
+		// First mount, or first non-empty data after an empty state: just
+		// record the baseline. We never want to flash every row on cold start.
+		if (seen === null || (seen.size === 0 && allIds.size > 0)) {
+			seenWorkspaceIdsRef.current = allIds;
+			return;
+		}
+
+		const justAdded: string[] = [];
+		for (const id of allIds) {
+			if (!seen.has(id)) justAdded.push(id);
+		}
+		seenWorkspaceIdsRef.current = allIds;
+
+		if (justAdded.length === 0) return;
+
+		setNewWorkspaceIds((prev) => {
+			const next = new Set(prev);
+			for (const id of justAdded) next.add(id);
+			return next;
+		});
+
+		for (const id of justAdded) {
+			const existing = newWorkspaceTimersRef.current.get(id);
+			if (existing !== undefined) window.clearTimeout(existing);
+			const timer = window.setTimeout(() => {
+				newWorkspaceTimersRef.current.delete(id);
+				setNewWorkspaceIds((prev) => {
+					if (!prev.has(id)) return prev;
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+			}, 1300);
+			newWorkspaceTimersRef.current.set(id, timer);
+		}
+	}, [groups, archivedRows]);
+
+	useEffect(() => {
+		const timers = newWorkspaceTimersRef.current;
+		return () => {
+			for (const timer of timers.values()) window.clearTimeout(timer);
+			timers.clear();
+		};
+	}, []);
+
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
 	// focus, invalidation, status change). Without this guard, collapsed
@@ -443,8 +511,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			}
 
 			// kind === "row"
+			const isNew = newWorkspaceIds.has(item.row.id);
 			return (
-				<div className="pl-2">
+				<div
+					className="pl-2"
+					data-workspace-row-new={isNew ? "true" : undefined}
+				>
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
@@ -495,6 +567,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,
 			creatingWorkspaceRepoId,
+			newWorkspaceIds,
 		],
 	);
 
@@ -641,6 +714,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			<div
 				ref={scrollContainerRef}
 				data-slot="workspace-groups-scroll"
+				data-workspace-list-animating={
+					newWorkspaceIds.size > 0 ? "true" : undefined
+				}
 				className="scrollbar-stable relative mt-2 min-h-0 flex-1 overflow-y-auto pr-1 pl-2 [scrollbar-width:thin]"
 			>
 				<div
@@ -653,6 +729,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					{virtualizer.getVirtualItems().map((vItem) => (
 						<div
 							key={vItem.key}
+							data-workspace-row-virtual=""
 							style={{
 								position: "absolute",
 								top: 0,
