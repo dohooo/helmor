@@ -45,9 +45,23 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
-import type { GithubLabelOption, RepositoryCreateOption } from "@/lib/api";
+import type {
+	ForgeLabelOption,
+	ForgeProvider,
+	InboxKind,
+	InboxKindLabels,
+	RepositoryCreateOption,
+} from "@/lib/api";
+import { forgeLabelsFor } from "@/lib/forge-labels";
+import {
+	parseForgeRepoFilter,
+	parseForgeRepoHost,
+} from "@/lib/forge-repo-filter";
 import { initialsFor } from "@/lib/initials";
-import { githubLabelsQueryOptions } from "@/lib/query-client";
+import {
+	forgeLabelsQueryOptions,
+	inboxKindLabelsQueryOptions,
+} from "@/lib/query-client";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	DEFAULT_INBOX_REPO_CONFIG,
@@ -106,14 +120,9 @@ const PROVIDER_TABS: {
 ];
 
 const COMING_SOON_COPY: Record<
-	Exclude<ContextProviderTab, "github">,
+	Exclude<ContextProviderTab, "github" | "gitlab">,
 	string[]
 > = {
-	gitlab: [
-		"Link merge requests, issues, and pipeline failures as context.",
-		"Turn review threads into targeted fix prompts.",
-		"Bring CI logs and branch state into the workspace flow.",
-	],
 	linear: [
 		"Pull in issues, specs, labels, and priorities.",
 		"Start workspaces directly from planned tasks.",
@@ -131,7 +140,7 @@ const COMING_SOON_COPY: Record<
 	],
 };
 
-const ISSUE_SCOPE_OPTIONS: Option<InboxIssueScope>[] = [
+const GITHUB_ISSUE_SCOPE_OPTIONS: Option<InboxIssueScope>[] = [
 	{ value: "all", label: "All" },
 	{ value: "involves", label: "Involves me" },
 	{ value: "assigned", label: "Assigned to me" },
@@ -139,7 +148,7 @@ const ISSUE_SCOPE_OPTIONS: Option<InboxIssueScope>[] = [
 	{ value: "created", label: "Created by me" },
 ];
 
-const PR_SCOPE_OPTIONS: Option<InboxPullRequestScope>[] = [
+const GITHUB_PR_SCOPE_OPTIONS: Option<InboxPullRequestScope>[] = [
 	{ value: "all", label: "All" },
 	{ value: "involves", label: "Involves me" },
 	{ value: "reviewRequested", label: "Review requested" },
@@ -147,6 +156,24 @@ const PR_SCOPE_OPTIONS: Option<InboxPullRequestScope>[] = [
 	{ value: "assignee", label: "Assigned to me" },
 	{ value: "mentions", label: "Mentioned me" },
 	{ value: "reviewedBy", label: "Reviewed by me" },
+];
+
+/** GitLab REST exposes a smaller scope surface than GitHub's search
+ *  query syntax: only `created_by_me` / `assigned_to_me` / `all`. The
+ *  backend (`apply_scope_filter_*` in `forge::gitlab::inbox`) honors
+ *  the first selected scope and falls back to "all" otherwise. We
+ *  surface the supported subset here so the UI doesn't promise filters
+ *  the API can't deliver. */
+const GITLAB_ISSUE_SCOPE_OPTIONS: Option<InboxIssueScope>[] = [
+	{ value: "all", label: "All" },
+	{ value: "assigned", label: "Assigned to me" },
+	{ value: "created", label: "Created by me" },
+];
+
+const GITLAB_PR_SCOPE_OPTIONS: Option<InboxPullRequestScope>[] = [
+	{ value: "all", label: "All" },
+	{ value: "assignee", label: "Assigned to me" },
+	{ value: "author", label: "Created by me" },
 ];
 
 const SORT_OPTIONS: Option<InboxSort>[] = [
@@ -173,24 +200,12 @@ function openAccountSettings() {
 	);
 }
 
-function parseGithubRepoFilter(
-	repository: RepositoryCreateOption | null,
-): string | null {
-	if (!repository) return null;
-	const trimmed = (repository.remoteUrl ?? repository.remote ?? "").trim();
-	if (!trimmed) return null;
-	const sshMatch = trimmed.match(
-		/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
-	);
-	if (sshMatch) {
-		return `${sshMatch[1]}/${sshMatch[2]}`;
-	}
-	const httpsMatch = trimmed.match(
-		/^(?:https?|git|ssh:\/\/git@)?:?\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
-	);
-	if (httpsMatch) {
-		return `${httpsMatch[1]}/${httpsMatch[2]}`;
-	}
+/** Map a settings tab id onto the `ForgeProvider` it represents.
+ *  Only forge providers (github/gitlab) have inbox configuration here;
+ *  other tabs render a Coming Soon panel. */
+function tabToForgeProvider(tab: ContextProviderTab): ForgeProvider | null {
+	if (tab === "github") return "github";
+	if (tab === "gitlab") return "gitlab";
 	return null;
 }
 
@@ -205,6 +220,17 @@ function joinLabels(labels: string[]): string {
 	return labels.join(", ");
 }
 
+/** Join a set of plural-singular labels into prose: `[a]` → `a`,
+ *  `[a, b]` → `a or b`, `[a, b, c]` → `a, b, or c`. Used for "issues
+ *  or merge requests" / "issues, pull requests, or discussions" copy
+ *  built dynamically from the backend's kind list. */
+function joinSingularsAsList(items: string[]): string {
+	if (items.length === 0) return "items";
+	if (items.length === 1) return items[0];
+	if (items.length === 2) return `${items[0]} or ${items[1]}`;
+	return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+}
+
 export function InboxSettingsPanel({
 	repositories,
 }: {
@@ -214,20 +240,45 @@ export function InboxSettingsPanel({
 	const { settings, updateSettings } = useSettings();
 	const [activeProvider, setActiveProvider] =
 		useState<ContextProviderTab>("github");
+	const activeForgeProvider = tabToForgeProvider(activeProvider);
+	const isGithub = activeForgeProvider === "github";
+	// Provider-level labels (provider name, "Connect GitHub" CTA, …)
+	// come from the forge-labels mirror — same pattern as the Git Header.
+	const activeForgeLabels = activeForgeProvider
+		? forgeLabelsFor(activeForgeProvider)
+		: null;
+	// Inbox kind labels (Issues / PRs vs MRs / Pull requests vs Merge
+	// requests / discussions-or-not) are backend-authoritative. The
+	// frontend never branches on `isGithub`/`isGitlab` to choose copy.
+	const kindLabelsQuery = useQuery({
+		...inboxKindLabelsQueryOptions(activeForgeProvider ?? "github"),
+		enabled: activeForgeProvider !== null,
+	});
+	const kindLabels = kindLabelsQuery.data ?? [];
+	const labelsByKind = useMemo<Partial<Record<InboxKind, InboxKindLabels>>>(
+		() => Object.fromEntries(kindLabels.map((entry) => [entry.kind, entry])),
+		[kindLabels],
+	);
+	const issueLabels = labelsByKind.issues;
+	const prLabels = labelsByKind.prs;
+	const discussionLabels = labelsByKind.discussions;
 
-	// Currently we only ship the GitHub connector. GitLab accounts exist
-	// in the forge layer but Contexts can't pull anything for them yet.
-	const githubAccounts = useMemo(
-		() => (accountsQuery.data ?? []).filter((a) => a.provider === "github"),
-		[accountsQuery.data],
+	// Accounts the active forge tab can configure. Filtered by the
+	// chosen provider so the dropdown / repo picker stays scoped.
+	const forgeAccounts = useMemo(
+		() =>
+			(accountsQuery.data ?? []).filter(
+				(a) => a.provider === activeForgeProvider,
+			),
+		[accountsQuery.data, activeForgeProvider],
 	);
 
-	const githubRepositories = useMemo(
+	const forgeRepositories = useMemo(
 		() =>
 			repositories
 				.map((repository) => ({
 					repository,
-					repoFilter: parseGithubRepoFilter(repository),
+					repoFilter: parseForgeRepoFilter(repository),
 				}))
 				.filter(
 					(
@@ -235,29 +286,36 @@ export function InboxSettingsPanel({
 					): entry is {
 						repository: RepositoryCreateOption;
 						repoFilter: string;
-					} =>
-						Boolean(entry.repoFilter) &&
-						(!entry.repository.forgeProvider ||
-							entry.repository.forgeProvider === "github"),
+					} => {
+						if (!entry.repoFilter) return false;
+						const provider = entry.repository.forgeProvider;
+						if (activeForgeProvider === "github") {
+							return !provider || provider === "github";
+						}
+						if (activeForgeProvider === "gitlab") {
+							return provider === "gitlab";
+						}
+						return false;
+					},
 				),
-		[repositories],
+		[repositories, activeForgeProvider],
 	);
 	const [selectedRepoFilter, setSelectedRepoFilter] = useState<string | null>(
 		null,
 	);
 	const effectiveRepoFilter =
 		selectedRepoFilter &&
-		githubRepositories.some((entry) => entry.repoFilter === selectedRepoFilter)
+		forgeRepositories.some((entry) => entry.repoFilter === selectedRepoFilter)
 			? selectedRepoFilter
-			: (githubRepositories[0]?.repoFilter ?? null);
+			: (forgeRepositories[0]?.repoFilter ?? null);
 	const selectedRepository =
-		githubRepositories.find((entry) => entry.repoFilter === effectiveRepoFilter)
+		forgeRepositories.find((entry) => entry.repoFilter === effectiveRepoFilter)
 			?.repository ?? null;
 	const selectedAccount =
-		githubAccounts.find(
+		forgeAccounts.find(
 			(account) => account.login === selectedRepository?.forgeLogin,
 		) ??
-		githubAccounts[0] ??
+		forgeAccounts[0] ??
 		null;
 	const effectiveLogin = selectedAccount?.login ?? null;
 	useEffect(() => {
@@ -265,12 +323,22 @@ export function InboxSettingsPanel({
 			setSelectedRepoFilter(effectiveRepoFilter);
 		}
 	}, [effectiveRepoFilter, selectedRepoFilter]);
+	// Forge-aware label query — both GitHub and GitLab go through the
+	// same backend command, so the LabelMultiSelect doesn't need to
+	// branch on provider. `host` is required for GitLab self-hosted;
+	// GitHub ignores it.
+	const labelsHost = parseForgeRepoHost(selectedRepository);
 	const labelsQuery = useQuery({
-		...githubLabelsQueryOptions(
-			effectiveLogin ?? "",
-			effectiveRepoFilter ? [effectiveRepoFilter] : [],
-		),
-		enabled: Boolean(effectiveLogin) && Boolean(effectiveRepoFilter),
+		...forgeLabelsQueryOptions({
+			provider: activeForgeProvider ?? "github",
+			login: effectiveLogin ?? "",
+			host: labelsHost,
+			repos: effectiveRepoFilter ? [effectiveRepoFilter] : [],
+		}),
+		enabled:
+			activeForgeProvider !== null &&
+			Boolean(effectiveLogin) &&
+			Boolean(effectiveRepoFilter),
 	});
 	const labelOptions = labelsQuery.data ?? [];
 
@@ -342,19 +410,31 @@ export function InboxSettingsPanel({
 				onChange={(provider) => setActiveProvider(provider)}
 			/>
 
-			{activeProvider !== "github" ? (
-				<ProviderComingSoon provider={activeProvider} />
-			) : githubAccounts.length === 0 ? (
+			{!activeForgeProvider ? (
+				<ProviderComingSoon
+					provider={
+						activeProvider as Exclude<ContextProviderTab, "github" | "gitlab">
+					}
+				/>
+			) : forgeAccounts.length === 0 ? (
 				<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-6 py-10 text-center">
 					<div className="flex size-9 items-center justify-center rounded-lg border border-border/50 text-muted-foreground">
-						<GithubBrandIcon size={18} />
+						{isGithub ? (
+							<GithubBrandIcon size={18} />
+						) : (
+							<GitlabBrandIcon size={18} />
+						)}
 					</div>
 					<div className="text-[13px] font-medium text-foreground">
-						Connect a GitHub account
+						Connect a {activeForgeLabels?.providerName} account
 					</div>
 					<div className="max-w-[360px] text-[12px] leading-5 text-muted-foreground">
-						You need at least one GitHub account before Contexts can pull
-						issues, pull requests, or discussions.
+						You need at least one {activeForgeLabels?.providerName} account
+						before Contexts can pull{" "}
+						{joinSingularsAsList(
+							kindLabels.map((entry) => `${entry.singular}s`),
+						)}
+						.
 					</div>
 					<Button
 						type="button"
@@ -373,127 +453,142 @@ export function InboxSettingsPanel({
 						description="Choose the repo these Contexts settings apply to."
 					>
 						<RepoPicker
-							repositories={githubRepositories}
+							repositories={forgeRepositories}
 							selected={selectedRepository}
 							onSelect={setSelectedRepoFilter}
 						/>
 					</SettingsRow>
 					{effectiveRepoFilter ? (
 						<div className="py-1">
-							<ContextKindSection
-								title="Issues"
-								icon={<CircleDot className="size-3" strokeWidth={2} />}
-								description="Surface issues you're assigned to or have opened."
-								enabled={currentRepoConfig.issues}
-								onEnabledChange={(next) => setToggle("issues", next)}
-							>
-								<ContextConfigRow
-									title="Scope"
-									description="Which issue relationship GitHub should use by default."
+							{issueLabels ? (
+								<ContextKindSection
+									title={issueLabels.plural}
+									icon={<CircleDot className="size-3" strokeWidth={2} />}
+									description={`Surface ${issueLabels.plural.toLowerCase()} you're assigned to or have opened.`}
+									enabled={currentRepoConfig.issues}
+									onEnabledChange={(next) => setToggle("issues", next)}
 								>
-									<ScopeMultiSelect
-										value={currentRepoConfig.issueScopes}
-										options={ISSUE_SCOPE_OPTIONS}
-										onChange={(value) => setConfig("issueScopes", value)}
-									/>
-								</ContextConfigRow>
-								<ContextConfigRow
-									title="Sort"
-									description="Default ordering before any sidebar filters are applied."
+									<ContextConfigRow
+										title="Scope"
+										description={`Which ${issueLabels.singular} relationship ${activeForgeLabels?.providerName} should use by default.`}
+									>
+										<ScopeMultiSelect
+											value={currentRepoConfig.issueScopes}
+											options={
+												isGithub
+													? GITHUB_ISSUE_SCOPE_OPTIONS
+													: GITLAB_ISSUE_SCOPE_OPTIONS
+											}
+											onChange={(value) => setConfig("issueScopes", value)}
+										/>
+									</ContextConfigRow>
+									<ContextConfigRow
+										title="Sort"
+										description="Default ordering before any sidebar filters are applied."
+									>
+										<SettingsSelect
+											value={currentRepoConfig.issueSort}
+											options={SORT_OPTIONS}
+											onChange={(value) => setConfig("issueSort", value)}
+										/>
+									</ContextConfigRow>
+									<ContextConfigRow
+										title="Labels"
+										description={`Only include ${issueLabels.plural.toLowerCase()} with selected repository labels.`}
+									>
+										<LabelMultiSelect
+											value={splitLabels(currentRepoConfig.issueLabels)}
+											options={labelOptions}
+											loading={labelsQuery.isLoading || labelsQuery.isFetching}
+											onChange={(value) =>
+												setConfig("issueLabels", joinLabels(value))
+											}
+										/>
+									</ContextConfigRow>
+								</ContextKindSection>
+							) : null}
+							{prLabels ? (
+								<ContextKindSection
+									title={prLabels.plural}
+									icon={<GitPullRequest className="size-3" strokeWidth={2} />}
+									description={`Surface ${prLabels.plural.toLowerCase()} you opened or are assigned to.`}
+									enabled={currentRepoConfig.prs}
+									onEnabledChange={(next) => setToggle("prs", next)}
 								>
-									<SettingsSelect
-										value={currentRepoConfig.issueSort}
-										options={SORT_OPTIONS}
-										onChange={(value) => setConfig("issueSort", value)}
-									/>
-								</ContextConfigRow>
-								<ContextConfigRow
-									title="Labels"
-									description="Only include issues with selected repository labels."
+									<ContextConfigRow
+										title="Scope"
+										description={`Which ${prLabels.singular} relationship ${activeForgeLabels?.providerName} should use by default.`}
+									>
+										<ScopeMultiSelect
+											value={currentRepoConfig.prScopes}
+											options={
+												isGithub
+													? GITHUB_PR_SCOPE_OPTIONS
+													: GITLAB_PR_SCOPE_OPTIONS
+											}
+											onChange={(value) => setConfig("prScopes", value)}
+										/>
+									</ContextConfigRow>
+									<ContextConfigRow
+										title="Drafts"
+										description={`Whether draft ${prLabels.plural.toLowerCase()} appear in the feed.`}
+									>
+										<SettingsSelect
+											value={currentRepoConfig.draftPrs}
+											options={DRAFT_OPTIONS}
+											onChange={(value) => setConfig("draftPrs", value)}
+										/>
+									</ContextConfigRow>
+									<ContextConfigRow
+										title="Sort"
+										description="Default ordering before any sidebar filters are applied."
+									>
+										<SettingsSelect
+											value={currentRepoConfig.prSort}
+											options={SORT_OPTIONS}
+											onChange={(value) => setConfig("prSort", value)}
+										/>
+									</ContextConfigRow>
+									<ContextConfigRow
+										title="Labels"
+										description={`Only include ${prLabels.plural.toLowerCase()} with selected repository labels.`}
+									>
+										<LabelMultiSelect
+											value={splitLabels(currentRepoConfig.prLabels)}
+											options={labelOptions}
+											loading={labelsQuery.isLoading || labelsQuery.isFetching}
+											onChange={(value) =>
+												setConfig("prLabels", joinLabels(value))
+											}
+										/>
+									</ContextConfigRow>
+								</ContextKindSection>
+							) : null}
+							{discussionLabels ? (
+								<ContextKindSection
+									title={discussionLabels.plural}
+									icon={<MessagesSquare className="size-3" strokeWidth={2} />}
+									description={`Surface ${discussionLabels.plural.toLowerCase()} in repos you have access to.`}
+									enabled={currentRepoConfig.discussions}
+									onEnabledChange={(next) => setToggle("discussions", next)}
 								>
-									<LabelMultiSelect
-										value={splitLabels(currentRepoConfig.issueLabels)}
-										options={labelOptions}
-										loading={labelsQuery.isLoading || labelsQuery.isFetching}
-										onChange={(value) =>
-											setConfig("issueLabels", joinLabels(value))
-										}
-									/>
-								</ContextConfigRow>
-							</ContextKindSection>
-							<ContextKindSection
-								title="Pull requests"
-								icon={<GitPullRequest className="size-3" strokeWidth={2} />}
-								description="Surface PRs you opened, are review-requested on, or have outstanding reviews."
-								enabled={currentRepoConfig.prs}
-								onEnabledChange={(next) => setToggle("prs", next)}
-							>
-								<ContextConfigRow
-									title="Scope"
-									description="Which pull request relationship GitHub should use by default."
-								>
-									<ScopeMultiSelect
-										value={currentRepoConfig.prScopes}
-										options={PR_SCOPE_OPTIONS}
-										onChange={(value) => setConfig("prScopes", value)}
-									/>
-								</ContextConfigRow>
-								<ContextConfigRow
-									title="Drafts"
-									description="Whether draft pull requests appear in the PR feed."
-								>
-									<SettingsSelect
-										value={currentRepoConfig.draftPrs}
-										options={DRAFT_OPTIONS}
-										onChange={(value) => setConfig("draftPrs", value)}
-									/>
-								</ContextConfigRow>
-								<ContextConfigRow
-									title="Sort"
-									description="Default ordering before any sidebar filters are applied."
-								>
-									<SettingsSelect
-										value={currentRepoConfig.prSort}
-										options={SORT_OPTIONS}
-										onChange={(value) => setConfig("prSort", value)}
-									/>
-								</ContextConfigRow>
-								<ContextConfigRow
-									title="Labels"
-									description="Only include PRs with selected repository labels."
-								>
-									<LabelMultiSelect
-										value={splitLabels(currentRepoConfig.prLabels)}
-										options={labelOptions}
-										loading={labelsQuery.isLoading || labelsQuery.isFetching}
-										onChange={(value) =>
-											setConfig("prLabels", joinLabels(value))
-										}
-									/>
-								</ContextConfigRow>
-							</ContextKindSection>
-							<ContextKindSection
-								title="Discussions"
-								icon={<MessagesSquare className="size-3" strokeWidth={2} />}
-								description="Surface discussions in repos you have access to."
-								enabled={currentRepoConfig.discussions}
-								onEnabledChange={(next) => setToggle("discussions", next)}
-							>
-								<ContextConfigRow
-									title="Sort"
-									description="Default ordering before any sidebar filters are applied."
-								>
-									<SettingsSelect
-										value={currentRepoConfig.discussionSort}
-										options={SORT_OPTIONS}
-										onChange={(value) => setConfig("discussionSort", value)}
-									/>
-								</ContextConfigRow>
-							</ContextKindSection>
+									<ContextConfigRow
+										title="Sort"
+										description="Default ordering before any sidebar filters are applied."
+									>
+										<SettingsSelect
+											value={currentRepoConfig.discussionSort}
+											options={SORT_OPTIONS}
+											onChange={(value) => setConfig("discussionSort", value)}
+										/>
+									</ContextConfigRow>
+								</ContextKindSection>
+							) : null}
 						</div>
 					) : (
 						<div className="py-8 text-center text-[12px] text-muted-foreground">
-							Add or connect a GitHub repository before configuring Contexts.
+							Add or connect a {activeForgeLabels?.providerName} repository
+							before configuring Contexts.
 						</div>
 					)}
 				</SettingsGroup>
@@ -534,7 +629,7 @@ function ProviderTabs({
 function ProviderComingSoon({
 	provider,
 }: {
-	provider: Exclude<ContextProviderTab, "github">;
+	provider: Exclude<ContextProviderTab, "github" | "gitlab">;
 }) {
 	return (
 		<div className="flex min-h-[360px] w-full items-center justify-center px-3 py-8">
@@ -738,7 +833,7 @@ function LabelMultiSelect({
 	onChange,
 }: {
 	value: string[];
-	options: GithubLabelOption[];
+	options: ForgeLabelOption[];
 	loading: boolean;
 	onChange: (value: string[]) => void;
 }) {

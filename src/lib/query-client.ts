@@ -11,6 +11,7 @@ import {
 	type ForgeAccount,
 	type ForgeActionStatus,
 	type ForgeDetection,
+	type ForgeProvider,
 	getClaudeRateLimits,
 	getCodexRateLimits,
 	getLiveContextUsage,
@@ -20,7 +21,8 @@ import {
 	getWorkspaceForge,
 	listActiveStreams,
 	listForgeAccounts,
-	listGithubLabels,
+	listForgeLabels,
+	listInboxKindLabels,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -103,8 +105,13 @@ export const helmorQueryKeys = {
 		source: string,
 		externalId: string,
 	) => ["inboxItemDetail", provider, login, source, externalId] as const,
-	githubLabels: (login: string, repos: string[]) =>
-		["githubLabels", login, ...repos] as const,
+	forgeLabels: (
+		provider: string,
+		host: string,
+		login: string,
+		repos: string[],
+	) => ["forgeLabels", provider, host, login, ...repos] as const,
+	inboxKindLabels: (provider: string) => ["inboxKindLabels", provider] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -333,15 +340,49 @@ export function activeStreamsQueryOptions() {
 	});
 }
 
-export function githubLabelsQueryOptions(login: string, repos: string[]) {
-	const sortedRepos = [...repos].sort();
+/** Repo labels for the Settings → Context multi-select. Forge-aware:
+ *  GitHub hits `gh api /repos/.../labels`; GitLab hits `glab api
+ *  projects/.../labels`. Cached for 10 min — labels rarely churn. */
+export function forgeLabelsQueryOptions(args: {
+	provider: ForgeProvider;
+	login: string;
+	host: string | null;
+	repos: string[];
+}) {
+	const sortedRepos = [...args.repos].sort();
+	const host = args.host ?? "";
 	return queryOptions({
-		queryKey: helmorQueryKeys.githubLabels(login, sortedRepos),
-		queryFn: () => listGithubLabels({ login, repos: sortedRepos }),
+		queryKey: helmorQueryKeys.forgeLabels(
+			args.provider,
+			host,
+			args.login,
+			sortedRepos,
+		),
+		queryFn: () =>
+			listForgeLabels({
+				provider: args.provider,
+				login: args.login,
+				host: args.host,
+				repos: sortedRepos,
+			}),
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 10 * 60_000,
 		gcTime: 24 * 60 * 60_000,
+	});
+}
+
+/// Inbox kind labels are static per provider (a given build's GitHub
+/// labels never change at runtime), so the cache is effectively
+/// permanent. We still go through the backend so frontend code is the
+/// pure consumer — every "PR" / "MR" / "Pull requests" / "Merge
+/// requests" string is owned by the Forge layer.
+export function inboxKindLabelsQueryOptions(provider: ForgeProvider) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.inboxKindLabels(provider),
+		queryFn: () => listInboxKindLabels(provider),
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: Number.POSITIVE_INFINITY,
 	});
 }
 

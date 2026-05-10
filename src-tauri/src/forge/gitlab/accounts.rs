@@ -402,6 +402,18 @@ mod pairs_cache {
     }
 }
 
+/// Resolve the host that owns a given GitLab login. The CLI registers
+/// at most one login per host today, so the first match wins. Returns
+/// `None` when no glab account matches — callers surface this as
+/// "Unauthenticated" in the inbox.
+pub(crate) fn host_for_login(login: &str) -> Option<String> {
+    list_glab_logged_in_pairs()
+        .ok()?
+        .into_iter()
+        .find(|(_, candidate)| candidate == login)
+        .map(|(host, _)| host)
+}
+
 /// Drop all cached state for `host` so the next `list_logins` /
 /// `list_accounts` call hits the wire. Called from the post-auth
 /// path so freshly-added logins are visible without a 30s wait.

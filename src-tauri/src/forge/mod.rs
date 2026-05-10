@@ -28,6 +28,7 @@ mod command;
 mod detect;
 pub mod github;
 mod gitlab;
+pub mod inbox;
 mod provider;
 pub(crate) mod remote;
 mod types;
@@ -37,6 +38,12 @@ pub use bundled::init as init_bundled_cli_paths;
 pub(crate) use cli_status::forge_cli_auth_command;
 pub use detect::detect_provider_for_repo;
 pub(crate) use detect::detect_provider_for_repo_offline;
+pub use inbox::{
+    ForgeLabelOption, InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxKind,
+    InboxKindLabels, InboxPage, InboxScopeFilter, InboxSortFilter, InboxSource, InboxState,
+    InboxStateFilter, InboxStateTone, InboxToggles,
+};
+pub(crate) use provider::backend_for as forge_backend_for;
 pub use types::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, DetectionSignal, ForgeActionItem,
     ForgeActionStatus, ForgeDetection, ForgeLabels, ForgeProvider, RemoteState,

@@ -24,6 +24,12 @@ export function SourceIcon({
 			return (
 				<MessagesSquare className={className} size={size} strokeWidth={2} />
 			);
+		case "gitlab_issue":
+			return <CircleDot className={className} size={size} strokeWidth={2} />;
+		case "gitlab_mr":
+			return (
+				<GitPullRequest className={className} size={size} strokeWidth={2} />
+			);
 		case "slack_thread":
 			return <SlackBrandIcon className={className} size={size} />;
 	}

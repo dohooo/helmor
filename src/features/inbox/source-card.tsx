@@ -147,12 +147,16 @@ function buildCardContextLabel(card: ContextCard) {
 	const number =
 		card.meta.type === "github_issue" ||
 		card.meta.type === "github_pr" ||
-		card.meta.type === "github_discussion"
+		card.meta.type === "github_discussion" ||
+		card.meta.type === "gitlab_issue" ||
+		card.meta.type === "gitlab_mr"
 			? card.meta.number
 			: null;
 
 	if (number) {
-		return `${card.title} #${number}`;
+		// GitLab MRs are conventionally referenced with `!N`; issues with `#N`.
+		const prefix = card.meta.type === "gitlab_mr" ? "!" : "#";
+		return `${card.title} ${prefix}${number}`;
 	}
 
 	return `${card.title} ${card.externalId}`.trim();
