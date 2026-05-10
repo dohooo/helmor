@@ -3,16 +3,9 @@ import { STREAMING_SMOOTHING_PRESET } from "@/components/ai/streaming-animated";
 import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import { cn } from "@/lib/utils";
 
-/**
- * Streamed plain-text renderer with character-level fade-in.
- *
- * Mirrors the typewriter look of <LazyStreamdown animated.sep="char"/> but
- * without the markdown pipeline — used for content that the model emits as
- * pure prose (reasoning blocks). Each character mounts inside its own
- * `<span class="stream-char">`, which CSS fades in. When `streaming` is
- * false we collapse to a single text node, so historical / static reads
- * pay nothing.
- */
+// Char-level fade for plain prose (reasoning). Mirrors streamdown's char
+// animation without the markdown pipeline; static mode collapses to a
+// single text node so historical reads pay nothing.
 export const StreamingPlainText = memo(function StreamingPlainText({
 	children,
 	streaming,

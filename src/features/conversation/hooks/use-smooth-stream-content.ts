@@ -1,15 +1,6 @@
-/**
- * Smooths a continuously-growing string into a steady character-per-frame reveal.
- *
- * Vendored from `lobe-ui` (`src/Markdown/SyntaxMarkdown/useSmoothStreamContent.ts`,
- * MIT). Profiler hooks removed; behaviour otherwise identical.
- *
- * Why: agent SDK deltas arrive bursty (a paragraph at once, then a long pause).
- * Feeding bursts straight to the renderer causes the typewriter animation to
- * jitter or skip ahead. This hook keeps an internal target buffer + EMA on the
- * arrival rate, then drains characters out at a frame-paced rate matching the
- * sender. End result: smooth, paced output regardless of network jitter.
- */
+// Smooths bursty agent SDK deltas into a steady character-per-frame reveal.
+// Vendored from lobe-ui (src/Markdown/SyntaxMarkdown/useSmoothStreamContent.ts,
+// MIT); profiler hooks removed, behaviour otherwise identical.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 

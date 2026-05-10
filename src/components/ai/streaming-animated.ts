@@ -1,12 +1,5 @@
-/**
- * Shared `animated` config passed to `<LazyStreamdown>` for live streams.
- *
- * `sep: "char"` reveals one character at a time (vs. "word"), giving the
- * smoother typewriter feel; `stagger` is the per-unit fade offset in ms.
- * Tune `duration` to match `.stream-char` in App.css so the markdown
- * surface (AssistantText) and the plain-text surface (ReasoningContent)
- * feel uniform.
- */
+// Streamdown char-level fade config; keep `duration` in sync with
+// `.stream-char` in App.css so markdown and plain-text surfaces match.
 export const STREAMING_ANIMATED = {
 	animation: "fadeIn" as const,
 	duration: 300,
@@ -15,9 +8,5 @@ export const STREAMING_ANIMATED = {
 	stagger: 0,
 };
 
-/**
- * Shared smoothing preset for both AssistantText and StreamingPlainText.
- * `silky` defaults to ~28 cps (vs. balanced's 38) and a longer settling
- * window — slower, more deliberate typewriter cadence.
- */
+// Smoothing preset shared by AssistantText and StreamingPlainText.
 export const STREAMING_SMOOTHING_PRESET = "silky" as const;
