@@ -1,5 +1,6 @@
 // Display-ready parsing for context usage and per-provider rate limits.
-// Percentages are only trusted when the stored model matches the composer.
+// The ring shows whatever was recorded at the last turn end — switching the
+// composer model in-place does not invalidate it; the next turn refreshes it.
 
 /** Baseline: written at turn end by both Claude and Codex. */
 export type StoredContextUsageMeta = {
@@ -28,11 +29,6 @@ export function ringTier(percentage: number): RingTier {
 export type DisplayResolution =
 	| { readonly kind: "empty" }
 	| {
-			readonly kind: "tokensOnly";
-			readonly recordedModelId: string;
-			readonly usedTokens: number;
-	  }
-	| {
 			readonly kind: "full";
 			readonly modelId: string;
 			readonly usedTokens: number;
@@ -42,24 +38,17 @@ export type DisplayResolution =
 			readonly rich: ClaudeRichContextUsage | null;
 	  };
 
-/** Rich overrides baseline; model mismatches degrade to tokens-only. */
+/** Rich (hover-time live fetch) drives the ring when it carries
+ *  trustworthy numbers — that's the freshest read available. Otherwise
+ *  fall back to the baseline DB record. Zeroed rich payloads (e.g. a
+ *  resume against a stale provider session id right after a model
+ *  switch) are rejected so they can't blank the ring. */
 export function resolveContextUsageDisplay(
 	baseline: StoredContextUsageMeta | null,
 	rich: ClaudeRichContextUsage | null,
-	composerModelId: string | null,
 ): DisplayResolution {
-	const effective = rich ?? baseline;
+	const effective = isTrustedRich(rich) ? rich : baseline;
 	if (!effective) return { kind: "empty" };
-
-	const matches =
-		composerModelId === null || effective.modelId === composerModelId;
-	if (!matches) {
-		return {
-			kind: "tokensOnly",
-			recordedModelId: effective.modelId,
-			usedTokens: effective.usedTokens,
-		};
-	}
 
 	return {
 		kind: "full",
@@ -70,6 +59,14 @@ export function resolveContextUsageDisplay(
 		tier: ringTier(effective.percentage),
 		rich,
 	};
+}
+
+/** A rich payload is trusted when it has non-zero used/max — anything
+ *  else is treated as "the live fetch came back without real data". */
+export function isTrustedRich(
+	rich: ClaudeRichContextUsage | null,
+): rich is ClaudeRichContextUsage {
+	return rich !== null && rich.usedTokens > 0 && rich.maxTokens > 0;
 }
 
 // ── JSON parsers ───────────────────────────────────────────────────────

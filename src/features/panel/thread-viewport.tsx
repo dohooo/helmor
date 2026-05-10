@@ -48,17 +48,11 @@ const CONVERSATION_BOTTOM_SPACER_HEIGHT = 40;
 export function resolveConversationRowHeight({
 	estimatedHeight,
 	measuredHeight,
-	streaming,
 }: {
 	estimatedHeight: number;
 	measuredHeight?: number;
-	streaming: boolean;
 }) {
-	if (measuredHeight === undefined) {
-		return estimatedHeight;
-	}
-
-	return streaming ? Math.max(measuredHeight, estimatedHeight) : measuredHeight;
+	return measuredHeight ?? estimatedHeight;
 }
 
 export function ActiveThreadViewport({
@@ -649,7 +643,6 @@ function ProgressiveConversationViewport({
 						const height = resolveConversationRowHeight({
 							estimatedHeight,
 							measuredHeight,
-							streaming: message.streaming === true,
 						});
 						result.push({
 							height,
@@ -766,7 +759,14 @@ function ProgressiveConversationViewport({
 
 					const inWindow = rows.filter((row) => {
 						const rowBottom = row.top + row.height;
-						return rowBottom >= windowTop && row.top <= windowBottom;
+						// Tall rows (multi-viewport reasoning blocks) keep a
+						// mount zone scaled to their own height so scrolling
+						// past and back doesn't tear down the smoothing-hook
+						// progress and streamdown's internal block state.
+						const localExpand = row.height > buffer ? row.height - buffer : 0;
+						const localTop = windowTop - localExpand;
+						const localBottom = windowBottom + localExpand;
+						return rowBottom >= localTop && row.top <= localBottom;
 					});
 					if (!pinTailRows || rows.length === 0) {
 						return inWindow;
@@ -788,6 +788,7 @@ function ProgressiveConversationViewport({
 				{ totalRows: rows.length },
 			),
 		[
+			buffer,
 			distanceFromBottom,
 			effectiveViewportHeight,
 			isTauri,

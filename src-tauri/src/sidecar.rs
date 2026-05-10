@@ -133,6 +133,14 @@ impl SidecarProcess {
         let mut cmd = if is_dev {
             let mut c = Command::new("bun");
             c.arg("run").arg(&sidecar_path);
+            // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
+            // applies the preload that registers our build-time plugins
+            // (sqlite3 shim + cursor SDK chunk) at runtime. Without this
+            // the sidecar inherits Tauri's cwd and the preload never runs,
+            // so loading @cursor/sdk crashes on the native sqlite3 addon.
+            if let Some(sidecar_root) = sidecar_path.parent().and_then(|p| p.parent()) {
+                c.current_dir(sidecar_root);
+            }
             c
         } else {
             Command::new(&sidecar_path)

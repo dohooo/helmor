@@ -44,6 +44,7 @@ import {
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { ResourceUsagePill } from "@/features/navigation/resource-usage-pill";
 import { AppOnboarding } from "@/features/onboarding";
@@ -89,6 +90,7 @@ import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import { HistoryScreenContainer } from "./features/history/container";
 import { KanbanScreenContainer } from "./features/kanban/container";
 import {
+	type ActiveStreamSummary,
 	createAndCheckoutBranch,
 	createSession,
 	drainPendingCliSends,
@@ -100,6 +102,7 @@ import {
 	moveLocalWorkspaceToWorktree,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
+	prewarmSlashCommandsForRepo,
 	prewarmSlashCommandsForWorkspace,
 	type RepositoryCreateOption,
 	syncWorkspaceWithTargetBranch,
@@ -186,6 +189,7 @@ type WorkspaceViewMode =
 	| "kanban";
 const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
 const EMPTY_STRING_LIST: readonly string[] = [];
+const EMPTY_ACTIVE_STREAMS: ActiveStreamSummary[] = [];
 
 function App() {
 	const e2eScenario =
@@ -510,7 +514,7 @@ function AppShell({
 	const [startInboxProviderTab, setStartInboxProviderTab] =
 		useState<string>("github");
 	const [startInboxProviderSourceTab, setStartInboxProviderSourceTab] =
-		useState<string>("github_issue");
+		useState<string>("issues");
 	const [startInboxStateFilterBySource, setStartInboxStateFilterBySource] =
 		useState<Record<string, string>>({});
 	const [startPreviewCard, setStartPreviewCard] = useState<ContextCard | null>(
@@ -533,12 +537,15 @@ function AppShell({
 	// StartPage's optimistic "creating workspace" marker on top so the
 	// panel can show a busy spinner before the real stream registers.
 	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	// Stable empty fallback so referential-equality consumers don't churn
+	// on undefined-data ticks.
+	const activeStreams = activeStreamsQuery.data ?? EMPTY_ACTIVE_STREAMS;
 	const effectiveSessionRunStates = useMemo<
 		ReadonlyMap<string, SessionRunState>
 	>(
 		() =>
 			buildSessionRunStates(
-				activeStreamsQuery.data ?? [],
+				activeStreams,
 				pendingCreatedWorkspaceSubmit
 					? {
 							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
@@ -546,7 +553,7 @@ function AppShell({
 						}
 					: null,
 			),
-		[activeStreamsQuery.data, pendingCreatedWorkspaceSubmit],
+		[activeStreams, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -980,6 +987,10 @@ function AppShell({
 			selectedWorkspaceDetail?.state !== "archived",
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
+
+	// Nudge CI-progress refetch on workspace switch — `refetchOnMount: "always"`
+	// doesn't fire on queryKey changes.
+	useRefreshForgeOnWorkspaceSwitch(selectedWorkspaceId);
 
 	useEffect(() => {
 		selectedWorkspaceIdRef.current = selectedWorkspaceId;
@@ -2586,6 +2597,16 @@ function AppShell({
 		repositories.find((repository) => repository.id === startRepositoryId) ??
 		repositories[0] ??
 		null;
+	// Prewarm slash-commands for the start-page repo so the next `/` press
+	// hits warm cache (cold path otherwise has no cwd → misses project-level
+	// `.claude/commands/`). Gated on start view to avoid scheduling while the
+	// user is in workspace mode; deps key on `id` so a repositories refresh
+	// that doesn't change the selected repo doesn't re-fire.
+	useEffect(() => {
+		if (workspaceViewMode !== "start") return;
+		if (!startRepository) return;
+		void prewarmSlashCommandsForRepo(startRepository.id);
+	}, [workspaceViewMode, startRepository?.id]);
 	const selectedWorkspaceRepository =
 		repositories.find(
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
@@ -3264,6 +3285,7 @@ function AppShell({
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
+														activeStreams={activeStreams}
 														busySessionIds={effectiveBusySessionIds}
 														stoppableSessionIds={effectiveStoppableSessionIds}
 														interactionRequiredSessionIds={
@@ -3323,6 +3345,7 @@ function AppShell({
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}
+													activeStreams={activeStreams}
 													busySessionIds={effectiveBusySessionIds}
 													stoppableSessionIds={effectiveStoppableSessionIds}
 													interactionRequiredSessionIds={
@@ -3683,6 +3706,10 @@ function AppShell({
 														workspaceRootPath={workspaceRootPath}
 														workspaceState={
 															selectedWorkspaceDetailQuery.data?.state ?? null
+														}
+														workspaceSetupCompletedAt={
+															selectedWorkspaceDetailQuery.data
+																?.setupCompletedAt ?? null
 														}
 														repoId={
 															selectedWorkspaceDetailQuery.data?.repoId ?? null

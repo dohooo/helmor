@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import type {
+	ActiveStreamSummary,
 	AgentModelOption,
 	ThreadMessageLike,
 	ToolCallPart,
@@ -28,6 +29,14 @@ const noopSubmitQueue: SubmitQueueApi = {
 	clear: () => {},
 };
 
+const NO_ACTIVE_STREAMS: ActiveStreamSummary[] = [];
+
+// Drain replay runs on `setTimeout(0)`; `Promise.resolve()` only flushes
+// microtasks, so tests need this to yield through one macrotask tick.
+async function flushDrainTimer() {
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 const apiMocks = vi.hoisted(() => ({
 	generateSessionTitle: vi.fn(),
 	loadRepoPreferences: vi.fn(),
@@ -40,16 +49,6 @@ const apiMocks = vi.hoisted(() => ({
 	stopAgentStream: vi.fn(),
 }));
 
-// `listActiveStreams` is intentionally NOT mocked here. The hook reads it
-// via React Query, where `activeStreamsQueryOptions` provides
-// `initialData: []`, and `src/test/setup.ts`'s default invoke mock
-// returns `undefined` for unhandled commands — both paths produce an
-// empty array, which matches "no backend-tracked streams" for these
-// unit tests. If a future test wants to assert the backend-truth abort
-// path (e.g. that `handleStopStream` picks up a `provider` published by
-// the Rust registry rather than the local optimistic fallback), mock
-// `listActiveStreams` explicitly here so the default doesn't silently
-// swallow the assertion.
 vi.mock("@/lib/api", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/api")>();
 
@@ -184,14 +183,6 @@ describe("useConversationStreaming", () => {
 		apiMocks.stopAgentStream.mockReset();
 		apiMocks.loadRepoPreferences.mockResolvedValue({
 			overrides: {},
-			inherit: {
-				createPr: false,
-				review: false,
-				fixErrors: false,
-				resolveConflicts: false,
-				branchRename: false,
-				general: false,
-			},
 			global: {},
 			effective: {},
 		});
@@ -235,6 +226,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{
 				initialProps: {
@@ -327,6 +319,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -365,6 +358,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -404,6 +398,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -468,6 +463,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -532,6 +528,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 				emptySibling: useConversationStreaming({
 					composerContextKey: "start:repo:repo-1",
@@ -541,6 +538,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			}),
 			{ wrapper: Wrapper },
@@ -583,17 +581,11 @@ describe("useConversationStreaming", () => {
 
 	it("sends the repo general preference via promptPrefix on the first prompt only", async () => {
 		apiMocks.loadRepoPreferences.mockResolvedValue({
-			overrides: { general: "Always summarize the repo conventions first." },
-			inherit: {
-				createPr: false,
-				review: false,
-				fixErrors: false,
-				resolveConflicts: false,
-				branchRename: false,
-				general: false,
-			},
+			overrides: {},
 			global: {},
-			effective: { general: "Always summarize the repo conventions first." },
+			effective: {
+				general: "Always summarize the repo conventions first.",
+			},
 		});
 		apiMocks.startAgentMessageStream.mockImplementation(async () => {});
 
@@ -617,6 +609,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -670,6 +663,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -811,6 +805,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -873,6 +868,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -961,6 +957,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1060,6 +1057,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1114,6 +1112,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1165,6 +1164,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1199,6 +1199,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1268,6 +1269,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1319,6 +1321,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{
 				initialProps: {
@@ -1421,6 +1424,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1470,6 +1474,7 @@ describe("useConversationStreaming", () => {
 					selectionPending: false,
 					followUpBehavior: "steer",
 					submitQueue: noopSubmitQueue,
+					activeStreams: NO_ACTIVE_STREAMS,
 				}),
 			{ wrapper: Wrapper },
 		);
@@ -1603,6 +1608,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -1661,10 +1667,17 @@ describe("useConversationStreaming", () => {
 				},
 			);
 			const queue = createFakeQueue();
+			const session1Active: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
 
 			const { Wrapper } = createWrapper();
-			const { result } = renderHook(
-				() =>
+			const { result, rerender } = renderHook(
+				({ activeStreams }: { activeStreams: ActiveStreamSummary[] }) =>
 					useConversationStreaming({
 						composerContextKey: "session:session-1",
 						displayedSelectedModelId: MODEL.id,
@@ -1673,11 +1686,15 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams,
 					}),
-				{ wrapper: Wrapper },
+				{
+					wrapper: Wrapper,
+					initialProps: { activeStreams: NO_ACTIVE_STREAMS },
+				},
 			);
 
-			// Kick off the primary turn.
+			// Kick off the primary turn, then mirror the backend register.
 			await act(async () => {
 				await result.current.handleComposerSubmit({
 					prompt: "Primary",
@@ -1691,8 +1708,9 @@ describe("useConversationStreaming", () => {
 					fastMode: false,
 				});
 			});
+			rerender({ activeStreams: session1Active });
 
-			// Enqueue a follow-up.
+			// Enqueue a follow-up while the stream is active.
 			await act(async () => {
 				await result.current.handleComposerSubmit({
 					prompt: "Queued",
@@ -1708,7 +1726,8 @@ describe("useConversationStreaming", () => {
 			});
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
 
-			// Finish the first turn — drain effect should pop + replay.
+			// Done → drain pops + replays.
+			rerender({ activeStreams: NO_ACTIVE_STREAMS });
 			await act(async () => {
 				streamCallbacks[0]({
 					kind: "done",
@@ -1720,13 +1739,11 @@ describe("useConversationStreaming", () => {
 					persisted: false,
 				});
 			});
-			// Drain is scheduled via `queueMicrotask`; let it run.
 			await act(async () => {
-				await Promise.resolve();
+				await flushDrainTimer();
 			});
 
 			expect(queue.snapshot().has("session-1")).toBe(false);
-			// Second `startAgentMessageStream` call carries the queued prompt.
 			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledTimes(2);
 			const secondCallPayload = apiMocks.startAgentMessageStream.mock
 				.calls[1][0] as { prompt: string };
@@ -1765,6 +1782,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -1798,6 +1816,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -1851,11 +1870,28 @@ describe("useConversationStreaming", () => {
 				},
 			);
 			const queue = createFakeQueue();
+			const sessionAActive: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-A",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
 
 			const { Wrapper } = createWrapper();
 			// Start displayed on session A.
 			const { result, rerender } = renderHook(
-				({ sessionId, workspaceId, contextKey }) =>
+				({
+					sessionId,
+					workspaceId,
+					contextKey,
+					activeStreams,
+				}: {
+					sessionId: string;
+					workspaceId: string;
+					contextKey: string;
+					activeStreams: ActiveStreamSummary[];
+				}) =>
 					useConversationStreaming({
 						composerContextKey: contextKey,
 						displayedSelectedModelId: MODEL.id,
@@ -1864,12 +1900,14 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams,
 					}),
 				{
 					initialProps: {
 						sessionId: "session-A",
 						workspaceId: "workspace-1",
 						contextKey: "session:session-A",
+						activeStreams: NO_ACTIVE_STREAMS,
 					},
 					wrapper: Wrapper,
 				},
@@ -1889,6 +1927,12 @@ describe("useConversationStreaming", () => {
 					fastMode: false,
 				});
 			});
+			rerender({
+				sessionId: "session-A",
+				workspaceId: "workspace-1",
+				contextKey: "session:session-A",
+				activeStreams: sessionAActive,
+			});
 			// Queue a follow-up in session A.
 			await act(async () => {
 				await result.current.handleComposerSubmit({
@@ -1905,14 +1949,21 @@ describe("useConversationStreaming", () => {
 			});
 			expect(queue.snapshot().get("session-A")).toHaveLength(1);
 
-			// User navigates to session B BEFORE A's turn finishes.
+			// User navigates to session B; A's stream is still alive.
 			rerender({
 				sessionId: "session-B",
 				workspaceId: "workspace-1",
 				contextKey: "session:session-B",
+				activeStreams: sessionAActive,
 			});
 
 			// A's turn finishes → drain fires.
+			rerender({
+				sessionId: "session-B",
+				workspaceId: "workspace-1",
+				contextKey: "session:session-B",
+				activeStreams: NO_ACTIVE_STREAMS,
+			});
 			await act(async () => {
 				streamCallbacks[0]({
 					kind: "done",
@@ -1925,15 +1976,12 @@ describe("useConversationStreaming", () => {
 				});
 			});
 			await act(async () => {
-				await Promise.resolve();
+				await flushDrainTimer();
 			});
 
-			// Queue for A is empty, queue for B untouched.
+			// Drained submit targets A (not the displayed B).
 			expect(queue.snapshot().has("session-A")).toBe(false);
 			expect(queue.snapshot().has("session-B")).toBe(false);
-			// The drained submit targeted session A (NOT B, which is
-			// currently displayed) — verified via the helmorSessionId
-			// passed to the second `startAgentMessageStream` call.
 			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledTimes(2);
 			const drainedPayload = apiMocks.startAgentMessageStream.mock
 				.calls[1][0] as { prompt: string; helmorSessionId: string };
@@ -1963,6 +2011,7 @@ describe("useConversationStreaming", () => {
 						// submit would steer. `forceQueue: true` must override.
 						followUpBehavior: "steer",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2028,6 +2077,7 @@ describe("useConversationStreaming", () => {
 						// submit would steer mid-turn.
 						followUpBehavior: "steer",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2088,6 +2138,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2144,6 +2195,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2211,6 +2263,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2277,6 +2330,7 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams: NO_ACTIVE_STREAMS,
 					}),
 				{ wrapper: Wrapper },
 			);
@@ -2331,10 +2385,17 @@ describe("useConversationStreaming", () => {
 				},
 			);
 			const queue = createFakeQueue();
+			const session1Active: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
 
 			const { Wrapper } = createWrapper();
-			const { result } = renderHook(
-				() =>
+			const { result, rerender } = renderHook(
+				({ activeStreams }: { activeStreams: ActiveStreamSummary[] }) =>
 					useConversationStreaming({
 						composerContextKey: "session:session-1",
 						displayedSelectedModelId: MODEL.id,
@@ -2343,8 +2404,12 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams,
 					}),
-				{ wrapper: Wrapper },
+				{
+					wrapper: Wrapper,
+					initialProps: { activeStreams: NO_ACTIVE_STREAMS },
+				},
 			);
 
 			// Start primary.
@@ -2361,6 +2426,7 @@ describe("useConversationStreaming", () => {
 					fastMode: false,
 				});
 			});
+			rerender({ activeStreams: session1Active });
 			// Queue two follow-ups.
 			for (const prompt of ["One", "Two"]) {
 				await act(async () => {
@@ -2379,7 +2445,8 @@ describe("useConversationStreaming", () => {
 			}
 			expect(queue.snapshot().get("session-1")).toHaveLength(2);
 
-			// Finish primary → drain pops "One".
+			// Finish primary → drain pops "One"; backend re-registers.
+			rerender({ activeStreams: NO_ACTIVE_STREAMS });
 			await act(async () => {
 				streamCallbacks[0]({
 					kind: "done",
@@ -2392,12 +2459,14 @@ describe("useConversationStreaming", () => {
 				});
 			});
 			await act(async () => {
-				await Promise.resolve();
+				await flushDrainTimer();
 			});
+			rerender({ activeStreams: session1Active });
 			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledTimes(2);
 			expect(queue.snapshot().get("session-1")).toHaveLength(1);
 
 			// Finish second → drain pops "Two".
+			rerender({ activeStreams: NO_ACTIVE_STREAMS });
 			await act(async () => {
 				streamCallbacks[1]({
 					kind: "done",
@@ -2410,13 +2479,17 @@ describe("useConversationStreaming", () => {
 				});
 			});
 			await act(async () => {
-				await Promise.resolve();
+				await flushDrainTimer();
 			});
 			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledTimes(3);
 			expect(queue.snapshot().has("session-1")).toBe(false);
-			const thirdPayload = apiMocks.startAgentMessageStream.mock
+			// FIFO: "One" drained first, "Two" second.
+			const firstDrainPayload = apiMocks.startAgentMessageStream.mock
+				.calls[1][0] as { prompt: string };
+			const secondDrainPayload = apiMocks.startAgentMessageStream.mock
 				.calls[2][0] as { prompt: string };
-			expect(thirdPayload.prompt).toBe("Two");
+			expect(firstDrainPayload.prompt).toBe("One");
+			expect(secondDrainPayload.prompt).toBe("Two");
 		});
 
 		it("drains queued items when the prior turn errors instead of done", async () => {
@@ -2427,10 +2500,17 @@ describe("useConversationStreaming", () => {
 				},
 			);
 			const queue = createFakeQueue();
+			const session1Active: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
 
 			const { Wrapper } = createWrapper();
-			const { result } = renderHook(
-				() =>
+			const { result, rerender } = renderHook(
+				({ activeStreams }: { activeStreams: ActiveStreamSummary[] }) =>
 					useConversationStreaming({
 						composerContextKey: "session:session-1",
 						displayedSelectedModelId: MODEL.id,
@@ -2439,8 +2519,12 @@ describe("useConversationStreaming", () => {
 						selectionPending: false,
 						followUpBehavior: "queue",
 						submitQueue: queue,
+						activeStreams,
 					}),
-				{ wrapper: Wrapper },
+				{
+					wrapper: Wrapper,
+					initialProps: { activeStreams: NO_ACTIVE_STREAMS },
+				},
 			);
 
 			await act(async () => {
@@ -2456,6 +2540,7 @@ describe("useConversationStreaming", () => {
 					fastMode: false,
 				});
 			});
+			rerender({ activeStreams: session1Active });
 			await act(async () => {
 				await result.current.handleComposerSubmit({
 					prompt: "Queued after error",
@@ -2470,6 +2555,7 @@ describe("useConversationStreaming", () => {
 				});
 			});
 
+			rerender({ activeStreams: NO_ACTIVE_STREAMS });
 			await act(async () => {
 				streamCallbacks[0]({
 					kind: "error",
@@ -2481,12 +2567,114 @@ describe("useConversationStreaming", () => {
 				});
 			});
 			await act(async () => {
-				await Promise.resolve();
+				await flushDrainTimer();
 			});
 
 			// error-path also drains — queued prompt doesn't get stuck.
 			expect(apiMocks.startAgentMessageStream).toHaveBeenCalledTimes(2);
 			expect(queue.snapshot().has("session-1")).toBe(false);
+		});
+
+		// Regression — start-page-toggle bug: hook remounts with empty
+		// local state but backend stream still registered. Routing must
+		// see this through `activeStreams` and route to steer/queue.
+		it("routes to steer after hook remount when backend stream is still active", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+			apiMocks.steerAgentStream.mockResolvedValue({ accepted: true });
+			const queue = createFakeQueue();
+			const session1Active: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+			const { Wrapper } = createWrapper();
+
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "steer",
+						submitQueue: queue,
+						activeStreams: session1Active,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Follow up after remount",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			// Must not collide with the still-held backend lock.
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			expect(apiMocks.steerAgentStream).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sessionId: "session-1",
+					provider: "codex",
+					prompt: "Follow up after remount",
+				}),
+			);
+		});
+
+		it("routes to queue after hook remount when backend stream is still active", async () => {
+			apiMocks.startAgentMessageStream.mockImplementation(async () => {});
+			const queue = createFakeQueue();
+			const session1Active: ActiveStreamSummary[] = [
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					provider: "codex",
+				},
+			];
+			const { Wrapper } = createWrapper();
+
+			const { result } = renderHook(
+				() =>
+					useConversationStreaming({
+						composerContextKey: "session:session-1",
+						displayedSelectedModelId: MODEL.id,
+						displayedSessionId: "session-1",
+						displayedWorkspaceId: "workspace-1",
+						selectionPending: false,
+						followUpBehavior: "queue",
+						submitQueue: queue,
+						activeStreams: session1Active,
+					}),
+				{ wrapper: Wrapper },
+			);
+
+			await act(async () => {
+				await result.current.handleComposerSubmit({
+					prompt: "Queued after remount",
+					imagePaths: [],
+					filePaths: [],
+					customTags: [],
+					model: MODEL,
+					workingDirectory: "/tmp/helmor",
+					effortLevel: "medium",
+					permissionMode: "default",
+					fastMode: false,
+				});
+			});
+
+			expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
+			expect(apiMocks.steerAgentStream).not.toHaveBeenCalled();
+			expect(queue.snapshot().get("session-1")).toHaveLength(1);
 		});
 	});
 });

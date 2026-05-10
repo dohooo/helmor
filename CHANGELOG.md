@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.20.4
+
+### Patch Changes
+
+- [#493](https://github.com/dohooo/helmor/pull/493) [`1f7b21c`](https://github.com/dohooo/helmor/commit/1f7b21c6acd587b9b81b751052f3510cdaadd367) Thanks [@natllian](https://github.com/natllian)! - Bring full GitLab support to the Add Context sidebar and fix two inbox bugs:
+
+  - Add Context now lists GitLab issues and merge requests when the current project lives on GitLab.
+  - Fix the "Newest" sort behaving identically to "Recently updated" on both GitHub and GitLab — it now actually sorts by creation date.
+  - Fix inbox pagination silently dropping items when a page returned more results than the page size (e.g. only 20 of 23 issues showing).
+
+- [#491](https://github.com/dohooo/helmor/pull/491) [`64b05bf`](https://github.com/dohooo/helmor/commit/64b05bfa47584912e9ab31e58234eda8d86738ff) Thanks [@natllian](https://github.com/natllian)! - Improve how thinking blocks are surfaced and rendered:
+  - Add a Claude Code Thinking Display setting in General (Summarized / Omitted) to control how Claude returns thinking — choosing Omitted speeds up time-to-first-text-token when streaming.
+  - Stop large reasoning blocks from flickering when they scroll out of view and back, and from stalling workspace switches.
+  - Keep the conversation's bottom whitespace stable during long streaming replies instead of letting it grow until real content is pushed off-screen.
+
+## 0.20.3
+
+### Patch Changes
+
+- [#484](https://github.com/dohooo/helmor/pull/484) [`ae315f0`](https://github.com/dohooo/helmor/commit/ae315f08f9aa899b65b7549bd6241d4f6960197a) Thanks [@natllian](https://github.com/natllian)! - Fix a multi-second UI freeze when starting a new worktree on a large repository, caused by the inspector running its file-diff panel against the worktree mid-checkout.
+
+- [#475](https://github.com/dohooo/helmor/pull/475) [`6ffeb16`](https://github.com/dohooo/helmor/commit/6ffeb162c066df3d9e13675cca985a899e898479) Thanks [@taroj1205](https://github.com/taroj1205)! - Let fish users run scripts.
+
+- [#483](https://github.com/dohooo/helmor/pull/483) [`b844f45`](https://github.com/dohooo/helmor/commit/b844f45a3350bbcf512981173af523f391bc9a24) Thanks [@taroj1205](https://github.com/taroj1205)! - Make slash command search match hyphenated commands when separators are omitted.
+
+- [#481](https://github.com/dohooo/helmor/pull/481) [`24e822b`](https://github.com/dohooo/helmor/commit/24e822b64ede953b013b76042966bd5b59282c67) Thanks [@natllian](https://github.com/natllian)! - Polish the streaming response visuals:
+
+  - Reveal assistant text and reasoning character-by-character with a steady fade-in, even when the underlying SDK output arrives in bursts.
+  - Restyle the reasoning block as inline text without a separate background or container.
+
+- [#488](https://github.com/dohooo/helmor/pull/488) [`0421877`](https://github.com/dohooo/helmor/commit/04218771472dbacede2314b6be78d033cab89f7c) Thanks [@taroj1205](https://github.com/taroj1205)! - Support exact GitHub issue and PR URL or number search in the context sidebar.
+
+## 0.20.2
+
+### Patch Changes
+
+- [#469](https://github.com/dohooo/helmor/pull/469) [`259a689`](https://github.com/dohooo/helmor/commit/259a6894be348e79a2291ac36e2c3030595f4b51) Thanks [@natllian](https://github.com/natllian)! - Fix project-level slash commands missing from the start-page `/` menu for both Claude and Codex.
+
+- [#466](https://github.com/dohooo/helmor/pull/466) [`059684c`](https://github.com/dohooo/helmor/commit/059684c1f5d854baa6c1f05cffe2796a838b3a50) Thanks [@natllian](https://github.com/natllian)! - Persist when a workspace's setup script has finished so the Setup tab no longer treats it as never run after restarting Helmor.
+
+- [#454](https://github.com/dohooo/helmor/pull/454) [`c995f7e`](https://github.com/dohooo/helmor/commit/c995f7eb3858d229a9f8c4fc7f1f50b9952a465f) Thanks [@natllian](https://github.com/natllian)! - Fix the Default / Review / PR-MR model rows in Settings so each row's model, effort, and fast mode are independent and clamp consistently when the model changes.
+
+- [#459](https://github.com/dohooo/helmor/pull/459) [`395ebae`](https://github.com/dohooo/helmor/commit/395ebae99a28b48a5b67cf7d7d47d8529754b0dc) Thanks [@natllian](https://github.com/natllian)! - Make the "Get your API key" button next to Cursor and Claude Code custom-provider key fields wider with a clearer label, and hide it once a key has been entered.
+
+- [#455](https://github.com/dohooo/helmor/pull/455) [`5d32585`](https://github.com/dohooo/helmor/commit/5d3258568f3f7d2c8e7624086aefd2fa80484306) Thanks [@natllian](https://github.com/natllian)! - Make long-text chips in the composer editable from their hover preview.
+
+- [#467](https://github.com/dohooo/helmor/pull/467) [`52006ce`](https://github.com/dohooo/helmor/commit/52006ce4fa03814674e3f153582e3d274fa6f154) Thanks [@natllian](https://github.com/natllian)! - Fix Queue and Steer follow-up sends failing with a "previous send is still running" error after toggling away from a streaming session (e.g. opening the start page) and coming back.
+
+- [#456](https://github.com/dohooo/helmor/pull/456) [`bd71df8`](https://github.com/dohooo/helmor/commit/bd71df894217af2e545b1484744b281e98270a46) Thanks [@natllian](https://github.com/natllian)! - Fix new workspaces showing an empty Setup tab while the auto-run setup script was actually producing output.
+
+- [#457](https://github.com/dohooo/helmor/pull/457) [`e7bc81e`](https://github.com/dohooo/helmor/commit/e7bc81e022fe03f8d9b3274f68d39d78a7c6aa95) Thanks [@natllian](https://github.com/natllian)! - Fix the context-usage ring resetting to zero when switching the active model.
+
+- [#464](https://github.com/dohooo/helmor/pull/464) [`302d973`](https://github.com/dohooo/helmor/commit/302d9739a3d79376764e95e204c5055b07137170) Thanks [@natllian](https://github.com/natllian)! - Switching back to a workspace with in-flight CI now refreshes the inspector immediately instead of waiting for the next poll.
+
+- [#465](https://github.com/dohooo/helmor/pull/465) [`8b86ca0`](https://github.com/dohooo/helmor/commit/8b86ca08048106b26671bd4f0f1e8764b21f0800) Thanks [@natllian](https://github.com/natllian)! - Reliably reclaim disk space from archived workspaces by resuming any incomplete cleanup on the next launch.
+
+## 0.20.1
+
+### Patch Changes
+
+- [#443](https://github.com/dohooo/helmor/pull/443) [`97d845f`](https://github.com/dohooo/helmor/commit/97d845f62689a397a7bd534cb24bf7c64b3d208d) Thanks [@natllian](https://github.com/natllian)! - Fix Cursor model list failing with "Cannot find module ./642.index.js" in the compiled sidecar binary.
+
+- [#441](https://github.com/dohooo/helmor/pull/441) [`e53c4ff`](https://github.com/dohooo/helmor/commit/e53c4ffe925c0fd617b6c7e213a806c9d7950880) Thanks [@natllian](https://github.com/natllian)! - Fix sidecar startup crash introduced in v0.20.0 where adding the Cursor provider caused the sidecar to exit immediately with "Invalid sidecar ready signal" due to a native sqlite3 addon that cannot load inside a compiled Bun binary.
+
 ## 0.20.0
 
 ### Minor Changes

@@ -218,7 +218,11 @@ export function StatePill({
 }
 
 export function parseExternalReference(externalId: string) {
-	const idx = externalId.lastIndexOf("#");
+	// GitHub uses `repo#NN`. GitLab uses `project#NN` (issues) or
+	// `project!NN` (MRs). Accept either.
+	const hashIdx = externalId.lastIndexOf("#");
+	const bangIdx = externalId.lastIndexOf("!");
+	const idx = Math.max(hashIdx, bangIdx);
 	const number = idx === -1 ? "" : externalId.slice(idx + 1);
 	const repo = idx === -1 ? externalId : externalId.slice(0, idx);
 	return { repo, number };

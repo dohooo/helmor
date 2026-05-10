@@ -1,13 +1,17 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import {
+	type ForgeProvider,
 	type InboxFilters,
 	type InboxItem,
 	type InboxItemDetailRef,
+	type InboxKind,
 	type InboxPage,
-	type InboxToggles,
 	listInboxItems,
 } from "@/lib/api";
+
+export type { InboxKind };
+
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	DEFAULT_INBOX_REPO_CONFIG,
@@ -27,31 +31,37 @@ const PAGE_SIZE = 20;
  * caller (e.g. a refresh button). */
 const STALE_MS = 60_000;
 
-type GithubAccountInboxArgs = {
+type ForgeAccountInboxArgs = {
 	login: string;
 	toggles: InboxAccountSourceToggles;
 };
 
 type ActiveInboxToggles = InboxAccountSourceToggles | InboxRepoSourceConfig;
 
-/** Resolves the GitHub accounts the inbox should fan out across, with
- * their per-account toggles merged from settings. Single-account today
- * (we only support one GH login at a time in the picker), but the hook
- * is shaped for future fan-out. */
-function useEnabledGithubAccounts(): GithubAccountInboxArgs[] {
+/** Forge providers the inbox can talk to. Excludes "unknown" since it
+ *  has no backend implementation. */
+type InboxProvider = Extract<ForgeProvider, "github" | "gitlab">;
+
+/** Resolves the accounts the inbox should fan out across for a given
+ *  forge, with their per-account toggles merged from settings.
+ *  Single-account in practice today (one login per provider), but the
+ *  hook is shaped for future fan-out. */
+function useEnabledForgeAccounts(
+	provider: InboxProvider,
+): ForgeAccountInboxArgs[] {
 	const accountsQuery = useForgeAccountsAll();
 	const { settings } = useSettings();
 	return useMemo(() => {
-		const githubAccounts = (accountsQuery.data ?? []).filter(
-			(a) => a.provider === "github",
+		const matching = (accountsQuery.data ?? []).filter(
+			(a) => a.provider === provider,
 		);
 		const accountsConfig = settings.inboxSourceConfig?.accounts ?? {};
-		return githubAccounts.map((account) => {
-			const key = `github:${account.login}`;
+		return matching.map((account) => {
+			const key = `${provider}:${account.login}`;
 			const toggles = accountsConfig[key] ?? DEFAULT_INBOX_ACCOUNT_TOGGLES;
 			return { login: account.login, toggles };
 		});
-	}, [accountsQuery.data, settings.inboxSourceConfig]);
+	}, [accountsQuery.data, settings.inboxSourceConfig, provider]);
 }
 
 export type UseInboxItemsResult = {
@@ -79,20 +89,6 @@ export type InboxItemWithDetailRef = InboxItem & {
 	detailRef: InboxItemDetailRef;
 };
 
-/** Which sub-tab the inbox sidebar is showing. The Rust backend supports
- * multi-source merging, but in practice an active developer's recent
- * activity is dominated by PRs — merging into a single page-20 window
- * crowds out issues and discussions to "page 2+" they'd never reach
- * through the UI. So each tab gets its own dedicated infinite query
- * with `toggles` set so the backend only fetches the requested kind. */
-export type InboxKind = "issues" | "prs" | "discussions";
-
-const KIND_TO_TOGGLES: Record<InboxKind, InboxToggles> = {
-	issues: { issues: true, prs: false, discussions: false },
-	prs: { issues: false, prs: true, discussions: false },
-	discussions: { issues: false, prs: false, discussions: true },
-};
-
 function defaultStateForKind(
 	kind: InboxKind,
 	toggles: ActiveInboxToggles,
@@ -109,24 +105,32 @@ function scopeForKind(kind: InboxKind, toggles: ActiveInboxToggles) {
 }
 
 /** Drives the kanban-inbox list for ONE sub-tab at a time. The caller
- * passes the current GitHub sub-type tab; switching tabs swaps to a
- * different cached query (TanStack reuses prior pages on switch-back).
+ * passes the current forge provider plus sub-type tab; switching tabs
+ * swaps to a different cached query (TanStack reuses prior pages on
+ * switch-back).
  *
- * `repoFilter` is the `owner/name` for the kanban's currently-selected
- * repo. When provided, every kind is scoped to that single repo via a
- * `repo:owner/name` GraphQL search qualifier on the backend. Each repo
+ * `repoFilter` is the `owner/name` (GitHub) or `group/sub/project`
+ * (GitLab) for the kanban's currently-selected repo. When provided,
+ * every kind is scoped to that single repo on the backend. Each repo
  * gets its own cache key so switching the repo picker doesn't trash
  * the previous repo's cached pages.
  *
- * Single-account today — picks the first GitHub login. The hook is
+ * Single-account today — picks the first matching login. The hook is
  * shaped for future multi-account fan-out (run one infinite query per
  * account-kind pair, merge in the consumer). */
 export function useInboxItems(
 	kind: InboxKind,
 	repoFilter: string | null = null,
 	filters: InboxFilters | null = null,
+	provider: InboxProvider = "github",
+	/** Host the API call should target — `gitlab.example.com` for
+	 *  self-hosted GitLab, `github.com` for GitHub. Derived from the
+	 *  repo's remote URL, NOT from the bound login. When `null` the
+	 *  backend falls back to login-based host derivation (single-host
+	 *  case), which is correct for the global "involves @me" feed. */
+	host: string | null = null,
 ): UseInboxItemsResult {
-	const accounts = useEnabledGithubAccounts();
+	const accounts = useEnabledForgeAccounts(provider);
 	const primary =
 		(repoFilter
 			? accounts.find((account) => account.toggles.repos?.[repoFilter])
@@ -140,6 +144,11 @@ export function useInboxItems(
 	const activeToggles: ActiveInboxToggles | null = repoFilter
 		? (repoToggles ?? { ...DEFAULT_INBOX_REPO_CONFIG, enabled: true })
 		: (primary?.toggles ?? null);
+	// GitLab has no Discussions equivalent; gate the kind out before the
+	// settings/account check so disabling it doesn't render a confusing
+	// "kind disabled" empty state.
+	const providerSupportsKind =
+		provider === "gitlab" ? kind !== "discussions" : true;
 	// Honor the per-account settings toggle for THIS kind — flipping
 	// `Issues` off in Settings → Context disables this tab's fetch.
 	const settingsAllowsKind = activeToggles
@@ -149,7 +158,8 @@ export function useInboxItems(
 				? activeToggles.prs
 				: activeToggles.discussions
 		: false;
-	const enabled = primary !== null && settingsAllowsKind;
+	const enabled =
+		primary !== null && providerSupportsKind && settingsAllowsKind;
 	const defaultFilters = activeToggles
 		? {
 				state: defaultStateForKind(kind, activeToggles),
@@ -184,7 +194,8 @@ export function useInboxItems(
 	const query = useInfiniteQuery<InboxPage, Error>({
 		queryKey: [
 			"inbox-items",
-			"github",
+			provider,
+			host ?? "",
 			primary?.login ?? "",
 			kind,
 			repoFilter ?? "",
@@ -202,9 +213,10 @@ export function useInboxItems(
 				return { items: [], nextCursor: null };
 			}
 			return listInboxItems({
-				provider: "github",
+				provider,
+				kind,
 				login: primary.login,
-				toggles: KIND_TO_TOGGLES[kind],
+				host,
 				cursor: typeof pageParam === "string" ? pageParam : null,
 				limit: PAGE_SIZE,
 				repo: repoFilter,
@@ -219,10 +231,10 @@ export function useInboxItems(
 	});
 
 	// Surface query failures as a toast so the user notices when a
-	// fetch silently dies (network, gh auth, GraphQL errors). The
-	// inline `<InboxErrorState>` still renders as the primary
-	// affordance — toast is an extra nudge in case the user is on a
-	// different sub-tab when the failure happens.
+	// fetch silently dies (network, auth, API errors). The inline
+	// `<InboxErrorState>` still renders as the primary affordance —
+	// toast is an extra nudge in case the user is on a different sub-tab
+	// when the failure happens.
 	const pushToast = useWorkspaceToast();
 	const lastSurfacedErrorRef = useRef<unknown>(null);
 	useEffect(() => {
@@ -246,14 +258,15 @@ export function useInboxItems(
 				p.items.map((item) => ({
 					...item,
 					detailRef: {
-						provider: "github",
+						provider,
 						login: primary?.login ?? "",
+						host,
 						source: item.source,
 						externalId: item.externalId,
 					},
 				})),
 			),
-		[primary?.login, query.data],
+		[primary?.login, provider, host, query.data],
 	);
 
 	return {

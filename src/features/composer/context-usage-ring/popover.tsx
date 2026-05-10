@@ -3,7 +3,6 @@ import type { DisplayResolution } from "./parse";
 import {
 	AutoCompactNote,
 	CategoryList,
-	TokensOnlyHeader,
 	UsageBar,
 	UsageHeader,
 } from "./popover-parts";
@@ -26,9 +25,7 @@ export function ContextUsagePopoverContent({
 
 	return (
 		<div className="flex flex-col gap-3 px-1 py-1">
-			{display.kind === "tokensOnly" ? (
-				<TokensOnlyHeader usedTokens={display.usedTokens} />
-			) : display.kind === "full" ? (
+			{display.kind === "full" ? (
 				<>
 					<UsageHeader
 						used={display.usedTokens}

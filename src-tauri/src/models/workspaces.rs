@@ -57,6 +57,10 @@ pub struct WorkspaceRecord {
     /// Most recent `last_user_message_at` across all sessions in the
     /// workspace. `None` for workspaces with no user messages yet.
     pub last_user_message_at: Option<String>,
+    /// Timestamp of the last successful setup-script run for this
+    /// workspace. `None` means setup was never run (or was skipped
+    /// because the repo has no setup script).
+    pub setup_completed_at: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -160,7 +164,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.forge_login,
       w.created_at,
       w.updated_at,
-      wss.last_user_message_at
+      wss.last_user_message_at,
+      w.setup_completed_at
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -371,6 +376,27 @@ pub(crate) fn update_workspace_state(
     Ok(())
 }
 
+/// Stamp the workspace as having successfully run its setup script and
+/// flip it to `ready`. Distinct from `update_workspace_state` so the
+/// "skipped setup (no script)" path can stay timestamp-less — that's
+/// what lets the inspector tell apart "ran in another session" vs
+/// "never ran" after a restart.
+pub(crate) fn mark_setup_completed(workspace_id: &str, timestamp: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET state = ?2, setup_completed_at = ?3, updated_at = ?3 WHERE id = ?1",
+            (workspace_id, WorkspaceState::Ready, timestamp),
+        )
+        .context("Failed to mark workspace setup completed")?;
+
+    if updated_rows != 1 {
+        bail!("Setup-completion update affected {updated_rows} rows for {workspace_id}");
+    }
+
+    Ok(())
+}
+
 pub(crate) fn delete_workspace_and_session_rows(workspace_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
@@ -545,5 +571,6 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         created_at: row.get(33)?,
         updated_at: row.get(34)?,
         last_user_message_at: row.get(35)?,
+        setup_completed_at: row.get(36)?,
     })
 }

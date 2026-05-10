@@ -301,6 +301,21 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
 
     acc.fallback_text.clear();
     acc.fallback_thinking.clear();
+
+    // Synthesize a turn/completed row with duration so the adapter renders
+    // the "Ns • about X ago" footer, matching Claude/Codex behavior.
+    if let Some(started) = state.started_at {
+        let duration = now_ms() - started;
+        if duration > 0.0 {
+            let enriched = json!({ "type": "turn/completed", "duration_ms": duration });
+            let enriched_str = serde_json::to_string(&enriched).unwrap_or_default();
+            let id = Uuid::new_v4().to_string();
+            acc.result_id = Some(id.clone());
+            acc.result_json = Some(enriched_str.clone());
+            acc.collect_message(&enriched_str, &enriched, MessageRole::Assistant, Some(&id));
+        }
+    }
+
     PushOutcome::Finalized
 }
 

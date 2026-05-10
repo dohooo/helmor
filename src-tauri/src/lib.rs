@@ -172,6 +172,19 @@ pub fn run() {
                 "Helmor started"
             );
 
+            // Sweep `.trash-*` dirs left over from a prior run (worker killed
+            // mid-cleanup, OS crash). Hands them to the global serial queue so
+            // the slow recursive deletes happen one at a time in the
+            // background. Spawned so a slow `read_dir` can't stall startup.
+            if let Ok(workspaces_root) = data_dir::workspaces_dir() {
+                std::thread::Builder::new()
+                    .name("helmor-trash-sweep".into())
+                    .spawn(move || {
+                        git::trash::sweep_workspaces_root(&workspaces_root);
+                    })
+                    .ok();
+            }
+
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
             // (users can find the messages in the archive list and choose
@@ -292,6 +305,7 @@ pub fn run() {
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
+            agents::prewarm_slash_commands_for_repo,
             commands::workspace_commands::prepare_archive_workspace,
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
@@ -323,7 +337,8 @@ pub fn run() {
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
             commands::forge_commands::list_inbox_items,
-            commands::forge_commands::list_github_labels,
+            commands::forge_commands::list_inbox_kind_labels,
+            commands::forge_commands::list_forge_labels,
             commands::forge_commands::get_inbox_item_detail,
             commands::forge_commands::get_workspace_account_profile,
             commands::forge_commands::cache_forge_avatar,
@@ -376,6 +391,7 @@ pub fn run() {
             commands::session_commands::delete_session,
             commands::session_commands::list_hidden_sessions,
             commands::session_commands::get_session_context_usage,
+            commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,
