@@ -3696,6 +3696,19 @@ function AppShell({
 														onOpenSettings={handleOpenSettings}
 														activeFileAbsolutePath={activeFileAbsolutePath}
 														onOpenFileTab={handleOpenFileTab}
+														leftSidebarCollapsed={sidebarCollapsed}
+														onToggleLeftSidebar={() =>
+															setSidebarCollapsed((collapsed) => !collapsed)
+														}
+														onCollapseRightSidebar={() =>
+															setInspectorCollapsed(true)
+														}
+														leftSidebarToggleShortcut={
+															leftSidebarToggleShortcut
+														}
+														rightSidebarToggleShortcut={
+															rightSidebarToggleShortcut
+														}
 													/>
 												)}
 											</div>

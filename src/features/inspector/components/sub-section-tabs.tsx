@@ -35,7 +35,7 @@ export function SubSectionTabs({
 				) : null}
 			</SubTab>
 			<SubTab active={value === "review"} onClick={() => onChange("review")}>
-				Review
+				Checks
 				{reviewIndicator !== "none" ? (
 					<span
 						aria-label={

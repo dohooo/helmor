@@ -1,8 +1,16 @@
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
@@ -100,6 +108,21 @@ type WorkspaceInspectorSidebarProps = {
 	 * the file-tab store.
 	 */
 	onOpenFileTab?: (input: OpenFileInput, opener: FileTabOpener) => void;
+	/** Whether the left workspace sidebar is currently collapsed; controls
+	 *  which icon the in-header sidebar-toggle button renders. */
+	leftSidebarCollapsed?: boolean;
+	/** Toggle the left workspace sidebar (default Mod+B). When omitted the
+	 *  inspector still renders without the sidebar-toggle buttons. */
+	onToggleLeftSidebar?: () => void;
+	/** Collapse the right (inspector) sidebar. The inspector is by
+	 *  definition visible while this component is mounted, so the button
+	 *  always closes — there's no in-inspector "expand right" affordance. */
+	onCollapseRightSidebar?: () => void;
+	/** Resolved hotkey string for `sidebar.left.toggle`, surfaced in the
+	 *  button's tooltip via `<InlineShortcutDisplay>`. */
+	leftSidebarToggleShortcut?: string | null;
+	/** Resolved hotkey string for `sidebar.right.toggle`. */
+	rightSidebarToggleShortcut?: string | null;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -125,6 +148,11 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	activeFileAbsolutePath = null,
 	onOpenFileTab,
+	leftSidebarCollapsed = false,
+	onToggleLeftSidebar,
+	onCollapseRightSidebar,
+	leftSidebarToggleShortcut = null,
+	rightSidebarToggleShortcut = null,
 }: WorkspaceInspectorSidebarProps) {
 	const [topSectionView, setTopSectionView] = useState<TopSectionView>(() =>
 		getInitialTopView<TopSectionView>(["files", "changes"] as const, "changes"),
@@ -474,12 +502,45 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<section className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-sidebar">
-				<div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/60 bg-muted/25 px-2">
-					<TopSectionTabs
-						value={topSectionView}
-						onChange={setTopSectionView}
-						changesCount={changes.length}
-					/>
+				<div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/25 px-2">
+					<div className="flex min-w-0 flex-1 items-center">
+						<TopSectionTabs
+							value={topSectionView}
+							onChange={setTopSectionView}
+						/>
+					</div>
+					{onToggleLeftSidebar || onCollapseRightSidebar ? (
+						<div className="flex shrink-0 items-center gap-0.5">
+							{onToggleLeftSidebar ? (
+								<SidebarHeaderButton
+									label={
+										leftSidebarCollapsed
+											? "Expand left sidebar"
+											: "Collapse left sidebar"
+									}
+									shortcut={leftSidebarToggleShortcut}
+									onClick={onToggleLeftSidebar}
+									icon={
+										leftSidebarCollapsed ? (
+											<PanelLeftOpen className="size-4" strokeWidth={1.8} />
+										) : (
+											<PanelLeftClose className="size-4" strokeWidth={1.8} />
+										)
+									}
+								/>
+							) : null}
+							{onCollapseRightSidebar ? (
+								<SidebarHeaderButton
+									label="Close right sidebar"
+									shortcut={rightSidebarToggleShortcut}
+									onClick={onCollapseRightSidebar}
+									icon={
+										<PanelRightClose className="size-4" strokeWidth={1.8} />
+									}
+								/>
+							) : null}
+						</div>
+					) : null}
 				</div>
 				{topSectionView === "files" ? (
 					<div
@@ -609,5 +670,45 @@ export function WorkspaceInspectorSidebar({
 				))}
 			</InspectorTabsSection>
 		</div>
+	);
+}
+
+function SidebarHeaderButton({
+	label,
+	shortcut,
+	onClick,
+	icon,
+}: {
+	label: string;
+	shortcut: string | null;
+	onClick: () => void;
+	icon: React.ReactNode;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={label}
+					onClick={onClick}
+					variant="ghost"
+					size="icon-xs"
+					className="text-muted-foreground hover:text-foreground"
+				>
+					{icon}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+			>
+				<span>{label}</span>
+				{shortcut ? (
+					<InlineShortcutDisplay
+						hotkey={shortcut}
+						className="text-background/60"
+					/>
+				) : null}
+			</TooltipContent>
+		</Tooltip>
 	);
 }

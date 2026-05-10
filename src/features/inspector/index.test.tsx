@@ -88,11 +88,11 @@ function renderInspector(
 			{...props}
 		/>,
 	);
-	// Tests in this file all assert against the Checks panel — now reachable
-	// as the Review sub-tab inside the Changes top-tab. Top-tab defaults to
-	// Changes; Review is the second underline sub-tab.
+	// Tests in this file all assert against the Checks panel — reachable as
+	// the right-side sub-tab inside the Changes top-tab. Top-tab defaults to
+	// Changes; the second underline sub-tab is labelled "Checks".
 	act(() => {
-		fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Checks/ }));
 	});
 	return result;
 }
