@@ -8,7 +8,6 @@ import {
 	ChevronDown,
 	CircleAlertIcon,
 	FolderOpen,
-	PanelLeftClose,
 	PanelLeftOpen,
 	PanelRightOpen,
 } from "lucide-react";
@@ -3053,38 +3052,12 @@ function AppShell({
 														}
 														onMoveLocalToWorktree={handleMoveLocalToWorktree}
 														pushWorkspaceToast={pushWorkspaceToast}
+														onCollapseSidebar={() => setSidebarCollapsed(true)}
+														sidebarToggleShortcut={leftSidebarToggleShortcut}
 													/>
 												</div>
 												<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
 													<AppUpdateButton status={appUpdateStatus} />
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<Button
-																aria-label="Collapse left sidebar"
-																onClick={() => setSidebarCollapsed(true)}
-																variant="ghost"
-																size="icon-xs"
-																className="text-muted-foreground hover:text-foreground"
-															>
-																<PanelLeftClose
-																	className="size-4"
-																	strokeWidth={1.8}
-																/>
-															</Button>
-														</TooltipTrigger>
-														<TooltipContent
-															side="bottom"
-															className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-														>
-															<span>Collapse left sidebar</span>
-															{leftSidebarToggleShortcut ? (
-																<InlineShortcutDisplay
-																	hotkey={leftSidebarToggleShortcut}
-																	className="text-background/60"
-																/>
-															) : null}
-														</TooltipContent>
-													</Tooltip>
 												</div>
 												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
 													<SettingsButton

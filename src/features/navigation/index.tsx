@@ -14,6 +14,7 @@ import {
 	LayoutDashboard,
 	ListChecks,
 	LoaderCircle,
+	PanelLeftClose,
 	Plus,
 } from "lucide-react";
 import {
@@ -134,6 +135,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
+	onCollapseSidebar,
+	sidebarToggleShortcut,
 }: {
 	groups: WorkspaceGroup[];
 	repositoryGroups?: RepositoryGroup[];
@@ -168,6 +171,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
+	onCollapseSidebar?: () => void;
+	sidebarToggleShortcut?: string | null;
 }) {
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const [isViewModeMenuOpen, setIsViewModeMenuOpen] = useState(false);
@@ -669,10 +674,38 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				className="flex h-9 shrink-0 items-center gap-1 pr-2"
 			>
 				<TrafficLightSpacer side="left" width={94} />
+				{onCollapseSidebar ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label="Collapse left sidebar"
+								onClick={onCollapseSidebar}
+								variant="ghost"
+								size="icon-xs"
+								className="text-muted-foreground hover:text-foreground"
+							>
+								<PanelLeftClose className="size-4" strokeWidth={1.8} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="bottom"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>Collapse left sidebar</span>
+							{sidebarToggleShortcut ? (
+								<InlineShortcutDisplay
+									hotkey={sidebarToggleShortcut}
+									className="text-background/60"
+								/>
+							) : null}
+						</TooltipContent>
+					</Tooltip>
+				) : null}
 				<NavHistoryButton direction="back" />
 				<NavHistoryButton direction="forward" />
 				<div data-tauri-drag-region className="h-full flex-1" />
-				<ResourceUsagePill />
 			</div>
 
 			<nav className="mt-1 flex flex-col gap-0.5 px-2">
@@ -869,6 +902,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						</div>
 					))}
 				</div>
+			</div>
+
+			{/* Sidebar footer — system-wide affordances live here so they
+			    don't compete with workspace rows for vertical space. */}
+			<div
+				data-slot="sidebar-footer"
+				className="flex h-9 shrink-0 items-center justify-end border-t border-sidebar-border/40 px-2"
+			>
+				<ResourceUsagePill />
 			</div>
 		</div>
 	);
