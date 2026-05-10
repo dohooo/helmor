@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { BorderBeam } from "@/components/border-beam";
 import { cn } from "@/lib/utils";
+import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
+import { VoiceModeStatus } from "./voice-mode-status";
 import { useVoiceModeActive } from "./voice-mode-store";
 
 type VoiceModeBarProps = {
@@ -12,49 +14,91 @@ type VoiceModeBarProps = {
 	 *  visual height is `height - gap` (default 40 - 8 = 32 px). */
 	gap?: number;
 	className?: string;
-	children?: ReactNode;
 };
 
+/** Slow-flow base duration (seconds). Used for listening / speaking / done. */
+const BEAM_SLOW_DURATION = 3;
+/** Fast-flow duration when the agent is busy (thinking / acting). */
+const BEAM_FAST_DURATION = 1.2;
+/** Strength floor at idle / working states. Visible but restrained. */
+const BEAM_BASE_STRENGTH = 0.3;
+/** Headroom above the floor that the audio level can push strength into. */
+const BEAM_LEVEL_HEADROOM = 0.7;
+
+function deriveBeamProps(state: VoiceUiState): {
+	duration: number;
+	strength: number;
+} {
+	const isWorking = state.phase === "thinking" || state.phase === "acting";
+	const reactive = state.phase === "listening" || state.phase === "speaking";
+	return {
+		duration: isWorking ? BEAM_FAST_DURATION : BEAM_SLOW_DURATION,
+		strength: reactive
+			? BEAM_BASE_STRENGTH + state.level * BEAM_LEVEL_HEADROOM
+			: BEAM_BASE_STRENGTH,
+	};
+}
+
 /**
- * Voice-mode bar slot. The outer element occupies `height` px when voice
- * mode is active (0 when inactive); the inner element fills `height - gap`
- * px below a `gap`-px top padding -- giving us a visible bar separated
- * from the composer above by a small gap.
+ * Voice-mode bar slot. Outer occupies `height` px when voice is active (0
+ * otherwise) with a `gap`-px top padding so the visible bar sits below
+ * the composer.
  *
- * Both height and padding-top transition together, so the bar's visible
- * area expands and contracts in lock-step with the composer's textarea
- * shrinkage.
+ * Visual state is concentrated on the BorderBeam: `duration` controls
+ * flow speed (slow at idle / speaking, fast while the agent is working);
+ * `strength` controls intensity (low floor + audio-level headroom while
+ * the user or TTS is speaking).
  *
- * Default visual is a placeholder `bg-muted` rectangle. Pass `children`
- * to fill it with real content (recording indicator, transcript, mute
- * button, etc.).
+ * The status content (icon + text + progress) is a thin overlay -- icons
+ * from lucide, text slides up between scenes.
+ *
+ * For now the state machine runs a scripted demo sequence (5 phases over
+ * ~12 s) every time voice mode toggles on, so re-pressing ⌘⇧V replays
+ * the whole arc. Swap `useDemoSequence` for a real reducer when the
+ * Realtime backend lands.
  */
 export function VoiceModeBar({
 	height = 40,
 	gap = 8,
 	className,
-	children,
 }: VoiceModeBarProps) {
 	const active = useVoiceModeActive();
+	const state = useDemoSequence(active);
+	const beam = deriveBeamProps(state);
+
 	return (
 		<div
-			className="overflow-hidden transition-[height,padding-top] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+			className="transition-[height,padding-top] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
 			data-voice-bar=""
 			data-voice-active={active ? "" : undefined}
 			style={{
 				height: active ? `${height}px` : "0px",
 				paddingTop: active ? `${gap}px` : "0px",
+				// Slot-level overflow hidden so the bar's visible content
+				// disappears when voice mode is off (height: 0). Note: this
+				// also clips the BorderBeam's bloom that paints just outside
+				// the bar's border -- if the bloom needs to spill, lift the
+				// hidden onto a wrapping element with extra padding instead.
+				overflow: "hidden",
 			}}
 		>
-			<div
-				className={cn(
-					"h-full w-full rounded-md bg-muted transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-					className,
-				)}
-				style={{ opacity: active ? 1 : 0 }}
+			<BorderBeam
+				className="block h-full w-full"
+				size="md"
+				colorVariant="colorful"
+				duration={beam.duration}
+				strength={beam.strength}
 			>
-				{children}
-			</div>
+				<div
+					className={cn(
+						"h-full w-full rounded-md border border-border bg-muted/30 transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+						className,
+					)}
+					style={{ opacity: active ? 1 : 0 }}
+				>
+					<VoiceModeStatus state={state} />
+				</div>
+			</BorderBeam>
 		</div>
 	);
 }

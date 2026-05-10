@@ -2052,7 +2052,11 @@ function generateBorderVariantCSS(options: GenerateStylesOptions): string {
 }
 
 @keyframes beam-spin-${id} {
-  to { --beam-angle-${id}: 360deg; }
+  0% { --beam-angle-${id}: 0deg; }
+  34% { --beam-angle-${id}: 120deg; }
+  50% { --beam-angle-${id}: 180deg; }
+  84% { --beam-angle-${id}: 300deg; }
+  100% { --beam-angle-${id}: 360deg; }
 }
 
 @keyframes beam-fade-in-${id} {
