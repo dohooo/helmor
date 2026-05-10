@@ -1,5 +1,7 @@
-// Streamdown char-level fade config; keep `duration` in sync with
-// `.stream-char` in App.css so markdown and plain-text surfaces match.
+// Streamdown char-level fade config. `duration` here is mostly informational
+// — the actual fade timing comes from the `[data-sd-animate]` override in
+// App.css, which ignores streamdown's per-frame `--sd-duration` rewrite
+// (that rewrite truncates in-flight fades to 0ms; see the App.css comment).
 export const STREAMING_ANIMATED = {
 	animation: "fadeIn" as const,
 	duration: 300,
