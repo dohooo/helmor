@@ -104,7 +104,11 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
                 "type": "realtime",
                 "model": "gpt-realtime-2",
                 "instructions": "You are Helmor's realtime voice assistant. Keep replies concise and conversational.\n\n# Unclear Audio\n- If the latest input is silence, low-level background noise, hold music, or a side conversation, call the wait_for_user tool instead of responding.\n- Only respond when the user is clearly addressing you in the foreground.\n- If you are unsure whether the user is talking to you, call wait_for_user.",
-                "reasoning": { "effort": "high" },
+                // Per the gpt-realtime-2 prompting guide and our research
+                // notes, production voice agents should start at `low` --
+                // higher effort adds 1-2 s to time-to-first-audio. Bump
+                // only if multi-step request quality suffers.
+                "reasoning": { "effort": "low" },
                 "output_modalities": ["audio"],
                 "audio": {
                     "input": {

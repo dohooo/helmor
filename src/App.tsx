@@ -65,7 +65,6 @@ import {
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
-import type { RealtimeVoiceSession } from "@/features/voice-mode/realtime-session";
 import { voiceModeStore } from "@/features/voice-mode/voice-mode-store";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
@@ -690,8 +689,6 @@ function AppShell({
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
 		() => localStorage.getItem(PREFERRED_EDITOR_STORAGE_KEY),
 	);
-	const voiceSessionRef = useRef<RealtimeVoiceSession | null>(null);
-	const voiceStartPendingRef = useRef(false);
 	const preferredEditor =
 		installedEditors.find((e) => e.id === preferredEditorId) ??
 		installedEditors[0] ??
@@ -720,20 +717,13 @@ function AppShell({
 		(shortcuts: ShortcutOverrides) => updateSettings({ shortcuts }),
 		[updateSettings],
 	);
-	const stopVoiceMode = useCallback(() => {
-		voiceStartPendingRef.current = false;
-		voiceSessionRef.current?.stop();
-		voiceSessionRef.current = null;
-	}, []);
-	// NOTE: Backend WebRTC session is intentionally disabled while we iterate
-	// on the composer voice-mode UI. The shortcut just flips the shared
-	// `voiceModeStore`; subscribers (composer shrink wrapper, future orb /
-	// glow) react via `useVoiceModeActive`. Re-enable backend by restoring
-	// the start-session call here and re-importing `startRealtimeVoiceSession`.
+	// The shortcut just flips the shared `voiceModeStore`. The actual
+	// WebRTC session lifecycle lives in `useRealtimeSequence` inside
+	// `<VoiceModeBar />`, which subscribes to the store and starts /
+	// tears down a session whenever the active flag flips.
 	const handleToggleVoiceMode = useCallback(() => {
 		voiceModeStore.toggle();
 	}, []);
-	useEffect(() => stopVoiceMode, [stopVoiceMode]);
 	useGlobalHotkeySync({
 		isLoaded: areSettingsLoaded,
 		shortcuts: appSettings.shortcuts,

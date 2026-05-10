@@ -1,5 +1,7 @@
 import { BorderBeam } from "@/components/border-beam";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { useRealtimeSequence } from "./use-realtime-sequence";
 import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
 import { VoiceModeStatus } from "./voice-mode-status";
 import { useVoiceModeActive } from "./voice-mode-store";
@@ -49,13 +51,13 @@ function deriveBeamProps(state: VoiceUiState): {
  * `strength` controls intensity (low floor + audio-level headroom while
  * the user or TTS is speaking).
  *
- * The status content (icon + text + progress) is a thin overlay -- icons
- * from lucide, text slides up between scenes.
+ * The status content (icon + text) is a thin overlay -- lucide icons and
+ * text that slides up between scenes.
  *
- * For now the state machine runs a scripted demo sequence (5 phases over
- * ~12 s) every time voice mode toggles on, so re-pressing ⌘⇧V replays
- * the whole arc. Swap `useDemoSequence` for a real reducer when the
- * Realtime backend lands.
+ * State source switches automatically: when an OpenAI Realtime API key
+ * is configured the bar is driven by real Realtime events
+ * (`useRealtimeSequence`); without a key it falls back to a 12 s scripted
+ * demo (`useDemoSequence`) so the UI stays iterable.
  */
 export function VoiceModeBar({
 	height = 40,
@@ -63,7 +65,16 @@ export function VoiceModeBar({
 	className,
 }: VoiceModeBarProps) {
 	const active = useVoiceModeActive();
-	const state = useDemoSequence(active);
+	const { settings } = useSettings();
+	const hasApiKey = settings.openAiRealtimeApiKey.trim().length > 0;
+	// Both hooks always run -- React forbids conditional hook calls -- but
+	// the `active` flag wired to each gates whether it does any work.
+	// When an API key is configured we drive the bar from real Realtime
+	// events; without one we fall back to the scripted demo so the UI is
+	// still iterable / debuggable.
+	const realState = useRealtimeSequence(active && hasApiKey);
+	const demoState = useDemoSequence(active && !hasApiKey);
+	const state = hasApiKey ? realState : demoState;
 	const beam = deriveBeamProps(state);
 
 	return (

@@ -19,6 +19,11 @@ export type VoiceUiState = {
 	label?: string;
 	/** Free-text shown while phase === "done". */
 	summary?: string;
+	/** Visual tone override. `"error"` swaps the icon to AlertCircle and
+	 *  recolors the row to a destructive accent without expanding the
+	 *  phase enum. Currently only set on `done` after a Realtime API
+	 *  failure (mic denied, ephemeral key error, dataChannel error). */
+	tone?: "error";
 };
 
 const IDLE_LEVEL = 0;

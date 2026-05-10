@@ -1,4 +1,4 @@
-import { Brain, Check, Loader2, Mic, Volume2 } from "lucide-react";
+import { AlertCircle, Brain, Check, Loader2, Mic, Volume2 } from "lucide-react";
 import {
 	type ComponentType,
 	type CSSProperties,
@@ -52,14 +52,15 @@ function Scene({
 	className?: string;
 	style?: CSSProperties;
 }) {
-	const Icon = ICONS[state.phase];
+	const isError = state.tone === "error";
+	const Icon = isError ? AlertCircle : ICONS[state.phase];
 	const label =
 		state.phase === "acting" && state.label
 			? state.label
 			: state.phase === "done" && state.summary
 				? state.summary
 				: DEFAULT_TEXT[state.phase];
-	const spin = state.phase === "acting";
+	const spin = state.phase === "acting" && !isError;
 
 	return (
 		<div
@@ -68,7 +69,8 @@ function Scene({
 		>
 			<Icon
 				className={cn(
-					"size-3.5 shrink-0 text-foreground/70",
+					"size-3.5 shrink-0",
+					isError ? "text-destructive" : "text-foreground/70",
 					spin && "animate-spin",
 				)}
 				strokeWidth={1.8}
@@ -78,7 +80,12 @@ function Scene({
 			    `items-center` centers the inflated box (looks low). `flex-1
 			    min-w-0` lets the label fill the slack between icon and the
 			    progress chip while still respecting `truncate`. */}
-			<span className="min-w-0 flex-1 truncate text-[12px] leading-none tracking-tight text-foreground/85">
+			<span
+				className={cn(
+					"min-w-0 flex-1 truncate text-[12px] leading-none tracking-tight",
+					isError ? "text-destructive/90" : "text-foreground/85",
+				)}
+			>
 				{label}
 			</span>
 		</div>

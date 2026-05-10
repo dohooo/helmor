@@ -1,7 +1,28 @@
 import { createOpenAiRealtimeClientSecret } from "@/lib/api";
 
+/** Minimal shape of a server-pushed Realtime event. We only narrow the
+ *  `type` discriminator -- everything else stays `unknown` so the consumer
+ *  can pattern-match without us copying the full event schema. */
+export type RealtimeServerEvent = {
+	type?: string;
+	[key: string]: unknown;
+};
+
+type EventListener = (event: RealtimeServerEvent) => void;
+
 export type RealtimeVoiceSession = {
+	/** Tear down peer + mic + speaker + close audio context. Idempotent. */
 	stop: () => void;
+	/** Subscribe to dataChannel events. Returns an unsubscribe. Listeners
+	 *  registered before the WebRTC handshake completes still get every
+	 *  event (including `session.created`) because the listener fan-out
+	 *  is wired before `setLocalDescription`. */
+	onEvent: (listener: EventListener) => () => void;
+	/** User's microphone stream. Stable for the whole session lifetime --
+	 *  safe to feed straight to an `AnalyserNode`. */
+	localStream: MediaStream;
+	/** OpenAI's TTS stream. Resolves the first time `ontrack` fires. */
+	remoteStream: Promise<MediaStream>;
 };
 
 const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
@@ -21,10 +42,16 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 
 	audio.autoplay = true;
 
+	let resolveRemote!: (s: MediaStream) => void;
+	const remoteStream = new Promise<MediaStream>((resolve) => {
+		resolveRemote = resolve;
+	});
+
 	peer.ontrack = (event) => {
-		const [remoteStream] = event.streams;
-		if (remoteStream) {
-			audio.srcObject = remoteStream;
+		const [remote] = event.streams;
+		if (remote) {
+			audio.srcObject = remote;
+			resolveRemote(remote);
 		}
 	};
 
@@ -32,14 +59,20 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 		peer.addTrack(track, stream);
 	}
 
+	const listeners = new Set<EventListener>();
 	dataChannel.addEventListener("message", (event) => {
+		let payload: RealtimeServerEvent;
 		try {
-			const payload = JSON.parse(String(event.data)) as { type?: string };
-			if (payload.type === "error") {
-				console.error("[helmor] OpenAI Realtime error", payload);
-			}
+			payload = JSON.parse(String(event.data)) as RealtimeServerEvent;
 		} catch {
-			// Ignore non-JSON control messages.
+			// Non-JSON control messages -- ignore.
+			return;
+		}
+		if (payload.type === "error") {
+			console.error("[helmor] OpenAI Realtime error", payload);
+		}
+		for (const listener of listeners) {
+			listener(payload);
 		}
 	});
 
@@ -66,8 +99,22 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 	const answer = await response.text();
 	await peer.setRemoteDescription({ type: "answer", sdp: answer });
 
+	let stopped = false;
 	return {
-		stop: () => stopMedia(stream, peer, audio),
+		stop: () => {
+			if (stopped) return;
+			stopped = true;
+			listeners.clear();
+			stopMedia(stream, peer, audio);
+		},
+		onEvent: (listener) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		localStream: stream,
+		remoteStream,
 	};
 }
 
