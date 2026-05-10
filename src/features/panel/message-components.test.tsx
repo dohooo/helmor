@@ -284,9 +284,12 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thinking...")).toBeInTheDocument();
-		expect(
-			screen.getByText("Inspecting the streamed reasoning block."),
-		).toBeInTheDocument();
+		// Streaming reasoning splits each char into its own <span> for the
+		// fade-in effect, so getByText("...") can't match a literal
+		// substring. toHaveTextContent walks the subtree.
+		expect(document.body).toHaveTextContent(
+			"Inspecting the streamed reasoning block.",
+		);
 
 		act(() => {
 			vi.advanceTimersByTime(2_000);
@@ -319,10 +322,11 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thought for 2s")).toBeInTheDocument();
-		// Content is hidden because reasoning auto-collapses on completion.
-		expect(
-			screen.queryByText("Inspecting the streamed reasoning block."),
-		).not.toBeInTheDocument();
+		// Content is hidden because reasoning auto-collapses on completion
+		// (CollapsibleContent unmounts via Radix Presence).
+		expect(document.body).not.toHaveTextContent(
+			"Inspecting the streamed reasoning block.",
+		);
 		expect(screen.getByText("Done.")).toBeInTheDocument();
 	});
 

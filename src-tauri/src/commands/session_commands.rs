@@ -81,6 +81,27 @@ pub async fn get_session_context_usage(session_id: String) -> CmdResult<Option<S
     run_blocking(move || sessions::get_session_context_usage(&session_id)).await
 }
 
+/// Frontend-initiated write of `context_usage_meta`. Used when a
+/// trustworthy Claude hover fetch returns fresher numbers than the
+/// last persisted turn-end record — promotes them into the DB so the
+/// ring stays accurate across cold starts.
+#[tauri::command]
+pub async fn set_session_context_usage(
+    app: tauri::AppHandle,
+    session_id: String,
+    meta: String,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        crate::agents::streaming::context_usage::persist_context_usage_meta(
+            &app,
+            &session_id,
+            &meta,
+        );
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<String>> {
     run_blocking(move || sessions::get_session_codex_goal(&session_id)).await

@@ -50,6 +50,7 @@ import {
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { AppOnboarding } from "@/features/onboarding";
 import { ExportSessionImageButton } from "@/features/panel/export-session-image";
@@ -87,6 +88,7 @@ import {
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
+	type ActiveStreamSummary,
 	createAndCheckoutBranch,
 	createSession,
 	drainPendingCliSends,
@@ -98,6 +100,7 @@ import {
 	moveLocalWorkspaceToWorktree,
 	openWorkspaceInEditor,
 	openWorkspaceInFinder,
+	prewarmSlashCommandsForRepo,
 	prewarmSlashCommandsForWorkspace,
 	type RepositoryCreateOption,
 	syncWorkspaceWithTargetBranch,
@@ -117,6 +120,7 @@ import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
 import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
 import {
+	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
@@ -134,12 +138,11 @@ import {
 	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
 import {
+	buildSessionRunStates,
 	deriveBusySessionIds,
 	deriveBusyWorkspaceIds,
 	deriveStoppableSessionIds,
-	nextSessionRunStates,
 	type SessionRunState,
-	withPendingFinalizeRunState,
 } from "./lib/session-run-state";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
@@ -178,6 +181,7 @@ const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 type WorkspaceViewMode = "conversation" | "editor" | "start";
 const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
 const EMPTY_STRING_LIST: readonly string[] = [];
+const EMPTY_ACTIVE_STREAMS: ActiveStreamSummary[] = [];
 
 function App() {
 	const e2eScenario =
@@ -490,33 +494,34 @@ function AppShell({
 	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
 		null,
 	);
-	const [sessionRunStates, setSessionRunStates] = useState<
-		Map<string, SessionRunState>
-	>(() => new Map());
-	const handleSessionRunStateChange = useCallback(
-		(sessionId: string, workspaceId: string | null, sending: boolean) => {
-			setSessionRunStates((current) =>
-				nextSessionRunStates(current, {
-					sessionId,
-					workspaceId,
-					running: sending,
-				}),
-			);
-		},
-		[],
-	);
 	const [pendingComposerInserts, setPendingComposerInserts] = useState<
 		ResolvedComposerInsertRequest[]
 	>([]);
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
-	const effectiveSessionRunStates = useMemo(
+	// Source of truth for "which sessions are running": the Rust
+	// `ActiveStreams` registry, mirrored here via React Query and kept
+	// fresh by `UiMutationEvent::ActiveStreamsChanged`. We layer the
+	// StartPage's optimistic "creating workspace" marker on top so the
+	// panel can show a busy spinner before the real stream registers.
+	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	// Stable empty fallback so referential-equality consumers don't churn
+	// on undefined-data ticks.
+	const activeStreams = activeStreamsQuery.data ?? EMPTY_ACTIVE_STREAMS;
+	const effectiveSessionRunStates = useMemo<
+		ReadonlyMap<string, SessionRunState>
+	>(
 		() =>
-			withPendingFinalizeRunState(
-				sessionRunStates,
-				pendingCreatedWorkspaceSubmit,
+			buildSessionRunStates(
+				activeStreams,
+				pendingCreatedWorkspaceSubmit
+					? {
+							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
+							workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
+						}
+					: null,
 			),
-		[sessionRunStates, pendingCreatedWorkspaceSubmit],
+		[activeStreams, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -950,6 +955,10 @@ function AppShell({
 			selectedWorkspaceDetail?.state !== "archived",
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
+
+	// Nudge CI-progress refetch on workspace switch — `refetchOnMount: "always"`
+	// doesn't fire on queryKey changes.
+	useRefreshForgeOnWorkspaceSwitch(selectedWorkspaceId);
 
 	useEffect(() => {
 		selectedWorkspaceIdRef.current = selectedWorkspaceId;
@@ -2337,6 +2346,16 @@ function AppShell({
 		repositories.find((repository) => repository.id === startRepositoryId) ??
 		repositories[0] ??
 		null;
+	// Prewarm slash-commands for the start-page repo so the next `/` press
+	// hits warm cache (cold path otherwise has no cwd → misses project-level
+	// `.claude/commands/`). Gated on start view to avoid scheduling while the
+	// user is in workspace mode; deps key on `id` so a repositories refresh
+	// that doesn't change the selected repo doesn't re-fire.
+	useEffect(() => {
+		if (workspaceViewMode !== "start") return;
+		if (!startRepository) return;
+		void prewarmSlashCommandsForRepo(startRepository.id);
+	}, [workspaceViewMode, startRepository?.id]);
 	const selectedWorkspaceRepository =
 		repositories.find(
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
@@ -2987,12 +3006,10 @@ function AppShell({
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
-														onSessionRunStateChange={
-															handleSessionRunStateChange
-														}
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
+														activeStreams={activeStreams}
 														busySessionIds={effectiveBusySessionIds}
 														stoppableSessionIds={effectiveStoppableSessionIds}
 														interactionRequiredSessionIds={
@@ -3049,10 +3066,10 @@ function AppShell({
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
 													}
-													onSessionRunStateChange={handleSessionRunStateChange}
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}
+													activeStreams={activeStreams}
 													busySessionIds={effectiveBusySessionIds}
 													stoppableSessionIds={effectiveStoppableSessionIds}
 													interactionRequiredSessionIds={
@@ -3406,6 +3423,10 @@ function AppShell({
 														workspaceRootPath={workspaceRootPath}
 														workspaceState={
 															selectedWorkspaceDetailQuery.data?.state ?? null
+														}
+														workspaceSetupCompletedAt={
+															selectedWorkspaceDetailQuery.data
+																?.setupCompletedAt ?? null
 														}
 														repoId={
 															selectedWorkspaceDetailQuery.data?.repoId ?? null

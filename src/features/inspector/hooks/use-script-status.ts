@@ -37,11 +37,16 @@ function deriveState(
  * Subscribes to the shared script-store for live status of a script slot
  * (setup / run) in a given workspace. Returns a state label suitable for
  * driving the small status icon next to each tab label.
+ *
+ * `lastCompletedAt` lets the caller restore the success badge across app
+ * restarts: when there's no live in-memory entry but the workspace has a
+ * persisted completion timestamp, treat the slot as `success`.
  */
 export function useScriptStatus(
 	workspaceId: string | null,
 	scriptType: "setup" | "run",
 	hasScript: boolean,
+	lastCompletedAt: string | null = null,
 ): ScriptIconState {
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [exitCode, setExitCode] = useState<number | null>(null);
@@ -65,5 +70,9 @@ export function useScriptStatus(
 		});
 	}, [workspaceId, scriptType]);
 
-	return deriveState(hasScript, status, exitCode);
+	const state = deriveState(hasScript, status, exitCode);
+	// Restore the success badge after restart: in-memory entry is gone but
+	// the workspace row still has a completion timestamp.
+	if (state === "idle" && lastCompletedAt) return "success";
+	return state;
 }

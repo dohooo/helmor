@@ -185,7 +185,13 @@ export class CursorSessionManager implements SessionManager {
 
 		try {
 			for await (const event of run.stream()) {
+				const e = event as unknown as Record<string, unknown>;
 				emitter.passthrough(requestId, namespaceEvent(event));
+				// Cursor SDK stream may not close on its own after FINISHED;
+				// break explicitly so emitter.end() is called promptly.
+				if (e.type === "status" && e.status === "FINISHED") {
+					break;
+				}
 			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);

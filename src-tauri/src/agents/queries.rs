@@ -505,6 +505,10 @@ pub async fn list_slash_commands(
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
+    // Start page has no workspace, so `working_directory` is empty. Fall
+    // back to the repo's `root_path` so Claude CLI can scan the project's
+    // `.claude/commands/` and the cache key aligns with the repo prewarm.
+    let request = resolve_repo_fallback_cwd(request);
     let cwd = request.working_directory.as_deref().unwrap_or("");
     let repo_id = request.repo_id.as_deref().unwrap_or("");
     let additional_directories =
@@ -584,6 +588,36 @@ pub async fn list_slash_commands(
     Ok(SlashCommandsResponse { commands })
 }
 
+/// When the caller (e.g. start page) has a `repo_id` but no `working_directory`,
+/// resolve it to the repo's local `root_path` so the sidecar can scan
+/// project-level `.claude/commands/`. Same key shape as `dispatch_prewarm_for_repo`,
+/// so cache hits line up.
+fn resolve_repo_fallback_cwd(mut request: ListSlashCommandsRequest) -> ListSlashCommandsRequest {
+    if request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
+        return request;
+    }
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return request;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return request;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return request;
+    }
+    request.working_directory = Some(root_path.to_string());
+    request
+}
+
 fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) -> Vec<String> {
     let Some(workspace_id) = workspace_id else {
         return Vec::new();
@@ -645,7 +679,7 @@ pub fn prewarm_slash_command_cache_for_workspace(app: &AppHandle, workspace_id: 
                 );
                 return;
             };
-            dispatch_prewarm_for(&app, &workspace_id, root_path, &record.repo_id);
+            dispatch_prewarm(&app, Some(&workspace_id), root_path, &record.repo_id);
         });
 }
 
@@ -673,15 +707,51 @@ pub fn prewarm_slash_command_cache(app: &AppHandle) {
         });
 }
 
-fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, repo_id: &str) {
+/// Repo-level prewarm — for the start page where no workspace is selected.
+/// Uses the repo's `root_path` as cwd; cache key matches what
+/// `resolve_repo_fallback_cwd` produces, so the next `/` press hits warm.
+pub fn prewarm_slash_command_cache_for_repo(app: &AppHandle, repo_id: &str) {
+    let app = app.clone();
+    let repo_id = repo_id.to_string();
+    let _ = std::thread::Builder::new()
+        .name("slash-cmd-prewarm-repo".into())
+        .spawn(move || {
+            let record = match crate::models::repos::load_repository_by_id(&repo_id) {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    tracing::debug!(repo_id, "Slash-command prewarm: repo not found");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(repo_id, error = %e, "Slash-command prewarm: load failed");
+                    return;
+                }
+            };
+            let root_path = record.root_path.trim();
+            if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+                tracing::debug!(
+                    repo_id,
+                    root_path,
+                    "Slash-command prewarm: repo root_path missing or not a directory"
+                );
+                return;
+            }
+            dispatch_prewarm(&app, None, root_path, &repo_id);
+        });
+}
+
+/// Schedule a background refresh per provider. Workspace-scoped callers pass
+/// `Some(workspace_id)` (which also pulls in any linked-directory commands);
+/// repo-scoped callers (start page) pass `None` and the key shape matches
+/// `resolve_repo_fallback_cwd` so the next `/` press hits warm cache.
+fn dispatch_prewarm(app: &AppHandle, workspace_id: Option<&str>, root_path: &str, repo_id: &str) {
     let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(Some(workspace_id));
+    let additional_directories = lookup_workspace_linked_directories_for_commands(workspace_id);
     for provider in ["claude", "codex"] {
         let request = ListSlashCommandsRequest {
             provider: provider.to_string(),
             working_directory: Some(root_path.to_string()),
-            workspace_id: Some(workspace_id.to_string()),
+            workspace_id: workspace_id.map(str::to_string),
             repo_id: Some(repo_id.to_string()),
         };
         let ws_key = super::slash_commands::workspace_key(
@@ -691,7 +761,7 @@ fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, re
         );
         tracing::debug!(
             provider,
-            workspace_id,
+            workspace_id = workspace_id.unwrap_or(""),
             cwd = root_path,
             repo_id,
             linked_dir_count = additional_directories.len(),
@@ -1129,4 +1199,113 @@ pub fn fetch_live_context_usage(
 
     sidecar.unsubscribe(&request_id);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request(cwd: Option<&str>, repo_id: Option<&str>) -> ListSlashCommandsRequest {
+        ListSlashCommandsRequest {
+            provider: "claude".to_string(),
+            working_directory: cwd.map(str::to_string),
+            workspace_id: None,
+            repo_id: repo_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn fallback_noop_when_working_directory_already_set() {
+        let req = make_request(Some("/some/path"), Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory.as_deref(), Some("/some/path"));
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_missing() {
+        let req = make_request(None, None);
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_blank() {
+        let req = make_request(None, Some(""));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    fn setup_test_db(dir: &std::path::Path) {
+        let db_path = dir.join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        drop(conn);
+        crate::models::db::init_pools().expect("failed to init test DB pools");
+    }
+
+    fn insert_repo(repo_id: &str, root_path: &str) {
+        let db_path = crate::data_dir::data_dir().unwrap().join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES (?1, 'test-repo', ?2)",
+            rusqlite::params![repo_id, root_path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fallback_resolves_to_repo_root_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        let repo_root = dir.path().join("repo-root");
+        std::fs::create_dir(&repo_root).unwrap();
+        insert_repo("r1", repo_root.to_str().unwrap());
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(
+            resolved.working_directory.as_deref(),
+            Some(repo_root.to_str().unwrap())
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_root_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // Insert a repo whose root_path points at a directory that doesn't
+        // exist — guards the start-page case where the user deleted the
+        // working tree behind Helmor's back.
+        insert_repo("r1", "/nonexistent/path/for/test");
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_not_in_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // No insert_repo — DB lookup returns Ok(None).
+
+        let req = make_request(None, Some("ghost-repo"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
 }

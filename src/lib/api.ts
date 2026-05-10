@@ -314,6 +314,11 @@ export type WorkspaceDetail = {
 	/** gh/glab account login bound to the parent repo. NULL means no
 	 * account is bound — UI shows the "Connect" prompt. */
 	forgeLogin?: string | null;
+	/** Set when this workspace's setup script last finished with exit
+	 * code 0. NULL means never run (or skipped because the repo had no
+	 * setup script). Drives the inspector's Setup tab "ran in another
+	 * session" notice and the default-tab heuristic on workspace switch. */
+	setupCompletedAt?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -1205,6 +1210,19 @@ export async function prewarmSlashCommandsForWorkspace(
 	}
 }
 
+/** Fire-and-forget: prewarm the slash-command cache for a repo (start page). */
+export async function prewarmSlashCommandsForRepo(
+	repoId: string,
+): Promise<void> {
+	try {
+		await invoke<void>("prewarm_slash_commands_for_repo", {
+			repoId,
+		});
+	} catch {
+		// Best-effort; cache will still be populated lazily on first /.
+	}
+}
+
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
@@ -1430,7 +1448,8 @@ export type UiMutationEvent =
 			prompt: string;
 			modelId: string | null;
 			permissionMode: string | null;
-	  };
+	  }
+	| { type: "activeStreamsChanged" };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -2459,6 +2478,22 @@ export async function stopAgentStream(
 	});
 }
 
+/** UI projection of a registered, in-flight agent stream. Mirror of
+ *  `agents::streaming::ActiveStreamSummary` on the Rust side. */
+export type ActiveStreamSummary = {
+	sessionId: string;
+	workspaceId: string | null;
+	provider: string;
+};
+
+/** Snapshot of currently in-flight agent streams. The frontend derives
+ *  `busy / stoppable / busy-workspace` Sets from this list. Refetched
+ *  whenever a `UiMutationEvent::ActiveStreamsChanged` lands via the
+ *  ui-sync bridge. */
+export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
+	return await invoke<ActiveStreamSummary[]>("list_active_streams");
+}
+
 export type AgentSteerRequest = {
 	sessionId: string;
 	provider?: string;
@@ -2687,6 +2722,17 @@ export async function getSessionContextUsage(
 	return await invoke<string | null>("get_session_context_usage", {
 		sessionId,
 	});
+}
+
+/** Frontend-driven write of `context_usage_meta`. Used after a
+ *  trustworthy Claude hover-time live fetch so the persisted baseline
+ *  catches up without waiting for the next turn end. The backend
+ *  broadcasts `ContextUsageChanged`, so other observers refresh too. */
+export async function setSessionContextUsage(
+	sessionId: string,
+	meta: string,
+): Promise<void> {
+	await invoke<void>("set_session_context_usage", { sessionId, meta });
 }
 
 /** Active Codex `/goal` payload as JSON. Null when no goal is set. */

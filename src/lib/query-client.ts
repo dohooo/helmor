@@ -18,6 +18,7 @@ import {
 	getSessionContextUsage,
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
+	listActiveStreams,
 	listForgeAccounts,
 	listGithubLabels,
 	listRepositories,
@@ -118,17 +119,20 @@ export const helmorQueryKeys = {
 		provider: AgentProvider,
 		workingDirectory: string | null,
 		workspaceId: string | null,
+		repoId: string | null,
 	) =>
 		[
 			"slashCommands",
 			provider,
 			workingDirectory ?? "",
 			workspaceId ?? "",
+			repoId ?? "",
 		] as const,
 	workspaceLinkedDirectories: (workspaceId: string) =>
 		["workspaceLinkedDirectories", workspaceId] as const,
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
+	activeStreams: ["activeStreams"] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -311,6 +315,21 @@ export function repositoriesQueryOptions() {
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		meta: PERSIST_META,
+	});
+}
+
+/** Snapshot of in-flight agent streams (source of truth = Rust
+ *  `ActiveStreams`). Drives abort-button visibility + busy badges; the
+ *  ui-sync bridge invalidates this on `activeStreamsChanged`. NOT
+ *  persisted — running streams are by definition tied to this app run,
+ *  rehydrating stale state across restarts would mislead the UI. */
+export function activeStreamsQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.activeStreams,
+		queryFn: listActiveStreams,
+		initialData: [],
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
 	});
 }
 
@@ -563,6 +582,7 @@ export function slashCommandsQueryOptions(
 			provider,
 			workingDirectory,
 			workspaceId,
+			repoId,
 		),
 		queryFn: () =>
 			listSlashCommands({
@@ -717,22 +737,13 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
-		// Same `staleTime: Infinity` + `refetchOnWindowFocus: "always"`
-		// baseline as the other three identity-info queries.
-		//
-		// Unique to this query: `refetchOnMount: "always"`. Inspector's
-		// `Connect` CTA reads `remoteState` from here, so the moment the
-		// user switches workspaces we MUST re-probe the new workspace's
-		// remote — otherwise the previously-visited workspace's stale
-		// cache (with the same `staleTime: Infinity` rule) would render
-		// the wrong CTA state until the next focus event. The cached
-		// value still shows immediately (no loading flicker), only
-		// `isFetching` flips while the background refetch lands.
-		//
-		// The other three queries intentionally don't get this: their
-		// data either rarely changes (chip avatar, GitHub-vs-GitLab
-		// label) or isn't workspace-scoped (Settings roster), so the
-		// extra mount-time IPC isn't worth the cost.
+		// `staleTime: Infinity` + focus/mount `"always"` baseline shared
+		// with the other identity-info queries. CI-progress refetch on
+		// workspace switch is nudged by `useRefreshForgeOnWorkspaceSwitch`
+		// — a queryKey change goes through `setOptions` →
+		// `shouldFetchOptionally`, which gates on `isStale` (Infinity
+		// blocks it) and ignores `refetchOnMount` (that only fires on
+		// cold-start `onSubscribe`).
 		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: "always",

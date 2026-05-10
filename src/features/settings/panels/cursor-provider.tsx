@@ -1,6 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ExternalLink, RefreshCcw, X } from "lucide-react";
+import {
+	ChevronDown,
+	RefreshCcw,
+	SquareArrowOutUpRight,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,22 +151,18 @@ export function CursorProviderPanel() {
 						placeholder="Cursor API key"
 						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
 					/>
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									type="button"
-									variant="outline"
-									size="icon-sm"
-									aria-label="Get Cursor API key"
-									onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
-								>
-									<ExternalLink className="size-3.5" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>Get API key</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					{!keyDraft && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							aria-label="Get Cursor API key"
+							onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
+						>
+							Get your API key
+							<SquareArrowOutUpRight className="size-3.5" />
+						</Button>
+					)}
 				</div>
 			</SettingsRow>
 

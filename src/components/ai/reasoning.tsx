@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { StreamingPlainText } from "@/components/ai/streaming-plain-text";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -181,14 +182,21 @@ export type ReasoningContentProps = ComponentProps<
 
 export const ReasoningContent = memo(
 	({ className, children, fontSize, ...props }: ReasoningContentProps) => {
+		const { lifecycle } = useReasoning();
+		const streaming = lifecycle === "streaming";
+		// Strip SDK leading space + collapse blank lines so paragraph
+		// breaks don't render as ~40px gaps under `whitespace-pre-wrap`.
+		const trimmed = children.replace(/^\s+/, "").replace(/\n[ \t]*\n+/g, "\n");
+
 		return (
-			<CollapsibleContent className={cn("pt-1.5", className)} {...props}>
-				<pre
-					className="whitespace-pre-wrap break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans leading-relaxed text-muted-foreground/80"
+			<CollapsibleContent className={cn("pt-0.5", className)} {...props}>
+				<StreamingPlainText
+					streaming={streaming}
+					className="px-3 py-1 font-sans leading-relaxed text-muted-foreground/80"
 					style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
 				>
-					{children}
-				</pre>
+					{trimmed}
+				</StreamingPlainText>
 			</CollapsibleContent>
 		);
 	},

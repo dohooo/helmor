@@ -22,7 +22,13 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { $createTextNode, type TextNode } from "lexical";
 import { FileText } from "lucide-react";
-import { type RefObject, useCallback, useMemo, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
 	Command,
@@ -104,11 +110,34 @@ export function FileMentionPlugin({
 	const [editor] = useLexicalComposerContext();
 	const [query, setQuery] = useState<string | null>(null);
 
-	// Cached per workspace root. The query is disabled until we have a root,
-	// so the popup simply never opens before the workspace finishes loading.
+	// Defer the recursive workspace walk to an idle frame so it doesn't
+	// compete with the view-switch reconciliation. By the time the user
+	// types `@`, the cache is usually warm.
+	const [hasIdledOnce, setHasIdledOnce] = useState(false);
+	useEffect(() => {
+		if (!workspaceRootPath || hasIdledOnce) return;
+		const win = typeof window === "undefined" ? null : window;
+		const ric =
+			win && "requestIdleCallback" in win
+				? win.requestIdleCallback.bind(win)
+				: null;
+		const cic =
+			win && "cancelIdleCallback" in win
+				? win.cancelIdleCallback.bind(win)
+				: null;
+		if (ric) {
+			const handle = ric(() => setHasIdledOnce(true), { timeout: 1500 });
+			return () => cic?.(handle);
+		}
+		const timer = setTimeout(() => setHasIdledOnce(true), 800);
+		return () => clearTimeout(timer);
+	}, [workspaceRootPath, hasIdledOnce]);
+
+	// Light up immediately if the picker opens before idle.
+	const pickerActive = query !== null;
 	const filesQuery = useQuery({
 		...workspaceFilesQueryOptions(workspaceRootPath ?? ""),
-		enabled: Boolean(workspaceRootPath),
+		enabled: Boolean(workspaceRootPath) && (hasIdledOnce || pickerActive),
 	});
 
 	const files = filesQuery.data ?? [];
