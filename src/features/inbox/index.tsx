@@ -7,6 +7,7 @@ import {
 	Smartphone,
 	X,
 } from "lucide-react";
+import type { ChangeEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
@@ -81,6 +82,18 @@ type GitHubStateFilter = {
 	id: "all" | "open" | "closed" | "merged" | "answered" | "unanswered";
 	label: string;
 };
+
+function githubIssuePrTabFromQuery(
+	query: string,
+): GitHubTypeFilter["id"] | null {
+	const match = query
+		.trim()
+		.match(
+			/^(?:https?:\/\/)?github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(?:[/?#].*)?$/i,
+		);
+	if (!match) return null;
+	return match[1].toLowerCase() === "issues" ? "github_issue" : "github_pr";
+}
 
 const SOURCE_FILTERS: SourceFilter[] = [
 	{
@@ -295,6 +308,18 @@ export const InboxSidebar = memo(function InboxSidebar({
 
 	const showGitHubTypeSelect =
 		selectedFilter.id === "github" && enabledGitHubTypeFilters.length > 1;
+	const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+		const nextQuery = event.target.value;
+		setSearchQuery(nextQuery);
+		const targetTab = githubIssuePrTabFromQuery(nextQuery);
+		if (
+			targetTab &&
+			targetTab !== githubTypeFilter &&
+			enabledGitHubTypeFilters.some((filter) => filter.id === targetTab)
+		) {
+			setGithubTypeFilter(targetTab);
+		}
+	};
 	const horizontalPaddingClass = showWindowSafeTop
 		? "pr-4 pl-3"
 		: "pr-3 pl-2.5";
@@ -421,7 +446,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<input
 								type="text"
 								value={searchQuery}
-								onChange={(event) => setSearchQuery(event.target.value)}
+								onChange={handleSearchChange}
 								placeholder="Search"
 								aria-label="Search GitHub contexts"
 								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/70"
