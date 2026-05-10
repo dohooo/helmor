@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	Archive,
+	ArrowLeft,
+	ArrowRight,
 	ChevronDown,
 	ChevronRight,
 	CircleDot,
@@ -49,6 +51,7 @@ import {
 	readStoredSectionOpenState,
 	writeStoredSectionOpenState,
 } from "./open-state";
+import { ResourceUsagePill } from "./resource-usage-pill";
 import { WorkspaceRowItem } from "./row-item";
 import {
 	ARCHIVED_SECTION_ID,
@@ -663,10 +666,13 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			/>
 			<div
 				data-slot="window-safe-top"
-				className="flex h-9 shrink-0 items-center pr-3"
+				className="flex h-9 shrink-0 items-center gap-1 pr-2"
 			>
 				<TrafficLightSpacer side="left" width={94} />
+				<NavHistoryButton direction="back" />
+				<NavHistoryButton direction="forward" />
 				<div data-tauri-drag-region className="h-full flex-1" />
+				<ResourceUsagePill />
 			</div>
 
 			<nav className="mt-1 flex flex-col gap-0.5 px-2">
@@ -886,5 +892,40 @@ function SidebarNavItem({
 			<Icon className="size-[15px] shrink-0" strokeWidth={1.9} />
 			<span className="truncate">{label}</span>
 		</button>
+	);
+}
+
+/**
+ * Browser-style back / forward affordance pinned to the sidebar's
+ * window-safe top row. Currently a visual stub — the buttons render
+ * disabled until the navigation history store + Mod+[ / Mod+] handlers
+ * land. Tooltips already announce the upcoming behaviour so a glance
+ * conveys what they'll do.
+ */
+function NavHistoryButton({ direction }: { direction: "back" | "forward" }) {
+	const Icon = direction === "back" ? ArrowLeft : ArrowRight;
+	const label = direction === "back" ? "Navigate back" : "Navigate forward";
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					aria-label={label}
+					variant="ghost"
+					size="icon-xs"
+					disabled
+					className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+				>
+					<Icon className="size-3.5" strokeWidth={2} />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent
+				side="bottom"
+				sideOffset={4}
+				className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+			>
+				{label}
+			</TooltipContent>
+		</Tooltip>
 	);
 }

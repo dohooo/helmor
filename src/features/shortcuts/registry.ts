@@ -208,6 +208,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "navigation.back",
+		title: "Navigate back",
+		group: "Navigation",
+		defaultHotkey: "Mod+[",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "navigation.forward",
+		title: "Navigate forward",
+		group: "Navigation",
+		defaultHotkey: "Mod+]",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "sidebar.right.toggle",
 		title: "Toggle right sidebar",
 		group: "System",
