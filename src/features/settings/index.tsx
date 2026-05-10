@@ -63,6 +63,7 @@ import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
+import { OpenAiRealtimePanel } from "./panels/openai-realtime";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const MIN_FONT_SIZE = 12;
@@ -649,6 +650,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "experimental" && (
 								<div className="flex flex-col gap-3">
 									<CliInstallPanel />
+									<OpenAiRealtimePanel />
 								</div>
 							)}
 

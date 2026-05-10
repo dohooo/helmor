@@ -101,6 +101,8 @@ pub fn run() {
                 "Helmor started"
             );
 
+            build_main_window(app)?;
+
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
             // (users can find the messages in the archive list and choose
@@ -231,6 +233,7 @@ pub fn run() {
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
+            commands::settings_commands::create_openai_realtime_client_secret,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::system_commands::get_cli_status,
@@ -429,6 +432,37 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+fn build_main_window(app: &mut tauri::App) -> tauri::Result<()> {
+    let Some(window_config) = app.config().app.windows.first() else {
+        return Ok(());
+    };
+
+    let builder = tauri::WebviewWindowBuilder::from_config(app, window_config)?;
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_webview_configuration(mac_webview_configuration());
+
+    builder.build()?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn mac_webview_configuration() -> objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration> {
+    use objc2_foundation::{ns_string, MainThreadMarker, NSNumber, NSObjectNSKeyValueCoding};
+    use objc2_web_kit::WKWebViewConfiguration;
+
+    let mtm = MainThreadMarker::new().expect("main window must be created on the main thread");
+    let config = unsafe { WKWebViewConfiguration::new(mtm) };
+    let yes = NSNumber::numberWithBool(true);
+
+    unsafe {
+        let preferences = config.preferences();
+        preferences.setValue_forKey(Some(&yes), ns_string!("mediaDevicesEnabled"));
+    }
+
+    config
 }
 
 // Route a user-initiated exit through the frontend quit-confirm flow.

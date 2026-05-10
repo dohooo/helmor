@@ -41,6 +41,7 @@ import type { PendingUserInput } from "@/features/conversation/pending-user-inpu
 import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import { useVoiceModeActive } from "@/features/voice-mode/voice-mode-store";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
@@ -209,6 +210,11 @@ const EDITOR_THEME = {
 	paragraph: "composer-paragraph",
 };
 
+/** Pixels removed from the textarea (and therefore the composer) when voice
+ *  mode is active. Mirrored by `VoiceModeBar`'s height so the outer flex
+ *  column's total height stays constant. Keep these two values in sync. */
+const VOICE_SHRINK_PX = 40;
+
 function onEditorError(error: Error) {
 	console.error("[Composer Lexical]", error);
 }
@@ -272,6 +278,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	startSubmitMode = "startNow",
 	onStartSubmitModeChange,
 }: WorkspaceComposerProps) {
+	// Voice-mode trims the textarea by `VOICE_SHRINK_PX`. Inline min/max set
+	// by AutoResizePlugin override the className tokens, so the textarea
+	// (and hence the whole composer) actually contracts -- no scaling, no
+	// clipping. Bar grows by the same amount in `VoiceModeBar` so total
+	// outer height stays constant.
+	const voiceModeActive = useVoiceModeActive();
+	const voiceShrinkBy = voiceModeActive ? VOICE_SHRINK_PX : 0;
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);
@@ -699,6 +712,15 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-multiline
 										className={cn(
 											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none",
+											// Smooth height collapse when voice mode toggles. We
+											// transition `height` ONLY -- transitioning min/max would
+											// trap `getComputedStyle().minHeight` at the in-flight
+											// value during AutoResizePlugin's measurement pass, so
+											// `scrollHeight` would lock to the old min and the
+											// shrink would never apply (silently). With just `height`
+											// transitioning, min/max snap instantly and the explicit
+											// height value drives a visible 300ms animation.
+											"transition-[height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 											showFocusHint && "pr-28",
 										)}
 									/>
@@ -756,7 +778,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						<CompositionGuardPlugin />
 						<PasteImagePlugin />
 						<DropFilePlugin />
-						<AutoResizePlugin minHeight={64} maxHeight={240} />
+						<AutoResizePlugin
+							minHeight={64}
+							maxHeight={240}
+							shrinkBy={voiceShrinkBy}
+						/>
 						<EditorRefPlugin editorRef={editorRef} />
 						<DraftPersistencePlugin
 							contextKey={contextKey}

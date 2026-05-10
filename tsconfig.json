@@ -20,6 +20,7 @@
 		"noUnusedParameters": true,
 		"noFallthroughCasesInSwitch": true,
 		"paths": {
+			"border-beam": ["./src/components/border-beam/index.ts"],
 			"@/*": ["./src/*"]
 		}
 	},

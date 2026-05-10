@@ -176,6 +176,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "voice.toggle",
+		title: "Voice mode",
+		group: "System",
+		defaultHotkey: "Mod+Shift+V",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "sidebar.left.toggle",
 		title: "Toggle left sidebar",
 		group: "System",

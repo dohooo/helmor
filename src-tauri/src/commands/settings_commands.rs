@@ -1,4 +1,5 @@
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::{
@@ -16,6 +17,19 @@ use super::common::{run_blocking, CmdResult};
 const RATE_LIMITS_THROTTLE_SECONDS: i64 = 30;
 static CLAUDE_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE_SECONDS);
 static CODEX_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE_SECONDS);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiRealtimeClientSecret {
+    pub value: String,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiRealtimeClientSecretResponse {
+    value: String,
+    expires_at: Option<i64>,
+}
 
 #[tauri::command]
 pub async fn get_app_settings() -> CmdResult<std::collections::HashMap<String, String>> {
@@ -63,6 +77,87 @@ pub async fn update_app_settings(
         sidecar.push_cursor_api_key(crate::sidecar::load_cursor_api_key());
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeClientSecret> {
+    run_blocking(|| {
+        let api_key = settings::load_setting_value("app.openai_realtime_api_key")?
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if api_key.is_empty() {
+            anyhow::bail!("OpenAI Realtime API key is not configured.");
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .context("build OpenAI Realtime HTTP client")?;
+        let body = serde_json::json!({
+            "expires_after": {
+                "anchor": "created_at",
+                "seconds": 600
+            },
+            "session": {
+                "type": "realtime",
+                "model": "gpt-realtime-2",
+                "instructions": "You are Helmor's realtime voice assistant. Keep replies concise and conversational.\n\n# Unclear Audio\n- If the latest input is silence, low-level background noise, hold music, or a side conversation, call the wait_for_user tool instead of responding.\n- Only respond when the user is clearly addressing you in the foreground.\n- If you are unsure whether the user is talking to you, call wait_for_user.",
+                "reasoning": { "effort": "high" },
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": {
+                        "noise_reduction": { "type": "near_field" },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.8,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 1000,
+                            "create_response": true,
+                            "interrupt_response": false
+                        }
+                    },
+                    "output": {
+                        "voice": "marin"
+                    }
+                },
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "wait_for_user",
+                        "description": "Call when the latest audio is silence, background noise, hold music, or a side conversation that doesn't need a response.",
+                        "parameters": { "type": "object", "properties": {}, "required": [] }
+                    }
+                ]
+            }
+        });
+
+        let response = client
+            .post("https://api.openai.com/v1/realtime/client_secrets")
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .context("create OpenAI Realtime client secret")?;
+
+        let status = response.status();
+        let text = response
+            .text()
+            .context("read OpenAI Realtime client secret response")?;
+
+        if !status.is_success() {
+            anyhow::bail!("OpenAI Realtime client secret request failed with HTTP {status}: {text}");
+        }
+
+        let parsed: OpenAiRealtimeClientSecretResponse =
+            serde_json::from_str(&text).context("parse OpenAI Realtime client secret response")?;
+
+        Ok(OpenAiRealtimeClientSecret {
+            value: parsed.value,
+            expires_at: parsed.expires_at,
+        })
+    })
+    .await
 }
 
 /// Read the account-global Codex rate-limit snapshot. Each call attempts

@@ -13,6 +13,7 @@ export type ShortcutId =
 	| "script.run"
 	| "settings.open"
 	| "theme.toggle"
+	| "voice.toggle"
 	| "sidebar.left.toggle"
 	| "sidebar.right.toggle"
 	| "zen.toggle"

@@ -65,6 +65,8 @@ import {
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { AppUpdateButton } from "@/features/updater/app-update-button";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
+import type { RealtimeVoiceSession } from "@/features/voice-mode/realtime-session";
+import { voiceModeStore } from "@/features/voice-mode/voice-mode-store";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
@@ -688,6 +690,8 @@ function AppShell({
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
 		() => localStorage.getItem(PREFERRED_EDITOR_STORAGE_KEY),
 	);
+	const voiceSessionRef = useRef<RealtimeVoiceSession | null>(null);
+	const voiceStartPendingRef = useRef(false);
 	const preferredEditor =
 		installedEditors.find((e) => e.id === preferredEditorId) ??
 		installedEditors[0] ??
@@ -716,6 +720,20 @@ function AppShell({
 		(shortcuts: ShortcutOverrides) => updateSettings({ shortcuts }),
 		[updateSettings],
 	);
+	const stopVoiceMode = useCallback(() => {
+		voiceStartPendingRef.current = false;
+		voiceSessionRef.current?.stop();
+		voiceSessionRef.current = null;
+	}, []);
+	// NOTE: Backend WebRTC session is intentionally disabled while we iterate
+	// on the composer voice-mode UI. The shortcut just flips the shared
+	// `voiceModeStore`; subscribers (composer shrink wrapper, future orb /
+	// glow) react via `useVoiceModeActive`. Re-enable backend by restoring
+	// the start-session call here and re-importing `startRealtimeVoiceSession`.
+	const handleToggleVoiceMode = useCallback(() => {
+		voiceModeStore.toggle();
+	}, []);
+	useEffect(() => stopVoiceMode, [stopVoiceMode]);
 	useGlobalHotkeySync({
 		isLoaded: areSettingsLoaded,
 		shortcuts: appSettings.shortcuts,
@@ -1987,6 +2005,10 @@ function AppShell({
 				callback: handleToggleTheme,
 			},
 			{
+				id: "voice.toggle" as const,
+				callback: handleToggleVoiceMode,
+			},
+			{
 				id: "sidebar.left.toggle" as const,
 				callback: () => setSidebarCollapsed((collapsed) => !collapsed),
 			},
@@ -2079,6 +2101,7 @@ function AppShell({
 			handlePullLatest,
 			handleReopenClosedSession,
 			handleToggleTheme,
+			handleToggleVoiceMode,
 			handleToggleZenMode,
 			preferredEditor,
 			pullRequestUrl,

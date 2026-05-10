@@ -2447,6 +2447,17 @@ export async function startAgentMessageStream(
 	await invoke("send_agent_message_stream", { request, onEvent });
 }
 
+export type OpenAiRealtimeClientSecret = {
+	value: string;
+	expiresAt?: number | null;
+};
+
+export async function createOpenAiRealtimeClientSecret(): Promise<OpenAiRealtimeClientSecret> {
+	return await invoke<OpenAiRealtimeClientSecret>(
+		"create_openai_realtime_client_secret",
+	);
+}
+
 export async function stopAgentStream(
 	sessionId: string,
 	provider?: string,

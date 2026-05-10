@@ -221,6 +221,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	openAiRealtimeApiKey: string;
 	inboxSourceConfig: InboxSourceConfig;
 	kanbanViewState: KanbanViewState;
 };
@@ -278,6 +279,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 		cachedModels: null,
 	},
+	openAiRealtimeApiKey: "",
 	inboxSourceConfig: { accounts: {} },
 	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 };
@@ -322,6 +324,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	openAiRealtimeApiKey: "app.openai_realtime_api_key",
 	inboxSourceConfig: "app.inbox_source_config",
 	kanbanViewState: "app.kanban_view_state",
 };
@@ -802,6 +805,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			openAiRealtimeApiKey:
+				raw[SETTINGS_KEY_MAP.openAiRealtimeApiKey] ??
+				DEFAULT_SETTINGS.openAiRealtimeApiKey,
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
