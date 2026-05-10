@@ -127,21 +127,25 @@
 .dark {
 	color-scheme: dark;
 
-	/* Official shadcn/ui radix-nova neutral theme */
-	--background: oklch(0.165 0 0);
+	/* Unified deep warm-neutral surface — every shell surface
+	   (`bg-background`, `bg-sidebar`, `bg-card`, `bg-popover`, `bg-muted`)
+	   resolves to #151110 so headers using `bg-muted/25` over `bg-sidebar`
+	   no longer show as a different shade. Hover affordances come from
+	   `--accent` which stays a touch lifted. */
+	--background: #151110;
 	--foreground: oklch(0.985 0 0);
 	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.205 0 0);
+	--card: #151110;
 	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
+	--popover: #151110;
 	--popover-foreground: oklch(0.985 0 0);
 	--primary: oklch(0.922 0 0);
 	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
+	--secondary: #151110;
 	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
+	--muted: #151110;
 	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
+	--accent: #1f1a18;
 	--accent-foreground: oklch(0.985 0 0);
 	--destructive: oklch(0.704 0.191 22.216);
 	--border: oklch(1 0 0 / 10%);
@@ -161,11 +165,11 @@
 	--subagent-4: oklch(0.74 0.1 320);
 	--subagent-5: oklch(0.74 0.1 280);
 	--subagent-6: oklch(0.76 0.09 195);
-	--sidebar: oklch(0.205 0 0);
+	--sidebar: #151110;
 	--sidebar-foreground: oklch(0.985 0 0);
 	--sidebar-primary: oklch(0.488 0.243 264.376);
 	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.269 0 0);
+	--sidebar-accent: #1f1a18;
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--workspace-sidebar-selected-bg: color-mix(
 		in oklch,

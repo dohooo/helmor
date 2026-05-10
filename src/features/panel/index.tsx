@@ -45,7 +45,14 @@ type WorkspacePanelProps = {
 	contextPreviewActive?: boolean;
 	fileTabs?: FileTab[];
 	activeTabId?: TabId | null;
-	activeFileEditorSession?: EditorSessionState | null;
+	/**
+	 * Sticky file editor session — equals the active file's session when a
+	 * file tab is active, otherwise the most recent file tab's session. Used
+	 * to keep `WorkspaceEditorSurface` mounted across non-file tab switches
+	 * so Monaco models survive instead of being disposed and recreated.
+	 */
+	displayedFileEditorSession?: EditorSessionState | null;
+	fileEditorVisible?: boolean;
 	activeFileHasChanges?: boolean;
 	workspaceRootPath?: string | null;
 	onSelectSession?: (sessionId: string) => void;
@@ -86,7 +93,8 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	contextPreviewActive = false,
 	fileTabs,
 	activeTabId = null,
-	activeFileEditorSession = null,
+	displayedFileEditorSession = null,
+	fileEditorVisible = false,
 	activeFileHasChanges = false,
 	workspaceRootPath = null,
 	onSelectSession,
@@ -174,38 +182,54 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 				/>
 
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					{activeTabId?.kind === "file" && activeFileEditorSession ? (
-						<WorkspaceEditorSurface
-							editorSession={activeFileEditorSession}
-							workspaceRootPath={workspaceRootPath}
-							fileHasChanges={activeFileHasChanges}
-							onChangeSession={onChangeFileEditorSession ?? (() => {})}
-							onExit={onExitFileEditor ?? (() => {})}
-							onError={onFileEditorError}
-						/>
-					) : contextPreviewActive && contextPreviewCard ? (
-						<div className="min-h-0 flex-1 overflow-hidden px-0 pt-4 pb-3">
-							<SourceDetailView card={contextPreviewCard} />
+					{/*
+					 * Editor surface stays mounted whenever there is any open file
+					 * tab so Monaco models survive switching to a session/preview
+					 * tab. Hidden via `display: none` instead of unmounting —
+					 * unmount/remount was racy and left the canvas blank on
+					 * re-select.
+					 */}
+					{displayedFileEditorSession ? (
+						<div
+							className={
+								fileEditorVisible ? "flex min-h-0 flex-1 flex-col" : "hidden"
+							}
+						>
+							<WorkspaceEditorSurface
+								editorSession={displayedFileEditorSession}
+								workspaceRootPath={workspaceRootPath}
+								fileHasChanges={activeFileHasChanges}
+								onChangeSession={onChangeFileEditorSession ?? (() => {})}
+								onExit={onExitFileEditor ?? (() => {})}
+								onError={onFileEditorError}
+							/>
 						</div>
-					) : activePane?.hasLoaded ? (
-						<ActiveThreadViewport
-							hasSession={!!selectedSession}
-							pane={activePane}
-							missingScriptTypes={missingScriptTypes}
-							onInitializeScript={onInitializeScript}
-						/>
-					) : loadingWorkspace || loadingSession ? (
-						<ConversationColdPlaceholder />
-					) : (
-						<div className="flex min-h-full flex-1 items-center justify-center px-8">
-							<EmptyState
-								workspaceState={workspace?.state ?? null}
+					) : null}
+
+					{!fileEditorVisible &&
+						(contextPreviewActive && contextPreviewCard ? (
+							<div className="min-h-0 flex-1 overflow-hidden px-0 pt-4 pb-3">
+								<SourceDetailView card={contextPreviewCard} />
+							</div>
+						) : activePane?.hasLoaded ? (
+							<ActiveThreadViewport
 								hasSession={!!selectedSession}
+								pane={activePane}
 								missingScriptTypes={missingScriptTypes}
 								onInitializeScript={onInitializeScript}
 							/>
-						</div>
-					)}
+						) : loadingWorkspace || loadingSession ? (
+							<ConversationColdPlaceholder />
+						) : (
+							<div className="flex min-h-full flex-1 items-center justify-center px-8">
+								<EmptyState
+									workspaceState={workspace?.state ?? null}
+									hasSession={!!selectedSession}
+									missingScriptTypes={missingScriptTypes}
+									onInitializeScript={onInitializeScript}
+								/>
+							</div>
+						))}
 				</div>
 			</div>
 		</HelmorProfiler>

@@ -94,7 +94,8 @@ type WorkspaceConversationContainerProps = {
 	onCloseContextPreview?: () => void;
 	fileTabs?: FileTab[];
 	activeTabId?: TabId | null;
-	activeFileEditorSession?: EditorSessionState | null;
+	displayedFileEditorSession?: EditorSessionState | null;
+	fileEditorVisible?: boolean;
 	activeFileHasChanges?: boolean;
 	onSelectFileTab?: (id: TabId) => void;
 	onCloseFileTab?: (id: TabId) => void;
@@ -187,7 +188,8 @@ export const WorkspaceConversationContainer = memo(
 		onCloseContextPreview,
 		fileTabs,
 		activeTabId = null,
-		activeFileEditorSession = null,
+		displayedFileEditorSession = null,
+		fileEditorVisible = false,
 		activeFileHasChanges = false,
 		onSelectFileTab,
 		onCloseFileTab,
@@ -523,7 +525,8 @@ export const WorkspaceConversationContainer = memo(
 						onCloseContextPreview={onCloseContextPreview}
 						fileTabs={fileTabs}
 						activeTabId={activeTabId}
-						activeFileEditorSession={activeFileEditorSession}
+						displayedFileEditorSession={displayedFileEditorSession}
+						fileEditorVisible={fileEditorVisible}
 						activeFileHasChanges={activeFileHasChanges}
 						workspaceRootPath={workspaceRootPath}
 						onSelectFileTab={onSelectFileTab}

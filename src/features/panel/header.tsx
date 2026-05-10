@@ -113,6 +113,11 @@ type WorkspacePanelHeaderProps = {
 	newSessionShortcut?: string | null;
 };
 
+// Flat tab cell: full-height, edge-to-edge highlight on the active tab
+// (no rounded pill). Overrides the default TabsTrigger pill styling.
+const SESSION_TAB_CLASS =
+	"group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden rounded-none border-0 px-3 pr-5 text-[13px] text-muted-foreground transition-colors hover:text-foreground/80 data-[state=active]:bg-foreground/[0.05] data-[state=active]:text-foreground data-[state=active]:shadow-none aria-selected:bg-foreground/[0.05] aria-selected:text-foreground aria-selected:shadow-none dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-foreground/[0.05] dark:aria-selected:border-transparent dark:aria-selected:bg-foreground/[0.05]";
+
 export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	workspace,
 	changeRequest = null,
@@ -409,7 +414,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		<header className="relative z-20">
 			<div
 				aria-label="Workspace header"
-				className="flex h-9 items-center justify-between gap-3 px-[18px]"
+				className="flex h-9 items-center justify-between gap-3 border-y border-border/60 px-[18px]"
 				data-tauri-drag-region
 			>
 				<div
@@ -642,7 +647,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				) : null}
 			</div>
 
-			<div className="flex items-center px-4 pb-1">
+			<div className="flex h-8 items-center border-y border-border/60 pr-4 pl-1">
 				<div className="group/tabs-scroll relative min-w-0 flex-1">
 					{hasRightOverflow && (
 						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent" />
@@ -680,7 +685,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							>
 								<TabsList
 									aria-label="Sessions"
-									className="inline-flex min-w-full w-max justify-start self-start"
+									className="inline-flex min-w-full w-max justify-start self-start bg-transparent"
 								>
 									{contextPreviewCard ? (
 										<Tooltip>
@@ -699,7 +704,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														event.stopPropagation();
 														onCloseContextPreview?.();
 													}}
-													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+													className={SESSION_TAB_CLASS}
 												>
 													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
 														<Layers className="size-3.5" strokeWidth={1.8} />
@@ -762,7 +767,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														onFocus={() => {
 															onPrefetchSession?.(session.id);
 														}}
-														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className={SESSION_TAB_CLASS}
 													>
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
@@ -880,7 +885,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															event.stopPropagation();
 															onCloseFileTab?.(id);
 														}}
-														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className={SESSION_TAB_CLASS}
 													>
 														<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
 															<span

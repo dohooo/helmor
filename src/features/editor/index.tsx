@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, FileCode, GitCompareArrows } from "lucide-react";
+import { Columns2, Pin, X } from "lucide-react";
 import {
 	type MutableRefObject,
 	Suspense,
@@ -10,10 +10,14 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { FileIcon } from "@/features/file-browser/file-icon";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
@@ -28,20 +32,6 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { describeUnknownError } from "@/lib/workspace-helpers";
-
-// Refined segmented-tab look: no tray, soft glassy pill on the active state.
-// Hover only changes text color (no bg) — otherwise hover-on-inactive sits next
-// to active-bg and the boundary blurs. Active is the ONLY trigger with a bg.
-const SEGMENT_CLASS = [
-	"h-5 gap-1 rounded-[5px] px-1.5 py-0 text-[10.5px] font-normal tracking-tight",
-	"border-transparent bg-transparent text-muted-foreground/70 shadow-none",
-	"hover:bg-transparent hover:text-foreground",
-	"data-active:bg-foreground/[0.10] data-active:text-foreground data-active:border-transparent data-active:shadow-none",
-	"aria-selected:bg-foreground/[0.10] aria-selected:text-foreground aria-selected:border-transparent aria-selected:shadow-none",
-	"dark:data-active:bg-foreground/[0.10] dark:data-active:border-transparent",
-	"dark:aria-selected:bg-foreground/[0.10] dark:aria-selected:border-transparent",
-	"[&_svg:not([class*='size-'])]:size-2.5",
-].join(" ");
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
@@ -632,63 +622,88 @@ export function WorkspaceEditorSurface({
 			className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground"
 		>
 			<div
-				className="flex h-7 items-center border-b border-border"
+				className="flex h-7 items-center border-y border-border/60 px-4"
 				data-tauri-drag-region
 			>
-				{/* Traffic-light inset. macOS: left; Windows / Linux: right. */}
-				<TrafficLightSpacer side="left" width={86} />
+				<div className="flex min-w-0 items-center gap-1.5">
+					<FileIcon
+						name={fileBasename(editorSession.path)}
+						kind="file"
+						className="size-3"
+					/>
+					<span
+						className="truncate font-mono text-[11px] italic text-muted-foreground"
+						title={editorSession.path}
+					>
+						{fileBasename(editorSession.path)}
+					</span>
+				</div>
 
 				<div className="min-w-0 flex-1" data-tauri-drag-region />
 
-				<div className="flex shrink-0 items-center gap-2 pr-3">
-					<Tabs
-						value={editorSession.kind}
-						onValueChange={handleFileDiffModeChange}
-						aria-label="File editor mode"
-					>
-						<TabsList className="h-5 gap-0 bg-transparent p-0">
-							<TabsTrigger value="file" className={SEGMENT_CLASS}>
-								<FileCode strokeWidth={1.8} />
-								File
-							</TabsTrigger>
-							<TabsTrigger
-								value="diff"
-								disabled={!fileHasChanges}
-								title={
-									fileHasChanges
-										? undefined
-										: "No changes to diff against this file"
-								}
+				<div className="flex shrink-0 items-center gap-1">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								onClick={() => {
+									const next = editorSession.kind === "file" ? "diff" : "file";
+									handleFileDiffModeChange(next);
+								}}
+								disabled={editorSession.kind === "file" && !fileHasChanges}
+								aria-pressed={editorSession.kind === "diff"}
 								className={cn(
-									SEGMENT_CLASS,
-									!fileHasChanges &&
-										"cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground/70",
+									"inline-flex h-[18px] cursor-pointer items-center rounded-[4px] px-1.5 text-[10.5px] font-normal tracking-tight text-muted-foreground/80 transition-colors hover:bg-foreground/[0.06] hover:text-foreground",
+									editorSession.kind === "diff" &&
+										"bg-foreground/[0.10] text-foreground",
+									editorSession.kind === "file" &&
+										!fileHasChanges &&
+										"cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground/80",
 								)}
 							>
-								<GitCompareArrows strokeWidth={1.8} />
-								Diff
-							</TabsTrigger>
-						</TabsList>
-					</Tabs>
+								{editorSession.kind === "diff" ? "Diff" : "Raw"}
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" sideOffset={4}>
+							{editorSession.kind === "diff"
+								? "Switch to raw file"
+								: fileHasChanges
+									? "Switch to diff view"
+									: "No changes to diff"}
+						</TooltipContent>
+					</Tooltip>
 					{isMarkdown && (
-						<Tabs
-							value={viewMode}
-							onValueChange={handleViewModeChange}
-							aria-label="Markdown view mode"
-						>
-							{/* No tray: bg-transparent + p-0. Pill highlight only on the active trigger. */}
-							<TabsList className="h-5 gap-0 bg-transparent p-0">
-								<TabsTrigger value="source" className={SEGMENT_CLASS}>
-									<FileCode strokeWidth={1.8} />
-									Source
-								</TabsTrigger>
-								<TabsTrigger value="preview" className={SEGMENT_CLASS}>
-									<Eye strokeWidth={1.8} />
-									Preview
-								</TabsTrigger>
-							</TabsList>
-						</Tabs>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={() =>
+										handleViewModeChange(
+											viewMode === "preview" ? "source" : "preview",
+										)
+									}
+									aria-pressed={viewMode === "preview"}
+									className={cn(
+										"inline-flex h-[18px] cursor-pointer items-center rounded-[4px] px-1.5 text-[10.5px] font-normal tracking-tight text-muted-foreground/80 transition-colors hover:bg-foreground/[0.06] hover:text-foreground",
+										viewMode === "preview" &&
+											"bg-foreground/[0.10] text-foreground",
+									)}
+								>
+									{viewMode === "preview" ? "Preview" : "Source"}
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" sideOffset={4}>
+								{viewMode === "preview"
+									? "Switch to source"
+									: "Switch to preview"}
+							</TooltipContent>
+						</Tooltip>
 					)}
+					<div className="ml-1 flex items-center gap-0.5">
+						<WindowAction label="Pin tab" icon={Pin} />
+						<WindowAction label="Split panel" icon={Columns2} />
+						<WindowAction label="Close" icon={X} />
+					</div>
 				</div>
 			</div>
 
@@ -775,6 +790,37 @@ export function WorkspaceEditorSurface({
 				) : null}
 			</div>
 		</section>
+	);
+}
+
+function fileBasename(path: string): string {
+	const trimmed = path.replace(/[/\\]+$/, "");
+	const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+	return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+function WindowAction({
+	label,
+	icon: Icon,
+}: {
+	label: string;
+	icon: typeof Pin;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					aria-label={label}
+					className="inline-flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
+				>
+					<Icon strokeWidth={1.8} className="size-3" />
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom" sideOffset={4}>
+				{label}
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 

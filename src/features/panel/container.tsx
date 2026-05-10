@@ -69,7 +69,8 @@ type WorkspacePanelContainerProps = {
 	onCloseContextPreview?: () => void;
 	fileTabs?: FileTab[];
 	activeTabId?: TabId | null;
-	activeFileEditorSession?: EditorSessionState | null;
+	displayedFileEditorSession?: EditorSessionState | null;
+	fileEditorVisible?: boolean;
 	activeFileHasChanges?: boolean;
 	workspaceRootPath?: string | null;
 	onSelectFileTab?: (id: TabId) => void;
@@ -106,7 +107,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 	onCloseContextPreview,
 	fileTabs,
 	activeTabId = null,
-	activeFileEditorSession = null,
+	displayedFileEditorSession = null,
+	fileEditorVisible = false,
 	activeFileHasChanges = false,
 	workspaceRootPath = null,
 	onSelectFileTab,
@@ -613,7 +615,8 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			contextPreviewActive={contextPreviewActive}
 			fileTabs={fileTabs}
 			activeTabId={activeTabId}
-			activeFileEditorSession={activeFileEditorSession}
+			displayedFileEditorSession={displayedFileEditorSession}
+			fileEditorVisible={fileEditorVisible}
 			activeFileHasChanges={activeFileHasChanges}
 			workspaceRootPath={workspaceRootPath}
 			onSelectFileTab={onSelectFileTab}

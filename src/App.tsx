@@ -479,6 +479,17 @@ function AppShell({
 		activeFileAbsolutePath !== null
 			? (fileTabEditorSessions[activeFileAbsolutePath] ?? null)
 			: null;
+	// Keep the editor surface mounted across tab switches: when the active tab
+	// is not a file, fall back to any open file tab's session so Monaco isn't
+	// torn down and rebuilt on every switch (which was leaving the canvas
+	// blank when re-selecting a file tab).
+	const displayedFileEditorSession: EditorSessionState | null =
+		activeFileEditorSession ??
+		fileTabs
+			.map((tab) => fileTabEditorSessions[tab.absolutePath])
+			.find((session): session is EditorSessionState => Boolean(session)) ??
+		null;
+	const fileEditorVisible = activeTabId?.kind === "file";
 	const dirtyFileTabCount = useMemo(
 		() =>
 			Object.values(fileTabEditorSessions).filter((session) => session.dirty)
@@ -3302,7 +3313,10 @@ function AppShell({
 													}
 													fileTabs={fileTabs}
 													activeTabId={activeTabId}
-													activeFileEditorSession={activeFileEditorSession}
+													displayedFileEditorSession={
+														displayedFileEditorSession
+													}
+													fileEditorVisible={fileEditorVisible}
 													activeFileHasChanges={activeFileHasChanges}
 													onSelectFileTab={handleSelectFileTab}
 													onCloseFileTab={handleCloseFileTab}
