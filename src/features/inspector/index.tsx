@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose } from "lucide-react";
+import { Maximize2, PanelRightClose } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -114,21 +114,15 @@ type WorkspaceInspectorSidebarProps = {
 	 * the file-tab store.
 	 */
 	onOpenFileTab?: (input: OpenFileInput, opener: FileTabOpener) => void;
-	/** Whether the left workspace sidebar is currently collapsed; controls
-	 *  which icon the in-header sidebar-toggle button renders. */
-	leftSidebarCollapsed?: boolean;
-	/** Toggle the left workspace sidebar (default Mod+B). When omitted the
-	 *  inspector still renders without the sidebar-toggle buttons. */
-	onToggleLeftSidebar?: () => void;
 	/** Collapse the right (inspector) sidebar. The inspector is by
 	 *  definition visible while this component is mounted, so the button
 	 *  always closes — there's no in-inspector "expand right" affordance. */
 	onCollapseRightSidebar?: () => void;
-	/** Resolved hotkey string for `sidebar.left.toggle`, surfaced in the
-	 *  button's tooltip via `<InlineShortcutDisplay>`. */
-	leftSidebarToggleShortcut?: string | null;
 	/** Resolved hotkey string for `sidebar.right.toggle`. */
 	rightSidebarToggleShortcut?: string | null;
+	/** Open the Diff view as a full surface on the main canvas. Stub for
+	 *  now — the button renders disabled until this is wired. */
+	onExpandDiffsOnCanvas?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -154,11 +148,9 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	activeFileAbsolutePath = null,
 	onOpenFileTab,
-	leftSidebarCollapsed = false,
-	onToggleLeftSidebar,
 	onCollapseRightSidebar,
-	leftSidebarToggleShortcut = null,
 	rightSidebarToggleShortcut = null,
+	onExpandDiffsOnCanvas,
 }: WorkspaceInspectorSidebarProps) {
 	const [topSectionView, setTopSectionView] = useState<TopSectionView>(() =>
 		getInitialTopView<TopSectionView>(["files", "changes"] as const, "changes"),
@@ -517,38 +509,23 @@ export function WorkspaceInspectorSidebar({
 							onChange={setTopSectionView}
 						/>
 					</div>
-					{onToggleLeftSidebar || onCollapseRightSidebar ? (
-						<div className="flex shrink-0 items-center gap-0.5">
-							{onToggleLeftSidebar ? (
-								<SidebarHeaderButton
-									label={
-										leftSidebarCollapsed
-											? "Expand left sidebar"
-											: "Collapse left sidebar"
-									}
-									shortcut={leftSidebarToggleShortcut}
-									onClick={onToggleLeftSidebar}
-									icon={
-										leftSidebarCollapsed ? (
-											<PanelLeftOpen className="size-4" strokeWidth={1.8} />
-										) : (
-											<PanelLeftClose className="size-4" strokeWidth={1.8} />
-										)
-									}
-								/>
-							) : null}
-							{onCollapseRightSidebar ? (
-								<SidebarHeaderButton
-									label="Close right sidebar"
-									shortcut={rightSidebarToggleShortcut}
-									onClick={onCollapseRightSidebar}
-									icon={
-										<PanelRightClose className="size-4" strokeWidth={1.8} />
-									}
-								/>
-							) : null}
-						</div>
-					) : null}
+					<div className="flex shrink-0 items-center gap-0.5">
+						<SidebarHeaderButton
+							label="Expand diffs on main canvas"
+							shortcut={null}
+							onClick={onExpandDiffsOnCanvas}
+							disabled={!onExpandDiffsOnCanvas}
+							icon={<Maximize2 className="size-4" strokeWidth={1.8} />}
+						/>
+						{onCollapseRightSidebar ? (
+							<SidebarHeaderButton
+								label="Close right sidebar"
+								shortcut={rightSidebarToggleShortcut}
+								onClick={onCollapseRightSidebar}
+								icon={<PanelRightClose className="size-4" strokeWidth={1.8} />}
+							/>
+						) : null}
+					</div>
 				</div>
 				{topSectionView === "files" ? (
 					<div
@@ -735,11 +712,13 @@ function SidebarHeaderButton({
 	shortcut,
 	onClick,
 	icon,
+	disabled = false,
 }: {
 	label: string;
 	shortcut: string | null;
-	onClick: () => void;
+	onClick?: () => void;
 	icon: React.ReactNode;
+	disabled?: boolean;
 }) {
 	return (
 		<Tooltip>
@@ -747,9 +726,10 @@ function SidebarHeaderButton({
 				<Button
 					aria-label={label}
 					onClick={onClick}
+					disabled={disabled}
 					variant="ghost"
 					size="icon-xs"
-					className="text-muted-foreground hover:text-foreground"
+					className="text-muted-foreground hover:text-foreground disabled:opacity-50"
 				>
 					{icon}
 				</Button>
