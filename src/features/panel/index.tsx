@@ -14,6 +14,7 @@ import type { ContextCard } from "@/lib/sources/types";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { WorkspacePanelHeader } from "./header";
 import { EmptyState, preloadStreamdown } from "./message-components";
+import { WorkspaceSessionSurfaceHeader } from "./session-header";
 import {
 	ActiveThreadViewport,
 	ConversationColdPlaceholder,
@@ -212,12 +213,21 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 								<SourceDetailView card={contextPreviewCard} />
 							</div>
 						) : activePane?.hasLoaded ? (
-							<ActiveThreadViewport
-								hasSession={!!selectedSession}
-								pane={activePane}
-								missingScriptTypes={missingScriptTypes}
-								onInitializeScript={onInitializeScript}
-							/>
+							<div className="flex min-h-0 flex-1 flex-col">
+								<WorkspaceSessionSurfaceHeader
+									session={
+										sessions.find(
+											(session) => session.id === activePane.sessionId,
+										) ?? null
+									}
+								/>
+								<ActiveThreadViewport
+									hasSession={!!selectedSession}
+									pane={activePane}
+									missingScriptTypes={missingScriptTypes}
+									onInitializeScript={onInitializeScript}
+								/>
+							</div>
 						) : loadingWorkspace || loadingSession ? (
 							<ConversationColdPlaceholder />
 						) : (
