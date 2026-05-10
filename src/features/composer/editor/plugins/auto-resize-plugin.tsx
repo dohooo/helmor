@@ -19,7 +19,7 @@
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export function AutoResizePlugin({
 	minHeight = 64,
@@ -34,6 +34,7 @@ export function AutoResizePlugin({
 	shrinkBy?: number;
 }) {
 	const [editor] = useLexicalComposerContext();
+	const didApplyInitialHeightRef = useRef(false);
 
 	useEffect(() => {
 		const effectiveMin = Math.max(0, minHeight - shrinkBy);
@@ -68,6 +69,15 @@ export function AutoResizePlugin({
 
 			const next = Math.min(naturalScroll, effectiveMax);
 			const target = `${Math.max(next, effectiveMin)}px`;
+
+			if (!didApplyInitialHeightRef.current) {
+				didApplyInitialHeightRef.current = true;
+				rootEl.style.height = target;
+				rootEl.scrollTop = rootEl.scrollHeight;
+				void rootEl.offsetHeight;
+				rootEl.style.transition = "";
+				return;
+			}
 
 			// Defer the target assignment one rAF so the no-transition state
 			// becomes the committed baseline. The next frame restores the
