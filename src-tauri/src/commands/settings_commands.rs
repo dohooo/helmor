@@ -203,11 +203,16 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
                 // only if multi-step request quality suffers.
                 "reasoning": { "effort": "low" },
                 "output_modalities": ["audio"],
-                "max_response_output_tokens": 1500,
                 // Multi-tool sessions accumulate context fast. retention_ratio
                 // 0.8 drops the bottom 20% of items when we approach the
                 // window cap, preserving prompt-cache hits on the system
                 // prompt + tool definitions.
+                //
+                // Note: `max_response_output_tokens` is documented in the
+                // Azure mirror but rejected as an unknown parameter by the
+                // GA OpenAI API as of 2026-05-11. Omitted until we confirm
+                // the correct field name; the model's internal limits and
+                // the terse prompt are enough to keep responses short.
                 "truncation": {
                     "type": "retention_ratio",
                     "retention_ratio": 0.8

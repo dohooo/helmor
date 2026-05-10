@@ -209,8 +209,7 @@ export function useRealtimeSequence(active: boolean): VoiceUiState {
 			})
 			.catch((err) => {
 				if (cancelled) return;
-				const message = err instanceof Error ? err.message : String(err);
-				applyPhase("done", { summary: message, tone: "error" });
+				applyPhase("done", { summary: messageOf(err), tone: "error" });
 			});
 
 		return () => {
@@ -251,4 +250,24 @@ function friendlyToolName(name: string): string {
 		.replace(/_/g, " ")
 		.replace(/\b\w/g, (c) => c.toUpperCase())
 		.trim();
+}
+
+/** Robust error-to-string. Tauri rejects with the JSON-shaped CommandError
+ *  (`{ code, message }`) rather than an `Error` instance, so the plain
+ *  `String(err)` falls back to "[object Object]". Walk a few likely
+ *  shapes — including `{ message }` for our Rust IPC layer — and only
+ *  fall through to `String()` for genuine string-ish primitives. */
+function messageOf(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (typeof err === "string") return err;
+	if (err && typeof err === "object") {
+		const msg = (err as { message?: unknown }).message;
+		if (typeof msg === "string" && msg.length > 0) return msg;
+		try {
+			return JSON.stringify(err);
+		} catch {
+			// fall through to String() below
+		}
+	}
+	return String(err);
 }
