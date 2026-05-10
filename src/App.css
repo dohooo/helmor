@@ -779,10 +779,6 @@ body {
 	color: var(--conversation-body-foreground);
 }
 
-.conversation-streamdown [data-sd-animate] {
-	animation: none;
-}
-
 .conversation-streamdown :where(p, li, ul, ol, blockquote, table, strong, em) {
 	color: inherit;
 }
@@ -811,6 +807,26 @@ body {
 	border: 1px solid
 		color-mix(in oklch, var(--muted) 87%, var(--muted-foreground) 13%);
 	margin: 0 2px;
+}
+
+/*
+ * Plain-text streaming fade — used by <StreamingPlainText/> for content
+ * that does NOT need markdown rendering (e.g. reasoning blocks). One span
+ * per character; the same easing as streamdown's char-level fade so the
+ * two surfaces feel uniform.
+ */
+@keyframes stream-char-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+.stream-char {
+	animation: stream-char-fade-in var(--stream-fade-ms, 300ms)
+		cubic-bezier(0.33, 0, 0.67, 1) forwards;
 }
 
 /* Table layout for assistant markdown */

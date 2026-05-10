@@ -5,7 +5,12 @@ import {
 	ReasoningContent,
 	ReasoningTrigger,
 } from "@/components/ai/reasoning";
+import {
+	STREAMING_ANIMATED,
+	STREAMING_SMOOTHING_PRESET,
+} from "@/components/ai/streaming-animated";
 import { LazyStreamdown } from "@/components/streamdown-loader";
+import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import {
 	type ExtendedMessagePart,
 	partKey,
@@ -39,14 +44,6 @@ import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
 
-const STREAMING_ANIMATED = {
-	animation: "blurIn" as const,
-	duration: 150,
-	easing: "linear" as const,
-	sep: "word" as const,
-	stagger: 30,
-};
-
 const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
@@ -56,13 +53,19 @@ const AssistantText = memo(function AssistantText({
 }) {
 	const mode: StreamdownMode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
+	// Smooth out bursty SDK deltas so the typewriter cadence stays even
+	// regardless of how chunky the upstream stream happens to be.
+	const smoothedText = useSmoothStreamContent(text, {
+		enabled: streaming,
+		preset: STREAMING_SMOOTHING_PRESET,
+	});
 
 	return (
 		<div
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			<Suspense fallback={<AssistantTextFallback text={text} />}>
+			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
 				<LazyStreamdown
 					animated={streaming ? STREAMING_ANIMATED : false}
 					caret={undefined}
@@ -70,7 +73,7 @@ const AssistantText = memo(function AssistantText({
 					isAnimating={streaming}
 					mode={mode}
 				>
-					{text}
+					{smoothedText}
 				</LazyStreamdown>
 			</Suspense>
 		</div>
