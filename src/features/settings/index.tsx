@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	CheckCircle2,
 	ChevronDown,
+	HelpCircle,
 	Minus,
 	Monitor,
 	Moon,
@@ -50,7 +51,12 @@ import {
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { AppSettings, DarkTheme, ThemeMode } from "@/lib/settings";
+import type {
+	AppSettings,
+	ClaudeThinkingDisplay,
+	DarkTheme,
+	ThemeMode,
+} from "@/lib/settings";
 import { resolveTheme, useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
@@ -440,6 +446,70 @@ export const SettingsDialog = memo(function SettingsDialog({
 												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Steer
+											</ToggleGroupItem>
+										</ToggleGroup>
+									</SettingsRow>
+									<SettingsRow
+										title={
+											<span className="inline-flex items-center gap-1.5">
+												Claude Code Thinking Display
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<HelpCircle
+															className="size-3 cursor-help text-muted-foreground/70"
+															strokeWidth={1.8}
+														/>
+													</TooltipTrigger>
+													<TooltipContent
+														side="top"
+														className="max-w-[320px] text-left"
+													>
+														<div className="space-y-1.5">
+															<div>
+																<span className="font-medium">Summarized</span>
+																{" — "}
+																thinking blocks contain summarized text.
+															</div>
+															<div>
+																<span className="font-medium">Omitted</span>
+																{" — "}
+																thinking blocks are empty. The server skips
+																streaming thinking tokens, so the final text
+																streams sooner. Reduces latency, not cost.
+															</div>
+														</div>
+													</TooltipContent>
+												</Tooltip>
+											</span>
+										}
+										description="Controls how Claude Code returns thinking content."
+									>
+										<ToggleGroup
+											type="single"
+											value={settings.claudeThinkingDisplay}
+											onValueChange={(value) => {
+												if (value === "summarized" || value === "omitted") {
+													updateSettings({
+														claudeThinkingDisplay:
+															value as ClaudeThinkingDisplay,
+													});
+												}
+											}}
+											className="gap-1 bg-muted/40"
+										>
+											<ToggleGroupItem
+												value="summarized"
+												aria-label="Summarized"
+												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+											>
+												Summarized
+											</ToggleGroupItem>
+											<ToggleGroupItem
+												value="omitted"
+												aria-label="Omitted"
+												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+											>
+												Omitted
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>

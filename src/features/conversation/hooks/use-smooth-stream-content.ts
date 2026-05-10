@@ -28,7 +28,31 @@ const clamp = (value: number, min: number, max: number): number =>
 const getNow = () =>
 	typeof performance === "undefined" ? Date.now() : performance.now();
 
-const countChars = (text: string): number => [...text].length;
+// Don't park the smoothed prefix on a markdown marker char — the literal
+// symbol would otherwise hang in the DOM until the closing token arrives.
+const MAX_MARKER_LOOKAHEAD = 16;
+
+const isMarkdownMarkerChar = (ch: string): boolean => {
+	switch (ch.charCodeAt(0)) {
+		case 0x21: // !
+		case 0x24: // $
+		case 0x28: // (
+		case 0x29: // )
+		case 0x2a: // *
+		case 0x3c: // <
+		case 0x3e: // >
+		case 0x5b: // [
+		case 0x5c: // \
+		case 0x5d: // ]
+		case 0x5f: // _
+		case 0x60: // `
+		case 0x7c: // |
+		case 0x7e: // ~
+			return true;
+		default:
+			return false;
+	}
+};
 
 interface UseSmoothStreamContentOptions {
 	enabled?: boolean;
@@ -42,17 +66,30 @@ export const useSmoothStreamContent = (
 	const [displayedContent, setDisplayedContent] = useState(content);
 
 	const displayedContentRef = useRef(content);
-	const displayedCountRef = useRef(countChars(content));
+	// Char-array refs are populated lazily on the first enabled render so a
+	// historical mount doesn't pay O(n) codepoint splits it'll never use.
+	const displayedCountRef = useRef(0);
 
 	const targetContentRef = useRef(content);
-	const targetCharsRef = useRef([...content]);
-	const targetCountRef = useRef(targetCharsRef.current.length);
+	const targetCharsRef = useRef<string[]>([]);
+	const targetCountRef = useRef(0);
+	const initializedRef = useRef(false);
 
 	const emaCpsRef = useRef(config.defaultCps);
 	const lastInputTsRef = useRef(0);
-	const lastInputCountRef = useRef(targetCountRef.current);
+	const lastInputCountRef = useRef(0);
 	const chunkSizeEmaRef = useRef(1);
 	const arrivalCpsEmaRef = useRef(config.defaultCps);
+
+	const ensureInitialized = useCallback((seed: string) => {
+		if (initializedRef.current) return;
+		initializedRef.current = true;
+		const chars = [...seed];
+		targetCharsRef.current = chars;
+		targetCountRef.current = chars.length;
+		displayedCountRef.current = chars.length;
+		lastInputCountRef.current = chars.length;
+	}, []);
 
 	const rafRef = useRef<number | null>(null);
 	const lastFrameTsRef = useRef<number | null>(null);
@@ -99,22 +136,25 @@ export const useSmoothStreamContent = (
 		(nextContent: string) => {
 			stopScheduling();
 
-			const chars = [...nextContent];
+			// Skip the codepoint split until smoothing is actually active.
+			const chars = initializedRef.current ? [...nextContent] : null;
 			const now = getNow();
 
 			targetContentRef.current = nextContent;
-			targetCharsRef.current = chars;
-			targetCountRef.current = chars.length;
+			if (chars) {
+				targetCharsRef.current = chars;
+				targetCountRef.current = chars.length;
+				displayedCountRef.current = chars.length;
+				lastInputCountRef.current = chars.length;
+			}
 
 			displayedContentRef.current = nextContent;
-			displayedCountRef.current = chars.length;
 			setDisplayedContent(nextContent);
 
 			emaCpsRef.current = config.defaultCps;
 			chunkSizeEmaRef.current = 1;
 			arrivalCpsEmaRef.current = config.defaultCps;
 			lastInputTsRef.current = now;
-			lastInputCountRef.current = chars.length;
 		},
 		[config.defaultCps, stopScheduling],
 	);
@@ -232,10 +272,18 @@ export const useSmoothStreamContent = (
 				revealChars = Math.min(revealChars, backlog);
 			}
 
-			const nextCount = displayedCount + revealChars;
-			const segment = targetCharsRef.current
-				.slice(displayedCount, nextCount)
-				.join("");
+			let nextCount = displayedCount + revealChars;
+			const targetChars = targetCharsRef.current;
+			let lookahead = 0;
+			while (
+				nextCount < targetCount &&
+				lookahead < MAX_MARKER_LOOKAHEAD &&
+				isMarkdownMarkerChar(targetChars[nextCount - 1] ?? "")
+			) {
+				nextCount += 1;
+				lookahead += 1;
+			}
+			const segment = targetChars.slice(displayedCount, nextCount).join("");
 
 			if (segment) {
 				const nextDisplayed = displayedContentRef.current + segment;
@@ -271,9 +319,26 @@ export const useSmoothStreamContent = (
 
 	useEffect(() => {
 		if (!enabled) {
-			syncImmediate(content);
+			// Bypass: just shadow `content` as the displayed value. No splits.
+			// Drop the lazy-init flag too so a future `enabled=true` flip
+			// re-seeds the char arrays from the current content (otherwise
+			// the append-only path would diff against a stale codepoint
+			// snapshot from the last enabled run).
+			stopScheduling();
+			initializedRef.current = false;
+			targetCharsRef.current = [];
+			targetCountRef.current = 0;
+			displayedCountRef.current = 0;
+			lastInputCountRef.current = 0;
+			if (targetContentRef.current !== content) {
+				targetContentRef.current = content;
+				displayedContentRef.current = content;
+				setDisplayedContent(content);
+			}
 			return;
 		}
+
+		ensureInitialized(targetContentRef.current);
 
 		const prevTargetContent = targetContentRef.current;
 		if (content === prevTargetContent) return;
@@ -340,7 +405,9 @@ export const useSmoothStreamContent = (
 		config.minCps,
 		content,
 		enabled,
+		ensureInitialized,
 		startFrameLoop,
+		stopScheduling,
 		syncImmediate,
 	]);
 

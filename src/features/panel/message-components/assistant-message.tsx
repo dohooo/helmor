@@ -40,13 +40,10 @@ import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
 
-// `animation` / `duration` / `easing` are pinned by the
-// `[data-sd-animate]` rule in App.css; only `sep` + `stagger` matter here.
-const STREAMING_ANIMATED = {
-	sep: "char" as const,
-	stagger: 0,
-};
-
+// `useSmoothStreamContent` paces character reveal at ~30 cps so streaming
+// feels steady. We deliberately disable streamdown's `animated` plugin —
+// per-char/word spans cause kerning re-shape on settle and balloon DOM size
+// during long streams.
 const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
@@ -65,10 +62,10 @@ const AssistantText = memo(function AssistantText({
 		>
 			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
 				<LazyStreamdown
-					animated={streaming ? STREAMING_ANIMATED : false}
+					animated={false}
 					caret={undefined}
 					className="conversation-streamdown"
-					isAnimating={streaming}
+					isAnimating={false}
 					mode={mode}
 				>
 					{smoothedText}
@@ -223,16 +220,20 @@ export function ChatAssistantMessage({
 						typeof part.durationMs === "number"
 							? Math.max(1, Math.ceil(part.durationMs / 1000))
 							: undefined;
+					const hasContent = part.text.trim().length > 0;
 					return (
 						<Reasoning
 							key={key}
 							lifecycle={reasoningLifecycle(part)}
 							duration={durationSeconds}
+							hasContent={hasContent}
 						>
 							<ReasoningTrigger />
-							<ReasoningContent fontSize={settings.fontSize}>
-								{part.text}
-							</ReasoningContent>
+							{hasContent ? (
+								<ReasoningContent fontSize={settings.fontSize}>
+									{part.text}
+								</ReasoningContent>
+							) : null}
 						</Reasoning>
 					);
 				}

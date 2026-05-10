@@ -18,6 +18,9 @@ export interface SendMessageParams {
 	readonly permissionMode: string | undefined;
 	readonly effortLevel: string | undefined;
 	readonly fastMode: boolean | undefined;
+	/** Mirrors the Claude Agent SDK's `thinking.display` field. When
+	 *  absent, the manager falls back to its hardcoded default. */
+	readonly claudeThinkingDisplay?: "summarized" | "omitted";
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
 	/**
 	 * Extra directories the user linked via `/add-dir`. Passed to Claude as

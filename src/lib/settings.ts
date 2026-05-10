@@ -11,6 +11,12 @@ export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
  *  - `queue`: stash locally; auto-fire as a new turn once the agent finishes.
  */
 export type FollowUpBehavior = "steer" | "queue";
+
+/** Controls how Claude Code returns thinking content.
+ *  - `summarized`: thinking blocks contain summarized thinking text.
+ *  - `omitted`: server skips streaming thinking tokens; the final text
+ *    response begins streaming sooner. */
+export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
 
@@ -212,6 +218,9 @@ export type AppSettings = {
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
 	zoomLevel: number;
 	followUpBehavior: FollowUpBehavior;
+	/** How Claude Code returns thinking content. Plumbed through to the
+	 *  sidecar's `thinking.display` field. */
+	claudeThinkingDisplay: ClaudeThinkingDisplay;
 	/** Force the context-usage ring to always be visible. When false (the
 	 *  default), the ring auto-hides until usage crosses
 	 *  `CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD`. */
@@ -263,6 +272,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultFastMode: false,
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
+	claudeThinkingDisplay: "summarized",
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	onboardingCompleted: false,
@@ -316,6 +326,7 @@ const SETTINGS_KEY_MAP: Record<
 	defaultFastMode: "app.default_fast_mode",
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
+	claudeThinkingDisplay: "app.claude_thinking_display",
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	onboardingCompleted: "app.onboarding_completed",
@@ -782,6 +793,12 @@ export async function loadSettings(): Promise<AppSettings> {
 				return v === "queue" || v === "steer"
 					? v
 					: DEFAULT_SETTINGS.followUpBehavior;
+			})(),
+			claudeThinkingDisplay: (() => {
+				const v = raw[SETTINGS_KEY_MAP.claudeThinkingDisplay];
+				return v === "summarized" || v === "omitted"
+					? v
+					: DEFAULT_SETTINGS.claudeThinkingDisplay;
 			})(),
 			alwaysShowContextUsage:
 				raw[SETTINGS_KEY_MAP.alwaysShowContextUsage] !== undefined

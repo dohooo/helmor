@@ -358,6 +358,7 @@ export class ClaudeSessionManager implements SessionManager {
 			permissionMode,
 			effortLevel,
 			fastMode,
+			claudeThinkingDisplay,
 			claudeEnvironment,
 			images,
 			sourceRepoPath,
@@ -417,7 +418,10 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: parsePermissionMode(permissionMode),
 				allowDangerouslySkipPermissions: true,
 				effort: parseEffort(effortLevel),
-				thinking: { type: "adaptive", display: "summarized" },
+				thinking: {
+					type: "adaptive",
+					display: claudeThinkingDisplay ?? "summarized",
+				},
 				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
 				...(projectMcpServers ? { mcpServers: projectMcpServers } : {}),
 				onElicitation: async (request, options) => {
