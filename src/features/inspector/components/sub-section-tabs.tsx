@@ -13,10 +13,10 @@ interface Props {
 }
 
 /**
- * Underline-style sub-tab strip rendered inside the Changes top-section
- * panel. The Diff tab carries a count badge for total changed files;
- * the Review tab carries a state pip (green tick when CI passes /
- * yellow when pending / red when failing — see `useChecksIndicator`).
+ * Two-up segmented strip mirroring `TopSectionTabs`, but with a darker
+ * warm-tone active surface (`#1B1716`) so the sub-level reads as nested
+ * inside the top tabs without a visual collision. Each tab fills half the
+ * available width.
  */
 export function SubSectionTabs({
 	value,
@@ -25,17 +25,17 @@ export function SubSectionTabs({
 	reviewIndicator = "none",
 }: Props) {
 	return (
-		<div className="flex h-7 items-center gap-3 border-b border-border/50 px-2 text-[11px] font-medium">
+		<div className="flex h-7 w-full items-center gap-1 rounded-md bg-muted/40 p-0.5">
 			<SubTab active={value === "diff"} onClick={() => onChange("diff")}>
-				Diff
+				<span>Diff</span>
 				{typeof diffCount === "number" && diffCount > 0 ? (
-					<span className="ml-1.5 rounded-sm bg-foreground/10 px-1 text-[10px] font-medium text-foreground/80">
+					<span className="ml-1 rounded-sm bg-foreground/10 px-1 text-[10px] font-medium text-foreground/80">
 						{diffCount}
 					</span>
 				) : null}
 			</SubTab>
 			<SubTab active={value === "review"} onClick={() => onChange("review")}>
-				Checks
+				<span>Checks</span>
 				{reviewIndicator !== "none" ? (
 					<span
 						aria-label={
@@ -46,7 +46,7 @@ export function SubSectionTabs({
 									: "Review checks passing"
 						}
 						className={cn(
-							"ml-1.5 inline-flex items-center justify-center",
+							"ml-1 inline-flex items-center justify-center",
 							reviewIndicator === "success"
 								? "size-3 rounded-full bg-emerald-500/15 text-emerald-500"
 								: reviewIndicator === "failure"
@@ -77,11 +77,15 @@ function SubTab({
 		<button
 			type="button"
 			onClick={onClick}
+			// Active state uses `#1B1716` directly via inline style so the
+			// dark warm-tone surface sits below the muted top-tab strip
+			// without aliasing to any existing semantic token.
+			style={active ? { backgroundColor: "#1B1716" } : undefined}
 			className={cn(
-				"-mb-px relative flex h-7 cursor-pointer items-center border-b-2 px-1 transition-colors",
+				"flex h-6 flex-1 cursor-pointer items-center justify-center gap-1 rounded-sm px-2 text-[11.5px] font-medium",
 				active
-					? "border-foreground text-foreground"
-					: "border-transparent text-muted-foreground hover:text-foreground",
+					? "text-foreground shadow-sm"
+					: "text-muted-foreground hover:text-foreground",
 			)}
 		>
 			{children}
