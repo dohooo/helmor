@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.3
+
+### Patch Changes
+
+- [#484](https://github.com/dohooo/helmor/pull/484) [`ae315f0`](https://github.com/dohooo/helmor/commit/ae315f08f9aa899b65b7549bd6241d4f6960197a) Thanks [@natllian](https://github.com/natllian)! - Fix a multi-second UI freeze when starting a new worktree on a large repository, caused by the inspector running its file-diff panel against the worktree mid-checkout.
+
+- [#475](https://github.com/dohooo/helmor/pull/475) [`6ffeb16`](https://github.com/dohooo/helmor/commit/6ffeb162c066df3d9e13675cca985a899e898479) Thanks [@taroj1205](https://github.com/taroj1205)! - Let fish users run scripts.
+
+- [#483](https://github.com/dohooo/helmor/pull/483) [`b844f45`](https://github.com/dohooo/helmor/commit/b844f45a3350bbcf512981173af523f391bc9a24) Thanks [@taroj1205](https://github.com/taroj1205)! - Make slash command search match hyphenated commands when separators are omitted.
+
+- [#481](https://github.com/dohooo/helmor/pull/481) [`24e822b`](https://github.com/dohooo/helmor/commit/24e822b64ede953b013b76042966bd5b59282c67) Thanks [@natllian](https://github.com/natllian)! - Polish the streaming response visuals:
+
+  - Reveal assistant text and reasoning character-by-character with a steady fade-in, even when the underlying SDK output arrives in bursts.
+  - Restyle the reasoning block as inline text without a separate background or container.
+
+- [#488](https://github.com/dohooo/helmor/pull/488) [`0421877`](https://github.com/dohooo/helmor/commit/04218771472dbacede2314b6be78d033cab89f7c) Thanks [@taroj1205](https://github.com/taroj1205)! - Support exact GitHub issue and PR URL or number search in the context sidebar.
+
 ## 0.20.2
 
 ### Patch Changes
