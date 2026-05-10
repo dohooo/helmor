@@ -6,8 +6,8 @@ mod support;
 pub mod types;
 
 pub use changes::{
-    discard_workspace_file, list_workspace_changes, list_workspace_changes_with_content,
-    stage_workspace_file, unstage_workspace_file,
+    compute_workspace_diff_stats, discard_workspace_file, list_workspace_changes,
+    list_workspace_changes_with_content, stage_workspace_file, unstage_workspace_file,
 };
 pub use editor::{
     list_editor_files, list_editor_files_with_content, list_workspace_files, read_editor_file,
@@ -16,6 +16,7 @@ pub use editor::{
 pub use types::{
     DirEntry, DirEntryKind, EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse,
     EditorFileStatResponse, EditorFileWriteOutcome, EditorFilesWithContentResponse, PathSearchHit,
+    WorkspaceDiffStats,
 };
 
 #[cfg(test)]

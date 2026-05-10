@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
@@ -6,11 +7,29 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
 import { WorkspacesSidebar } from "./index";
+
+// One client shared across renders so each `cleanup()` releases all
+// observers; a fresh client per render leaves focus listeners attached
+// and the worker grows unboundedly over a multi-test file.
+const testQueryClient = new QueryClient({
+	defaultOptions: {
+		queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+	},
+});
+
+function TestProviders({ children }: { children: ReactNode }) {
+	return (
+		<QueryClientProvider client={testQueryClient}>
+			<TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+		</QueryClientProvider>
+	);
+}
 
 const workspaceRow: WorkspaceRow = {
 	id: "workspace-1",
@@ -36,14 +55,14 @@ afterEach(() => {
 describe("WorkspacesSidebar", () => {
 	it("shows the Helmor thinking indicator when a workspace enters sending state", () => {
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 					busyWorkspaceIds={new Set()}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const initialRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -52,14 +71,14 @@ describe("WorkspacesSidebar", () => {
 		).toBeNull();
 
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 					busyWorkspaceIds={new Set(["workspace-1"])}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const updatedRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -70,7 +89,7 @@ describe("WorkspacesSidebar", () => {
 
 	it("keeps the unread dot visible for the selected workspace", () => {
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={[
 						{
@@ -83,7 +102,7 @@ describe("WorkspacesSidebar", () => {
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
@@ -94,13 +113,13 @@ describe("WorkspacesSidebar", () => {
 		const onOpenNewWorkspace = vi.fn();
 
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onOpenNewWorkspace={onOpenNewWorkspace}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const [newWorkspaceButton] = within(container).getAllByRole("button", {
@@ -119,13 +138,13 @@ describe("WorkspacesSidebar", () => {
 		const onOpenInFinder = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onOpenInFinder={onOpenInFinder}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Workspace 1" }));
@@ -143,13 +162,13 @@ describe("WorkspacesSidebar", () => {
 		};
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[archivedRow]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(
@@ -170,9 +189,9 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { container } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar groups={emptyGroups} archivedRows={[]} />
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute(
@@ -210,14 +229,14 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					onArchiveWorkspace={onArchiveWorkspace}
 					archivingWorkspaceIds={new Set(["workspace-1"])}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const archiveButtons = screen.getAllByRole("button", {
@@ -237,14 +256,14 @@ describe("WorkspacesSidebar", () => {
 		const onArchiveWorkspace = vi.fn();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onArchiveWorkspace={onArchiveWorkspace}
 					creatingWorkspaceRepoId="repo-1"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const [archiveButton] = screen.getAllByRole("button", {
@@ -268,13 +287,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { unmount } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={collapsedGroups}
 					archivedRows={[]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(
@@ -289,13 +308,13 @@ describe("WorkspacesSidebar", () => {
 		unmount();
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={collapsedGroups}
 					archivedRows={[]}
 					selectedWorkspaceId={null}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(
@@ -321,7 +340,7 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
@@ -330,7 +349,7 @@ describe("WorkspacesSidebar", () => {
 						new Set(["workspace-1", "workspace-2"])
 					}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const selectedRow = screen.getByRole("button", { name: "Workspace 1" });
@@ -356,13 +375,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		expect(
@@ -377,13 +396,13 @@ describe("WorkspacesSidebar", () => {
 
 		// Simulate a groups refetch (new array reference, same data)
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={[...groups.map((g) => ({ ...g, rows: [...g.rows] }))]}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		// Group should stay collapsed
@@ -411,13 +430,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={initialGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-move"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		// Collapse the "Done" group
@@ -446,13 +465,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={afterMoveGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-move"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		// "Done" should stay collapsed — the workspace moved there but
@@ -483,13 +502,13 @@ describe("WorkspacesSidebar", () => {
 		];
 
 		const { rerender } = render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		// Collapse "Done"
@@ -500,13 +519,13 @@ describe("WorkspacesSidebar", () => {
 
 		// Select a workspace inside the collapsed "Done" group
 		rerender(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={groups}
 					archivedRows={[]}
 					selectedWorkspaceId="ws-completed"
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		// Group should expand because selectedWorkspaceId changed
@@ -517,13 +536,13 @@ describe("WorkspacesSidebar", () => {
 
 	it("shows workspace hover actions without an opacity transition", () => {
 		render(
-			<TooltipProvider delayDuration={0}>
+			<TestProviders>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
 					onArchiveWorkspace={vi.fn()}
 				/>
-			</TooltipProvider>,
+			</TestProviders>,
 		);
 
 		const actionButton = screen.getByRole("button", {
@@ -547,7 +566,7 @@ describe("WorkspacesSidebar", () => {
 		it("defaults to status mode and switches to repository mode on toggle", async () => {
 			const user = userEvent.setup();
 			render(
-				<TooltipProvider delayDuration={0}>
+				<TestProviders>
 					<WorkspacesSidebar
 						groups={workspaceGroups}
 						repositoryGroups={[
@@ -575,7 +594,7 @@ describe("WorkspacesSidebar", () => {
 						]}
 						archivedRows={[]}
 					/>
-				</TooltipProvider>,
+				</TestProviders>,
 			);
 
 			expect(
@@ -586,7 +605,7 @@ describe("WorkspacesSidebar", () => {
 
 			await openViewModeMenu(user);
 			await user.click(
-				screen.getByRole("menuitemradio", { name: /Repositories/ }),
+				screen.getByRole("menuitemradio", { name: /Workspaces/ }),
 			);
 
 			expect(screen.getByText("alpha")).toBeInTheDocument();
@@ -594,13 +613,13 @@ describe("WorkspacesSidebar", () => {
 			expect(screen.getByText("Empty")).toBeInTheDocument();
 			expect(
 				screen.getByRole("button", { name: "Change sidebar grouping" }),
-			).toHaveTextContent("Repositories");
+			).toHaveTextContent("Workspaces");
 		});
 
 		it("collapses a repository when its header is clicked", async () => {
 			const user = userEvent.setup();
 			render(
-				<TooltipProvider delayDuration={0}>
+				<TestProviders>
 					<WorkspacesSidebar
 						groups={[]}
 						repositoryGroups={[
@@ -621,12 +640,12 @@ describe("WorkspacesSidebar", () => {
 						]}
 						archivedRows={[]}
 					/>
-				</TooltipProvider>,
+				</TestProviders>,
 			);
 
 			await openViewModeMenu(user);
 			await user.click(
-				screen.getByRole("menuitemradio", { name: /Repositories/ }),
+				screen.getByRole("menuitemradio", { name: /Workspaces/ }),
 			);
 
 			expect(

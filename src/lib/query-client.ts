@@ -17,6 +17,7 @@ import {
 	getSessionCodexGoal,
 	getSessionContextUsage,
 	getWorkspaceAccountProfile,
+	getWorkspaceDiffStats,
 	getWorkspaceForge,
 	listActiveStreams,
 	listForgeAccounts,
@@ -82,6 +83,8 @@ export const helmorQueryKeys = {
 		["sessionMessages", sessionId] as const,
 	workspaceChanges: (workspaceRootPath: string) =>
 		["workspaceChanges", workspaceRootPath] as const,
+	workspaceDiffStats: (workspaceId: string) =>
+		["workspaceDiffStats", workspaceId] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspaceDirectory: (workspaceRootPath: string, relativePath: string) =>
@@ -776,6 +779,25 @@ export function workspaceForgeRefetchInterval(
 	return data.provider === "github" || data.provider === "gitlab"
 		? WORKSPACE_FORGE_REFETCH_INTERVAL
 		: false;
+}
+
+/** Per-workspace +/- line totals shown on each sidebar row. Lazy: each
+ *  visible row mounts its own observer; the in-memory cache means
+ *  re-renders / virtual-list recycling don't refire IPC. Invalidated by
+ *  `workspaceFilesChanged` and `workspaceGitStateChanged`, so working-tree
+ *  edits picked up by the inspector's polling loop and ref changes from
+ *  the git watcher both refresh the chip. Not persisted — the totals are
+ *  cheap to recompute on cold start, and we don't want stale `+0/−0` to
+ *  flash before the real value lands. */
+export function workspaceDiffStatsQueryOptions(workspaceId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.workspaceDiffStats(workspaceId),
+		queryFn: () => getWorkspaceDiffStats(workspaceId),
+		staleTime: 30_000,
+		gcTime: DEFAULT_GC_TIME,
+		refetchOnWindowFocus: true,
+		retry: 0,
+	});
 }
 
 export function workspaceChangesQueryOptions(workspaceRootPath: string) {

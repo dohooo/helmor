@@ -8,6 +8,9 @@ import {
 	FolderGit2,
 	FolderPlus,
 	Globe,
+	History,
+	LayoutDashboard,
+	ListChecks,
 	LoaderCircle,
 	Plus,
 } from "lucide-react";
@@ -666,7 +669,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 
-			<div className="mt-1 flex items-center justify-between px-3">
+			<nav className="mt-1 flex flex-col gap-0.5 px-2">
+				<SidebarNavItem icon={LayoutDashboard} label="Dashboard" />
+				<SidebarNavItem icon={ListChecks} label="Tasks" />
+				<SidebarNavItem icon={History} label="History" />
+			</nav>
+
+			<div className="mx-3 mt-2 h-px shrink-0 bg-sidebar-border/60" />
+
+			<div className="mt-2 flex items-center justify-between px-3">
 				<DropdownMenu
 					open={isViewModeMenuOpen}
 					onOpenChange={setIsViewModeMenuOpen}
@@ -677,14 +688,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							aria-label="Change sidebar grouping"
 							className="group/view-mode -ml-1 flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[14px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground data-[state=open]:bg-accent/60 data-[state=open]:text-foreground"
 						>
-							<span>{viewMode === "status" ? "Status" : "Repositories"}</span>
+							<span>{viewMode === "status" ? "Status" : "Workspaces"}</span>
 							<ChevronDown
 								className="size-3.5 text-muted-foreground/70 transition-transform duration-200 group-data-[state=open]/view-mode:rotate-180"
 								strokeWidth={2}
 							/>
 						</button>
 					</DropdownMenuTrigger>
-					<DropdownMenuContent align="start" className="min-w-40">
+					<DropdownMenuContent
+						align="start"
+						className="min-w-40 border-white/10 bg-popover/60 backdrop-blur-xl"
+					>
 						<DropdownMenuRadioGroup
 							value={viewMode}
 							onValueChange={(value) => {
@@ -699,7 +713,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</DropdownMenuRadioItem>
 							<DropdownMenuRadioItem value="repositories">
 								<FolderGit2 className="size-3.5" strokeWidth={2} />
-								<span>Repositories</span>
+								<span>Workspaces</span>
 							</DropdownMenuRadioItem>
 						</DropdownMenuRadioGroup>
 					</DropdownMenuContent>
@@ -853,3 +867,24 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		</div>
 	);
 });
+
+function SidebarNavItem({
+	icon: Icon,
+	label,
+	onClick,
+}: {
+	icon: typeof LayoutDashboard;
+	label: string;
+	onClick?: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className="group flex h-7 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+		>
+			<Icon className="size-[15px] shrink-0" strokeWidth={1.9} />
+			<span className="truncate">{label}</span>
+		</button>
+	);
+}

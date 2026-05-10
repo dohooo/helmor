@@ -1766,6 +1766,30 @@ export async function listWorkspaceChangesWithContent(
 	}
 }
 
+export type WorkspaceDiffStats = {
+	additions: number;
+	deletions: number;
+};
+
+/** Lightweight per-workspace diff totals (additions/deletions across all
+ *  areas — committed vs target branch, staged, unstaged, untracked). Used
+ *  by the sidebar row's `+N -M` chip. Lazily fetched per row, invalidated
+ *  via the `workspaceFilesChanged` / `workspaceGitStateChanged` UI sync
+ *  events. */
+export async function getWorkspaceDiffStats(
+	workspaceId: string,
+): Promise<WorkspaceDiffStats> {
+	try {
+		return await invoke<WorkspaceDiffStats>("get_workspace_diff_stats", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to compute workspace diff stats."),
+		);
+	}
+}
+
 export async function discardWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,

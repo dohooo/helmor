@@ -9,7 +9,10 @@ use rusqlite::Connection;
 
 use super::{
     support::allowed_workspace_roots,
-    types::{EditorFileListItem, EditorFilePrefetchItem, EditorFilesWithContentResponse},
+    types::{
+        EditorFileListItem, EditorFilePrefetchItem, EditorFilesWithContentResponse,
+        WorkspaceDiffStats,
+    },
 };
 use crate::{
     bail_coded, db,
@@ -192,6 +195,134 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         .collect();
 
     Ok(items)
+}
+
+/// Compute total +/- line counts across staged + unstaged + untracked +
+/// committed (vs target branch). Lighter than `list_workspace_changes`:
+/// only the three numstat git invocations + untracked line counting,
+/// folded straight into two integers — no name-status, no per-file
+/// metadata. Sized for the sidebar row's `+N -M` chip, where users
+/// expect quick, approximate totals rather than per-file breakdowns.
+pub fn compute_workspace_diff_stats(workspace_root_path: &str) -> Result<WorkspaceDiffStats> {
+    let workspace_root = Path::new(workspace_root_path);
+    if !workspace_root.is_absolute() {
+        bail!(
+            "Workspace root must be an absolute path: {}",
+            workspace_root.display()
+        );
+    }
+    if !workspace_root.is_dir() {
+        // Match list_workspace_changes: silently return zeros when the
+        // workspace dir vanished, since the sidebar polls and we don't
+        // want every tick to log an error.
+        return Ok(WorkspaceDiffStats::default());
+    }
+
+    let target_ref = resolve_target_ref(workspace_root)?;
+
+    let (committed_numstat, staged_numstat, unstaged_numstat, untracked_output) =
+        std::thread::scope(|s| {
+            let tr = target_ref.as_str();
+            let h_committed = s.spawn(move || {
+                git_ops::run_git(["diff", "--numstat", tr, "HEAD"], Some(workspace_root))
+                    .unwrap_or_default()
+            });
+            let h_staged = s.spawn(|| {
+                git_ops::run_git(["diff", "--numstat", "--cached"], Some(workspace_root))
+                    .unwrap_or_default()
+            });
+            let h_unstaged = s.spawn(|| {
+                git_ops::run_git(["diff", "--numstat"], Some(workspace_root)).unwrap_or_default()
+            });
+            let h_untracked = s.spawn(|| {
+                git_ops::run_git(
+                    ["ls-files", "--others", "--exclude-standard"],
+                    Some(workspace_root),
+                )
+                .unwrap_or_default()
+            });
+            (
+                h_committed.join().unwrap_or_default(),
+                h_staged.join().unwrap_or_default(),
+                h_unstaged.join().unwrap_or_default(),
+                h_untracked.join().unwrap_or_default(),
+            )
+        });
+
+    let mut additions: u64 = 0;
+    let mut deletions: u64 = 0;
+    sum_numstat_into(&committed_numstat, &mut additions, &mut deletions);
+    sum_numstat_into(&staged_numstat, &mut additions, &mut deletions);
+    sum_numstat_into(&unstaged_numstat, &mut additions, &mut deletions);
+    additions = additions.saturating_add(count_untracked_added_lines(
+        &untracked_output,
+        workspace_root,
+    ));
+
+    Ok(WorkspaceDiffStats {
+        additions: u32::try_from(additions).unwrap_or(u32::MAX),
+        deletions: u32::try_from(deletions).unwrap_or(u32::MAX),
+    })
+}
+
+/// Folds one `git diff --numstat` output into running totals. Skips binary
+/// files (numstat sentinel `-\t-`) since they have no meaningful line diff
+/// — same convention as `parse_numstat_area`.
+fn sum_numstat_into(output: &str, additions: &mut u64, deletions: &mut u64) {
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let Some(ins_str) = parts.next() else {
+            continue;
+        };
+        let Some(del_str) = parts.next() else {
+            continue;
+        };
+        if ins_str == "-" && del_str == "-" {
+            continue;
+        }
+        if let Ok(ins) = ins_str.parse::<u64>() {
+            *additions = additions.saturating_add(ins);
+        }
+        if let Ok(del) = del_str.parse::<u64>() {
+            *deletions = deletions.saturating_add(del);
+        }
+    }
+}
+
+/// Brand-new (untracked) files don't appear in `git diff --numstat`. Count
+/// their lines directly so a fresh file shows up in the totals. Capped at
+/// `MAX_UNTRACKED_LINECOUNT_BYTES` per file so a stray multi-GB blob
+/// doesn't stall the sidebar.
+fn count_untracked_added_lines(untracked_output: &str, workspace_root: &Path) -> u64 {
+    let mut total: u64 = 0;
+    for line in untracked_output.lines() {
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let absolute = workspace_root.join(path);
+        let Ok(metadata) = fs::metadata(&absolute) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > MAX_UNTRACKED_LINECOUNT_BYTES {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&absolute) else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        total = total.saturating_add(text.lines().count() as u64);
+    }
+    total
 }
 
 pub fn list_workspace_changes_with_content(
