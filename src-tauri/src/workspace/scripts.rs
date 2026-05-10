@@ -211,10 +211,11 @@ impl ScriptProcessManager {
 }
 
 /// Send SIGTERM (and SIGKILL after a short grace period) to a process group
-/// and its leader. Polls `kill(pid, 0)` to detect when the process has been
+/// and its leader. Polls `kill(pid, 0)` to detect when the leader has been
 /// reaped by its parent — which is `run_script`'s `child.wait()` running on
-/// a separate thread. Zombies still report alive, so this effectively waits
-/// for the reap, which happens microseconds after the child actually dies.
+/// a separate thread. When the script owns a separate process group, also wait
+/// for that group to disappear so a fast leader exit cannot leave descendants
+/// running after Stop returns.
 fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
     let current_pgrp = unsafe { libc::getpgrp() };
     let can_signal_group = pgid > 0 && pgid != current_pgrp;
@@ -226,7 +227,7 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    if wait_for_pid_gone(pid, PROCESS_TERM_TIMEOUT) {
+    if wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_TERM_TIMEOUT) {
         return;
     }
 
@@ -237,26 +238,45 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGKILL);
     }
 
-    let _ = wait_for_pid_gone(pid, PROCESS_KILL_TIMEOUT);
+    let _ = wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_KILL_TIMEOUT);
 }
 
-/// Poll `kill(pid, 0)` until it returns ESRCH or the deadline passes.
-/// ESRCH means the pid is gone AND has been reaped — zombies still return 0.
-fn wait_for_pid_gone(pid: libc::pid_t, timeout: Duration) -> bool {
+fn wait_for_processes_gone(
+    pid: libc::pid_t,
+    pgid: libc::pid_t,
+    can_signal_group: bool,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let ret = unsafe { libc::kill(pid, 0) };
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ESRCH) {
-                return true;
-            }
+        let pid_gone = is_pid_gone(pid);
+        let group_gone = !can_signal_group || is_process_group_gone(pgid);
+        if pid_gone && group_gone {
+            return true;
         }
         if Instant::now() >= deadline {
             return false;
         }
         std::thread::sleep(PTY_POLL_INTERVAL);
     }
+}
+
+fn is_pid_gone(pid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::kill(pid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
+}
+
+fn is_process_group_gone(pgid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::killpg(pgid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
 }
 
 /// Workspace context passed to scripts as environment variables.

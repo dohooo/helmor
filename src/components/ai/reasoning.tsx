@@ -26,6 +26,7 @@ interface ReasoningContextValue {
 	isOpen: boolean;
 	setIsOpen: (open: boolean) => void;
 	duration: number | undefined;
+	hasContent: boolean;
 }
 
 const ReasoningContext = createContext<ReasoningContextValue | null>(null);
@@ -48,6 +49,10 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
 	defaultOpen?: boolean;
 	onOpenChange?: (open: boolean) => void;
 	duration?: number;
+	/** False when the block has no body to expand into (e.g. Claude
+	 *  Thinking Display = Omitted). Renders the trigger as a static
+	 *  non-interactive label. Defaults to true. */
+	hasContent?: boolean;
 };
 
 const MS_IN_S = 1000;
@@ -60,6 +65,7 @@ export const Reasoning = memo(
 		defaultOpen,
 		onOpenChange,
 		duration: durationProp,
+		hasContent = true,
 		children,
 		...props
 	}: ReasoningProps) => {
@@ -71,7 +77,9 @@ export const Reasoning = memo(
 		// with an expanded block, which both surprises users (per their
 		// "thinking 输出完之后自动收起" expectation) and inflates
 		// `totalRowsHeight` against the layout estimator.
-		const resolvedDefaultOpen = defaultOpen ?? lifecycle === "streaming";
+		const resolvedDefaultOpen = hasContent
+			? (defaultOpen ?? lifecycle === "streaming")
+			: false;
 
 		const [isOpen, setIsOpen] = useControllableState({
 			prop: open,
@@ -108,14 +116,32 @@ export const Reasoning = memo(
 			}
 		}, [lifecycle, setIsOpen]);
 
+		// Reasoning that mounts empty (e.g. first delta hadn't shipped text
+		// yet) initializes collapsed because `hasContent=false`. Once text
+		// arrives, restore the "streaming defaults open" promise.
+		const prevHasContentRef = useRef(hasContent);
+		useEffect(() => {
+			const prev = prevHasContentRef.current;
+			prevHasContentRef.current = hasContent;
+			if (!prev && hasContent && lifecycle === "streaming") {
+				setIsOpen(true);
+			}
+		}, [hasContent, lifecycle, setIsOpen]);
+
 		return (
 			<ReasoningContext.Provider
-				value={{ lifecycle, isOpen: isOpen ?? false, setIsOpen, duration }}
+				value={{
+					lifecycle,
+					isOpen: hasContent ? (isOpen ?? false) : false,
+					setIsOpen,
+					duration,
+					hasContent,
+				}}
 			>
 				<Collapsible
 					className={cn("flex flex-col", className)}
 					onOpenChange={setIsOpen}
-					open={isOpen}
+					open={hasContent ? isOpen : false}
 					{...props}
 				>
 					{children}
@@ -148,8 +174,25 @@ export const ReasoningTrigger = memo(
 		getThinkingMessage = defaultGetThinkingMessage,
 		...props
 	}: ReasoningTriggerProps) => {
-		const { lifecycle, isOpen, duration } = useReasoning();
+		const { lifecycle, isOpen, duration, hasContent } = useReasoning();
 		const isStreaming = lifecycle === "streaming";
+		const label = children ?? getThinkingMessage(isStreaming, duration);
+
+		// No body to expand into → render a flat, non-interactive label:
+		// no chevron, no cursor-pointer, no hover affordance.
+		if (!hasContent) {
+			return (
+				<div
+					className={cn(
+						"inline-flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground",
+						className,
+					)}
+				>
+					<BrainIcon className="size-3 shrink-0" strokeWidth={1.8} />
+					{label}
+				</div>
+			);
+		}
 
 		return (
 			<CollapsibleTrigger
@@ -160,7 +203,7 @@ export const ReasoningTrigger = memo(
 				{...props}
 			>
 				<BrainIcon className="size-3 shrink-0" strokeWidth={1.8} />
-				{children ?? getThinkingMessage(isStreaming, duration)}
+				{label}
 				<ChevronRightIcon
 					className={cn(
 						"size-3 shrink-0 text-[#444241] transition-[transform,color] group-hover/reasoning:text-[rgb(134,133,132)]",

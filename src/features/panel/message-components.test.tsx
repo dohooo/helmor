@@ -284,9 +284,6 @@ describe("MemoConversationMessage plan review", () => {
 		);
 
 		expect(screen.getByText("Thinking...")).toBeInTheDocument();
-		// Streaming reasoning splits each char into its own <span> for the
-		// fade-in effect, so getByText("...") can't match a literal
-		// substring. toHaveTextContent walks the subtree.
 		expect(document.body).toHaveTextContent(
 			"Inspecting the streamed reasoning block.",
 		);
