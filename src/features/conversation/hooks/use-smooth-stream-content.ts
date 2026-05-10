@@ -1,76 +1,25 @@
 // Smooths bursty agent SDK deltas into a steady character-per-frame reveal.
 // Vendored from lobe-ui (src/Markdown/SyntaxMarkdown/useSmoothStreamContent.ts,
-// MIT); profiler hooks removed, behaviour otherwise identical.
+// MIT); profiler hooks + multi-preset API stripped — single helmor-tuned
+// config below: deeper buffer + tighter output ceilings to absorb sidecar
+// adapter jitter while staying steady when the model pauses.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type StreamSmoothingPreset = "realtime" | "balanced" | "silky";
-
-interface StreamSmoothingPresetConfig {
-	activeInputWindowMs: number;
-	defaultCps: number;
-	emaAlpha: number;
-	flushCps: number;
-	largeAppendChars: number;
-	maxActiveCps: number;
-	maxCps: number;
-	maxFlushCps: number;
-	minCps: number;
-	settleAfterMs: number;
-	settleDrainMaxMs: number;
-	settleDrainMinMs: number;
-	targetBufferMs: number;
-}
-
-const PRESET_CONFIG: Record<
-	StreamSmoothingPreset,
-	StreamSmoothingPresetConfig
-> = {
-	balanced: {
-		activeInputWindowMs: 220,
-		defaultCps: 38,
-		emaAlpha: 0.2,
-		flushCps: 120,
-		largeAppendChars: 120,
-		maxActiveCps: 132,
-		maxCps: 72,
-		maxFlushCps: 280,
-		minCps: 18,
-		settleAfterMs: 360,
-		settleDrainMaxMs: 520,
-		settleDrainMinMs: 180,
-		targetBufferMs: 120,
-	},
-	realtime: {
-		activeInputWindowMs: 140,
-		defaultCps: 50,
-		emaAlpha: 0.3,
-		flushCps: 170,
-		largeAppendChars: 180,
-		maxActiveCps: 180,
-		maxCps: 96,
-		maxFlushCps: 360,
-		minCps: 24,
-		settleAfterMs: 260,
-		settleDrainMaxMs: 360,
-		settleDrainMinMs: 140,
-		targetBufferMs: 40,
-	},
-	silky: {
-		activeInputWindowMs: 320,
-		defaultCps: 28,
-		emaAlpha: 0.14,
-		flushCps: 96,
-		largeAppendChars: 100,
-		maxActiveCps: 102,
-		maxCps: 56,
-		maxFlushCps: 220,
-		minCps: 14,
-		settleAfterMs: 460,
-		settleDrainMaxMs: 680,
-		settleDrainMinMs: 240,
-		targetBufferMs: 170,
-	},
+const CONFIG = {
+	activeInputWindowMs: 380,
+	defaultCps: 26,
+	emaAlpha: 0.12,
+	flushCps: 64,
+	largeAppendChars: 140,
+	maxActiveCps: 56,
+	maxCps: 44,
+	maxFlushCps: 96,
+	minCps: 12,
+	settleAfterMs: 520,
+	settleDrainMaxMs: 900,
+	settleDrainMinMs: 300,
+	targetBufferMs: 1000,
 };
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -83,14 +32,13 @@ const countChars = (text: string): number => [...text].length;
 
 interface UseSmoothStreamContentOptions {
 	enabled?: boolean;
-	preset?: StreamSmoothingPreset;
 }
 
 export const useSmoothStreamContent = (
 	content: string,
-	{ enabled = true, preset = "balanced" }: UseSmoothStreamContentOptions = {},
+	{ enabled = true }: UseSmoothStreamContentOptions = {},
 ): string => {
-	const config = PRESET_CONFIG[preset];
+	const config = CONFIG;
 	const [displayedContent, setDisplayedContent] = useState(content);
 
 	const displayedContentRef = useRef(content);

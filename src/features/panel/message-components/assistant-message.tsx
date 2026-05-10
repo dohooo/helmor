@@ -5,10 +5,6 @@ import {
 	ReasoningContent,
 	ReasoningTrigger,
 } from "@/components/ai/reasoning";
-import {
-	STREAMING_ANIMATED,
-	STREAMING_SMOOTHING_PRESET,
-} from "@/components/ai/streaming-animated";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import {
@@ -44,6 +40,13 @@ import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
 
+// `animation` / `duration` / `easing` are pinned by the
+// `[data-sd-animate]` rule in App.css; only `sep` + `stagger` matter here.
+const STREAMING_ANIMATED = {
+	sep: "char" as const,
+	stagger: 0,
+};
+
 const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
@@ -53,12 +56,7 @@ const AssistantText = memo(function AssistantText({
 }) {
 	const mode: StreamdownMode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
-	// Smooth out bursty SDK deltas so the typewriter cadence stays even
-	// regardless of how chunky the upstream stream happens to be.
-	const smoothedText = useSmoothStreamContent(text, {
-		enabled: streaming,
-		preset: STREAMING_SMOOTHING_PRESET,
-	});
+	const smoothedText = useSmoothStreamContent(text, { enabled: streaming });
 
 	return (
 		<div

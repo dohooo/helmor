@@ -184,10 +184,9 @@ export const ReasoningContent = memo(
 	({ className, children, fontSize, ...props }: ReasoningContentProps) => {
 		const { lifecycle } = useReasoning();
 		const streaming = lifecycle === "streaming";
-		// SDK reasoning text often starts with a stray space; under
-		// `whitespace-pre-wrap` that renders as a leading <span> and shifts
-		// the first line right by one char while wrapped lines sit flush.
-		const trimmed = children.replace(/^\s+/, "");
+		// Strip SDK leading space + collapse blank lines so paragraph
+		// breaks don't render as ~40px gaps under `whitespace-pre-wrap`.
+		const trimmed = children.replace(/^\s+/, "").replace(/\n[ \t]*\n+/g, "\n");
 
 		return (
 			<CollapsibleContent className={cn("pt-0.5", className)} {...props}>
