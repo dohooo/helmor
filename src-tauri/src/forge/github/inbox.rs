@@ -18,190 +18,21 @@ use super::{
     api::{looks_like_auth_rejection, run_graphql, GraphqlOutcome, GITHUB_HOST},
 };
 use crate::forge::command::{command_detail, CommandOutput};
+use crate::forge::inbox::{
+    ForgeLabelOption, InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxPage,
+    InboxScopeFilter, InboxSortFilter, InboxSource, InboxState, InboxStateFilter, InboxStateTone,
+    InboxToggles,
+};
 
-/// Per-kind toggle the user picks in Settings → Inbox.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxToggles {
-    pub issues: bool,
-    pub prs: bool,
-    pub discussions: bool,
-}
+pub mod detail;
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxFilters {
-    pub query: Option<String>,
-    pub state: Option<InboxStateFilter>,
-    pub scope: Option<Vec<InboxScopeFilter>>,
-    pub sort: Option<InboxSortFilter>,
-    pub draft: Option<InboxDraftFilter>,
-    pub labels: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InboxStateFilter {
-    Open,
-    Closed,
-    Merged,
-    All,
-    Answered,
-    Unanswered,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum InboxScopeFilter {
-    Involves,
-    Assigned,
-    Mentioned,
-    Created,
-    Author,
-    Assignee,
-    Mentions,
-    ReviewRequested,
-    ReviewedBy,
-    All,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InboxSortFilter {
-    Updated,
-    Created,
-    Comments,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InboxDraftFilter {
-    Exclude,
-    Include,
-    Only,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GithubLabelOption {
-    pub name: String,
-    pub color: Option<String>,
-    pub description: Option<String>,
-}
+use detail::{GithubDiscussionDetail, GithubIssueDetail, GithubPullRequestDetail};
 
 #[derive(Debug, Deserialize)]
 struct GithubLabelRestResponse {
     name: String,
     color: Option<String>,
     description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxPage {
-    pub items: Vec<InboxItem>,
-    /// Opaque cursor — null when no more items in any source. Pass back
-    /// verbatim to fetch the next page.
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxItem {
-    /// Stable, source-prefixed key safe to use as React key + chip key.
-    pub id: String,
-    pub source: InboxSource,
-    pub external_id: String,
-    pub external_url: String,
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub state: Option<InboxState>,
-    /// Unix milliseconds — already converted from ISO 8601 in the
-    /// adapter so the frontend's "Xh ago" formatter works directly.
-    pub last_activity_at: i64,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum InboxSource {
-    GithubIssue,
-    GithubPr,
-    GithubDiscussion,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxState {
-    pub label: String,
-    pub tone: InboxStateTone,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InboxStateTone {
-    Open,
-    Closed,
-    Merged,
-    Draft,
-    Answered,
-    Unanswered,
-    Urgent,
-    Neutral,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum InboxItemDetail {
-    GithubIssue(Box<GithubIssueDetail>),
-    GithubPr(Box<GithubPullRequestDetail>),
-    GithubDiscussion(Box<GithubDiscussionDetail>),
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GithubIssueDetail {
-    pub external_id: String,
-    pub title: String,
-    pub body: Option<String>,
-    pub url: String,
-    pub state: String,
-    pub state_reason: Option<String>,
-    pub author_login: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-    pub closed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GithubPullRequestDetail {
-    pub external_id: String,
-    pub title: String,
-    pub body: Option<String>,
-    pub url: String,
-    pub state: String,
-    pub merged: bool,
-    pub draft: bool,
-    pub author_login: Option<String>,
-    pub base_ref_name: Option<String>,
-    pub head_ref_name: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GithubDiscussionDetail {
-    pub external_id: String,
-    pub title: String,
-    pub body: Option<String>,
-    pub url: String,
-    pub answered: Option<bool>,
-    pub author_login: Option<String>,
-    pub category_name: Option<String>,
-    pub category_emoji: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
 }
 
 /// Validate `owner/name` shape so we can splice it directly into a
@@ -531,9 +362,9 @@ pub fn list_inbox_items(
     let scope_filters = filters
         .as_ref()
         .and_then(|filters| filters.scope.as_deref());
-    let sort_qual = sort_qualifier(filters.as_ref().and_then(|filters| filters.sort));
-    let discussion_sort_qual =
-        discussion_sort_qualifier(filters.as_ref().and_then(|filters| filters.sort));
+    let sort_filter = filters.as_ref().and_then(|filters| filters.sort);
+    let sort_qual = sort_qualifier(sort_filter);
+    let discussion_sort_qual = discussion_sort_qualifier(sort_filter);
     let draft_filter = filters.as_ref().and_then(|filters| filters.draft);
 
     tracing::debug!(
@@ -572,7 +403,7 @@ pub fn list_inbox_items(
                 state_qualifier(InboxSource::GithubIssue, state_filter),
                 scope_qualifier(InboxSource::GithubIssue, scope)
             );
-            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual)? {
+            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual, limit)? {
                 FetchOutcome::Auth => {
                     tracing::warn!(target: "helmor::inbox", login, "issues search: auth required");
                     return Ok(InboxPage {
@@ -592,7 +423,7 @@ pub fn list_inbox_items(
                     items.extend(
                         page.nodes
                             .into_iter()
-                            .filter_map(|n| issue_or_pr_to_item(n, false)),
+                            .filter_map(|n| issue_or_pr_to_item(n, false, sort_filter)),
                     );
                     *cursor_entry = MultiCursorEntry {
                         cursor: page.end_cursor,
@@ -625,7 +456,7 @@ pub fn list_inbox_items(
                 scope_qualifier(InboxSource::GithubPr, scope),
                 draft_qualifier(draft_filter)
             );
-            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual)? {
+            match fetch_search(login, &q, &cursor_entry.cursor, sort_qual, limit)? {
                 FetchOutcome::Auth => {
                     tracing::warn!(target: "helmor::inbox", login, "prs search: auth required");
                     return Ok(InboxPage {
@@ -645,7 +476,7 @@ pub fn list_inbox_items(
                     items.extend(
                         page.nodes
                             .into_iter()
-                            .filter_map(|n| issue_or_pr_to_item(n, true)),
+                            .filter_map(|n| issue_or_pr_to_item(n, true, sort_filter)),
                     );
                     *cursor_entry = MultiCursorEntry {
                         cursor: page.end_cursor,
@@ -669,6 +500,7 @@ pub fn list_inbox_items(
             state_qualifier(InboxSource::GithubDiscussion, state_filter),
             discussion_scope_qual,
             discussion_sort_qual,
+            limit,
         )? {
             FetchOutcome::Auth => {
                 tracing::warn!(target: "helmor::inbox", login, "discussions search: auth required");
@@ -681,7 +513,11 @@ pub fn list_inbox_items(
                     has_next = page.has_next_page,
                     "discussions search results"
                 );
-                items.extend(page.nodes.into_iter().filter_map(discussion_to_item));
+                items.extend(
+                    page.nodes
+                        .into_iter()
+                        .filter_map(|n| discussion_to_item(n, sort_filter)),
+                );
                 state.discussions = MultiCursorEntry {
                     cursor: page.end_cursor,
                     done: !page.has_next_page,
@@ -728,11 +564,18 @@ pub fn get_inbox_item_detail(
         InboxSource::GithubIssue => fetch_issue_detail(login, external_id),
         InboxSource::GithubPr => fetch_pull_request_detail(login, external_id),
         InboxSource::GithubDiscussion => fetch_discussion_detail(login, external_id),
+        // Reaching here means the router (`backend_for(provider)`) sent
+        // a GitLab source to the GitHub backend — that's a logic bug.
+        // Loud crash beats silent `Ok(None)` for diagnosing it.
+        InboxSource::GitlabIssue | InboxSource::GitlabMr => unreachable!(
+            "GitHub inbox backend received GitLab source: {source:?}. \
+             This is a router bug — `provider` and the item's `source` got out of sync."
+        ),
     }
 }
 
-pub fn list_github_labels(login: &str, repos: &[String]) -> Result<Vec<GithubLabelOption>> {
-    let mut labels_by_name = BTreeMap::<String, GithubLabelOption>::new();
+pub fn list_repo_labels(login: &str, repos: &[String]) -> Result<Vec<ForgeLabelOption>> {
+    let mut labels_by_name = BTreeMap::<String, ForgeLabelOption>::new();
     for repo in repos.iter().filter_map(|repo| sanitize_repo_filter(repo)) {
         let path = format!("/repos/{repo}/labels?per_page=100");
         let raw = match run_github_api(login, &path, "repository labels") {
@@ -765,7 +608,7 @@ pub fn list_github_labels(login: &str, repos: &[String]) -> Result<Vec<GithubLab
         for label in labels {
             labels_by_name
                 .entry(label.name.clone())
-                .or_insert(GithubLabelOption {
+                .or_insert(ForgeLabelOption {
                     name: label.name,
                     color: label.color,
                     description: label.description,
@@ -1402,6 +1245,7 @@ query InboxIssuePrSearch($q: String!, $cursor: String) {
         url
         state
         stateReason
+        createdAt
         updatedAt
         repository { nameWithOwner }
       }
@@ -1413,6 +1257,7 @@ query InboxIssuePrSearch($q: String!, $cursor: String) {
         state
         isDraft
         merged
+        createdAt
         updatedAt
         repository { nameWithOwner }
       }
@@ -1432,6 +1277,7 @@ query InboxDiscussionSearch($q: String!, $cursor: String) {
         number
         title
         url
+        createdAt
         updatedAt
         isAnswered
         repository { nameWithOwner }
@@ -1465,6 +1311,8 @@ enum IssueOrPrNode {
         state: String,
         #[serde(rename = "stateReason")]
         state_reason: Option<String>,
+        #[serde(rename = "createdAt")]
+        created_at: String,
         #[serde(rename = "updatedAt")]
         updated_at: String,
         repository: RepoNameWithOwner,
@@ -1478,6 +1326,8 @@ enum IssueOrPrNode {
         #[serde(rename = "isDraft")]
         is_draft: bool,
         merged: bool,
+        #[serde(rename = "createdAt")]
+        created_at: String,
         #[serde(rename = "updatedAt")]
         updated_at: String,
         repository: RepoNameWithOwner,
@@ -1498,6 +1348,8 @@ struct DiscussionNode {
     number: i64,
     title: String,
     url: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
     #[serde(rename = "isAnswered")]
@@ -1550,11 +1402,21 @@ struct GraphqlSearchError {
     message: String,
 }
 
+/// Bake the requested page size into the GraphQL `first:` slot.
+/// Avoids over-fetching followed by client-side truncate (which would
+/// silently drop the tail of every page — see the 23-issue / 20-limit
+/// case where 3 items got lost).
+fn with_search_first(query: &'static str, limit: usize) -> String {
+    let limit = limit.clamp(1, 100);
+    query.replace("first: 50", &format!("first: {limit}"))
+}
+
 fn fetch_search(
     login: &str,
     base_query: &str,
     cursor: &Option<String>,
     sort_qualifier: &str,
+    limit: usize,
 ) -> Result<FetchOutcome<SearchPage<IssueOrPrNode>>> {
     let q = format!("{base_query} {sort_qualifier}");
     let cursor_arg = cursor.clone().unwrap_or_default();
@@ -1562,12 +1424,9 @@ fn fetch_search(
     if !cursor_arg.is_empty() {
         variables.push(("cursor", cursor_arg.as_str()));
     }
+    let query = with_search_first(ISSUE_PR_SEARCH_QUERY, limit);
 
-    match run_graphql::<GraphqlSearchEnvelope<IssueOrPrNode>>(
-        login,
-        ISSUE_PR_SEARCH_QUERY,
-        &variables,
-    )? {
+    match run_graphql::<GraphqlSearchEnvelope<IssueOrPrNode>>(login, &query, &variables)? {
         GraphqlOutcome::Auth => Ok(FetchOutcome::Auth),
         GraphqlOutcome::Ok(envelope) => {
             if let Some(errors) = envelope.errors {
@@ -1595,6 +1454,7 @@ fn fetch_search(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_discussion_search(
     login: &str,
     cursor: &Option<String>,
@@ -1603,6 +1463,7 @@ fn fetch_discussion_search(
     state_qual: &str,
     scope_qual: &str,
     sort_qualifier: &str,
+    limit: usize,
 ) -> Result<FetchOutcome<SearchPage<DiscussionNode>>> {
     let q = format!("{repo_qual}{search_qual}{state_qual}{scope_qual}{sort_qualifier}");
     let cursor_arg = cursor.clone().unwrap_or_default();
@@ -1610,12 +1471,9 @@ fn fetch_discussion_search(
     if !cursor_arg.is_empty() {
         variables.push(("cursor", cursor_arg.as_str()));
     }
+    let query = with_search_first(DISCUSSION_SEARCH_QUERY, limit);
 
-    match run_graphql::<GraphqlSearchEnvelope<DiscussionNode>>(
-        login,
-        DISCUSSION_SEARCH_QUERY,
-        &variables,
-    )? {
+    match run_graphql::<GraphqlSearchEnvelope<DiscussionNode>>(login, &query, &variables)? {
         GraphqlOutcome::Auth => Ok(FetchOutcome::Auth),
         GraphqlOutcome::Ok(envelope) => {
             if let Some(errors) = envelope.errors {
@@ -1643,7 +1501,11 @@ fn fetch_discussion_search(
     }
 }
 
-fn issue_or_pr_to_item(node: IssueOrPrNode, expect_pr: bool) -> Option<InboxItem> {
+fn issue_or_pr_to_item(
+    node: IssueOrPrNode,
+    expect_pr: bool,
+    sort: Option<InboxSortFilter>,
+) -> Option<InboxItem> {
     match node {
         IssueOrPrNode::Issue {
             id,
@@ -1652,6 +1514,7 @@ fn issue_or_pr_to_item(node: IssueOrPrNode, expect_pr: bool) -> Option<InboxItem
             url,
             state,
             state_reason,
+            created_at,
             updated_at,
             repository,
         } => {
@@ -1669,7 +1532,7 @@ fn issue_or_pr_to_item(node: IssueOrPrNode, expect_pr: bool) -> Option<InboxItem
                 title,
                 subtitle: Some(repository.name_with_owner.clone()),
                 state: Some(issue_state(&state, state_reason.as_deref())),
-                last_activity_at: parse_iso8601_to_ms(&updated_at)?,
+                last_activity_at: pick_sort_timestamp(sort, &created_at, &updated_at)?,
             })
         }
         IssueOrPrNode::PullRequest {
@@ -1680,6 +1543,7 @@ fn issue_or_pr_to_item(node: IssueOrPrNode, expect_pr: bool) -> Option<InboxItem
             state,
             is_draft,
             merged,
+            created_at,
             updated_at,
             repository,
         } => {
@@ -1694,14 +1558,31 @@ fn issue_or_pr_to_item(node: IssueOrPrNode, expect_pr: bool) -> Option<InboxItem
                 title,
                 subtitle: Some(repository.name_with_owner.clone()),
                 state: Some(pr_state(&state, is_draft, merged)),
-                last_activity_at: parse_iso8601_to_ms(&updated_at)?,
+                last_activity_at: pick_sort_timestamp(sort, &created_at, &updated_at)?,
             })
         }
         IssueOrPrNode::Other => None,
     }
 }
 
-fn discussion_to_item(node: DiscussionNode) -> Option<InboxItem> {
+/// `last_activity_at` carries whichever timestamp the user is sorting
+/// by — keeps the post-fetch `sort_by_key` consistent with the GitHub
+/// `sort:` qualifier we sent, and makes the UI's "X ago" display the
+/// metric the user actually picked. Comments-by sort falls back to
+/// `updated_at` (no comment count plumbed through yet).
+fn pick_sort_timestamp(
+    sort: Option<InboxSortFilter>,
+    created_at: &str,
+    updated_at: &str,
+) -> Option<i64> {
+    let primary = match sort {
+        Some(InboxSortFilter::Created) => created_at,
+        _ => updated_at,
+    };
+    parse_iso8601_to_ms(primary).or_else(|| parse_iso8601_to_ms(updated_at))
+}
+
+fn discussion_to_item(node: DiscussionNode, sort: Option<InboxSortFilter>) -> Option<InboxItem> {
     let category_label = node.category.map(|c| c.name);
     let subtitle = match category_label {
         Some(cat) => Some(format!("{} · {}", node.repository.name_with_owner, cat)),
@@ -1729,7 +1610,7 @@ fn discussion_to_item(node: DiscussionNode) -> Option<InboxItem> {
                 tone: InboxStateTone::Unanswered,
             }
         }),
-        last_activity_at: parse_iso8601_to_ms(&node.updated_at)?,
+        last_activity_at: pick_sort_timestamp(sort, &node.created_at, &node.updated_at)?,
     })
 }
 

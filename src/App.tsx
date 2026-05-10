@@ -473,7 +473,7 @@ function AppShell({
 	const [startInboxProviderTab, setStartInboxProviderTab] =
 		useState<string>("github");
 	const [startInboxProviderSourceTab, setStartInboxProviderSourceTab] =
-		useState<string>("github_issue");
+		useState<string>("issues");
 	const [startInboxStateFilterBySource, setStartInboxStateFilterBySource] =
 		useState<Record<string, string>>({});
 	const [startPreviewCard, setStartPreviewCard] = useState<ContextCard | null>(

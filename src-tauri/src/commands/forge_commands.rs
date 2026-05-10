@@ -1,11 +1,9 @@
 use crate::forge::{
     self,
     accounts::{self, ForgeAccount},
-    github::inbox::{
-        self as github_inbox, GithubLabelOption, InboxFilters, InboxItemDetail, InboxPage,
-        InboxSource, InboxToggles,
-    },
-    ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeProvider, RemoteState,
+    forge_backend_for, ChangeRequestInfo, ForgeActionStatus, ForgeDetection, ForgeLabelOption,
+    ForgeProvider, InboxFilters, InboxItemDetail, InboxKind, InboxKindLabels, InboxPage,
+    InboxSource, RemoteState,
 };
 // `accounts` re-exports the dispatchers; provider-specific work
 // happens inside `forge::github::accounts` / `forge::gitlab::accounts`
@@ -41,62 +39,111 @@ pub async fn list_forge_accounts(gitlab_hosts: Vec<String>) -> CmdResult<Vec<For
     run_blocking(move || Ok(accounts::list_forge_accounts(&gitlab_hosts))).await
 }
 
-/// List inbox items for one GitHub account.
-///
-/// Toggles are mirrored 1:1 from `settings.inboxSourceConfig.accounts[<provider>:<login>]`.
-/// `cursor` is opaque on the JS side — pass back the previous response's
-/// `nextCursor` to fetch the next page. `limit` clamps to [1, 100].
-///
-/// Currently GitHub-only; future Linear / Slack go through their own
-/// adapters and a dispatcher here.
+/// One kind per call. Frontend must check `list_inbox_kind_labels`
+/// first — `(Gitlab, Discussions)` errors out (not supported).
+/// `cursor` is opaque; `limit` clamps to [1, 100].
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn list_inbox_items(
     provider: ForgeProvider,
+    kind: InboxKind,
     login: String,
-    toggles: InboxToggles,
+    host: Option<String>,
     cursor: Option<String>,
     limit: Option<u32>,
     repo: Option<String>,
     filters: Option<InboxFilters>,
 ) -> CmdResult<InboxPage> {
     let limit = limit.unwrap_or(20).clamp(1, 100) as usize;
-    run_blocking(move || match provider {
-        ForgeProvider::Github => github_inbox::list_inbox_items(
-            &login,
-            toggles,
-            cursor.as_deref(),
-            limit,
-            repo.as_deref(),
-            filters,
-        ),
-        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(InboxPage {
-            items: Vec::new(),
-            next_cursor: None,
-        }),
+    run_blocking(move || {
+        let Some(backend) = forge_backend_for(provider) else {
+            return Ok(InboxPage {
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        };
+        match kind {
+            InboxKind::Issues => backend.list_inbox_issues(
+                &login,
+                host.as_deref(),
+                cursor.as_deref(),
+                limit,
+                repo.as_deref(),
+                filters,
+            ),
+            InboxKind::Prs => backend.list_inbox_prs(
+                &login,
+                host.as_deref(),
+                cursor.as_deref(),
+                limit,
+                repo.as_deref(),
+                filters,
+            ),
+            InboxKind::Discussions => backend.list_inbox_discussions(
+                &login,
+                host.as_deref(),
+                cursor.as_deref(),
+                limit,
+                repo.as_deref(),
+                filters,
+            ),
+        }
     })
     .await
 }
 
+/// Inbox kinds the forge supports, paired with their labels (the strings
+/// the frontend renders). GitHub returns `[issues, prs, discussions]`
+/// with PR-flavoured copy; GitLab returns `[issues, prs]` with
+/// MR-flavoured copy and no Discussions entry. The frontend reads
+/// labels from the response and never branches on provider for copy.
 #[tauri::command]
-pub async fn list_github_labels(
-    login: String,
-    repos: Vec<String>,
-) -> CmdResult<Vec<GithubLabelOption>> {
-    run_blocking(move || github_inbox::list_github_labels(&login, &repos)).await
+pub async fn list_inbox_kind_labels(provider: ForgeProvider) -> CmdResult<Vec<InboxKindLabels>> {
+    run_blocking(move || {
+        let Some(backend) = forge_backend_for(provider) else {
+            return Ok(Vec::new());
+        };
+        Ok(backend.inbox_kind_labels())
+    })
+    .await
 }
 
-/// Fetch native detail data for one inbox item. The command is a shared
-/// entry point, but each provider/source owns its own response shape.
+/// Repository label set for the labels multi-select in Settings →
+/// Context. Routes via the forge backend so both GitHub and GitLab
+/// share one command. `host` is required for GitLab (self-hosted
+/// instances differ per project) and ignored by GitHub today.
+#[tauri::command]
+pub async fn list_forge_labels(
+    provider: ForgeProvider,
+    login: String,
+    host: Option<String>,
+    repos: Vec<String>,
+) -> CmdResult<Vec<ForgeLabelOption>> {
+    run_blocking(move || {
+        let Some(backend) = forge_backend_for(provider) else {
+            return Ok(Vec::new());
+        };
+        backend.list_repo_labels(&login, host.as_deref(), &repos)
+    })
+    .await
+}
+
+/// Fetch native detail data for one inbox item. `host` mirrors
+/// `list_inbox_items` — needed for self-hosted GitLab so the call hits
+/// the same instance the item came from.
 #[tauri::command]
 pub async fn get_inbox_item_detail(
     provider: ForgeProvider,
     login: String,
+    host: Option<String>,
     source: InboxSource,
     external_id: String,
 ) -> CmdResult<Option<InboxItemDetail>> {
-    run_blocking(move || match provider {
-        ForgeProvider::Github => github_inbox::get_inbox_item_detail(&login, source, &external_id),
-        ForgeProvider::Gitlab | ForgeProvider::Unknown => Ok(None),
+    run_blocking(move || {
+        let Some(backend) = forge_backend_for(provider) else {
+            return Ok(None);
+        };
+        backend.get_inbox_item_detail(&login, host.as_deref(), source, &external_id)
     })
     .await
 }

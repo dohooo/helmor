@@ -529,11 +529,16 @@ function sourceCardNumber(card: ContextCard): string {
 	if (
 		card.meta.type === "github_issue" ||
 		card.meta.type === "github_pr" ||
-		card.meta.type === "github_discussion"
+		card.meta.type === "github_discussion" ||
+		card.meta.type === "gitlab_issue" ||
+		card.meta.type === "gitlab_mr"
 	) {
 		return String(card.meta.number);
 	}
 
-	const idx = card.externalId.lastIndexOf("#");
+	// `#` is GitHub / GitLab issues; `!` is GitLab MRs.
+	const hashIdx = card.externalId.lastIndexOf("#");
+	const bangIdx = card.externalId.lastIndexOf("!");
+	const idx = Math.max(hashIdx, bangIdx);
 	return idx === -1 ? "" : card.externalId.slice(idx + 1);
 }

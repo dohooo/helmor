@@ -4,6 +4,8 @@ import type { ContextCard } from "@/lib/sources/types";
 import { GitHubDiscussionView } from "./github/discussion-view";
 import { GitHubIssueView } from "./github/issue-view";
 import { GitHubPullRequestView } from "./github/pull-request-view";
+import { GitLabIssueView } from "./gitlab/issue-view";
+import { GitLabMergeRequestView } from "./gitlab/merge-request-view";
 import { UnsupportedSourceView } from "./unsupported-view";
 
 // `memo` keeps the markdown render in `GitHubDetailPage` from re-running
@@ -35,6 +37,20 @@ export const SourceDetailView = memo(function SourceDetailView({
 		case "github_discussion":
 			return (
 				<GitHubDiscussionView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
+		case "gitlab_issue":
+			return (
+				<GitLabIssueView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
+		case "gitlab_mr":
+			return (
+				<GitLabMergeRequestView
 					card={card}
 					appendContextTarget={appendContextTarget}
 				/>

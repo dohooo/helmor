@@ -962,7 +962,9 @@ export async function listCursorModels(
 export type InboxItemSource =
 	| "github_issue"
 	| "github_pr"
-	| "github_discussion";
+	| "github_discussion"
+	| "gitlab_issue"
+	| "gitlab_mr";
 
 export type InboxItemStateTone =
 	| "open"
@@ -986,8 +988,12 @@ export type InboxItem = {
 };
 
 export type InboxItemDetailRef = {
-	provider: Extract<ForgeProvider, "github">;
+	provider: Extract<ForgeProvider, "github" | "gitlab">;
 	login: string;
+	/** Host the item lives on. Critical for self-hosted GitLab where a
+	 *  login may have accounts on multiple instances — without this the
+	 *  detail call could route to the wrong host and 404. */
+	host?: string | null;
 	source: InboxItemSource;
 	externalId: string;
 };
@@ -1033,10 +1039,39 @@ export type GitHubDiscussionDetail = {
 	updatedAt?: string | null;
 };
 
+export type GitLabIssueDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
+};
+
+export type GitLabMergeRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	sourceBranch?: string | null;
+	targetBranch?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
 export type InboxItemDetail =
 	| { type: "github_issue"; data: GitHubIssueDetail }
 	| { type: "github_pr"; data: GitHubPullRequestDetail }
-	| { type: "github_discussion"; data: GitHubDiscussionDetail };
+	| { type: "github_discussion"; data: GitHubDiscussionDetail }
+	| { type: "gitlab_issue"; data: GitLabIssueDetail }
+	| { type: "gitlab_mr"; data: GitLabMergeRequestDetail };
 
 export type InboxPage = {
 	items: InboxItem[];
@@ -1045,11 +1080,10 @@ export type InboxPage = {
 	nextCursor: string | null;
 };
 
-export type InboxToggles = {
-	issues: boolean;
-	prs: boolean;
-	discussions: boolean;
-};
+/** Sub-tab the inbox is showing. The Tauri command takes one kind per
+ *  call; the frontend maps each tab onto a separate React-Query so
+ *  switching tabs reuses the prior cached pages. */
+export type InboxKind = "issues" | "prs" | "discussions";
 
 export type InboxStateFilter =
 	| "open"
@@ -1083,44 +1117,63 @@ export type InboxFilters = {
 	labels?: string | null;
 };
 
-export type GithubLabelOption = {
+/** Repo-scoped label, shared between GitHub and GitLab — both forges
+ *  expose `(name, color, description)` triples on their labels API. */
+export type ForgeLabelOption = {
 	name: string;
 	color?: string | null;
 	description?: string | null;
 };
 
-export async function listGithubLabels(args: {
+/** Union of labels visible across the given repositories. Powers the
+ *  Settings → Context labels multi-select. `host` is required for
+ *  self-hosted GitLab; ignored by GitHub today. */
+export async function listForgeLabels(args: {
+	provider: ForgeProvider;
 	login: string;
+	host?: string | null;
 	repos: string[];
-}): Promise<GithubLabelOption[]> {
+}): Promise<ForgeLabelOption[]> {
 	try {
-		return await invoke<GithubLabelOption[]>("list_github_labels", {
+		return await invoke<ForgeLabelOption[]>("list_forge_labels", {
+			provider: args.provider,
 			login: args.login,
+			host: args.host ?? null,
 			repos: args.repos,
 		});
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to load GitHub labels."),
+			describeInvokeError(error, "Unable to load repository labels."),
 		);
 	}
 }
 
 export async function listInboxItems(args: {
 	provider: ForgeProvider;
+	/** Sub-tab kind. Pass one at a time — the backend dispatches via
+	 *  per-kind trait methods. Asking GitLab for "discussions" panics
+	 *  via Rust's `unimplemented!()` (it's a router bug); callers must
+	 *  consult `listSupportedInboxKinds(provider)` first. */
+	kind: InboxKind;
 	login: string;
-	toggles: InboxToggles;
+	/** Host the API call should target. Required for self-hosted GitLab
+	 *  to avoid querying `gitlab.com` for projects that live elsewhere.
+	 *  When `null`, the backend falls back to the login's home host
+	 *  (correct for the single-host "involves @me" global feed). */
+	host?: string | null;
 	cursor?: string | null;
 	limit?: number;
-	/** GitHub `owner/name` filter — when present, all enabled kinds are
-	 *  scoped to that single repo via a `repo:owner/name` qualifier. */
+	/** `owner/name` (GitHub) or `group/.../project` (GitLab) — scopes
+	 *  the query to one repo on the backend. */
 	repo?: string | null;
 	filters?: InboxFilters | null;
 }): Promise<InboxPage> {
 	try {
 		return await invoke<InboxPage>("list_inbox_items", {
 			provider: args.provider,
+			kind: args.kind,
 			login: args.login,
-			toggles: args.toggles,
+			host: args.host ?? null,
 			cursor: args.cursor ?? null,
 			limit: args.limit ?? 20,
 			repo: args.repo ?? null,
@@ -1131,6 +1184,45 @@ export async function listInboxItems(args: {
 	}
 }
 
+/** User-facing labels for one inbox kind, scoped to a forge.
+ *
+ *  All inbox copy that differs between GitHub and GitLab ("PR" vs
+ *  "MR", "Pull requests" vs "Merge requests", GitHub-only Discussions
+ *  entry, …) lives in these structs on the backend. The frontend
+ *  renders strings from the fields directly — no provider-branched
+ *  copy in TypeScript. */
+export type InboxKindLabels = {
+	kind: InboxKind;
+	/** Short title-cased form for sub-tab dropdown items
+	 *  ("Issues", "PRs", "MRs", "Discussions"). */
+	short: string;
+	/** Title-cased plural for empty-state titles and section headers
+	 *  ("Issues", "Pull requests", "Merge requests", "Discussions"). */
+	plural: string;
+	/** Lowercase singular for inline mentions ("issue", "pull request",
+	 *  "merge request", "discussion"). */
+	singular: string;
+};
+
+/** Inbox kinds the forge supports + their labels. The set is also the
+ *  capability gate — kinds NOT in the response don't have a backend
+ *  implementation (e.g. GitLab omits Discussions because GitLab has no
+ *  equivalent feature, and `listInboxItems(gitlab, discussions)` would
+ *  panic via `unimplemented!()`). */
+export async function listInboxKindLabels(
+	provider: ForgeProvider,
+): Promise<InboxKindLabels[]> {
+	try {
+		return await invoke<InboxKindLabels[]>("list_inbox_kind_labels", {
+			provider,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load inbox kind labels."),
+		);
+	}
+}
+
 export async function getInboxItemDetail(
 	ref: InboxItemDetailRef,
 ): Promise<InboxItemDetail | null> {
@@ -1138,6 +1230,7 @@ export async function getInboxItemDetail(
 		return await invoke<InboxItemDetail | null>("get_inbox_item_detail", {
 			provider: ref.provider,
 			login: ref.login,
+			host: ref.host ?? null,
 			source: ref.source,
 			externalId: ref.externalId,
 		});
