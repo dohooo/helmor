@@ -330,9 +330,18 @@ export function useWorkspaceInspectorSidebar({
 	const isActionsResizing = resizeState?.target === RESIZE_TARGET_ACTIONS;
 	const isTabsResizing = resizeState?.target === RESIZE_TARGET_TABS;
 
+	// Skip while the worktree isn't fully materialised. During
+	// `Initializing`, `git worktree add` is mid-checkout: `git diff`
+	// against the half-populated tree returns every tracked file as a
+	// phantom delete, and the inspector's auto-expanded tree stalls the
+	// JS thread for seconds. `Archived` has no worktree at all.
+	const changesQueryEnabled =
+		!!workspaceRootPath &&
+		workspaceState !== "initializing" &&
+		workspaceState !== "archived";
 	const changesQuery = useQuery({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
-		enabled: !!workspaceRootPath,
+		enabled: changesQueryEnabled,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
 
