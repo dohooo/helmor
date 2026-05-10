@@ -277,7 +277,7 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("merge");
 		});
 
-		it("returns merge when checks are pending (not failure)", () => {
+		it("returns merge mode when checks are pending so state can disable the CTA", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
@@ -418,6 +418,53 @@ describe("deriveCommitButtonState", () => {
 			deriveCommitButtonState(
 				null,
 				makeChangeRequestActionStatus({ mergeable: "MERGEABLE" }),
+				"merge",
+			),
+		).toBe("idle");
+	});
+
+	it("returns disabled when merge mode has no forge action status yet", () => {
+		expect(deriveCommitButtonState(null, null, "merge")).toBe("disabled");
+	});
+
+	it.each([
+		"pending",
+		"running",
+	] as const)("returns disabled when merge mode has a %s check", (status) => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({
+					mergeable: "MERGEABLE",
+					checks: [
+						{
+							id: "ci-1",
+							name: "build",
+							provider: "github",
+							status,
+						},
+					],
+				}),
+				"merge",
+			),
+		).toBe("disabled");
+	});
+
+	it("returns idle when merge mode only has successful checks", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({
+					mergeable: "MERGEABLE",
+					checks: [
+						{
+							id: "ci-1",
+							name: "build",
+							provider: "github",
+							status: "success",
+						},
+					],
+				}),
 				"merge",
 			),
 		).toBe("idle");

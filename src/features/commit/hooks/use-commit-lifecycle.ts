@@ -239,6 +239,20 @@ export function useWorkspaceCommitLifecycle({
 			if (mode === "merge" || mode === "closed") {
 				// ── Merge pre-validation ─────────────────────────────────
 				if (mode === "merge") {
+					if (!forgeActionStatusRef.current) {
+						console.warn(
+							"[commitButton] merge blocked: forge action status still loading, please wait",
+						);
+						pushToast?.(
+							"Merge status is still loading. Please wait and try again.",
+							"Merge blocked",
+							"destructive",
+						);
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+						});
+						return;
+					}
 					const currentMergeable = forgeActionStatusRef.current?.mergeable;
 					if (currentMergeable === "CONFLICTING") {
 						console.warn(
@@ -261,6 +275,23 @@ export function useWorkspaceCommitLifecycle({
 							"destructive",
 						);
 						// Trigger a refresh so the status resolves sooner
+						void queryClient.invalidateQueries({
+							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+						});
+						return;
+					}
+					const hasActiveCheck = forgeActionStatusRef.current?.checks?.some(
+						(check) => check.status === "pending" || check.status === "running",
+					);
+					if (hasActiveCheck) {
+						console.warn(
+							"[commitButton] merge blocked: CI checks are still running",
+						);
+						pushToast?.(
+							"CI checks are still running. Please wait and try again.",
+							"Merge blocked",
+							"destructive",
+						);
 						void queryClient.invalidateQueries({
 							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 						});

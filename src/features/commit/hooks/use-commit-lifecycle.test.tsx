@@ -708,6 +708,56 @@ describe("useWorkspaceCommitLifecycle", () => {
 		).toBe("review");
 	});
 
+	it("blocks merge while forge action status is still loading", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+		const pushToast = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					selectedWorkspaceIdRef: { current: "workspace-1" },
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: null,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+					pushToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("merge");
+		expect(result.current.commitButtonState).toBe("disabled");
+
+		await act(async () => {
+			await result.current.handleInspectorCommitAction("merge");
+		});
+
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		expect(pushToast).toHaveBeenCalledWith(
+			"Merge status is still loading. Please wait and try again.",
+			"Merge blocked",
+			"destructive",
+		);
+		expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+			queryKey: helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+		});
+	});
+
 	it("queues a review prompt with the configured modelId when handleInspectorReviewAction runs", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

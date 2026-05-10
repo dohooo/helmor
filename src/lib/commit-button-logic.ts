@@ -43,7 +43,7 @@ function lifecycleChangeRequest(
  *   2. commit-and-push    — local dirty changes need committing first
  *   3. push               — committed local work is ahead of origin
  *   4. fix                — CI needs fixing before merge
- *   5. merge              — ready to merge
+ *   5. merge              — ready to merge, or waiting for CI to finish
  */
 export function deriveCommitButtonMode(
 	lifecycle: CommitLifecycle,
@@ -90,7 +90,8 @@ export function deriveCommitButtonMode(
 			);
 			if (hasFailingCheck) return "fix";
 
-			// 5. Ready to merge
+			// 5. Ready to merge, unless state derivation disables this while
+			//    GitHub checks are still pending/running.
 			return "merge";
 		}
 
@@ -117,8 +118,16 @@ export function deriveCommitButtonState(
 	mode?: WorkspaceCommitButtonMode,
 ): CommitButtonState {
 	if (!lifecycle) {
-		if (mode === "merge" && forgeActionStatus?.mergeable === "UNKNOWN") {
-			return "disabled";
+		if (mode === "merge") {
+			if (!forgeActionStatus) {
+				return "disabled";
+			}
+			const hasActiveCheck = forgeActionStatus?.checks?.some(
+				(c) => c.status === "pending" || c.status === "running",
+			);
+			if (forgeActionStatus?.mergeable === "UNKNOWN" || hasActiveCheck) {
+				return "disabled";
+			}
 		}
 		return "idle";
 	}
