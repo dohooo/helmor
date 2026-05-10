@@ -1,5 +1,4 @@
 import { type CSSProperties, memo, useMemo } from "react";
-import { STREAMING_SMOOTHING_PRESET } from "@/components/ai/streaming-animated";
 import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import { cn } from "@/lib/utils";
 
@@ -17,10 +16,7 @@ export const StreamingPlainText = memo(function StreamingPlainText({
 	className?: string;
 	style?: CSSProperties;
 }) {
-	const smoothed = useSmoothStreamContent(children, {
-		enabled: streaming,
-		preset: STREAMING_SMOOTHING_PRESET,
-	});
+	const smoothed = useSmoothStreamContent(children, { enabled: streaming });
 
 	// `[...str]` splits by codepoint so emoji / surrogate pairs stay intact.
 	const chars = useMemo(

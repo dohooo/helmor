@@ -17,7 +17,7 @@ use super::{
     accounts as gh_accounts,
     api::{looks_like_auth_rejection, run_graphql, GraphqlOutcome, GITHUB_HOST},
 };
-use crate::forge::command::command_detail;
+use crate::forge::command::{command_detail, CommandOutput};
 
 /// Per-kind toggle the user picks in Settings → Inbox.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -121,7 +121,7 @@ pub struct InboxItem {
     pub last_activity_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxSource {
     GithubIssue,
@@ -236,6 +236,12 @@ fn repo_qualifier(filter: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+fn repo_filters_exact_reference(repo_filter: Option<&str>, reference_repo: &str) -> bool {
+    repo_filter
+        .and_then(sanitize_repo_filter)
+        .is_some_and(|repo| !repo.eq_ignore_ascii_case(reference_repo))
+}
+
 fn sanitize_search_query(query: &str) -> Option<String> {
     let cleaned = query
         .trim()
@@ -261,6 +267,101 @@ fn search_qualifier(query: Option<&str>) -> String {
         .and_then(sanitize_search_query)
         .map(|safe| format!("{safe} in:title,body "))
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactIssuePrReference {
+    repo_with_owner: String,
+    owner: String,
+    repo: String,
+    number: i64,
+    source: InboxSource,
+}
+
+fn parse_exact_issue_pr_reference(
+    query: &str,
+    repo_filter: Option<&str>,
+    toggles: InboxToggles,
+) -> Option<ExactIssuePrReference> {
+    let trimmed = query.trim();
+    if let Some(reference) = parse_exact_issue_pr_url(trimmed) {
+        return Some(reference);
+    }
+
+    let source = exact_issue_pr_source_from_toggles(toggles)?;
+    if let Some((repo_with_owner, number)) = trimmed.split_once('#') {
+        if !repo_with_owner.is_empty() {
+            let repo_with_owner = sanitize_repo_filter(repo_with_owner)?;
+            let number = number.parse::<i64>().ok()?;
+            let (owner, repo) = repo_with_owner.split_once('/')?;
+            return Some(ExactIssuePrReference {
+                repo_with_owner: repo_with_owner.clone(),
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                number,
+                source,
+            });
+        }
+    }
+
+    let number_text = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if !number_text.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let repo_with_owner = repo_filter.and_then(sanitize_repo_filter)?;
+    let number = number_text.parse::<i64>().ok()?;
+    let (owner, repo) = repo_with_owner.split_once('/')?;
+    Some(ExactIssuePrReference {
+        repo_with_owner: repo_with_owner.clone(),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        number,
+        source,
+    })
+}
+
+fn parse_exact_issue_pr_url(query: &str) -> Option<ExactIssuePrReference> {
+    let without_scheme = match query.split_once("://") {
+        Some((scheme, rest))
+            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
+        {
+            rest
+        }
+        _ => query,
+    };
+    let (host, without_host) = without_scheme.split_once('/')?;
+    if !host.eq_ignore_ascii_case("github.com") {
+        return None;
+    }
+    let parts = without_host
+        .split(['/', '?', '#'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let [owner, repo, kind, number, ..] = parts.as_slice() else {
+        return None;
+    };
+    sanitize_repo_filter(&format!("{owner}/{repo}"))?;
+    let source = match *kind {
+        "issues" => InboxSource::GithubIssue,
+        "pull" => InboxSource::GithubPr,
+        _ => return None,
+    };
+    let number = number.parse::<i64>().ok()?;
+    Some(ExactIssuePrReference {
+        repo_with_owner: format!("{owner}/{repo}"),
+        owner: (*owner).to_string(),
+        repo: (*repo).to_string(),
+        number,
+        source,
+    })
+}
+
+fn exact_issue_pr_source_from_toggles(toggles: InboxToggles) -> Option<InboxSource> {
+    match (toggles.issues, toggles.prs) {
+        (true, false) => Some(InboxSource::GithubIssue),
+        (false, true) => Some(InboxSource::GithubPr),
+        _ => None,
+    }
 }
 
 fn labels_qualifier(labels: Option<&str>) -> String {
@@ -392,6 +493,19 @@ pub fn list_inbox_items(
     filters: Option<InboxFilters>,
 ) -> Result<InboxPage> {
     let limit = limit.clamp(1, 100);
+    let exact_reference = filters
+        .as_ref()
+        .and_then(|filters| filters.query.as_deref())
+        .and_then(|query| parse_exact_issue_pr_reference(query, repo_filter, toggles));
+    if let Some(reference) = exact_reference {
+        return list_exact_issue_pr_reference(
+            login,
+            toggles,
+            repo_filter,
+            filters.as_ref(),
+            reference,
+        );
+    }
     let mut state = decode_cursor(cursor)?;
     if !toggles.issues {
         state.issues.done = true;
@@ -788,6 +902,19 @@ fn fetch_discussion_detail(login: &str, external_id: &str) -> Result<Option<Inbo
 }
 
 fn run_github_api(login: &str, path: &str, label: &str) -> Result<Option<String>> {
+    run_github_api_with_options(login, path, label, false)
+}
+
+fn run_github_api_allow_not_found(login: &str, path: &str, label: &str) -> Result<Option<String>> {
+    run_github_api_with_options(login, path, label, true)
+}
+
+fn run_github_api_with_options(
+    login: &str,
+    path: &str,
+    label: &str,
+    not_found_as_empty: bool,
+) -> Result<Option<String>> {
     let args = [
         "api",
         "--hostname",
@@ -812,10 +939,289 @@ fn run_github_api(login: &str, path: &str, label: &str) -> Result<Option<String>
     }
 
     let detail = command_detail(&output);
-    if looks_like_auth_rejection(&detail) {
+    if looks_like_auth_rejection(&detail)
+        || (not_found_as_empty && looks_like_not_found(&output, &detail))
+    {
         return Ok(None);
     }
     Err(anyhow!("`gh api` failed for {label}: {detail}"))
+}
+
+fn looks_like_not_found(output: &CommandOutput, detail: &str) -> bool {
+    output.status == Some(1)
+        && (detail.contains("HTTP 404")
+            || detail.contains("404 Not Found")
+            || detail.contains("Not Found (HTTP 404)"))
+}
+
+fn exact_issue_matches_filters(
+    login: &str,
+    issue: &IssueRestResponse,
+    filters: Option<&InboxFilters>,
+) -> bool {
+    if exact_issue_payload_is_pull_request(issue) {
+        return false;
+    }
+    let Some(filters) = filters else {
+        return true;
+    };
+    let state = issue.state.to_ascii_uppercase();
+    exact_state_matches(InboxSource::GithubIssue, filters.state, &state, false)
+        && exact_labels_match(filters.labels.as_deref(), &issue.labels)
+        && exact_issue_scopes_match(login, filters.scope.as_deref(), issue)
+}
+
+fn exact_issue_payload_is_pull_request(issue: &IssueRestResponse) -> bool {
+    issue.pull_request.is_some()
+}
+
+fn exact_pull_request_matches_filters(
+    login: &str,
+    pull_request: &PullRequestRestResponse,
+    filters: Option<&InboxFilters>,
+) -> bool {
+    let Some(filters) = filters else {
+        return true;
+    };
+    let state = pull_request.state.to_ascii_uppercase();
+    let is_draft = pull_request.draft.unwrap_or(false);
+    exact_state_matches(
+        InboxSource::GithubPr,
+        filters.state,
+        &state,
+        pull_request.merged,
+    ) && exact_draft_matches(filters.draft, is_draft)
+        && exact_labels_match(filters.labels.as_deref(), &pull_request.labels)
+        && exact_pull_request_scopes_match(login, filters.scope.as_deref(), pull_request)
+}
+
+fn exact_state_matches(
+    source: InboxSource,
+    state_filter: Option<InboxStateFilter>,
+    state: &str,
+    merged: bool,
+) -> bool {
+    match (source, state_filter) {
+        (_, None | Some(InboxStateFilter::All)) => true,
+        (InboxSource::GithubIssue, Some(InboxStateFilter::Open)) => state == "OPEN",
+        (InboxSource::GithubIssue, Some(InboxStateFilter::Closed)) => state == "CLOSED",
+        (InboxSource::GithubPr, Some(InboxStateFilter::Open)) => state == "OPEN" && !merged,
+        (InboxSource::GithubPr, Some(InboxStateFilter::Closed)) => state == "CLOSED" && !merged,
+        (InboxSource::GithubPr, Some(InboxStateFilter::Merged)) => merged,
+        _ => false,
+    }
+}
+
+fn exact_draft_matches(draft_filter: Option<InboxDraftFilter>, is_draft: bool) -> bool {
+    match draft_filter {
+        Some(InboxDraftFilter::Exclude) => !is_draft,
+        Some(InboxDraftFilter::Only) => is_draft,
+        Some(InboxDraftFilter::Include) | None => true,
+    }
+}
+
+fn exact_labels_match(labels_filter: Option<&str>, labels: &[GithubRestLabel]) -> bool {
+    let Some(labels_filter) = labels_filter else {
+        return true;
+    };
+    let required = labels_filter
+        .split(',')
+        .filter_map(|label| {
+            let label = label.trim();
+            (!label.is_empty()).then(|| label.to_ascii_lowercase())
+        })
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        return true;
+    }
+    let present = labels
+        .iter()
+        .map(|label| label.name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    required.iter().all(|label| present.contains(label))
+}
+
+fn exact_scope_filters_match<F>(
+    scope_filters: Option<&[InboxScopeFilter]>,
+    mut matches_scope: F,
+) -> bool
+where
+    F: FnMut(InboxScopeFilter) -> bool,
+{
+    let Some(scope_filters) = scope_filters else {
+        return true;
+    };
+    if scope_filters.is_empty() {
+        return true;
+    }
+    scope_filters
+        .iter()
+        .copied()
+        .any(|scope| matches!(scope, InboxScopeFilter::All) || matches_scope(scope))
+}
+
+fn exact_issue_scopes_match(
+    login: &str,
+    scope_filters: Option<&[InboxScopeFilter]>,
+    issue: &IssueRestResponse,
+) -> bool {
+    exact_scope_filters_match(scope_filters, |scope| match scope {
+        InboxScopeFilter::Assigned | InboxScopeFilter::Assignee => issue
+            .assignees
+            .iter()
+            .any(|user| user.login.eq_ignore_ascii_case(login)),
+        InboxScopeFilter::Created | InboxScopeFilter::Author => issue
+            .user
+            .as_ref()
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(login)),
+        // The issue REST payload proves author/assignee but not every
+        // `involves:@me` case (comments, mentions, review activity). For an
+        // exact pasted URL, avoid a false-empty result when the active scope
+        // depends on those search-only relationships.
+        InboxScopeFilter::Involves | InboxScopeFilter::Mentioned | InboxScopeFilter::Mentions => {
+            true
+        }
+        InboxScopeFilter::ReviewRequested
+        | InboxScopeFilter::ReviewedBy
+        | InboxScopeFilter::All => false,
+    })
+}
+
+fn exact_pull_request_scopes_match(
+    login: &str,
+    scope_filters: Option<&[InboxScopeFilter]>,
+    pull_request: &PullRequestRestResponse,
+) -> bool {
+    exact_scope_filters_match(scope_filters, |scope| match scope {
+        InboxScopeFilter::Author | InboxScopeFilter::Created => pull_request
+            .user
+            .as_ref()
+            .is_some_and(|user| user.login.eq_ignore_ascii_case(login)),
+        InboxScopeFilter::Assignee | InboxScopeFilter::Assigned => pull_request
+            .assignees
+            .iter()
+            .any(|user| user.login.eq_ignore_ascii_case(login)),
+        InboxScopeFilter::ReviewRequested => pull_request
+            .requested_reviewers
+            .iter()
+            .any(|user| user.login.eq_ignore_ascii_case(login)),
+        // The PR REST payload does not include all search relationships for
+        // `involves:@me`, mentions, or reviews by the user. Enforcing those
+        // here would hide exact pasted URLs that normal GitHub search finds.
+        InboxScopeFilter::Involves
+        | InboxScopeFilter::Mentioned
+        | InboxScopeFilter::Mentions
+        | InboxScopeFilter::ReviewedBy => true,
+        InboxScopeFilter::All => true,
+    })
+}
+
+fn list_exact_issue_pr_reference(
+    login: &str,
+    toggles: InboxToggles,
+    repo_filter: Option<&str>,
+    filters: Option<&InboxFilters>,
+    reference: ExactIssuePrReference,
+) -> Result<InboxPage> {
+    if repo_filters_exact_reference(repo_filter, &reference.repo_with_owner) {
+        return Ok(InboxPage {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    }
+
+    let item = match reference.source {
+        InboxSource::GithubIssue if toggles.issues => {
+            fetch_exact_issue_item(login, &reference, filters)?
+        }
+        InboxSource::GithubPr if toggles.prs => {
+            fetch_exact_pull_request_item(login, &reference, filters)?
+        }
+        _ => None,
+    };
+
+    Ok(InboxPage {
+        items: item.into_iter().collect(),
+        next_cursor: None,
+    })
+}
+
+fn fetch_exact_pull_request_item(
+    login: &str,
+    reference: &ExactIssuePrReference,
+    filters: Option<&InboxFilters>,
+) -> Result<Option<InboxItem>> {
+    let path = format!(
+        "/repos/{}/{}/pulls/{}",
+        reference.owner, reference.repo, reference.number
+    );
+    let Some(stdout) = run_github_api_allow_not_found(login, &path, "GitHub PR search result")?
+    else {
+        return Ok(None);
+    };
+    let response = serde_json::from_str::<PullRequestRestResponse>(&stdout)
+        .with_context(|| "Failed to decode GitHub PR search result".to_string())?;
+    let state = response.state.to_ascii_uppercase();
+    if !exact_pull_request_matches_filters(login, &response, filters) {
+        return Ok(None);
+    }
+    Ok(Some(InboxItem {
+        id: format!("github_pr:{}", response.node_id),
+        source: InboxSource::GithubPr,
+        external_id: format!("{}#{}", reference.repo_with_owner, reference.number),
+        external_url: response.html_url,
+        title: response.title,
+        subtitle: Some(reference.repo_with_owner.clone()),
+        state: Some(pr_state(
+            &state,
+            response.draft.unwrap_or(false),
+            response.merged,
+        )),
+        last_activity_at: response
+            .updated_at
+            .as_deref()
+            .and_then(parse_iso8601_to_ms)
+            .unwrap_or(0),
+    }))
+}
+
+fn fetch_exact_issue_item(
+    login: &str,
+    reference: &ExactIssuePrReference,
+    filters: Option<&InboxFilters>,
+) -> Result<Option<InboxItem>> {
+    let path = format!(
+        "/repos/{}/{}/issues/{}",
+        reference.owner, reference.repo, reference.number
+    );
+    let Some(stdout) = run_github_api_allow_not_found(login, &path, "GitHub issue search result")?
+    else {
+        return Ok(None);
+    };
+    let response = serde_json::from_str::<IssueRestResponse>(&stdout)
+        .with_context(|| "Failed to decode GitHub issue search result".to_string())?;
+    let state = response.state.to_ascii_uppercase();
+    let state_reason = response
+        .state_reason
+        .as_deref()
+        .map(str::to_ascii_uppercase);
+    if !exact_issue_matches_filters(login, &response, filters) {
+        return Ok(None);
+    }
+    Ok(Some(InboxItem {
+        id: format!("github_issue:{}", response.node_id),
+        source: InboxSource::GithubIssue,
+        external_id: format!("{}#{}", reference.repo_with_owner, reference.number),
+        external_url: response.html_url,
+        title: response.title,
+        subtitle: Some(reference.repo_with_owner.clone()),
+        state: Some(issue_state(&state, state_reason.as_deref())),
+        last_activity_at: response
+            .updated_at
+            .as_deref()
+            .and_then(parse_iso8601_to_ms)
+            .unwrap_or(0),
+    }))
 }
 
 fn parse_external_reference(external_id: &str) -> Result<(String, String, i64)> {
@@ -833,6 +1239,7 @@ fn parse_external_reference(external_id: &str) -> Result<(String, String, i64)> 
 
 #[derive(Debug, Deserialize)]
 struct PullRequestRestResponse {
+    node_id: String,
     html_url: String,
     title: String,
     body: Option<String>,
@@ -840,6 +1247,12 @@ struct PullRequestRestResponse {
     merged: bool,
     draft: Option<bool>,
     user: Option<PullRequestRestUser>,
+    #[serde(default)]
+    assignees: Vec<PullRequestRestUser>,
+    #[serde(default)]
+    requested_reviewers: Vec<PullRequestRestUser>,
+    #[serde(default)]
+    labels: Vec<GithubRestLabel>,
     base: Option<PullRequestRestRef>,
     head: Option<PullRequestRestRef>,
     created_at: Option<String>,
@@ -859,15 +1272,26 @@ struct PullRequestRestRef {
 
 #[derive(Debug, Deserialize)]
 struct IssueRestResponse {
+    node_id: String,
     html_url: String,
     title: String,
     body: Option<String>,
     state: String,
     state_reason: Option<String>,
     user: Option<PullRequestRestUser>,
+    #[serde(default)]
+    assignees: Vec<PullRequestRestUser>,
+    #[serde(default)]
+    labels: Vec<GithubRestLabel>,
+    pull_request: Option<serde_json::Value>,
     created_at: Option<String>,
     updated_at: Option<String>,
     closed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRestLabel {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1374,6 +1798,22 @@ fn parse_iso8601_to_ms(value: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
+    fn issue_only_toggles() -> InboxToggles {
+        InboxToggles {
+            issues: true,
+            prs: false,
+            discussions: false,
+        }
+    }
+
+    fn pr_only_toggles() -> InboxToggles {
+        InboxToggles {
+            issues: false,
+            prs: true,
+            discussions: false,
+        }
+    }
+
     #[test]
     fn cursor_roundtrip() {
         let original = MultiCursor {
@@ -1493,6 +1933,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_reference_repo_scope_is_case_insensitive() {
+        assert!(!repo_filters_exact_reference(
+            Some("dohooo/helmor"),
+            "Dohooo/Helmor",
+        ));
+        assert!(!repo_filters_exact_reference(
+            Some("Dohooo/Helmor"),
+            "dohooo/helmor",
+        ));
+        assert!(repo_filters_exact_reference(
+            Some("dohooo/helmor"),
+            "octocat/hello-world",
+        ));
+    }
+
+    #[test]
     fn search_qualifier_sanitizes_user_text() {
         assert_eq!(search_qualifier(None), "");
         assert_eq!(
@@ -1503,6 +1959,246 @@ mod tests {
             search_qualifier(Some("is:open \"quoted\"")),
             "is open quoted in:title,body ",
         );
+    }
+
+    #[test]
+    fn parse_exact_issue_pr_reference_accepts_github_links() {
+        let issue = parse_exact_issue_pr_reference(
+            "https://github.com/dohooo/helmor/issues/123?notification_referrer_id=1",
+            None,
+            pr_only_toggles(),
+        )
+        .unwrap();
+        assert_eq!(issue.repo_with_owner, "dohooo/helmor");
+        assert_eq!(issue.number, 123);
+        assert_eq!(issue.source, InboxSource::GithubIssue);
+
+        let pr = parse_exact_issue_pr_reference(
+            "github.com/dohooo/helmor/pull/456#discussion",
+            None,
+            issue_only_toggles(),
+        )
+        .unwrap();
+        assert_eq!(pr.repo_with_owner, "dohooo/helmor");
+        assert_eq!(pr.number, 456);
+        assert_eq!(pr.source, InboxSource::GithubPr);
+
+        let mixed_case = parse_exact_issue_pr_reference(
+            "HtTpS://GitHub.com/dohooo/helmor/issues/789",
+            None,
+            issue_only_toggles(),
+        )
+        .unwrap();
+        assert_eq!(mixed_case.repo_with_owner, "dohooo/helmor");
+        assert_eq!(mixed_case.number, 789);
+    }
+
+    #[test]
+    fn parse_exact_issue_pr_reference_accepts_numbers_when_unambiguous() {
+        let repo_number =
+            parse_exact_issue_pr_reference("dohooo/helmor#123", None, pr_only_toggles()).unwrap();
+        assert_eq!(repo_number.repo_with_owner, "dohooo/helmor");
+        assert_eq!(repo_number.number, 123);
+        assert_eq!(repo_number.source, InboxSource::GithubPr);
+
+        let hash_number =
+            parse_exact_issue_pr_reference("#456", Some("dohooo/helmor"), issue_only_toggles())
+                .unwrap();
+        assert_eq!(hash_number.repo_with_owner, "dohooo/helmor");
+        assert_eq!(hash_number.number, 456);
+        assert_eq!(hash_number.source, InboxSource::GithubIssue);
+
+        let plain_number =
+            parse_exact_issue_pr_reference("789", Some("dohooo/helmor"), issue_only_toggles())
+                .unwrap();
+        assert_eq!(plain_number.repo_with_owner, "dohooo/helmor");
+        assert_eq!(plain_number.number, 789);
+        assert_eq!(plain_number.source, InboxSource::GithubIssue);
+    }
+
+    #[test]
+    fn parse_exact_issue_pr_reference_rejects_non_exact_search() {
+        assert!(parse_exact_issue_pr_reference("123", None, issue_only_toggles()).is_none());
+        assert!(parse_exact_issue_pr_reference(
+            "123",
+            Some("dohooo/helmor"),
+            InboxToggles {
+                issues: true,
+                prs: true,
+                discussions: false,
+            },
+        )
+        .is_none());
+        assert!(parse_exact_issue_pr_reference(
+            "https://github.com/dohooo/helmor",
+            None,
+            issue_only_toggles()
+        )
+        .is_none());
+        assert!(parse_exact_issue_pr_reference(
+            "https://github.com/dohooo/helmor/discussions/123",
+            None,
+            issue_only_toggles()
+        )
+        .is_none());
+        assert!(parse_exact_issue_pr_reference(
+            "https://github.com/dohooo/helmor/issues/not-a-number",
+            None,
+            issue_only_toggles()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn exact_filters_reject_items_outside_active_state_or_draft() {
+        assert!(!exact_state_matches(
+            InboxSource::GithubIssue,
+            Some(InboxStateFilter::Open),
+            "CLOSED",
+            false,
+        ));
+        assert!(!exact_state_matches(
+            InboxSource::GithubPr,
+            Some(InboxStateFilter::Closed),
+            "CLOSED",
+            true,
+        ));
+        assert!(!exact_draft_matches(Some(InboxDraftFilter::Exclude), true));
+        assert!(exact_draft_matches(Some(InboxDraftFilter::Only), true));
+    }
+
+    #[test]
+    fn exact_filters_reject_items_outside_active_labels_or_scope() {
+        let labels = vec![
+            GithubRestLabel {
+                name: "bug".to_string(),
+            },
+            GithubRestLabel {
+                name: "area:ui".to_string(),
+            },
+        ];
+        assert!(exact_labels_match(Some("bug, area:ui"), &labels));
+        assert!(!exact_labels_match(Some("bug, backend"), &labels));
+
+        let issue = IssueRestResponse {
+            node_id: "I_kw".to_string(),
+            html_url: "https://github.com/dohooo/helmor/issues/1".to_string(),
+            title: "Issue".to_string(),
+            body: None,
+            state: "open".to_string(),
+            state_reason: None,
+            user: Some(PullRequestRestUser {
+                login: "dohooo".to_string(),
+            }),
+            assignees: Vec::new(),
+            labels,
+            pull_request: None,
+            created_at: None,
+            updated_at: None,
+            closed_at: None,
+        };
+        assert!(exact_issue_scopes_match(
+            "dohooo",
+            Some(&[InboxScopeFilter::Created]),
+            &issue,
+        ));
+        assert!(!exact_issue_scopes_match(
+            "octocat",
+            Some(&[InboxScopeFilter::Created]),
+            &issue,
+        ));
+        assert!(exact_issue_scopes_match(
+            "octocat",
+            Some(&[InboxScopeFilter::Involves]),
+            &issue,
+        ));
+        assert!(exact_issue_scopes_match(
+            "octocat",
+            Some(&[InboxScopeFilter::Mentioned]),
+            &issue,
+        ));
+
+        let pull_request = PullRequestRestResponse {
+            node_id: "PR_kw".to_string(),
+            html_url: "https://github.com/dohooo/helmor/pull/2".to_string(),
+            title: "PR".to_string(),
+            body: None,
+            state: "open".to_string(),
+            merged: false,
+            draft: Some(false),
+            user: Some(PullRequestRestUser {
+                login: "octocat".to_string(),
+            }),
+            assignees: Vec::new(),
+            requested_reviewers: vec![PullRequestRestUser {
+                login: "dohooo".to_string(),
+            }],
+            labels: Vec::new(),
+            base: None,
+            head: None,
+            created_at: None,
+            updated_at: None,
+        };
+        assert!(exact_pull_request_scopes_match(
+            "dohooo",
+            Some(&[InboxScopeFilter::ReviewRequested]),
+            &pull_request,
+        ));
+        assert!(!exact_pull_request_scopes_match(
+            "dohooo",
+            Some(&[InboxScopeFilter::Author]),
+            &pull_request,
+        ));
+        assert!(exact_pull_request_scopes_match(
+            "dohooo",
+            Some(&[InboxScopeFilter::ReviewedBy]),
+            &pull_request,
+        ));
+        assert!(exact_pull_request_scopes_match(
+            "octocat",
+            Some(&[InboxScopeFilter::Involves]),
+            &pull_request,
+        ));
+    }
+
+    #[test]
+    fn exact_issue_filter_rejects_pull_request_payloads() {
+        let pull_request_as_issue = IssueRestResponse {
+            node_id: "PR_kw".to_string(),
+            html_url: "https://github.com/dohooo/helmor/pull/487".to_string(),
+            title: "PR".to_string(),
+            body: None,
+            state: "open".to_string(),
+            state_reason: None,
+            user: None,
+            assignees: Vec::new(),
+            labels: Vec::new(),
+            pull_request: Some(serde_json::json!({
+                "url": "https://api.github.com/repos/dohooo/helmor/pulls/487"
+            })),
+            created_at: None,
+            updated_at: None,
+            closed_at: None,
+        };
+
+        assert!(exact_issue_payload_is_pull_request(&pull_request_as_issue));
+        assert!(!exact_issue_matches_filters(
+            "dohooo",
+            &pull_request_as_issue,
+            None
+        ));
+    }
+
+    #[test]
+    fn exact_lookup_treats_gh_404_as_empty() {
+        let output = CommandOutput {
+            stdout: String::new(),
+            stderr: "gh: Not Found (HTTP 404)".to_string(),
+            success: false,
+            status: Some(1),
+        };
+
+        assert!(looks_like_not_found(&output, &command_detail(&output)));
     }
 
     #[test]
