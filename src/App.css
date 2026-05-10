@@ -774,35 +774,6 @@ body {
 	background: var(--workspace-sidebar-selected-bg);
 }
 
-/*
- * Smooth row insertion in the workspaces sidebar.
- *
- * The virtualizer positions every item via `transform: translateY(start)`.
- * When a new workspace is inserted, existing rows keep their stable React
- * keys but receive a new `start`, so a transform transition is enough to
- * make them slide down. The transition is gated on a data attribute that
- * only flips on briefly while a recent insertion is animating, which keeps
- * unrelated interactions (scroll recycling, expand/collapse, reorder by
- * status change) snapping as before.
- */
-[data-workspace-list-animating="true"] [data-workspace-row-virtual] {
-	transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@keyframes workspace-row-insert-highlight {
-	0%,
-	18% {
-		background-color: var(--workspace-sidebar-selected-bg);
-	}
-	100% {
-		background-color: transparent;
-	}
-}
-
-[data-workspace-row-new="true"] [data-workspace-row-id] {
-	animation: workspace-row-insert-highlight 1100ms ease-out;
-}
-
 /* Streamdown theme overrides — minimal, no !important */
 .conversation-streamdown {
 	color: var(--conversation-body-foreground);

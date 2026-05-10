@@ -182,71 +182,127 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		writeStoredSectionOpenState(sectionOpenState);
 	}, [sectionOpenState]);
 
-	// ── Highlight + slide animation for newly added workspaces ────────
-	// Track every workspace ID we've already seen. When `groups`/`archivedRows`
-	// produce IDs that weren't there before, flag them as "new" for ~1.3s so
-	// the wrapper around their virtual row gets a brief highlight animation
-	// AND the scroll container opts into a transform transition (which makes
-	// the rows below the insertion point slide down smoothly). The transition
-	// is scoped to this short window so unrelated re-layouts (section
-	// collapse/expand, status-change reorders) keep their existing snap
-	// behavior — minimum surface for regressions.
+	// ── Insertion animation: FLIP slide for new workspaces ─────────────
+	//
+	// Why FLIP: the virtualizer positions every row via `transform:
+	// translateY(start)`. When a new workspace appears, React commits the
+	// new `start` synchronously — by the time any `useEffect` could opt
+	// into a `transition`, the new transform is already painted, so a
+	// CSS transition has nothing to animate from. FLIP fixes this by
+	// playing the animation *from* the previous position to the new one
+	// in `useLayoutEffect`, which runs after commit but BEFORE paint.
+	//
+	// Mechanics: we keep a ref of last-render `start` values keyed by
+	// virtual key. After every render we diff: if (a) at least one row's
+	// id is brand-new and (b) some visible rows shifted, we replay each
+	// shifted wrapper's translateY from old → new via Web Animations API.
+	// `fill: 'none'` means the animation hands the property back to the
+	// inline style on completion — no jump, no permanent override.
+	//
+	// Scoping: we only run when a NEW id appears. Section collapse/expand,
+	// status reorders, and scroll recycling don't touch the animation
+	// path — those keep their original snap behavior.
 	const seenWorkspaceIdsRef = useRef<Set<string> | null>(null);
-	const newWorkspaceTimersRef = useRef<Map<string, number>>(new Map());
-	const [newWorkspaceIds, setNewWorkspaceIds] = useState<Set<string>>(
-		() => new Set(),
-	);
+	const prevVirtualStartsRef = useRef<Map<string, number>>(new Map());
+	const wrapperRefsByKey = useRef<Map<string, HTMLDivElement>>(new Map());
+	const flipAnimationsRef = useRef<Map<string, Animation>>(new Map());
 
-	useEffect(() => {
-		const allIds = new Set<string>();
+	const allWorkspaceIds = useMemo(() => {
+		const ids = new Set<string>();
 		for (const group of groups) {
-			for (const row of group.rows) allIds.add(row.id);
+			for (const row of group.rows) ids.add(row.id);
 		}
-		for (const row of archivedRows) allIds.add(row.id);
+		for (const row of archivedRows) ids.add(row.id);
+		return ids;
+	}, [groups, archivedRows]);
+
+	// Drives FLIP. `useLayoutEffect` so the animation is queued on the same
+	// frame React commits the new transforms — no flicker.
+	// No deps: must run on every render so prev-starts stays in sync with
+	// scroll-driven recycling. The body is O(visible rows) and short-circuits
+	// to a single Map rebuild when nothing changed.
+	useLayoutEffect(() => {
+		const visibleItems = virtualizer.getVirtualItems();
+		const nextStarts = new Map<string, number>();
+		for (const v of visibleItems) {
+			nextStarts.set(String(v.key), v.start);
+		}
 
 		const seen = seenWorkspaceIdsRef.current;
-		// First mount, or first non-empty data after an empty state: just
-		// record the baseline. We never want to flash every row on cold start.
-		if (seen === null || (seen.size === 0 && allIds.size > 0)) {
-			seenWorkspaceIdsRef.current = allIds;
+		const isFirstMeaningfulRender =
+			seen === null || (seen.size === 0 && allWorkspaceIds.size > 0);
+
+		if (isFirstMeaningfulRender) {
+			seenWorkspaceIdsRef.current = allWorkspaceIds;
+			prevVirtualStartsRef.current = nextStarts;
 			return;
 		}
 
 		const justAdded: string[] = [];
-		for (const id of allIds) {
+		for (const id of allWorkspaceIds) {
 			if (!seen.has(id)) justAdded.push(id);
 		}
-		seenWorkspaceIdsRef.current = allIds;
+		seenWorkspaceIdsRef.current = allWorkspaceIds;
 
-		if (justAdded.length === 0) return;
-
-		setNewWorkspaceIds((prev) => {
-			const next = new Set(prev);
-			for (const id of justAdded) next.add(id);
-			return next;
-		});
-
-		for (const id of justAdded) {
-			const existing = newWorkspaceTimersRef.current.get(id);
-			if (existing !== undefined) window.clearTimeout(existing);
-			const timer = window.setTimeout(() => {
-				newWorkspaceTimersRef.current.delete(id);
-				setNewWorkspaceIds((prev) => {
-					if (!prev.has(id)) return prev;
-					const next = new Set(prev);
-					next.delete(id);
-					return next;
-				});
-			}, 1300);
-			newWorkspaceTimersRef.current.set(id, timer);
+		if (justAdded.length === 0) {
+			prevVirtualStartsRef.current = nextStarts;
+			return;
 		}
-	}, [groups, archivedRows]);
+
+		// Slide every visible wrapper that shifted, from old → new start.
+		// Wrapped in try/catch so that any environment without full Web
+		// Animations API support (e.g. jsdom in tests) silently degrades
+		// to the existing snap behavior instead of breaking the commit.
+		const prevStarts = prevVirtualStartsRef.current;
+		for (const v of visibleItems) {
+			const key = String(v.key);
+			const prevStart = prevStarts.get(key);
+			if (prevStart === undefined) continue;
+			const delta = prevStart - v.start;
+			if (Math.abs(delta) < 0.5) continue;
+			const node = wrapperRefsByKey.current.get(key);
+			if (!node || typeof node.animate !== "function") continue;
+
+			try {
+				// Cancel any in-flight FLIP on this wrapper so back-to-back
+				// inserts don't double-animate from a stale origin.
+				const inFlight = flipAnimationsRef.current.get(key);
+				if (inFlight) inFlight.cancel();
+
+				const animation = node.animate(
+					[
+						{ transform: `translateY(${prevStart}px)` },
+						{ transform: `translateY(${v.start}px)` },
+					],
+					{
+						duration: 240,
+						easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+						fill: "none",
+					},
+				);
+				flipAnimationsRef.current.set(key, animation);
+				animation.finished
+					.catch(() => {
+						/* cancelled — ignore */
+					})
+					.finally(() => {
+						if (flipAnimationsRef.current.get(key) === animation) {
+							flipAnimationsRef.current.delete(key);
+						}
+					});
+			} catch {
+				/* WAAPI unavailable — fall back to snap. */
+			}
+		}
+
+		prevVirtualStartsRef.current = nextStarts;
+	});
 
 	useEffect(() => {
-		const timers = newWorkspaceTimersRef.current;
+		const animations = flipAnimationsRef.current;
 		return () => {
-			for (const timer of timers.values()) window.clearTimeout(timer);
-			timers.clear();
+			for (const a of animations.values()) a.cancel();
+			animations.clear();
 		};
 	}, []);
 
@@ -511,12 +567,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			}
 
 			// kind === "row"
-			const isNew = newWorkspaceIds.has(item.row.id);
 			return (
-				<div
-					className="pl-2"
-					data-workspace-row-new={isNew ? "true" : undefined}
-				>
+				<div className="pl-2">
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
@@ -567,7 +619,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,
 			creatingWorkspaceRepoId,
-			newWorkspaceIds,
 		],
 	);
 
@@ -714,9 +765,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			<div
 				ref={scrollContainerRef}
 				data-slot="workspace-groups-scroll"
-				data-workspace-list-animating={
-					newWorkspaceIds.size > 0 ? "true" : undefined
-				}
 				className="scrollbar-stable relative mt-2 min-h-0 flex-1 overflow-y-auto pr-1 pl-2 [scrollbar-width:thin]"
 			>
 				<div
@@ -726,22 +774,31 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						position: "relative",
 					}}
 				>
-					{virtualizer.getVirtualItems().map((vItem) => (
-						<div
-							key={vItem.key}
-							data-workspace-row-virtual=""
-							style={{
-								position: "absolute",
-								top: 0,
-								left: 0,
-								width: "100%",
-								height: `${vItem.size}px`,
-								transform: `translateY(${vItem.start}px)`,
-							}}
-						>
-							{renderItem(flatItems[vItem.index])}
-						</div>
-					))}
+					{virtualizer.getVirtualItems().map((vItem) => {
+						const key = String(vItem.key);
+						return (
+							<div
+								key={vItem.key}
+								ref={(node) => {
+									if (node === null) {
+										wrapperRefsByKey.current.delete(key);
+									} else {
+										wrapperRefsByKey.current.set(key, node);
+									}
+								}}
+								style={{
+									position: "absolute",
+									top: 0,
+									left: 0,
+									width: "100%",
+									height: `${vItem.size}px`,
+									transform: `translateY(${vItem.start}px)`,
+								}}
+							>
+								{renderItem(flatItems[vItem.index])}
+							</div>
+						);
+					})}
 				</div>
 			</div>
 		</div>
