@@ -35,6 +35,7 @@ Open Helmor, Import Helmor, Ask Helmor:
 > _"How do I contribute to Helmor?"_
 
 That's the guide.
+If you're contributing from the terminal, the repo workflow lives in [AGENTS.md](./AGENTS.md).
 
 ## License
 
