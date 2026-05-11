@@ -47,6 +47,7 @@ import {
 	type SessionThreadSnapshot,
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -547,11 +548,8 @@ export function useConversationStreaming({
 
 	const invalidateConversationQueries = useCallback(
 		async (workspaceId: string | null, sessionId: string | null) => {
-			const invalidations: Promise<unknown>[] = [
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-			];
+			requestSidebarReconcile(queryClient);
+			const invalidations: Promise<unknown>[] = [];
 
 			if (workspaceId) {
 				invalidations.push(
@@ -970,10 +968,8 @@ export function useConversationStreaming({
 						titleSeed,
 					).then((result) => {
 						if (result?.title || result?.branchRenamed) {
+							requestSidebarReconcile(queryClient);
 							void Promise.all([
-								queryClient.invalidateQueries({
-									queryKey: helmorQueryKeys.workspaceGroups,
-								}),
 								targetWorkspaceId
 									? queryClient.invalidateQueries({
 											queryKey:

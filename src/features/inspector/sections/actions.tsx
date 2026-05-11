@@ -46,6 +46,7 @@ import {
 // for the review/PR rows (MR vs PR wording). Forge onboarding lives in
 // `GitSectionHeader` — see the top-right of the Changes section.
 import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import {
 	INSPECTOR_SECTION_HEADER_CLASS,
@@ -284,6 +285,7 @@ export function ActionsSection({
 					: "Unable to pull target updates.";
 			toast.error(message);
 		} finally {
+			requestSidebarReconcile(queryClient);
 			await Promise.all([
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
@@ -296,9 +298,6 @@ export function ActionsSection({
 				}),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
 			]);

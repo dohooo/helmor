@@ -87,6 +87,7 @@ import {
 	saveSettings,
 	useSettings,
 } from "./lib/settings";
+import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
 import { summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
@@ -834,15 +835,13 @@ function AppShell({
 			session,
 			activateAdjacent: true,
 			onSessionsChanged: () => {
+				requestSidebarReconcile(queryClient);
 				void Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 					}),
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-					}),
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
 					}),
 					queryClient.invalidateQueries({
 						queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
@@ -876,6 +875,7 @@ function AppShell({
 			});
 			handleSelectSession(sessionId);
 
+			requestSidebarReconcile(queryClient);
 			void Promise.all([
 				...(cachedWorkspace
 					? [
@@ -892,9 +892,6 @@ function AppShell({
 				}),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 			]);
 		} catch (error) {

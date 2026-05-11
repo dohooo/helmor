@@ -13,7 +13,11 @@ import type {
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
-import { resetSidebarMutationGate } from "@/lib/sidebar-mutation-gate";
+import {
+	isSidebarMutationInFlight,
+	requestSidebarReconcile,
+	resetSidebarMutationGate,
+} from "@/lib/sidebar-mutation-gate";
 import { useWorkspacesSidebarController } from "./use-controller";
 
 const apiMocks = vi.hoisted(() => {
@@ -1236,5 +1240,519 @@ describe("useWorkspacesSidebarController archive flow", () => {
 
 		expect(result.current.archivedRows).toHaveLength(0);
 		expect(onSelectWorkspace).toHaveBeenCalledWith("ws-2");
+	});
+});
+
+// These tests pin down the cross-flow contract between handlers and the
+// sidebar-mutation-gate. They cover the race that produced the
+// unarchive-flicker bug and the archive/pin races we hit during the
+// App.tsx refactor: while a sidebar mutation is in flight, any external
+// `requestSidebarReconcile` (the only legal way for outside code to
+// invalidate sidebar lists) must be dropped — otherwise refetching the
+// still-pre-mutation server state clobbers the optimistic cache.
+describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
+	beforeEach(() => {
+		resetSidebarMutationGate();
+		vi.clearAllMocks();
+		apiMocks.loadWorkspaceGroups.mockResolvedValue(workspaceGroups);
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue([]);
+		apiMocks.listRepositories.mockResolvedValue([]);
+		apiMocks.loadAddRepositoryDefaults.mockResolvedValue({
+			lastCloneDirectory: null,
+		});
+		apiMocks.loadWorkspaceDetail.mockImplementation(async (id: string) =>
+			makeWorkspaceDetail(id),
+		);
+		apiMocks.loadWorkspaceSessions.mockResolvedValue(emptySessions);
+		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.prepareArchiveWorkspace.mockImplementation(
+			async (
+				workspaceId: string,
+			): Promise<PrepareArchiveWorkspaceResponse> => ({
+				workspaceId,
+			}),
+		);
+		apiMocks.permanentlyDeleteWorkspace.mockResolvedValue(undefined);
+		apiMocks.startArchiveWorkspace.mockResolvedValue(undefined);
+		apiMocks.validateRestoreWorkspace.mockResolvedValue({
+			targetBranchConflict: null,
+		});
+		apiMocks.restoreWorkspace.mockResolvedValue({
+			restoredWorkspaceId: "ws-1",
+			restoredState: "ready",
+			selectedWorkspaceId: "ws-1",
+			branchRename: null,
+			restoredFromTargetBranch: null,
+		});
+		apiMocks.pinWorkspace.mockResolvedValue(undefined);
+		apiMocks.unpinWorkspace.mockResolvedValue(undefined);
+	});
+
+	afterEach(() => {
+		resetSidebarMutationGate();
+		vi.clearAllMocks();
+	});
+
+	function archivedSummariesWith(id: string): WorkspaceSummary[] {
+		return [makeArchivedSummary(id)];
+	}
+
+	it("archive in flight: requestSidebarReconcile from elsewhere is dropped", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		// `startArchiveWorkspace` is fire-and-forget: it resolves once the
+		// worker is launched but the row is only really archived when
+		// `emitArchiveSucceeded` fires. Hold both open to keep the gate
+		// alive for the duration of the assertion.
+		let resolveStart: (() => void) | null = null;
+		apiMocks.startArchiveWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-1",
+			),
+		);
+
+		const loadGroupsCallsBefore =
+			apiMocks.loadWorkspaceGroups.mock.calls.length;
+		const loadArchivedCallsBefore =
+			apiMocks.loadArchivedWorkspaces.mock.calls.length;
+
+		// External actor (mark-read effect, ui-sync-bridge fan-out) asks
+		// for a reconcile while the archive worker is still running.
+		// Must be dropped — refetching here would return the
+		// pre-archive snapshot from the server and clobber the move.
+		act(() => {
+			requestSidebarReconcile(queryClient);
+		});
+
+		// Give React Query a beat to fire the refetch if the gate were
+		// broken; the assertion below would then catch the extra call.
+		await new Promise((r) => setTimeout(r, 20));
+
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(
+			loadGroupsCallsBefore,
+		);
+		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(
+			loadArchivedCallsBefore,
+		);
+		expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-2",
+		]);
+		expect(result.current.archivedRows.map((row) => row.id)).toContain("ws-1");
+
+		// Cleanup: let the worker resolve and fire the success event so
+		// the gate releases. Without this the counter leaks into the
+		// next test (and `resetSidebarMutationGate` papers over it).
+		act(() => {
+			resolveStart?.();
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+		});
+	});
+
+	it("restore in flight: requestSidebarReconcile is dropped (the unarchive-flicker case)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		// Hold restore in flight so the gate stays acquired.
+		let resolveRestore:
+			| ((value: {
+					restoredWorkspaceId: string;
+					restoredState: string;
+					selectedWorkspaceId: string;
+					branchRename: null;
+					restoredFromTargetBranch: null;
+			  }) => void)
+			| null = null;
+		apiMocks.restoreWorkspace.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveRestore = resolve;
+				}),
+		);
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue(
+			archivedSummariesWith("ws-archived"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() =>
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-archived",
+			),
+		);
+
+		act(() => {
+			result.current.handleRestoreWorkspace("ws-archived");
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.restoreWorkspace).toHaveBeenCalledWith(
+				"ws-archived",
+				undefined,
+			),
+		);
+		await waitFor(() =>
+			expect(
+				result.current.groups.flatMap((g) => g.rows.map((r) => r.id)),
+			).toContain("ws-archived"),
+		);
+
+		const loadGroupsCallsBefore =
+			apiMocks.loadWorkspaceGroups.mock.calls.length;
+		const loadArchivedCallsBefore =
+			apiMocks.loadArchivedWorkspaces.mock.calls.length;
+
+		// External reconcile request mid-restore. Must NOT refetch — the
+		// git-watcher publishing `workspaceGitStateChanged` (because the
+		// worktree just (re)appeared on disk) is the production source
+		// of this race.
+		act(() => {
+			requestSidebarReconcile(queryClient);
+		});
+		await new Promise((r) => setTimeout(r, 20));
+
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(
+			loadGroupsCallsBefore,
+		);
+		expect(apiMocks.loadArchivedWorkspaces).toHaveBeenCalledTimes(
+			loadArchivedCallsBefore,
+		);
+		expect(
+			result.current.groups.flatMap((g) => g.rows.map((r) => r.id)),
+		).toContain("ws-archived");
+
+		act(() => {
+			resolveRestore?.({
+				restoredWorkspaceId: "ws-archived",
+				restoredState: "ready",
+				selectedWorkspaceId: "ws-archived",
+				branchRename: null,
+				restoredFromTargetBranch: null,
+			});
+		});
+	});
+
+	it("pin in flight: requestSidebarReconcile is dropped", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let resolvePin: (() => void) | null = null;
+		apiMocks.pinWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolvePin = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			void result.current.handleTogglePin("ws-1", false);
+		});
+
+		await waitFor(() => expect(apiMocks.pinWorkspace).toHaveBeenCalled());
+
+		const loadGroupsCallsBefore =
+			apiMocks.loadWorkspaceGroups.mock.calls.length;
+
+		act(() => {
+			requestSidebarReconcile(queryClient);
+		});
+		await new Promise((r) => setTimeout(r, 20));
+
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(
+			loadGroupsCallsBefore,
+		);
+
+		act(() => {
+			resolvePin?.();
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
+	});
+
+	it("delete in flight: requestSidebarReconcile is dropped", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let resolveDelete: (() => void) | null = null;
+		apiMocks.permanentlyDeleteWorkspace.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveDelete = resolve;
+				}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleDeleteWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.permanentlyDeleteWorkspace).toHaveBeenCalled(),
+		);
+
+		const loadGroupsCallsBefore =
+			apiMocks.loadWorkspaceGroups.mock.calls.length;
+
+		act(() => {
+			requestSidebarReconcile(queryClient);
+		});
+		await new Promise((r) => setTimeout(r, 20));
+
+		expect(apiMocks.loadWorkspaceGroups).toHaveBeenCalledTimes(
+			loadGroupsCallsBefore,
+		);
+
+		act(() => {
+			resolveDelete?.();
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
+	});
+
+	it("archive prepare failure releases the gate (no leak)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.prepareArchiveWorkspace.mockRejectedValueOnce(
+			new Error("prepare boom"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(apiMocks.prepareArchiveWorkspace).toHaveBeenCalled(),
+		);
+		await waitFor(() =>
+			expect(result.current.archivingWorkspaceIds.has("ws-1")).toBe(false),
+		);
+		expect(isSidebarMutationInFlight()).toBe(false);
+	});
+
+	it("archive start failure releases the gate via rollback (no leak)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.startArchiveWorkspace.mockRejectedValueOnce(
+			new Error("worker boom"),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() =>
+			expect(result.current.archivingWorkspaceIds.has("ws-1")).toBe(false),
+		);
+		expect(isSidebarMutationInFlight()).toBe(false);
+	});
+
+	it("archive failure listener releases the gate (no leak)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		// startArchive resolves, but the backend later emits failure.
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(true));
+
+		act(() => {
+			apiMocks.emitArchiveFailed({
+				workspaceId: "ws-1",
+				code: "Unknown",
+				message: "archive worker exited",
+			});
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
+	});
+
+	it("pin failure releases the gate (no leak)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.pinWorkspace.mockRejectedValueOnce(new Error("pin boom"));
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		await act(async () => {
+			await result.current.handleTogglePin("ws-1", false);
+		});
+
+		expect(isSidebarMutationInFlight()).toBe(false);
+	});
+
+	it("restore failure releases the gate (no leak)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.loadArchivedWorkspaces.mockResolvedValue(
+			archivedSummariesWith("ws-archived"),
+		);
+		apiMocks.restoreWorkspace.mockRejectedValueOnce(new Error("restore boom"));
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() =>
+			expect(result.current.archivedRows.map((row) => row.id)).toContain(
+				"ws-archived",
+			),
+		);
+
+		act(() => {
+			result.current.handleRestoreWorkspace("ws-archived");
+		});
+
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
+	});
+
+	it("concurrent archives both keep the gate up until both finish", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		// Static three-row repo so we can archive two and check the
+		// gate stays held until both succeeded events fire.
+		apiMocks.loadWorkspaceGroups.mockResolvedValue([
+			{
+				...workspaceGroups[0],
+				rows: [
+					{ ...workspaceGroups[0].rows[0], id: "ws-a", title: "A" },
+					{ ...workspaceGroups[0].rows[0], id: "ws-b", title: "B" },
+					{ ...workspaceGroups[0].rows[0], id: "ws-c", title: "C" },
+				],
+			},
+		]);
+		apiMocks.startArchiveWorkspace.mockImplementation(
+			() => new Promise<void>(() => {}),
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-a",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(3));
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-a");
+			result.current.handleArchiveWorkspace("ws-b");
+		});
+
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(true));
+
+		// Releasing only one of the archives must NOT drop the gate yet.
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-a" });
+		});
+		await new Promise((r) => setTimeout(r, 20));
+		expect(isSidebarMutationInFlight()).toBe(true);
+
+		// Releasing the second one finally drops the gate.
+		act(() => {
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-b" });
+		});
+		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
 	});
 });

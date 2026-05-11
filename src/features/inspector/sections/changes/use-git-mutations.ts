@@ -14,6 +14,7 @@ import {
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 
@@ -158,10 +159,8 @@ export function useGitMutations({
 		try {
 			const result = await continueWorkspaceFromTargetBranch(workspaceId);
 			pushToast(`Workspace moved to ${result.branch}.`, "Continued", "default");
+			requestSidebarReconcile(queryClient);
 			await Promise.all([
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 				}),
