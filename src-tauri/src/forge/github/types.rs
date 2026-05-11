@@ -41,8 +41,14 @@ pub(super) struct PullRequestNode {
     pub title: String,
     pub merged: bool,
     /// True when head is in a fork. `pullRequests(headRefName:)` matches
-    /// branch name only, so we drop these to avoid mis-association.
+    /// branch name only, so fork PRs need owner checks before matching.
     pub is_cross_repository: bool,
+    pub head_repository_owner: Option<HeadRepositoryOwner>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct HeadRepositoryOwner {
+    pub login: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +91,7 @@ pub(super) struct ActionPullRequestNode {
     pub review_decision: Option<String>,
     pub mergeable: Option<String>,
     pub is_cross_repository: bool,
+    pub head_repository_owner: Option<HeadRepositoryOwner>,
     pub commits: ActionCommitConnection,
 }
 
