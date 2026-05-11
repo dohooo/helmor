@@ -27,8 +27,9 @@ function handleUiMutation(
 	switch (event.type) {
 		case "workspaceListChanged":
 			// Gate the sidebar-list invalidate so it skips while archive /
-			// restore / pin etc. is mid-flight (their `endSidebarMutation`
-			// will flush once they settle). Other queries are unaffected.
+			// restore / pin etc. is mid-flight (their `holdSidebarMutation`
+			// release will reconcile once they settle). Other queries are
+			// unaffected.
 			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				predicate: (query) =>
@@ -82,8 +83,8 @@ function handleUiMutation(
 		case "workspaceGitStateChanged":
 			// This is the event that fired during restore and clobbered the
 			// optimistic move from archived → active. Gate it so it sits
-			// out while the restore round-trip holds the gate, then
-			// reconciles via `endSidebarMutation`.
+			// out while the restore round-trip holds the gate; reconcile
+			// happens when the hold releases.
 			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),

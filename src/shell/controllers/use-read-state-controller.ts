@@ -20,6 +20,10 @@ import {
 } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { RECENTLY_CLOSED_SESSIONS_MAX } from "@/shell/constants";
+import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
 
 type NotifyFn = (opts: { title: string; body: string }) => void;
 
@@ -109,18 +113,12 @@ export function useReadStateController(
 
 	// Keep latest callbacks accessible inside effects without forcing them
 	// into the dep array (callers often pass inline arrows).
-	const onReopenSelectWorkspaceRef = useRef(onReopenSelectWorkspace);
-	const onReopenSelectSessionRef = useRef(onReopenSelectSession);
-	const getSelectedWorkspaceIdRef = useRef(getSelectedWorkspaceId);
-	const getSelectedSessionIdRef = useRef(getSelectedSessionId);
-	const notifyRef = useRef(notify);
-	const pushToastRef = useRef(pushToast);
-	onReopenSelectWorkspaceRef.current = onReopenSelectWorkspace;
-	onReopenSelectSessionRef.current = onReopenSelectSession;
-	getSelectedWorkspaceIdRef.current = getSelectedWorkspaceId;
-	getSelectedSessionIdRef.current = getSelectedSessionId;
-	notifyRef.current = notify;
-	pushToastRef.current = pushToast;
+	const onReopenSelectWorkspaceRef = useLatestRef(onReopenSelectWorkspace);
+	const onReopenSelectSessionRef = useLatestRef(onReopenSelectSession);
+	const getSelectedWorkspaceIdRef = useLatestRef(getSelectedWorkspaceId);
+	const getSelectedSessionIdRef = useLatestRef(getSelectedSessionId);
+	const notifyRef = useLatestRef(notify);
+	const pushToastRef = useLatestRef(pushToast);
 
 	useEffect(() => {
 		if (!displayedSessionId) {
@@ -369,29 +367,13 @@ export function useReadStateController(
 		],
 	);
 
-	const liveActions = {
+	const actions = useStableActions<ReadStateActions>({
 		onSessionCompleted,
 		onSessionAborted,
 		onInteractionSessionsChange,
 		onSessionHidden,
 		reopenClosedSession,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<ReadStateActions>(
-		() => ({
-			onSessionCompleted: (sessionId, workspaceId) =>
-				actionsRef.current.onSessionCompleted(sessionId, workspaceId),
-			onSessionAborted: (sessionId) =>
-				actionsRef.current.onSessionAborted(sessionId),
-			onInteractionSessionsChange: (nextMap, counts) =>
-				actionsRef.current.onInteractionSessionsChange(nextMap, counts),
-			onSessionHidden: (sessionId, workspaceId) =>
-				actionsRef.current.onSessionHidden(sessionId, workspaceId),
-			reopenClosedSession: () => actionsRef.current.reopenClosedSession(),
-		}),
-		[],
-	);
+	});
 
 	return { state, actions };
 }

@@ -22,23 +22,22 @@ import { helmorQueryKeys } from "./query-client";
 let pending = 0;
 
 /**
- * Acquire the gate before any optimistic write to sidebar lists. Pair
- * with `endSidebarMutation`. Prefer `holdSidebarMutation` (returns a
- * disposable) which can't leak the counter on early returns / throws.
+ * @internal — primitive used by `holdSidebarMutation` and
+ * `createScopedSidebarGate`, and by gate tests. Production code MUST
+ * NOT call this directly; use `holdSidebarMutation` so begin/end
+ * pairing is enforced even on early returns / throws.
  */
 export function beginSidebarMutation(): void {
 	pending += 1;
 }
 
 /**
- * Release the gate. When `queryClient` is supplied and the counter
- * reaches zero, sidebar lists are reconciled with the server (a single
- * pair of invalidates against `workspaceGroups` + `archivedWorkspaces`).
- *
- * The `queryClient` parameter is optional only for the deprecated
- * no-arg shape during the migration; new code MUST pass it so
- * reconcile happens automatically. Prefer `holdSidebarMutation` which
- * handles both sides of the pairing.
+ * @internal — see `beginSidebarMutation`. When `queryClient` is
+ * supplied and the counter reaches zero, sidebar lists are reconciled
+ * (a single pair of invalidates against `workspaceGroups` +
+ * `archivedWorkspaces`). The no-arg shape exists only so the counter
+ * can be decremented in test scenarios that don't care about
+ * reconcile.
  */
 export function endSidebarMutation(queryClient?: QueryClient): void {
 	pending = Math.max(0, pending - 1);
@@ -70,21 +69,41 @@ export function holdSidebarMutation(queryClient: QueryClient): () => void {
  * etc.) where `begin` happens on the IPC start and `end` waits for a
  * backend event correlating back to the same id — duplicate events or
  * end-before-begin must be safe.
+ *
+ * Always call `disposeAll()` from the owner's cleanup path (React
+ * `useEffect` return / unmount) so an in-flight mutation can't leak
+ * the module-level counter if the owner goes away before its backend
+ * event arrives. After dispose the gate is unusable.
  */
 export function createScopedSidebarGate(queryClient: QueryClient): {
 	begin: (id: string) => void;
 	end: (id: string) => void;
+	disposeAll: () => void;
 } {
 	const active = new Set<string>();
+	let disposed = false;
 	return {
 		begin(id) {
+			if (disposed) return;
 			if (active.has(id)) return;
 			active.add(id);
 			beginSidebarMutation();
 		},
 		end(id) {
+			if (disposed) return;
 			if (!active.delete(id)) return;
 			endSidebarMutation(queryClient);
+		},
+		disposeAll() {
+			if (disposed) return;
+			disposed = true;
+			// Release every outstanding hold the gate owns. The
+			// reconcile at counter==0 fires through the final
+			// `endSidebarMutation` call, exactly once.
+			for (const _ of active) {
+				endSidebarMutation(queryClient);
+			}
+			active.clear();
 		},
 	};
 }

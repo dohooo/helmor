@@ -4,8 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
-	beginSidebarMutation,
-	endSidebarMutation,
+	holdSidebarMutation,
 	resetSidebarMutationGate,
 } from "@/lib/sidebar-mutation-gate";
 import { useUiSyncBridge } from "./use-ui-sync-bridge";
@@ -267,7 +266,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "workspaceListChanged" },
 				invalidateQueries,
@@ -286,7 +285,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "workspaceChanged", workspaceId: "workspace-1" },
 				invalidateQueries,
@@ -305,7 +304,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "sessionListChanged", workspaceId: "workspace-1" },
 				invalidateQueries,
@@ -324,7 +323,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "workspaceGitStateChanged", workspaceId: "workspace-1" },
 				invalidateQueries,
@@ -343,7 +342,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "workspaceChangeRequestChanged", workspaceId: "workspace-1" },
 				invalidateQueries,
@@ -362,7 +361,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			fireAndAssertSidebarGated(
 				{ type: "repositoryChanged", repoId: "repo-1" },
 				invalidateQueries,
@@ -384,7 +383,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			holdSidebarMutation(queryClient);
 			act(() => {
 				capturedSubscription?.({
 					type: "workspaceGitStateChanged",
@@ -411,7 +410,7 @@ describe("useUiSyncBridge", () => {
 				}),
 			);
 
-			beginSidebarMutation();
+			const release = holdSidebarMutation(queryClient);
 			act(() => {
 				capturedSubscription?.({ type: "workspaceListChanged" });
 			});
@@ -420,8 +419,8 @@ describe("useUiSyncBridge", () => {
 				queryKey: helmorQueryKeys.workspaceGroups,
 			});
 
-			endSidebarMutation(queryClient);
-			// `end` itself reconciles; that single pair is the
+			release();
+			// `release` itself reconciles; that single pair is the
 			// post-mutation flush.
 			expect(invalidateQueries).toHaveBeenCalledWith({
 				queryKey: helmorQueryKeys.workspaceGroups,

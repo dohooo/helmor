@@ -28,6 +28,10 @@ import {
 	WORKSPACE_WARMUP_STEP_DELAY_MS,
 } from "@/shell/constants";
 import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
+import {
 	findAdjacentSessionId,
 	findAdjacentWorkspaceId,
 	flattenWorkspaceRows,
@@ -103,10 +107,8 @@ export function useSelectionController(
 
 	// Callbacks held by ref so AppShell can pass inline arrows without
 	// destabilising every downstream `useCallback`/`useMemo`.
-	const onWorkspaceSwitchedRef = useRef(deps.onWorkspaceSwitched);
-	const onStartOpenedRef = useRef(deps.onStartOpened);
-	onWorkspaceSwitchedRef.current = deps.onWorkspaceSwitched;
-	onStartOpenedRef.current = deps.onStartOpened;
+	const onWorkspaceSwitchedRef = useLatestRef(deps.onWorkspaceSwitched);
+	const onStartOpenedRef = useLatestRef(deps.onStartOpened);
 
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
@@ -582,9 +584,7 @@ export function useSelectionController(
 
 	// Stabilise the `actions` reference so downstream `useCallback`/`useMemo`
 	// hooks that close over it don't re-create on every controller render.
-	// The latest implementations live in a ref; the exported wrappers are
-	// frozen at mount time.
-	const liveActions = {
+	const actions = useStableActions<SelectionActions>({
 		selectWorkspace,
 		selectSession,
 		openStart,
@@ -595,28 +595,7 @@ export function useSelectionController(
 		rememberSessionSelection,
 		getSessionSelectionHistory,
 		getSnapshot,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<SelectionActions>(
-		() => ({
-			selectWorkspace: (id) => actionsRef.current.selectWorkspace(id),
-			selectSession: (id) => actionsRef.current.selectSession(id),
-			openStart: (opts) => actionsRef.current.openStart(opts),
-			setViewMode: (mode) => actionsRef.current.setViewMode(mode),
-			navigateWorkspaces: (offset) =>
-				actionsRef.current.navigateWorkspaces(offset),
-			navigateSessions: (offset) => actionsRef.current.navigateSessions(offset),
-			resolveDisplayedSession: (id) =>
-				actionsRef.current.resolveDisplayedSession(id),
-			rememberSessionSelection: (workspaceId, sessionId) =>
-				actionsRef.current.rememberSessionSelection(workspaceId, sessionId),
-			getSessionSelectionHistory: (workspaceId) =>
-				actionsRef.current.getSessionSelectionHistory(workspaceId),
-			getSnapshot: () => actionsRef.current.getSnapshot(),
-		}),
-		[],
-	);
+	});
 
 	const state = useMemo<SelectionState>(
 		() => ({

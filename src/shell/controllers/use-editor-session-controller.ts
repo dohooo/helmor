@@ -2,7 +2,7 @@
 // owns the open/close/dirty-confirm flow. The conversation/editor view-mode
 // switch lives in the selection controller; this one drives the actual
 // editor pane state and the workspace fetch on open.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { triggerWorkspaceFetch } from "@/lib/api";
 import {
 	type DiffOpenOptions,
@@ -11,6 +11,10 @@ import {
 	isPathWithinRoot,
 } from "@/lib/editor-session";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
 
 export type EditorSessionActions = {
 	openFile(path: string, options?: DiffOpenOptions): void;
@@ -49,12 +53,9 @@ export function useEditorSessionController(
 		null,
 	);
 
-	const enterEditorModeRef = useRef(enterEditorMode);
-	const exitEditorModeRef = useRef(exitEditorMode);
-	const pushToastRef = useRef(pushToast);
-	enterEditorModeRef.current = enterEditorMode;
-	exitEditorModeRef.current = exitEditorMode;
-	pushToastRef.current = pushToast;
+	const enterEditorModeRef = useLatestRef(enterEditorMode);
+	const exitEditorModeRef = useLatestRef(exitEditorMode);
+	const pushToastRef = useLatestRef(pushToast);
 
 	// If the open editor file falls outside the workspace root (e.g. the
 	// user switched to a different workspace), bounce back to the chat.
@@ -189,27 +190,13 @@ export function useEditorSessionController(
 		setEditorSession(null);
 	}, [confirmDiscardEditorChanges]);
 
-	const liveActions = {
+	const actions = useStableActions<EditorSessionActions>({
 		openFile,
 		openFileReference,
 		changeSession,
 		exit,
 		reportError,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<EditorSessionActions>(
-		() => ({
-			openFile: (path, options) => actionsRef.current.openFile(path, options),
-			openFileReference: (path, line, column) =>
-				actionsRef.current.openFileReference(path, line, column),
-			changeSession: (session) => actionsRef.current.changeSession(session),
-			exit: () => actionsRef.current.exit(),
-			reportError: (description, title) =>
-				actionsRef.current.reportError(description, title),
-		}),
-		[],
-	);
+	});
 
 	return {
 		state: { editorSession },
