@@ -15,7 +15,6 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
-	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
@@ -24,7 +23,6 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
-	type WorkspaceState,
 	type WorkspaceStatus,
 } from "@/lib/api";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
@@ -63,6 +61,10 @@ import {
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
+import {
+	createOptimisticWorkspaceSession,
+	createPreparedWorkspaceRow,
+} from "./controller/optimistic-rows";
 
 type WorkspaceToastVariant = "default" | "destructive";
 
@@ -149,6 +151,30 @@ export function useWorkspacesSidebarController({
 			flushSidebarLists();
 		}
 	}, [flushSidebarLists]);
+
+	// Archive is fire-and-forget: `startArchiveWorkspace` resolves once
+	// the worker has been launched, not when the DB row is actually
+	// archived. We need the gate to stay live until the
+	// `archive-execution-succeeded` / `-failed` event arrives, so
+	// concurrent mark-read flushes don't refetch the still-pre-archive
+	// groups and clobber the optimistic move. This ref tracks which
+	// workspace ids currently hold a gate so we never double-end.
+	const activeArchiveGatesRef = useRef<Set<string>>(new Set());
+	const beginArchiveGate = useCallback(
+		(workspaceId: string) => {
+			if (activeArchiveGatesRef.current.has(workspaceId)) return;
+			activeArchiveGatesRef.current.add(workspaceId);
+			beginSidebarMutation();
+		},
+		[beginSidebarMutation],
+	);
+	const endArchiveGate = useCallback(
+		(workspaceId: string) => {
+			if (!activeArchiveGatesRef.current.delete(workspaceId)) return;
+			endSidebarMutation();
+		},
+		[endSidebarMutation],
+	);
 
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
@@ -262,6 +288,13 @@ export function useWorkspacesSidebarController({
 				return next;
 			});
 
+			// Release the gate this archive opened — covers both the
+			// startArchive.catch path and the listenArchiveExecutionFailed
+			// listener path. `endArchiveGate` is idempotent, so calling it
+			// here when no gate was acquired (e.g. failed event with no
+			// pending entry) is safe.
+			endArchiveGate(workspaceId);
+
 			if (!rollback) {
 				flushSidebarLists();
 			}
@@ -277,7 +310,7 @@ export function useWorkspacesSidebarController({
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, updateArchivingWorkspaceId],
+		[endArchiveGate, flushSidebarLists, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -318,12 +351,11 @@ export function useWorkspacesSidebarController({
 				});
 				return next;
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			});
+			// `endArchiveGate` invokes `flushSidebarLists` when the gate
+			// counter hits zero, which already invalidates workspaceGroups
+			// and archivedWorkspaces. Avoid an extra duplicate invalidation
+			// pair here — it would cause a redundant refetch.
+			endArchiveGate(payload.workspaceId);
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();
@@ -337,7 +369,7 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [queryClient, rollbackArchivedWorkspace]);
+	}, [endArchiveGate, queryClient, rollbackArchivedWorkspace]);
 
 	useEffect(() => {
 		if (pendingArchives.size === 0) {
@@ -630,6 +662,11 @@ export function useWorkspacesSidebarController({
 
 	const handleTogglePin = useCallback(
 		async (workspaceId: string, currentlyPinned: boolean) => {
+			// Gate sidebar flushes so concurrent mark-read / mark-unread don't
+			// refetch workspaceGroups mid-flight and clobber the optimistic
+			// pin/unpin move (the row migrates between Pinned and its status
+			// group).
+			beginSidebarMutation();
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
 				if (!Array.isArray(current)) {
 					return current;
@@ -688,9 +725,17 @@ export function useWorkspacesSidebarController({
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to update pin state."),
 				);
+			} finally {
+				endSidebarMutation();
 			}
 		},
-		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
+		[
+			beginSidebarMutation,
+			endSidebarMutation,
+			invalidateWorkspaceSummary,
+			pushWorkspaceToast,
+			queryClient,
+		],
 	);
 
 	const handleSetWorkspaceStatus = useCallback(
@@ -1335,6 +1380,12 @@ export function useWorkspacesSidebarController({
 					return next;
 				});
 
+				// Gate concurrent mark-read / mark-unread flushes so they don't
+				// clobber the optimistic move-to-archived while the backend
+				// archive worker is in flight. The gate lives until the
+				// matching `archive-execution-succeeded` / `-failed` event
+				// fires (see listener effect) or the .catch path rolls back.
+				beginArchiveGate(workspaceId);
 				queryClient.setQueryData(
 					helmorQueryKeys.workspaceGroups,
 					optimisticGroups,
@@ -1392,6 +1443,7 @@ export function useWorkspacesSidebarController({
 		[
 			archivingWorkspaceIds,
 			baseArchivedSummaries,
+			beginArchiveGate,
 			groups,
 			onSelectWorkspace,
 			onOpenNewWorkspace,
@@ -1586,68 +1638,5 @@ export function useWorkspacesSidebarController({
 		isCloneDialogOpen,
 		prefetchWorkspace,
 		setIsCloneDialogOpen,
-	};
-}
-
-function createPreparedWorkspaceRow(
-	repository: RepositoryCreateOption,
-	prepared: {
-		workspaceId: string;
-		initialSessionId: string;
-		directoryName: string;
-		branch: string;
-		state: WorkspaceState;
-	},
-): WorkspaceRow {
-	return {
-		id: prepared.workspaceId,
-		// Prepare returns the final directory and branch, so the row is
-		// already in its terminal shape — no placeholder → real swap.
-		title: `${repository.name} workspace`,
-		directoryName: prepared.directoryName,
-		repoName: repository.name,
-		repoIconSrc: repository.repoIconSrc ?? null,
-		repoInitials: repository.repoInitials ?? null,
-		state: prepared.state,
-		hasUnread: false,
-		workspaceUnread: 0,
-		unreadSessionCount: 0,
-		status: "in-progress",
-		branch: prepared.branch,
-		activeSessionId: prepared.initialSessionId,
-		activeSessionTitle: "Untitled",
-		activeSessionAgentType: null,
-		activeSessionStatus: "idle",
-		prTitle: null,
-		pinnedAt: null,
-		sessionCount: 1,
-		messageCount: 0,
-		createdAt: new Date().toISOString(),
-	};
-}
-
-function createOptimisticWorkspaceSession(
-	workspaceId: string,
-	sessionId: string,
-	createdAt: string,
-): WorkspaceSessionSummary {
-	return {
-		id: sessionId,
-		workspaceId,
-		title: "Untitled",
-		agentType: null,
-		status: "idle",
-		model: null,
-		permissionMode: "default",
-		providerSessionId: null,
-		effortLevel: null,
-		unreadCount: 0,
-		fastMode: false,
-		createdAt,
-		updatedAt: createdAt,
-		lastUserMessageAt: null,
-		isHidden: false,
-		actionKind: null,
-		active: true,
 	};
 }

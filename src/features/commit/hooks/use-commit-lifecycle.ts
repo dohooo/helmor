@@ -1,12 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import {
-	type MutableRefObject,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type ChangeRequestInfo,
 	closeWorkspaceChangeRequest,
@@ -147,7 +140,7 @@ export type PendingPromptForSession = {
 export function useWorkspaceCommitLifecycle({
 	queryClient,
 	selectedWorkspaceId,
-	selectedWorkspaceIdRef,
+	getSelectedWorkspaceId,
 	selectedRepoId,
 	selectedWorkspaceTargetBranch,
 	selectedWorkspaceRemote,
@@ -164,7 +157,10 @@ export function useWorkspaceCommitLifecycle({
 }: {
 	queryClient: QueryClient;
 	selectedWorkspaceId: string | null;
-	selectedWorkspaceIdRef: MutableRefObject<string | null>;
+	/** Resolves the latest selected workspace at call time. Lets the
+	 *  callbacks read the current value without depending on a ref the
+	 *  caller has to thread through. */
+	getSelectedWorkspaceId: () => string | null;
 	selectedRepoId: string | null;
 	selectedWorkspaceTargetBranch?: string | null;
 	/** Git remote name (e.g. "origin") for the selected workspace's repo.
@@ -227,7 +223,7 @@ export function useWorkspaceCommitLifecycle({
 				fastMode?: boolean | null;
 			},
 		) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+			const workspaceId = getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
 				return;
@@ -435,7 +431,7 @@ export function useWorkspaceCommitLifecycle({
 			selectedRepoId,
 			selectedWorkspaceTargetBranch,
 			selectedWorkspaceRemote,
-			selectedWorkspaceIdRef,
+			getSelectedWorkspaceId,
 		],
 	);
 
@@ -456,7 +452,7 @@ export function useWorkspaceCommitLifecycle({
 			effort?: string | null;
 			fastMode?: boolean | null;
 		}) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+			const workspaceId = getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[review] action ignored: no selected workspace");
 				return;
@@ -506,7 +502,7 @@ export function useWorkspaceCommitLifecycle({
 			pushToast,
 			queryClient,
 			selectedRepoId,
-			selectedWorkspaceIdRef,
+			getSelectedWorkspaceId,
 			selectedWorkspaceTargetBranch,
 			selectedWorkspaceRemote,
 		],

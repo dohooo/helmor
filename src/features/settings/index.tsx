@@ -128,17 +128,9 @@ const DARK_THEME_OPTIONS: Array<{
 	},
 ];
 
-export type SettingsSection =
-	| "general"
-	| "shortcuts"
-	| "appearance"
-	| "model"
-	| "experimental"
-	| "import"
-	| "developer"
-	| "account"
-	| "inbox"
-	| `repo:${string}`;
+export type { SettingsSection } from "./types";
+
+import type { SettingsSection } from "./types";
 
 /// Display labels for settings sections in the sidebar / dialog title.
 /// Most match the section key with a leading capital, but a few names

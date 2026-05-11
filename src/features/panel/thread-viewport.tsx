@@ -22,6 +22,8 @@ import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { EmptyState, MemoConversationMessage } from "./message-components";
+import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
+import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
 
 export type PresentedSessionPane = {
 	sessionId: string;
@@ -567,63 +569,7 @@ function ProgressiveConversationViewport({
 		};
 	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
 
-	useEffect(() => {
-		if (!scrollParent || typeof window === "undefined") {
-			return;
-		}
-		const escapeBottomLock = () => {
-			hasUserScrolledRef.current = true;
-			stopScroll();
-		};
-		const inScrollParent = (target: EventTarget | null) => {
-			return (
-				target instanceof Node &&
-				(scrollParent === target || scrollParent.contains(target))
-			);
-		};
-		const onWheel = (event: WheelEvent) => {
-			if (event.deltaY < -2 && inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (
-				(event.key === "ArrowUp" ||
-					event.key === "PageUp" ||
-					event.key === "Home") &&
-				inScrollParent(event.target)
-			) {
-				escapeBottomLock();
-			}
-		};
-		const onTouchMove = (event: TouchEvent) => {
-			if (inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		window.addEventListener("wheel", onWheel as EventListener, {
-			passive: true,
-		});
-		window.addEventListener("keydown", onKeyDown as unknown as EventListener, {
-			passive: true,
-		});
-		window.addEventListener(
-			"touchmove",
-			onTouchMove as unknown as EventListener,
-			{ passive: true },
-		);
-		return () => {
-			window.removeEventListener("wheel", onWheel as EventListener);
-			window.removeEventListener(
-				"keydown",
-				onKeyDown as unknown as EventListener,
-			);
-			window.removeEventListener(
-				"touchmove",
-				onTouchMove as unknown as EventListener,
-			);
-		};
-	}, [scrollParent, stopScroll]);
+	useEscapeBottomLock({ scrollParent, stopScroll, hasUserScrolledRef });
 
 	const estimatedHeights = useMemo(
 		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
@@ -704,29 +650,11 @@ function ProgressiveConversationViewport({
 	// length. When the streaming row isn't mounted yet (request sent but
 	// assistant hasn't started emitting), we fall back to the state-driven
 	// row.top so the indicator doesn't collapse to y=0.
-	useLayoutEffect(() => {
-		const indicator = indicatorElRef.current;
-		if (!indicator) {
-			return;
-		}
-		if (streamingRowEl) {
-			const sync = () => {
-				indicator.style.top = `${
-					streamingRowEl.offsetTop + streamingRowEl.offsetHeight
-				}px`;
-			};
-			sync();
-			if (typeof ResizeObserver === "undefined") {
-				return;
-			}
-			const observer = new ResizeObserver(sync);
-			observer.observe(streamingRowEl);
-			return () => observer.disconnect();
-		}
-		if (indicatorFallbackTop !== undefined) {
-			indicator.style.top = `${indicatorFallbackTop}px`;
-		}
-	}, [streamingRowEl, indicatorFallbackTop]);
+	useStreamingIndicatorSync({
+		indicatorElRef,
+		streamingRowEl,
+		indicatorFallbackTop,
+	});
 	const headerHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
 	const effectiveViewportHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;

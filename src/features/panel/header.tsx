@@ -44,24 +44,16 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { clearPersistedDraft } from "@/features/composer/draft-storage";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type AgentProvider,
 	type ChangeRequestInfo,
-	createSession,
-	deleteSession,
 	listRemoteBranches,
-	loadHiddenSessions,
 	prefetchRemoteRefs,
-	renameSession,
-	renameWorkspaceBranch,
-	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
-import { extractError } from "@/lib/errors";
 import { initialsFor } from "@/lib/initials";
 import {
 	helmorQueryKeys,
@@ -75,9 +67,9 @@ import {
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import { normalizeBranchRenameInput } from "./branch-rename";
-import { seedNewSessionInCache } from "./session-cache";
-import { closeWorkspaceSession } from "./session-close";
+import { useBranchRename } from "./header/use-branch-rename";
+import { useHiddenHistory } from "./header/use-hidden-history";
+import { useSessionActions } from "./header/use-session-actions";
 import { isSessionRunningStatus } from "./session-running";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
@@ -139,10 +131,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const tabsValue = contextPreviewActive
 		? contextTabValue
 		: (selectedSessionId ?? sessions[0]?.id);
-	const [showHistory, setShowHistory] = useState(false);
-	const [hiddenSessions, setHiddenSessions] = useState<
-		WorkspaceSessionSummary[]
-	>([]);
 	const pushToast = useWorkspaceToast();
 	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
@@ -165,18 +153,40 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	// Mirror the inspector's Connect-CTA condition: when the workspace is
 	// in `unauthenticated` state, the bound `forgeLogin` no longer has
 	// access (token revoked / removed account / etc.). Suppress the
-	// avatar in that case so it doesn't masquerade as another account
-	// while the right-side panel is asking the user to reconnect.
+	// avatar so it doesn't masquerade as another account while the
+	// right-side panel asks the user to reconnect.
 	const forgeStatusQuery = useQuery({
 		...workspaceForgeActionStatusQueryOptions(workspace?.id ?? ""),
 		enabled: !!workspace?.id,
 	});
 	const forgeNeedsConnect =
 		forgeStatusQuery.data?.remoteState === "unauthenticated";
-	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-	const [editingTitle, setEditingTitle] = useState("");
-	const [editingBranch, setEditingBranch] = useState<string | null>(null);
-	const [branchCopied, setBranchCopied] = useState(false);
+
+	const branchRename = useBranchRename({
+		workspace,
+		queryClient,
+		pushToast,
+		onWorkspaceChanged,
+	});
+	const hiddenHistory = useHiddenHistory({
+		workspace,
+		onSelectSession,
+		onSessionsChanged,
+	});
+	const sessionActions = useSessionActions({
+		workspace,
+		sessions,
+		selectedSessionId,
+		sessionDisplayProviders,
+		queryClient,
+		pushToast,
+		onSelectSession,
+		onSessionsChanged,
+		onSessionRenamed,
+		onRequestCloseSession,
+		onAfterDelete: hiddenHistory.pruneFromHistory,
+	});
+
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
 
@@ -194,194 +204,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, [updateOverflow, sessions.length]);
-
-	const handleStartBranchRename = useCallback(() => {
-		if (!workspace?.branch) {
-			return;
-		}
-		setEditingBranch(workspace.branch);
-	}, [workspace?.branch]);
-
-	const handleCommitBranchRename = useCallback(async () => {
-		if (editingBranch === null || !workspace) {
-			return;
-		}
-		const normalized = normalizeBranchRenameInput(editingBranch);
-		if (normalized && normalized !== workspace.branch) {
-			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
-			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
-				detailKey,
-			);
-			if (previous) {
-				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
-					...previous,
-					branch: normalized,
-				});
-			}
-			try {
-				await renameWorkspaceBranch(workspace.id, normalized);
-				onWorkspaceChanged?.();
-			} catch (error: unknown) {
-				if (previous) {
-					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
-				}
-				const { message } = extractError(error, "Unable to rename branch.");
-				pushToast(message, "Branch rename failed", "destructive");
-			}
-		}
-		setEditingBranch(null);
-	}, [editingBranch, onWorkspaceChanged, pushToast, queryClient, workspace]);
-
-	const handleCancelBranchRename = useCallback(() => {
-		setEditingBranch(null);
-	}, []);
-
-	const handleCreateSession = useCallback(async () => {
-		if (!workspace) {
-			return;
-		}
-		try {
-			const result = await createSession(workspace.id);
-			seedNewSessionInCache({
-				queryClient,
-				workspaceId: workspace.id,
-				sessionId: result.sessionId,
-				workspace,
-				existingSessions: sessions,
-				createdAt: new Date().toISOString(),
-			});
-
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(result.sessionId);
-		} catch (error) {
-			console.error("Failed to create session:", error);
-		}
-	}, [onSelectSession, onSessionsChanged, queryClient, sessions, workspace]);
-
-	const handleHideSession = useCallback(
-		async (sessionId: string, event: React.MouseEvent) => {
-			event.stopPropagation();
-			if (!workspace) {
-				return;
-			}
-			const targetSession =
-				sessions.find((session) => session.id === sessionId) ?? null;
-			if (!targetSession) {
-				return;
-			}
-
-			// When the caller provided a shared confirm-close hook
-			// (`onRequestCloseSession`), delegate — it handles the running-
-			// session confirmation dialog itself. Otherwise fall back to an
-			// unconditional close.
-			if (onRequestCloseSession) {
-				onRequestCloseSession({
-					workspace,
-					sessions,
-					session: targetSession,
-					activateAdjacent: targetSession.id === selectedSessionId,
-					provider: sessionDisplayProviders?.[targetSession.id] ?? null,
-					onSessionsChanged,
-				});
-				return;
-			}
-
-			await closeWorkspaceSession({
-				queryClient,
-				workspace,
-				sessions,
-				sessionId,
-				activateAdjacent: sessionId === selectedSessionId,
-				onSelectSession,
-				onSessionsChanged,
-				pushToast,
-			});
-		},
-		[
-			onRequestCloseSession,
-			onSelectSession,
-			onSessionsChanged,
-			pushToast,
-			queryClient,
-			selectedSessionId,
-			sessionDisplayProviders,
-			sessions,
-			workspace,
-		],
-	);
-
-	const handleToggleHistory = useCallback(
-		async (open: boolean) => {
-			if (open && workspace) {
-				const hidden = await loadHiddenSessions(workspace.id);
-				setHiddenSessions(hidden);
-			}
-			setShowHistory(open);
-		},
-		[workspace],
-	);
-
-	const handleUnhide = useCallback(
-		async (sessionId: string) => {
-			await unhideSession(sessionId);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(sessionId);
-		},
-		[onSelectSession, onSessionsChanged],
-	);
-
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			await deleteSession(sessionId);
-			clearPersistedDraft(`session:${sessionId}`);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-		},
-		[onSessionsChanged],
-	);
-
-	const handleStartRename = useCallback(
-		(session: WorkspaceSessionSummary, event: React.MouseEvent) => {
-			event.stopPropagation();
-			setEditingSessionId(session.id);
-			setEditingTitle(displaySessionTitle(session));
-		},
-		[],
-	);
-
-	const handleCommitRename = useCallback(async () => {
-		if (!editingSessionId) {
-			return;
-		}
-		const trimmed = editingTitle.trim();
-		if (trimmed) {
-			await renameSession(editingSessionId, trimmed);
-			onSessionRenamed?.(editingSessionId, trimmed);
-		}
-		setEditingSessionId(null);
-		setEditingTitle("");
-	}, [editingSessionId, editingTitle, onSessionRenamed]);
-
-	const handleCancelRename = useCallback(() => {
-		setEditingSessionId(null);
-		setEditingTitle("");
-	}, []);
 
 	const stopTabActionPointerDown = useCallback((event: React.PointerEvent) => {
 		event.preventDefault();
@@ -449,20 +271,22 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								</HoverCard>
 							);
 						})()}
-						{editingBranch !== null ? (
+						{branchRename.editingBranch !== null ? (
 							<Input
 								autoFocus
-								value={editingBranch}
-								onChange={(event) => setEditingBranch(event.target.value)}
+								value={branchRename.editingBranch}
+								onChange={(event) =>
+									branchRename.setEditingBranch(event.target.value)
+								}
 								onKeyDown={(event) => {
 									if (event.key === "Enter") {
 										event.preventDefault();
-										void handleCommitBranchRename();
+										void branchRename.commitBranchRename();
 									} else if (event.key === "Escape") {
-										handleCancelBranchRename();
+										branchRename.cancelBranchRename();
 									}
 								}}
-								onBlur={() => void handleCommitBranchRename()}
+								onBlur={() => void branchRename.commitBranchRename()}
 								onClick={(event) => event.stopPropagation()}
 								className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
 							/>
@@ -478,7 +302,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										<span
 											role="button"
 											aria-label="Rename branch"
-											onClick={handleStartBranchRename}
+											onClick={branchRename.startBranchRename}
 											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											<Pencil className="size-3" strokeWidth={2} />
@@ -486,17 +310,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										<span
 											role="button"
 											aria-label="Copy branch name"
-											onClick={() => {
-												if (!workspace.branch) {
-													return;
-												}
-												void navigator.clipboard.writeText(workspace.branch);
-												setBranchCopied(true);
-												setTimeout(() => setBranchCopied(false), 1500);
-											}}
+											onClick={branchRename.copyBranchName}
 											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
-											{branchCopied ? (
+											{branchRename.branchCopied ? (
 												<Check
 													className="size-3 text-green-400"
 													strokeWidth={2}
@@ -720,7 +537,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											isActivelySending && !isInteractionRequired;
 										const hasStatusDot =
 											isInteractionRequired || (!selected && hasUnread);
-										const isEditing = editingSessionId === session.id;
+										const isEditing =
+											sessionActions.editingSessionId === session.id;
 
 										return (
 											<Tooltip key={session.id}>
@@ -748,19 +566,23 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															{isEditing ? (
 																<Input
 																	autoFocus
-																	value={editingTitle}
+																	value={sessionActions.editingTitle}
 																	onChange={(event) =>
-																		setEditingTitle(event.target.value)
+																		sessionActions.setEditingTitle(
+																			event.target.value,
+																		)
 																	}
 																	onKeyDown={(event) => {
 																		if (event.key === "Enter") {
 																			event.preventDefault();
-																			void handleCommitRename();
+																			void sessionActions.commitRename();
 																		} else if (event.key === "Escape") {
-																			handleCancelRename();
+																			sessionActions.cancelRename();
 																		}
 																	}}
-																	onBlur={() => void handleCommitRename()}
+																	onBlur={() =>
+																		void sessionActions.commitRename()
+																	}
 																	onClick={(event) => event.stopPropagation()}
 																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-[13px] font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
 																/>
@@ -799,7 +621,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	aria-label="Rename session"
 																	onPointerDown={stopTabActionPointerDown}
 																	onClick={(event) =>
-																		handleStartRename(session, event)
+																		sessionActions.startRename(session, event)
 																	}
 																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
@@ -810,7 +632,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	aria-label="Close session"
 																	onPointerDown={stopTabActionPointerDown}
 																	onClick={(event) =>
-																		handleHideSession(session.id, event)
+																		sessionActions.hideSession(
+																			session.id,
+																			event,
+																		)
 																	}
 																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
@@ -845,7 +670,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label="New session"
-							onClick={handleCreateSession}
+							onClick={sessionActions.createSession}
 							variant="ghost"
 							size="icon-sm"
 							className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -868,7 +693,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					</TooltipContent>
 				</Tooltip>
 
-				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
+				<DropdownMenu
+					open={hiddenHistory.showHistory}
+					onOpenChange={hiddenHistory.toggleHistory}
+				>
 					<DropdownMenuTrigger asChild>
 						<Button
 							aria-label="Session history"
@@ -876,7 +704,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							size="icon-sm"
 							className={cn(
 								"ml-1 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0",
-								showHistory && "bg-accent/60 text-foreground",
+								hiddenHistory.showHistory && "bg-accent/60 text-foreground",
 							)}
 						>
 							<History className="size-3.5" strokeWidth={1.8} />
@@ -886,8 +714,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						align="end"
 						className="max-h-96 w-56 overscroll-contain"
 					>
-						{hiddenSessions.length > 0 ? (
-							hiddenSessions.map((session) => (
+						{hiddenHistory.hiddenSessions.length > 0 ? (
+							hiddenHistory.hiddenSessions.map((session) => (
 								<Tooltip key={session.id}>
 									<TooltipTrigger asChild>
 										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
@@ -903,7 +731,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<div className="flex shrink-0 items-center gap-0.5">
 												<Button
 													aria-label="Restore session"
-													onClick={() => handleUnhide(session.id)}
+													onClick={() => hiddenHistory.unhide(session.id)}
 													variant="ghost"
 													size="icon-xs"
 													className="text-muted-foreground hover:text-foreground"
@@ -912,7 +740,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												</Button>
 												<Button
 													aria-label="Delete session permanently"
-													onClick={() => handleDelete(session.id)}
+													onClick={() =>
+														sessionActions.deleteHiddenSession(session.id)
+													}
 													variant="ghost"
 													size="icon-xs"
 													className="text-muted-foreground hover:text-destructive"
