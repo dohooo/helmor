@@ -1135,18 +1135,21 @@ export function useWorkspacesSidebarController({
 			);
 
 			if (selectedWorkspaceId === workspaceId) {
+				// Pick the neighbour so virtualizer doesn't fling to the top.
 				const optimisticGroups =
 					(queryClient.getQueryData(
 						helmorQueryKeys.workspaceGroups,
 					) as typeof groups) ?? [];
-				const optimisticArchived =
-					(queryClient.getQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-					) as typeof archivedSummaries) ?? [];
-				const nextWorkspaceId =
-					findInitialWorkspaceId(optimisticGroups) ??
-					optimisticArchived[0]?.id ??
-					null;
+				const nextArchivedRows = archivedRows.filter(
+					(row) => row.id !== workspaceId,
+				);
+				const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+					currentGroups: groups,
+					currentArchivedRows: archivedRows,
+					nextGroups: optimisticGroups,
+					nextArchivedRows,
+					removedWorkspaceId: workspaceId,
+				});
 				if (nextWorkspaceId) {
 					prefetchWorkspace(nextWorkspaceId);
 				}
@@ -1176,8 +1179,10 @@ export function useWorkspacesSidebarController({
 				.finally(endSidebarMutation);
 		},
 		[
+			archivedRows,
 			beginSidebarMutation,
 			endSidebarMutation,
+			groups,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
