@@ -13,7 +13,7 @@ import {
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { flushSidebarListsIfIdle } from "@/lib/sidebar-mutation-gate";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import {
 	recomputeWorkspaceDetailUnread,
 	recomputeWorkspaceUnreadInGroups,
@@ -191,7 +191,7 @@ export function useReadStateController(
 
 		void markSessionRead(sessionId)
 			.then(() => {
-				flushSidebarListsIfIdle(queryClient);
+				requestSidebarReconcile(queryClient);
 				const invalidations: Promise<void>[] = [];
 				if (workspaceId) {
 					invalidations.push(
@@ -245,7 +245,7 @@ export function useReadStateController(
 			if (!isCurrentSession) {
 				void markSessionUnread(sessionId)
 					.then(() => {
-						flushSidebarListsIfIdle(queryClient);
+						requestSidebarReconcile(queryClient);
 						return Promise.all([
 							queryClient.invalidateQueries({
 								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
@@ -334,15 +334,13 @@ export function useReadStateController(
 			recentlyClosedSessionsRef.current.slice(1);
 		try {
 			await unhideSession(next.sessionId);
+			requestSidebarReconcile(queryClient);
 			await Promise.all([
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(next.workspaceId),
 				}),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(next.workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 			]);
 			onReopenSelectWorkspaceRef.current(next.workspaceId);

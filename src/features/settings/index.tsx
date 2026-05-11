@@ -59,6 +59,7 @@ import type {
 	ThemeMode,
 } from "@/lib/settings";
 import { resolveTheme, useSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -745,9 +746,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 										// Invalidate all workspace detail caches so
 										// open panels pick up the new remote/branch.
 										void queryClient.invalidateQueries({
@@ -759,9 +758,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 									}}
 								/>
 							)}

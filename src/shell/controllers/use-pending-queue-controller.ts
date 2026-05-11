@@ -13,6 +13,7 @@ import {
 	resolveComposerInsertTarget,
 } from "@/lib/composer-insert";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { CLI_SEND_AUTO_SUBMIT_DELAY_MS } from "@/shell/constants";
 
@@ -122,9 +123,7 @@ export function usePendingQueueController(
 
 			const first = sends[0];
 
-			await queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 			if (first.workspaceId) {
 				await queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(first.workspaceId),

@@ -24,6 +24,7 @@ import {
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { AppSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { EMPTY_STRING_LIST } from "@/shell/constants";
@@ -267,9 +268,7 @@ export function useStartSurfaceController(
 		(workspaceId: string) => {
 			void moveLocalWorkspaceToWorktree(workspaceId)
 				.then(() => {
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					});
+					requestSidebarReconcile(queryClient);
 					void queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 					});
@@ -346,9 +345,7 @@ export function useStartSurfaceController(
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				});
+				requestSidebarReconcile(queryClient);
 
 				if (outcome.shouldStream) {
 					// Defer the view-switch state burst to the next animation frame
@@ -393,9 +390,7 @@ export function useStartSurfaceController(
 								describeUnknownError(error, "Workspace setup failed."),
 								"Workspace setup failed",
 							);
-							void queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceGroups,
-							});
+							requestSidebarReconcile(queryClient);
 							return { shouldStream: false };
 						}
 					}
@@ -417,9 +412,7 @@ export function useStartSurfaceController(
 								}
 							: current,
 					);
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					});
+					requestSidebarReconcile(queryClient);
 					return { shouldStream: false };
 				}
 

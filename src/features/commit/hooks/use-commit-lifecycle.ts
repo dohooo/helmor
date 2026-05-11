@@ -30,9 +30,8 @@ import {
 	workspaceForgeQueryOptions,
 } from "@/lib/query-client";
 import {
-	beginSidebarMutation,
-	endSidebarMutation,
-	flushSidebarListsIfIdle,
+	holdSidebarMutation,
+	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import { moveWorkspaceToGroup } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -207,9 +206,7 @@ export function useWorkspaceCommitLifecycle({
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 		},
 		[queryClient],
 	);
@@ -300,7 +297,7 @@ export function useWorkspaceCommitLifecycle({
 				// Gate sidebar flushes during the forge round-trip — without
 				// this, mark-read on workspace-switch would refetch the
 				// still-pre-merge groups and clobber the optimistic row.
-				beginSidebarMutation();
+				const release = holdSidebarMutation(queryClient);
 				void (async () => {
 					try {
 						const result =
@@ -333,9 +330,7 @@ export function useWorkspaceCommitLifecycle({
 								: prev,
 						);
 					} finally {
-						endSidebarMutation();
-						// Reconcile flushes skipped during the gate hold.
-						flushSidebarListsIfIdle(queryClient);
+						release();
 					}
 				})();
 				return;

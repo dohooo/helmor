@@ -5,6 +5,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { syncWorkspaceWithTargetBranch } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
 export function usePullLatest(opts: {
 	queryClient: QueryClient;
@@ -30,6 +31,7 @@ export function usePullLatest(opts: {
 					: "Unable to pull target branch updates.",
 			);
 		} finally {
+			requestSidebarReconcile(queryClient);
 			await Promise.all([
 				queryClient.invalidateQueries({
 					queryKey:
@@ -44,9 +46,6 @@ export function usePullLatest(opts: {
 				}),
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
 				}),
 				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
 			]);
