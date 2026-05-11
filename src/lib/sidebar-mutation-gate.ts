@@ -17,8 +17,9 @@ import { helmorQueryKeys } from "./query-client";
 //      cover the leak / nesting cases).
 //   2) NO business code calls `queryClient.invalidateQueries({queryKey:
 //      workspaceGroups | archivedWorkspaces})` directly. Everyone routes
-//      through `requestSidebarReconcile`. This is enforced by
-//      `scripts/check-sidebar-invalidate.ts`, wired into `bun run lint`.
+//      through `requestSidebarReconcile`. This contract is upheld by
+//      convention — reviewers should reject any direct invalidate of
+//      the sidebar lists outside this file.
 let pending = 0;
 
 /**
@@ -114,8 +115,7 @@ export function createScopedSidebarGate(queryClient: QueryClient): {
  *
  * Direct `queryClient.invalidateQueries({queryKey: workspaceGroups |
  * archivedWorkspaces})` in business code would race with optimistic
- * state during a mutation — `scripts/check-sidebar-invalidate.ts`
- * enforces this at lint time.
+ * state during a mutation. Don't do that — call this function instead.
  */
 export function requestSidebarReconcile(queryClient: QueryClient): void {
 	if (pending > 0) return;
