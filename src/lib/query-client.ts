@@ -1,6 +1,7 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
 	type AgentProvider,
@@ -12,6 +13,7 @@ import {
 	type ForgeActionStatus,
 	type ForgeDetection,
 	type ForgeProvider,
+	fetchSessionThreadMessagesPage,
 	getClaudeRateLimits,
 	getCodexRateLimits,
 	getLiveContextUsage,
@@ -43,6 +45,10 @@ import {
 	refreshWorkspaceChangeRequest,
 } from "./api";
 import { parsePrUrl } from "./pr-url";
+import {
+	getSessionThreadPaginationState,
+	setSessionThreadPaginationState,
+} from "./session-thread-pagination";
 
 const SESSION_STALE_TIME = 10 * 60_000;
 const CHANGES_STALE_TIME = 3_000;
@@ -602,13 +608,112 @@ export function workspaceCandidateDirectoriesQueryOptions(
 	});
 }
 
-/** Pipeline-rendered thread messages — ready for direct rendering. */
+/**
+ * Pipeline-rendered thread messages — ready for direct rendering.
+ *
+ * Defaults to tail-loading the most recent
+ * `DEFAULT_SESSION_THREAD_TAIL_LIMIT` records for snappy switches on huge
+ * sessions. Older messages are fetched on demand via `expandSessionThread`
+ * — that path writes into this same cache key (manual `setQueryData`
+ * prepend) so the streaming-tail / optimistic-user / setQueryData helpers
+ * stay tail-unaware.
+ *
+ * Pagination metadata (`hasMore`, `loadedTailLimit`) flows through the
+ * sibling `session-thread-pagination` store so the cache value can stay a
+ * plain `ThreadMessageLike[]`.
+ */
 export function sessionThreadMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
+		// `loadSessionThreadMessages` updates the pagination store as a
+		// side effect — going through it (rather than the raw page fetch)
+		// keeps existing test mocks (`apiMocks.loadSessionThreadMessages`)
+		// working unchanged.
 		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
+	});
+}
+
+/**
+ * Step size for each "Load earlier" click. Roughly doubles the loaded
+ * window every two clicks (200 -> 400 -> 600 -> 800 -> 1000 -> jump-to-full).
+ * The "jump to full" guard exists because for very large sessions the user
+ * typically wants to stop adding tens of clicks and load the rest in one
+ * step once they're scrolling deep into history.
+ */
+const EXPAND_STEP = 200;
+const EXPAND_FULL_THRESHOLD = 1000;
+
+/**
+ * Fetch the next chunk of older messages and prepend them to the cached
+ * thread. Idempotent — a no-op when `hasMore` is already false. Resolves
+ * once the cache and pagination store are both updated.
+ *
+ * Strategy:
+ *   - Reads the currently loaded tailLimit from the pagination store.
+ *   - Fetches a trailing window of size `currentLimit + EXPAND_STEP` (or
+ *     a full load past `EXPAND_FULL_THRESHOLD`).
+ *   - Dedupes against the in-cache messages by id and prepends the
+ *     new "head only" portion to the cached array. This preserves
+ *     streaming-tail writes and optimistic user bubbles that the
+ *     backend doesn't know about yet.
+ */
+export async function expandSessionThread(
+	client: QueryClient,
+	sessionId: string,
+): Promise<void> {
+	const { hasMore, loadedTailLimit } =
+		getSessionThreadPaginationState(sessionId);
+	if (!hasMore) return;
+
+	const nextTailLimit: number | null = (() => {
+		if (loadedTailLimit === null) return null;
+		const proposed = loadedTailLimit + EXPAND_STEP;
+		return proposed >= EXPAND_FULL_THRESHOLD ? null : proposed;
+	})();
+
+	const page = await fetchSessionThreadMessagesPage(sessionId, {
+		tailLimit: nextTailLimit,
+	});
+
+	const cacheKey = [
+		...helmorQueryKeys.sessionMessages(sessionId),
+		"thread",
+	] as const;
+	client.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const previous = prev ?? [];
+		if (previous.length === 0) {
+			return page.messages;
+		}
+		// Keep every message currently in the cache (including streaming
+		// tails / optimistic ids the server doesn't know about) and
+		// prepend the newly-revealed older portion. Dedupe by id so we
+		// don't double-render rows that overlap the window.
+		const seenIds = new Set<string>();
+		for (const msg of previous) {
+			if (msg.id != null) seenIds.add(msg.id);
+		}
+		const head: ThreadMessageLike[] = [];
+		for (const msg of page.messages) {
+			if (msg.id != null && seenIds.has(msg.id)) {
+				// Stop at the first overlap — everything from here to the
+				// tail is already in `previous` in correct chronological
+				// order. (`page.messages` is the trailing window from the
+				// DB, so the overlap is contiguous at the boundary.)
+				break;
+			}
+			head.push(msg);
+		}
+		if (head.length === 0) {
+			return previous;
+		}
+		return [...head, ...previous];
+	});
+
+	setSessionThreadPaginationState(sessionId, {
+		hasMore: page.hasMore,
+		loadedTailLimit: nextTailLimit,
 	});
 }
 

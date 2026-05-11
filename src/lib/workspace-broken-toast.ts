@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { permanentlyDeleteWorkspace } from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 
 type ShowWorkspaceBrokenToastArgs = {
@@ -40,12 +41,7 @@ export function showWorkspaceBrokenToast({
 				onClick: () => {
 					void permanentlyDeleteWorkspace(workspaceId)
 						.then(() => {
-							void queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceGroups,
-							});
-							void queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.archivedWorkspaces,
-							});
+							requestSidebarReconcile(queryClient);
 							void queryClient.removeQueries({
 								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 							});

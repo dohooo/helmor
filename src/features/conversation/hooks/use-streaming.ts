@@ -47,6 +47,7 @@ import {
 	type SessionThreadSnapshot,
 } from "@/lib/session-thread-cache";
 import type { FollowUpBehavior } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { SubmitQueueApi } from "@/lib/use-submit-queue";
 import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import {
@@ -54,6 +55,7 @@ import {
 	findModelOption,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+import { seedSessionTitle } from "./seed-session-title";
 
 const EMPTY_IMAGES: string[] = [];
 const EMPTY_FILES: string[] = [];
@@ -212,46 +214,9 @@ export function useConversationStreaming({
 		userInputResponsePendingByContext[composerContextKey] ?? false;
 	const hasPlanReview = planReviewByContext[composerContextKey] ?? false;
 
-	const seedSessionTitle = useCallback(
+	const seedSessionTitleCallback = useCallback(
 		(sessionId: string, workspaceId: string | null, title: string) => {
-			queryClient.setQueryData(
-				helmorQueryKeys.workspaceSessions(workspaceId ?? "__none__"),
-				(current: Array<Record<string, unknown>> | undefined) =>
-					(current ?? []).map((session) =>
-						session.id === sessionId ? { ...session, title } : session,
-					),
-			);
-			if (workspaceId) {
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-					(current: Record<string, unknown> | undefined) => {
-						if (!current || current.activeSessionId !== sessionId) {
-							return current;
-						}
-						return {
-							...current,
-							activeSessionTitle: title,
-						};
-					},
-				);
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceGroups,
-					(current: Array<Record<string, unknown>> | undefined) =>
-						(current ?? []).map((group) => ({
-							...group,
-							rows: Array.isArray(group.rows)
-								? group.rows.map((row: Record<string, unknown>) =>
-										row.id === workspaceId && row.activeSessionId === sessionId
-											? {
-													...row,
-													activeSessionTitle: title,
-												}
-											: row,
-									)
-								: group.rows,
-						})),
-				);
-			}
+			seedSessionTitle(queryClient, sessionId, workspaceId, title);
 		},
 		[queryClient],
 	);
@@ -583,11 +548,8 @@ export function useConversationStreaming({
 
 	const invalidateConversationQueries = useCallback(
 		async (workspaceId: string | null, sessionId: string | null) => {
-			const invalidations: Promise<unknown>[] = [
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-			];
+			requestSidebarReconcile(queryClient);
+			const invalidations: Promise<unknown>[] = [];
 
 			if (workspaceId) {
 				invalidations.push(
@@ -966,7 +928,7 @@ export function useConversationStreaming({
 			let titleSeed: string | null = null;
 			if (isFirstUserMessage && !isCompactCommand) {
 				titleSeed = buildTitleSeed(trimmedPrompt);
-				seedSessionTitle(targetSessionId, targetWorkspaceId, titleSeed);
+				seedSessionTitleCallback(targetSessionId, targetWorkspaceId, titleSeed);
 				void renameSession(targetSessionId, titleSeed).catch((error) => {
 					console.warn("[conversation] failed to seed session title:", error);
 				});
@@ -1006,10 +968,8 @@ export function useConversationStreaming({
 						titleSeed,
 					).then((result) => {
 						if (result?.title || result?.branchRenamed) {
+							requestSidebarReconcile(queryClient);
 							void Promise.all([
-								queryClient.invalidateQueries({
-									queryKey: helmorQueryKeys.workspaceGroups,
-								}),
 								targetWorkspaceId
 									? queryClient.invalidateQueries({
 											queryKey:

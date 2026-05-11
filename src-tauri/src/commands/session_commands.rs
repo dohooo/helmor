@@ -14,13 +14,25 @@ pub async fn list_workspace_sessions(
     run_blocking(move || sessions::list_workspace_sessions(&workspace_id)).await
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionThreadMessagesPage {
+    pub messages: Vec<pipeline::types::ThreadMessageLike>,
+    pub has_more: bool,
+}
+
 #[tauri::command]
 pub async fn list_session_thread_messages(
     session_id: String,
-) -> CmdResult<Vec<pipeline::types::ThreadMessageLike>> {
+    tail_limit: Option<usize>,
+) -> CmdResult<SessionThreadMessagesPage> {
     run_blocking(move || {
-        let historical = sessions::list_session_historical_records(&session_id)?;
-        Ok(pipeline::MessagePipeline::convert_historical(&historical))
+        let windowed = sessions::list_session_historical_records_windowed(&session_id, tail_limit)?;
+        let messages = pipeline::MessagePipeline::convert_historical(&windowed.records);
+        Ok(SessionThreadMessagesPage {
+            messages,
+            has_more: windowed.has_more,
+        })
     })
     .await
 }

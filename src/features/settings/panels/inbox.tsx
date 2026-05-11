@@ -1,13 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import {
-	ChevronDown,
 	CircleDot,
 	GitPullRequest,
 	MessagesSquare,
 	Pickaxe,
 	Plus,
 	Smartphone,
-	X,
 } from "lucide-react";
 import {
 	type ReactNode,
@@ -22,31 +20,8 @@ import {
 	LinearBrandIcon,
 	SlackBrandIcon,
 } from "@/components/brand-icon";
-import { CachedAvatar } from "@/components/cached-avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "@/components/ui/command";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
 import type {
-	ForgeLabelOption,
 	ForgeProvider,
 	InboxKind,
 	InboxKindLabels,
@@ -57,7 +32,6 @@ import {
 	parseForgeRepoFilter,
 	parseForgeRepoHost,
 } from "@/lib/forge-repo-filter";
-import { initialsFor } from "@/lib/initials";
 import {
 	forgeLabelsQueryOptions,
 	inboxKindLabelsQueryOptions,
@@ -82,6 +56,17 @@ const EMPTY_INBOX_CONFIG: InboxSourceConfig = { accounts: {} };
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
+import {
+	LabelMultiSelect,
+	type Option,
+	RepoPicker,
+	ScopeMultiSelect,
+	SettingsSelect,
+} from "./inbox/inbox-controls";
+import {
+	ContextConfigRow,
+	ContextKindSection,
+} from "./inbox/inbox-section-layout";
 
 /** Storage key shape used by the inbox settings map: `<provider>:<login>`.
  * Keep the shape stable — the future Tauri command that fetches inbox
@@ -95,11 +80,6 @@ type ConfigField = keyof Omit<
 	InboxRepoSourceConfig,
 	"enabled" | "issues" | "prs" | "discussions"
 >;
-
-type Option<T extends string> = {
-	value: T;
-	label: string;
-};
 
 type ContextProviderTab = "github" | "gitlab" | "linear" | "slack" | "mobile";
 
@@ -653,410 +633,5 @@ function ProviderComingSoon({
 				</ul>
 			</div>
 		</div>
-	);
-}
-
-function ContextKindSection({
-	title,
-	icon,
-	description,
-	enabled,
-	onEnabledChange,
-	children,
-}: {
-	title: string;
-	icon: ReactNode;
-	description: string;
-	enabled: boolean;
-	onEnabledChange: (enabled: boolean) => void;
-	children: ReactNode;
-}) {
-	return (
-		<div className="py-5">
-			<div className="flex items-center justify-between gap-4">
-				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
-						<span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
-							{icon}
-						</span>
-						{title}
-					</div>
-					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						{description}
-					</div>
-				</div>
-				<Switch checked={enabled} onCheckedChange={onEnabledChange} />
-			</div>
-			{enabled ? (
-				<div className="mt-4 divide-y divide-border/25 border-border/30 border-t">
-					{children}
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-function ContextConfigRow({
-	title,
-	description,
-	children,
-}: {
-	title: string;
-	description: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="flex items-center justify-between gap-4 py-3">
-			<div className="min-w-0 flex-1">
-				<div className="text-[12px] font-medium leading-snug text-foreground">
-					{title}
-				</div>
-				<div className="mt-1 text-[11px] leading-snug text-muted-foreground">
-					{description}
-				</div>
-			</div>
-			<div className="shrink-0">{children}</div>
-		</div>
-	);
-}
-
-function ScopeMultiSelect<T extends string>({
-	value,
-	options,
-	onChange,
-}: {
-	value: T[];
-	options: Option<T>[];
-	onChange: (value: T[]) => void;
-}) {
-	const allValue = options.find((option) => option.value === "all")?.value;
-	const fallbackValue = allValue ?? options[0]?.value;
-	const normalizeValues = (values: T[]) => {
-		const validValues = values.filter((item) =>
-			options.some((option) => option.value === item),
-		);
-		if (allValue && validValues.includes(allValue)) {
-			return [allValue];
-		}
-		if (validValues.length > 0) {
-			return Array.from(new Set(validValues));
-		}
-		return fallbackValue ? [fallbackValue] : [];
-	};
-	const selectedValues = normalizeValues(value);
-	const selected = options.filter((option) =>
-		selectedValues.includes(option.value),
-	);
-	const toggleValue = (nextValue: T) => {
-		if (allValue && nextValue === allValue) {
-			onChange([allValue]);
-			return;
-		}
-		const hasValue = selectedValues.includes(nextValue);
-		const nextValues = hasValue
-			? selectedValues.filter((item) => item !== nextValue)
-			: [...selectedValues.filter((item) => item !== allValue), nextValue];
-		onChange(normalizeValues(nextValues));
-	};
-	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<div
-					role="button"
-					tabIndex={0}
-					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
-						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-					)}
-				>
-					<span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-						{selected.map((option) => (
-							<Badge
-								key={option.value}
-								variant="outline"
-								className="h-6 gap-1 rounded-md pr-1 text-[11px]"
-								onClick={(event) => event.stopPropagation()}
-							>
-								{option.label}
-								<button
-									type="button"
-									aria-label={`Remove ${option.label}`}
-									onClick={(event) => {
-										event.preventDefault();
-										event.stopPropagation();
-										toggleValue(option.value);
-									}}
-									className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-								>
-									<X className="size-3" strokeWidth={2} />
-								</button>
-							</Badge>
-						))}
-					</span>
-					<ChevronDown
-						className="size-4 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				</div>
-			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[280px] p-1.5">
-				<Command>
-					<CommandInput placeholder="Search scopes" />
-					<CommandList>
-						<CommandEmpty>No scopes found.</CommandEmpty>
-						<CommandGroup>
-							{options.map((option) => {
-								const checked = selectedValues.includes(option.value);
-								return (
-									<CommandItem
-										key={option.value}
-										value={option.label}
-										data-checked={checked}
-										onSelect={() => toggleValue(option.value)}
-									>
-										{option.label}
-									</CommandItem>
-								);
-							})}
-						</CommandGroup>
-					</CommandList>
-				</Command>
-			</PopoverContent>
-		</Popover>
-	);
-}
-
-function LabelMultiSelect({
-	value,
-	options,
-	loading,
-	onChange,
-}: {
-	value: string[];
-	options: ForgeLabelOption[];
-	loading: boolean;
-	onChange: (value: string[]) => void;
-}) {
-	const optionMap = useMemo(
-		() => new Map(options.map((option) => [option.name, option])),
-		[options],
-	);
-	const mergedOptions = useMemo(() => {
-		const selectedOnly = value
-			.filter((label) => !optionMap.has(label))
-			.map((name) => ({ name, color: null, description: null }));
-		return [...selectedOnly, ...options];
-	}, [optionMap, options, value]);
-	const toggleValue = (nextValue: string) => {
-		onChange(
-			value.includes(nextValue)
-				? value.filter((item) => item !== nextValue)
-				: [...value, nextValue],
-		);
-	};
-	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<div
-					role="button"
-					tabIndex={0}
-					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
-						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-					)}
-				>
-					<span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-						{value.length > 0 ? (
-							value.map((label) => (
-								<Badge
-									key={label}
-									variant="outline"
-									className="h-6 gap-1 rounded-md pr-1 text-[11px]"
-									onClick={(event) => event.stopPropagation()}
-								>
-									<LabelColorDot color={optionMap.get(label)?.color} />
-									{label}
-									<button
-										type="button"
-										aria-label={`Remove ${label}`}
-										onClick={(event) => {
-											event.preventDefault();
-											event.stopPropagation();
-											toggleValue(label);
-										}}
-										className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-									>
-										<X className="size-3" strokeWidth={2} />
-									</button>
-								</Badge>
-							))
-						) : (
-							<span className="px-1 text-[12px] text-muted-foreground">
-								{loading ? "Loading labels" : "Select labels"}
-							</span>
-						)}
-					</span>
-					<ChevronDown
-						className="size-4 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				</div>
-			</PopoverTrigger>
-			<PopoverContent align="end" className="w-[280px] p-1.5">
-				<Command>
-					<CommandInput placeholder="Search labels" />
-					<CommandList>
-						<CommandEmpty>
-							{loading ? "Loading labels..." : "No labels found."}
-						</CommandEmpty>
-						<CommandGroup>
-							{mergedOptions.map((option) => {
-								const checked = value.includes(option.name);
-								return (
-									<CommandItem
-										key={option.name}
-										value={option.name}
-										data-checked={checked}
-										onSelect={() => toggleValue(option.name)}
-									>
-										<LabelColorDot color={option.color} />
-										<span className="truncate">{option.name}</span>
-									</CommandItem>
-								);
-							})}
-						</CommandGroup>
-					</CommandList>
-				</Command>
-			</PopoverContent>
-		</Popover>
-	);
-}
-
-function LabelColorDot({ color }: { color?: string | null }) {
-	if (!color) return null;
-	return (
-		<span
-			className="size-2 shrink-0 rounded-full"
-			style={{ backgroundColor: `#${color}` }}
-		/>
-	);
-}
-
-function SettingsSelect<T extends string>({
-	value,
-	options,
-	onChange,
-}: {
-	value: T;
-	options: Option<T>[];
-	onChange: (value: T) => void;
-}) {
-	const selected =
-		options.find((option) => option.value === value) ?? options[0];
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button
-					type="button"
-					variant="outline"
-					className="h-9 w-[180px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
-				>
-					<span className="truncate">{selected.label}</span>
-					<ChevronDown
-						className="size-4 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent
-				align="end"
-				className="w-[var(--radix-dropdown-menu-trigger-width)]"
-			>
-				{options.map((option) => (
-					<DropdownMenuItem
-						key={option.value}
-						onSelect={() => onChange(option.value)}
-						className="cursor-pointer text-[13px]"
-					>
-						{option.label}
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
-function RepoPicker({
-	repositories,
-	selected,
-	onSelect,
-}: {
-	repositories: ReadonlyArray<{
-		repository: RepositoryCreateOption;
-		repoFilter: string;
-	}>;
-	selected: RepositoryCreateOption | null;
-	onSelect: (repoFilter: string) => void;
-}) {
-	const selectedEntry =
-		repositories.find((entry) => entry.repository.id === selected?.id) ?? null;
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button
-					type="button"
-					variant="outline"
-					disabled={repositories.length === 0}
-					className="h-10 w-[280px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
-				>
-					<span className="flex min-w-0 items-center gap-2">
-						{selected ? (
-							<RepoAvatar repo={selected} />
-						) : (
-							<GithubBrandIcon size={16} />
-						)}
-						<span className="min-w-0 truncate font-medium">
-							{selected ? selected.name : "Select repo"}
-						</span>
-					</span>
-					<ChevronDown
-						className="size-4 shrink-0 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent
-				align="start"
-				className="w-[var(--radix-dropdown-menu-trigger-width)]"
-			>
-				{repositories.map((entry) => (
-					<DropdownMenuItem
-						key={entry.repoFilter}
-						onSelect={() => onSelect(entry.repoFilter)}
-						className="cursor-pointer gap-2 text-[13px]"
-					>
-						<RepoAvatar repo={entry.repository} />
-						<span className="min-w-0 flex-1 truncate">
-							{entry.repository.name}
-						</span>
-						{selectedEntry?.repoFilter === entry.repoFilter ? (
-							<span className="size-1.5 shrink-0 rounded-full bg-primary" />
-						) : null}
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
-function RepoAvatar({ repo }: { repo: RepositoryCreateOption }) {
-	return (
-		<CachedAvatar
-			src={repo.repoIconSrc ?? undefined}
-			alt={repo.name}
-			fallback={repo.repoInitials ?? initialsFor(repo.name)}
-			className="size-5 shrink-0 rounded-md"
-			fallbackClassName="rounded-md text-[10px]"
-		/>
 	);
 }

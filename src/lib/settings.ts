@@ -312,6 +312,22 @@ const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"aurora",
 ];
 
+// Synchronous theme read for flash-free splash boot. The full settings
+// payload lives in SQLite and loads async; theme is mirrored to
+// localStorage so we can paint with the right colour scheme before that
+// returns.
+export function getPreloadedTheme(): ThemeMode {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.theme;
+	}
+	const raw = localStorage.getItem(THEME_STORAGE_KEY);
+	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
+}
+
+export function getPreloadedSettings(): AppSettings {
+	return { ...DEFAULT_SETTINGS, theme: getPreloadedTheme() };
+}
+
 // theme + darkTheme + sidebarGrouping are stored in localStorage
 // (sync read for flash-free boot), not SQLite
 const SETTINGS_KEY_MAP: Record<

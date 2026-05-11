@@ -2,7 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
-import { flushSidebarListsIfIdle } from "@/lib/sidebar-mutation-gate";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
 type Options = {
 	queryClient: QueryClient;
@@ -26,18 +26,18 @@ function handleUiMutation(
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
-			// Sidebar lists go through the mutation gate so an event that
-			// arrives mid-archive/restore/etc. cannot overwrite the
-			// optimistic cache with a stale snapshot. The mutation owner
-			// flushes once the round-trip completes.
-			flushSidebarListsIfIdle(queryClient);
+			// Gate the sidebar-list invalidate so it skips while archive /
+			// restore / pin etc. is mid-flight (their `holdSidebarMutation`
+			// release will reconcile once they settle). Other queries are
+			// unaffected.
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				predicate: (query) =>
 					query.queryKey[0] === "workspaceCandidateDirectories",
 			});
 			return;
 		case "workspaceChanged":
-			flushSidebarListsIfIdle(queryClient);
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -46,7 +46,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionListChanged":
-			flushSidebarListsIfIdle(queryClient);
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -81,7 +81,11 @@ function handleUiMutation(
 			invalidateAllWorkspaceChanges(queryClient);
 			return;
 		case "workspaceGitStateChanged":
-			flushSidebarListsIfIdle(queryClient);
+			// This is the event that fired during restore and clobbered the
+			// optimistic move from archived → active. Gate it so it sits
+			// out while the restore round-trip holds the gate; reconcile
+			// happens when the hold releases.
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -104,7 +108,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChangeRequestChanged":
-			flushSidebarListsIfIdle(queryClient);
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -152,7 +156,7 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				predicate: (query) => query.queryKey[0] === "workspaceDetail",
 			});
-			flushSidebarListsIfIdle(queryClient);
+			requestSidebarReconcile(queryClient);
 			return;
 		case "settingsChanged":
 			if (

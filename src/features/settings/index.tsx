@@ -59,6 +59,7 @@ import type {
 	ThemeMode,
 } from "@/lib/settings";
 import { resolveTheme, useSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -128,17 +129,9 @@ const DARK_THEME_OPTIONS: Array<{
 	},
 ];
 
-export type SettingsSection =
-	| "general"
-	| "shortcuts"
-	| "appearance"
-	| "model"
-	| "experimental"
-	| "import"
-	| "developer"
-	| "account"
-	| "inbox"
-	| `repo:${string}`;
+export type { SettingsSection } from "./types";
+
+import type { SettingsSection } from "./types";
 
 /// Display labels for settings sections in the sidebar / dialog title.
 /// Most match the section key with a leading capital, but a few names
@@ -768,9 +761,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 										// Invalidate all workspace detail caches so
 										// open panels pick up the new remote/branch.
 										void queryClient.invalidateQueries({
@@ -782,9 +773,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 									}}
 								/>
 							)}

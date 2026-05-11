@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
+import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
 	| "pinned"
@@ -1600,22 +1601,76 @@ export async function loadWorkspaceSessions(
 	}
 }
 
+export type SessionThreadMessagesPage = {
+	messages: ThreadMessageLike[];
+	hasMore: boolean;
+};
+
 /**
- * Load session messages as pipeline-rendered ThreadMessageLike[].
- * The frontend can render these directly without any conversion.
+ * Default tail window for session message loads. Mirrored in
+ * `query-client.ts` as `SESSION_THREAD_DEFAULT_TAIL_LIMIT` — keep in sync.
  */
-export async function loadSessionThreadMessages(
+export const DEFAULT_SESSION_THREAD_TAIL_LIMIT = 200;
+
+/**
+ * Raw page fetch — returns both messages and the `hasMore` flag.
+ *
+ * Lower-level than `loadSessionThreadMessages`. Used by the React Query
+ * queryFn (which then updates the pagination store) and by the
+ * "Load earlier" expand path (which needs `hasMore` after each fetch).
+ */
+export async function fetchSessionThreadMessagesPage(
 	sessionId: string,
-): Promise<ThreadMessageLike[]> {
+	options?: { tailLimit?: number | null },
+): Promise<SessionThreadMessagesPage> {
+	const tailLimit =
+		options?.tailLimit === undefined
+			? DEFAULT_SESSION_THREAD_TAIL_LIMIT
+			: options.tailLimit;
 	try {
-		return await invoke<ThreadMessageLike[]>("list_session_thread_messages", {
-			sessionId,
-		});
+		return await invoke<SessionThreadMessagesPage>(
+			"list_session_thread_messages",
+			{
+				sessionId,
+				tailLimit,
+			},
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load session thread messages."),
 		);
 	}
+}
+
+/**
+ * Load session messages as pipeline-rendered ThreadMessageLike[].
+ *
+ * Thin wrapper over `fetchSessionThreadMessagesPage` that drops
+ * `hasMore` for callers wanting just the array. As a side effect this
+ * also updates the pagination store so the React Query path (which
+ * calls this for trivial mockability) keeps `hasMore` / `loadedTailLimit`
+ * in sync with the cache.
+ *
+ * Pass `tailLimit: null` (e.g. full session export) to skip the store
+ * update — that path lives under a different cache key and should not
+ * stomp the live panel's pagination state.
+ */
+export async function loadSessionThreadMessages(
+	sessionId: string,
+	options?: { tailLimit?: number | null },
+): Promise<ThreadMessageLike[]> {
+	const page = await fetchSessionThreadMessagesPage(sessionId, options);
+	if (options?.tailLimit !== null) {
+		const tailLimit =
+			options?.tailLimit === undefined
+				? DEFAULT_SESSION_THREAD_TAIL_LIMIT
+				: options.tailLimit;
+		setSessionThreadPaginationState(sessionId, {
+			hasMore: page.hasMore,
+			loadedTailLimit: tailLimit,
+		});
+	}
+	return page.messages;
 }
 
 export async function restoreWorkspace(

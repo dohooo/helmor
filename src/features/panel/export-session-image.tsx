@@ -18,8 +18,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ThreadMessageLike } from "@/lib/api";
-import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
+import { loadSessionThreadMessages, type ThreadMessageLike } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { MemoConversationMessage } from "./message-components";
 
@@ -67,9 +67,15 @@ export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 
 function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 	const pushToast = useWorkspaceToast();
+	// The main thread query is paginated (tail-only) for big-session
+	// switching speed, but the image export needs the entire history.
+	// Fetch with `tailLimit: null` here — separate query key so the
+	// trailing snapshot used by the live chat panel isn't blown away.
 	const messagesQuery = useQuery({
-		...sessionThreadMessagesQueryOptions(sessionId),
+		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread", "full"],
+		queryFn: () => loadSessionThreadMessages(sessionId, { tailLimit: null }),
 		enabled: Boolean(sessionId),
+		staleTime: 60_000,
 	});
 	const messages = useMemo<ThreadMessageLike[]>(
 		() => messagesQuery.data ?? [],

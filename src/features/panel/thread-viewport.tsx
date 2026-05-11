@@ -1,4 +1,5 @@
-import { ArrowDown } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 import {
 	type ComponentType,
 	createElement,
@@ -19,9 +20,13 @@ import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
+import { expandSessionThread } from "@/lib/query-client";
+import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
 import { EmptyState, MemoConversationMessage } from "./message-components";
+import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
+import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
 
 export type PresentedSessionPane = {
 	sessionId: string;
@@ -142,6 +147,8 @@ function ChatThread({
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
+	const queryClient = useQueryClient();
+	const pagination = useSessionThreadPagination(sessionId);
 	const usePlainThread =
 		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const hasStreamingMessage = threadMessages.some(
@@ -161,6 +168,65 @@ function ChatThread({
 		},
 		[scrollRef],
 	);
+
+	// "Load earlier" state. We capture the pre-expand scroll geometry so the
+	// post-expand layout effect can offset `scrollTop` by the height of the
+	// newly-prepended messages — that's what keeps the visible region from
+	// jumping when older history slides in above the user's reading position.
+	const [expanding, setExpanding] = useState(false);
+	const pendingScrollAnchorRef = useRef<{
+		prevScrollHeight: number;
+		prevScrollTop: number;
+	} | null>(null);
+
+	const handleLoadEarlier = useCallback(async () => {
+		if (expanding || !pagination.hasMore) return;
+		const parent = scrollParentRef.current;
+		if (parent) {
+			pendingScrollAnchorRef.current = {
+				prevScrollHeight: parent.scrollHeight,
+				prevScrollTop: parent.scrollTop,
+			};
+		}
+		setExpanding(true);
+		try {
+			await expandSessionThread(queryClient, sessionId);
+		} catch (error) {
+			pendingScrollAnchorRef.current = null;
+			console.error("[thread-viewport] expand failed", error);
+		} finally {
+			setExpanding(false);
+		}
+	}, [expanding, pagination.hasMore, queryClient, sessionId]);
+
+	// After expand: the new messages mounted, contentRef.scrollHeight grew.
+	// Push scrollTop by exactly the delta so the user's visible message stays
+	// pinned in place. `messages` is the layout-causing dep — once React
+	// commits the new array, the layout effect runs synchronously before paint.
+	useLayoutEffect(() => {
+		const anchor = pendingScrollAnchorRef.current;
+		if (!anchor) return;
+		const parent = scrollParentRef.current;
+		if (!parent) return;
+		const delta = parent.scrollHeight - anchor.prevScrollHeight;
+		if (delta > 0) {
+			parent.scrollTop = anchor.prevScrollTop + delta;
+		}
+		pendingScrollAnchorRef.current = null;
+	}, [messages]);
+
+	// Discard a stale anchor when the user switches sessions mid-expand — the
+	// remembered scrollHeight belongs to a different thread, so applying its
+	// delta would mis-position the new thread.
+	useEffect(() => {
+		return () => {
+			pendingScrollAnchorRef.current = null;
+		};
+	}, []);
+
+	const loadEarlierBanner = pagination.hasMore ? (
+		<LoadEarlierBanner loading={expanding} onClick={handleLoadEarlier} />
+	) : null;
 	// Track streaming start time per session so the timer survives session switches.
 	if (sending && !streamingStartTimes.has(sessionId)) {
 		streamingStartTimes.set(sessionId, Date.now());
@@ -236,6 +302,7 @@ function ChatThread({
 				onInitializeScript={onInitializeScript}
 				paneWidth={paneWidth}
 				pinTailRows={pinTailRows}
+				prologueSlot={loadEarlierBanner}
 				scrollRef={handleScrollRef}
 				sessionId={sessionId}
 				sending={sending}
@@ -272,6 +339,7 @@ function ConversationViewport({
 	onInitializeScript,
 	paneWidth,
 	pinTailRows,
+	prologueSlot,
 	scrollRef,
 	sessionId,
 	sending,
@@ -290,6 +358,7 @@ function ConversationViewport({
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	pinTailRows: boolean;
+	prologueSlot?: ReactNode;
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
@@ -329,6 +398,7 @@ function ConversationViewport({
 				ref={viewportRef}
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
+				{prologueSlot}
 				{usePlainThread ? (
 					<div ref={contentRef} className="flex min-h-full flex-col">
 						{Header ? createElement(Header) : null}
@@ -567,63 +637,7 @@ function ProgressiveConversationViewport({
 		};
 	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
 
-	useEffect(() => {
-		if (!scrollParent || typeof window === "undefined") {
-			return;
-		}
-		const escapeBottomLock = () => {
-			hasUserScrolledRef.current = true;
-			stopScroll();
-		};
-		const inScrollParent = (target: EventTarget | null) => {
-			return (
-				target instanceof Node &&
-				(scrollParent === target || scrollParent.contains(target))
-			);
-		};
-		const onWheel = (event: WheelEvent) => {
-			if (event.deltaY < -2 && inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (
-				(event.key === "ArrowUp" ||
-					event.key === "PageUp" ||
-					event.key === "Home") &&
-				inScrollParent(event.target)
-			) {
-				escapeBottomLock();
-			}
-		};
-		const onTouchMove = (event: TouchEvent) => {
-			if (inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		window.addEventListener("wheel", onWheel as EventListener, {
-			passive: true,
-		});
-		window.addEventListener("keydown", onKeyDown as unknown as EventListener, {
-			passive: true,
-		});
-		window.addEventListener(
-			"touchmove",
-			onTouchMove as unknown as EventListener,
-			{ passive: true },
-		);
-		return () => {
-			window.removeEventListener("wheel", onWheel as EventListener);
-			window.removeEventListener(
-				"keydown",
-				onKeyDown as unknown as EventListener,
-			);
-			window.removeEventListener(
-				"touchmove",
-				onTouchMove as unknown as EventListener,
-			);
-		};
-	}, [scrollParent, stopScroll]);
+	useEscapeBottomLock({ scrollParent, stopScroll, hasUserScrolledRef });
 
 	const estimatedHeights = useMemo(
 		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
@@ -704,29 +718,11 @@ function ProgressiveConversationViewport({
 	// length. When the streaming row isn't mounted yet (request sent but
 	// assistant hasn't started emitting), we fall back to the state-driven
 	// row.top so the indicator doesn't collapse to y=0.
-	useLayoutEffect(() => {
-		const indicator = indicatorElRef.current;
-		if (!indicator) {
-			return;
-		}
-		if (streamingRowEl) {
-			const sync = () => {
-				indicator.style.top = `${
-					streamingRowEl.offsetTop + streamingRowEl.offsetHeight
-				}px`;
-			};
-			sync();
-			if (typeof ResizeObserver === "undefined") {
-				return;
-			}
-			const observer = new ResizeObserver(sync);
-			observer.observe(streamingRowEl);
-			return () => observer.disconnect();
-		}
-		if (indicatorFallbackTop !== undefined) {
-			indicator.style.top = `${indicatorFallbackTop}px`;
-		}
-	}, [streamingRowEl, indicatorFallbackTop]);
+	useStreamingIndicatorSync({
+		indicatorElRef,
+		streamingRowEl,
+		indicatorFallbackTop,
+	});
 	const headerHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
 	const effectiveViewportHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
@@ -1073,6 +1069,70 @@ export function ConversationColdPlaceholder() {
 
 function ConversationHeaderSpacer() {
 	return <div className="h-6 shrink-0" />;
+}
+
+/**
+ * Affordance shown at the top of the scroll viewport whenever older
+ * messages exist beyond the loaded window. Self-triggers via an
+ * IntersectionObserver as the user scrolls up to it; clicking is the
+ * fallback for keyboard / pointer users.
+ */
+function LoadEarlierBanner({
+	loading,
+	onClick,
+}: {
+	loading: boolean;
+	onClick: () => void;
+}) {
+	const sentinelRef = useRef<HTMLDivElement | null>(null);
+	const onClickRef = useRef(onClick);
+	useEffect(() => {
+		onClickRef.current = onClick;
+	}, [onClick]);
+
+	// Auto-trigger when the banner enters the viewport. We re-create the
+	// observer each render cycle that toggles `loading` so we don't fire
+	// again while an expand is in flight.
+	useEffect(() => {
+		const node = sentinelRef.current;
+		if (!node || loading) return;
+		if (typeof IntersectionObserver === "undefined") return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((entry) => entry.isIntersecting)) {
+					onClickRef.current();
+				}
+			},
+			{ root: null, rootMargin: "100px 0px 0px 0px", threshold: 0 },
+		);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [loading]);
+
+	return (
+		<div
+			ref={sentinelRef}
+			className="flex shrink-0 items-center justify-center py-2"
+		>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				disabled={loading}
+				onClick={onClick}
+				className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+			>
+				{loading ? (
+					<Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
+				) : (
+					<ArrowUp className="size-3.5" strokeWidth={2} />
+				)}
+				<span>
+					{loading ? "Loading earlier messages…" : "Load earlier messages"}
+				</span>
+			</Button>
+		</div>
+	);
 }
 
 function ConversationBottomSpacer() {
