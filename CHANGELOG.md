@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.4
+
+### Patch Changes
+
+- [#493](https://github.com/dohooo/helmor/pull/493) [`1f7b21c`](https://github.com/dohooo/helmor/commit/1f7b21c6acd587b9b81b751052f3510cdaadd367) Thanks [@natllian](https://github.com/natllian)! - Bring full GitLab support to the Add Context sidebar and fix two inbox bugs:
+
+  - Add Context now lists GitLab issues and merge requests when the current project lives on GitLab.
+  - Fix the "Newest" sort behaving identically to "Recently updated" on both GitHub and GitLab — it now actually sorts by creation date.
+  - Fix inbox pagination silently dropping items when a page returned more results than the page size (e.g. only 20 of 23 issues showing).
+
+- [#491](https://github.com/dohooo/helmor/pull/491) [`64b05bf`](https://github.com/dohooo/helmor/commit/64b05bfa47584912e9ab31e58234eda8d86738ff) Thanks [@natllian](https://github.com/natllian)! - Improve how thinking blocks are surfaced and rendered:
+  - Add a Claude Code Thinking Display setting in General (Summarized / Omitted) to control how Claude returns thinking — choosing Omitted speeds up time-to-first-text-token when streaming.
+  - Stop large reasoning blocks from flickering when they scroll out of view and back, and from stalling workspace switches.
+  - Keep the conversation's bottom whitespace stable during long streaming replies instead of letting it grow until real content is pushed off-screen.
+
 ## 0.20.3
 
 ### Patch Changes
