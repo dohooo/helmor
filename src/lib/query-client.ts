@@ -602,7 +602,16 @@ export function workspaceCandidateDirectoriesQueryOptions(
 	});
 }
 
-/** Pipeline-rendered thread messages — ready for direct rendering. */
+/**
+ * Pipeline-rendered thread messages — ready for direct rendering.
+ *
+ * Defaults to tail-loading (most recent 200 records) for snappy switches
+ * on huge sessions; the backend command accepts an optional `tailLimit`
+ * which `loadSessionThreadMessages` plumbs through. Older messages are
+ * not in this snapshot yet — UI for fetching earlier history will live
+ * outside the queryKey (a manual `setQueryData` overwrite) so the
+ * streaming cache helpers don't have to be tail-aware.
+ */
 export function sessionThreadMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],

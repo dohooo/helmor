@@ -1598,17 +1598,42 @@ export async function loadWorkspaceSessions(
 	}
 }
 
+type SessionThreadMessagesPage = {
+	messages: ThreadMessageLike[];
+	hasMore: boolean;
+};
+
+/**
+ * Default tail window for session message loads — see
+ * `SESSION_THREAD_DEFAULT_TAIL_LIMIT` in query-client for rationale.
+ */
+const DEFAULT_THREAD_TAIL_LIMIT = 200;
+
 /**
  * Load session messages as pipeline-rendered ThreadMessageLike[].
- * The frontend can render these directly without any conversion.
+ *
+ * Internally the backend returns `{ messages, hasMore }` — we drop
+ * `hasMore` here and surface only the array so existing callers and the
+ * thread cache machinery stay shape-stable. Pass `tailLimit: null` to
+ * load the full history (e.g. session image export).
  */
 export async function loadSessionThreadMessages(
 	sessionId: string,
+	options?: { tailLimit?: number | null },
 ): Promise<ThreadMessageLike[]> {
+	const tailLimit =
+		options?.tailLimit === undefined
+			? DEFAULT_THREAD_TAIL_LIMIT
+			: options.tailLimit;
 	try {
-		return await invoke<ThreadMessageLike[]>("list_session_thread_messages", {
-			sessionId,
-		});
+		const page = await invoke<SessionThreadMessagesPage>(
+			"list_session_thread_messages",
+			{
+				sessionId,
+				tailLimit,
+			},
+		);
+		return page.messages;
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load session thread messages."),
