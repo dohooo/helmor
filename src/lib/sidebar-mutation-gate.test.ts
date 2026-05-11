@@ -227,5 +227,49 @@ describe("sidebar-mutation-gate", () => {
 			gateB.end("y");
 			expect(isSidebarMutationInFlight()).toBe(false);
 		});
+
+		it("disposeAll releases every outstanding hold (covers component unmount mid-flight)", () => {
+			const gate = createScopedSidebarGate(queryClient);
+			gate.begin("a");
+			gate.begin("b");
+			gate.begin("c");
+			expect(isSidebarMutationInFlight()).toBe(true);
+			gate.disposeAll();
+			expect(isSidebarMutationInFlight()).toBe(false);
+			// Reconcile runs exactly once when the last hold drops.
+			expect(invalidateSpy).toHaveBeenCalledTimes(2);
+		});
+
+		it("disposeAll while no holds outstanding is a no-op", () => {
+			const gate = createScopedSidebarGate(queryClient);
+			gate.disposeAll();
+			expect(isSidebarMutationInFlight()).toBe(false);
+			expect(invalidateSpy).not.toHaveBeenCalled();
+		});
+
+		it("methods become no-ops after disposeAll (gate is unusable)", () => {
+			const gate = createScopedSidebarGate(queryClient);
+			gate.begin("a");
+			gate.disposeAll();
+			expect(isSidebarMutationInFlight()).toBe(false);
+			// Late begin/end events (e.g. a backend success arriving
+			// after the owner is gone) must not touch the counter.
+			gate.begin("a");
+			gate.end("a");
+			gate.begin("late");
+			expect(isSidebarMutationInFlight()).toBe(false);
+		});
+
+		it("disposeAll does not affect other gate instances' counters", () => {
+			const gateA = createScopedSidebarGate(queryClient);
+			const gateB = createScopedSidebarGate(queryClient);
+			gateA.begin("a");
+			gateB.begin("b");
+			gateA.disposeAll();
+			// B's hold is still live.
+			expect(isSidebarMutationInFlight()).toBe(true);
+			gateB.end("b");
+			expect(isSidebarMutationInFlight()).toBe(false);
+		});
 	});
 });

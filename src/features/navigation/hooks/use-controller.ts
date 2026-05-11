@@ -39,8 +39,7 @@ import {
 import { useSettings } from "@/lib/settings";
 import {
 	createScopedSidebarGate,
-	beginSidebarMutation as gateBeginSidebarMutation,
-	endSidebarMutation as gateEndSidebarMutation,
+	holdSidebarMutation,
 	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import {
@@ -147,6 +146,13 @@ export function useWorkspacesSidebarController({
 	// out-of-sequence events never imbalance the counter.
 	const archiveGateRef = useRef(createScopedSidebarGate(queryClient));
 	const archiveGate = archiveGateRef.current;
+	useEffect(() => {
+		// If the controller unmounts mid-archive (HMR, Tauri webview
+		// reload, future route change), release any outstanding holds
+		// so the module-level counter doesn't permanently silence
+		// `requestSidebarReconcile` for the next mount.
+		return () => archiveGate.disposeAll();
+	}, [archiveGate]);
 
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
@@ -542,7 +548,7 @@ export function useWorkspacesSidebarController({
 			if (!opts?.skipSidebarFlush) {
 				// `requestSidebarReconcile` is itself gated, so callers
 				// that hold a sidebar mutation will see this turn into a
-				// no-op until `endSidebarMutation` releases the gate.
+				// no-op until the active mutation releases the gate.
 				requestSidebarReconcile(queryClient);
 			}
 		},
@@ -638,7 +644,7 @@ export function useWorkspacesSidebarController({
 			// refetch workspaceGroups mid-flight and clobber the optimistic
 			// pin/unpin move (the row migrates between Pinned and its status
 			// group).
-			gateBeginSidebarMutation();
+			const releaseSidebar = holdSidebarMutation(queryClient);
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
 				if (!Array.isArray(current)) {
 					return current;
@@ -691,15 +697,14 @@ export function useWorkspacesSidebarController({
 				}
 				await invalidateWorkspaceSummary(workspaceId);
 			} catch (error) {
-				// Error rollback — gate is still held; `endSidebarMutation`
-				// below reconciles once we release, which is the right
-				// path to pull the canonical post-failure state from the
-				// server.
+				// Error rollback — gate is still held; releasing below
+				// reconciles, which pulls the canonical post-failure
+				// state from the server.
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to update pin state."),
 				);
 			} finally {
-				gateEndSidebarMutation(queryClient);
+				releaseSidebar();
 			}
 		},
 		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
@@ -1168,7 +1173,7 @@ export function useWorkspacesSidebarController({
 				onSelectWorkspace(nextWorkspaceId);
 			}
 
-			gateBeginSidebarMutation();
+			const releaseSidebar = holdSidebarMutation(queryClient);
 			void permanentlyDeleteWorkspace(workspaceId)
 				.catch((error) => {
 					queryClient.setQueryData(
@@ -1188,7 +1193,7 @@ export function useWorkspacesSidebarController({
 						"destructive",
 					);
 				})
-				.finally(() => gateEndSidebarMutation(queryClient));
+				.finally(releaseSidebar);
 		},
 		[
 			archivedRows,
@@ -1430,7 +1435,7 @@ export function useWorkspacesSidebarController({
 			// watcher refs events on worktree (re)appearance, etc.) skip
 			// instead of refetching the still-pre-restore server state and
 			// clobbering the optimistic move from archived → active.
-			gateBeginSidebarMutation();
+			const releaseSidebar = holdSidebarMutation(queryClient);
 
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
@@ -1463,7 +1468,7 @@ export function useWorkspacesSidebarController({
 							"Unable to restore workspace.",
 						);
 					})
-					.finally(() => gateEndSidebarMutation(queryClient));
+					.finally(releaseSidebar);
 				return;
 			}
 
@@ -1533,7 +1538,7 @@ export function useWorkspacesSidebarController({
 						"Unable to restore workspace.",
 					);
 				})
-				.finally(() => gateEndSidebarMutation(queryClient));
+				.finally(releaseSidebar);
 		},
 		[
 			notifyBranchRename,

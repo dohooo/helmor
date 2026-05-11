@@ -4,7 +4,7 @@
 // holds them, the composer / streaming layer consumes them, then the
 // `*Consumed` callbacks clear the slot.
 import type { QueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PendingPromptForSession } from "@/features/commit/hooks/use-commit-lifecycle";
 import { drainPendingCliSends, triggerWorkspaceFetch } from "@/lib/api";
 import {
@@ -16,6 +16,10 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { CLI_SEND_AUTO_SUBMIT_DELAY_MS } from "@/shell/constants";
+import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
 
 export type PendingQueueState = {
 	pendingComposerInserts: ResolvedComposerInsertRequest[];
@@ -55,20 +59,16 @@ export function usePendingQueueController(
 		ResolvedComposerInsertRequest[]
 	>([]);
 
-	const pushToastRef = useRef(pushToast);
-	const getSelectionTargetsRef = useRef(deps.getSelectionTargets);
-	const getActiveWorkspaceIdRef = useRef(deps.getActiveWorkspaceId);
-	const onCliSendSelectWorkspaceRef = useRef(deps.onCliSendSelectWorkspace);
-	const onCliSendSelectSessionRef = useRef(deps.onCliSendSelectSession);
-	const queuePendingPromptForSessionRef = useRef(
+	const pushToastRef = useLatestRef(pushToast);
+	const getSelectionTargetsRef = useLatestRef(deps.getSelectionTargets);
+	const getActiveWorkspaceIdRef = useLatestRef(deps.getActiveWorkspaceId);
+	const onCliSendSelectWorkspaceRef = useLatestRef(
+		deps.onCliSendSelectWorkspace,
+	);
+	const onCliSendSelectSessionRef = useLatestRef(deps.onCliSendSelectSession);
+	const queuePendingPromptForSessionRef = useLatestRef(
 		deps.queuePendingPromptForSession,
 	);
-	pushToastRef.current = pushToast;
-	getSelectionTargetsRef.current = deps.getSelectionTargets;
-	getActiveWorkspaceIdRef.current = deps.getActiveWorkspaceId;
-	onCliSendSelectWorkspaceRef.current = deps.onCliSendSelectWorkspace;
-	onCliSendSelectSessionRef.current = deps.onCliSendSelectSession;
-	queuePendingPromptForSessionRef.current = deps.queuePendingPromptForSession;
 
 	const insertIntoComposer = useCallback((request: ComposerInsertRequest) => {
 		const targets = getSelectionTargetsRef.current();
@@ -170,23 +170,11 @@ export function usePendingQueueController(
 		};
 	}, [processPendingCliSends]);
 
-	const liveActions = {
+	const actions = useStableActions<PendingQueueActions>({
 		insertIntoComposer,
 		consumeComposerInserts,
 		processPendingCliSends,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<PendingQueueActions>(
-		() => ({
-			insertIntoComposer: (request) =>
-				actionsRef.current.insertIntoComposer(request),
-			consumeComposerInserts: (ids) =>
-				actionsRef.current.consumeComposerInserts(ids),
-			processPendingCliSends: () => actionsRef.current.processPendingCliSends(),
-		}),
-		[],
-	);
+	});
 
 	const state = useMemo<PendingQueueState>(
 		() => ({ pendingComposerInserts }),

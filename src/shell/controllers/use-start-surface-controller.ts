@@ -4,7 +4,7 @@
 // the `prepareComposer` orchestration that runs when the user commits the
 // start composer to create a workspace.
 import { type QueryClient, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import type {
 	ComposerCreatePrepareOutcome,
@@ -29,6 +29,10 @@ import { describeUnknownError } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { EMPTY_STRING_LIST } from "@/shell/constants";
 import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
+import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
 
 export type StartSurfaceState = {
 	startRepositoryId: string | null;
@@ -128,23 +132,15 @@ export function useStartSurfaceController(
 
 	// Latest cross-controller callbacks, kept in refs so AppShell can pass
 	// inline arrows without thrashing every downstream useCallback.
-	const getViewModeRef = useRef(deps.getViewMode);
-	const openWorkspaceStartRef = useRef(deps.openWorkspaceStart);
-	const setViewModeRef = useRef(deps.setViewMode);
-	const selectWorkspaceRef = useRef(deps.selectWorkspace);
-	const selectSessionRef = useRef(deps.selectSession);
-	const setPendingCreatedWorkspaceSubmitRef = useRef(
+	const getViewModeRef = useLatestRef(deps.getViewMode);
+	const openWorkspaceStartRef = useLatestRef(deps.openWorkspaceStart);
+	const setViewModeRef = useLatestRef(deps.setViewMode);
+	const selectWorkspaceRef = useLatestRef(deps.selectWorkspace);
+	const selectSessionRef = useLatestRef(deps.selectSession);
+	const setPendingCreatedWorkspaceSubmitRef = useLatestRef(
 		deps.setPendingCreatedWorkspaceSubmit,
 	);
-	const pushToastRef = useRef(deps.pushToast);
-	getViewModeRef.current = deps.getViewMode;
-	openWorkspaceStartRef.current = deps.openWorkspaceStart;
-	setViewModeRef.current = deps.setViewMode;
-	selectWorkspaceRef.current = deps.selectWorkspace;
-	selectSessionRef.current = deps.selectSession;
-	setPendingCreatedWorkspaceSubmitRef.current =
-		deps.setPendingCreatedWorkspaceSubmit;
-	pushToastRef.current = deps.pushToast;
+	const pushToastRef = useLatestRef(deps.pushToast);
 
 	const startRepository =
 		repositories.find((repository) => repository.id === startRepositoryId) ??
@@ -462,7 +458,7 @@ export function useStartSurfaceController(
 		setStartPendingNewBranch(null);
 	}, []);
 
-	const liveActions = {
+	const actions = useStableActions<StartSurfaceActions>({
 		selectRepository,
 		selectSourceBranch,
 		selectMode,
@@ -475,33 +471,7 @@ export function useStartSurfaceController(
 		prepareComposer,
 		addRepositoryNeedsStart,
 		resetScratchOnReentry,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<StartSurfaceActions>(
-		() => ({
-			selectRepository: (repo) => actionsRef.current.selectRepository(repo),
-			selectSourceBranch: (branch) =>
-				actionsRef.current.selectSourceBranch(branch),
-			selectMode: (mode) => actionsRef.current.selectMode(mode),
-			stashPendingNewBranch: (branch) =>
-				actionsRef.current.stashPendingNewBranch(branch),
-			refetchBranches: () => actionsRef.current.refetchBranches(),
-			setInboxProviderTab: (tab) => actionsRef.current.setInboxProviderTab(tab),
-			setInboxProviderSourceTab: (tab) =>
-				actionsRef.current.setInboxProviderSourceTab(tab),
-			setInboxStateFilterBySource: (value) =>
-				actionsRef.current.setInboxStateFilterBySource(value),
-			moveLocalToWorktree: (workspaceId) =>
-				actionsRef.current.moveLocalToWorktree(workspaceId),
-			prepareComposer: (payload, options) =>
-				actionsRef.current.prepareComposer(payload, options),
-			addRepositoryNeedsStart: (repositoryId) =>
-				actionsRef.current.addRepositoryNeedsStart(repositoryId),
-			resetScratchOnReentry: () => actionsRef.current.resetScratchOnReentry(),
-		}),
-		[],
-	);
+	});
 
 	const state = useMemo<StartSurfaceState>(
 		() => ({

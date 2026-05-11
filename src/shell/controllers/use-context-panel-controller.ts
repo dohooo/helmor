@@ -8,6 +8,10 @@ import type { AppSettings, WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
 import { useShellEvent } from "@/shell/event-bus";
+import {
+	useLatestRef,
+	useStableActions,
+} from "@/shell/hooks/use-stable-actions";
 
 export type ContextPanelState = {
 	rightSidebarMode: WorkspaceRightSidebarMode;
@@ -68,8 +72,7 @@ export function useContextPanelController(
 		null,
 	);
 
-	const getViewModeRef = useRef(deps.getViewMode);
-	getViewModeRef.current = deps.getViewMode;
+	const getViewModeRef = useLatestRef(deps.getViewMode);
 
 	// One-shot hydration when settings load. Restores the right-sidebar
 	// layout the user last saw, gated by which surface (workspace vs.
@@ -179,7 +182,7 @@ export function useContextPanelController(
 		rightSidebarMode === "context" &&
 		!inspectorCollapsed;
 
-	const liveActions = {
+	const actions = useStableActions<ContextPanelActions>({
 		setInspectorCollapsed,
 		toggleContextPanel,
 		openWorkspaceContextCard,
@@ -191,32 +194,7 @@ export function useContextPanelController(
 		closeStartContextPreview,
 		syncToWorkspaceMode,
 		syncToStartMode,
-	};
-	const actionsRef = useRef(liveActions);
-	actionsRef.current = liveActions;
-	const actions = useMemo<ContextPanelActions>(
-		() => ({
-			setInspectorCollapsed: (value) =>
-				actionsRef.current.setInspectorCollapsed(value),
-			toggleContextPanel: () => actionsRef.current.toggleContextPanel(),
-			openWorkspaceContextCard: (card) =>
-				actionsRef.current.openWorkspaceContextCard(card),
-			selectWorkspaceContextPreview: () =>
-				actionsRef.current.selectWorkspaceContextPreview(),
-			closeWorkspaceContextPreview: () =>
-				actionsRef.current.closeWorkspaceContextPreview(),
-			deactivateWorkspaceContextPreview: () =>
-				actionsRef.current.deactivateWorkspaceContextPreview(),
-			clearWorkspacePreview: () => actionsRef.current.clearWorkspacePreview(),
-			openStartContextCard: (card) =>
-				actionsRef.current.openStartContextCard(card),
-			closeStartContextPreview: () =>
-				actionsRef.current.closeStartContextPreview(),
-			syncToWorkspaceMode: () => actionsRef.current.syncToWorkspaceMode(),
-			syncToStartMode: () => actionsRef.current.syncToStartMode(),
-		}),
-		[],
-	);
+	});
 
 	const state = useMemo<ContextPanelState>(
 		() => ({
