@@ -30,10 +30,12 @@ import type { ReleaseAnnouncementCatalogEntry } from "./announcements";
  *   - Deleting an entry is fine: the toast simply stops surfacing on
  *     fresh launches. Users who already saw it are unaffected.
  *
- * SKIPPED-VERSION BEHAVIOR (intentional)
- *   The runtime matches the user's CURRENT version exactly. If a user
- *   jumps 0.19.1 to 0.21.0, any 0.20.0 toast is silently skipped. We
- *   prefer this over queuing every missed release.
+ * SKIPPED-VERSION BEHAVIOR
+ *   If a user jumps several versions (e.g. 0.19.1 → 0.21.0), the runtime
+ *   merges every entry in the half-open range (lastSeen, current] into a
+ *   single toast — they see what they missed, newest version first
+ *   (older content scrolls below). Dismissing the toast dismisses every
+ *   id rolled into it.
  */
 export const RELEASE_ANNOUNCEMENT_CATALOG: readonly ReleaseAnnouncementCatalogEntry[] =
 	[

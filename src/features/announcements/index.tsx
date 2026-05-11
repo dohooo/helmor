@@ -42,7 +42,7 @@ export function ReleaseAnnouncementToastHost({
 	onOpenSettings,
 	onSetRightSidebarMode,
 }: ReleaseAnnouncementToastHostProps) {
-	const shownIdRef = useRef<string | null>(null);
+	const shownIdsRef = useRef<string | null>(null);
 	const [announcement, setAnnouncement] = useState<ReleaseAnnouncement | null>(
 		null,
 	);
@@ -59,9 +59,13 @@ export function ReleaseAnnouncementToastHost({
 		// fresh installs as upgrades) and prevents re-showing the same
 		// version's toast on the next mount.
 		writeLastSeenInstallVersion(APP_VERSION);
-		if (!nextAnnouncement || shownIdRef.current === nextAnnouncement.id) return;
+		if (!nextAnnouncement) return;
 
-		shownIdRef.current = nextAnnouncement.id;
+		// Same set of ids already shown this mount — React strict mode can
+		// fire this effect twice in dev; the join key dedupes.
+		const idsKey = nextAnnouncement.ids.join(",");
+		if (shownIdsRef.current === idsKey) return;
+		shownIdsRef.current = idsKey;
 		setAnnouncement(nextAnnouncement);
 	}, []);
 
@@ -79,7 +83,11 @@ export function ReleaseAnnouncementToastHost({
 	};
 
 	const close = () => {
-		dismissReleaseAnnouncement(announcement.id);
+		// Multi-id when the user skipped versions — dismiss every id so the
+		// next launch doesn't replay the same backlog.
+		for (const id of announcement.ids) {
+			dismissReleaseAnnouncement(id);
+		}
 		setAnnouncement(null);
 	};
 
@@ -154,7 +162,11 @@ function ReleaseAnnouncementToast({
 			</div>
 			{collapsed ? null : (
 				<>
-					<ul className="mt-3 space-y-2 pl-[6px]">
+					{/* Cap height so a skipped-version backlog (many items)
+					 *  scrolls inside the card instead of pushing the card
+					 *  off the top of the screen. 50vh leaves room for header
+					 *  + footer + macOS chrome on small displays. */}
+					<ul className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pl-[6px] [scrollbar-width:thin]">
 						{announcement.items.map((item) => (
 							<ReleaseAnnouncementListItem
 								key={item.text}
