@@ -330,7 +330,10 @@ export const useSmoothStreamContent = (
 			targetCountRef.current = 0;
 			displayedCountRef.current = 0;
 			lastInputCountRef.current = 0;
-			if (targetContentRef.current !== content) {
+			if (
+				targetContentRef.current !== content ||
+				displayedContentRef.current !== content
+			) {
 				targetContentRef.current = content;
 				displayedContentRef.current = content;
 				setDisplayedContent(content);

@@ -26,6 +26,7 @@ mod actions;
 mod api;
 mod context;
 pub mod inbox;
+mod pr_match;
 mod pull_request;
 mod types;
 
