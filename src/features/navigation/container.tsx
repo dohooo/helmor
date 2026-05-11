@@ -96,6 +96,7 @@ export const WorkspacesSidebarContainer = memo(
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
 				onOpenNewWorkspace={onOpenNewWorkspace}
+				onCreateWorkspaceForRepo={onAddRepositoryNeedsStart}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMoveLocalToWorktree={onMoveLocalToWorktree}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}

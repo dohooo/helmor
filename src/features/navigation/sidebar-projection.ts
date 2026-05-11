@@ -1,8 +1,20 @@
 import type { WorkspaceGroup, WorkspaceRow, WorkspaceSummary } from "@/lib/api";
+import type { SidebarGrouping } from "@/lib/settings";
 import { summaryToArchivedRow } from "@/lib/workspace-helpers";
 
 export const REPO_GROUP_PREFIX = "repo:";
 const UNKNOWN_REPO_GROUP_ID = `${REPO_GROUP_PREFIX}__unknown__`;
+
+/**
+ * Extract the underlying repository id from a sidebar group id, or `null`
+ * if the group isn't a repo bucket (status group, pinned, backlog) or is
+ * the catch-all "unknown repo" bucket where we have no repo to act on.
+ */
+export function repoIdFromGroupId(groupId: string): string | null {
+	if (!groupId.startsWith(REPO_GROUP_PREFIX)) return null;
+	if (groupId === UNKNOWN_REPO_GROUP_ID) return null;
+	return groupId.slice(REPO_GROUP_PREFIX.length);
+}
 
 export type PendingArchiveEntry = {
 	row: WorkspaceRow;
@@ -94,6 +106,23 @@ export function projectSidebarLists({
 		groups: liveGroups,
 		archivedRows,
 	};
+}
+
+/**
+ * Project base sidebar data into the exact shape the UI renders, applying
+ * pending optimistic state AND the user's grouping preference. This is the
+ * single source of truth for "visual sidebar" — every consumer that needs
+ * to reason about the order rows actually appear in (auto-select, archive
+ * replacement, etc.) should call this rather than composing the two steps
+ * by hand, which is how the two sides drift out of sync.
+ */
+export function projectVisualSidebar(
+	args: Parameters<typeof projectSidebarLists>[0],
+	sidebarGrouping: SidebarGrouping,
+): ReturnType<typeof projectSidebarLists> {
+	const projected = projectSidebarLists(args);
+	if (sidebarGrouping !== "repo") return projected;
+	return { ...projected, groups: regroupByRepo(projected.groups) };
 }
 
 /**

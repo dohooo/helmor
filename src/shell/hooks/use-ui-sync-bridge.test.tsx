@@ -3,6 +3,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	beginSidebarMutation,
+	endSidebarMutation,
+	resetSidebarMutationGate,
+} from "@/lib/sidebar-mutation-gate";
 import { useUiSyncBridge } from "./use-ui-sync-bridge";
 
 const apiMocks = vi.hoisted(() => ({
@@ -36,6 +41,8 @@ describe("useUiSyncBridge", () => {
 		capturedSubscription = null;
 		apiMocks.subscribeUiMutations.mockClear();
 		apiMocks.unlistenUiMutations.mockClear();
+		// Ensure no leaked counter from a previous test gates a fresh flush.
+		resetSidebarMutationGate();
 	});
 
 	it("invalidates the expected query families for workspace git state changes", async () => {
@@ -61,8 +68,13 @@ describe("useUiSyncBridge", () => {
 		});
 
 		await waitFor(() => {
+			// Sidebar lists go through `flushSidebarListsIfIdle`, which
+			// invalidates both workspaceGroups AND archivedWorkspaces.
 			expect(invalidateQueries).toHaveBeenCalledWith({
 				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			expect(invalidateQueries).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.archivedWorkspaces,
 			});
 			expect(invalidateQueries).toHaveBeenCalledWith({
 				queryKey: helmorQueryKeys.workspaceDetail("workspace-1"),
@@ -77,6 +89,47 @@ describe("useUiSyncBridge", () => {
 				predicate: expect.any(Function),
 			});
 		});
+	});
+
+	it("skips sidebar list refetch while a mutation is in flight", async () => {
+		// Reproduces the unarchive flicker: an unrelated event (e.g.
+		// workspaceListChanged) arriving mid-restore would otherwise
+		// invalidate workspaceGroups, the refetch returns the still-archived
+		// row, and the optimistic placement gets clobbered until the
+		// mutation owner forces a flush at the end.
+		const queryClient = makeClient();
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+		renderHook(() =>
+			useUiSyncBridge({
+				queryClient,
+				processPendingCliSends: vi.fn(),
+				reloadSettings: vi.fn(),
+			}),
+		);
+
+		beginSidebarMutation();
+		try {
+			act(() => {
+				capturedSubscription?.({ type: "workspaceListChanged" });
+			});
+
+			await waitFor(() => {
+				// Non-sidebar invalidate (workspaceCandidateDirectories) still
+				// runs — the gate only protects the two sidebar lists.
+				expect(invalidateQueries).toHaveBeenCalledWith({
+					predicate: expect.any(Function),
+				});
+			});
+			expect(invalidateQueries).not.toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceGroups,
+			});
+			expect(invalidateQueries).not.toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.archivedWorkspaces,
+			});
+		} finally {
+			endSidebarMutation();
+		}
 	});
 
 	it("replays pending CLI sends immediately instead of waiting for focus", async () => {

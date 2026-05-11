@@ -59,8 +59,7 @@ import {
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
-	projectSidebarLists,
-	regroupByRepo,
+	projectVisualSidebar,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
@@ -159,28 +158,31 @@ export function useWorkspacesSidebarController({
 	const baseArchivedSummaries = archivedQuery.data ?? [];
 	const projectedSidebar = useMemo(
 		() =>
-			projectSidebarLists({
-				baseGroups,
-				baseArchivedSummaries,
-				pendingArchives,
-				pendingCreations: new Map(
-					Array.from(pendingCreations.entries()).map(
-						([workspaceId, pendingCreation]) => [
-							workspaceId,
-							pendingCreation.entry,
-						],
+			projectVisualSidebar(
+				{
+					baseGroups,
+					baseArchivedSummaries,
+					pendingArchives,
+					pendingCreations: new Map(
+						Array.from(pendingCreations.entries()).map(
+							([workspaceId, pendingCreation]) => [
+								workspaceId,
+								pendingCreation.entry,
+							],
+						),
 					),
-				),
-			}),
-		[baseArchivedSummaries, baseGroups, pendingArchives, pendingCreations],
+				},
+				settings.sidebarGrouping,
+			),
+		[
+			baseArchivedSummaries,
+			baseGroups,
+			pendingArchives,
+			pendingCreations,
+			settings.sidebarGrouping,
+		],
 	);
-	const groups = useMemo(
-		() =>
-			settings.sidebarGrouping === "repo"
-				? regroupByRepo(projectedSidebar.groups)
-				: projectedSidebar.groups,
-		[projectedSidebar.groups, settings.sidebarGrouping],
-	);
+	const groups = projectedSidebar.groups;
 	const archivedSummaries = useMemo(
 		() =>
 			projectedSidebar.archivedRows.map((row) => rowToWorkspaceSummary(row)),
@@ -1342,22 +1344,32 @@ export function useWorkspacesSidebarController({
 					optimisticGroups,
 				);
 
-				const optimisticArchived = projectSidebarLists({
-					baseGroups: optimisticGroups,
-					baseArchivedSummaries,
-					pendingArchives: new Map([
-						...pendingArchives,
-						[workspaceId, pendingArchive],
-					]),
-					pendingCreations: new Map(
-						Array.from(pendingCreations.entries()).map(
-							([optimisticWorkspaceId, pendingCreation]) => [
-								optimisticWorkspaceId,
-								pendingCreation.entry,
-							],
+				// Project the post-archive snapshot through the same visual
+				// pipeline used for the live sidebar so the replacement search
+				// below compares apples to apples — without this, repo-mode
+				// flattens the "before" view by repo bucket and the "after"
+				// view by status bucket, and selection jumps to whichever
+				// workspace happens to share the removed row's flat index in
+				// the wrong layout.
+				const optimisticVisual = projectVisualSidebar(
+					{
+						baseGroups: optimisticGroups,
+						baseArchivedSummaries,
+						pendingArchives: new Map([
+							...pendingArchives,
+							[workspaceId, pendingArchive],
+						]),
+						pendingCreations: new Map(
+							Array.from(pendingCreations.entries()).map(
+								([optimisticWorkspaceId, pendingCreation]) => [
+									optimisticWorkspaceId,
+									pendingCreation.entry,
+								],
+							),
 						),
-					),
-				});
+					},
+					settings.sidebarGrouping,
+				);
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
@@ -1367,8 +1379,8 @@ export function useWorkspacesSidebarController({
 						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
 							currentGroups: groups,
 							currentArchivedRows: archivedRows,
-							nextGroups: optimisticGroups,
-							nextArchivedRows: optimisticArchived.archivedRows,
+							nextGroups: optimisticVisual.groups,
+							nextArchivedRows: optimisticVisual.archivedRows,
 							removedWorkspaceId: workspaceId,
 						});
 						if (nextWorkspaceId) {
@@ -1392,18 +1404,21 @@ export function useWorkspacesSidebarController({
 			})();
 		},
 		[
+			archivedRows,
 			archivingWorkspaceIds,
 			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
 			onOpenNewWorkspace,
 			pendingArchives,
+			pendingCreations,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,
 			pushWorkspaceToast,
 			queryClient,
 			rollbackArchivedWorkspace,
 			selectedWorkspaceId,
+			settings.sidebarGrouping,
 			updateArchivingWorkspaceId,
 		],
 	);

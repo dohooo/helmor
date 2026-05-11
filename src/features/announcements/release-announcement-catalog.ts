@@ -36,4 +36,41 @@ import type { ReleaseAnnouncementCatalogEntry } from "./announcements";
  *   prefer this over queuing every missed release.
  */
 export const RELEASE_ANNOUNCEMENT_CATALOG: readonly ReleaseAnnouncementCatalogEntry[] =
-	[];
+	[
+		// One entry per release. The runtime only surfaces one toast per
+		// upgraded version (it picks the first matching `published` entry),
+		// so bundle a release's user-visible highlights as items here rather
+		// than splitting into multiple entries that would silently get
+		// dropped. The id intentionally omits a version number — the stamp
+		// script will bind it to whatever the next `release:version` run
+		// produces.
+		{
+			id: "release-announcements-launch",
+			items: [
+				{
+					text: "Group workspaces in the sidebar by repository instead of status — handy when you juggle many repos.",
+					action: {
+						label: "Open General",
+						value: { type: "openSettings", section: "general" },
+					},
+				},
+				{
+					text: "Add Context now lists GitLab issues and merge requests when the current project lives on GitLab.",
+					action: {
+						label: "Open Context",
+						value: { type: "setRightSidebarMode", mode: "context" },
+					},
+				},
+				{
+					text: "Pick how Claude returns thinking under General → Claude Code Thinking Display. Choosing Omitted lets the final text stream sooner.",
+					action: {
+						label: "Open General",
+						value: { type: "openSettings", section: "general" },
+					},
+				},
+				{
+					text: "Inbox: 'Newest' now actually sorts by creation date, and pagination no longer silently drops items.",
+				},
+			],
+		},
+	];

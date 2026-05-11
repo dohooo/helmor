@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { flushSidebarListsIfIdle } from "@/lib/sidebar-mutation-gate";
 
 type Options = {
 	queryClient: QueryClient;
@@ -25,21 +26,18 @@ function handleUiMutation(
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			});
+			// Sidebar lists go through the mutation gate so an event that
+			// arrives mid-archive/restore/etc. cannot overwrite the
+			// optimistic cache with a stale snapshot. The mutation owner
+			// flushes once the round-trip completes.
+			flushSidebarListsIfIdle(queryClient);
 			void queryClient.invalidateQueries({
 				predicate: (query) =>
 					query.queryKey[0] === "workspaceCandidateDirectories",
 			});
 			return;
 		case "workspaceChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			flushSidebarListsIfIdle(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -48,9 +46,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			flushSidebarListsIfIdle(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -85,9 +81,7 @@ function handleUiMutation(
 			invalidateAllWorkspaceChanges(queryClient);
 			return;
 		case "workspaceGitStateChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			flushSidebarListsIfIdle(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -110,9 +104,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChangeRequestChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			flushSidebarListsIfIdle(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -160,9 +152,7 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				predicate: (query) => query.queryKey[0] === "workspaceDetail",
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			flushSidebarListsIfIdle(queryClient);
 			return;
 		case "settingsChanged":
 			if (

@@ -366,7 +366,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 								<SettingsGroup>
 									<SettingsRow
 										title="Group sidebar by repository"
-										releaseMarker={{ version: "0.19.1", kind: "feature" }}
+										releaseMarker={{ kind: "feature" }}
 										description="Group workspaces in the sidebar by repository instead of status."
 									>
 										<Switch
@@ -505,6 +505,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 												</TooltipProvider>
 											</span>
 										}
+										releaseMarker={{ kind: "feature" }}
 										description="Controls how Claude Code returns thinking content."
 									>
 										<ToggleGroup

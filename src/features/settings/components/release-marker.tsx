@@ -1,11 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import packageJson from "../../../../package.json";
 
-const CURRENT_APP_VERSION = packageJson.version;
-
+/**
+ * Per-row "this is new" badge for settings rows. Lifecycle is fully
+ * manual: add the marker prop when you want the badge to appear, remove
+ * it when you no longer want it. No automatic expiry tied to the app
+ * version — release cadence varies and some badges deserve to linger
+ * across a few versions.
+ */
 export type SettingsReleaseMarker = {
-	version: string;
 	kind: "feature" | "update";
 };
 
@@ -27,7 +30,7 @@ export function SettingsReleaseBadge({
 	marker?: SettingsReleaseMarker;
 	className?: string;
 }) {
-	if (!marker || marker.version !== CURRENT_APP_VERSION) return null;
+	if (!marker) return null;
 
 	return (
 		<Badge

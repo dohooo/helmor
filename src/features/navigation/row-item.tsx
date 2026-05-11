@@ -69,12 +69,13 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
-	/** Order of avatar / branch icon slots inside the row.
-	 *  - "avatar-first" (default, status grouping): avatar then branch icon.
-	 *  - "branch-first" (repo grouping): branch icon then avatar — the
-	 *    branch becomes the primary differentiator when every row in the
-	 *    group shares the same repo. */
-	layoutVariant?: "avatar-first" | "branch-first";
+	/** Drop the per-row repo avatar — used when the surrounding group header
+	 *  already shows it (i.e. repo grouping), where rendering it again on
+	 *  every row is just visual noise. The branch icon takes over the leading
+	 *  slot. NOTE: the avatar also hosts the unread/interaction-required
+	 *  status dot and the run-script ShineBorder; both disappear in this
+	 *  mode. */
+	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -118,7 +119,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
-		layoutVariant = "avatar-first",
+		hideRepoAvatar = false,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -247,17 +248,6 @@ export const WorkspaceRowItem = memo(
 				)}
 			>
 				{(() => {
-					const avatarSlot = (
-						<WorkspaceAvatar
-							repoIconSrc={row.repoIconSrc}
-							repoInitials={row.repoInitials ?? row.avatar ?? null}
-							repoName={row.repoName}
-							title={displayTitle}
-							badgeClassName={showStatusDot ? statusDotClassName : null}
-							badgeAriaLabel={statusDotLabel ?? undefined}
-							isRunning={isRunScriptRunning}
-						/>
-					);
 					const branchSlot =
 						isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
@@ -278,30 +268,50 @@ export const WorkspaceRowItem = memo(
 								strokeWidth={1.9}
 							/>
 						);
-					const branchFirst = layoutVariant === "branch-first";
+					const titleSlot = (
+						<span
+							className={cn(
+								// leading-tight (1.25) instead of leading-none so descenders
+								// (g/j/p/q/y) aren't clipped by truncate's overflow:hidden
+								// when the page is zoomed out (Cmd+-).
+								"truncate leading-tight",
+								selected
+									? row.hasUnread
+										? "font-semibold text-foreground"
+										: "font-medium text-foreground"
+									: row.hasUnread
+										? "font-semibold text-foreground"
+										: "font-medium",
+							)}
+						>
+							<HyperText text={displayTitle} className="inline" />
+						</span>
+					);
+					if (hideRepoAvatar) {
+						return (
+							<div className="flex min-w-0 flex-1 items-center gap-2">
+								{branchSlot}
+								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+									{titleSlot}
+								</div>
+							</div>
+						);
+					}
 					return (
 						<div className="flex min-w-0 flex-1 items-center gap-2">
-							{branchFirst ? branchSlot : avatarSlot}
+							<WorkspaceAvatar
+								repoIconSrc={row.repoIconSrc}
+								repoInitials={row.repoInitials ?? row.avatar ?? null}
+								repoName={row.repoName}
+								title={displayTitle}
+								badgeClassName={showStatusDot ? statusDotClassName : null}
+								badgeAriaLabel={statusDotLabel ?? undefined}
+								isRunning={isRunScriptRunning}
+							/>
 							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
 							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
-								{branchFirst ? avatarSlot : branchSlot}
-								<span
-									className={cn(
-										// leading-tight (1.25) instead of leading-none so descenders
-										// (g/j/p/q/y) aren't clipped by truncate's overflow:hidden
-										// when the page is zoomed out (Cmd+-).
-										"truncate leading-tight",
-										selected
-											? row.hasUnread
-												? "font-semibold text-foreground"
-												: "font-medium text-foreground"
-											: row.hasUnread
-												? "font-semibold text-foreground"
-												: "font-medium",
-									)}
-								>
-									<HyperText text={displayTitle} className="inline" />
-								</span>
+								{branchSlot}
+								{titleSlot}
 							</div>
 						</div>
 					);
@@ -500,7 +510,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
-			previous.layoutVariant === next.layoutVariant &&
+			previous.hideRepoAvatar === next.hideRepoAvatar &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

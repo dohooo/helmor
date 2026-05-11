@@ -48,7 +48,7 @@ import {
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
-import { REPO_GROUP_PREFIX } from "./sidebar-projection";
+import { repoIdFromGroupId } from "./sidebar-projection";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -103,6 +103,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace,
 	onPrefetchWorkspace,
 	onOpenNewWorkspace,
+	onCreateWorkspaceForRepo,
 	onArchiveWorkspace,
 	onMoveLocalToWorktree,
 	onMarkWorkspaceUnread,
@@ -137,6 +138,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
 	onOpenNewWorkspace?: () => void;
+	/** Open the start page with this repo preselected. Wired on repo
+	 *  group headers in `repo` grouping mode. */
+	onCreateWorkspaceForRepo?: (repoId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
 	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
@@ -414,41 +418,111 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						: (sectionOpenState[item.groupId] ?? true);
 				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
 				const isEmptyGroup = item.group.rows.length === 0;
-				const isRepoGroup = item.groupId.startsWith(REPO_GROUP_PREFIX);
+				const repoId = repoIdFromGroupId(item.groupId);
+				const isRepoGroup = repoId !== null;
 				const repoSampleRow: WorkspaceRow | undefined = isRepoGroup
 					? item.group.rows[0]
 					: undefined;
+
+				const headerLabel = (
+					<span className="flex items-center gap-2">
+						{isArchived ? (
+							<Archive
+								className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
+								strokeWidth={1.9}
+							/>
+						) : isRepoGroup ? (
+							<WorkspaceAvatar
+								repoIconSrc={repoSampleRow?.repoIconSrc}
+								repoInitials={repoSampleRow?.repoInitials ?? null}
+								repoName={item.group.label}
+								title={item.group.label}
+							/>
+						) : (
+							<GroupIcon tone={item.group.tone} />
+						)}
+						<span>{item.group.label}</span>
+					</span>
+				);
+
+				const headerClassName = cn(
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+				);
+
+				// Repo groups: drop the row count and the toggle chevron, but
+				// keep the click-to-collapse behavior — the whole header
+				// still toggles the section, the right side just trades
+				// affordances (badge/chevron → hover-revealed `+` that
+				// drops into the start page with this repo preselected).
+				// `<div role="button">` instead of `<button>` because the
+				// `+` is itself a button and HTML forbids nested buttons.
+				if (isRepoGroup && repoId) {
+					const repoToggleSection = () => {
+						if (item.canCollapse) toggleSection(item.groupId);
+					};
+					return (
+						<div
+							role="button"
+							tabIndex={item.canCollapse ? 0 : -1}
+							aria-expanded={item.canCollapse ? isOpen : undefined}
+							aria-disabled={item.canCollapse ? undefined : true}
+							className={cn(
+								headerClassName,
+								item.canCollapse ? "cursor-pointer" : "cursor-default",
+								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+							)}
+							data-empty-group={isEmptyGroup ? "true" : "false"}
+							onClick={repoToggleSection}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									repoToggleSection();
+								}
+							}}
+						>
+							{headerLabel}
+							{onCreateWorkspaceForRepo ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											type="button"
+											aria-label={`New workspace in ${item.group.label}`}
+											variant="ghost"
+											size="icon-xs"
+											className="size-5 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/trigger:opacity-100 focus-visible:opacity-100"
+											onClick={(event) => {
+												event.stopPropagation();
+												onCreateWorkspaceForRepo(repoId);
+											}}
+										>
+											<Plus className="size-3.5" strokeWidth={2.2} />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={4}
+										className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+									>
+										New workspace in {item.group.label}
+									</TooltipContent>
+								</Tooltip>
+							) : null}
+						</div>
+					);
+				}
 
 				return (
 					<button
 						type="button"
 						className={cn(
-							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-							"py-1",
+							headerClassName,
 							item.canCollapse ? "cursor-pointer" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
 						disabled={!item.canCollapse}
 						onClick={() => toggleSection(item.groupId)}
 					>
-						<span className="flex items-center gap-2">
-							{isArchived ? (
-								<Archive
-									className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
-									strokeWidth={1.9}
-								/>
-							) : isRepoGroup ? (
-								<WorkspaceAvatar
-									repoIconSrc={repoSampleRow?.repoIconSrc}
-									repoInitials={repoSampleRow?.repoInitials ?? null}
-									repoName={item.group.label}
-									title={item.group.label}
-								/>
-							) : (
-								<GroupIcon tone={item.group.tone} />
-							)}
-							<span>{item.group.label}</span>
-						</span>
+						{headerLabel}
 
 						{item.group.rows.length > 0 ? (
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
@@ -481,11 +555,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
-						layoutVariant={
-							sidebarGrouping === "repo" && !item.isArchived
-								? "branch-first"
-								: "avatar-first"
-						}
+						hideRepoAvatar={sidebarGrouping === "repo" && !item.isArchived}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
@@ -517,6 +587,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			selectedWorkspaceId,
 			busyWorkspaceIds,
 			interactionRequiredWorkspaceIds,
+			onCreateWorkspaceForRepo,
 			onSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,

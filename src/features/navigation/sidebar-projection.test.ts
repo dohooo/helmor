@@ -4,8 +4,10 @@ import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	projectSidebarLists,
+	projectVisualSidebar,
 	REPO_GROUP_PREFIX,
 	regroupByRepo,
+	repoIdFromGroupId,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "./sidebar-projection";
@@ -368,5 +370,121 @@ describe("regroupByRepo", () => {
 			"ws-orphan-1",
 			"ws-orphan-2",
 		]);
+	});
+});
+
+describe("projectVisualSidebar", () => {
+	const baseGroups: WorkspaceGroup[] = [
+		{
+			id: "progress",
+			label: "In progress",
+			tone: "progress",
+			rows: [
+				{
+					id: "ws-a",
+					title: "A",
+					state: "ready",
+					status: "in-progress",
+					repoId: "repo-1",
+					repoName: "repo-one",
+				},
+				{
+					id: "ws-b",
+					title: "B",
+					state: "ready",
+					status: "in-progress",
+					repoId: "repo-2",
+					repoName: "repo-two",
+				},
+			],
+		},
+	];
+
+	it("returns the projection unchanged when grouping is `status`", () => {
+		const result = projectVisualSidebar(
+			{
+				baseGroups,
+				baseArchivedSummaries: [],
+				pendingArchives: new Map(),
+				pendingCreations: new Map(),
+			},
+			"status",
+		);
+		// Status mode: rows stay in their original status bucket.
+		expect(result.groups.map((g) => g.id)).toEqual(["progress"]);
+		expect(result.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-a", "ws-b"]);
+	});
+
+	it("re-buckets the projection by repo when grouping is `repo`", () => {
+		const result = projectVisualSidebar(
+			{
+				baseGroups,
+				baseArchivedSummaries: [],
+				pendingArchives: new Map(),
+				pendingCreations: new Map(),
+			},
+			"repo",
+		);
+		// Repo mode: rows flatten out of `progress` and bucket per repoId.
+		expect(result.groups.map((g) => g.id)).toEqual([
+			`${REPO_GROUP_PREFIX}repo-1`,
+			`${REPO_GROUP_PREFIX}repo-2`,
+		]);
+		expect(result.groups[0]?.rows.map((r) => r.id)).toEqual(["ws-a"]);
+		expect(result.groups[1]?.rows.map((r) => r.id)).toEqual(["ws-b"]);
+	});
+
+	it("hides pending-archived rows in both grouping modes", () => {
+		// Same `pendingArchives` should drop ws-a from live groups regardless
+		// of grouping — the projection-then-regroup composition has to apply
+		// pendingArchives BEFORE regroupByRepo, otherwise the row leaks into
+		// the repo bucket.
+		const args = {
+			baseGroups,
+			baseArchivedSummaries: [],
+			pendingArchives: new Map([
+				[
+					"ws-a",
+					{
+						row: { id: "ws-a", title: "A", state: "archived", status: null },
+						sourceGroupId: "progress",
+						sourceIndex: 0,
+						stage: "running",
+						sortTimestamp: 1,
+					},
+				],
+			]) as unknown as Map<string, PendingArchiveEntry>,
+			pendingCreations: new Map<string, PendingCreationEntry>(),
+		};
+
+		const status = projectVisualSidebar(args, "status");
+		expect(status.groups.flatMap((g) => g.rows.map((r) => r.id))).not.toContain(
+			"ws-a",
+		);
+
+		const repo = projectVisualSidebar(args, "repo");
+		expect(repo.groups.flatMap((g) => g.rows.map((r) => r.id))).not.toContain(
+			"ws-a",
+		);
+		// The "ws-a" pending row surfaces only in archivedRows, identical
+		// for both groupings.
+		expect(repo.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
+		expect(status.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
+	});
+});
+
+describe("repoIdFromGroupId", () => {
+	it("returns the underlying repo id for a real repo bucket", () => {
+		expect(repoIdFromGroupId(`${REPO_GROUP_PREFIX}repo-123`)).toBe("repo-123");
+	});
+
+	it("returns null for the unknown-repo bucket", () => {
+		expect(repoIdFromGroupId(`${REPO_GROUP_PREFIX}__unknown__`)).toBeNull();
+	});
+
+	it("returns null for status / pinned / backlog group ids", () => {
+		expect(repoIdFromGroupId("progress")).toBeNull();
+		expect(repoIdFromGroupId("pinned")).toBeNull();
+		expect(repoIdFromGroupId("backlog")).toBeNull();
 	});
 });
