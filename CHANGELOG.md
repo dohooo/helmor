@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.5
+
+### Patch Changes
+
+- [#496](https://github.com/dohooo/helmor/pull/496) [`5b46c55`](https://github.com/dohooo/helmor/commit/5b46c550fcf5823d1122de8e6d38cc14c286aba7) Thanks [@natllian](https://github.com/natllian)! - Fix the sidebar scrolling to the top when deleting an archived workspace.
+
+- [#501](https://github.com/dohooo/helmor/pull/501) [`389c63b`](https://github.com/dohooo/helmor/commit/389c63b6d3ee739f1ddf600e3c74a783f45c0679) Thanks [@aidxun](https://github.com/aidxun)! - Fix streamed assistant replies sometimes leaving the final visible text incomplete after the turn finishes.
+
+- [#499](https://github.com/dohooo/helmor/pull/499) [`f2deefe`](https://github.com/dohooo/helmor/commit/f2deefef5b736931a8180cbd71671518aeaefdcb) Thanks [@aidxun](https://github.com/aidxun)! - Fix workspace pull request status lookup for GitHub PRs opened from the bound account's fork.
+
 ## 0.20.4
 
 ### Patch Changes
