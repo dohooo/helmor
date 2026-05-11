@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { FileIcon } from "./file-icon";
+import type { ChangeStatusLetter } from "./hooks/use-changed-paths";
 
 interface Props {
 	name: string;
@@ -12,7 +13,14 @@ interface Props {
 	active?: boolean;
 	onClick: () => void;
 	onContextMenu?: (event: React.MouseEvent) => void;
+	changeStatus?: ChangeStatusLetter;
 }
+
+const STATUS_COLOR_CLASS: Record<ChangeStatusLetter, string> = {
+	M: "text-amber-500",
+	A: "text-emerald-500",
+	D: "text-red-500",
+};
 
 export function TreeRow({
 	name,
@@ -22,7 +30,9 @@ export function TreeRow({
 	active,
 	onClick,
 	onContextMenu,
+	changeStatus,
 }: Props) {
+	const changeTone = changeStatus ? STATUS_COLOR_CLASS[changeStatus] : null;
 	return (
 		<button
 			type="button"
@@ -47,8 +57,19 @@ export function TreeRow({
 			) : (
 				<span className="size-3 shrink-0" />
 			)}
-			<FileIcon name={name} kind={kind} open={expanded} />
-			<span className="truncate">{name}</span>
+			<FileIcon name={name} kind={kind} />
+			<span className={cn("truncate", changeTone)}>{name}</span>
+			{changeStatus ? (
+				<span
+					className={cn(
+						"ml-auto shrink-0 pl-2 text-[10.5px] font-semibold tabular-nums",
+						changeTone,
+					)}
+					aria-label={`${changeStatus} status`}
+				>
+					{changeStatus}
+				</span>
+			) : null}
 		</button>
 	);
 }

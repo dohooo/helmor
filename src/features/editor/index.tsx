@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, Columns2, Copy, Pin, X } from "lucide-react";
+import { Check, Columns2, Copy, Eye, Pin, X } from "lucide-react";
 import {
 	type MutableRefObject,
 	Suspense,
@@ -92,6 +92,40 @@ export function WorkspaceEditorSurface({
 		null,
 	);
 	const [fileNameCopied, setFileNameCopied] = useState(false);
+	// Per-file "viewed" toggle for the diff surface. Resets on session change
+	// because the viewer's mental model is per-open-diff, not per-path.
+	const [viewedPath, setViewedPath] = useState<string | null>(null);
+	const isViewed = editorSession.path === viewedPath;
+	const diffLineStats = useMemo(() => {
+		if (editorSession.kind !== "diff") return null;
+		const original = editorSession.originalText ?? "";
+		const modified = editorSession.modifiedText ?? "";
+		if (!original && !modified) return null;
+		// Coarse: total added/removed lines based on diffing line sets.
+		// Doesn't match git's strict accounting but reads at the same scale.
+		const origLines = original.split("\n");
+		const modLines = modified.split("\n");
+		const origSet = new Map<string, number>();
+		for (const line of origLines)
+			origSet.set(line, (origSet.get(line) ?? 0) + 1);
+		const modSet = new Map<string, number>();
+		for (const line of modLines) modSet.set(line, (modSet.get(line) ?? 0) + 1);
+		let added = 0;
+		let removed = 0;
+		for (const [line, count] of modSet) {
+			const inOrig = origSet.get(line) ?? 0;
+			if (count > inOrig) added += count - inOrig;
+		}
+		for (const [line, count] of origSet) {
+			const inMod = modSet.get(line) ?? 0;
+			if (count > inMod) removed += count - inMod;
+		}
+		return { added, removed };
+	}, [
+		editorSession.kind,
+		editorSession.originalText,
+		editorSession.modifiedText,
+	]);
 	const { settings } = useSettings();
 	const queryClient = useQueryClient();
 	latestSessionRef.current = editorSession;
@@ -703,6 +737,32 @@ export function WorkspaceEditorSurface({
 									: "No changes to diff"}
 						</TooltipContent>
 					</Tooltip>
+					{editorSession.kind === "diff" && diffLineStats ? (
+						<span className="ml-1 flex items-center gap-1.5 text-[10.5px] tabular-nums">
+							{diffLineStats.added > 0 ? (
+								<span className="text-emerald-500">+{diffLineStats.added}</span>
+							) : null}
+							{diffLineStats.removed > 0 ? (
+								<span className="text-red-500">−{diffLineStats.removed}</span>
+							) : null}
+						</span>
+					) : null}
+					{editorSession.kind === "diff" ? (
+						<button
+							type="button"
+							onClick={() =>
+								setViewedPath(isViewed ? null : editorSession.path)
+							}
+							aria-pressed={isViewed}
+							className={cn(
+								"ml-1 inline-flex h-[18px] cursor-pointer items-center gap-1 rounded-[4px] px-1.5 text-[10.5px] font-normal text-muted-foreground/80 transition-colors hover:bg-foreground/[0.06] hover:text-foreground",
+								isViewed && "bg-foreground/[0.10] text-foreground",
+							)}
+						>
+							<Eye className="size-3" strokeWidth={2} />
+							<span>Viewed</span>
+						</button>
+					) : null}
 					{isMarkdown && (
 						<Tooltip>
 							<TooltipTrigger asChild>

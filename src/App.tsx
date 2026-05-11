@@ -9,6 +9,7 @@ import {
 	CircleAlertIcon,
 	FolderOpen,
 	PanelLeftOpen,
+	PanelRightClose,
 	PanelRightOpen,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -3561,38 +3562,53 @@ function AppShell({
 																	 * redundant pair of close buttons. When
 																	 * collapsed, this is the only path back in.
 																	 */}
-																	{inspectorCollapsed ? (
-																		<Tooltip>
-																			<TooltipTrigger asChild>
-																				<Button
-																					aria-label="Expand right sidebar"
-																					onClick={() =>
-																						setInspectorCollapsed(false)
-																					}
-																					variant="ghost"
-																					size="icon-xs"
-																					className="text-muted-foreground hover:text-foreground"
-																				>
+																	<Tooltip>
+																		<TooltipTrigger asChild>
+																			<Button
+																				aria-label={
+																					inspectorCollapsed
+																						? "Expand right sidebar"
+																						: "Close right sidebar"
+																				}
+																				onClick={() =>
+																					setInspectorCollapsed(
+																						!inspectorCollapsed,
+																					)
+																				}
+																				variant="ghost"
+																				size="icon-xs"
+																				className="text-muted-foreground hover:text-foreground"
+																			>
+																				{inspectorCollapsed ? (
 																					<PanelRightOpen
 																						className="size-4"
 																						strokeWidth={1.8}
 																					/>
-																				</Button>
-																			</TooltipTrigger>
-																			<TooltipContent
-																				side="bottom"
-																				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																			>
-																				<span>Expand right sidebar</span>
-																				{rightSidebarToggleShortcut ? (
-																					<InlineShortcutDisplay
-																						hotkey={rightSidebarToggleShortcut}
-																						className="text-background/60"
+																				) : (
+																					<PanelRightClose
+																						className="size-4"
+																						strokeWidth={1.8}
 																					/>
-																				) : null}
-																			</TooltipContent>
-																		</Tooltip>
-																	) : null}
+																				)}
+																			</Button>
+																		</TooltipTrigger>
+																		<TooltipContent
+																			side="bottom"
+																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+																		>
+																			<span>
+																				{inspectorCollapsed
+																					? "Expand right sidebar"
+																					: "Close right sidebar"}
+																			</span>
+																			{rightSidebarToggleShortcut ? (
+																				<InlineShortcutDisplay
+																					hotkey={rightSidebarToggleShortcut}
+																					className="text-background/60"
+																				/>
+																			) : null}
+																		</TooltipContent>
+																	</Tooltip>
 																</div>
 															</div>
 														) : undefined
@@ -3764,12 +3780,6 @@ function AppShell({
 														onOpenSettings={handleOpenSettings}
 														activeFileAbsolutePath={activeFileAbsolutePath}
 														onOpenFileTab={handleOpenFileTab}
-														onCollapseRightSidebar={() =>
-															setInspectorCollapsed(true)
-														}
-														rightSidebarToggleShortcut={
-															rightSidebarToggleShortcut
-														}
 													/>
 												)}
 											</div>

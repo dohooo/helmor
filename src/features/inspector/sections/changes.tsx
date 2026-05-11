@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+	ChevronDown as ChevronDownIcon,
 	CopyIcon,
 	FolderOpenIcon,
 	LinkIcon,
@@ -22,10 +23,16 @@ import {
 } from "@/components/ui/context-menu";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import { FileIcon } from "@/features/file-browser/file-icon";
 import {
 	type ChangeRequestInfo,
 	continueWorkspaceFromTargetBranch,
@@ -51,12 +58,19 @@ import {
 	TABS_ANIMATION_MS,
 	TABS_EASING_CURVE,
 } from "../layout";
+import type { ChangesFilter } from "./diff/action-toolbar";
 import { GitSectionHeader } from "./git-section-header";
 
-const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
-	M: "text-yellow-500",
-	A: "text-green-500",
-	D: "text-red-500",
+const STATUS_PIP_COLORS: Record<InspectorFileItem["status"], string> = {
+	M: "border-amber-500 text-amber-500",
+	A: "border-emerald-500 text-emerald-500",
+	D: "border-red-500 text-red-500",
+};
+
+const SIDE_LABELS: Record<ChangeSide, string> = {
+	staged: "Staged",
+	unstaged: "Unstaged",
+	remote: "Unstaged",
 };
 
 type StageActionKind = "stage" | "unstage";
@@ -114,11 +128,11 @@ type ChangesSectionProps = {
 	/** When true, suppress the legacy `<GitSectionHeader>` render. Used by
 	 *  the new Diff sub-tab where the toolbar + sticky commit footer
 	 *  replace the in-section header's commit button + change-request
-	 *  badge + bulk stage/unstage controls. Until the per-accordion
-	 *  bulk-action affordances land we lose stage-all / unstage-all in
-	 *  the Diff view — those will be re-introduced on the unstaged
-	 *  accordion in a follow-up. */
+	 *  badge. Bulk change controls live on each diff accordion header. */
 	hideGitSectionHeader?: boolean;
+	/** Active "All changes" vs "Uncommitted changes" filter. Owned by the
+	 *  inspector header so the dropdown can live in the toolbar above. */
+	filter?: ChangesFilter;
 };
 
 export function ChangesSection({
@@ -142,6 +156,7 @@ export function ChangesSection({
 	animatePanelToggle = false,
 	isResizing,
 	hideGitSectionHeader = false,
+	filter = "uncommitted",
 }: ChangesSectionProps) {
 	const shouldReduceMotion = useReducedMotion();
 	const panelTransition = {
@@ -332,6 +347,27 @@ export function ChangesSection({
 		}
 	}, [invalidateChanges, stagedChanges, surfaceChangeError, workspaceRootPath]);
 
+	const discardAll = useCallback(async () => {
+		if (!workspaceRootPath) {
+			return;
+		}
+		const paths = unstagedChanges.map((change) => change.path);
+		try {
+			for (const path of paths) {
+				await discardWorkspaceFile(workspaceRootPath, path);
+			}
+		} catch (error) {
+			surfaceChangeError("discard changes", error);
+		} finally {
+			invalidateChanges();
+		}
+	}, [
+		invalidateChanges,
+		surfaceChangeError,
+		unstagedChanges,
+		workspaceRootPath,
+	]);
+
 	const discardFile = useCallback(
 		async (relativePath: string) => {
 			if (!workspaceRootPath) {
@@ -398,11 +434,9 @@ export function ChangesSection({
 	// background refresh or a placeholder render).
 	const isForgeRefreshing = workspaceId !== null && forgeIsRefreshing;
 
-	// ---- Flat list of all changes ----
-	// One unified surface: staged → unstaged → committed (remote). The status
-	// letter on each row carries its kind (M/A/D); we drop the section-header
-	// chrome entirely. Each `ChangeEntry` carries the per-row action set so
-	// the renderer doesn't need to re-derive it.
+	// Two collapsable groups: Unstaged and Staged. Committed (branch-relative)
+	// entries merge into the Unstaged group when the user picks
+	// "All changes" — and are hidden entirely under "Uncommitted changes".
 	const entries = useMemo<ChangeEntry[]>(() => {
 		const list: ChangeEntry[] = [];
 		for (const change of stagedChanges) {
@@ -426,19 +460,30 @@ export function ChangesSection({
 				onDiscard: discardFile,
 			});
 		}
-		for (const change of committedChanges) {
-			list.push({
-				change,
-				side: "remote",
-				insertions: change.committedInsertions,
-				deletions: change.committedDeletions,
-			});
+		if (filter === "all") {
+			// Suppress committed rows that the user already sees as staged /
+			// unstaged (same path, different snapshot) — otherwise the row
+			// duplicates and the bulk-action affordances stop matching.
+			const seen = new Set<string>([
+				...stagedChanges.map((c) => c.path),
+				...unstagedChanges.map((c) => c.path),
+			]);
+			for (const change of committedChanges) {
+				if (seen.has(change.path)) continue;
+				list.push({
+					change,
+					side: "remote",
+					insertions: change.committedInsertions,
+					deletions: change.committedDeletions,
+				});
+			}
 		}
 		return list;
 	}, [
 		stagedChanges,
 		unstagedChanges,
 		committedChanges,
+		filter,
 		stageFile,
 		unstageFile,
 		discardFile,
@@ -545,6 +590,9 @@ export function ChangesSection({
 						workspaceRemoteUrl={workspaceRemoteUrl}
 						registerRowRef={registerRowRef}
 						onArrowNav={handleArrowNav}
+						onStageAll={stageAll}
+						onUnstageAll={unstageAll}
+						onDiscardAll={discardAll}
 					/>
 				) : (
 					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
@@ -566,6 +614,9 @@ function ChangesFlatView({
 	workspaceRemoteUrl,
 	registerRowRef,
 	onArrowNav,
+	onStageAll,
+	onUnstageAll,
+	onDiscardAll,
 }: {
 	entries: ChangeEntry[];
 	editorMode: boolean;
@@ -576,99 +627,285 @@ function ChangesFlatView({
 	workspaceRemoteUrl: string | null;
 	registerRowRef?: (path: string, el: HTMLDivElement | null) => void;
 	onArrowNav?: (currentPath: string, direction: 1 | -1) => void;
+	onStageAll: () => void;
+	onUnstageAll: () => void;
+	onDiscardAll: () => void;
 }) {
+	// Display buckets: "Unstaged" absorbs branch-relative (remote) entries so
+	// there's no separate "Branch" section. "Staged" stays its own group.
+	const grouped = useMemo(() => {
+		const map = new Map<ChangeSide, ChangeEntry[]>();
+		for (const entry of entries) {
+			const displaySide: ChangeSide =
+				entry.side === "remote" ? "unstaged" : entry.side;
+			const bucket = map.get(displaySide) ?? [];
+			bucket.push(entry);
+			map.set(displaySide, bucket);
+		}
+		return map;
+	}, [entries]);
+
+	const sides: ChangeSide[] = ["unstaged", "staged"];
+
 	return (
 		<div className="py-1">
-			{entries.map((entry) => {
-				const {
-					change,
-					insertions,
-					deletions,
-					action,
-					onStageAction,
-					onDiscard,
-				} = entry;
-				const lastSlash = change.path.lastIndexOf("/");
-				const dir = lastSlash >= 0 ? change.path.slice(0, lastSlash + 1) : "";
-				const name =
-					lastSlash >= 0 ? change.path.slice(lastSlash + 1) : change.path;
-				const selected = change.absolutePath === activeEditorPath;
-				const hasAction = !!action || !!onDiscard;
+			{sides.map((side) => {
+				const groupEntries = grouped.get(side);
+				if (!groupEntries || groupEntries.length === 0) return null;
 				return (
-					<FileRowContextMenu
-						key={change.path}
-						file={change}
+					<ChangeGroup
+						key={side}
+						side={side}
+						entries={groupEntries}
+						editorMode={editorMode}
+						activeEditorPath={activeEditorPath}
+						onOpenEntry={onOpenEntry}
+						flashingPaths={flashingPaths}
 						workspaceBranch={workspaceBranch}
 						workspaceRemoteUrl={workspaceRemoteUrl}
-					>
-						<div
-							ref={(el) => registerRowRef?.(change.path, el)}
-							className={cn(
-								"group/row relative mx-1.5 flex h-[26px] cursor-pointer items-center gap-2 rounded-md px-2 transition-colors hover:bg-accent/60 focus:outline-none",
-								selected &&
-									cn(
-										"bg-primary/10 text-foreground",
-										editorMode && "bg-primary/15",
-									),
-							)}
-							role="button"
-							tabIndex={0}
-							onClick={() => onOpenEntry(entry)}
-							onKeyDown={(event) => {
-								if (event.key === "Enter" || event.key === " ") {
-									event.preventDefault();
-									onOpenEntry(entry);
-									return;
-								}
-								if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-									if (!onArrowNav) return;
-									event.preventDefault();
-									onArrowNav(change.path, event.key === "ArrowDown" ? 1 : -1);
-								}
-							}}
-						>
-							<span className="min-w-0 flex-1 truncate text-[11.5px] leading-[18px]">
-								<ShinyFlash active={flashingPaths.has(change.path)}>
-									<span className="text-muted-foreground/70">{dir}</span>
-									<span
-										className={cn(
-											"text-foreground/85",
-											selected && "font-medium text-foreground",
-										)}
-									>
-										{name}
-									</span>
-								</ShinyFlash>
-							</span>
-							<span
-								className={cn(
-									"flex shrink-0 items-center gap-1.5 tabular-nums",
-									hasAction && "group-hover/row:hidden",
-								)}
-							>
-								<span
-									className={cn(
-										"inline-flex h-4 w-3 items-center justify-center text-[10px] font-semibold",
-										STATUS_COLORS[change.status],
-									)}
-								>
-									{change.status}
-								</span>
-								<LineStats insertions={insertions} deletions={deletions} />
-							</span>
-							{hasAction && (
-								<RowHoverActions
-									path={change.path}
-									action={action}
-									onStageAction={onStageAction}
-									onDiscard={onDiscard}
-								/>
-							)}
-						</div>
-					</FileRowContextMenu>
+						registerRowRef={registerRowRef}
+						onArrowNav={onArrowNav}
+						onStageAll={onStageAll}
+						onUnstageAll={onUnstageAll}
+						onDiscardAll={onDiscardAll}
+					/>
 				);
 			})}
 		</div>
+	);
+}
+
+function ChangeGroup({
+	side,
+	entries,
+	editorMode,
+	activeEditorPath,
+	onOpenEntry,
+	flashingPaths,
+	workspaceBranch,
+	workspaceRemoteUrl,
+	registerRowRef,
+	onArrowNav,
+	onStageAll,
+	onUnstageAll,
+	onDiscardAll,
+}: {
+	side: ChangeSide;
+	entries: ChangeEntry[];
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEntry: (entry: ChangeEntry) => void;
+	flashingPaths: Set<string>;
+	workspaceBranch: string | null;
+	workspaceRemoteUrl: string | null;
+	registerRowRef?: (path: string, el: HTMLDivElement | null) => void;
+	onArrowNav?: (currentPath: string, direction: 1 | -1) => void;
+	onStageAll: () => void;
+	onUnstageAll: () => void;
+	onDiscardAll: () => void;
+}) {
+	const [collapsed, setCollapsed] = useState(false);
+	const stageActionKind: StageActionKind | null =
+		side === "unstaged" ? "stage" : side === "staged" ? "unstage" : null;
+	const discardableCount = entries.filter((entry) => entry.onDiscard).length;
+	const runStageAction = side === "unstaged" ? onStageAll : onUnstageAll;
+
+	return (
+		<div className="pb-1">
+			<div className="flex h-7 items-center gap-1.5 px-2 text-[11px] font-medium text-foreground/80">
+				<button
+					type="button"
+					onClick={() => setCollapsed((v) => !v)}
+					className="flex h-5 min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-sm px-0.5 hover:bg-accent/60"
+					aria-label={collapsed ? "Expand group" : "Collapse group"}
+				>
+					<ChevronDownIcon
+						className={cn(
+							"size-3 text-muted-foreground transition-transform",
+							collapsed && "-rotate-90",
+						)}
+						strokeWidth={2}
+					/>
+					<span>{SIDE_LABELS[side]}</span>
+					<span className="text-muted-foreground/70">{entries.length}</span>
+				</button>
+				<div className="ml-auto inline-flex h-5 shrink-0 items-center gap-1">
+					{side === "unstaged" ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<GroupHeaderIconButton
+									aria-label="Revert changes"
+									onClick={() => {
+										if (
+											typeof window !== "undefined" &&
+											!window.confirm(
+												`Revert all unstaged change${
+													discardableCount === 1 ? "" : "s"
+												}? This cannot be undone.`,
+											)
+										) {
+											return;
+										}
+										onDiscardAll();
+									}}
+									tone="destructive"
+								>
+									<Undo2Icon className="size-3" strokeWidth={2.2} />
+								</GroupHeaderIconButton>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" sideOffset={4}>
+								Revert changes
+							</TooltipContent>
+						</Tooltip>
+					) : null}
+					{stageActionKind ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<GroupHeaderIconButton
+									aria-label={
+										stageActionKind === "stage" ? "Stage all" : "Unstage all"
+									}
+									onClick={runStageAction}
+								>
+									{stageActionKind === "stage" ? (
+										<PlusIcon className="size-3" strokeWidth={2.2} />
+									) : (
+										<MinusIcon className="size-3" strokeWidth={2.2} />
+									)}
+								</GroupHeaderIconButton>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" sideOffset={4}>
+								{stageActionKind === "stage" ? "Stage all" : "Unstage all"}
+							</TooltipContent>
+						</Tooltip>
+					) : null}
+				</div>
+			</div>
+			{collapsed
+				? null
+				: entries.map((entry) => (
+						<ChangeFileRow
+							key={entry.change.path}
+							entry={entry}
+							editorMode={editorMode}
+							activeEditorPath={activeEditorPath}
+							onOpenEntry={onOpenEntry}
+							flashingPaths={flashingPaths}
+							workspaceBranch={workspaceBranch}
+							workspaceRemoteUrl={workspaceRemoteUrl}
+							registerRowRef={registerRowRef}
+							onArrowNav={onArrowNav}
+						/>
+					))}
+		</div>
+	);
+}
+
+function ChangeFileRow({
+	entry,
+	editorMode,
+	activeEditorPath,
+	onOpenEntry,
+	flashingPaths,
+	workspaceBranch,
+	workspaceRemoteUrl,
+	registerRowRef,
+	onArrowNav,
+}: {
+	entry: ChangeEntry;
+	editorMode: boolean;
+	activeEditorPath?: string | null;
+	onOpenEntry: (entry: ChangeEntry) => void;
+	flashingPaths: Set<string>;
+	workspaceBranch: string | null;
+	workspaceRemoteUrl: string | null;
+	registerRowRef?: (path: string, el: HTMLDivElement | null) => void;
+	onArrowNav?: (currentPath: string, direction: 1 | -1) => void;
+}) {
+	const { change, insertions, deletions, action, onStageAction, onDiscard } =
+		entry;
+	const lastSlash = change.path.lastIndexOf("/");
+	const dir = lastSlash >= 0 ? change.path.slice(0, lastSlash + 1) : "";
+	const name = lastSlash >= 0 ? change.path.slice(lastSlash + 1) : change.path;
+	const selected = change.absolutePath === activeEditorPath;
+	const hasAction = !!action || !!onDiscard;
+
+	return (
+		<FileRowContextMenu
+			file={change}
+			workspaceBranch={workspaceBranch}
+			workspaceRemoteUrl={workspaceRemoteUrl}
+		>
+			<div
+				ref={(el) => registerRowRef?.(change.path, el)}
+				className={cn(
+					"group/row relative mx-1 flex h-[26px] cursor-pointer items-center gap-2 rounded-md px-2 transition-colors hover:bg-accent/60 focus:outline-none",
+					selected &&
+						cn("bg-primary/10 text-foreground", editorMode && "bg-primary/15"),
+				)}
+				role="button"
+				tabIndex={0}
+				onClick={() => onOpenEntry(entry)}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						onOpenEntry(entry);
+						return;
+					}
+					if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+						if (!onArrowNav) return;
+						event.preventDefault();
+						onArrowNav(change.path, event.key === "ArrowDown" ? 1 : -1);
+					}
+				}}
+			>
+				<FileIcon name={name} kind="file" className="size-3.5" />
+				<span className="min-w-0 flex-1 truncate text-[11.5px] leading-[18px]">
+					<ShinyFlash active={flashingPaths.has(change.path)}>
+						{dir ? (
+							<span className="text-muted-foreground/70">{dir}</span>
+						) : null}
+						<span
+							className={cn(
+								"font-medium text-foreground/90",
+								selected && "text-foreground",
+							)}
+						>
+							{name}
+						</span>
+					</ShinyFlash>
+				</span>
+				<span
+					className={cn(
+						"flex shrink-0 items-center gap-1.5 tabular-nums",
+						hasAction && "group-hover/row:hidden",
+					)}
+				>
+					<LineStats insertions={insertions} deletions={deletions} />
+					<span
+						aria-label={`${change.status} status`}
+						className={cn(
+							"relative inline-block size-[10px] rounded-[2px] border",
+							STATUS_PIP_COLORS[change.status],
+						)}
+					>
+						<span
+							className={cn(
+								"absolute inset-0 m-auto size-[3px] rounded-full bg-current",
+							)}
+						/>
+					</span>
+				</span>
+				{hasAction && (
+					<RowHoverActions
+						path={change.path}
+						action={action}
+						onStageAction={onStageAction}
+						onDiscard={onDiscard}
+					/>
+				)}
+			</div>
+		</FileRowContextMenu>
 	);
 }
 
@@ -711,6 +948,49 @@ function RowHoverActions({
 	);
 }
 
+function GroupHeaderIconButton({
+	onClick,
+	disabled = false,
+	children,
+	tone = "default",
+	"aria-label": ariaLabel,
+	className,
+	...props
+}: Omit<React.ComponentProps<"button">, "type" | "disabled" | "aria-label"> & {
+	onClick: React.MouseEventHandler<HTMLButtonElement>;
+	disabled?: boolean;
+	children: React.ReactNode;
+	tone?: "default" | "destructive";
+	"aria-label": string;
+}) {
+	return (
+		<button
+			type="button"
+			aria-label={ariaLabel}
+			aria-disabled={disabled}
+			{...props}
+			onClick={(event) => {
+				event.stopPropagation();
+				if (disabled) return;
+				onClick(event);
+			}}
+			onKeyDown={(event) => {
+				event.stopPropagation();
+				props.onKeyDown?.(event);
+			}}
+			className={cn(
+				"inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-foreground/75 transition-colors",
+				"hover:bg-accent/60 hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-transparent aria-disabled:hover:text-foreground/75",
+				tone === "destructive" &&
+					"hover:bg-destructive/10 hover:text-destructive aria-disabled:hover:text-foreground/80",
+				className,
+			)}
+		>
+			{children}
+		</button>
+	);
+}
+
 function RowIconButton({
 	onClick,
 	disabled = false,
@@ -737,7 +1017,7 @@ function RowIconButton({
 			}}
 			onKeyDown={(event) => event.stopPropagation()}
 			className={cn(
-				"size-4 rounded-sm transition-colors disabled:pointer-events-none disabled:opacity-60",
+				"size-5 rounded-sm transition-colors disabled:pointer-events-none disabled:opacity-60",
 				className,
 			)}
 		>

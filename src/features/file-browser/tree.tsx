@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 
 import { workspaceDirectoryQueryOptions } from "@/lib/query-client";
-
+import type { ChangedPathsIndex } from "./hooks/use-changed-paths";
 import { useDirectoryListing } from "./hooks/use-directory-listing";
 import { useTreeState } from "./hooks/use-tree-state";
 import { TreeRow } from "./tree-row";
@@ -17,6 +17,7 @@ interface Props {
 	workspaceId: string | null;
 	onOpenFile: (input: OpenFileInput) => void;
 	activeAbsolutePath: string | null;
+	changedPaths: ChangedPathsIndex;
 }
 
 export function Tree({
@@ -24,6 +25,7 @@ export function Tree({
 	workspaceId,
 	onOpenFile,
 	activeAbsolutePath,
+	changedPaths,
 }: Props) {
 	return (
 		<div className="flex flex-col">
@@ -34,6 +36,7 @@ export function Tree({
 				depth={0}
 				onOpenFile={onOpenFile}
 				activeAbsolutePath={activeAbsolutePath}
+				changedPaths={changedPaths}
 			/>
 		</div>
 	);
@@ -46,6 +49,7 @@ interface NodeProps {
 	depth: number;
 	onOpenFile: (input: OpenFileInput) => void;
 	activeAbsolutePath: string | null;
+	changedPaths: ChangedPathsIndex;
 }
 
 function DirectoryNode({
@@ -55,6 +59,7 @@ function DirectoryNode({
 	depth,
 	onOpenFile,
 	activeAbsolutePath,
+	changedPaths,
 }: NodeProps) {
 	const queryClient = useQueryClient();
 	const { isExpanded, toggle } = useTreeState(workspaceId);
@@ -72,6 +77,10 @@ function DirectoryNode({
 		<>
 			{data.map((entry) => {
 				const expanded = entry.kind === "directory" && isExpanded(entry.path);
+				const changeStatus =
+					entry.kind === "directory"
+						? changedPaths.folders.get(entry.path)
+						: changedPaths.files.get(entry.path);
 				return (
 					<div key={entry.absolutePath}>
 						<TreeRow
@@ -80,16 +89,9 @@ function DirectoryNode({
 							depth={depth}
 							expanded={expanded}
 							active={activeAbsolutePath === entry.absolutePath}
+							changeStatus={changeStatus}
 							onClick={async () => {
 								if (entry.kind === "directory") {
-									// Warm the child listing's cache before
-									// flipping the expansion bit so the inner
-									// DirectoryNode mounts straight into a
-									// resolved query state. Avoids the skeleton
-									// flash when filesystem reads are fast
-									// (typical for local FS) and gives observers
-									// a single deterministic point at which the
-									// child rows are visible.
 									if (workspaceRootPath && !isExpanded(entry.path)) {
 										await queryClient.prefetchQuery(
 											workspaceDirectoryQueryOptions(
@@ -116,6 +118,7 @@ function DirectoryNode({
 								depth={depth + 1}
 								onOpenFile={onOpenFile}
 								activeAbsolutePath={activeAbsolutePath}
+								changedPaths={changedPaths}
 							/>
 						)}
 					</div>

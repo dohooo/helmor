@@ -1917,6 +1917,38 @@ export async function discardWorkspaceFile(
 	}
 }
 
+export type CreateEntryResponse = {
+	absolutePath: string;
+};
+
+export async function createWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<CreateEntryResponse> {
+	try {
+		return await invoke<CreateEntryResponse>("create_workspace_file", {
+			workspaceRootPath,
+			relativePath,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to create file."));
+	}
+}
+
+export async function createWorkspaceFolder(
+	workspaceRootPath: string,
+	relativePath: string,
+): Promise<CreateEntryResponse> {
+	try {
+		return await invoke<CreateEntryResponse>("create_workspace_folder", {
+			workspaceRootPath,
+			relativePath,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to create folder."));
+	}
+}
+
 export async function stageWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,

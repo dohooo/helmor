@@ -53,6 +53,7 @@ describe("Tree", () => {
 				workspaceId="ws-1"
 				onOpenFile={() => {}}
 				activeAbsolutePath={null}
+				changedPaths={{ files: new Map(), folders: new Map() }}
 			/>,
 		);
 		await waitFor(() => screen.getByText("src"));
@@ -83,6 +84,7 @@ describe("Tree", () => {
 				workspaceId="ws-1"
 				onOpenFile={() => {}}
 				activeAbsolutePath={null}
+				changedPaths={{ files: new Map(), folders: new Map() }}
 			/>,
 		);
 		await waitFor(() => screen.getByText("src"));
@@ -107,6 +109,7 @@ describe("Tree", () => {
 				workspaceId="ws-1"
 				onOpenFile={onOpenFile}
 				activeAbsolutePath={null}
+				changedPaths={{ files: new Map(), folders: new Map() }}
 			/>,
 		);
 		await waitFor(() => screen.getByText("a.ts"));
@@ -133,6 +136,7 @@ describe("Tree", () => {
 				workspaceId="ws-1"
 				onOpenFile={() => {}}
 				activeAbsolutePath="/root/a.ts"
+				changedPaths={{ files: new Map(), folders: new Map() }}
 			/>,
 		);
 		await waitFor(() => screen.getByText("a.ts"));

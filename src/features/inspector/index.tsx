@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Maximize2, PanelRightClose } from "lucide-react";
+import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,8 +46,10 @@ import type { ScriptStatus } from "./script-store";
 import { AllFilesSection } from "./sections/all-files";
 import { ChangesSection } from "./sections/changes";
 import { ChecksSection, useChecksIndicator } from "./sections/checks";
-import { DiffActionToolbar } from "./sections/diff/action-toolbar";
-import { DiffCommitFooter } from "./sections/diff/commit-footer";
+import {
+	type ChangesFilter,
+	DiffActionToolbar,
+} from "./sections/diff/action-toolbar";
 import { PrCommentsSection } from "./sections/review/pr-comments";
 import { OpenDevServerButton, RunTab } from "./sections/run";
 import { SetupTab } from "./sections/setup";
@@ -121,12 +123,6 @@ type WorkspaceInspectorSidebarProps = {
 	/** Collapse the right (inspector) sidebar. The inspector is by
 	 *  definition visible while this component is mounted, so the button
 	 *  always closes — there's no in-inspector "expand right" affordance. */
-	onCollapseRightSidebar?: () => void;
-	/** Resolved hotkey string for `sidebar.right.toggle`. */
-	rightSidebarToggleShortcut?: string | null;
-	/** Open the Diff view as a full surface on the main canvas. Stub for
-	 *  now — the button renders disabled until this is wired. */
-	onExpandDiffsOnCanvas?: () => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -153,9 +149,6 @@ export function WorkspaceInspectorSidebar({
 	onOpenSettings,
 	activeFileAbsolutePath = null,
 	onOpenFileTab,
-	onCollapseRightSidebar,
-	rightSidebarToggleShortcut = null,
-	onExpandDiffsOnCanvas,
 }: WorkspaceInspectorSidebarProps) {
 	const [topSectionView, setTopSectionView] = useState<TopSectionView>(() =>
 		getInitialTopView<TopSectionView>(["files", "changes"] as const, "changes"),
@@ -194,6 +187,28 @@ export function WorkspaceInspectorSidebar({
 			// non-fatal
 		}
 	}, [changesSubView]);
+	const [changesFilter, setChangesFilter] = useState<ChangesFilter>(() => {
+		if (typeof window === "undefined") return "uncommitted";
+		try {
+			const stored = window.localStorage.getItem(
+				"helmor.workspaceInspectorChangesFilter",
+			);
+			if (stored === "all" || stored === "uncommitted") return stored;
+		} catch {
+			// fall through
+		}
+		return "uncommitted";
+	});
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				"helmor.workspaceInspectorChangesFilter",
+				changesFilter,
+			);
+		} catch {
+			// non-fatal
+		}
+	}, [changesFilter]);
 	const handleOpenFileTab = useMemo<
 		(input: OpenFileInput, opener: FileTabOpener) => void
 	>(() => onOpenFileTab ?? (() => {}), [onOpenFileTab]);
@@ -518,20 +533,14 @@ export function WorkspaceInspectorSidebar({
 					</div>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<SidebarHeaderButton
-							label="Expand diffs on main canvas"
+							label="Search files"
 							shortcut={null}
-							onClick={onExpandDiffsOnCanvas}
-							disabled={!onExpandDiffsOnCanvas}
-							icon={<Maximize2 className="size-4" strokeWidth={1.8} />}
+							onClick={() => {
+								// TODO(search): wire to a workspace-wide file finder.
+								console.warn("[inspector] search: not yet implemented");
+							}}
+							icon={<Search className="size-4" strokeWidth={1.8} />}
 						/>
-						{onCollapseRightSidebar ? (
-							<SidebarHeaderButton
-								label="Close right sidebar"
-								shortcut={rightSidebarToggleShortcut}
-								onClick={onCollapseRightSidebar}
-								icon={<PanelRightClose className="size-4" strokeWidth={1.8} />}
-							/>
-						) : null}
 					</div>
 				</div>
 				{topSectionView === "files" ? (
@@ -608,15 +617,8 @@ export function WorkspaceInspectorSidebar({
 											? () => void openUrl(changeRequest.url)
 											: undefined
 									}
-								/>
-								<DiffCommitFooter
-									workspaceId={workspaceId ?? null}
-									commitButtonMode={commitButtonMode ?? "create-pr"}
-									commitButtonState={commitButtonState ?? "idle"}
-									changeRequest={changeRequest ?? null}
-									hasUncommittedChanges={changes.length > 0}
-									changeRequestName="PR"
-									onCommitAction={onCommitAction}
+									filter={changesFilter}
+									onFilterChange={setChangesFilter}
 								/>
 								<ChangesSection
 									workspaceId={workspaceId ?? null}
@@ -649,10 +651,11 @@ export function WorkspaceInspectorSidebar({
 									// (~150) trimmed off the sub-section's body budget;
 									// the file list now sits BELOW the commit area and
 									// scrolls in the remaining space.
-									bodyHeight={Math.max(topBodyHeight - 28 - 36 - 150, 0)}
+									bodyHeight={Math.max(topBodyHeight - 28 - 36, 0)}
 									animatePanelToggle={isPanelToggleAnimating}
 									isResizing={isResizing}
 									hideGitSectionHeader
+									filter={changesFilter}
 								/>
 							</>
 						)}

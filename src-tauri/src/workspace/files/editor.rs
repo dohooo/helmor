@@ -164,6 +164,72 @@ pub fn write_editor_file(
     })
 }
 
+/// Result of a `create_workspace_file` / `create_workspace_folder` request.
+/// `absolute_path` is the canonicalized path of the newly-created entry,
+/// returned so the frontend can immediately open the file or scroll to it
+/// in the tree.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEntryResponse {
+    pub absolute_path: String,
+}
+
+fn resolve_create_target(workspace_root_path: &str, relative_path: &str) -> Result<PathBuf> {
+    let trimmed = relative_path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        bail!("New entry name cannot be empty");
+    }
+    if trimmed.contains("..") {
+        bail!("New entry path cannot contain '..': {trimmed}");
+    }
+    let workspace_root = Path::new(workspace_root_path);
+    if !workspace_root.is_absolute() {
+        bail!(
+            "Workspace root must be an absolute path: {}",
+            workspace_root.display()
+        );
+    }
+    let candidate = workspace_root.join(trimmed);
+    // resolve_allowed_path canonicalizes both real and missing paths and
+    // enforces that the result lives inside a known workspace root — the
+    // same gate every other write goes through.
+    let resolved = resolve_allowed_path(&candidate, false)?;
+    Ok(resolved)
+}
+
+pub fn create_workspace_file(
+    workspace_root_path: &str,
+    relative_path: &str,
+) -> Result<CreateEntryResponse> {
+    let target = resolve_create_target(workspace_root_path, relative_path)?;
+    if target.exists() {
+        bail!("Already exists: {}", target.display());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent {}", parent.display()))?;
+    }
+    atomic_write_file(&target, b"").context("create file")?;
+    Ok(CreateEntryResponse {
+        absolute_path: target.display().to_string(),
+    })
+}
+
+pub fn create_workspace_folder(
+    workspace_root_path: &str,
+    relative_path: &str,
+) -> Result<CreateEntryResponse> {
+    let target = resolve_create_target(workspace_root_path, relative_path)?;
+    if target.exists() {
+        bail!("Already exists: {}", target.display());
+    }
+    fs::create_dir_all(&target)
+        .with_context(|| format!("Failed to create folder {}", target.display()))?;
+    Ok(CreateEntryResponse {
+        absolute_path: target.display().to_string(),
+    })
+}
+
 pub fn stat_editor_file(path: &str) -> Result<EditorFileStatResponse> {
     let resolved_path = resolve_allowed_path(Path::new(path), false)?;
 

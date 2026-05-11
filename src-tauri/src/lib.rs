@@ -425,6 +425,8 @@ pub fn run() {
             commands::editor_commands::get_workspace_git_action_status,
             commands::system_commands::drain_pending_cli_sends,
             commands::editor_commands::read_editor_file,
+            commands::editor_commands::create_workspace_file,
+            commands::editor_commands::create_workspace_folder,
             commands::editor_commands::read_file_at_ref,
             commands::editor_commands::list_workspace_directory,
             commands::editor_commands::search_workspace_paths,

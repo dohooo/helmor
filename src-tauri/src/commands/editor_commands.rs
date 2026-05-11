@@ -10,6 +10,26 @@ pub async fn read_editor_file(path: String) -> CmdResult<editor_files::EditorFil
 }
 
 #[tauri::command]
+pub async fn create_workspace_file(
+    workspace_root_path: String,
+    relative_path: String,
+) -> CmdResult<editor_files::CreateEntryResponse> {
+    run_blocking(move || editor_files::create_workspace_file(&workspace_root_path, &relative_path))
+        .await
+}
+
+#[tauri::command]
+pub async fn create_workspace_folder(
+    workspace_root_path: String,
+    relative_path: String,
+) -> CmdResult<editor_files::CreateEntryResponse> {
+    run_blocking(move || {
+        editor_files::create_workspace_folder(&workspace_root_path, &relative_path)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn read_file_at_ref(
     workspace_root_path: String,
     file_path: String,

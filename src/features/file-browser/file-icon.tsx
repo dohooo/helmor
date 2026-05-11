@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 interface Props {
 	name: string;
 	kind: "file" | "directory";
-	open?: boolean;
 	className?: string;
 }
 
@@ -40,14 +39,6 @@ function urlForIconName(iconName: string | undefined): string | undefined {
 	return buildIconUrl(file);
 }
 
-function resolveFolderUrl(name: string, open: boolean): string | undefined {
-	const lower = name.toLowerCase();
-	const table = open ? m.folderNamesExpanded : m.folderNames;
-	const iconName =
-		table[lower] ?? table[name] ?? (open ? m.folderExpanded : m.folder);
-	return urlForIconName(iconName);
-}
-
 // Material Icon Theme leaves these extensions out of `fileExtensions` because
 // VS Code routes them through its languageId map. We have no language server,
 // so map the common cases by extension directly.
@@ -78,11 +69,13 @@ function resolveFileUrl(name: string): string | undefined {
 	return urlForIconName(m.file);
 }
 
-export function FileIcon({ name, kind, open, className }: Props) {
-	const url =
-		kind === "directory"
-			? resolveFolderUrl(name, Boolean(open))
-			: resolveFileUrl(name);
+export function FileIcon({ name, kind, className }: Props) {
+	// Directories render chevron + name only (VS Code-style explorer).
+	if (kind === "directory") {
+		return null;
+	}
+
+	const url = resolveFileUrl(name);
 
 	if (!url) {
 		return <span className={cn("size-3.5 shrink-0", className)} aria-hidden />;
