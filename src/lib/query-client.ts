@@ -19,6 +19,7 @@ import {
 	getLiveContextUsage,
 	getSessionCodexGoal,
 	getSessionContextUsage,
+	getSessionPlanState,
 	getWorkspaceAccountProfile,
 	getWorkspaceForge,
 	listActiveStreams,
@@ -71,6 +72,8 @@ export const helmorQueryKeys = {
 		["sessionContextUsage", sessionId] as const,
 	sessionCodexGoal: (sessionId: string) =>
 		["sessionCodexGoal", sessionId] as const,
+	sessionPlanState: (sessionId: string) =>
+		["sessionPlanState", sessionId] as const,
 	codexRateLimits: ["codexRateLimits"] as const,
 	claudeRateLimits: ["claudeRateLimits"] as const,
 	claudeRichContextUsage: (
@@ -524,6 +527,17 @@ export function sessionCodexGoalQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.sessionCodexGoal(sessionId),
 		queryFn: () => getSessionCodexGoal(sessionId),
+		staleTime: 0,
+	});
+}
+
+/** Normalised plan projection. Event-driven via `SessionPlanChanged`.
+ *  Same shape every time the underlying row mutates, so callers don't
+ *  need to dedupe — the bridge invalidates and the observer refetches. */
+export function sessionPlanStateQueryOptions(sessionId: string) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.sessionPlanState(sessionId),
+		queryFn: () => getSessionPlanState(sessionId),
 		staleTime: 0,
 	});
 }

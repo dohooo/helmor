@@ -1,0 +1,28 @@
+---
+source: tests/schema_migrations.rs
+expression: session_plan_state_columns(&connection)
+---
+- - session_id
+  - TEXT
+  - 0
+  - ~
+- - source
+  - TEXT
+  - 1
+  - ~
+- - source_message_id
+  - TEXT
+  - 0
+  - ~
+- - plan_json
+  - TEXT
+  - 1
+  - ~
+- - status
+  - TEXT
+  - 1
+  - "'active'"
+- - updated_at
+  - TEXT
+  - 1
+  - "datetime('now')"

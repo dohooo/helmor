@@ -119,6 +119,20 @@ pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<Stri
     run_blocking(move || sessions::get_session_codex_goal(&session_id)).await
 }
 
+/// Latest normalised plan projection for `session_id`. Backed by
+/// `session_plan_state`; populated by the streaming bridge when
+/// Codex emits `turn/plan/updated` or Claude emits `ExitPlanMode`.
+/// `Ok(None)` means the session has never carried a plan (or the
+/// stored row failed validation — the loader logs and returns
+/// `None` instead of bubbling the error so the pinned-plan UI can
+/// degrade gracefully).
+#[tauri::command]
+pub async fn get_session_plan_state(
+    session_id: String,
+) -> CmdResult<Option<crate::agents::session_plan::SessionPlanState>> {
+    run_blocking(move || crate::agents::session_plan::load_session_plan_state(&session_id)).await
+}
+
 /// Out-of-band Codex `/goal` lifecycle control. The banner buttons
 /// (Pause / Resume / Clear) call this directly so the operations don't
 /// appear in chat history. Routes to the sidecar's `mutateCodexGoal`

@@ -20,6 +20,13 @@ pub enum UiMutationEvent {
     CodexGoalChanged {
         session_id: String,
     },
+    /// The session's normalised plan projection in `session_plan_state`
+    /// was upserted (Codex `turn/plan/updated` or Claude `ExitPlanMode`
+    /// just landed). Frontends invalidate the `sessionPlanState` query
+    /// and re-fetch the typed payload.
+    SessionPlanChanged {
+        session_id: String,
+    },
     /// Fires when a `goal_status` system message has been synthesised into
     /// the conversation history out-of-band — the streaming pipeline owns
     /// real assistant messages, this exists for the lifecycle markers
@@ -105,6 +112,9 @@ mod tests {
             UiMutationEvent::CodexGoalChanged {
                 session_id: "s".into(),
             },
+            UiMutationEvent::SessionPlanChanged {
+                session_id: "s".into(),
+            },
             UiMutationEvent::SessionMessagesAppended {
                 session_id: "s".into(),
             },
@@ -146,6 +156,17 @@ mod tests {
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "contextUsageChanged");
+        assert_eq!(json["sessionId"], "abc");
+        assert!(json.get("session_id").is_none());
+    }
+
+    #[test]
+    fn session_plan_changed_uses_camel_case_type_and_field() {
+        let event = UiMutationEvent::SessionPlanChanged {
+            session_id: "abc".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "sessionPlanChanged");
         assert_eq!(json["sessionId"], "abc");
         assert!(json.get("session_id").is_none());
     }

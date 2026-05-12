@@ -14,6 +14,7 @@ pub(crate) mod claude_project_files;
 mod custom_providers;
 mod persistence;
 mod queries;
+pub mod session_plan;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;

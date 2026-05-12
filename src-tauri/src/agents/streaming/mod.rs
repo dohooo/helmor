@@ -845,6 +845,39 @@ pub(super) fn stream_via_sidecar(
                         } else {
                             None
                         };
+                        // Project the captured plan into session_plan_state
+                        // while we still hold the writer borrow. The
+                        // pipeline keeps emitting the in-line plan card
+                        // unchanged — this is a parallel side-table for
+                        // the pinned-plan UI that survives reload.
+                        if let (Some(ctx), Some(conn)) = (exchange_ctx.as_ref(), writer.as_ref()) {
+                            if let Some(plan) =
+                                crate::agents::session_plan::plan_from_exit_plan_mode(&event.raw)
+                            {
+                                let msg_for_plan =
+                                    persisted_metadata.as_ref().map(|(id, _)| id.as_str());
+                                match crate::agents::session_plan::upsert_session_plan(
+                                    conn,
+                                    &ctx.helmor_session_id,
+                                    crate::agents::session_plan::PlanSource::ExitPlanMode,
+                                    msg_for_plan,
+                                    &plan,
+                                ) {
+                                    Ok(_) => crate::ui_sync::publish(
+                                        &app,
+                                        crate::ui_sync::UiMutationEvent::SessionPlanChanged {
+                                            session_id: ctx.helmor_session_id.clone(),
+                                        },
+                                    ),
+                                    Err(error) => tracing::warn!(
+                                        rid = %rid,
+                                        session_id = %ctx.helmor_session_id,
+                                        %error,
+                                        "Failed to project ExitPlanMode into session_plan_state"
+                                    ),
+                                }
+                            }
+                        }
                         drop(writer);
                         let (msg_id, created_at) = persisted_metadata.unwrap_or_default();
                         let plan_message = build_exit_plan_review_message(
@@ -1070,6 +1103,41 @@ pub(super) fn stream_via_sidecar(
                     // takes its `PipelineEmit` and decides what to send.
                     let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
+                        // Codex plan/todo projection. The accumulator
+                        // still renders the inline todo card unchanged
+                        // — this is a parallel side-table write keyed
+                        // by session id so the pinned-plan UI survives
+                        // a reload.
+                        if event.raw.get("type").and_then(Value::as_str)
+                            == Some("turn/plan/updated")
+                        {
+                            if let Some(ctx) = exchange_ctx.as_ref() {
+                                if let Some(plan) =
+                                    crate::agents::session_plan::plan_from_codex_event(&event.raw)
+                                {
+                                    match crate::agents::session_plan::upsert_session_plan_via_pool(
+                                        &ctx.helmor_session_id,
+                                        crate::agents::session_plan::PlanSource::Codex,
+                                        None,
+                                        &plan,
+                                    ) {
+                                        Ok(_) => crate::ui_sync::publish(
+                                            &app,
+                                            crate::ui_sync::UiMutationEvent::SessionPlanChanged {
+                                                session_id: ctx.helmor_session_id.clone(),
+                                            },
+                                        ),
+                                        Err(error) => tracing::warn!(
+                                            rid = %rid,
+                                            session_id = %ctx.helmor_session_id,
+                                            %error,
+                                            "Failed to project codex turn/plan/updated into session_plan_state"
+                                        ),
+                                    }
+                                }
+                            }
+                        }
+
                         if let Some(pipeline_state) = pipeline.as_mut() {
                             let emit = pipeline_state.push_event(&event.raw, &line);
 

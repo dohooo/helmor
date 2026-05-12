@@ -1535,6 +1535,7 @@ export type UiMutationEvent =
 	| { type: "sessionListChanged"; workspaceId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
+	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
@@ -2936,6 +2937,54 @@ export type CodexGoalState = {
 	createdAt: number;
 	updatedAt: number;
 };
+
+/** Provenance of the latest normalised plan projection. */
+export type SessionPlanSource = "codex" | "exit_plan_mode";
+
+/** Status of a single plan item, normalised away from provider quirks. */
+export type SessionPlanItemStatus = "pending" | "inProgress" | "completed";
+
+/** Status of the plan as a whole. Only `active` ships today; the union
+ *  exists so future "completed" / "cancelled" states don't break callers. */
+export type SessionPlanStatus = "active";
+
+export type SessionPlanItem = {
+	id: string;
+	text: string;
+	status: SessionPlanItemStatus;
+};
+
+export type SessionPlan = {
+	items: SessionPlanItem[];
+	currentItemId: string | null;
+	allowedPrompts: string[];
+	/** Markdown fallback present when the provider ships free-text plans
+	 *  (currently Claude `ExitPlanMode`). `null` when the original
+	 *  payload was already structured (Codex `turn/plan/updated`). */
+	rawText: string | null;
+	rawSource: string;
+};
+
+export type SessionPlanState = {
+	sessionId: string;
+	source: SessionPlanSource;
+	sourceMessageId: string | null;
+	plan: SessionPlan;
+	status: SessionPlanStatus;
+	updatedAt: string;
+};
+
+/** Latest persisted plan projection for a session. `null` means the
+ *  session has never carried a plan (or the stored row failed
+ *  validation — the loader degrades gracefully so the pinned-plan UI
+ *  doesn't need to handle a hard error path). */
+export async function getSessionPlanState(
+	sessionId: string,
+): Promise<SessionPlanState | null> {
+	return invoke<SessionPlanState | null>("get_session_plan_state", {
+		sessionId,
+	});
+}
 
 /** Read the active Codex `/goal` for one session. Null when no goal. */
 export async function getSessionCodexGoal(

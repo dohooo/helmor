@@ -254,3 +254,84 @@ fn workspaces_port_range_migration_adds_columns_when_missing() {
         workspaces_port_columns(&connection)
     );
 }
+
+fn session_plan_state_columns(
+    connection: &rusqlite::Connection,
+) -> Vec<(String, String, i64, Option<String>)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT name, type, \"notnull\", dflt_value
+             FROM pragma_table_info('session_plan_state')
+             ORDER BY cid",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn session_plan_state_migration_creates_table_on_legacy_dbs() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    // Bare-bones pre-feature schema: no session_plan_state table at all.
+    // The workspaces shape mirrors the other migration tests' minimal
+    // seed so the index/trigger creation in SCHEMA_SQL doesn't trip on
+    // the missing `repository_id` column.
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                repository_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .unwrap();
+
+    schema::ensure_schema(&connection).unwrap();
+    // Idempotency — second pass must be a no-op.
+    schema::ensure_schema(&connection).unwrap();
+
+    // The table now exists and accepts the upsert shape the projection
+    // layer writes (plan_json + source + optional message id).
+    connection
+        .execute(
+            "INSERT INTO session_plan_state (session_id, source, source_message_id, plan_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params!["s1", "codex", Option::<String>::None, "{}"],
+        )
+        .unwrap();
+
+    let stored: (String, String, Option<String>, String, String) = connection
+        .query_row(
+            "SELECT session_id, source, source_message_id, plan_json, status \
+             FROM session_plan_state WHERE session_id = 's1'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(stored.0, "s1");
+    assert_eq!(stored.1, "codex");
+    assert!(stored.2.is_none());
+    assert_eq!(stored.3, "{}");
+    assert_eq!(stored.4, "active", "status defaults to 'active'");
+
+    assert_yaml_snapshot!(
+        "session_plan_state_migration",
+        session_plan_state_columns(&connection)
+    );
+}
