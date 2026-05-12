@@ -439,7 +439,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 													updateSettings({ followUpBehavior: value });
 												}
 											}}
-											className="gap-1 bg-muted/40"
+											className="gap-1"
 										>
 											<ToggleGroupItem
 												value="queue"
@@ -512,7 +512,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 													});
 												}
 											}}
-											className="gap-1 bg-muted/40"
+											className="gap-1"
 										>
 											<ToggleGroupItem
 												value="summarized"
