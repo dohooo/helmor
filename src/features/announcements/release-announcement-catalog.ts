@@ -23,6 +23,14 @@ import type { ReleaseAnnouncementCatalogEntry } from "./announcements";
 export const RELEASE_ANNOUNCEMENT_CATALOG: readonly ReleaseAnnouncementCatalogEntry[] =
 	[
 		{
+			id: "2026-05-12-2104",
+			items: [
+				{
+					text: "You can now drag workspaces in the sidebar to keep each section in your preferred order.",
+				},
+			],
+		},
+		{
 			id: "2026-05-11-2300",
 			items: [
 				{
