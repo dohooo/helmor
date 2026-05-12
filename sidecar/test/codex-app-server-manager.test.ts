@@ -69,6 +69,25 @@ class MockCodexAppServer {
 			});
 			return {};
 		}
+		if (method === "skills/list") {
+			return {
+				data: [
+					{
+						cwd: "/tmp/workspace",
+						skills: [
+							{ name: "workspace-skill", description: "from workspace" },
+						],
+					},
+					{
+						cwd: "/tmp/repo",
+						skills: [
+							{ name: "repo-skill", description: "from repo" },
+							{ name: "workspace-skill", description: "duplicate" },
+						],
+					},
+				],
+			};
+		}
 		if (method === "turn/start") {
 			queueMicrotask(() => {
 				serverState.onNotification?.({
@@ -146,6 +165,26 @@ describe("CodexAppServerManager", () => {
 		};
 		codexConfigState.calls = 0;
 		emitter = createSidecarEmitter(() => {});
+	});
+
+	test("listSlashCommands sends cwd plus additionalDirectories to skills/list", async () => {
+		const manager = new CodexAppServerManager();
+
+		const commands = await manager.listSlashCommands({
+			cwd: "/tmp/workspace",
+			additionalDirectories: ["/tmp/repo", "/tmp/repo", " "],
+		});
+
+		const skillsList = serverState.requests.find(
+			(request) => request.method === "skills/list",
+		);
+		expect(skillsList?.params).toEqual({
+			cwds: ["/tmp/workspace", "/tmp/repo"],
+		});
+		expect(commands.map((command) => command.name)).toEqual([
+			"workspace-skill",
+			"repo-skill",
+		]);
 	});
 
 	test("returns the hardcoded model list", async () => {

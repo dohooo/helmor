@@ -294,7 +294,7 @@ function ChatThread({
 			<ConversationViewport
 				contentRef={contentRef}
 				data={threadMessages}
-				fontSize={settings.fontSize}
+				fontSize={settings.chatFontSize}
 				hasSession={hasSession}
 				itemContent={itemContent}
 				layoutCacheKey={layoutCacheKey}

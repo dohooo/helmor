@@ -1,6 +1,7 @@
-// Side-effect hook that mirrors the theme + dark-theme settings into
-// `<html>`'s class list and `colorScheme` so the rest of the app picks up
-// the right tokens without each component reaching into settings.
+// Side-effect hook that mirrors the theme + appearance settings into
+// `<html>`'s class list, data attributes, and inline CSS variables, so
+// the rest of the app picks up the right tokens without each component
+// reaching into settings.
 import { useEffect } from "react";
 import { type DarkTheme, resolveTheme, type ThemeMode } from "@/lib/settings";
 
@@ -11,11 +12,36 @@ const DARK_THEME_CLASSES: readonly DarkTheme[] = [
 	"aurora",
 ];
 
-export function useThemeApplication(opts: {
+export type ThemeApplicationOptions = {
 	theme: ThemeMode;
 	darkTheme: DarkTheme;
-}): void {
-	const { theme, darkTheme } = opts;
+	uiFontFamily: string | null;
+	codeFontFamily: string | null;
+	chatFontSize: number;
+	usePointerCursors: boolean;
+};
+
+function setOrRemoveProperty(
+	root: HTMLElement,
+	property: string,
+	value: string | null,
+): void {
+	if (value && value.length > 0) {
+		root.style.setProperty(property, value);
+	} else {
+		root.style.removeProperty(property);
+	}
+}
+
+export function useThemeApplication(opts: ThemeApplicationOptions): void {
+	const {
+		theme,
+		darkTheme,
+		uiFontFamily,
+		codeFontFamily,
+		chatFontSize,
+		usePointerCursors,
+	} = opts;
 
 	useEffect(() => {
 		const apply = () => {
@@ -45,4 +71,41 @@ export function useThemeApplication(opts: {
 			document.documentElement.classList.add(`theme-${darkTheme}`);
 		}
 	}, [darkTheme]);
+
+	// Font family overrides. `--font-sans` / `--font-mono` are also written by
+	// Tailwind's @theme block in `App.css`, but inline style on :root wins.
+	useEffect(() => {
+		setOrRemoveProperty(
+			document.documentElement,
+			"--font-sans-user",
+			uiFontFamily,
+		);
+	}, [uiFontFamily]);
+
+	useEffect(() => {
+		setOrRemoveProperty(
+			document.documentElement,
+			"--font-mono-user",
+			codeFontFamily,
+		);
+	}, [codeFontFamily]);
+
+	// Chat font size mirrored to a CSS var so message components can pick
+	// it up without prop drilling. (They currently inline-style it from
+	// settings; the var is here for future css-only consumers.)
+	useEffect(() => {
+		document.documentElement.style.setProperty(
+			"--chat-font-size",
+			`${chatFontSize}px`,
+		);
+	}, [chatFontSize]);
+
+	// Pointer-cursor toggle — class on <html> so CSS can flip the global
+	// cursor rule without a JS round-trip.
+	useEffect(() => {
+		document.documentElement.classList.toggle(
+			"no-pointer-cursors",
+			!usePointerCursors,
+		);
+	}, [usePointerCursors]);
 }

@@ -122,7 +122,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **Path alias**: `@/` maps to `src/`
 - **Styling**: Tailwind CSS v4 with oklch semantic color tokens (`bg-app-base`, `text-app-foreground`, etc.)
 - **UI**: shadcn/ui (base-nova), `lucide-react` icons. **No `@assistant-ui/react` or `react-virtuoso`** -- removed, do not re-introduce.
-- **Cursor**: Every clickable element MUST have `cursor-pointer`. This is already baked into base UI components (`Button`, `SidebarMenuButton`, `CommandItem`, `DropdownMenuItem`, `ContextMenuItem`, etc.). When adding custom clickable elements (e.g. `<div onClick>`), always include `cursor-pointer`.
+- **Cursor**: Clickable elements default to `cursor-pointer` (baked into base UI components; keep it on custom `<div onClick>` too). Users can flip the whole app back to the platform arrow via Appearance settings → "Use pointer cursors" (adds `.no-pointer-cursors` on `<html>`); don't bypass with inline `style={{ cursor }}`.
 - **Chat rendering**: `streamdown` + `use-stick-to-bottom`. Markdown overrides in `src/components/streamdown-components.tsx`.
 - **Rich text input**: Lexical in `src/features/composer/editor/`.
 - **File editor**: Monaco, lazy via `src/lib/monaco-runtime.ts`.

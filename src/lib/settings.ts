@@ -185,7 +185,16 @@ export type KanbanViewState = {
 };
 
 export type AppSettings = {
-	fontSize: number;
+	/** Chat message body font size (px). Migrated from the legacy `fontSize`
+	 *  field, which only ever affected chat rendering. */
+	chatFontSize: number;
+	/** Override for the sans-serif UI font stack. `null` = preset default. */
+	uiFontFamily: string | null;
+	/** Override for the monospace code font stack. `null` = preset default. */
+	codeFontFamily: string | null;
+	/** When true, all clickable elements show a pointer cursor on hover.
+	 *  When false, falls back to the default arrow. */
+	usePointerCursors: boolean;
 	theme: ThemeMode;
 	darkTheme: DarkTheme;
 	notifications: boolean;
@@ -257,7 +266,10 @@ export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
 export const CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD = 70;
 
 export const DEFAULT_SETTINGS: AppSettings = {
-	fontSize: 14,
+	chatFontSize: 14,
+	uiFontFamily: null,
+	codeFontFamily: null,
+	usePointerCursors: true,
 	theme: "system",
 	darkTheme: "default",
 	notifications: true,
@@ -301,6 +313,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const THEME_STORAGE_KEY = "helmor-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
+export const UI_FONT_FAMILY_STORAGE_KEY = "helmor-ui-font-family";
+export const CODE_FONT_FAMILY_STORAGE_KEY = "helmor-code-font-family";
+
+/** Keys mirrored to localStorage for flash-free synchronous boot reads.
+ *  Anything visible in the first paint must live here so we don't wait
+ *  on the async SQLite round-trip. */
+const LOCALSTORAGE_KEYS = {
+	theme: THEME_STORAGE_KEY,
+	darkTheme: DARK_THEME_STORAGE_KEY,
+	sidebarGrouping: SIDEBAR_GROUPING_STORAGE_KEY,
+	uiFontFamily: UI_FONT_FAMILY_STORAGE_KEY,
+	codeFontFamily: CODE_FONT_FAMILY_STORAGE_KEY,
+} as const;
+
+type LocalStorageKey = keyof typeof LOCALSTORAGE_KEYS;
 
 const VALID_SIDEBAR_GROUPINGS: readonly SidebarGrouping[] = ["status", "repo"];
 
@@ -324,17 +351,36 @@ export function getPreloadedTheme(): ThemeMode {
 	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
 }
 
-export function getPreloadedSettings(): AppSettings {
-	return { ...DEFAULT_SETTINGS, theme: getPreloadedTheme() };
+function readLocalStorageString(key: string): string | null {
+	if (typeof localStorage === "undefined") return null;
+	const v = localStorage.getItem(key);
+	return v && v.length > 0 ? v : null;
 }
 
-// theme + darkTheme + sidebarGrouping are stored in localStorage
-// (sync read for flash-free boot), not SQLite
+export function getPreloadedSettings(): AppSettings {
+	const darkTheme = (() => {
+		const raw = readLocalStorageString(DARK_THEME_STORAGE_KEY);
+		return VALID_DARK_THEMES.includes(raw as DarkTheme)
+			? (raw as DarkTheme)
+			: DEFAULT_SETTINGS.darkTheme;
+	})();
+	return {
+		...DEFAULT_SETTINGS,
+		theme: getPreloadedTheme(),
+		darkTheme,
+		uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
+		codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+	};
+}
+
+// localStorage-backed fields (sync read for flash-free boot) live in
+// `LOCALSTORAGE_KEYS` above. Everything else goes through SQLite.
 const SETTINGS_KEY_MAP: Record<
-	Exclude<keyof AppSettings, "theme" | "darkTheme" | "sidebarGrouping">,
+	Exclude<keyof AppSettings, LocalStorageKey>,
 	string
 > = {
-	fontSize: "app.font_size",
+	chatFontSize: "app.chat_font_size",
+	usePointerCursors: "app.use_pointer_cursors",
 	notifications: "app.notifications",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
@@ -732,6 +778,19 @@ function parseClaudeCustomProviderSettings(
 	}
 }
 
+/** Read an integer setting bounded to [min, max] with a default fallback.
+ *  Used for font sizes so corrupted or out-of-range values can't render
+ *  the UI unreadable. */
+function readClampedInt(
+	value: string | undefined,
+	{ min, max, fallback }: { min: number; max: number; fallback: number },
+): number {
+	if (value === undefined) return fallback;
+	const n = Number(value);
+	if (!Number.isFinite(n)) return fallback;
+	return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
@@ -742,10 +801,21 @@ export async function loadSettings(): Promise<AppSettings> {
 		const rawPrModelId = raw[SETTINGS_KEY_MAP.prModelId];
 		const rawPrEffort = raw[SETTINGS_KEY_MAP.prEffort];
 		const rawPrFastMode = raw[SETTINGS_KEY_MAP.prFastMode];
+		// Migration: legacy `app.font_size` is the new chatFontSize. Read
+		// it as a fallback when the new key is absent; the old row stays
+		// in SQLite (unused) until the user next changes the chat font.
+		const legacyFontSize = raw["app.font_size"];
 		return {
-			fontSize: raw[SETTINGS_KEY_MAP.fontSize]
-				? Number(raw[SETTINGS_KEY_MAP.fontSize])
-				: DEFAULT_SETTINGS.fontSize,
+			chatFontSize: readClampedInt(
+				raw[SETTINGS_KEY_MAP.chatFontSize] ?? legacyFontSize,
+				{ min: 10, max: 24, fallback: DEFAULT_SETTINGS.chatFontSize },
+			),
+			uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
+			codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+			usePointerCursors:
+				raw[SETTINGS_KEY_MAP.usePointerCursors] !== undefined
+					? raw[SETTINGS_KEY_MAP.usePointerCursors] === "true"
+					: DEFAULT_SETTINGS.usePointerCursors,
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
@@ -864,48 +934,27 @@ export async function loadSettings(): Promise<AppSettings> {
 }
 
 export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
-	if (patch.theme !== undefined) {
+	// localStorage-backed fields. `null` / "" clears the row so the next
+	// boot falls back to the preset default.
+	for (const [field, lsKey] of Object.entries(LOCALSTORAGE_KEYS) as Array<
+		[LocalStorageKey, string]
+	>) {
+		const value = patch[field];
+		if (value === undefined) continue;
 		try {
-			localStorage.setItem(THEME_STORAGE_KEY, patch.theme);
+			if (value === null || value === "") {
+				localStorage.removeItem(lsKey);
+			} else {
+				localStorage.setItem(lsKey, String(value));
+			}
 		} catch (error) {
-			console.error(
-				`[helmor] theme save failed for "${THEME_STORAGE_KEY}"`,
-				error,
-			);
-		}
-	}
-
-	if (patch.darkTheme !== undefined) {
-		try {
-			localStorage.setItem(DARK_THEME_STORAGE_KEY, patch.darkTheme);
-		} catch (error) {
-			console.error(
-				`[helmor] dark theme save failed for "${DARK_THEME_STORAGE_KEY}"`,
-				error,
-			);
-		}
-	}
-
-	if (patch.sidebarGrouping !== undefined) {
-		try {
-			localStorage.setItem(SIDEBAR_GROUPING_STORAGE_KEY, patch.sidebarGrouping);
-		} catch (error) {
-			console.error(
-				`[helmor] sidebar grouping save failed for "${SIDEBAR_GROUPING_STORAGE_KEY}"`,
-				error,
-			);
+			console.error(`[helmor] localStorage save failed for "${lsKey}"`, error);
 		}
 	}
 
 	const settings: Record<string, string> = {};
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
-		const value =
-			patch[
-				key as keyof Omit<
-					AppSettings,
-					"theme" | "darkTheme" | "sidebarGrouping"
-				>
-			];
+		const value = patch[key as keyof Omit<AppSettings, LocalStorageKey>];
 		if (value !== undefined) {
 			settings[dbKey] =
 				key === "shortcuts" ||

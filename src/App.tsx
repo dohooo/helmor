@@ -52,6 +52,7 @@ import {
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	createSession,
+	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
@@ -204,6 +205,16 @@ function MainApp() {
 			setTimeout(() => setSplashMounted(false), SPLASH_FADE_MS);
 		});
 	}, []);
+
+	useEffect(() => {
+		if (appSettings?.onboardingCompleted !== true) {
+			return;
+		}
+
+		void exitOnboardingWindowMode().catch((error) => {
+			console.error("[app] failed to restore main window mode", error);
+		});
+	}, [appSettings?.onboardingCompleted]);
 
 	useShellEvent("reload-settings", () => {
 		void loadSettings().then(setAppSettings);
@@ -732,6 +743,10 @@ function AppShell({
 	useThemeApplication({
 		theme: appSettings.theme,
 		darkTheme: appSettings.darkTheme,
+		uiFontFamily: appSettings.uiFontFamily,
+		codeFontFamily: appSettings.codeFontFamily,
+		chatFontSize: appSettings.chatFontSize,
+		usePointerCursors: appSettings.usePointerCursors,
 	});
 
 	const handleSelectWorkspace = useCallback(

@@ -1,15 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	CheckCircle2,
-	ChevronDown,
-	HelpCircle,
-	Minus,
-	Monitor,
-	Moon,
-	Plus,
-	Settings,
-	Sun,
-} from "lucide-react";
+import { CheckCircle2, ChevronDown, HelpCircle, Settings } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
@@ -52,19 +42,15 @@ import {
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type {
-	AppSettings,
-	ClaudeThinkingDisplay,
-	DarkTheme,
-	ThemeMode,
-} from "@/lib/settings";
-import { resolveTheme, useSettings } from "@/lib/settings";
+import type { AppSettings, ClaudeThinkingDisplay } from "@/lib/settings";
+import { useSettings } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
+import { AppearancePanel } from "./panels/appearance";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { CursorProviderPanel } from "./panels/cursor-provider";
@@ -73,61 +59,7 @@ import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
-const MIN_FONT_SIZE = 12;
-const MAX_FONT_SIZE = 20;
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
-
-const DARK_THEME_OPTIONS: Array<{
-	id: DarkTheme;
-	label: string;
-	/** Gradient stop colors for dark-mode swatch (vivid, hue-family) */
-	bg: string;
-	accent: string;
-	/** Gradient stop colors for light-mode swatch (vivid, hue-family) */
-	lightBg: string;
-	lightAccent: string;
-}> = [
-	{
-		id: "default",
-		label: "Default",
-		bg: "oklch(0.38 0 0)",
-		accent: "oklch(0.18 0 0)",
-		lightBg: "oklch(0.88 0 0)",
-		lightAccent: "oklch(0.52 0 0)",
-	},
-	{
-		id: "midnight",
-		label: "Midnight",
-		bg: "oklch(0.62 0.14 258)",
-		accent: "oklch(0.30 0.10 260)",
-		lightBg: "oklch(0.82 0.09 258)",
-		lightAccent: "oklch(0.46 0.20 255)",
-	},
-	{
-		id: "forest",
-		label: "Forest",
-		bg: "oklch(0.58 0.13 150)",
-		accent: "oklch(0.28 0.08 155)",
-		lightBg: "oklch(0.80 0.09 152)",
-		lightAccent: "oklch(0.44 0.17 148)",
-	},
-	{
-		id: "ember",
-		label: "Ember",
-		bg: "oklch(0.66 0.15 55)",
-		accent: "oklch(0.32 0.09 48)",
-		lightBg: "oklch(0.84 0.11 60)",
-		lightAccent: "oklch(0.52 0.19 50)",
-	},
-	{
-		id: "aurora",
-		label: "Aurora",
-		bg: "oklch(0.60 0.15 286)",
-		accent: "oklch(0.28 0.09 292)",
-		lightBg: "oklch(0.80 0.10 289)",
-		lightAccent: "oklch(0.46 0.20 284)",
-	},
-];
 
 export type { SettingsSection } from "./types";
 
@@ -542,121 +474,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 							)}
 
 							{activeSection === "appearance" && (
-								<SettingsGroup>
-									<SettingsRow
-										title="Theme"
-										description="Switch between light and dark appearance"
-									>
-										<ToggleGroup
-											type="single"
-											value={settings.theme}
-											className="gap-1.5"
-											onValueChange={(value: string) => {
-												if (value) {
-													updateSettings({ theme: value as ThemeMode });
-												}
-											}}
-										>
-											{(
-												[
-													{ value: "system", icon: Monitor, label: "System" },
-													{ value: "light", icon: Sun, label: "Light" },
-													{ value: "dark", icon: Moon, label: "Dark" },
-												] as const
-											).map(({ value, icon: Icon, label }) => (
-												<ToggleGroupItem
-													key={value}
-													value={value}
-													className="gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
-												>
-													<Icon className="size-3.5" strokeWidth={1.8} />
-													{label}
-												</ToggleGroupItem>
-											))}
-										</ToggleGroup>
-									</SettingsRow>
-									<SettingsRow
-										title="Color Theme"
-										description="Choose an accent palette"
-									>
-										{(() => {
-											const isLight = resolveTheme(settings.theme) === "light";
-											return (
-												<div className="flex gap-2">
-													{DARK_THEME_OPTIONS.map((opt) => {
-														const swatchBg = isLight ? opt.lightBg : opt.bg;
-														const swatchAccent = isLight
-															? opt.lightAccent
-															: opt.accent;
-														const isSelected = settings.darkTheme === opt.id;
-														return (
-															<button
-																key={opt.id}
-																type="button"
-																title={opt.label}
-																aria-label={opt.label}
-																aria-pressed={isSelected}
-																className={cn(
-																	"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
-																	isSelected ? "scale-105" : "hover:scale-105",
-																)}
-																style={{
-																	background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
-																	boxShadow: isSelected
-																		? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
-																		: undefined,
-																}}
-																onClick={() =>
-																	updateSettings({ darkTheme: opt.id })
-																}
-															/>
-														);
-													})}
-												</div>
-											);
-										})()}
-									</SettingsRow>
-									<SettingsRow
-										title="Font Size"
-										description="Adjust the text size for chat messages"
-									>
-										<div className="flex items-center gap-3">
-											<Button
-												variant="outline"
-												size="icon-sm"
-												onClick={() =>
-													updateSettings({
-														fontSize: Math.max(
-															MIN_FONT_SIZE,
-															settings.fontSize - 1,
-														),
-													})
-												}
-												disabled={settings.fontSize <= MIN_FONT_SIZE}
-											>
-												<Minus className="size-3.5" strokeWidth={2} />
-											</Button>
-											<span className="w-12 text-center text-[14px] font-semibold tabular-nums text-foreground">
-												{settings.fontSize}px
-											</span>
-											<Button
-												variant="outline"
-												size="icon-sm"
-												onClick={() =>
-													updateSettings({
-														fontSize: Math.min(
-															MAX_FONT_SIZE,
-															settings.fontSize + 1,
-														),
-													})
-												}
-												disabled={settings.fontSize >= MAX_FONT_SIZE}
-											>
-												<Plus className="size-3.5" strokeWidth={2} />
-											</Button>
-										</div>
-									</SettingsRow>
-								</SettingsGroup>
+								<AppearancePanel
+									settings={settings}
+									updateSettings={updateSettings}
+								/>
 							)}
 
 							{activeSection === "model" && (

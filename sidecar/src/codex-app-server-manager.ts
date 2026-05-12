@@ -1115,6 +1115,7 @@ export class CodexAppServerManager implements SessionManager {
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]> {
 		const cwd = params.cwd ?? process.cwd();
+		const cwds = collectSkillCwds(cwd, params.additionalDirectories);
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
@@ -1132,11 +1133,11 @@ export class CodexAppServerManager implements SessionManager {
 			// providers fail the same way when their CLI is missing/slow.
 			const result = await server.sendRequest<Record<string, unknown>>(
 				"skills/list",
-				{ cwds: [cwd] },
+				{ cwds },
 				20_000,
 			);
 
-			return parseSkillsResponse(result, cwd);
+			return parseSkillsResponse(result, cwds);
 		} finally {
 			server.kill();
 		}
@@ -1772,27 +1773,36 @@ function deepGet(obj: unknown, ...keys: string[]): unknown {
 	return current;
 }
 
-function parseSkillsResponse(result: unknown, cwd: string): SlashCommandInfo[] {
+function collectSkillCwds(
+	cwd: string,
+	additionalDirectories: readonly string[] | undefined,
+): string[] {
+	const cwds = [cwd, ...(additionalDirectories ?? [])].map((dir) => dir.trim());
+	return Array.from(new Set(cwds.filter(Boolean)));
+}
+
+function parseSkillsResponse(
+	result: unknown,
+	cwds: readonly string[],
+): SlashCommandInfo[] {
 	if (!result || typeof result !== "object") return [];
 	const r = result as Record<string, unknown>;
 
-	let skills: unknown[] = [];
+	const skills: unknown[] = [];
 	const dataBuckets = Array.isArray(r.data) ? r.data : [];
-	const bucket = dataBuckets.find(
-		(b: unknown) =>
-			typeof b === "object" &&
-			b !== null &&
-			(b as Record<string, unknown>).cwd === cwd,
-	);
-	if (bucket && typeof bucket === "object") {
-		const s = (bucket as Record<string, unknown>).skills;
-		if (Array.isArray(s)) skills = s;
+	const wantedCwds = new Set(cwds);
+	for (const bucket of dataBuckets) {
+		if (!bucket || typeof bucket !== "object") continue;
+		const record = bucket as Record<string, unknown>;
+		if (!wantedCwds.has(String(record.cwd ?? ""))) continue;
+		const bucketSkills = record.skills;
+		if (Array.isArray(bucketSkills)) skills.push(...bucketSkills);
 	}
 	if (skills.length === 0 && Array.isArray(r.skills)) {
-		skills = r.skills;
+		skills.push(...r.skills);
 	}
 
-	return skills.flatMap((s) => {
+	const commands = skills.flatMap((s) => {
 		if (!s || typeof s !== "object") return [];
 		const skill = s as Record<string, unknown>;
 		const name = typeof skill.name === "string" ? skill.name : null;
@@ -1814,6 +1824,11 @@ function parseSkillsResponse(result: unknown, cwd: string): SlashCommandInfo[] {
 			},
 		];
 	});
+	const byName = new Map<string, SlashCommandInfo>();
+	for (const command of commands) {
+		if (!byName.has(command.name)) byName.set(command.name, command);
+	}
+	return Array.from(byName.values());
 }
 
 /**
