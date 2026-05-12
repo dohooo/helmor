@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::workspace::sidebar_order;
 use crate::workspace_state::{WorkspaceMode, WorkspaceState};
 use crate::workspace_status::WorkspaceStatus;
 
@@ -286,6 +287,163 @@ fn move_workspace_in_sidebar_updates_status_and_group_order() {
 
     assert_eq!(alpha_status, "review");
     assert!(alpha_order < charlie_order);
+}
+
+#[test]
+fn move_workspace_in_sidebar_preserves_repo_order_component() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("charlie");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
+            (
+                "workspace-alpha",
+                sidebar_order::pack(
+                    3 * sidebar_order::ORDER_STEP,
+                    11 * sidebar_order::ORDER_STEP,
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
+            (
+                "workspace-charlie",
+                sidebar_order::pack(
+                    2 * sidebar_order::ORDER_STEP,
+                    22 * sidebar_order::ORDER_STEP,
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+
+    workspaces::move_workspace_in_sidebar(
+        "workspace-alpha",
+        crate::workspace_status::WorkspaceStatus::Review,
+        Some("workspace-charlie"),
+    )
+    .unwrap();
+
+    let alpha_order: i64 = connection
+        .query_row(
+            "SELECT display_order FROM workspaces WHERE id = 'workspace-alpha'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let charlie_order: i64 = connection
+        .query_row(
+            "SELECT display_order FROM workspaces WHERE id = 'workspace-charlie'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert!(sidebar_order::status_order(alpha_order) < sidebar_order::status_order(charlie_order));
+    assert_eq!(
+        sidebar_order::repo_order(alpha_order),
+        11 * sidebar_order::ORDER_STEP
+    );
+}
+
+#[test]
+fn move_workspace_within_repo_updates_only_repo_order_component() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+    harness.insert_workspace_name("charlie");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    for (index, name) in ["alpha", "bravo", "charlie"].iter().enumerate() {
+        connection
+            .execute(
+                "UPDATE workspaces SET status = 'review', display_order = ?2 WHERE id = ?1",
+                (
+                    format!("workspace-{name}"),
+                    sidebar_order::pack(
+                        ((index as i64) + 1) * sidebar_order::ORDER_STEP,
+                        ((index as i64) + 1) * sidebar_order::ORDER_STEP,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+    }
+
+    workspaces::move_workspace_within_repo("workspace-charlie", Some("workspace-alpha")).unwrap();
+
+    let rows = connection
+        .prepare("SELECT id, status, display_order FROM workspaces ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    let alpha = rows.iter().find(|row| row.0 == "workspace-alpha").unwrap();
+    let charlie = rows
+        .iter()
+        .find(|row| row.0 == "workspace-charlie")
+        .unwrap();
+
+    assert_eq!(charlie.1, "review");
+    assert_eq!(
+        sidebar_order::status_order(charlie.2),
+        3 * sidebar_order::ORDER_STEP
+    );
+    assert!(sidebar_order::repo_order(charlie.2) < sidebar_order::repo_order(alpha.2));
+}
+
+#[test]
+fn move_workspace_within_repo_rejects_cross_repo_before_target() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-other', 'other', ?1)",
+            [harness.root.join("other").to_str().unwrap()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id, repository_id, directory_name, state, status, display_order
+            ) VALUES ('workspace-other', 'repo-other', 'other', 'ready', 'in-progress', ?1)
+            "#,
+            [sidebar_order::pack(sidebar_order::ORDER_STEP, sidebar_order::ORDER_STEP).unwrap()],
+        )
+        .unwrap();
+
+    let error = workspaces::move_workspace_within_repo("workspace-alpha", Some("workspace-other"))
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("same repository"),
+        "expected same-repository error, got {error:#}"
+    );
 }
 
 #[test]

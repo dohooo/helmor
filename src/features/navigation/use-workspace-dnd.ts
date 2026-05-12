@@ -13,6 +13,9 @@ const LONG_PRESS_MS = 140;
 const MOVE_CANCEL_PX = 10;
 const DRAGGABLE_ROW_SELECTOR = "[data-workspace-dnd-row='true']";
 const DROP_GROUP_SELECTOR = "[data-workspace-drop-group-id]";
+export const WORKSPACE_DND_ACTIVE_ATTRIBUTE = "data-workspace-dnd-active";
+export const WORKSPACE_DND_ACTIVE_CHANGE_EVENT = "workspace-dnd-active-change";
+const DRAG_CURSOR_STYLE_ID = "workspace-dnd-cursor-style";
 
 type DragStart = {
 	workspaceId: string;
@@ -44,24 +47,57 @@ export type WorkspaceDropTarget = {
 	beforeWorkspaceId: string | null;
 };
 
+export type WorkspaceDndPolicy = {
+	canDragRow: (row: WorkspaceRow, sourceGroupId: string) => boolean;
+	canDropIntoGroup: (sourceGroupId: string, targetGroupId: string) => boolean;
+};
+
 export function isWorkspaceGroupDroppable(groupId: string) {
 	return workspaceStatusFromGroupId(groupId) !== null;
 }
 
 export function useWorkspaceDnd({
 	onMoveWorkspace,
+	policy,
 }: {
 	onMoveWorkspace?: (
 		workspaceId: string,
 		targetGroupId: string,
 		beforeWorkspaceId: string | null,
 	) => void;
+	policy?: WorkspaceDndPolicy;
 }) {
 	const [dragState, setDragState] = useState<WorkspaceDragState | null>(null);
 	const pendingStartRef = useRef<DragStart | null>(null);
 	const longPressTimerRef = useRef<number | null>(null);
 	const dragStateRef = useRef<WorkspaceDragState | null>(null);
 	dragStateRef.current = dragState;
+	const isDragging = dragState !== null;
+
+	useEffect(() => {
+		if (!isDragging) return;
+
+		const root = document.documentElement;
+		let styleElement = document.getElementById(DRAG_CURSOR_STYLE_ID);
+		if (!styleElement) {
+			styleElement = document.createElement("style");
+			styleElement.id = DRAG_CURSOR_STYLE_ID;
+			styleElement.textContent = `
+				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"],
+				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] * {
+					cursor: grabbing !important;
+				}
+			`;
+			document.head.appendChild(styleElement);
+		}
+		root.setAttribute(WORKSPACE_DND_ACTIVE_ATTRIBUTE, "true");
+		window.dispatchEvent(new Event(WORKSPACE_DND_ACTIVE_CHANGE_EVENT));
+
+		return () => {
+			root.removeAttribute(WORKSPACE_DND_ACTIVE_ATTRIBUTE);
+			window.dispatchEvent(new Event(WORKSPACE_DND_ACTIVE_CHANGE_EVENT));
+		};
+	}, [isDragging]);
 
 	const clearPendingStart = useCallback(() => {
 		if (longPressTimerRef.current !== null) {
@@ -78,7 +114,15 @@ export function useWorkspaceDnd({
 				.map((element) => element.closest(DROP_GROUP_SELECTOR))
 				.find(Boolean) as HTMLElement | undefined;
 			const groupId = groupElement?.dataset.workspaceDropGroupId;
-			if (!groupId || !isWorkspaceGroupDroppable(groupId)) {
+			const sourceGroupId = dragStateRef.current?.sourceGroupId;
+			if (
+				!groupId ||
+				!sourceGroupId ||
+				!(
+					policy?.canDropIntoGroup(sourceGroupId, groupId) ??
+					isWorkspaceGroupDroppable(groupId)
+				)
+			) {
 				return null;
 			}
 
@@ -104,7 +148,7 @@ export function useWorkspaceDnd({
 
 			return { groupId, beforeWorkspaceId: null };
 		},
-		[],
+		[policy],
 	);
 
 	useEffect(() => {
@@ -148,6 +192,7 @@ export function useWorkspaceDnd({
 			const active = dragStateRef.current;
 			if (active && event.pointerId === pendingStartRef.current?.pointerId) {
 				event.preventDefault();
+				let moved = false;
 				if (
 					active.targetGroupId !== active.sourceGroupId ||
 					active.beforeWorkspaceId !== active.workspaceId
@@ -157,8 +202,13 @@ export function useWorkspaceDnd({
 						active.targetGroupId,
 						active.beforeWorkspaceId,
 					);
+					moved = true;
 				}
-				setDragState(null);
+				if (moved) {
+					window.requestAnimationFrame(() => setDragState(null));
+				} else {
+					setDragState(null);
+				}
 			}
 			clearPendingStart();
 		};
@@ -191,7 +241,9 @@ export function useWorkspaceDnd({
 		}) => {
 			if (
 				event.button !== 0 ||
-				!isWorkspaceGroupDroppable(groupId) ||
+				!(
+					policy?.canDragRow(row, groupId) ?? isWorkspaceGroupDroppable(groupId)
+				) ||
 				row.pinnedAt ||
 				row.state === "archived"
 			) {
@@ -230,7 +282,7 @@ export function useWorkspaceDnd({
 				});
 			}, LONG_PRESS_MS);
 		},
-		[clearPendingStart],
+		[clearPendingStart, policy],
 	);
 
 	const dropTarget = useMemo<WorkspaceDropTarget | null>(() => {

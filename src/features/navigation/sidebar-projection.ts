@@ -138,9 +138,10 @@ export function projectVisualSidebar(
  *   group's title is the repository name.
  * - Rows with no `repoId` (legacy / optimistic) fall into a single
  *   "Unknown" bucket so they never silently disappear.
- * - Repo bucket order follows first-seen order in the flattened input,
- *   which inherits the server's status ordering (done → review → progress
- *   → canceled), so recently-completed repos surface near the top.
+ * - Repo bucket order follows first-seen order in the flattened input.
+ *   Rows inside each repo bucket use the backend-provided repoDisplayOrder;
+ *   the frontend treats it as an ordinary sort key and never parses the
+ *   packed database order.
  */
 export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 	const head: WorkspaceGroup[] = []; // pinned
@@ -174,6 +175,10 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 		}
 	}
 
+	for (const bucket of repoBuckets.values()) {
+		bucket.rows.sort(compareRepoRows);
+	}
+
 	const repoGroups: WorkspaceGroup[] = repoOrder.map((bucketId) => {
 		const bucket = repoBuckets.get(bucketId);
 		if (!bucket) {
@@ -191,6 +196,18 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 	});
 
 	return [...head, ...repoGroups, ...tail];
+}
+
+function compareRepoRows(left: WorkspaceRow, right: WorkspaceRow) {
+	const leftOrder = left.repoDisplayOrder ?? left.displayOrder ?? 0;
+	const rightOrder = right.repoDisplayOrder ?? right.displayOrder ?? 0;
+	if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+
+	const leftCreated = Date.parse(left.createdAt ?? "") || 0;
+	const rightCreated = Date.parse(right.createdAt ?? "") || 0;
+	if (leftCreated !== rightCreated) return rightCreated - leftCreated;
+
+	return 0;
 }
 
 export function shouldReconcilePendingArchive(

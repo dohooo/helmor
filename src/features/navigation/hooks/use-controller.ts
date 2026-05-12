@@ -12,6 +12,7 @@ import {
 	loadAddRepositoryDefaults,
 	markWorkspaceUnread,
 	moveWorkspaceInSidebar,
+	moveWorkspaceWithinRepo,
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
@@ -52,6 +53,7 @@ import {
 	hasWorkspaceId,
 	insertRowByCreatedAtDesc,
 	reorderWorkspaceInGroups,
+	reorderWorkspaceRepoOrderInGroups,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
@@ -743,6 +745,32 @@ export function useWorkspacesSidebarController({
 			targetGroupId: string,
 			beforeWorkspaceId: string | null,
 		) => {
+			if (settings.sidebarGrouping === "repo") {
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceGroups,
+					(current: WorkspaceGroup[] | undefined) =>
+						reorderWorkspaceRepoOrderInGroups(
+							current,
+							workspaceId,
+							beforeWorkspaceId,
+						),
+				);
+
+				try {
+					await moveWorkspaceWithinRepo(workspaceId, beforeWorkspaceId);
+					await invalidateWorkspaceSummary(workspaceId);
+					requestSidebarReconcile(queryClient);
+				} catch (error) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.workspaceGroups,
+					});
+					pushWorkspaceToast(
+						describeUnknownError(error, "Unable to move workspace."),
+					);
+				}
+				return;
+			}
+
 			const targetStatus = workspaceStatusFromGroupId(targetGroupId);
 			if (!targetStatus) return;
 
@@ -773,7 +801,12 @@ export function useWorkspacesSidebarController({
 				);
 			}
 		},
-		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
+		[
+			invalidateWorkspaceSummary,
+			pushWorkspaceToast,
+			queryClient,
+			settings.sidebarGrouping,
+		],
 	);
 
 	const handleCreateWorkspaceFromRepo = useCallback(

@@ -6,6 +6,8 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use crate::workspace::sidebar_order;
+
 /// Identifier sanity check before string-interpolating into SQL. SQLite
 /// `pragma_table_info()` and `DROP TABLE` don't accept bound parameters
 /// for the table/column name, so we must interpolate. All call sites pass
@@ -584,7 +586,95 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.display_order column")?;
     }
 
+    migrate_workspace_display_order_to_packed(connection)?;
+
     Ok(())
+}
+
+fn migrate_workspace_display_order_to_packed(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "settings") || !has_table(connection, "workspaces") {
+        return Ok(());
+    }
+
+    let already_migrated = connection
+        .prepare("SELECT 1 FROM settings WHERE key = 'workspace_display_order_packed_v1'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    if already_migrated {
+        return Ok(());
+    }
+
+    let max_display_order = connection
+        .query_row(
+            "SELECT COALESCE(MAX(COALESCE(display_order, 0)), 0) FROM workspaces",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if max_display_order >= sidebar_order::ORDER_BASE {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('workspace_display_order_packed_v1', '1')",
+                [],
+            )
+            .context("Failed to mark packed workspace display_order migration")?;
+        return Ok(());
+    }
+
+    let sql = format!(
+        r#"
+        CREATE TEMP TABLE IF NOT EXISTS tmp_workspace_sidebar_order (
+            id TEXT PRIMARY KEY,
+            status_order INTEGER NOT NULL,
+            repo_order INTEGER NOT NULL
+        );
+        DELETE FROM tmp_workspace_sidebar_order;
+
+        INSERT INTO tmp_workspace_sidebar_order (id, status_order, repo_order)
+        SELECT id, status_order, repo_order
+        FROM (
+            SELECT
+                id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        CASE WHEN pinned_at IS NOT NULL THEN 'pinned' ELSE COALESCE(status, 'in-progress') END
+                    ORDER BY COALESCE(display_order, 0) ASC,
+                             datetime(created_at) DESC,
+                             datetime(updated_at) DESC,
+                             id DESC
+                ) * {step} AS status_order,
+                ROW_NUMBER() OVER (
+                    PARTITION BY repository_id
+                    ORDER BY COALESCE(display_order, 0) ASC,
+                             datetime(created_at) DESC,
+                             datetime(updated_at) DESC,
+                             id DESC
+                ) * {step} AS repo_order
+            FROM workspaces
+        );
+
+        UPDATE workspaces
+        SET display_order = (
+            SELECT status_order * {base} + repo_order
+            FROM tmp_workspace_sidebar_order
+            WHERE tmp_workspace_sidebar_order.id = workspaces.id
+        )
+        WHERE EXISTS (
+            SELECT 1
+            FROM tmp_workspace_sidebar_order
+            WHERE tmp_workspace_sidebar_order.id = workspaces.id
+        );
+
+        DROP TABLE tmp_workspace_sidebar_order;
+        INSERT OR REPLACE INTO settings (key, value) VALUES ('workspace_display_order_packed_v1', '1');
+        "#,
+        base = sidebar_order::ORDER_BASE,
+        step = sidebar_order::ORDER_STEP,
+    );
+
+    connection
+        .execute_batch(&sql)
+        .context("Failed to migrate workspace display_order to packed sidebar order")
 }
 
 const SCHEMA_SQL: &str = r#"
@@ -990,6 +1080,84 @@ mod tests {
 
         // Idempotent on second run
         run_migrations(&connection).unwrap();
+    }
+
+    #[test]
+    fn migration_packs_legacy_workspace_display_order_once() {
+        let (connection, _dir) = open_test_db();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE repos (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    root_path TEXT,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
+                    status TEXT,
+                    provider_session_id TEXT,
+                    unread_count INTEGER DEFAULT 0,
+                    model TEXT,
+                    permission_mode TEXT DEFAULT 'default',
+                    is_hidden INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z',
+                    updated_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    sent_at TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT,
+                    directory_name TEXT,
+                    state TEXT DEFAULT 'ready',
+                    status TEXT DEFAULT 'in-progress',
+                    pinned_at TEXT,
+                    mode TEXT DEFAULT 'worktree',
+                    display_order INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z',
+                    updated_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                INSERT INTO repos (id, name, root_path) VALUES ('r1', 'repo', '/tmp/repo');
+                INSERT INTO workspaces (id, repository_id, directory_name, status, display_order, created_at)
+                VALUES
+                    ('w-low', 'r1', 'low', 'in-progress', 1000, '2024-01-01T00:00:00Z'),
+                    ('w-high', 'r1', 'high', 'in-progress', 2000, '2024-01-02T00:00:00Z');
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        let read_order = |id: &str| -> i64 {
+            connection
+                .query_row(
+                    "SELECT display_order FROM workspaces WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let low_order = read_order("w-low");
+        let high_order = read_order("w-high");
+
+        assert!(low_order >= sidebar_order::ORDER_BASE);
+        assert!(sidebar_order::status_order(low_order) < sidebar_order::status_order(high_order));
+        assert!(sidebar_order::repo_order(low_order) < sidebar_order::repo_order(high_order));
+
+        run_migrations(&connection).unwrap();
+        assert_eq!(low_order, read_order("w-low"));
     }
 
     /// Construct the full pre-drop legacy DDL once. Each migration test

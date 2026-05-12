@@ -291,6 +291,66 @@ export function reorderWorkspaceInGroups(
 	});
 }
 
+const OPTIMISTIC_REPO_ORDER_STEP = 1024;
+
+export function reorderWorkspaceRepoOrderInGroups(
+	groups: WorkspaceGroup[] | undefined,
+	workspaceId: string,
+	beforeWorkspaceId: string | null,
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+
+	const liveRepoRows = groups
+		.filter((group) => group.id !== "pinned" && group.id !== "backlog")
+		.flatMap((group) => group.rows)
+		.filter((row) => !row.pinnedAt && row.state !== "archived");
+	const movingRow = liveRepoRows.find((row) => row.id === workspaceId);
+	if (!movingRow?.repoId) return groups;
+
+	const rowsInRepo = liveRepoRows
+		.filter((row) => row.repoId === movingRow.repoId)
+		.sort(compareWorkspaceRepoOrder)
+		.filter((row) => row.id !== workspaceId);
+
+	const insertIndex =
+		beforeWorkspaceId === null
+			? rowsInRepo.length
+			: rowsInRepo.findIndex((row) => row.id === beforeWorkspaceId);
+	const boundedInsertIndex =
+		insertIndex === -1 ? rowsInRepo.length : insertIndex;
+	const orderedRows = [
+		...rowsInRepo.slice(0, boundedInsertIndex),
+		movingRow,
+		...rowsInRepo.slice(boundedInsertIndex),
+	];
+	const nextOrderById = new Map(
+		orderedRows.map((row, index) => [
+			row.id,
+			(index + 1) * OPTIMISTIC_REPO_ORDER_STEP,
+		]),
+	);
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const repoDisplayOrder = nextOrderById.get(row.id);
+			return repoDisplayOrder === undefined
+				? row
+				: { ...row, repoDisplayOrder };
+		}),
+	}));
+}
+
+function compareWorkspaceRepoOrder(left: WorkspaceRow, right: WorkspaceRow) {
+	const leftOrder = left.repoDisplayOrder ?? left.displayOrder ?? 0;
+	const rightOrder = right.repoDisplayOrder ?? right.displayOrder ?? 0;
+	if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+
+	const leftCreated = Date.parse(left.createdAt ?? "") || 0;
+	const rightCreated = Date.parse(right.createdAt ?? "") || 0;
+	return rightCreated - leftCreated;
+}
+
 export type WorkspaceBranchTone =
 	| "working"
 	| "open"

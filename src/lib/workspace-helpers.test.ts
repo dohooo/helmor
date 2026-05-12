@@ -16,6 +16,7 @@ import {
 	insertRowByCreatedAtDesc,
 	isNewSession,
 	moveWorkspaceToGroup,
+	reorderWorkspaceRepoOrderInGroups,
 	resolveSessionDisplayProvider,
 	resolveSessionSelectedModelId,
 	splitTextWithFiles,
@@ -322,6 +323,64 @@ describe("moveWorkspaceToGroup", () => {
 			?.find((g) => g.id === "canceled")
 			?.rows.find((r) => r.id === "target");
 		expect(moved?.status).toBe("canceled");
+	});
+});
+
+describe("reorderWorkspaceRepoOrderInGroups", () => {
+	const row = (
+		id: string,
+		repoId: string,
+		repoDisplayOrder: number,
+		extras: Partial<WorkspaceRow> = {},
+	): WorkspaceRow => ({
+		id,
+		title: id,
+		repoId,
+		repoName: repoId,
+		repoDisplayOrder,
+		status: "in-progress",
+		...extras,
+	});
+
+	const groups: WorkspaceGroup[] = [
+		{
+			id: "done",
+			label: "Done",
+			tone: "done",
+			rows: [row("a", "repo-1", 1024), row("other", "repo-2", 1024)],
+		},
+		{
+			id: "progress",
+			label: "In Progress",
+			tone: "progress",
+			rows: [row("b", "repo-1", 2048), row("c", "repo-1", 3072)],
+		},
+	];
+
+	it("updates only repoDisplayOrder for rows in the same repo", () => {
+		const next = reorderWorkspaceRepoOrderInGroups(groups, "c", "a");
+		const rows = next?.flatMap((group) => group.rows) ?? [];
+		const orderById = new Map(
+			rows.map((item) => [item.id, item.repoDisplayOrder]),
+		);
+
+		expect(orderById.get("c")).toBe(1024);
+		expect(orderById.get("a")).toBe(2048);
+		expect(orderById.get("b")).toBe(3072);
+		expect(orderById.get("other")).toBe(1024);
+		expect(rows.find((item) => item.id === "c")?.status).toBe("in-progress");
+	});
+
+	it("appends when beforeWorkspaceId is null", () => {
+		const next = reorderWorkspaceRepoOrderInGroups(groups, "a", null);
+		const rows = next?.flatMap((group) => group.rows) ?? [];
+		const orderById = new Map(
+			rows.map((item) => [item.id, item.repoDisplayOrder]),
+		);
+
+		expect(orderById.get("b")).toBe(1024);
+		expect(orderById.get("c")).toBe(2048);
+		expect(orderById.get("a")).toBe(3072);
 	});
 });
 

@@ -354,6 +354,7 @@ pub fn run() {
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_status,
             commands::workspace_commands::move_workspace_in_sidebar,
+            commands::workspace_commands::move_workspace_within_repo,
             commands::workspace_commands::list_workspace_linked_directories,
             commands::workspace_commands::set_workspace_linked_directories,
             commands::workspace_commands::list_workspace_candidate_directories,

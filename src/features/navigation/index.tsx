@@ -35,6 +35,7 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import type { SidebarGrouping } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import {
@@ -49,7 +50,7 @@ import {
 	GroupIcon,
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
-import { useWorkspaceDnd } from "./use-workspace-dnd";
+import { useWorkspaceDnd, type WorkspaceDndPolicy } from "./use-workspace-dnd";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -167,8 +168,27 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }) {
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	const dndPolicy = useMemo<WorkspaceDndPolicy>(
+		() =>
+			sidebarGrouping === "repo"
+				? {
+						canDragRow: (_row, sourceGroupId) =>
+							repoIdFromGroupId(sourceGroupId) !== null,
+						canDropIntoGroup: (sourceGroupId, targetGroupId) =>
+							sourceGroupId === targetGroupId &&
+							repoIdFromGroupId(targetGroupId) !== null,
+					}
+				: {
+						canDragRow: (_row, sourceGroupId) =>
+							workspaceStatusFromGroupId(sourceGroupId) !== null,
+						canDropIntoGroup: (_sourceGroupId, targetGroupId) =>
+							workspaceStatusFromGroupId(targetGroupId) !== null,
+					},
+		[sidebarGrouping],
+	);
 	const { dragState, dropTarget, startLongPress } = useWorkspaceDnd({
 		onMoveWorkspace: onMoveWorkspaceInSidebar,
+		policy: dndPolicy,
 	});
 	const activeDragWorkspaceId = dragState?.workspaceId ?? null;
 	const dropTargetGroupId = dropTarget?.groupId ?? null;
@@ -898,6 +918,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							activeDragRow.id,
 						)}
 						dragPreview
+						hideRepoAvatar={
+							dragState
+								? repoIdFromGroupId(dragState.sourceGroupId) !== null
+								: false
+						}
 						workspaceActionsDisabled
 					/>
 				</div>

@@ -5,6 +5,7 @@ pub mod helpers;
 pub(crate) mod lifecycle;
 pub mod pr_sync;
 pub mod scripts;
+pub mod sidebar_order;
 pub mod state;
 pub mod status;
 pub mod workspaces;

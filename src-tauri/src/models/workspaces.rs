@@ -3,6 +3,7 @@ use rusqlite::Row;
 
 use crate::{
     repos,
+    workspace::sidebar_order,
     workspace_pr_sync::PrSyncState,
     workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
@@ -177,8 +178,9 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
 
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
+    let status_order_expr = sidebar_order::status_order_expr("w.display_order");
     let sql = format!(
-        "{WORKSPACE_RECORD_SQL} ORDER BY COALESCE(w.display_order, 0) ASC, datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
+        "{WORKSPACE_RECORD_SQL} ORDER BY {status_order_expr} ASC, datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
     );
     let mut statement = connection.prepare(&sql)?;
 
@@ -258,6 +260,45 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     let transaction = connection
         .transaction()
         .context("Failed to start create-workspace transaction")?;
+    let status_order_expr = sidebar_order::status_order_expr("display_order");
+    let repo_order_expr = sidebar_order::repo_order_expr("display_order");
+    let next_status_order = transaction
+        .query_row(
+            format!(
+                r#"
+                SELECT COALESCE(MAX({status_order_expr}), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?3
+                "#
+            )
+            .as_str(),
+            rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace status order")?;
+    let next_repo_order = transaction
+        .query_row(
+            format!(
+                r#"
+                SELECT COALESCE(MAX({repo_order_expr}), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND repository_id = ?3
+                "#
+            )
+            .as_str(),
+            rusqlite::params![
+                WorkspaceState::Archived,
+                sidebar_order::ORDER_STEP,
+                repository.id.as_str()
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace repo order")?;
+    let display_order = sidebar_order::pack(next_status_order, next_repo_order)?;
 
     transaction
         .execute(
@@ -277,7 +318,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, 0, ?11, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
             "#,
             (
                 workspace_id,
@@ -289,6 +330,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 default_branch,
                 mode,
+                display_order,
                 status,
                 timestamp,
             ),

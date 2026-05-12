@@ -8,6 +8,7 @@ use crate::{
     helpers,
     models::workspaces::{self as workspace_models, WorkspaceRecord},
     sessions,
+    workspace::sidebar_order,
     workspace_pr_sync::PrSyncState,
     workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
@@ -66,6 +67,7 @@ pub struct WorkspaceSidebarRow {
     pub pr_url: Option<String>,
     pub pinned_at: Option<String>,
     pub display_order: i64,
+    pub repo_display_order: i64,
     pub session_count: i64,
     pub message_count: i64,
     pub created_at: String,
@@ -111,6 +113,7 @@ pub struct WorkspaceSummary {
     pub pr_url: Option<String>,
     pub pinned_at: Option<String>,
     pub display_order: i64,
+    pub repo_display_order: i64,
     pub session_count: i64,
     pub message_count: i64,
     pub created_at: String,
@@ -147,6 +150,7 @@ pub struct WorkspaceDetail {
     pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub display_order: i64,
+    pub repo_display_order: i64,
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
@@ -305,36 +309,64 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
 }
 
 pub fn pin_workspace(workspace_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start pin-workspace transaction")?;
+    let current_display_order = load_workspace_display_order(&transaction, workspace_id)?;
+    let next_status_order = next_status_order(&transaction, None, true)?;
+    let display_order =
+        sidebar_order::replace_status_order(current_display_order, next_status_order)?;
+    transaction
         .execute(
-            "UPDATE workspaces SET pinned_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
-            [workspace_id],
+            "UPDATE workspaces SET pinned_at = datetime('now'), display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, display_order],
         )
         .context("Failed to pin workspace")?;
-    Ok(())
+    transaction
+        .commit()
+        .context("Failed to commit pin-workspace transaction")
 }
 
 pub fn unpin_workspace(workspace_id: &str) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start unpin-workspace transaction")?;
+    let (status, current_display_order) =
+        load_workspace_status_and_display_order(&transaction, workspace_id)?;
+    let next_status_order = next_status_order(&transaction, Some(status), false)?;
+    let display_order =
+        sidebar_order::replace_status_order(current_display_order, next_status_order)?;
+    transaction
         .execute(
-            "UPDATE workspaces SET pinned_at = NULL, updated_at = datetime('now') WHERE id = ?1",
-            [workspace_id],
+            "UPDATE workspaces SET pinned_at = NULL, display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, display_order],
         )
         .context("Failed to unpin workspace")?;
-    Ok(())
+    transaction
+        .commit()
+        .context("Failed to commit unpin-workspace transaction")
 }
 
 pub fn set_workspace_status(workspace_id: &str, status: WorkspaceStatus) -> Result<()> {
-    let connection = db::write_conn()?;
-    connection
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start set-status transaction")?;
+    let current_display_order = load_workspace_display_order(&transaction, workspace_id)?;
+    let next_status_order = next_status_order(&transaction, Some(status), false)?;
+    let display_order =
+        sidebar_order::replace_status_order(current_display_order, next_status_order)?;
+    transaction
         .execute(
-            "UPDATE workspaces SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, status],
+            "UPDATE workspaces SET status = ?2, display_order = ?3, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![workspace_id, status, display_order],
         )
         .context("Failed to set workspace status")?;
-    Ok(())
+    transaction
+        .commit()
+        .context("Failed to commit set-status transaction")
 }
 
 pub fn move_workspace_in_sidebar(
@@ -364,19 +396,23 @@ pub fn move_workspace_in_sidebar(
         bail!("Workspace move affected {updated_rows} rows for workspace {workspace_id}");
     }
 
+    let status_order_expr = sidebar_order::status_order_expr("display_order");
     let mut statement = transaction
         .prepare(
-            r#"
+            format!(
+                r#"
             SELECT id
             FROM workspaces
             WHERE state <> ?1
               AND pinned_at IS NULL
               AND COALESCE(status, 'in-progress') = ?2
-            ORDER BY COALESCE(display_order, 0) ASC,
+            ORDER BY {status_order_expr} ASC,
                      datetime(created_at) DESC,
                      datetime(updated_at) DESC,
                      id DESC
             "#,
+            )
+            .as_str(),
         )
         .context("Failed to prepare target workspace order query")?;
     let ordered = statement.query_map(
@@ -393,7 +429,11 @@ pub fn move_workspace_in_sidebar(
     drop(statement);
 
     for (index, id) in ids.iter().enumerate() {
-        let display_order = ((index as i64) + 1) * 1000;
+        let current_display_order = load_workspace_display_order(&transaction, id)?;
+        let display_order = sidebar_order::replace_status_order(
+            current_display_order,
+            sidebar_order::order_for_index(index)?,
+        )?;
         transaction
             .execute(
                 "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
@@ -406,6 +446,174 @@ pub fn move_workspace_in_sidebar(
         .commit()
         .context("Failed to commit workspace reorder transaction")?;
     Ok(())
+}
+
+pub fn move_workspace_within_repo(
+    workspace_id: &str,
+    before_workspace_id: Option<&str>,
+) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start repo workspace reorder transaction")?;
+
+    let (repo_id, state, pinned_at): (String, WorkspaceState, Option<String>) = transaction
+        .query_row(
+            r#"
+            SELECT repository_id, state, pinned_at
+            FROM workspaces
+            WHERE id = ?1
+            "#,
+            [workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+    if state == WorkspaceState::Archived {
+        bail!("Archived workspace cannot be reordered in a repo group");
+    }
+    if pinned_at.is_some() {
+        bail!("Pinned workspace cannot be reordered in a repo group");
+    }
+
+    if let Some(before_id) = before_workspace_id {
+        let before_repo_id: String = transaction
+            .query_row(
+                "SELECT repository_id FROM workspaces WHERE id = ?1",
+                [before_id],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("Before-workspace not found: {before_id}"))?;
+        if before_repo_id != repo_id {
+            bail!("Repo workspace reorder target must be in the same repository");
+        }
+    }
+
+    let repo_order_expr = sidebar_order::repo_order_expr("display_order");
+    let mut statement = transaction
+        .prepare(
+            format!(
+                r#"
+                SELECT id
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND repository_id = ?2
+                ORDER BY {repo_order_expr} ASC,
+                         datetime(created_at) DESC,
+                         datetime(updated_at) DESC,
+                         id DESC
+                "#,
+            )
+            .as_str(),
+        )
+        .context("Failed to prepare repo workspace order query")?;
+    let ordered = statement.query_map(
+        rusqlite::params![WorkspaceState::Archived, repo_id],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut ids = ordered.collect::<std::result::Result<Vec<_>, _>>()?;
+    ids.retain(|id| id != workspace_id);
+
+    let insert_index = before_workspace_id
+        .and_then(|before_id| ids.iter().position(|id| id == before_id))
+        .unwrap_or(ids.len());
+    ids.insert(insert_index, workspace_id.to_string());
+    drop(statement);
+
+    for (index, id) in ids.iter().enumerate() {
+        let current_display_order = load_workspace_display_order(&transaction, id)?;
+        let display_order = sidebar_order::replace_repo_order(
+            current_display_order,
+            sidebar_order::order_for_index(index)?,
+        )?;
+        transaction
+            .execute(
+                "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
+                rusqlite::params![id, display_order],
+            )
+            .with_context(|| format!("Failed to update repo display order for workspace {id}"))?;
+    }
+
+    transaction
+        .commit()
+        .context("Failed to commit repo workspace reorder transaction")?;
+    Ok(())
+}
+
+fn load_workspace_display_order(
+    transaction: &rusqlite::Transaction<'_>,
+    workspace_id: &str,
+) -> Result<i64> {
+    transaction
+        .query_row(
+            "SELECT COALESCE(display_order, 0) FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Workspace not found: {workspace_id}"))
+}
+
+fn load_workspace_status_and_display_order(
+    transaction: &rusqlite::Transaction<'_>,
+    workspace_id: &str,
+) -> Result<(WorkspaceStatus, i64)> {
+    transaction
+        .query_row(
+            "SELECT COALESCE(status, 'in-progress'), COALESCE(display_order, 0) FROM workspaces WHERE id = ?1",
+            [workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("Workspace not found: {workspace_id}"))
+}
+
+fn next_status_order(
+    transaction: &rusqlite::Transaction<'_>,
+    status: Option<WorkspaceStatus>,
+    pinned: bool,
+) -> Result<i64> {
+    let status_order_expr = sidebar_order::status_order_expr("display_order");
+    let sql = if pinned {
+        format!(
+            r#"
+            SELECT COALESCE(MAX({status_order_expr}), 0) + ?2
+            FROM workspaces
+            WHERE state <> ?1
+              AND pinned_at IS NOT NULL
+            "#
+        )
+    } else {
+        format!(
+            r#"
+            SELECT COALESCE(MAX({status_order_expr}), 0) + ?2
+            FROM workspaces
+            WHERE state <> ?1
+              AND pinned_at IS NULL
+              AND COALESCE(status, 'in-progress') = ?3
+            "#
+        )
+    };
+
+    if pinned {
+        transaction
+            .query_row(
+                sql.as_str(),
+                rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP],
+                |row| row.get(0),
+            )
+            .context("Failed to compute next pinned workspace order")
+    } else {
+        transaction
+            .query_row(
+                sql.as_str(),
+                rusqlite::params![
+                    WorkspaceState::Archived,
+                    sidebar_order::ORDER_STEP,
+                    status.unwrap_or_default()
+                ],
+                |row| row.get(0),
+            )
+            .context("Failed to compute next workspace status order")
+    }
 }
 
 pub fn sync_workspace_pr_state(
@@ -800,6 +1008,8 @@ pub(crate) fn select_visible_workspace_for_repo(
 pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
     let title = helpers::display_title(&record);
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    let display_order = sidebar_order::status_order(record.display_order);
+    let repo_display_order = sidebar_order::repo_order(record.display_order);
 
     WorkspaceSidebarRow {
         avatar: repo_initials.clone(),
@@ -828,7 +1038,8 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
         pinned_at: record.pinned_at,
-        display_order: record.display_order,
+        display_order,
+        repo_display_order,
         session_count: record.session_count,
         message_count: record.message_count,
         created_at: record.created_at,
@@ -839,6 +1050,8 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
 
 pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    let display_order = sidebar_order::status_order(record.display_order);
+    let repo_display_order = sidebar_order::repo_order(record.display_order);
     // Local workspaces: replace the stored snapshot with the live HEAD
     // so the sidebar/hover-card never shows a stale branch label.
     let branch = helpers::live_branch_label(&record);
@@ -869,7 +1082,8 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,
         pinned_at: record.pinned_at,
-        display_order: record.display_order,
+        display_order,
+        repo_display_order,
         session_count: record.session_count,
         message_count: record.message_count,
         created_at: record.created_at,
@@ -880,6 +1094,8 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
 
 pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
     let repo_initials = helpers::repo_initials_for_name(&record.repo_name);
+    let display_order = sidebar_order::status_order(record.display_order);
+    let repo_display_order = sidebar_order::repo_order(record.display_order);
 
     // Use the workspace path as root_path so Claude Code/Codex operate in the
     // correct directory. For worktree workspaces this is the helmor data
@@ -924,7 +1140,8 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         initialization_parent_branch: record.initialization_parent_branch,
         intended_target_branch: record.intended_target_branch,
         pinned_at: record.pinned_at,
-        display_order: record.display_order,
+        display_order,
+        repo_display_order,
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,

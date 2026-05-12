@@ -236,6 +236,17 @@ pub async fn move_workspace_in_sidebar(
     .await
 }
 
+#[tauri::command]
+pub async fn move_workspace_within_repo(
+    workspace_id: String,
+    before_workspace_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        workspaces::move_workspace_within_repo(&workspace_id, before_workspace_id.as_deref())
+    })
+    .await
+}
+
 /// `/add-dir` feature: list the extra directories the user has linked to
 /// this workspace. These are sent as `additionalDirectories` to the agent
 /// SDKs on every turn.

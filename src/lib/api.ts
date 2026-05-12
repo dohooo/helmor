@@ -100,6 +100,8 @@ export type WorkspaceRow = {
 	updatedAt?: string;
 	/** Stable sidebar ordering inside a status group. */
 	displayOrder?: number;
+	/** Stable sidebar ordering inside a repository group. */
+	repoDisplayOrder?: number;
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
@@ -2360,6 +2362,16 @@ export async function moveWorkspaceInSidebar(
 	return invoke<void>("move_workspace_in_sidebar", {
 		workspaceId,
 		targetStatus,
+		beforeWorkspaceId,
+	});
+}
+
+export async function moveWorkspaceWithinRepo(
+	workspaceId: string,
+	beforeWorkspaceId: string | null,
+): Promise<void> {
+	return invoke<void>("move_workspace_within_repo", {
+		workspaceId,
 		beforeWorkspaceId,
 	});
 }
