@@ -6,6 +6,7 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import type { AgentProvider } from "@/lib/api";
 import {
 	claudeRateLimitsQueryOptions,
 	codexRateLimitsQueryOptions,
@@ -22,7 +23,7 @@ import {
 import { LimitRow } from "../context-usage-ring/popover-parts";
 
 type Props = {
-	agentType: "claude" | "codex" | "cursor" | null;
+	agentType: AgentProvider | null;
 	disabled?: boolean;
 	className?: string;
 };

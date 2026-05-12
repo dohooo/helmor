@@ -3,6 +3,7 @@ import {
 	buildClaudeRichMeta,
 	buildClaudeStoredMeta,
 	buildCodexStoredMeta,
+	buildCopilotStoredMeta,
 } from "./context-usage";
 
 const CLAUDE_MODEL = "claude-opus-4-7[1m]";
@@ -375,5 +376,38 @@ describe("buildCodexStoredMeta", () => {
 			"",
 		);
 		expect(meta?.modelId).toBe("");
+	});
+});
+
+describe("buildCopilotStoredMeta", () => {
+	it("maps used/size into the persisted meta shape", () => {
+		const meta = buildCopilotStoredMeta(
+			{ used: 12_000, size: 200_000 },
+			"claude-sonnet-4.6",
+		);
+		expect(meta).toEqual({
+			modelId: "claude-sonnet-4.6",
+			usedTokens: 12_000,
+			maxTokens: 200_000,
+			percentage: 6,
+		});
+	});
+
+	it("clamps used to size when ACP over-reports", () => {
+		const meta = buildCopilotStoredMeta(
+			{ used: 250_000, size: 200_000 },
+			"copilot-default",
+		);
+		expect(meta?.usedTokens).toBe(200_000);
+		expect(meta?.percentage).toBe(100);
+	});
+
+	it("falls back to a stable model id when ACP hasn't reported one", () => {
+		const meta = buildCopilotStoredMeta({ used: 500, size: 100_000 }, null);
+		expect(meta?.modelId).toBe("copilot");
+	});
+
+	it("returns null when both fields are zero", () => {
+		expect(buildCopilotStoredMeta({ used: 0, size: 0 }, null)).toBeNull();
 	});
 });

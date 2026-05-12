@@ -13,6 +13,7 @@ import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError } from "./abort.js";
 import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
+import { CopilotAcpSessionManager } from "./copilot-acp-session-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
 import { errorDetails, logger } from "./logger.js";
@@ -43,10 +44,12 @@ import {
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
 const cursorManager = new CursorSessionManager();
+const copilotManager = new CopilotAcpSessionManager();
 const managers: Record<Provider, SessionManager> = {
 	claude: claudeManager,
 	codex: codexManager,
 	cursor: cursorManager,
+	copilot: copilotManager,
 };
 
 // `parentGone` flips to true only when stdin EOFs — that's the
@@ -596,9 +599,16 @@ for await (const line of rl) {
 				const message =
 					typeof params.message === "string" ? params.message : undefined;
 				logger.debug(`[${id}] permissionResponse`, { permissionId, behavior });
-				// Route to the right provider — Codex permissions use "codex-" prefix
+				// Route to the right provider via permission-id prefix:
+				//   "codex-*"   → Codex AppServer manager
+				//   "copilot-*" → Copilot ACP manager
+				//   anything else (including unprefixed Claude SDK ids that look
+				//   like opaque tokens) → Claude manager. Each provider mints its
+				//   own ids in its handler, so the prefix is the source of truth.
 				if (permissionId.startsWith("codex-")) {
 					codexManager.resolvePermission(permissionId, behavior);
+				} else if (permissionId.startsWith("copilot-")) {
+					copilotManager.resolvePermission(permissionId, behavior);
 				} else {
 					claudeManager.resolvePermission(
 						permissionId,

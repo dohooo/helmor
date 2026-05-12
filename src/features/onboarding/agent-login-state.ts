@@ -1,3 +1,4 @@
+import { GithubBrandIcon } from "@/components/brand-icon";
 import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
 import type { AgentLoginStatusResult } from "@/lib/api";
 import type { AgentLoginItem } from "./types";
@@ -32,6 +33,15 @@ export function buildAgentLoginItems(
 				? "API key saved and ready to run Cursor models in Helmor."
 				: "Add a Cursor API key to use Cursor models in Helmor.",
 			status: status?.cursor ? "ready" : "needsSetup",
+		},
+		{
+			icon: GithubBrandIcon,
+			provider: "copilot",
+			label: "GitHub Copilot",
+			description: status?.copilot
+				? "GitHub Copilot CLI is installed and ready."
+				: "Install GitHub Copilot CLI (`npm i -g @github/copilot`) and sign in with `copilot login` to use Copilot in Helmor.",
+			status: status?.copilot ? "ready" : "needsSetup",
 		},
 	];
 }

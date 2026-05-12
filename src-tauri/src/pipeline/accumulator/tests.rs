@@ -470,6 +470,75 @@ fn codex_command_execution_synthesis() {
 }
 
 #[test]
+fn copilot_acp_text_and_tool_synthesize_shared_messages() {
+    let mut acc = StreamAccumulator::new("copilot", "default");
+    acc.push_event(
+        &json!({
+            "type": "copilot/session_started",
+            "session_id": "copilot-session-1",
+            "model": "default"
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "copilot/status",
+            "status": "RUNNING",
+            "run_id": "run-1"
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "copilot/tool_call_start",
+            "call_id": "tool-1",
+            "name": "List files",
+            "args": {"command": "ls"}
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "copilot/tool_call_end",
+            "call_id": "tool-1",
+            "name": "List files",
+            "args": {"command": "ls"},
+            "result": {"status": "success", "output": "src"}
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "copilot/assistant",
+            "message": {"content": [{"type": "text", "text": "Done"}]}
+        }),
+        "",
+    );
+    acc.push_event(
+        &json!({
+            "type": "copilot/status",
+            "status": "FINISHED",
+            "run_id": "run-1"
+        }),
+        "",
+    );
+
+    assert_eq!(acc.session_id.as_deref(), Some("copilot-session-1"));
+    assert_eq!(acc.turns_len(), 2);
+    let snapshot = acc.snapshot("ctx", "sess");
+    assert_eq!(snapshot.len(), 3);
+    assert_eq!(snapshot[0].role, MessageRole::Assistant);
+    assert_eq!(snapshot[1].role, MessageRole::User);
+    assert_eq!(snapshot[2].role, MessageRole::Assistant);
+    let assistant = snapshot[0].parsed.as_ref().unwrap();
+    let content = assistant["message"]["content"].as_array().unwrap();
+    assert!(content.iter().any(|part| part["type"] == "tool_use"));
+    assert!(content
+        .iter()
+        .any(|part| part["type"] == "text" && part["text"] == "Done"));
+}
+
+#[test]
 fn partial_identity_stays_stable_across_deltas() {
     let mut acc = StreamAccumulator::new("claude", "opus");
     acc.push_event(

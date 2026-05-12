@@ -43,6 +43,7 @@ import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	AgentModelSection,
+	AgentProvider,
 	CandidateDirectory,
 	SlashCommandEntry,
 } from "@/lib/api";
@@ -171,10 +172,10 @@ type WorkspaceComposerProps = {
 	 *  context-usage ring for its hover-triggered live fetch. */
 	providerSessionId?: string | null;
 	/** Agent provider for this session — gates the Claude-only rich fetch
-	 *  and selects which rate-limits API to query. `"cursor"` exists but
-	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
-	 *  yet, so the indicators just hide for cursor sessions. */
-	agentType?: "claude" | "codex" | "cursor" | null;
+	 *  and selects which rate-limits API to query. Cursor/Copilot don't
+	 *  expose rate-limit / context-usage endpoints here yet, so the
+	 *  indicators just hide for those sessions. */
+	agentType?: AgentProvider | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
@@ -326,8 +327,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
-	// Cursor SDK auto-handles plans internally — no toggle to expose.
+	// Cursor handles plan-mode internally with no toggle. Copilot ACP
+	// exposes plan/autopilot via setSessionMode → keep the toggle.
 	const supportsPlanMode = selectedModel?.provider !== "cursor";
+	// Autopilot is a Copilot-only third state (besides default/plan).
+	// Wired through `permissionMode = "autopilot"` so the sidecar can
+	// translate it to ACP's `setSessionMode(autopilot)`.
+	const supportsAutopilot = selectedModel?.provider === "copilot";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -987,6 +993,28 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 												strokeWidth={1.8}
 											/>
 											<span>Plan</span>
+										</ComposerButton>
+									) : null}
+									{supportsAutopilot ? (
+										<ComposerButton
+											aria-label="Autopilot mode"
+											disabled={toolbarDisabled}
+											className={cn(
+												`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
+												permissionMode === "autopilot"
+													? "text-amber-500 hover:text-amber-500"
+													: "text-muted-foreground/70 hover:text-muted-foreground/70",
+											)}
+											onClick={() =>
+												onChangePermissionMode(
+													permissionMode === "autopilot"
+														? "default"
+														: "autopilot",
+												)
+											}
+										>
+											<Zap className="size-[13px]" strokeWidth={1.8} />
+											<span>Autopilot</span>
 										</ComposerButton>
 									) : null}
 									{onToggleContextPanel ? (

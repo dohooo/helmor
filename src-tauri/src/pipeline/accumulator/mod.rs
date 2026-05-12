@@ -492,6 +492,21 @@ impl StreamAccumulator {
             Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
             Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
 
+            // ── GitHub Copilot ACP events (namespaced by sidecar manager) ──
+            // Copilot speaks the Agent Client Protocol whose event vocabulary
+            // overlaps with Cursor's SDK; both providers reuse the cursor::*
+            // handlers. session_id is lifted by push_event extractor above.
+            Some("copilot/session_started") => PushOutcome::NoOp,
+            Some("copilot/status") => cursor::handle_status(self, value),
+            Some("copilot/thinking") => cursor::handle_thinking(self, value),
+            Some("copilot/assistant") => cursor::handle_assistant_delta(self, value),
+            Some("copilot/tool_call_start") => cursor::handle_tool_call_start(self, value),
+            Some("copilot/tool_call_end") => cursor::handle_tool_call_end(self, value),
+            // Live token telemetry for the composer ring. Persistence
+            // happens upstream via emitter.contextUsageUpdated; the
+            // raw passthrough is informational only.
+            Some("copilot/usage") => PushOutcome::NoOp,
+
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
             | Some("thread/tokenUsage/updated")

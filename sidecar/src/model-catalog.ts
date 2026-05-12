@@ -99,6 +99,13 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			effortLevels: CURSOR_REASONING_LEVELS,
 		},
 	],
+	copilot: [
+		{
+			id: "copilot-default",
+			label: "Default",
+			cliModel: "default",
+		},
+	],
 };
 
 export function listProviderModels(provider: Provider): ProviderModelInfo[] {

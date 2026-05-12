@@ -180,3 +180,27 @@ export function buildCodexStoredMeta(
 		percentage: computePercentage(usedClamped, max),
 	};
 }
+
+/**
+ * Build the persisted meta from a Copilot ACP `usage_update` session
+ * notification. ACP exposes raw `used` / `size` token counts (size =
+ * full context window). When the active session hasn't reported a
+ * model id yet (e.g. older Copilot CLI builds without
+ * `SessionModelState`), fall back to the constant `"copilot"` so the
+ * UI ring still renders.
+ */
+export function buildCopilotStoredMeta(
+	usage: { used?: number | null; size?: number | null },
+	modelId: string | null,
+): StoredContextUsageMeta | null {
+	const used = num(usage.used);
+	const max = num(usage.size);
+	if (used <= 0 && max <= 0) return null;
+	const usedClamped = max > 0 ? Math.min(used, max) : used;
+	return {
+		modelId: modelId ?? "copilot",
+		usedTokens: usedClamped,
+		maxTokens: max,
+		percentage: computePercentage(usedClamped, max),
+	};
+}
