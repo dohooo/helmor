@@ -68,7 +68,21 @@ const TRANSCRIPT_LINGER_MS = 1000;
  * listening — a sticking visual would feel laggy when the user just
  * spoke.
  */
-export function useRealtimeSequence(active: boolean): VoiceUiState {
+export function useRealtimeSequence(
+	active: boolean,
+	onNavigateToWorkspace?: (workspaceId: string) => void,
+): VoiceUiState {
+	// Hold the latest navigation callback in a ref. Caller-side identity
+	// can change every render (App.tsx's `handleSelectWorkspace` closes
+	// over plenty of state), but we don't want a fresh closure to retrigger
+	// the WebRTC session lifecycle — that's exactly the bug this whole
+	// provider exists to fix. Reading through the ref keeps the latest
+	// behavior without participating in the effect's dep array.
+	const navigateRef = useRef(onNavigateToWorkspace);
+	useEffect(() => {
+		navigateRef.current = onNavigateToWorkspace;
+	}, [onNavigateToWorkspace]);
+
 	const [phase, setPhase] = useState<VoiceUiPhase>("listening");
 	const [label, setLabel] = useState<string | undefined>();
 	const [tone, setTone] = useState<"error" | undefined>();
@@ -395,6 +409,14 @@ export function useRealtimeSequence(active: boolean): VoiceUiState {
 				const dispatcher = createToolDispatcher({
 					send: next.send,
 					onMutation: invalidateCaches,
+					// Route through the ref so the dispatcher always
+					// sees the latest App-side handler without forcing
+					// us to put `onNavigateToWorkspace` into this
+					// effect's deps (which would restart the session
+					// on every parent render).
+					onNavigateToWorkspace: (workspaceId) => {
+						navigateRef.current?.(workspaceId);
+					},
 				});
 				next.onEvent((event) => dispatcher.handleEvent(event));
 				next.onEvent(handleEvent);

@@ -1,11 +1,10 @@
 import type { BorderBeamColorVariant } from "@/components/border-beam";
 import { BorderBeam } from "@/components/border-beam";
-import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import { useRealtimeSequence } from "./use-realtime-sequence";
-import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
+import type { VoiceUiState } from "./voice-mode-state";
 import { VoiceModeStatus } from "./voice-mode-status";
 import { useVoiceModeActive } from "./voice-mode-store";
+import { useVoiceSession } from "./voice-session-provider";
 
 type VoiceModeBarProps = {
 	/** Total slot height (visible bar + top gap) when voice mode is active.
@@ -76,10 +75,12 @@ function deriveBeamProps(state: VoiceUiState): {
  * The status content (icon + text) is a thin overlay -- lucide icons and
  * text that slides up between scenes.
  *
- * State source switches automatically: when an OpenAI Realtime API key
- * is configured the bar is driven by real Realtime events
- * (`useRealtimeSequence`); without a key it falls back to a 12 s scripted
- * demo (`useDemoSequence`) so the UI stays iterable.
+ * The bar is now a passive consumer: state comes from `VoiceSessionProvider`
+ * (mounted near the top of the app tree), which owns the WebRTC peer and
+ * the demo fallback. That makes the bar safe to mount in two mutually-
+ * exclusive subtrees (the `workspaceViewMode === "start"` vs
+ * `"conversation"` branches in `App.tsx`) without restarting the session
+ * every time the user switches between them.
  */
 export function VoiceModeBar({
 	height = 40,
@@ -87,16 +88,7 @@ export function VoiceModeBar({
 	className,
 }: VoiceModeBarProps) {
 	const active = useVoiceModeActive();
-	const { settings } = useSettings();
-	const hasApiKey = settings.openAiRealtimeApiKey.trim().length > 0;
-	// Both hooks always run -- React forbids conditional hook calls -- but
-	// the `active` flag wired to each gates whether it does any work.
-	// When an API key is configured we drive the bar from real Realtime
-	// events; without one we fall back to the scripted demo so the UI is
-	// still iterable / debuggable.
-	const realState = useRealtimeSequence(active && hasApiKey);
-	const demoState = useDemoSequence(active && !hasApiKey);
-	const state = hasApiKey ? realState : demoState;
+	const state = useVoiceSession();
 	const beam = deriveBeamProps(state);
 
 	return (

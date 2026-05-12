@@ -1,0 +1,82 @@
+import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { useRealtimeSequence } from "./use-realtime-sequence";
+import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
+import { useVoiceModeActive } from "./voice-mode-store";
+
+/** Voice-mode session anchor. Hosts the WebRTC peer + UI state machine
+ *  once, near the top of the app tree, and republishes the resulting
+ *  `VoiceUiState` to anyone who needs it via React context.
+ *
+ *  This provider exists to break a regression: when the voice bar
+ *  itself owned `useRealtimeSequence`, switching `workspaceViewMode`
+ *  between `"start"` and `"conversation"` unmounted the bar's parent
+ *  subtree (the two branches in `App.tsx` are mutually exclusive) and
+ *  tore the WebRTC session down with it. The bar then re-mounted on
+ *  the other side and spent another 1-3 s in "Connecting" while the
+ *  macOS mic indicator blinked off and on. Hoisting the session above
+ *  the conditional render keeps it alive across view switches; the bar
+ *  becomes a passive consumer that simply reads the latest state.
+ *
+ *  Source switching:
+ *  - With an OpenAI Realtime API key configured, drive the bar from
+ *    real Realtime events via `useRealtimeSequence`.
+ *  - Without a key, fall back to the 12 s scripted `useDemoSequence`
+ *    so the UI stays iterable for designers / debugging.
+ *  Both hooks run unconditionally (React hook rules) but the `active`
+ *  flag gates whether either does any actual work.
+ */
+
+const VoiceSessionContext = createContext<VoiceUiState | null>(null);
+
+type VoiceSessionProviderProps = {
+	children: ReactNode;
+	/** API key is owned by settings, which itself sits behind a hook —
+	 *  passing it as a prop keeps this provider settings-agnostic and
+	 *  lets `App.tsx` use its already-loaded `useSettings()` result. */
+	hasApiKey: boolean;
+	/** Triggered after `create_workspace`, `send_prompt`, or
+	 *  `select_workspace` complete successfully. Caller wires this to
+	 *  the same workspace-selection handler the sidebar uses, so the UI
+	 *  follows the voice agent's action instead of stranding the user
+	 *  on the previous view. Must accept a workspace UUID (not a slug);
+	 *  the dispatcher resolves slugs internally before calling.
+	 *
+	 *  Stable identity (memoize at the caller) — the underlying
+	 *  realtime session is restarted whenever this changes, which
+	 *  reopens WebRTC + remints the OpenAI client secret. */
+	onNavigateToWorkspace?: (workspaceId: string) => void;
+};
+
+export function VoiceSessionProvider({
+	children,
+	hasApiKey,
+	onNavigateToWorkspace,
+}: VoiceSessionProviderProps) {
+	const active = useVoiceModeActive();
+	const realState = useRealtimeSequence(
+		active && hasApiKey,
+		onNavigateToWorkspace,
+	);
+	const demoState = useDemoSequence(active && !hasApiKey);
+	const state = hasApiKey ? realState : demoState;
+	return (
+		<VoiceSessionContext.Provider value={state}>
+			{children}
+		</VoiceSessionContext.Provider>
+	);
+}
+
+/** Read the current voice-mode UI state. Returns a stable inert
+ *  `listening / level 0` state when the provider isn't mounted, so
+ *  components that render with or without voice mode wired up don't
+ *  have to branch on null. */
+export function useVoiceSession(): VoiceUiState {
+	const ctx = useContext(VoiceSessionContext);
+	// useMemo so the fallback identity is stable across renders — keeps
+	// downstream effects from re-running when context is genuinely null.
+	const fallback = useMemo<VoiceUiState>(
+		() => ({ phase: "listening", level: 0 }),
+		[],
+	);
+	return ctx ?? fallback;
+}

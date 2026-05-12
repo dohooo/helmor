@@ -5,8 +5,8 @@ import type {
 } from "./realtime-session";
 
 /** Names of every typed tool we declare to `gpt-realtime-2`. Keep in
- *  sync with the `tools` array in
- *  `src-tauri/src/commands/settings_commands.rs`. */
+ *  sync with the `tools` array in `commands::voice_tools` on the Rust
+ *  side. */
 type ToolName =
 	| "list_workspaces"
 	| "show_workspace"
@@ -15,6 +15,7 @@ type ToolName =
 	| "list_sessions"
 	| "send_prompt"
 	| "list_repos"
+	| "select_workspace"
 	| "wait_for_user";
 
 /** Coarse-grained kinds of state the voice agent can mutate. The
@@ -102,6 +103,15 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 	list_repos: {
 		toArgs: () => ["repo", "list", "--json"],
 	},
+	select_workspace: {
+		// UI-only side effect: dispatcher uses `workspace show` to
+		// resolve the ref → UUID, then routes through
+		// `onNavigateToWorkspace`. We still shell `show --json` because
+		// it validates the ref exists before we navigate (a slug for a
+		// just-deleted workspace would otherwise leave the UI on a
+		// dangling row).
+		toArgs: (a) => ["workspace", "show", String(a.ref ?? ""), "--json"],
+	},
 	wait_for_user: {
 		// No-op tool. Model calls it to deliberately produce no audio
 		// when the latest input was silence / background noise. The
@@ -129,6 +139,17 @@ type DispatcherOptions = {
 	 *  invalidations so the GUI picks up the external DB mutation
 	 *  (`helmor` CLI writes to the same SQLite the desktop app reads). */
 	onMutation?: (kinds: AgentMutationKind[]) => void;
+	/** Drive UI workspace selection on behalf of the voice agent.
+	 *  Called with a resolved workspace UUID after:
+	 *  - the model explicitly calls `select_workspace`
+	 *  - `create_workspace` finishes (auto-follow to the new workspace)
+	 *  - `send_prompt` finishes (auto-follow to the target workspace
+	 *    so the user sees the agent's reply stream in real time)
+	 *
+	 *  The dispatcher guarantees the id is non-empty and the CLI call
+	 *  it was derived from reported success — the host doesn't need
+	 *  defensive checks on its side. */
+	onNavigateToWorkspace?: (workspaceId: string) => void;
 };
 
 export type ToolDispatcher = {
@@ -290,15 +311,32 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 		}
 		if (kinds.size > 0) opts.onMutation(Array.from(kinds));
 	}
+
+	// Fire UI navigation. Last-writer-wins: if a turn somehow chained
+	// multiple workspace-touching tools (rare — the prompt steers the
+	// model away from this), navigate to the most recent one so the
+	// user lands where the last action happened.
+	if (opts.onNavigateToWorkspace) {
+		for (let i = results.length - 1; i >= 0; i--) {
+			const id = results[i]?.navigateToWorkspaceId;
+			if (id) {
+				opts.onNavigateToWorkspace(id);
+				break;
+			}
+		}
+	}
 }
 
-/** Run one tool call, return the JSON envelope the model will see plus
- *  any cache-invalidation hints. */
-async function runCall(call: PendingCall): Promise<{
+type RunCallResult = {
 	callId: string;
 	output: string;
 	invalidates?: AgentMutationKind[];
-}> {
+	navigateToWorkspaceId?: string;
+};
+
+/** Run one tool call, return the JSON envelope the model will see plus
+ *  any cache-invalidation hints and UI-navigation intent. */
+async function runCall(call: PendingCall): Promise<RunCallResult> {
 	const args = parseArgs(call.argsBuffer);
 	if (!isKnownTool(call.name)) {
 		return {
@@ -335,12 +373,80 @@ async function runCall(call: PendingCall): Promise<{
 	// Only request a cache flush when the CLI itself reported success;
 	// otherwise the DB hasn't actually changed and invalidating would
 	// just thrash queries.
-	const invalidates = cli.ok && !cli.error ? spec.invalidates : undefined;
+	const succeeded = cli.ok && !cli.error;
+	const invalidates = succeeded ? spec.invalidates : undefined;
+
+	// Resolve UI navigation intent for the three workspace-touching
+	// tools. Guard: only navigate on real success and a non-empty id.
+	let navigateToWorkspaceId: string | undefined;
+	if (succeeded) {
+		if (call.name === "select_workspace" || call.name === "create_workspace") {
+			// Both commands print the workspace row as JSON; the
+			// canonical `id` field is the UUID we hand to the UI.
+			navigateToWorkspaceId = parseWorkspaceId(cli.stdout) ?? undefined;
+		} else if (call.name === "send_prompt") {
+			// `helmor send --json` emits `AgentStreamEvent::Done`, which
+			// carries `sessionId` but not `workspaceId`. Re-resolve from
+			// the user-supplied ref so we can follow the prompt to the
+			// right workspace. The shortcut for already-resolved UUIDs
+			// avoids a second CLI hop in the common voice flow where
+			// the model just listed workspaces and got UUIDs back.
+			const ref = typeof args.workspace === "string" ? args.workspace : "";
+			if (ref) {
+				navigateToWorkspaceId = (await resolveWorkspaceId(ref)) ?? undefined;
+			}
+		}
+	}
+
+	// For select_workspace, return a tiny envelope rather than the
+	// full workspace row — the model only needs to confirm; surfacing
+	// the row tempts it to read the id aloud, which violates the
+	// "no UUIDs" rule in the prompt.
+	const output =
+		call.name === "select_workspace" && navigateToWorkspaceId
+			? JSON.stringify({ ok: true, navigated_to: navigateToWorkspaceId })
+			: JSON.stringify(envelopeFor(cli));
+
 	return {
 		callId: call.callId,
-		output: JSON.stringify(envelopeFor(cli)),
+		output,
 		invalidates,
+		navigateToWorkspaceId,
 	};
+}
+
+/** Pull a workspace UUID out of `helmor workspace show|new --json`
+ *  output. Both subcommands return the workspace row directly at the
+ *  top level, so the `id` field lives one parse deep. */
+function parseWorkspaceId(stdout: string): string | null {
+	const parsed = tryParseJson(stdout);
+	if (parsed && typeof parsed === "object" && "id" in parsed) {
+		const id = (parsed as { id?: unknown }).id;
+		if (typeof id === "string" && id.length > 0) return id;
+	}
+	return null;
+}
+
+/** Standard 8-4-4-4-12 hex UUID. We use this to skip a redundant
+ *  `workspace show` round-trip when the model already passed a UUID
+ *  (which is what `list_workspaces` returns). */
+const UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Translate a workspace ref (UUID or `repo-name/dir-name`) to its
+ *  UUID, used by the auto-navigate path for `send_prompt`. Returns
+ *  `null` on any failure path so the caller skips navigation cleanly
+ *  rather than landing on a stale or non-existent workspace. */
+async function resolveWorkspaceId(ref: string): Promise<string | null> {
+	if (UUID_RE.test(ref)) return ref;
+	let cli: HelmorCliResult;
+	try {
+		cli = await runHelmorCli(["workspace", "show", ref, "--json"]);
+	} catch {
+		return null;
+	}
+	if (!cli.ok || cli.error) return null;
+	return parseWorkspaceId(cli.stdout);
 }
 
 function parseArgs(buffer: string): Record<string, unknown> {

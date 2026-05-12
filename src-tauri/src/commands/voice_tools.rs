@@ -231,6 +231,29 @@ pub fn build_tools_array() -> Vec<Value> {
         }),
         json!({
             "type": "function",
+            "name": "select_workspace",
+            "description": "Switch the Helmor UI to a specific workspace so the user can see \
+                its session. USE WHEN: user says 'open <repo>/<dir>', 'switch to <repo>/<dir>', \
+                'show me <repo>/<dir>'. Do NOT use to fetch workspace details — that's \
+                show_workspace. UI-only side effect (does not modify any data); the dispatcher \
+                resolves the ref against `helmor workspace show` and then navigates. \
+                `create_workspace` and `send_prompt` already auto-navigate after success — \
+                only call this tool when the user explicitly wants to view a *different* \
+                workspace from the one currently selected. Return is a tiny envelope; do not \
+                read the workspace id aloud. Preamble samples (only if slow): 'one sec.' / 'ok.'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": {
+                        "type": "string",
+                        "description": "Workspace UUID or `repo-name/dir-name` shorthand."
+                    }
+                },
+                "required": ["ref"]
+            }
+        }),
+        json!({
+            "type": "function",
             "name": "wait_for_user",
             "description": "Call when the latest audio is silence, background noise, hold music, \
                 or a side conversation that doesn't need a response. Produces no audio output. \
