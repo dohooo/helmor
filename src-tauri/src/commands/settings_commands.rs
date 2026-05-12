@@ -309,135 +309,12 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
                         "speed": 1.15
                     }
                 },
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "list_workspaces",
-                        "description": "List the user's Helmor workspaces. Returns id, repo, title, branch, and status (done|review|progress|backlog|canceled). USE WHEN: user asks 'show/list/what workspaces do I have'. Preamble sample phrases (use only if a noticeable delay seems likely): 'let me check.' / 'one sec.' / 'hmm, looking now.'",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["done", "review", "progress", "backlog", "canceled"],
-                                    "description": "Optional filter by workspace status."
-                                },
-                                "repo": {
-                                    "type": "string",
-                                    "description": "Optional filter by repo name or UUID."
-                                },
-                                "archived": {
-                                    "type": "boolean",
-                                    "description": "Include archived workspaces. Default false."
-                                }
-                            },
-                            "required": []
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "show_workspace",
-                        "description": "Get full detail of one workspace by id or repo/dir reference. USE WHEN: user asks 'what's the status of X', 'show me X', 'how's X doing'. Preamble sample phrases (only if it might be slow): 'let me look.' / 'one sec.' / 'checking.'",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "ref": {
-                                    "type": "string",
-                                    "description": "Workspace UUID or `repo-name/dir-name` shorthand."
-                                }
-                            },
-                            "required": ["ref"]
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "create_workspace",
-                        "description": "Create a new workspace for a registered repo. USE WHEN: user says 'create/new/start a workspace for repo X'. Call immediately — no confirmation needed (creation is reversible via delete). If the repo name is unclear, run list_repos first to find the right one. After success, report the repo name, not the new ID. Preamble sample phrases (creation can take a moment, so a short preamble is usually fine): 'ok, on it.' / 'sure, doing that now.' / 'one sec.'",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "repo": {
-                                    "type": "string",
-                                    "description": "Repo name or UUID. Must already be registered; check list_repos first if unsure."
-                                }
-                            },
-                            "required": ["repo"]
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "set_workspace_status",
-                        "description": "Mark a workspace as done, review, progress, backlog, or canceled. USE WHEN: user says 'mark X done', 'move X to review', etc. **CONFIRM ONLY when status='canceled' (destructive — cannot be undone without recreating).** For all other status changes, call immediately without confirmation. Status changes return fast — usually no preamble needed; just call and report the outcome briefly ('done.' / 'moved to review.').",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "ref": {
-                                    "type": "string",
-                                    "description": "Workspace UUID or `repo/dir`."
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["done", "review", "progress", "backlog", "canceled"]
-                                }
-                            },
-                            "required": ["ref", "status"]
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "list_sessions",
-                        "description": "List sessions (agent conversations) in a workspace. USE WHEN: user asks 'show sessions in X', 'what have we worked on in X'. Preamble sample phrases (only if slow): 'let me check.' / 'one sec.'",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "workspace": {
-                                    "type": "string",
-                                    "description": "Workspace UUID or `repo/dir`."
-                                }
-                            },
-                            "required": ["workspace"]
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "send_prompt",
-                        "description": "Send a prompt to the AI agent inside a workspace's session. Returns once the session is acknowledged; the agent keeps working in the background. USE WHEN: user says 'tell agent in X to do Y' or 'have agent fix the bug'. Call immediately — no confirmation needed. After success, report 'sent' without reading the session ID. Use show_workspace later to check status. Preamble sample phrases (this one streams agent output for a beat, so a short heads-up is appropriate): 'sending.' / 'on it.' / 'ok, sending now.'",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "workspace": {
-                                    "type": "string",
-                                    "description": "Workspace UUID or `repo/dir`."
-                                },
-                                "session": {
-                                    "type": "string",
-                                    "description": "Optional existing session UUID to append to. Omit to start a fresh session."
-                                },
-                                "prompt": {
-                                    "type": "string",
-                                    "description": "The instruction to send to the agent."
-                                },
-                                "plan_mode": {
-                                    "type": "boolean",
-                                    "description": "Run agent in plan mode (no edits). Default false."
-                                }
-                            },
-                            "required": ["workspace", "prompt"]
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "name": "list_repos",
-                        "description": "List all repos registered in Helmor. USE WHEN: user asks 'what repos do I have', or before create_workspace to find the right repo. Preamble sample phrases (only if slow): 'let me check.' / 'one sec.'",
-                        "parameters": { "type": "object", "properties": {}, "required": [] }
-                    },
-                    {
-                        "type": "function",
-                        "name": "wait_for_user",
-                        "description": "Call when the latest audio is silence, background noise, hold music, or a side conversation that doesn't need a response. Produces no audio output.",
-                        "parameters": { "type": "object", "properties": {}, "required": [] }
-                    }
-                ]
+                // Tool definitions live in `voice_tools` so their
+                // descriptions can be assembled from clap's own
+                // `--help` output at session-mint time — one source of
+                // truth (the CLI args) for both the human typing
+                // `helmor send --help` and the model picking a tool.
+                "tools": super::voice_tools::build_tools_array()
             }
         });
 
@@ -454,7 +331,9 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             .context("read OpenAI Realtime client secret response")?;
 
         if !status.is_success() {
-            anyhow::bail!("OpenAI Realtime client secret request failed with HTTP {status}: {text}");
+            anyhow::bail!(
+                "OpenAI Realtime client secret request failed with HTTP {status}: {text}"
+            );
         }
 
         let parsed: OpenAiRealtimeClientSecretResponse =

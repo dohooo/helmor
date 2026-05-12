@@ -2471,20 +2471,13 @@ export type HelmorCliResult = {
 };
 
 /** Shell out to the `helmor` CLI from the voice-mode agent's tool
- *  dispatcher.
- *
- *  - `detach=false` (default): wait for the child to finish, return the
- *    full stdout/stderr.
- *  - `detach=true`: spawn the child, return as soon as the first line
- *    of stdout arrives (or after a ~2 s timeout) so long-running
- *    commands like `helmor send` can be fired and forgotten. The child
- *    keeps running in the background; subsequent state is fetched via
- *    fresh CLI calls. */
-export async function runHelmorCli(
-	args: string[],
-	detach = false,
-): Promise<HelmorCliResult> {
-	return await invoke<HelmorCliResult>("run_helmor_cli", { args, detach });
+ *  dispatcher. Synchronous: waits for the child to exit (or the 30 s
+ *  wrapper-side timeout) and returns the full stdout/stderr. Errors —
+ *  spawn failures, non-zero exits, timeouts — flow through `ok=false`
+ *  + `error`/`stderr`, so the voice agent can report them to the user
+ *  instead of silently lying about success. */
+export async function runHelmorCli(args: string[]): Promise<HelmorCliResult> {
+	return await invoke<HelmorCliResult>("run_helmor_cli", { args });
 }
 
 export async function stopAgentStream(

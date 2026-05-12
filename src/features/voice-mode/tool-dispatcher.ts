@@ -26,11 +26,9 @@ export type AgentMutationKind = "workspaces" | "sessions" | "repos";
 
 /** How each declared tool maps to an actual `helmor` CLI invocation.
  *  `toArgs` translates the model-supplied argument JSON into argv;
- *  `detach: true` flips on fire-and-forget mode for streaming commands;
  *  `invalidates` lists which caches to refresh after a successful run. */
 type ToolSpec = {
 	toArgs: (args: Record<string, unknown>) => string[];
-	detach?: boolean;
 	invalidates?: AgentMutationKind[];
 };
 
@@ -61,9 +59,15 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 		invalidates: ["workspaces"],
 	},
 	set_workspace_status: {
+		// `set-status` is a clap subcommand whose actions are further
+		// nested (`Set`, `Clear`) — see `cli/args.rs::WorkspaceStatusAction`.
+		// The missing `"set"` literal here used to cause every call to
+		// exit non-zero; combined with the now-deleted detach mode (which
+		// reported `ok: true` regardless), this was silent for months.
 		toArgs: (a) => [
 			"workspace",
 			"set-status",
+			"set",
 			String(a.status ?? ""),
 			String(a.ref ?? ""),
 			"--json",
@@ -90,7 +94,6 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 			out.push(String(a.prompt ?? ""));
 			return out;
 		},
-		detach: true,
 		// `helmor send` may create a new session item in the workspace
 		// (and updates last-message timestamps). Invalidate both lists
 		// so the GUI sees the freshly-spawned session.
@@ -318,7 +321,7 @@ async function runCall(call: PendingCall): Promise<{
 
 	let cli: HelmorCliResult;
 	try {
-		cli = await runHelmorCli(argv, spec.detach === true);
+		cli = await runHelmorCli(argv);
 	} catch (err) {
 		return {
 			callId: call.callId,

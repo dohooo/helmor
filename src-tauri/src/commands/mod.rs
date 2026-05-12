@@ -11,6 +11,7 @@ pub(crate) mod system_commands;
 pub(crate) mod terminal_commands;
 pub(crate) mod updater_commands;
 pub(crate) mod voice_commands;
+pub(crate) mod voice_tools;
 pub(crate) mod workspace_commands;
 
 pub use system_commands::DataInfo;

@@ -3,19 +3,20 @@
 //! [`run_helmor_cli`]; the frontend tool-dispatcher receives the result
 //! as JSON and forwards it back into the OpenAI Realtime session.
 //!
-//! Two execution modes:
-//! - **sync** (default): wait for the child to exit, return the full
-//!   stdout/stderr. Used by every read tool and quick writes.
-//! - **detach**: spawn the child, read at most one line from stdout (or
-//!   give up after [`DETACH_FIRST_LINE_TIMEOUT_SECS`]), return that line
-//!   immediately, and keep the child running in the background. Used by
-//!   `send_prompt` where the underlying `helmor send` streams agent
-//!   output for tens of seconds — we want the voice tool to return as
-//!   soon as the workspace/session metadata is on the wire.
+//! Every invocation is synchronous: spawn the child, drain stdout/stderr
+//! off-thread, wait for exit (with a wall-clock cap), return the result.
+//! An earlier `detach` mode that returned the first stdout line and let
+//! the child keep running existed to "speed up" `helmor send` — but it
+//! also unconditionally reported `ok: true`, silently swallowing every
+//! CLI error (bad workspace ref, wrong argv shape, anything). Since
+//! `helmor send` against a running desktop app already completes in
+//! <100 ms via the delegation path in `service::send_message`, the
+//! speed argument never held up. Sync mode with the existing 30 s cap
+//! is more than enough — and it surfaces failures to the agent so it
+//! can tell the user the truth instead of a polite lie.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -28,16 +29,14 @@ use super::common::{run_blocking, CmdResult};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelmorCliResult {
-    /// `true` iff the child exited with status 0 (or detached mode
-    /// succeeded in reading the first stdout line).
+    /// `true` iff the child exited with status 0.
     pub ok: bool,
-    /// Exit code if the child has terminated. `None` for detached mode
-    /// while the child is still running.
+    /// Exit code if the child has terminated. `None` only when the
+    /// wrapper itself failed (spawn / timeout).
     pub exit_code: Option<i32>,
-    /// In sync mode: full stdout. In detach mode: first line only.
+    /// Full stdout.
     pub stdout: String,
-    /// In sync mode: full stderr. In detach mode: empty (drained in
-    /// background).
+    /// Full stderr.
     pub stderr: String,
     /// Set when the wrapper itself failed (e.g. timeout, spawn error)
     /// rather than the child exiting non-zero.
@@ -55,28 +54,19 @@ fn helmor_binary_name() -> &'static str {
     }
 }
 
-/// Sync-mode wall-clock cap. Most reads finish in <500 ms; writes (e.g.
-/// `workspace new`) can take a couple seconds. 30 s is the safety net
-/// for an unresponsive CLI.
+/// Wall-clock cap on a single CLI invocation. Most reads finish in
+/// <500 ms; writes (e.g. `workspace new`) can take a couple seconds.
+/// 30 s is the safety net for an unresponsive CLI.
 const CLI_TIMEOUT_SECS: u64 = 30;
 
-/// How long detached mode waits for the first line of stdout before
-/// giving up and returning an empty payload. The child keeps running.
-const DETACH_FIRST_LINE_TIMEOUT_SECS: u64 = 2;
-
 #[tauri::command]
-pub async fn run_helmor_cli(args: Vec<String>, detach: Option<bool>) -> CmdResult<HelmorCliResult> {
+pub async fn run_helmor_cli(args: Vec<String>) -> CmdResult<HelmorCliResult> {
     let binary = helmor_binary_name();
-    let detach = detach.unwrap_or(false);
     // Voice-mode invocations are rare and high-signal — log every one so
     // we can correlate "the agent said X" with what the CLI actually saw.
-    tracing::info!(binary, ?args, detach, "voice agent invoking helmor CLI");
+    tracing::info!(binary, ?args, "voice agent invoking helmor CLI");
     run_blocking(move || {
-        let result = if detach {
-            run_detached(binary, args.clone())
-        } else {
-            run_sync(binary, args.clone())
-        };
+        let result = run_sync(binary, args.clone());
         if let Ok(ref res) = result {
             tracing::info!(
                 ok = res.ok,
@@ -183,75 +173,4 @@ fn run_sync(binary: &str, args: Vec<String>) -> anyhow::Result<HelmorCliResult> 
             error: Some(format!("{binary} timed out after {CLI_TIMEOUT_SECS}s")),
         }),
     }
-}
-
-fn run_detached(binary: &str, args: Vec<String>) -> anyhow::Result<HelmorCliResult> {
-    let mut cmd = Command::new(binary);
-    cmd.args(&args);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return Ok(HelmorCliResult {
-                ok: false,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(format!("spawn {binary}: {err}")),
-            });
-        }
-    };
-
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            return Ok(HelmorCliResult {
-                ok: false,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(format!("{binary}: stdout pipe missing")),
-            });
-        }
-    };
-
-    // Hand both reader and child to a detached worker thread so that
-    // (a) stdout keeps being drained — otherwise the pipe fills and the
-    // child blocks on its next write — and (b) the child lives past
-    // this function's return. The channel fast-paths the first line
-    // back before the drain loop swallows it.
-    let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let mut first_line = String::new();
-        let mut sent = false;
-        if reader.read_line(&mut first_line).is_ok() && !first_line.is_empty() {
-            let _ = tx.send(first_line.trim_end_matches('\n').to_string());
-            sent = true;
-        }
-        if !sent {
-            // EOF without any line: wake the waiter with empty so it
-            // doesn't sit on the timeout.
-            let _ = tx.send(String::new());
-        }
-        // Drain remaining stdout — discarded, but reading keeps the
-        // pipe healthy so the child doesn't block.
-        let mut sink = Vec::with_capacity(4096);
-        let _ = reader.read_to_end(&mut sink);
-        let _ = child.wait();
-    });
-
-    let first_line = rx
-        .recv_timeout(Duration::from_secs(DETACH_FIRST_LINE_TIMEOUT_SECS))
-        .unwrap_or_default();
-
-    Ok(HelmorCliResult {
-        ok: true,
-        exit_code: None,
-        stdout: first_line,
-        stderr: String::new(),
-        error: None,
-    })
 }
