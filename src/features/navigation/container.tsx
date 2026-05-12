@@ -55,6 +55,7 @@ export const WorkspacesSidebarContainer = memo(
 			handleCloneFromUrl,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
+			handleMoveRepositoryInSidebar,
 			handleMoveWorkspaceInSidebar,
 			handleOpenCloneDialog,
 			handleRestoreWorkspace,
@@ -122,6 +123,9 @@ export const WorkspacesSidebarContainer = memo(
 						targetGroupId,
 						beforeWorkspaceId,
 					);
+				}}
+				onMoveRepositoryInSidebar={(repoId, beforeRepoId) => {
+					void handleMoveRepositoryInSidebar(repoId, beforeRepoId);
 				}}
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);

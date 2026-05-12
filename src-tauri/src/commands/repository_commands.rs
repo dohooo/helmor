@@ -135,6 +135,17 @@ pub async fn delete_repository(repo_id: String) -> CmdResult<()> {
     run_blocking(move || repos::delete_repository_cascade(&repo_id)).await
 }
 
+/// Drag-reorder a repo bucket in the sidebar's repo grouping mode.
+/// `before_repo_id == None` appends to the end.
+#[tauri::command]
+pub async fn move_repository_in_sidebar(
+    repo_id: String,
+    before_repo_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || repos::move_repository_in_sidebar(&repo_id, before_repo_id.as_deref()))
+        .await
+}
+
 /// Re-run forge auto-bind for a repo. Frontend calls this after the user
 /// completes a `gh auth login` / `glab auth login` flow so the repo
 /// picks up the freshly-added account without an app restart. Returns

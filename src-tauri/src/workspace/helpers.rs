@@ -817,7 +817,7 @@ mod tests {
             forge_provider: None,
             forge_login: None,
             display_order: crate::workspace::sidebar_order::ORDER_STEP,
-            repo_display_order: crate::workspace::sidebar_order::ORDER_STEP,
+            repo_sidebar_order: crate::workspace::sidebar_order::ORDER_STEP,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             last_user_message_at: None,

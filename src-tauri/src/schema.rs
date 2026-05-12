@@ -61,6 +61,9 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("workspaces", "placeholder_branch_name"),
     ("workspaces", "pr_description"),
     ("workspaces", "secondary_directory_name"),
+    // The repo-grouped DnD prototype split sidebar order into two columns;
+    // we collapsed back to a single `display_order` before shipping.
+    ("workspaces", "repo_display_order"),
     // sessions: vestigial flags / counters never surfaced after a refactor.
     ("sessions", "agent_personality"),
     ("sessions", "context_token_count"),
@@ -586,130 +589,60 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.display_order column")?;
     }
 
-    if has_table(connection, "workspaces")
-        && !has_column(connection, "workspaces", "repo_display_order")
-    {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN repo_display_order INTEGER DEFAULT 0")
-            .context("Failed to add workspaces.repo_display_order column")?;
-    }
-
-    normalize_workspace_sidebar_orders(connection)?;
+    seed_workspace_display_orders(connection)?;
 
     Ok(())
 }
 
-fn normalize_workspace_sidebar_orders(connection: &Connection) -> Result<()> {
+/// One-shot init for rows that still carry `display_order = 0` — the column
+/// is freshly added or imported. Lays them out on the sparse 1024-step grid
+/// in a stable order (pinned first, then by recency). Subsequent reorders
+/// keep the gaps wide so a normal move is a single UPDATE.
+///
+/// Tolerant of legacy schemas that predate `pinned_at` / `created_at` so
+/// the migration test bench (which seeds bare-bones tables) can run it.
+fn seed_workspace_display_orders(connection: &Connection) -> Result<()> {
     if !has_table(connection, "workspaces") {
         return Ok(());
     }
-
-    let has_status = has_column(connection, "workspaces", "status");
-    let has_pinned_at = has_column(connection, "workspaces", "pinned_at");
-    let has_repository_id = has_column(connection, "workspaces", "repository_id");
-    let has_created_at = has_column(connection, "workspaces", "created_at");
-    let has_updated_at = has_column(connection, "workspaces", "updated_at");
-
-    let status_expr = if has_status {
-        "COALESCE(status, 'in-progress')".to_string()
+    let zero_rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE COALESCE(display_order, 0) <= 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if zero_rows == 0 {
+        return Ok(());
+    }
+    let pinned_priority = if has_column(connection, "workspaces", "pinned_at") {
+        "CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+                        datetime(COALESCE(pinned_at, created_at)) DESC,"
+    } else if has_column(connection, "workspaces", "created_at") {
+        "datetime(created_at) DESC,"
     } else {
-        "'in-progress'".to_string()
+        ""
     };
-    let partition_status_expr = if has_pinned_at {
-        format!("CASE WHEN pinned_at IS NOT NULL THEN 'pinned' ELSE {status_expr} END")
-    } else {
-        status_expr.clone()
-    };
-    let partition_repo_expr = if has_repository_id {
-        "repository_id".to_string()
-    } else {
-        "NULL".to_string()
-    };
-    let status_order_source_expr = "COALESCE(display_order, 0)".to_string();
-    let repo_order_source_expr = if has_column(connection, "workspaces", "repo_display_order") {
-        "CASE
-            WHEN COALESCE(repo_display_order, 0) > 0 THEN repo_display_order
-            ELSE COALESCE(display_order, 0)
-         END"
-        .to_string()
-    } else {
-        "COALESCE(display_order, 0)".to_string()
-    };
-    let legacy_created_sort_expr = if has_created_at {
-        "datetime(created_at) DESC,".to_string()
-    } else {
-        String::new()
-    };
-    let updated_sort_expr = if has_updated_at {
-        "datetime(updated_at) DESC,".to_string()
-    } else {
-        String::new()
-    };
-
-    let sql = format!(
-        r#"
-        CREATE TEMP TABLE IF NOT EXISTS tmp_workspace_sidebar_order (
-            id TEXT PRIMARY KEY,
-            status_order INTEGER NOT NULL,
-            repo_order INTEGER NOT NULL
-        );
-        DELETE FROM tmp_workspace_sidebar_order;
-
-        INSERT INTO tmp_workspace_sidebar_order (id, status_order, repo_order)
-        SELECT id, status_order, repo_order
-        FROM (
-            SELECT
-                id,
-                ROW_NUMBER() OVER (
-                    PARTITION BY {partition_status_expr}
-                    ORDER BY CASE WHEN {status_order_source_expr} > 0 THEN 0 ELSE 1 END ASC,
-                             CASE WHEN {status_order_source_expr} > 0 THEN {status_order_source_expr} END ASC,
-                             {legacy_created_sort_expr}
-                             {updated_sort_expr}
-                             id DESC
-                ) * {step} AS status_order,
-                ROW_NUMBER() OVER (
-                    PARTITION BY {partition_repo_expr}
-                    ORDER BY CASE WHEN {repo_order_source_expr} > 0 THEN 0 ELSE 1 END ASC,
-                             CASE WHEN {repo_order_source_expr} > 0 THEN {repo_order_source_expr} END ASC,
-                             {legacy_created_sort_expr}
-                             {updated_sort_expr}
-                             id DESC
-                ) * {step} AS repo_order
-            FROM workspaces
-        );
-
-        UPDATE workspaces
-        SET display_order = (
-                SELECT status_order
-                FROM tmp_workspace_sidebar_order
-                WHERE tmp_workspace_sidebar_order.id = workspaces.id
-            ),
-            repo_display_order = (
-                SELECT repo_order
-                FROM tmp_workspace_sidebar_order
-                WHERE tmp_workspace_sidebar_order.id = workspaces.id
-            )
-        WHERE EXISTS (
-            SELECT 1
-            FROM tmp_workspace_sidebar_order
-            WHERE tmp_workspace_sidebar_order.id = workspaces.id
-        );
-
-        DROP TABLE tmp_workspace_sidebar_order;
-        "#,
-        partition_repo_expr = partition_repo_expr,
-        partition_status_expr = partition_status_expr,
-        repo_order_source_expr = repo_order_source_expr,
-        status_order_source_expr = status_order_source_expr,
-        legacy_created_sort_expr = legacy_created_sort_expr,
-        updated_sort_expr = updated_sort_expr,
-        step = sidebar_order::ORDER_STEP,
-    );
-
     connection
-        .execute_batch(&sql)
-        .context("Failed to normalize workspace sidebar orders")
+        .execute_batch(&format!(
+            r#"
+            WITH ranked AS (
+                SELECT id, ROW_NUMBER() OVER (
+                    ORDER BY
+                        {pinned_priority}
+                        id DESC
+                ) AS rn
+                FROM workspaces
+            )
+            UPDATE workspaces
+            SET display_order = (SELECT rn * {step} FROM ranked WHERE ranked.id = workspaces.id)
+            WHERE COALESCE(display_order, 0) <= 0
+              AND EXISTS (SELECT 1 FROM ranked WHERE ranked.id = workspaces.id);
+            "#,
+            pinned_priority = pinned_priority,
+            step = sidebar_order::ORDER_STEP,
+        ))
+        .context("Failed to seed initial workspace display orders")
 }
 
 const SCHEMA_SQL: &str = r#"
@@ -777,8 +710,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     linked_directory_paths TEXT,
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
-    display_order INTEGER NOT NULL,
-    repo_display_order INTEGER NOT NULL DEFAULT 0,
+    display_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1119,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_normalizes_workspace_display_orders_when_rows_are_mixed() {
+    fn migration_seeds_display_orders_for_unset_rows_and_is_idempotent() {
         let (connection, _dir) = open_test_db();
         connection
             .execute_batch(
@@ -1164,32 +1096,33 @@ mod tests {
                 INSERT INTO repos (id, name, root_path) VALUES ('r1', 'repo', '/tmp/repo');
                 INSERT INTO workspaces (id, repository_id, directory_name, status, display_order, created_at)
                 VALUES
-                    ('w-ordered', 'r1', 'ordered', 'in-progress', 1000, '2024-01-01T00:00:00Z'),
-                    ('w-legacy', 'r1', 'legacy', 'in-progress', 2000, '2024-01-02T00:00:00Z');
+                    ('w-keep', 'r1', 'keep', 'in-progress', 1500, '2024-01-01T00:00:00Z'),
+                    ('w-zero', 'r1', 'zero', 'in-progress', 0, '2024-01-02T00:00:00Z');
                 "#,
             )
             .unwrap();
 
         run_migrations(&connection).unwrap();
 
-        let read_orders = |id: &str| -> (i64, i64) {
+        let read_order = |id: &str| -> i64 {
             connection
                 .query_row(
-                    "SELECT display_order, repo_display_order FROM workspaces WHERE id = ?1",
+                    "SELECT display_order FROM workspaces WHERE id = ?1",
                     [id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .unwrap()
         };
-        let ordered_order = read_orders("w-ordered");
-        let legacy_order = read_orders("w-legacy");
 
-        assert_eq!(ordered_order, (1024, 1024));
-        assert_eq!(legacy_order, (2048, 2048));
+        // Existing positive order is preserved untouched.
+        assert_eq!(read_order("w-keep"), 1500);
+        // Zero rows get seeded onto the sparse grid.
+        assert!(read_order("w-zero") > 0);
 
+        // Second run is a no-op.
+        let before = read_order("w-zero");
         run_migrations(&connection).unwrap();
-        assert_eq!(ordered_order, read_orders("w-ordered"));
-        assert_eq!(legacy_order, read_orders("w-legacy"));
+        assert_eq!(read_order("w-zero"), before);
     }
 
     /// Construct the full pre-drop legacy DDL once. Each migration test

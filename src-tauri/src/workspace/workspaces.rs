@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use rusqlite::Transaction;
 use serde::Serialize;
 
 use crate::{
@@ -67,7 +68,9 @@ pub struct WorkspaceSidebarRow {
     pub pr_url: Option<String>,
     pub pinned_at: Option<String>,
     pub display_order: i64,
-    pub repo_display_order: i64,
+    /// `repos.display_order` for the parent repo. Drives sidebar bucket
+    /// ordering in repo grouping mode.
+    pub repo_sidebar_order: i64,
     pub session_count: i64,
     pub message_count: i64,
     pub created_at: String,
@@ -113,7 +116,6 @@ pub struct WorkspaceSummary {
     pub pr_url: Option<String>,
     pub pinned_at: Option<String>,
     pub display_order: i64,
-    pub repo_display_order: i64,
     pub session_count: i64,
     pub message_count: i64,
     pub created_at: String,
@@ -150,7 +152,6 @@ pub struct WorkspaceDetail {
     pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub display_order: i64,
-    pub repo_display_order: i64,
     pub pr_title: Option<String>,
     pub pr_sync_state: PrSyncState,
     pub pr_url: Option<String>,
@@ -313,11 +314,11 @@ pub fn pin_workspace(workspace_id: &str) -> Result<()> {
     let transaction = connection
         .transaction()
         .context("Failed to start pin-workspace transaction")?;
-    let next_status_order = next_status_order(&transaction, None, true)?;
+    let next_order = next_order_for_target(&transaction, &MoveTarget::Pinned)?;
     transaction
         .execute(
             "UPDATE workspaces SET pinned_at = datetime('now'), display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, next_status_order],
+            rusqlite::params![workspace_id, next_order],
         )
         .context("Failed to pin workspace")?;
     transaction
@@ -331,11 +332,11 @@ pub fn unpin_workspace(workspace_id: &str) -> Result<()> {
         .transaction()
         .context("Failed to start unpin-workspace transaction")?;
     let status = load_workspace_status(&transaction, workspace_id)?;
-    let next_status_order = next_status_order(&transaction, Some(status), false)?;
+    let next_order = next_order_for_target(&transaction, &MoveTarget::Status(status))?;
     transaction
         .execute(
             "UPDATE workspaces SET pinned_at = NULL, display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, next_status_order],
+            rusqlite::params![workspace_id, next_order],
         )
         .context("Failed to unpin workspace")?;
     transaction
@@ -348,11 +349,11 @@ pub fn set_workspace_status(workspace_id: &str, status: WorkspaceStatus) -> Resu
     let transaction = connection
         .transaction()
         .context("Failed to start set-status transaction")?;
-    let next_status_order = next_status_order(&transaction, Some(status), false)?;
+    let next_order = next_order_for_target(&transaction, &MoveTarget::Status(status))?;
     transaction
         .execute(
             "UPDATE workspaces SET status = ?2, display_order = ?3, updated_at = datetime('now') WHERE id = ?1",
-            rusqlite::params![workspace_id, status, next_status_order],
+            rusqlite::params![workspace_id, status, next_order],
         )
         .context("Failed to set workspace status")?;
     transaction
@@ -360,176 +361,269 @@ pub fn set_workspace_status(workspace_id: &str, status: WorkspaceStatus) -> Resu
         .context("Failed to commit set-status transaction")
 }
 
-pub fn move_workspace_in_sidebar(
-    workspace_id: &str,
-    target_status: WorkspaceStatus,
-    before_workspace_id: Option<&str>,
-) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start workspace reorder transaction")?;
-
-    let updated_rows = transaction
-        .execute(
-            r#"
-            UPDATE workspaces
-            SET status = ?2,
-                pinned_at = NULL,
-                updated_at = datetime('now')
-            WHERE id = ?1
-              AND state <> ?3
-            "#,
-            rusqlite::params![workspace_id, target_status, WorkspaceState::Archived],
-        )
-        .context("Failed to move workspace status")?;
-    if updated_rows != 1 {
-        bail!("Workspace move affected {updated_rows} rows for workspace {workspace_id}");
-    }
-
-    let mut statement = transaction
-        .prepare(
-            r#"
-            SELECT id
-            FROM workspaces
-            WHERE state <> ?1
-              AND pinned_at IS NULL
-              AND COALESCE(status, 'in-progress') = ?2
-            ORDER BY display_order ASC,
-                     datetime(created_at) DESC,
-                     datetime(updated_at) DESC,
-                     id DESC
-            "#,
-        )
-        .context("Failed to prepare target workspace order query")?;
-    let ordered = statement.query_map(
-        rusqlite::params![WorkspaceState::Archived, target_status],
-        |row| row.get::<_, String>(0),
-    )?;
-    let mut ids = ordered.collect::<std::result::Result<Vec<_>, _>>()?;
-    ids.retain(|id| id != workspace_id);
-
-    let insert_index = resolve_reorder_insert_index(&ids, workspace_id, before_workspace_id)?;
-    ids.insert(insert_index, workspace_id.to_string());
-    drop(statement);
-
-    for (index, id) in ids.iter().enumerate() {
-        transaction
-            .execute(
-                "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
-                rusqlite::params![id, sidebar_order::order_for_index(index)?],
-            )
-            .with_context(|| format!("Failed to update display order for workspace {id}"))?;
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit workspace reorder transaction")?;
-    Ok(())
+/// Where a workspace move is targeted. Mirrors the sidebar group ids the
+/// frontend sends across IPC:
+///   - "pinned"
+///   - "done" / "review" / "progress" / "backlog" / "canceled"
+///   - "repo:<repo_id>"
+pub enum MoveTarget {
+    Pinned,
+    Status(WorkspaceStatus),
+    Repo(String),
 }
 
-pub fn move_workspace_within_repo(
+impl MoveTarget {
+    fn parse(transaction: &Transaction<'_>, target_group_id: &str) -> Result<Self> {
+        if target_group_id == "pinned" {
+            return Ok(Self::Pinned);
+        }
+        if let Some(repo_id) = target_group_id.strip_prefix("repo:") {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM repos WHERE id = ?1)",
+                    [repo_id],
+                    |row| row.get(0),
+                )
+                .with_context(|| format!("Failed to look up repo for group {target_group_id}"))?;
+            if !exists {
+                bail!("Unknown repo group: {target_group_id}");
+            }
+            return Ok(Self::Repo(repo_id.to_string()));
+        }
+        if let Some(status) = parse_status_group_id(target_group_id) {
+            return Ok(Self::Status(status));
+        }
+        bail!("Unknown sidebar group: {target_group_id}");
+    }
+}
+
+fn parse_status_group_id(id: &str) -> Option<WorkspaceStatus> {
+    match id {
+        "progress" => Some(WorkspaceStatus::InProgress),
+        "done" => Some(WorkspaceStatus::Done),
+        "review" => Some(WorkspaceStatus::Review),
+        "backlog" => Some(WorkspaceStatus::Backlog),
+        "canceled" => Some(WorkspaceStatus::Canceled),
+        _ => None,
+    }
+}
+
+/// Move a workspace to `target_group_id`, placing it before `before_workspace_id`
+/// (or to the end of the group when None). Updates exactly one row in the common
+/// case — only triggers a full-group rebalance when the sparse sequence has run
+/// out of midpoints between neighbours.
+pub fn move_workspace_in_sidebar(
     workspace_id: &str,
+    target_group_id: &str,
     before_workspace_id: Option<&str>,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
         .transaction()
-        .context("Failed to start repo workspace reorder transaction")?;
+        .context("Failed to start workspace move transaction")?;
 
-    let (repo_id, state, pinned_at): (String, WorkspaceState, Option<String>) = transaction
-        .query_row(
-            r#"
-            SELECT repository_id, state, pinned_at
-            FROM workspaces
-            WHERE id = ?1
-            "#,
-            [workspace_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    if state == WorkspaceState::Archived {
-        bail!("Archived workspace cannot be reordered in a repo group");
-    }
-    if pinned_at.is_some() {
-        bail!("Pinned workspace cannot be reordered in a repo group");
-    }
+    let target = MoveTarget::parse(&transaction, target_group_id)?;
 
-    if let Some(before_id) = before_workspace_id {
-        let before_repo_id: String = transaction
+    if let MoveTarget::Repo(repo_id) = &target {
+        let actual: String = transaction
             .query_row(
                 "SELECT repository_id FROM workspaces WHERE id = ?1",
-                [before_id],
+                [workspace_id],
                 |row| row.get(0),
             )
-            .with_context(|| format!("Before-workspace not found: {before_id}"))?;
-        if before_repo_id != repo_id {
-            bail!("Repo workspace reorder target must be in the same repository");
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+        if &actual != repo_id {
+            bail!("Repo group reorder must stay within the workspace's own repository");
         }
     }
 
-    let mut statement = transaction
-        .prepare(
-            r#"
-                SELECT id
+    let neighbours = list_target_group_orders(&transaction, &target, workspace_id)?;
+    let (prev, next) = resolve_neighbour_orders(&neighbours, workspace_id, before_workspace_id)?;
+
+    let new_order = match sidebar_order::compute_midpoint(prev, next) {
+        Some(order) => order,
+        None => rebalance_target_group(&transaction, &target, workspace_id, before_workspace_id)?,
+    };
+
+    apply_target_to_workspace(&transaction, workspace_id, &target, new_order)?;
+
+    transaction
+        .commit()
+        .context("Failed to commit workspace move transaction")
+}
+
+fn list_target_group_orders(
+    transaction: &Transaction<'_>,
+    target: &MoveTarget,
+    exclude_workspace_id: &str,
+) -> Result<Vec<(String, i64)>> {
+    let rows: Vec<(String, i64)> = match target {
+        MoveTarget::Pinned => transaction
+            .prepare(
+                r#"
+                SELECT id, display_order
+                FROM workspaces
+                WHERE state <> ?1 AND pinned_at IS NOT NULL
+                ORDER BY display_order ASC, datetime(created_at) DESC, id DESC
+                "#,
+            )?
+            .query_map([WorkspaceState::Archived], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?,
+        MoveTarget::Status(status) => transaction
+            .prepare(
+                r#"
+                SELECT id, display_order
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?2
+                ORDER BY display_order ASC, datetime(created_at) DESC, id DESC
+                "#,
+            )?
+            .query_map(rusqlite::params![WorkspaceState::Archived, status], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?,
+        MoveTarget::Repo(repo_id) => transaction
+            .prepare(
+                r#"
+                SELECT id, display_order
                 FROM workspaces
                 WHERE state <> ?1
                   AND pinned_at IS NULL
                   AND repository_id = ?2
-                ORDER BY repo_display_order ASC,
-                         datetime(created_at) DESC,
-                         datetime(updated_at) DESC,
-                         id DESC
+                ORDER BY display_order ASC, datetime(created_at) DESC, id DESC
                 "#,
-        )
-        .context("Failed to prepare repo workspace order query")?;
-    let ordered = statement.query_map(
-        rusqlite::params![WorkspaceState::Archived, repo_id],
-        |row| row.get::<_, String>(0),
-    )?;
-    let mut ids = ordered.collect::<std::result::Result<Vec<_>, _>>()?;
-    ids.retain(|id| id != workspace_id);
-
-    let insert_index = resolve_reorder_insert_index(&ids, workspace_id, before_workspace_id)?;
-    ids.insert(insert_index, workspace_id.to_string());
-    drop(statement);
-
-    for (index, id) in ids.iter().enumerate() {
-        transaction
-            .execute(
-                "UPDATE workspaces SET repo_display_order = ?2 WHERE id = ?1",
-                rusqlite::params![id, sidebar_order::order_for_index(index)?],
-            )
-            .with_context(|| format!("Failed to update repo display order for workspace {id}"))?;
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit repo workspace reorder transaction")?;
-    Ok(())
+            )?
+            .query_map(
+                rusqlite::params![WorkspaceState::Archived, repo_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )?
+            .collect::<std::result::Result<_, _>>()?,
+    };
+    Ok(rows
+        .into_iter()
+        .filter(|(id, _)| id != exclude_workspace_id)
+        .collect())
 }
 
-fn resolve_reorder_insert_index(
-    ordered_ids_without_moving_workspace: &[String],
+fn resolve_neighbour_orders(
+    neighbours: &[(String, i64)],
     workspace_id: &str,
     before_workspace_id: Option<&str>,
-) -> Result<usize> {
+) -> Result<(Option<i64>, Option<i64>)> {
     let Some(before_id) = before_workspace_id else {
-        return Ok(ordered_ids_without_moving_workspace.len());
+        return Ok((neighbours.last().map(|(_, order)| *order), None));
     };
     if before_id == workspace_id {
         bail!("Workspace cannot be moved before itself");
     }
-    ordered_ids_without_moving_workspace
+    let position = neighbours
         .iter()
-        .position(|id| id == before_id)
+        .position(|(id, _)| id == before_id)
         .with_context(|| {
             format!("Before-workspace is not reorderable in target group: {before_id}")
-        })
+        })?;
+    let next = Some(neighbours[position].1);
+    let prev = if position == 0 {
+        None
+    } else {
+        Some(neighbours[position - 1].1)
+    };
+    Ok((prev, next))
+}
+
+fn rebalance_target_group(
+    transaction: &Transaction<'_>,
+    target: &MoveTarget,
+    workspace_id: &str,
+    before_workspace_id: Option<&str>,
+) -> Result<i64> {
+    let neighbours = list_target_group_orders(transaction, target, workspace_id)?;
+    let insert_position = match before_workspace_id {
+        None => neighbours.len(),
+        Some(id) => neighbours
+            .iter()
+            .position(|(rid, _)| rid == id)
+            .with_context(|| {
+                format!("Before-workspace is not reorderable in target group: {id}")
+            })?,
+    };
+
+    let mut ordered_ids: Vec<&str> = neighbours.iter().map(|(s, _)| s.as_str()).collect();
+    ordered_ids.insert(insert_position, workspace_id);
+
+    let mut moving_order = sidebar_order::ORDER_STEP;
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let order = sidebar_order::order_for_index(index)?;
+        if *id == workspace_id {
+            moving_order = order;
+            continue;
+        }
+        transaction
+            .execute(
+                "UPDATE workspaces SET display_order = ?2 WHERE id = ?1",
+                rusqlite::params![id, order],
+            )
+            .with_context(|| format!("Failed to rebalance display order for workspace {id}"))?;
+    }
+    Ok(moving_order)
+}
+
+fn apply_target_to_workspace(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+    target: &MoveTarget,
+    new_order: i64,
+) -> Result<()> {
+    let updated = match target {
+        MoveTarget::Pinned => transaction.execute(
+            r#"
+            UPDATE workspaces
+            SET pinned_at = COALESCE(pinned_at, datetime('now')),
+                display_order = ?2,
+                updated_at = datetime('now')
+            WHERE id = ?1 AND state <> ?3
+            "#,
+            rusqlite::params![workspace_id, new_order, WorkspaceState::Archived],
+        )?,
+        MoveTarget::Status(status) => transaction.execute(
+            r#"
+            UPDATE workspaces
+            SET pinned_at = NULL,
+                status = ?2,
+                display_order = ?3,
+                updated_at = datetime('now')
+            WHERE id = ?1 AND state <> ?4
+            "#,
+            rusqlite::params![workspace_id, status, new_order, WorkspaceState::Archived],
+        )?,
+        MoveTarget::Repo(_) => transaction.execute(
+            // Promote a backlog row to in-progress when dragging it into its
+            // own repo bucket — otherwise the row would still belong to the
+            // Backlog group and visually never leave it. Other statuses are
+            // preserved (repo target keeps status by default).
+            r#"
+            UPDATE workspaces
+            SET pinned_at = NULL,
+                status = CASE WHEN status = 'backlog' THEN 'in-progress' ELSE status END,
+                display_order = ?2,
+                updated_at = datetime('now')
+            WHERE id = ?1 AND state <> ?3
+            "#,
+            rusqlite::params![workspace_id, new_order, WorkspaceState::Archived],
+        )?,
+    };
+    if updated != 1 {
+        bail!("Workspace move affected {updated} rows for {workspace_id}");
+    }
+    Ok(())
 }
 
 fn load_workspace_status(
-    transaction: &rusqlite::Transaction<'_>,
+    transaction: &Transaction<'_>,
     workspace_id: &str,
 ) -> Result<WorkspaceStatus> {
     let status = transaction
@@ -542,49 +636,34 @@ fn load_workspace_status(
     Ok(status)
 }
 
-fn next_status_order(
-    transaction: &rusqlite::Transaction<'_>,
-    status: Option<WorkspaceStatus>,
-    pinned: bool,
-) -> Result<i64> {
-    let sql = if pinned {
-        r#"
-            SELECT COALESCE(MAX(display_order), 0) + ?2
-            FROM workspaces
-            WHERE state <> ?1
-              AND pinned_at IS NOT NULL
-            "#
-    } else {
-        r#"
-            SELECT COALESCE(MAX(display_order), 0) + ?2
-            FROM workspaces
-            WHERE state <> ?1
-              AND pinned_at IS NULL
-              AND COALESCE(status, 'in-progress') = ?3
-            "#
+/// Highest display_order in the target group plus one step — used by
+/// pin/unpin/status-change/PR-sync paths to drop a workspace at the
+/// end of its new home without touching neighbours.
+fn next_order_for_target(transaction: &Transaction<'_>, target: &MoveTarget) -> Result<i64> {
+    let max: Option<i64> = match target {
+        MoveTarget::Pinned => transaction
+            .query_row(
+                "SELECT MAX(display_order) FROM workspaces WHERE state <> ?1 AND pinned_at IS NOT NULL",
+                [WorkspaceState::Archived],
+                |row| row.get(0),
+            )
+            .context("Failed to compute next pinned workspace order")?,
+        MoveTarget::Status(status) => transaction
+            .query_row(
+                "SELECT MAX(display_order) FROM workspaces WHERE state <> ?1 AND pinned_at IS NULL AND COALESCE(status, 'in-progress') = ?2",
+                rusqlite::params![WorkspaceState::Archived, status],
+                |row| row.get(0),
+            )
+            .context("Failed to compute next status workspace order")?,
+        MoveTarget::Repo(repo_id) => transaction
+            .query_row(
+                "SELECT MAX(display_order) FROM workspaces WHERE state <> ?1 AND pinned_at IS NULL AND repository_id = ?2",
+                rusqlite::params![WorkspaceState::Archived, repo_id],
+                |row| row.get(0),
+            )
+            .context("Failed to compute next repo workspace order")?,
     };
-
-    if pinned {
-        transaction
-            .query_row(
-                sql,
-                rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP],
-                |row| row.get(0),
-            )
-            .context("Failed to compute next pinned workspace order")
-    } else {
-        transaction
-            .query_row(
-                sql,
-                rusqlite::params![
-                    WorkspaceState::Archived,
-                    sidebar_order::ORDER_STEP,
-                    status.unwrap_or_default()
-                ],
-                |row| row.get(0),
-            )
-            .context("Failed to compute next workspace status order")
-    }
+    Ok(max.unwrap_or(0) + sidebar_order::ORDER_STEP)
 }
 
 pub fn sync_workspace_pr_state(
@@ -634,7 +713,7 @@ pub fn sync_workspace_pr_state(
         let transaction = connection
             .transaction()
             .context("Failed to start PR-sync workspace transaction")?;
-        let next_display_order = next_status_order(&transaction, Some(status), false)?;
+        let next_display_order = next_order_for_target(&transaction, &MoveTarget::Status(status))?;
         transaction
             .execute(
                 r#"
@@ -1030,7 +1109,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         pr_url: record.pr_url,
         pinned_at: record.pinned_at,
         display_order: record.display_order,
-        repo_display_order: record.repo_display_order,
+        repo_sidebar_order: record.repo_sidebar_order,
         session_count: record.session_count,
         message_count: record.message_count,
         created_at: record.created_at,
@@ -1072,7 +1151,6 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         pr_url: record.pr_url,
         pinned_at: record.pinned_at,
         display_order: record.display_order,
-        repo_display_order: record.repo_display_order,
         session_count: record.session_count,
         message_count: record.message_count,
         created_at: record.created_at,
@@ -1128,7 +1206,6 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         intended_target_branch: record.intended_target_branch,
         pinned_at: record.pinned_at,
         display_order: record.display_order,
-        repo_display_order: record.repo_display_order,
         pr_title: record.pr_title,
         pr_sync_state: record.pr_sync_state,
         pr_url: record.pr_url,

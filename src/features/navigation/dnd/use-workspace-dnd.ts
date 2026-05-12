@@ -8,24 +8,32 @@ import {
 } from "react";
 import type { WorkspaceRow } from "@/lib/api";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
+import {
+	DRAG_MOVE_ACTIVATE_PX,
+	DRAG_MOVE_CANCEL_PX,
+	ghostCentreY,
+	useDndActiveOverlay,
+} from "./shared";
 
-const MOVE_CANCEL_PX = 10;
-const MOVE_ACTIVATE_PX = 3;
+// Status grouping: kanban lanes + pinned (drag-to-pin).
+function isStatusOrPinnedGroup(groupId: string) {
+	return groupId === "pinned" || workspaceStatusFromGroupId(groupId) !== null;
+}
+
 const DRAGGABLE_ROW_SELECTOR = "[data-workspace-dnd-row='true']";
 const DROP_GROUP_SELECTOR = "[data-workspace-drop-group-id]";
-export const WORKSPACE_DND_ACTIVE_ATTRIBUTE = "data-workspace-dnd-active";
-export const WORKSPACE_DND_ACTIVE_CHANGE_EVENT = "workspace-dnd-active-change";
-const DRAG_CURSOR_STYLE_ID = "workspace-dnd-cursor-style";
 
 type DragStart = {
 	workspaceId: string;
 	groupId: string;
 	title: string;
+	sourceRepoId: string | null;
 	clientX: number;
 	clientY: number;
 	offsetY: number;
 	left: number;
 	width: number;
+	height: number;
 	pointerId: number;
 };
 
@@ -39,6 +47,7 @@ export type WorkspaceDragState = {
 	workspaceId: string;
 	title: string;
 	sourceGroupId: string;
+	sourceRepoId: string | null;
 	targetGroupId: string;
 	beforeWorkspaceId: string | null;
 	clientX: number;
@@ -46,6 +55,7 @@ export type WorkspaceDragState = {
 	offsetY: number;
 	left: number;
 	width: number;
+	height: number;
 };
 
 export type WorkspaceDropTarget = {
@@ -55,11 +65,15 @@ export type WorkspaceDropTarget = {
 
 export type WorkspaceDndPolicy = {
 	canDragRow: (row: WorkspaceRow, sourceGroupId: string) => boolean;
-	canDropIntoGroup: (sourceGroupId: string, targetGroupId: string) => boolean;
+	canDropIntoGroup: (
+		sourceGroupId: string,
+		targetGroupId: string,
+		context: { sourceRepoId: string | null },
+	) => boolean;
 };
 
 export function isWorkspaceGroupDroppable(groupId: string) {
-	return workspaceStatusFromGroupId(groupId) !== null;
+	return isStatusOrPinnedGroup(groupId);
 }
 
 export function useWorkspaceDnd({
@@ -79,42 +93,7 @@ export function useWorkspaceDnd({
 	const dragFrameRef = useRef<number | null>(null);
 	const dragStateRef = useRef<WorkspaceDragState | null>(null);
 	dragStateRef.current = dragState;
-	const isDragging = dragState !== null;
-
-	useEffect(() => {
-		if (!isDragging) return;
-
-		const root = document.documentElement;
-		let styleElement = document.getElementById(DRAG_CURSOR_STYLE_ID);
-		if (!styleElement) {
-			styleElement = document.createElement("style");
-			styleElement.id = DRAG_CURSOR_STYLE_ID;
-			styleElement.textContent = `
-				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"],
-				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] * {
-					cursor: grabbing !important;
-				}
-				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] [data-workspace-row-body]:hover {
-					background-color: transparent !important;
-				}
-				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] .workspace-row-selected[data-workspace-row-body]:hover {
-					background: var(--workspace-sidebar-selected-bg) !important;
-				}
-				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] [data-workspace-row-actions] {
-					opacity: 0 !important;
-					pointer-events: none !important;
-				}
-			`;
-			document.head.appendChild(styleElement);
-		}
-		root.setAttribute(WORKSPACE_DND_ACTIVE_ATTRIBUTE, "true");
-		window.dispatchEvent(new Event(WORKSPACE_DND_ACTIVE_CHANGE_EVENT));
-
-		return () => {
-			root.removeAttribute(WORKSPACE_DND_ACTIVE_ATTRIBUTE);
-			window.dispatchEvent(new Event(WORKSPACE_DND_ACTIVE_CHANGE_EVENT));
-		};
-	}, [isDragging]);
+	useDndActiveOverlay(dragState !== null);
 
 	const clearPendingStart = useCallback(() => {
 		pendingStartRef.current = null;
@@ -127,25 +106,53 @@ export function useWorkspaceDnd({
 
 	const resolveDropTarget = useCallback(
 		(
-			clientX: number,
+			_clientX: number,
 			clientY: number,
+			heightOverride?: number,
 			sourceGroupIdOverride?: string,
 			workspaceIdOverride?: string,
 		): WorkspaceDropTarget | null => {
-			const elements = document.elementsFromPoint(clientX, clientY);
-			const groupElement = elements
-				.map((element) => element.closest(DROP_GROUP_SELECTOR))
-				.find(Boolean) as HTMLElement | undefined;
-			const groupId = groupElement?.dataset.workspaceDropGroupId;
 			const sourceGroupId =
 				sourceGroupIdOverride ?? dragStateRef.current?.sourceGroupId;
 			const workspaceId =
 				workspaceIdOverride ?? dragStateRef.current?.workspaceId;
+			if (!sourceGroupId || !workspaceId) return null;
+
+			// Anchor on ghost centre (closestCenter), not pointer. Ghost X
+			// stays inside the sidebar even when pointer drifts horizontally.
+			const offsetY =
+				dragStateRef.current?.offsetY ?? pendingStartRef.current?.offsetY ?? 0;
+			const height =
+				heightOverride ??
+				dragStateRef.current?.height ??
+				pendingStartRef.current?.height ??
+				0;
+			const ghostLeft =
+				dragStateRef.current?.left ?? pendingStartRef.current?.left ?? 0;
+			const ghostWidth =
+				dragStateRef.current?.width ?? pendingStartRef.current?.width ?? 0;
+			const ghostCentreX = ghostLeft + ghostWidth / 2;
+			const centreY = ghostCentreY({ clientY, offsetY, height });
+
+			// Probe near ghost centre so gaps between groups still hit.
+			const probeOffsets = [0, -8, 8, -16, 16, -24, 24];
+			let groupElement: HTMLElement | undefined;
+			for (const dy of probeOffsets) {
+				const elements = document.elementsFromPoint(ghostCentreX, centreY + dy);
+				groupElement = elements
+					.map((element) => element.closest(DROP_GROUP_SELECTOR))
+					.find(Boolean) as HTMLElement | undefined;
+				if (groupElement) break;
+			}
+			const groupId = groupElement?.dataset.workspaceDropGroupId;
+			const sourceRepoId =
+				dragStateRef.current?.sourceRepoId ??
+				pendingStartRef.current?.sourceRepoId ??
+				null;
 			if (
 				!groupId ||
-				!sourceGroupId ||
 				!(
-					policy?.canDropIntoGroup(sourceGroupId, groupId) ??
+					policy?.canDropIntoGroup(sourceGroupId, groupId, { sourceRepoId }) ??
 					isWorkspaceGroupDroppable(groupId)
 				)
 			) {
@@ -160,7 +167,7 @@ export function useWorkspaceDnd({
 
 			for (const element of rowElements) {
 				const rect = element.getBoundingClientRect();
-				if (clientY < rect.top + rect.height / 2) {
+				if (centreY < rect.top + rect.height / 2) {
 					return {
 						groupId,
 						beforeWorkspaceId: element.dataset.workspaceDndRowId ?? null,
@@ -178,6 +185,7 @@ export function useWorkspaceDnd({
 			const target = resolveDropTarget(
 				event.clientX,
 				event.clientY,
+				pending.height,
 				pending.groupId,
 				pending.workspaceId,
 			);
@@ -185,6 +193,7 @@ export function useWorkspaceDnd({
 				workspaceId: pending.workspaceId,
 				title: pending.title,
 				sourceGroupId: pending.groupId,
+				sourceRepoId: pending.sourceRepoId,
 				targetGroupId: target?.groupId ?? pending.groupId,
 				beforeWorkspaceId: target
 					? target.beforeWorkspaceId
@@ -194,6 +203,7 @@ export function useWorkspaceDnd({
 				offsetY: pending.offsetY,
 				left: pending.left,
 				width: pending.width,
+				height: pending.height,
 			};
 			dragStateRef.current = next;
 			setDragState(next);
@@ -254,11 +264,11 @@ export function useWorkspaceDnd({
 
 			const dx = event.clientX - pending.clientX;
 			const dy = event.clientY - pending.clientY;
-			if (Math.abs(dx) > MOVE_CANCEL_PX && Math.abs(dx) > Math.abs(dy)) {
+			if (Math.abs(dx) > DRAG_MOVE_CANCEL_PX && Math.abs(dx) > Math.abs(dy)) {
 				clearPendingStart();
 				return;
 			}
-			if (Math.hypot(dx, dy) >= MOVE_ACTIVATE_PX) {
+			if (Math.hypot(dx, dy) >= DRAG_MOVE_ACTIVATE_PX) {
 				event.preventDefault();
 				beginDrag(pending, event);
 			}
@@ -272,7 +282,6 @@ export function useWorkspaceDnd({
 			const active = dragStateRef.current;
 			if (active && event.pointerId === pendingStartRef.current?.pointerId) {
 				event.preventDefault();
-				let moved = false;
 				if (
 					active.targetGroupId !== active.sourceGroupId ||
 					active.beforeWorkspaceId !== active.workspaceId
@@ -282,14 +291,9 @@ export function useWorkspaceDnd({
 						active.targetGroupId,
 						active.beforeWorkspaceId,
 					);
-					moved = true;
 				}
-				if (moved) {
-					dragStateRef.current = null;
-					setDragState(null);
-				} else {
-					setDragState(null);
-				}
+				dragStateRef.current = null;
+				setDragState(null);
 			}
 			clearPendingStart();
 		};
@@ -331,7 +335,6 @@ export function useWorkspaceDnd({
 				!(
 					policy?.canDragRow(row, groupId) ?? isWorkspaceGroupDroppable(groupId)
 				) ||
-				row.pinnedAt ||
 				row.state === "archived"
 			) {
 				return;
@@ -344,11 +347,13 @@ export function useWorkspaceDnd({
 				workspaceId: row.id,
 				groupId,
 				title,
+				sourceRepoId: row.repoId ?? null,
 				clientX: event.clientX,
 				clientY: event.clientY,
 				offsetY: event.clientY - rect.top,
 				left: rect.left,
 				width: rect.width,
+				height: rect.height,
 				pointerId: event.pointerId,
 			};
 		},

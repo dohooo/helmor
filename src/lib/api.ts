@@ -98,10 +98,12 @@ export type WorkspaceRow = {
 	createdAt?: string;
 	/** ISO-8601 timestamp — last DB-recorded change to the workspace. */
 	updatedAt?: string;
-	/** Stable sidebar ordering inside a status group. */
+	/** Sparse sidebar order. Lower comes first; shared across every grouping
+	 * mode (status / repo / pinned). */
 	displayOrder?: number;
-	/** Stable sidebar ordering inside a repository group. */
-	repoDisplayOrder?: number;
+	/** Sparse order of this row's parent repo bucket. Used in repo grouping
+	 * mode to sort buckets. Mirrors `repos.display_order`. */
+	repoSidebarOrder?: number;
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
@@ -2354,25 +2356,36 @@ export async function setWorkspaceStatus(
 	return invoke<void>("set_workspace_status", { workspaceId, status });
 }
 
+/**
+ * Sidebar drag drop. `targetGroupId` matches the frontend grouping ids:
+ *   - `"pinned"`
+ *   - a status lane: `"done"` / `"review"` / `"progress"` / `"backlog"` / `"canceled"`
+ *   - a repo bucket: `"repo:<repoId>"`
+ *
+ * The backend rewrites status / pinned_at / display_order on a single row
+ * in the common case; only the gap-exhausted fallback rebalances neighbours.
+ */
 export async function moveWorkspaceInSidebar(
 	workspaceId: string,
-	targetStatus: WorkspaceStatus,
+	targetGroupId: string,
 	beforeWorkspaceId: string | null,
 ): Promise<void> {
 	return invoke<void>("move_workspace_in_sidebar", {
 		workspaceId,
-		targetStatus,
+		targetGroupId,
 		beforeWorkspaceId,
 	});
 }
 
-export async function moveWorkspaceWithinRepo(
-	workspaceId: string,
-	beforeWorkspaceId: string | null,
+/** Drag-reorder a repo bucket in the sidebar's repo grouping mode.
+ *  `beforeRepoId === null` appends to the end. */
+export async function moveRepositoryInSidebar(
+	repoId: string,
+	beforeRepoId: string | null,
 ): Promise<void> {
-	return invoke<void>("move_workspace_within_repo", {
-		workspaceId,
-		beforeWorkspaceId,
+	return invoke<void>("move_repository_in_sidebar", {
+		repoId,
+		beforeRepoId,
 	});
 }
 

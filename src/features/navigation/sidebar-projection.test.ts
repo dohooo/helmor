@@ -341,7 +341,7 @@ describe("regroupByRepo", () => {
 		expect(repoGroups[1]?.rows.map((r) => r.id)).toEqual(["ws-done-B"]);
 	});
 
-	it("sorts rows inside a repo bucket by repoDisplayOrder", () => {
+	it("sorts rows inside a repo bucket by displayOrder", () => {
 		const result = regroupByRepo([
 			{
 				id: "progress",
@@ -355,7 +355,7 @@ describe("regroupByRepo", () => {
 						status: "in-progress",
 						repoId: "repo-A",
 						repoName: "alpha",
-						repoDisplayOrder: 2000,
+						displayOrder: 2000,
 					},
 					{
 						id: "ws-early",
@@ -364,7 +364,7 @@ describe("regroupByRepo", () => {
 						status: "in-progress",
 						repoId: "repo-A",
 						repoName: "alpha",
-						repoDisplayOrder: 1000,
+						displayOrder: 1000,
 					},
 				],
 			},

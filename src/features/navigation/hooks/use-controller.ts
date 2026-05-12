@@ -11,8 +11,8 @@ import {
 	listenArchiveExecutionSucceeded,
 	loadAddRepositoryDefaults,
 	markWorkspaceUnread,
+	moveRepositoryInSidebar,
 	moveWorkspaceInSidebar,
-	moveWorkspaceWithinRepo,
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
@@ -46,18 +46,17 @@ import {
 	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import {
+	applyRepoReorder,
 	createOptimisticCreatingWorkspaceDetail,
 	describeUnknownError,
 	findInitialWorkspaceId,
 	findReplacementWorkspaceIdAfterRemoval,
 	hasWorkspaceId,
 	insertRowByCreatedAtDesc,
-	reorderWorkspaceInGroups,
-	reorderWorkspaceRepoOrderInGroups,
+	reorderWorkspaceInSidebar,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
-	workspaceStatusFromGroupId,
 } from "@/lib/workspace-helpers";
 import {
 	type PendingArchiveEntry,
@@ -739,45 +738,48 @@ export function useWorkspacesSidebarController({
 		[pushWorkspaceToast, queryClient],
 	);
 
+	const handleMoveRepositoryInSidebar = useCallback(
+		async (repoId: string, beforeRepoId: string | null) => {
+			// Optimistic: rewrite `repoSidebarOrder` on every row whose repo
+			// participates in the reorder, so `regroupByRepo` re-buckets in
+			// the new order immediately.
+			//
+			// On success we deliberately do NOT invalidate the sidebar query —
+			// the optimistic cache already mirrors the final state. A refetch
+			// here only swaps the array reference, which is what users see as
+			// a flicker right after dropping. The next natural refetch (focus
+			// / mount / another mutation) reconciles `repos.display_order` to
+			// the canonical sparse values; the relative order is identical.
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				(current: WorkspaceGroup[] | undefined) =>
+					applyRepoReorder(current, repoId, beforeRepoId),
+			);
+
+			try {
+				await moveRepositoryInSidebar(repoId, beforeRepoId);
+			} catch (error) {
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to reorder repository."),
+				);
+			}
+		},
+		[pushWorkspaceToast, queryClient],
+	);
+
 	const handleMoveWorkspaceInSidebar = useCallback(
 		async (
 			workspaceId: string,
 			targetGroupId: string,
 			beforeWorkspaceId: string | null,
 		) => {
-			if (settings.sidebarGrouping === "repo") {
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceGroups,
-					(current: WorkspaceGroup[] | undefined) =>
-						reorderWorkspaceRepoOrderInGroups(
-							current,
-							workspaceId,
-							beforeWorkspaceId,
-						),
-				);
-
-				try {
-					await moveWorkspaceWithinRepo(workspaceId, beforeWorkspaceId);
-					await invalidateWorkspaceSummary(workspaceId);
-					requestSidebarReconcile(queryClient);
-				} catch (error) {
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					});
-					pushWorkspaceToast(
-						describeUnknownError(error, "Unable to move workspace."),
-					);
-				}
-				return;
-			}
-
-			const targetStatus = workspaceStatusFromGroupId(targetGroupId);
-			if (!targetStatus) return;
-
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceGroups,
 				(current: WorkspaceGroup[] | undefined) =>
-					reorderWorkspaceInGroups(
+					reorderWorkspaceInSidebar(
 						current,
 						workspaceId,
 						targetGroupId,
@@ -788,10 +790,17 @@ export function useWorkspacesSidebarController({
 			try {
 				await moveWorkspaceInSidebar(
 					workspaceId,
-					targetStatus,
+					targetGroupId,
 					beforeWorkspaceId,
 				);
-				await invalidateWorkspaceSummary(workspaceId);
+				// Detail invalidate is fine — it only affects the inspector,
+				// not the sidebar list — but we skip the sidebar flush so the
+				// optimistic cache stays in place and the row doesn't visibly
+				// jump when the refetch returns the same relative ordering
+				// with different display_order values.
+				await invalidateWorkspaceSummary(workspaceId, {
+					skipSidebarFlush: true,
+				});
 			} catch (error) {
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
@@ -801,12 +810,7 @@ export function useWorkspacesSidebarController({
 				);
 			}
 		},
-		[
-			invalidateWorkspaceSummary,
-			pushWorkspaceToast,
-			queryClient,
-			settings.sidebarGrouping,
-		],
+		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
 	);
 
 	const handleCreateWorkspaceFromRepo = useCallback(
@@ -1718,6 +1722,7 @@ export function useWorkspacesSidebarController({
 		handleRestoreWorkspace,
 		handleSelectWorkspace,
 		handleMoveWorkspaceInSidebar,
+		handleMoveRepositoryInSidebar,
 		handleSetWorkspaceStatus,
 		handleTogglePin,
 		isCloneDialogOpen,

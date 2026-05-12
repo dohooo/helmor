@@ -893,22 +893,14 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
 
         if col == "display_order" {
             main_parts.push(col.clone());
+            // Imported rows arrive with display_order = 0; the schema migration
+            // (`seed_workspace_display_orders`) lays them out on the sparse
+            // grid on the next startup. Avoids leaking Conductor's ordering
+            // (which used a different column) into Helmor's sidebar.
             source_parts.push(if source_set.contains("display_order") {
                 "COALESCE(display_order, 0) AS display_order".to_string()
             } else {
                 "0 AS display_order".to_string()
-            });
-            continue;
-        }
-
-        if col == "repo_display_order" {
-            main_parts.push(col.clone());
-            source_parts.push(if source_set.contains("repo_display_order") {
-                "COALESCE(repo_display_order, 0) AS repo_display_order".to_string()
-            } else if source_set.contains("display_order") {
-                "COALESCE(display_order, 0) AS repo_display_order".to_string()
-            } else {
-                "0 AS repo_display_order".to_string()
             });
             continue;
         }
@@ -1249,13 +1241,12 @@ mod tests {
             .unwrap();
         conductor_conn
             .execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, display_order, repo_display_order, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, ?6, datetime('now'), datetime('now'))",
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, datetime('now'), datetime('now'))",
                 rusqlite::params![
                     "w1",
                     "r1",
                     "broken-import",
                     "missing/branch",
-                    crate::workspace::sidebar_order::ORDER_STEP,
                     crate::workspace::sidebar_order::ORDER_STEP,
                 ],
             )

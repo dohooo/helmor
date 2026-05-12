@@ -54,7 +54,9 @@ pub struct WorkspaceRecord {
     /// predates the binding feature).
     pub forge_login: Option<String>,
     pub display_order: i64,
-    pub repo_display_order: i64,
+    /// `repos.display_order` for the parent repo — drives bucket ordering
+    /// in the sidebar's repo grouping mode.
+    pub repo_sidebar_order: i64,
     pub created_at: String,
     pub updated_at: String,
     /// Most recent `last_user_message_at` across all sessions in the
@@ -166,7 +168,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.forge_provider,
       r.forge_login,
       w.display_order AS display_order,
-      w.repo_display_order AS repo_display_order,
+      COALESCE(r.display_order, 0) AS repo_sidebar_order,
       w.created_at,
       w.updated_at,
       wss.last_user_message_at,
@@ -261,7 +263,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     let transaction = connection
         .transaction()
         .context("Failed to start create-workspace transaction")?;
-    let next_status_order = transaction
+    let next_order = transaction
         .query_row(
             r#"
                 SELECT COALESCE(MAX(display_order), 0) + ?2
@@ -273,24 +275,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
             rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
             |row| row.get::<_, i64>(0),
         )
-        .context("Failed to compute next workspace status order")?;
-    let next_repo_order = transaction
-        .query_row(
-            r#"
-                SELECT COALESCE(MAX(repo_display_order), 0) + ?2
-                FROM workspaces
-                WHERE state <> ?1
-                  AND pinned_at IS NULL
-                  AND repository_id = ?3
-                "#,
-            rusqlite::params![
-                WorkspaceState::Archived,
-                sidebar_order::ORDER_STEP,
-                repository.id.as_str()
-            ],
-            |row| row.get::<_, i64>(0),
-        )
-        .context("Failed to compute next workspace repo order")?;
+        .context("Failed to compute next workspace display order")?;
 
     transaction
         .execute(
@@ -306,12 +291,11 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               intended_target_branch,
               mode,
               display_order,
-              repo_display_order,
               status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?13)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
             "#,
             (
                 workspace_id,
@@ -323,8 +307,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 default_branch,
                 mode,
-                next_status_order,
-                next_repo_order,
+                next_order,
                 status,
                 timestamp,
             ),
@@ -613,7 +596,7 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         forge_provider: row.get(31)?,
         forge_login: row.get(32)?,
         display_order: row.get(33)?,
-        repo_display_order: row.get(34)?,
+        repo_sidebar_order: row.get(34)?,
         created_at: row.get(35)?,
         updated_at: row.get(36)?,
         last_user_message_at: row.get(37)?,

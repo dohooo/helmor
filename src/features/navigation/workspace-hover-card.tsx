@@ -37,11 +37,11 @@ import {
 import { summarizeToolCall } from "@/lib/tool-summary";
 import { cn } from "@/lib/utils";
 import { WorkspaceAvatar } from "./avatar";
-import { humanizeBranch } from "./shared";
 import {
 	WORKSPACE_DND_ACTIVE_ATTRIBUTE,
 	WORKSPACE_DND_ACTIVE_CHANGE_EVENT,
-} from "./use-workspace-dnd";
+} from "./dnd/shared";
+import { humanizeBranch } from "./shared";
 
 const STATUS_LABEL: Record<NonNullable<WorkspaceRow["status"]>, string> = {
 	"in-progress": "In progress",
