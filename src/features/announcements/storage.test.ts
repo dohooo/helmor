@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
 	dismissReleaseAnnouncement,
+	isFirstHelmorBoot,
 	LAST_SEEN_INSTALL_VERSION_STORAGE_KEY,
 	readDismissedReleaseAnnouncementIds,
 	readLastSeenInstallVersion,
@@ -132,5 +133,39 @@ describe("last-seen-install-version storage", () => {
 		expect(consoleErrorSpy).toHaveBeenCalled();
 		setItemSpy.mockRestore();
 		consoleErrorSpy.mockRestore();
+	});
+});
+
+describe("isFirstHelmorBoot", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("reports true when no helmor-* keys exist", () => {
+		expect(isFirstHelmorBoot()).toBe(true);
+	});
+
+	it("reports false when helmor-theme is set (existing user)", () => {
+		window.localStorage.setItem("helmor-theme", "dark");
+		expect(isFirstHelmorBoot()).toBe(false);
+	});
+
+	it("reports false when helmor-dark-theme is set (existing user)", () => {
+		window.localStorage.setItem("helmor-dark-theme", "midnight");
+		expect(isFirstHelmorBoot()).toBe(false);
+	});
+
+	it("reports false (fail-closed) when localStorage access throws", () => {
+		// If storage is blocked, surface as 'not fresh' so the toast at
+		// least attempts to render — silently classifying as fresh would
+		// drop announcements for the very users whose state is unreadable.
+		vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+			throw new Error("blocked");
+		});
+		expect(isFirstHelmorBoot()).toBe(false);
 	});
 });

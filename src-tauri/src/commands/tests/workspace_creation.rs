@@ -1419,3 +1419,59 @@ fn cleanup_orphaned_initializing_workspaces_skips_non_initializing_states() {
         .unwrap();
     assert_eq!(still_exists, 1);
 }
+
+#[test]
+fn prepare_local_workspace_with_backlog_initial_status_lands_in_backlog() {
+    // Pins the contract that the `initial_status` parameter actually
+    // routes through to the DB. The whole reason this parameter exists
+    // is so "Save for later" on the start page can land the workspace
+    // directly in Backlog instead of momentarily flashing through
+    // In Progress before a follow-up `setWorkspaceStatus` flips it.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let response =
+        workspaces::prepare_local_workspace_impl(&harness.repo_id, None, WorkspaceStatus::Backlog)
+            .unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let status: String = connection
+        .query_row(
+            "SELECT status FROM workspaces WHERE id = ?1",
+            [&response.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "backlog");
+}
+
+#[test]
+fn prepare_workspace_from_repo_with_backlog_initial_status_lands_in_backlog() {
+    // Same contract on the worktree path. Both impls share the same
+    // DB writer (`insert_initializing_workspace_and_session_with_mode`),
+    // but pinning both surfaces guards against a future refactor that
+    // accidentally hard-codes "in-progress" on one of them.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let response = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        None,
+        WorkspaceStatus::Backlog,
+    )
+    .unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let status: String = connection
+        .query_row(
+            "SELECT status FROM workspaces WHERE id = ?1",
+            [&response.workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "backlog");
+}

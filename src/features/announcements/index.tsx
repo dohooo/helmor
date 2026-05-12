@@ -21,6 +21,7 @@ import publishedReleaseAnnouncements from "@/features/announcements/published-re
 import { RELEASE_ANNOUNCEMENT_CATALOG } from "@/features/announcements/release-announcement-catalog";
 import {
 	dismissReleaseAnnouncement,
+	isFirstHelmorBoot,
 	readDismissedReleaseAnnouncementIds,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
@@ -53,6 +54,13 @@ export function ReleaseAnnouncementToastHost({
 			published: publishedReleaseAnnouncements.items,
 			currentVersion: APP_VERSION,
 			lastSeenVersion: readLastSeenInstallVersion(),
+			// Distinguish "never used Helmor" (suppress) from "existing
+			// user picking up the announcement system for the first time"
+			// (replay backlog). Without this check, every existing user's
+			// upgrade to the launch version of this feature gets silently
+			// classified as a fresh install — meaning the very toast that
+			// introduces the announcement system is never seen by anyone.
+			isFirstHelmorBoot: isFirstHelmorBoot(),
 			dismissedIds: readDismissedReleaseAnnouncementIds(),
 		});
 		// Always advance: bootstraps first-install (so we never re-evaluate
@@ -167,9 +175,14 @@ function ReleaseAnnouncementToast({
 					 *  off the top of the screen. 50vh leaves room for header
 					 *  + footer + macOS chrome on small displays. */}
 					<ul className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pl-[6px] [scrollbar-width:thin]">
-						{announcement.items.map((item) => (
+						{announcement.items.map((item, index) => (
+							// Prefix with index so a skipped-version backlog
+							// that happens to merge two items with identical
+							// text doesn't collide. Index is stable here —
+							// the list is built once per mount and never
+							// reordered.
 							<ReleaseAnnouncementListItem
-								key={item.text}
+								key={`${index}::${item.text}`}
 								item={item}
 								onRunAction={onRunAction}
 							/>

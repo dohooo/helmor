@@ -1526,9 +1526,19 @@ export function useWorkspacesSidebarController({
 					: current,
 			);
 
-			prefetchWorkspace(workspaceId);
-			onSelectWorkspace(workspaceId);
-
+			// Defer prefetch + selection until backend restore completes.
+			// The sidebar row already moved to its target group via the
+			// optimistic cache writes above (and shows a spinner via
+			// `restoringWorkspaceId`), so the user gets immediate visual
+			// feedback. Selecting before restore_impl finishes triggers a
+			// fan-out of queries against a still-archived workspace — git
+			// status against a missing worktree, slash-command prewarm
+			// that spawns a fresh `claude-code` subprocess (~4s),
+			// per-workspace fetch, forge HTTP, avatar lookup — and that
+			// fan-out is what freezes the webview for several seconds.
+			// Waiting until the worktree exists means every downstream
+			// query sees a real workspace and resolves in a single
+			// frame's worth of work.
 			void restoreWorkspace(workspaceId, targetBranchOverride)
 				.then(async (response) => {
 					await Promise.all([
@@ -1539,6 +1549,8 @@ export function useWorkspacesSidebarController({
 							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 						}),
 					]);
+					prefetchWorkspace(workspaceId);
+					onSelectWorkspace(workspaceId);
 					if (response.branchRename) {
 						notifyBranchRename(response.branchRename);
 					}

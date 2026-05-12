@@ -16,16 +16,41 @@ const published: readonly PublishedReleaseAnnouncement[] = [
 ];
 
 describe("selectReleaseAnnouncement", () => {
-	it("returns null on first launch (lastSeenVersion is null)", () => {
+	it("returns null on a genuine first install (isFirstHelmorBoot=true)", () => {
+		// No prior version recorded AND no other Helmor trace on the
+		// device: this is a brand-new install. Don't lead with a "what's
+		// new in vX" toast for a user who has nothing old to compare
+		// against.
 		expect(
 			selectReleaseAnnouncement({
 				catalog,
 				published,
 				currentVersion: "0.20.0",
 				lastSeenVersion: null,
+				isFirstHelmorBoot: true,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();
+	});
+
+	it("replays everything on an existing user's first boot with the announcement system", () => {
+		// Existing user picking up the announcement system for the first
+		// time. The lastSeen storage key is brand-new (so it's null), but
+		// the user has used previous Helmor builds — `isFirstHelmorBoot`
+		// reports false. The selector should treat the upgrade range as
+		// (0.0.0, currentVersion] and replay every published entry,
+		// otherwise the launch toast is invisible to every existing
+		// user — the very people we want to teach.
+		const result = selectReleaseAnnouncement({
+			catalog,
+			published,
+			currentVersion: "0.20.0",
+			lastSeenVersion: null,
+			isFirstHelmorBoot: false,
+			dismissedIds: new Set(),
+		});
+		expect(result?.ids).toEqual(["a", "b"]);
+		expect(result?.items).toEqual([{ text: "A" }, { text: "B" }]);
 	});
 
 	it("returns null when the version has not changed since last boot", () => {
@@ -35,6 +60,7 @@ describe("selectReleaseAnnouncement", () => {
 				published,
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.20.0",
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();
@@ -48,6 +74,7 @@ describe("selectReleaseAnnouncement", () => {
 				published,
 				currentVersion: "0.19.0",
 				lastSeenVersion: "0.20.0",
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();
@@ -59,6 +86,7 @@ describe("selectReleaseAnnouncement", () => {
 			published,
 			currentVersion: "0.20.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(),
 		});
 		expect(result).toEqual({
@@ -74,6 +102,7 @@ describe("selectReleaseAnnouncement", () => {
 			published,
 			currentVersion: "0.20.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(["a"]),
 		});
 		expect(result?.ids).toEqual(["b"]);
@@ -87,6 +116,7 @@ describe("selectReleaseAnnouncement", () => {
 				published,
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.19.1",
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(["a", "b"]),
 			}),
 		).toBeNull();
@@ -109,6 +139,7 @@ describe("selectReleaseAnnouncement", () => {
 			published: widePublished,
 			currentVersion: "0.21.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(),
 		});
 		expect(result).toEqual({
@@ -135,6 +166,7 @@ describe("selectReleaseAnnouncement", () => {
 			published: futurePublished,
 			currentVersion: "0.20.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(),
 		});
 		expect(result?.ids).toEqual(["a"]);
@@ -157,6 +189,7 @@ describe("selectReleaseAnnouncement", () => {
 			published: orderedPublished,
 			currentVersion: "0.21.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(),
 		});
 		expect(result?.ids).toEqual(["newer", "older"]);
@@ -179,6 +212,7 @@ describe("selectReleaseAnnouncement", () => {
 			published: sameVersionPublished,
 			currentVersion: "0.21.0",
 			lastSeenVersion: "0.19.1",
+			isFirstHelmorBoot: false,
 			dismissedIds: new Set(),
 		});
 		expect(result?.ids).toEqual(["first", "second"]);
@@ -191,6 +225,7 @@ describe("selectReleaseAnnouncement", () => {
 				published,
 				currentVersion: "0.21.0",
 				lastSeenVersion: "0.20.0", // (0.20.0, 0.21.0] — nothing published here
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();
@@ -205,6 +240,7 @@ describe("selectReleaseAnnouncement", () => {
 				published,
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.19.1",
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();
@@ -217,6 +253,7 @@ describe("selectReleaseAnnouncement", () => {
 				published: [],
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.19.1",
+				isFirstHelmorBoot: false,
 				dismissedIds: new Set(),
 			}),
 		).toBeNull();

@@ -160,18 +160,29 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		...readStoredSectionOpenState(sidebarGrouping),
 	}));
 
-	// Re-hydrate open state from the per-grouping localStorage key when the
-	// user toggles between status/repo modes — each mode keeps its own
-	// expand/collapse memory so switching back doesn't lose state.
+	// Each grouping mode (status / repo) keeps its own expand-collapse
+	// memory under a distinct localStorage key. Switching modes
+	// re-hydrates from the new key; subsequent edits flow back to that
+	// key. The rehydrate + write are intentionally in the SAME effect
+	// (`return` after rehydrate, write on the fallthrough branch) so
+	// they can't race: on the render that bumps `sidebarGrouping`, the
+	// effect rehydrates and bails out — the next render then runs the
+	// write branch with the freshly-loaded state. Splitting these into
+	// two effects briefly persists the previous mode's state under the
+	// new key, and any hot-reload / crash inside that window corrupts
+	// the persisted blob.
 	const previousGroupingRef = useRef(sidebarGrouping);
 	useEffect(() => {
-		if (previousGroupingRef.current === sidebarGrouping) return;
-		previousGroupingRef.current = sidebarGrouping;
-		setSectionOpenState({
-			...createInitialSectionOpenState(groups),
-			...readStoredSectionOpenState(sidebarGrouping),
-		});
-	}, [groups, sidebarGrouping]);
+		if (previousGroupingRef.current !== sidebarGrouping) {
+			previousGroupingRef.current = sidebarGrouping;
+			setSectionOpenState({
+				...createInitialSectionOpenState(groups),
+				...readStoredSectionOpenState(sidebarGrouping),
+			});
+			return;
+		}
+		writeStoredSectionOpenState(sidebarGrouping, sectionOpenState);
+	}, [groups, sidebarGrouping, sectionOpenState]);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -199,10 +210,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return changed ? next : current;
 		});
 	}, [archivedRows, groups]);
-
-	useEffect(() => {
-		writeStoredSectionOpenState(sidebarGrouping, sectionOpenState);
-	}, [sidebarGrouping, sectionOpenState]);
 
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
@@ -555,7 +562,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
-						hideRepoAvatar={sidebarGrouping === "repo" && !item.isArchived}
+						// Only suppress the per-row repo avatar inside a real
+						// repo bucket — the group header there already shows
+						// the same icon, so a per-row repeat is pure noise.
+						// Pinned / Backlog / Archived rows (and the catch-all
+						// "Unknown repo" bucket) keep their avatar because
+						// without it you can't tell which repo a row came
+						// from at a glance.
+						hideRepoAvatar={repoIdFromGroupId(item.groupId) !== null}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}

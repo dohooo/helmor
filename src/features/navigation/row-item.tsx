@@ -26,6 +26,7 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HyperText } from "@/components/ui/hyper-text";
+import { ShineBorder } from "@/components/ui/shine-border";
 import {
 	Tooltip,
 	TooltipContent,
@@ -70,11 +71,12 @@ export type WorkspaceRowItemProps = {
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
 	/** Drop the per-row repo avatar — used when the surrounding group header
-	 *  already shows it (i.e. repo grouping), where rendering it again on
-	 *  every row is just visual noise. The branch icon takes over the leading
-	 *  slot. NOTE: the avatar also hosts the unread/interaction-required
-	 *  status dot and the run-script ShineBorder; both disappear in this
-	 *  mode. */
+	 *  already shows it (i.e. rows inside a real repo bucket in repo
+	 *  grouping mode), where rendering it again on every row is pure
+	 *  noise. The branch icon takes over the leading slot AND becomes
+	 *  the carrier for the unread / interaction-required status dot and
+	 *  the run-script ShineBorder, so those affordances aren't lost when
+	 *  the avatar is hidden. */
 	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
@@ -248,7 +250,7 @@ export const WorkspaceRowItem = memo(
 				)}
 			>
 				{(() => {
-					const branchSlot =
+					const branchIcon =
 						isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
 						) : row.mode === "local" ? (
@@ -268,6 +270,40 @@ export const WorkspaceRowItem = memo(
 								strokeWidth={1.9}
 							/>
 						);
+					// When the repo avatar is suppressed (rows inside a repo
+					// bucket), the branch icon takes over as the carrier for
+					// unread / interaction-required / running indicators —
+					// otherwise those signals would silently vanish in repo
+					// grouping mode.
+					const branchSlot = hideRepoAvatar ? (
+						<span className="relative inline-flex shrink-0">
+							{branchIcon}
+							{showStatusDot ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"pointer-events-none absolute -top-1 -right-1 size-1.5 rounded-full ring-2 ring-sidebar",
+										statusDotClassName,
+									)}
+								/>
+							) : null}
+							{isRunScriptRunning ? (
+								<ShineBorder
+									borderWidth={1}
+									duration={6}
+									shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
+									style={{
+										inset: "-2px",
+										width: "calc(100% + 4px)",
+										height: "calc(100% + 4px)",
+										borderRadius: "6px",
+									}}
+								/>
+							) : null}
+						</span>
+					) : (
+						branchIcon
+					);
 					const titleSlot = (
 						<span
 							className={cn(

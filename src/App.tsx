@@ -26,6 +26,7 @@ import {
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
+import { regroupByRepo } from "@/features/navigation/sidebar-projection";
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
@@ -349,7 +350,20 @@ function AppShell({
 	} = useSettings();
 	const navigationGroupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const navigationArchivedQuery = useQuery(archivedWorkspacesQueryOptions());
-	const workspaceGroups = navigationGroupsQuery.data ?? [];
+	const baseWorkspaceGroups = navigationGroupsQuery.data ?? [];
+	// Project the raw status-grouped query result through the same
+	// repo-bucketing step the sidebar applies for rendering, so callers
+	// downstream (selection controller's keyboard navigation, workspace
+	// warmup) see groups in the order the user actually sees them on
+	// screen. Without this, repo grouping mode keeps the raw status
+	// buckets and up/down keys jump in seemingly random order.
+	const workspaceGroups = useMemo(
+		() =>
+			appSettings.sidebarGrouping === "repo"
+				? regroupByRepo(baseWorkspaceGroups)
+				: baseWorkspaceGroups,
+		[appSettings.sidebarGrouping, baseWorkspaceGroups],
+	);
 	const archivedRows = useMemo(
 		() => (navigationArchivedQuery.data ?? []).map(summaryToArchivedRow),
 		[navigationArchivedQuery.data],

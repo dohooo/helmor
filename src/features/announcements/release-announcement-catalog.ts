@@ -3,75 +3,51 @@ import type { ReleaseAnnouncementCatalogEntry } from "./announcements";
 /**
  * Release Announcement Catalog
  * ----------------------------
- * Each entry below becomes a one-time toast on app launch when the
- * release that ships this entry's `id` matches the user's current
- * version. You write content here; the release pipeline writes the
- * version number for you.
+ * Add an entry here when a release deserves an in-app toast (a new
+ * user-visible feature). Bug fixes and perf work belong in changesets
+ * only.
  *
- * WHEN TO ADD AN ENTRY
- *   Only when a release deserves an in-app toast (a new user-visible
- *   feature with a CTA). Bug fixes, refactors, and perf changes
- *   belong in changesets only.
+ * Conventions:
+ *   - `id` is the ship timestamp as `yyyy-mm-dd-hhmm` (24h, author's
+ *     local time). The minute slot keeps ids unique when multiple
+ *     releases ship on the same day. It's just a stable key — the
+ *     runtime doesn't parse it, only matches it.
+ *   - Don't write the version anywhere here. `release:stamp` binds the
+ *     id to the bumped version when `release:version` runs in CI.
+ *   - NEVER rename an `id` after release — that orphans every user's
+ *     dismissal record. In-place edits to `items` are fine.
  *
- * HOW TO ADD AN ENTRY
- *   1. Append a new object to `RELEASE_ANNOUNCEMENT_CATALOG` below.
- *   2. Pick a stable, unique `id` (kebab-case, no version prefix).
- *   3. Write a changeset as usual (`bun run changeset`).
- *   4. On the next `bun run release:version`, the stamping script
- *      auto-binds your id to the bumped version inside
- *      `published-release-announcements.json`. Do NOT write a
- *      version anywhere in this file.
- *
- * STABILITY RULES
- *   - Once an id has been stamped, NEVER rename it. Renaming detaches
- *     the toast from its dismissal record and orphans the JSON entry.
- *   - Editing `items` (text/action) on an already-stamped id is fine;
- *     the runtime joins by id, not by content snapshot.
- *   - Deleting an entry is fine: the toast simply stops surfacing on
- *     fresh launches. Users who already saw it are unaffected.
- *
- * SKIPPED-VERSION BEHAVIOR
- *   If a user jumps several versions (e.g. 0.19.1 → 0.21.0), the runtime
- *   merges every entry in the half-open range (lastSeen, current] into a
- *   single toast — they see what they missed, newest version first
- *   (older content scrolls below). Dismissing the toast dismisses every
- *   id rolled into it.
+ * Users who skip versions see one merged toast covering the half-open
+ * range `(lastSeen, current]`, newest release on top.
  */
 export const RELEASE_ANNOUNCEMENT_CATALOG: readonly ReleaseAnnouncementCatalogEntry[] =
 	[
-		// One entry per release. The runtime only surfaces one toast per
-		// upgraded version (it picks the first matching `published` entry),
-		// so bundle a release's user-visible highlights as items here rather
-		// than splitting into multiple entries that would silently get
-		// dropped. The id intentionally omits a version number — the stamp
-		// script will bind it to whatever the next `release:version` run
-		// produces.
 		{
-			id: "release-announcements-launch",
+			id: "2026-05-11-2300",
 			items: [
 				{
-					text: "Group workspaces in the sidebar by repository instead of status — handy when you juggle many repos.",
+					text: "You can now group workspaces in the sidebar by repository — toggle it in Settings.",
 					action: {
 						label: "Open General",
 						value: { type: "openSettings", section: "general" },
 					},
 				},
 				{
-					text: "Add Context now lists GitLab issues and merge requests when the current project lives on GitLab.",
+					text: "Add Context now supports GitLab too — auto-detected based on your current project.",
 					action: {
 						label: "Open Context",
 						value: { type: "setRightSidebarMode", mode: "context" },
 					},
 				},
 				{
-					text: "Pick how Claude returns thinking under General → Claude Code Thinking Display. Choosing Omitted lets the final text stream sooner.",
+					text: "Claude Code thinking now offers two modes. Choosing Omitted lets the final text stream sooner.",
 					action: {
 						label: "Open General",
 						value: { type: "openSettings", section: "general" },
 					},
 				},
 				{
-					text: "Inbox: 'Newest' now actually sorts by creation date, and pagination no longer silently drops items.",
+					text: "Plus a batch of performance fixes across the app.",
 				},
 			],
 		},

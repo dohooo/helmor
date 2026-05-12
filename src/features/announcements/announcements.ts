@@ -87,14 +87,41 @@ export function selectReleaseAnnouncement(args: {
 	published: readonly PublishedReleaseAnnouncement[];
 	currentVersion: string;
 	lastSeenVersion: string | null;
+	/**
+	 * Whether this device has never run Helmor before. The caller decides
+	 * what counts as "fresh" — usually "no other `helmor-*` localStorage
+	 * key exists either".
+	 *
+	 * Disambiguates two `lastSeenVersion === null` cases that look
+	 * identical in storage:
+	 *   - true  → genuinely fresh install; the catalog is irrelevant
+	 *             history, suppress the toast.
+	 *   - false → existing user picking up the announcement system for
+	 *             the first time (the storage key itself is new), so
+	 *             replay the full catalog backlog into one toast.
+	 */
+	isFirstHelmorBoot: boolean;
 	dismissedIds: ReadonlySet<string>;
 }): ReleaseAnnouncement | null {
-	const { catalog, published, currentVersion, lastSeenVersion, dismissedIds } =
-		args;
+	const {
+		catalog,
+		published,
+		currentVersion,
+		isFirstHelmorBoot,
+		dismissedIds,
+	} = args;
+	let { lastSeenVersion } = args;
 
-	// First launch ever — no prior version recorded, so this is a fresh
-	// install rather than an upgrade. Don't show anything.
-	if (lastSeenVersion === null) return null;
+	if (lastSeenVersion === null) {
+		// Genuinely first time Helmor is opened — the catalog has nothing
+		// to teach a user who hasn't even used the previous version.
+		if (isFirstHelmorBoot) return null;
+		// Existing user, but this is the first build that ships the
+		// announcement system, so `helmor:last-seen-install-version` was
+		// never written before. Pretend they were on a very old version
+		// and replay every published entry up to `currentVersion`.
+		lastSeenVersion = "0.0.0";
+	}
 
 	// Already at (or past) the current version — nothing new to surface.
 	if (compareSemver(lastSeenVersion, currentVersion) >= 0) return null;
