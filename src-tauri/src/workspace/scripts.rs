@@ -127,6 +127,32 @@ impl ScriptProcessManager {
         count
     }
 
+    /// Signal every live script and terminal handle the manager currently
+    /// owns. Used by the graceful-quit path so Run-tab scripts and
+    /// embedded-terminal PTY sessions don't outlive Helmor as orphan
+    /// process trees. Returns the number of handles that were signaled.
+    ///
+    /// Mirrors `kill_others_in_repo`'s lock discipline: snapshot the
+    /// handles under the map lock, drop the lock, then call
+    /// `escalating_kill` for each. Holding the lock across the signal
+    /// would block `run_script`'s post-wait `unregister` (which takes
+    /// the same lock) and deadlock the quit path.
+    ///
+    /// Does **not** reap — each `run_script` thread still owns its own
+    /// `child.wait()`.
+    pub fn kill_all(&self) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.values().cloned().collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
     /// Signal the process group (and leader as a fallback) with SIGTERM,
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
@@ -813,6 +839,108 @@ mod tests {
     fn kill_others_in_repo_with_no_matches_is_noop() {
         let mgr = ScriptProcessManager::new();
         assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
+    }
+
+    // ── kill_all (graceful-quit path) ──────────────────────────────────────
+
+    #[test]
+    fn kill_all_signals_every_registered_handle_across_repos_and_script_types() {
+        let mgr = ScriptProcessManager::new();
+        // Mixed registry: two scripts in one repo, one terminal in
+        // another, and a forge-auth-style no-workspace entry. kill_all
+        // must hit every single one.
+        let a_run: ProcessKey = ("A".into(), "run".into(), Some("ws-1".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-1".into()));
+        let b_terminal: ProcessKey = ("B".into(), "terminal:abc".into(), Some("ws-other".into()));
+        let auth: ProcessKey = ("__auth__".into(), "agent-login:claude".into(), None);
+
+        let (mut c1, _, _, k1) = spawn_and_register(&mgr, a_run.clone());
+        let (mut c2, _, _, k2) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut c3, _, _, k3) = spawn_and_register(&mgr, b_terminal.clone());
+        let (mut c4, _, _, k4) = spawn_and_register(&mgr, auth.clone());
+
+        let signaled = mgr.kill_all();
+        assert_eq!(signaled, 4);
+
+        // Reap each child to release pid resources, then prove the
+        // killed flag was flipped on every handle.
+        let _ = c1.wait();
+        let _ = c2.wait();
+        let _ = c3.wait();
+        let _ = c4.wait();
+        assert!(k1.load(Ordering::Acquire));
+        assert!(k2.load(Ordering::Acquire));
+        assert!(k3.load(Ordering::Acquire));
+        assert!(k4.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn kill_all_with_empty_manager_is_zero() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_all(), 0);
+    }
+
+    /// Regression: `kill_all` must drop the process-map lock BEFORE
+    /// signaling, otherwise the `run_script` thread's post-wait
+    /// `unregister` — which takes the same lock — would deadlock the
+    /// quit path. We exercise the exact ordering by spawning a real
+    /// `run_script` that exits the moment it's signaled (so its reaper
+    /// thread calls `unregister` while `kill_all` is still iterating
+    /// over its victim list). The test would hang the suite if the
+    /// lock were held; finishing under the timeout proves the
+    /// invariant.
+    #[test]
+    fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let mgr = std::sync::Arc::new(ScriptProcessManager::new());
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+        };
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let runner = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                Some("sleep 60"),
+                &tempdir,
+                &ctx,
+                make_channel(),
+                "/bin/sh",
+                &[],
+                None,
+            )
+        });
+
+        // Wait for run_script to register before we issue kill_all.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(&key) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "run_script never registered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert_eq!(mgr.kill_all(), 1);
+        // run_script's reaper must have unregistered + returned. If
+        // kill_all held the map lock past the signal, the unregister
+        // would have blocked and this join would hang.
+        let _ = runner.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "kill_all + reap took too long: {:?}",
+            start.elapsed()
+        );
+        assert!(mgr.processes.lock().unwrap().is_empty());
     }
 
     // ── escalating_kill kills the process group ────────────────────────────

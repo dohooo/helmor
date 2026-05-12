@@ -1158,7 +1158,22 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         );
     }
 
-    // 3. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
+    // 3. Signal every Run-tab script and embedded-terminal PTY so dev
+    //    servers, watch processes, and shell sessions don't outlive
+    //    Helmor as orphan process trees. Unconditional (not gated on
+    //    `force`) — even a normal quit needs to clean up the processes
+    //    Helmor itself spawned. Each handle's owning `run_script` thread
+    //    reaps its own `Child`, so we just need to deliver the signal.
+    let scripts = app.state::<ScriptProcessManager>();
+    let signaled = scripts.kill_all();
+    if signaled > 0 {
+        tracing::info!(
+            signaled,
+            "request_quit: signaled live script/terminal handles"
+        );
+    }
+
+    // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     let (cooperative, escalation) = if force {
         (
@@ -1173,7 +1188,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     };
     sidecar.shutdown(cooperative, escalation);
 
-    // 4. Done — terminate the process.
+    // 5. Done — terminate the process.
     app.exit(0);
 }
 
