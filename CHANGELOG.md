@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.1
+
+### Patch Changes
+
+- [#516](https://github.com/dohooo/helmor/pull/516) [`59cbe19`](https://github.com/dohooo/helmor/commit/59cbe19516f895f85b6aa7902b26dd18593b8553) Thanks [@natllian](https://github.com/natllian)! - Hide internal agent skill context from the chat transcript so `SKILL.md` content no longer appears as a user message.
+
+- [#444](https://github.com/dohooo/helmor/pull/444) [`f63599e`](https://github.com/dohooo/helmor/commit/f63599ec1cd077055fd92ba47d363fabf8f75257) Thanks [@aidxun](https://github.com/aidxun)! - Add drag-and-drop reordering for sidebar workspaces so users can move active workspaces between status sections and keep a custom order.
+
 ## 0.21.0
 
 ### Minor Changes
