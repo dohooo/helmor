@@ -183,46 +183,57 @@ pub fn send_message(
     // and streams through its shared sidecar so the frontend sees live
     // updates. The CLI prints a short confirmation instead of streaming.
     if is_app_running() {
-        // Persist user message so the app's conversation container
-        // shows the optimistic user bubble right away.
-        let conn = crate::models::db::write_conn()?;
-        let timestamp = crate::models::db::current_timestamp()?;
+        // All three writes (optimistic user message + session metadata
+        // + pending CLI send row) are bundled in a single transaction
+        // so they commit atomically — a previous version of this code
+        // borrowed the writer three times serially, which both risked
+        // a partial half-applied state on failure AND nested a second
+        // `write_conn()` inside `insert_pending_cli_send()`, dead-
+        // locking the single-writer pool for the full 30 s timeout
+        // window. The transaction holds the writer exactly once for
+        // the entire critical section.
         let user_msg_id = Uuid::new_v4().to_string();
         let user_content = serde_json::json!({
             "type": "user_prompt",
             "text": params.prompt,
         })
         .to_string();
-        conn.execute(
-            r#"INSERT INTO session_messages
-               (id, session_id, role, content, created_at, sent_at)
-               VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
-            params![user_msg_id, session_id, user_content, timestamp],
-        )?;
+        crate::models::db::write_transaction(|tx| {
+            let timestamp = crate::models::db::current_timestamp()?;
+            tx.execute(
+                r#"INSERT INTO session_messages
+                   (id, session_id, role, content, created_at, sent_at)
+                   VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
+                params![user_msg_id, session_id, user_content, timestamp],
+            )?;
 
-        // Pin the resolved model + (optional) permission_mode onto the
-        // session row before queuing. The App composer reads these off
-        // `currentSession` when it auto-submits the drained prompt — so
-        // without this the row still has model=NULL and the composer
-        // falls back to settings.defaultModelId, ignoring the CLI's
-        // --model / --plan override.
-        conn.execute(
-            "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
-            params![
-                session_id,
-                model_id,
+            // Pin the resolved model + (optional) permission_mode onto
+            // the session row before queuing. The App composer reads
+            // these off `currentSession` when it auto-submits the
+            // drained prompt — so without this the row still has
+            // model=NULL and the composer falls back to
+            // settings.defaultModelId, ignoring the CLI's
+            // --model / --plan override.
+            tx.execute(
+                "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
+                params![
+                    session_id,
+                    model_id,
+                    params.permission_mode.as_deref(),
+                    timestamp,
+                ],
+            )?;
+
+            insert_pending_cli_send(
+                tx,
+                &workspace_id,
+                &session_id,
+                &params.prompt,
+                Some(&model_id),
                 params.permission_mode.as_deref(),
-                timestamp,
-            ],
-        )?;
-
-        insert_pending_cli_send(
-            &workspace_id,
-            &session_id,
-            &params.prompt,
-            Some(&model_id),
-            params.permission_mode.as_deref(),
-        )?;
+            )?;
+            Ok(())
+        })?;
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
@@ -557,14 +568,19 @@ pub struct PendingCliSend {
 }
 
 /// Insert a pending send so the App's frontend can pick it up on focus.
+///
+/// Takes `&Connection` rather than borrowing the write pool itself so
+/// callers already holding a writer (e.g. `send_message`'s delegation
+/// transaction) don't trip the pool's reentrancy guard. Passing
+/// `&Transaction` works too via deref.
 pub fn insert_pending_cli_send(
+    conn: &rusqlite::Connection,
     workspace_id: &str,
     session_id: &str,
     prompt: &str,
     model_id: Option<&str>,
     permission_mode: Option<&str>,
 ) -> Result<String> {
-    let conn = crate::models::db::write_conn()?;
     let id = Uuid::new_v4().to_string();
     conn.execute(
         r#"INSERT INTO pending_cli_sends (id, workspace_id, session_id, prompt, model_id, permission_mode)
@@ -672,7 +688,9 @@ mod tests {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("insert-drain");
 
+        let conn = crate::models::db::write_conn().unwrap();
         let id = insert_pending_cli_send(
+            &conn,
             "ws-1",
             "sess-1",
             "fix the bug",
@@ -680,6 +698,9 @@ mod tests {
             Some("default"),
         )
         .unwrap();
+        // Drop the writer before draining: drain_pending_cli_sends
+        // borrows it itself.
+        drop(conn);
         assert!(!id.is_empty());
 
         let sends = drain_pending_cli_sends().unwrap();
@@ -700,10 +721,16 @@ mod tests {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("drain-order");
 
-        insert_pending_cli_send("ws-1", "sess-a", "first", None, None).unwrap();
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            insert_pending_cli_send(&conn, "ws-1", "sess-a", "first", None, None).unwrap();
+        }
         // Ensure different created_at by sleeping briefly
         std::thread::sleep(std::time::Duration::from_millis(50));
-        insert_pending_cli_send("ws-1", "sess-b", "second", None, None).unwrap();
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            insert_pending_cli_send(&conn, "ws-1", "sess-b", "second", None, None).unwrap();
+        }
 
         let sends = drain_pending_cli_sends().unwrap();
         assert_eq!(sends.len(), 2);
@@ -716,7 +743,10 @@ mod tests {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("null-fields");
 
-        insert_pending_cli_send("ws-1", "sess-1", "hello", None, None).unwrap();
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            insert_pending_cli_send(&conn, "ws-1", "sess-1", "hello", None, None).unwrap();
+        }
 
         let sends = drain_pending_cli_sends().unwrap();
         assert_eq!(sends.len(), 1);
