@@ -2458,26 +2458,38 @@ export async function createOpenAiRealtimeClientSecret(): Promise<OpenAiRealtime
 	);
 }
 
-/** Envelope returned by `helmor` CLI invocations made on behalf of the
- *  voice agent. Mirrors `commands::voice_commands::HelmorCliResult` on
- *  the Rust side. `ok=false` covers both non-zero exits and wrapper
- *  errors (spawn / timeout); inspect `error` vs `exitCode` to tell which. */
-export type HelmorCliResult = {
+/** Coarse-grained cache invalidation hint emitted by an in-process voice
+ *  tool call. Mirrors the Rust `MutationKind` enum
+ *  (`commands::voice_agent::MutationKind`) — variants are intentionally
+ *  the same camelCase strings on both sides. */
+export type VoiceToolMutationKind = "workspaces" | "sessions";
+
+/** Envelope returned by an in-process voice tool invocation. Mirrors
+ *  `commands::voice_agent::VoiceToolEnvelope` on the Rust side.
+ *
+ *  Handler errors are returned as `ok: false` with `error` populated
+ *  rather than as IPC failures, so a single bad tool call can't abort
+ *  the whole Realtime turn — the model still gets the failure in its
+ *  `function_call_output` and can phrase it for the user. */
+export type VoiceToolEnvelope = {
 	ok: boolean;
-	exitCode: number | null;
-	stdout: string;
-	stderr: string;
+	data: unknown;
 	error: string | null;
+	invalidates: VoiceToolMutationKind[];
+	navigateToWorkspaceId: string | null;
 };
 
-/** Shell out to the `helmor` CLI from the voice-mode agent's tool
- *  dispatcher. Synchronous: waits for the child to exit (or the 30 s
- *  wrapper-side timeout) and returns the full stdout/stderr. Errors —
- *  spawn failures, non-zero exits, timeouts — flow through `ok=false`
- *  + `error`/`stderr`, so the voice agent can report them to the user
- *  instead of silently lying about success. */
-export async function runHelmorCli(args: string[]): Promise<HelmorCliResult> {
-	return await invoke<HelmorCliResult>("run_helmor_cli", { args });
+/** Run one voice-agent tool in-process inside the Tauri host. The Rust
+ *  side dispatches `tool` to its matching handler (which calls the same
+ *  internal `service::*` / `workspace::*` / `models::*` function the
+ *  CLI would have used) and returns a typed envelope. No subprocess,
+ *  no separate SQLite write pool — see `commands::voice_agent` for the
+ *  rationale. */
+export async function runVoiceTool(
+	tool: string,
+	args: Record<string, unknown>,
+): Promise<VoiceToolEnvelope> {
+	return await invoke<VoiceToolEnvelope>("run_voice_tool", { tool, args });
 }
 
 export async function stopAgentStream(

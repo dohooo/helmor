@@ -1,12 +1,18 @@
-import { type HelmorCliResult, runHelmorCli } from "@/lib/api";
+import {
+	runVoiceTool,
+	type VoiceToolEnvelope,
+	type VoiceToolMutationKind,
+} from "@/lib/api";
 import type {
 	RealtimeClientEvent,
 	RealtimeServerEvent,
 } from "./realtime-session";
 
 /** Names of every typed tool we declare to `gpt-realtime-2`. Keep in
- *  sync with the `tools` array in `commands::voice_tools` on the Rust
- *  side. */
+ *  sync with the `ToolKind` enum in
+ *  `src-tauri/src/commands/voice_agent.rs::ToolKind` — the
+ *  `tool_name_set_matches_frontend_contract` Rust test will flag any
+ *  drift between the two lists at build time. */
 type ToolName =
 	| "list_workspaces"
 	| "show_workspace"
@@ -18,111 +24,9 @@ type ToolName =
 	| "select_workspace"
 	| "wait_for_user";
 
-/** Coarse-grained kinds of state the voice agent can mutate. The
- *  dispatcher emits these so the host can invalidate the matching
- *  React Query caches — without that wiring, the running GUI never
- *  notices that an external CLI process changed the database, and
- *  newly-created workspaces stay invisible until the app restarts. */
-export type AgentMutationKind = "workspaces" | "sessions" | "repos";
-
-/** How each declared tool maps to an actual `helmor` CLI invocation.
- *  `toArgs` translates the model-supplied argument JSON into argv;
- *  `invalidates` lists which caches to refresh after a successful run. */
-type ToolSpec = {
-	toArgs: (args: Record<string, unknown>) => string[];
-	invalidates?: AgentMutationKind[];
-};
-
-/** Tool name → CLI invocation recipe. The descriptions registered with
- *  the model live in `settings_commands.rs`; argument names must match
- *  the JSON Schemas declared there. */
-const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
-	list_workspaces: {
-		toArgs: (a) => {
-			const out = ["workspace", "list", "--json"];
-			if (typeof a.status === "string") out.push("--status", a.status);
-			if (typeof a.repo === "string") out.push("--repo", a.repo);
-			if (a.archived === true) out.push("--archived");
-			return out;
-		},
-	},
-	show_workspace: {
-		toArgs: (a) => ["workspace", "show", String(a.ref ?? ""), "--json"],
-	},
-	create_workspace: {
-		toArgs: (a) => [
-			"workspace",
-			"new",
-			"--repo",
-			String(a.repo ?? ""),
-			"--json",
-		],
-		invalidates: ["workspaces"],
-	},
-	set_workspace_status: {
-		// `set-status` is a clap subcommand whose actions are further
-		// nested (`Set`, `Clear`) — see `cli/args.rs::WorkspaceStatusAction`.
-		// The missing `"set"` literal here used to cause every call to
-		// exit non-zero; combined with the now-deleted detach mode (which
-		// reported `ok: true` regardless), this was silent for months.
-		toArgs: (a) => [
-			"workspace",
-			"set-status",
-			"set",
-			String(a.status ?? ""),
-			String(a.ref ?? ""),
-			"--json",
-		],
-		invalidates: ["workspaces"],
-	},
-	list_sessions: {
-		toArgs: (a) => [
-			"session",
-			"list",
-			"--workspace",
-			String(a.workspace ?? ""),
-			"--json",
-		],
-	},
-	send_prompt: {
-		toArgs: (a) => {
-			const out = ["send", "--workspace", String(a.workspace ?? "")];
-			if (typeof a.session === "string" && a.session) {
-				out.push("--session", a.session);
-			}
-			if (a.plan_mode === true) out.push("--plan");
-			out.push("--json");
-			out.push(String(a.prompt ?? ""));
-			return out;
-		},
-		// `helmor send` may create a new session item in the workspace
-		// (and updates last-message timestamps). Invalidate both lists
-		// so the GUI sees the freshly-spawned session.
-		invalidates: ["sessions", "workspaces"],
-	},
-	list_repos: {
-		toArgs: () => ["repo", "list", "--json"],
-	},
-	select_workspace: {
-		// UI-only side effect: dispatcher uses `workspace show` to
-		// resolve the ref → UUID, then routes through
-		// `onNavigateToWorkspace`. We still shell `show --json` because
-		// it validates the ref exists before we navigate (a slug for a
-		// just-deleted workspace would otherwise leave the UI on a
-		// dangling row).
-		toArgs: (a) => ["workspace", "show", String(a.ref ?? ""), "--json"],
-	},
-	wait_for_user: {
-		// No-op tool. Model calls it to deliberately produce no audio
-		// when the latest input was silence / background noise. The
-		// dispatcher resolves it without shelling out.
-		toArgs: () => [],
-	},
-};
-
-function isKnownTool(name: string): name is ToolName {
-	return name in TOOL_REGISTRY;
-}
+/** Re-export of the Rust-side mutation kind enum. Kept as a TS type
+ *  alias rather than its own union so they can't drift independently. */
+export type AgentMutationKind = VoiceToolMutationKind;
 
 /** Tracked per call_id as deltas stream in. */
 type PendingCall = {
@@ -134,10 +38,10 @@ type PendingCall = {
 type DispatcherOptions = {
 	/** Forward client events back to the model over the data channel. */
 	send: (event: RealtimeClientEvent) => void;
-	/** Called after a successful write tool returns, with the kinds of
-	 *  state that changed. The host should map these to React Query
-	 *  invalidations so the GUI picks up the external DB mutation
-	 *  (`helmor` CLI writes to the same SQLite the desktop app reads). */
+	/** Called once per turn (after all parallel tools resolved) with the
+	 *  union of cache-mutation kinds the tools emitted. The host should
+	 *  map these to React Query invalidations so the GUI picks up the
+	 *  effects of in-process tool runs. */
 	onMutation?: (kinds: AgentMutationKind[]) => void;
 	/** Drive UI workspace selection on behalf of the voice agent.
 	 *  Called with a resolved workspace UUID after:
@@ -146,9 +50,8 @@ type DispatcherOptions = {
 	 *  - `send_prompt` finishes (auto-follow to the target workspace
 	 *    so the user sees the agent's reply stream in real time)
 	 *
-	 *  The dispatcher guarantees the id is non-empty and the CLI call
-	 *  it was derived from reported success — the host doesn't need
-	 *  defensive checks on its side. */
+	 *  The Rust handler guarantees the id is non-empty and the tool
+	 *  reported success — the host doesn't need defensive checks. */
 	onNavigateToWorkspace?: (workspaceId: string) => void;
 };
 
@@ -161,10 +64,10 @@ export type ToolDispatcher = {
 	reset: () => void;
 };
 
-/** Build a dispatcher tied to a live Realtime session. The dispatcher
- *  watches the event stream for function-call deltas, runs the
- *  corresponding `helmor` CLI invocations on `response.done`, and posts
- *  `function_call_output` items + a fresh `response.create` back. */
+/** Build a dispatcher tied to a live Realtime session. Watches the
+ *  event stream for function-call deltas, runs the corresponding
+ *  in-process Tauri command (`run_voice_tool`) on `response.done`, and
+ *  posts `function_call_output` items + a fresh `response.create` back. */
 export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 	const pendingByCallId = new Map<string, PendingCall>();
 	const callsByResponseId = new Map<string, string[]>();
@@ -305,9 +208,7 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 	if (opts.onMutation) {
 		const kinds = new Set<AgentMutationKind>();
 		for (const r of results) {
-			if (r.invalidates) {
-				for (const kind of r.invalidates) kinds.add(kind);
-			}
+			for (const kind of r.invalidates) kinds.add(kind);
 		}
 		if (kinds.size > 0) opts.onMutation(Array.from(kinds));
 	}
@@ -330,136 +231,62 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 type RunCallResult = {
 	callId: string;
 	output: string;
-	invalidates?: AgentMutationKind[];
+	invalidates: AgentMutationKind[];
 	navigateToWorkspaceId?: string;
 };
 
-/** Run one tool call, return the JSON envelope the model will see plus
- *  any cache-invalidation hints and UI-navigation intent. */
+/** Empty-success result for `wait_for_user` and front-end short-circuits. */
+function silentResult(callId: string): RunCallResult {
+	return {
+		callId,
+		output: JSON.stringify({ ok: true }),
+		invalidates: [],
+	};
+}
+
+/** Run one tool call by invoking the in-process Tauri command. Errors
+ *  are wrapped in an envelope and forwarded to the model rather than
+ *  thrown — a single bad tool shouldn't abort the whole turn. */
 async function runCall(call: PendingCall): Promise<RunCallResult> {
-	const args = parseArgs(call.argsBuffer);
-	if (!isKnownTool(call.name)) {
-		return {
-			callId: call.callId,
-			output: JSON.stringify({
-				ok: false,
-				error: `unknown tool '${call.name}'`,
-			}),
-		};
-	}
-
 	// wait_for_user is intentionally a no-op: it tells the model not
-	// to speak, and there's nothing to actually run.
+	// to speak, and there's nothing to actually run. Short-circuit on
+	// the client side to avoid a round-trip for the most-frequent
+	// "agent has nothing to say" case.
 	if (call.name === "wait_for_user") {
-		return { callId: call.callId, output: JSON.stringify({ ok: true }) };
+		return silentResult(call.callId);
 	}
 
-	const spec = TOOL_REGISTRY[call.name];
-	const argv = spec.toArgs(args);
+	const args = parseArgs(call.argsBuffer);
 
-	let cli: HelmorCliResult;
+	let envelope: VoiceToolEnvelope;
 	try {
-		cli = await runHelmorCli(argv);
+		envelope = await runVoiceTool(call.name, args);
 	} catch (err) {
+		// The Rust command wraps handler errors in `ok: false`
+		// envelopes, so an exception here is an IPC / serialization
+		// failure rather than a handler problem.
 		return {
 			callId: call.callId,
 			output: JSON.stringify({
 				ok: false,
 				error: err instanceof Error ? err.message : String(err),
 			}),
+			invalidates: [],
 		};
 	}
 
-	// Only request a cache flush when the CLI itself reported success;
-	// otherwise the DB hasn't actually changed and invalidating would
-	// just thrash queries.
-	const succeeded = cli.ok && !cli.error;
-	const invalidates = succeeded ? spec.invalidates : undefined;
-
-	// Resolve UI navigation intent for the three workspace-touching
-	// tools. Guard: only navigate on real success and a non-empty id.
-	let navigateToWorkspaceId: string | undefined;
-	if (succeeded) {
-		if (call.name === "select_workspace" || call.name === "create_workspace") {
-			// Both commands print the workspace row as JSON; the
-			// canonical `id` field is the UUID we hand to the UI.
-			navigateToWorkspaceId = parseWorkspaceId(cli.stdout) ?? undefined;
-		} else if (call.name === "send_prompt") {
-			// `helmor send --json` emits `AgentStreamEvent::Done`, which
-			// carries `sessionId` but not `workspaceId`. Re-resolve from
-			// the user-supplied ref so we can follow the prompt to the
-			// right workspace. The shortcut for already-resolved UUIDs
-			// avoids a second CLI hop in the common voice flow where
-			// the model just listed workspaces and got UUIDs back.
-			const ref = typeof args.workspace === "string" ? args.workspace : "";
-			if (ref) {
-				navigateToWorkspaceId = (await resolveWorkspaceId(ref)) ?? undefined;
-			}
-		}
-	}
-
-	// For select_workspace, return a tiny envelope rather than the
-	// full workspace row — the model only needs to confirm; surfacing
-	// the row tempts it to read the id aloud, which violates the
-	// "no UUIDs" rule in the prompt.
-	const output =
-		call.name === "select_workspace" && navigateToWorkspaceId
-			? JSON.stringify({ ok: true, navigated_to: navigateToWorkspaceId })
-			: JSON.stringify(envelopeFor(cli));
+	const output = JSON.stringify(
+		envelope.ok
+			? { ok: true, data: envelope.data }
+			: { ok: false, error: envelope.error ?? "voice tool failed" },
+	);
 
 	return {
 		callId: call.callId,
 		output,
-		invalidates,
-		navigateToWorkspaceId,
+		invalidates: envelope.invalidates,
+		navigateToWorkspaceId: envelope.navigateToWorkspaceId ?? undefined,
 	};
-}
-
-/** Pull the UUID we should navigate to out of `helmor workspace
- *  show|new --json` output. The two commands print different
- *  envelopes:
- *  - `workspace show` returns a `WorkspaceDetail` with `id` at the
- *    top level.
- *  - `workspace new` returns a `CreateWorkspaceResponse` whose
- *    relevant fields are `selectedWorkspaceId` (preferred — covers
- *    the case where create reuses a pending workspace) and
- *    `createdWorkspaceId` (fallback). It does NOT have an `id`
- *    field — relying on `id` alone for `create_workspace` silently
- *    dropped the navigate event and was the original bug here.
- *
- *  We check all three in priority order so this one helper covers
- *  every workspace-emitting subcommand. */
-function parseWorkspaceId(stdout: string): string | null {
-	const parsed = tryParseJson(stdout);
-	if (!parsed || typeof parsed !== "object") return null;
-	const obj = parsed as Record<string, unknown>;
-	for (const key of ["id", "selectedWorkspaceId", "createdWorkspaceId"]) {
-		const value = obj[key];
-		if (typeof value === "string" && value.length > 0) return value;
-	}
-	return null;
-}
-
-/** Standard 8-4-4-4-12 hex UUID. We use this to skip a redundant
- *  `workspace show` round-trip when the model already passed a UUID
- *  (which is what `list_workspaces` returns). */
-const UUID_RE =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Translate a workspace ref (UUID or `repo-name/dir-name`) to its
- *  UUID, used by the auto-navigate path for `send_prompt`. Returns
- *  `null` on any failure path so the caller skips navigation cleanly
- *  rather than landing on a stale or non-existent workspace. */
-async function resolveWorkspaceId(ref: string): Promise<string | null> {
-	if (UUID_RE.test(ref)) return ref;
-	let cli: HelmorCliResult;
-	try {
-		cli = await runHelmorCli(["workspace", "show", ref, "--json"]);
-	} catch {
-		return null;
-	}
-	if (!cli.ok || cli.error) return null;
-	return parseWorkspaceId(cli.stdout);
 }
 
 function parseArgs(buffer: string): Record<string, unknown> {
@@ -474,54 +301,7 @@ function parseArgs(buffer: string): Record<string, unknown> {
 	}
 }
 
-/** Wrap a `HelmorCliResult` in the shape the model expects. The CLI
- *  emits JSON on stdout when invoked with `--json`; we try to parse
- *  it so the model sees structured fields rather than a string blob,
- *  but fall back to the raw text if parsing fails.
- *
- *  Failure paths: when the CLI exits non-zero it usually prints a
- *  `{"error":"..."}` JSON to stdout (see `helmor` Rust impl). We lift
- *  that string up to the envelope's top-level `error` so the model
- *  doesn't have to dig into `data` to phrase the failure — that step
- *  was unreliable in practice and led to false "success" reports. */
-function envelopeFor(cli: HelmorCliResult): unknown {
-	if (cli.error) {
-		return {
-			ok: false,
-			error: cli.error,
-			exit_code: cli.exitCode,
-			stderr: cli.stderr || undefined,
-		};
-	}
-	const data = tryParseJson(cli.stdout);
-	let error: string | undefined;
-	if (
-		!cli.ok &&
-		data &&
-		typeof data === "object" &&
-		"error" in (data as Record<string, unknown>)
-	) {
-		const e = (data as Record<string, unknown>).error;
-		if (typeof e === "string" && e.length > 0) error = e;
-	}
-	if (!cli.ok && !error && cli.stderr) {
-		error = cli.stderr.trim().split("\n")[0];
-	}
-	return {
-		ok: cli.ok,
-		exit_code: cli.exitCode,
-		data,
-		...(error ? { error } : {}),
-		...(cli.stderr ? { stderr: cli.stderr } : {}),
-	};
-}
-
-function tryParseJson(text: string): unknown {
-	const trimmed = text.trim();
-	if (!trimmed) return null;
-	try {
-		return JSON.parse(trimmed);
-	} catch {
-		return trimmed;
-	}
-}
+// Re-export ToolName for any (future) caller that wants a typed
+// reference to the registered tool set — the dispatcher itself accepts
+// arbitrary strings (the Rust side validates).
+export type { ToolName };

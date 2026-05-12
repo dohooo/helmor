@@ -92,11 +92,13 @@ export function useRealtimeSequence(
 	const micLevel = useAudioLevel(localStream);
 	const ttsLevel = useAudioLevel(remoteStream);
 
-	// The CLI mutations the agent dispatches write directly to the same
-	// SQLite the desktop app reads from. Without explicit invalidation
-	// the running GUI never notices — newly-created workspaces stay
-	// invisible until restart. Map the dispatcher's coarse mutation
-	// kinds to the precise React Query keys that drive the visible UI.
+	// Voice tools mutate the same SQLite the desktop app reads from.
+	// Without explicit invalidation the running GUI never notices —
+	// newly-created workspaces stay invisible until restart. Map the
+	// dispatcher's coarse mutation kinds to the precise React Query
+	// keys that drive the visible UI. The set of kinds is whatever the
+	// Rust `MutationKind` enum emits (`workspaces` / `sessions` today;
+	// add a branch for `repos` etc. as the enum grows).
 	const queryClient = useQueryClient();
 	const invalidateCaches = useCallback(
 		(kinds: AgentMutationKind[]) => {
@@ -107,11 +109,6 @@ export function useRealtimeSequence(
 				});
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.archivedWorkspaces,
-				});
-			}
-			if (want.has("repos")) {
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.repositories,
 				});
 			}
 			if (want.has("sessions")) {

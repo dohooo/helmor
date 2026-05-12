@@ -198,12 +198,12 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
                         "speed": 1.15
                     }
                 },
-                // Tool definitions live in `voice_tools` so their
+                // Tool definitions live in `voice_agent` so their
                 // descriptions can be assembled from clap's own
                 // `--help` output at session-mint time — one source of
                 // truth (the CLI args) for both the human typing
                 // `helmor send --help` and the model picking a tool.
-                "tools": super::voice_tools::build_tools_array()
+                "tools": super::voice_agent::build_tools_array()
             }
         });
 
