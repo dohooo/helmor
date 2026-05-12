@@ -415,14 +415,27 @@ async function runCall(call: PendingCall): Promise<RunCallResult> {
 	};
 }
 
-/** Pull a workspace UUID out of `helmor workspace show|new --json`
- *  output. Both subcommands return the workspace row directly at the
- *  top level, so the `id` field lives one parse deep. */
+/** Pull the UUID we should navigate to out of `helmor workspace
+ *  show|new --json` output. The two commands print different
+ *  envelopes:
+ *  - `workspace show` returns a `WorkspaceDetail` with `id` at the
+ *    top level.
+ *  - `workspace new` returns a `CreateWorkspaceResponse` whose
+ *    relevant fields are `selectedWorkspaceId` (preferred — covers
+ *    the case where create reuses a pending workspace) and
+ *    `createdWorkspaceId` (fallback). It does NOT have an `id`
+ *    field — relying on `id` alone for `create_workspace` silently
+ *    dropped the navigate event and was the original bug here.
+ *
+ *  We check all three in priority order so this one helper covers
+ *  every workspace-emitting subcommand. */
 function parseWorkspaceId(stdout: string): string | null {
 	const parsed = tryParseJson(stdout);
-	if (parsed && typeof parsed === "object" && "id" in parsed) {
-		const id = (parsed as { id?: unknown }).id;
-		if (typeof id === "string" && id.length > 0) return id;
+	if (!parsed || typeof parsed !== "object") return null;
+	const obj = parsed as Record<string, unknown>;
+	for (const key of ["id", "selectedWorkspaceId", "createdWorkspaceId"]) {
+		const value = obj[key];
+		if (typeof value === "string" && value.length > 0) return value;
 	}
 	return null;
 }
