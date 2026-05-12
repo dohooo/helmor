@@ -112,6 +112,7 @@ export function useConfirmSessionClose({
 		const provider = pending.provider ?? pending.session.agentType;
 		if (provider === "codex") return "Codex";
 		if (provider === "cursor") return "Cursor";
+		if (provider === "copilot") return "GitHub Copilot";
 		return "Claude";
 	}, [pending]);
 

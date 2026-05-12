@@ -47,6 +47,7 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    pub copilot: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -390,6 +391,7 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
         },
     )))
 }
@@ -528,6 +530,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
         };
         let agents = ready_skill_agents(&login);
         let command = helmor_skills_install_command(&agents);
@@ -656,6 +659,7 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             claude: claude_login_ready(),
             codex: codex_login_ready(),
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
         })
     })
     .await
@@ -735,6 +739,53 @@ fn codex_login_ready() -> bool {
     }
 }
 
+fn copilot_login_ready() -> bool {
+    // Step 1 — Copilot CLI must be reachable (env override → PATH).
+    // Without the binary, no env token can rescue the session.
+    let copilot_bin = std::env::var("HELMOR_COPILOT_BIN_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "copilot".to_string());
+
+    match std::process::Command::new(&copilot_bin)
+        .arg("--version")
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            tracing::trace!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Copilot CLI unavailable (--version returned non-zero)"
+            );
+            return false;
+        }
+        Err(error) => {
+            tracing::debug!("Copilot CLI unavailable: {error}");
+            return false;
+        }
+    }
+
+    // Step 2 — credential probe. Headless authentication uses one of
+    // the documented env vars (`COPILOT_GITHUB_TOKEN` is the
+    // Copilot-specific name; `GH_TOKEN`/`GITHUB_TOKEN` are accepted
+    // for parity with other GitHub tooling). When none are set the
+    // CLI falls back to OS-keychain credentials written by an
+    // interactive `copilot login` / in-REPL `/login` — Helmor cannot
+    // probe the keychain portably, so CLI presence alone is treated
+    // as "ready" and any per-session auth failure surfaces through
+    // the normal error path.
+    if std::env::var("COPILOT_GITHUB_TOKEN")
+        .or_else(|_| std::env::var("GH_TOKEN"))
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .ok()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        return true;
+    }
+
+    true
+}
+
 fn parse_claude_login_status(stdout: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(stdout)
         .ok()
@@ -751,6 +802,10 @@ fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
     match provider {
         "claude" => Ok("claude auth login"),
         "codex" => Ok("codex login"),
+        // `copilot login` is the headless equivalent. Users already
+        // inside the REPL can also run `/login` interactively — both
+        // routes write to the same OS-keychain credentials.
+        "copilot" => Ok("copilot login"),
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     }
 }

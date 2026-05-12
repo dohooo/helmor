@@ -67,6 +67,7 @@ import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
+import { CopilotProviderPanel } from "./panels/copilot-provider";
 import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
@@ -730,6 +731,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									/>
 									<ClaudeCustomProvidersPanel />
 									<CursorProviderPanel />
+									<CopilotProviderPanel />
 								</SettingsGroup>
 							)}
 

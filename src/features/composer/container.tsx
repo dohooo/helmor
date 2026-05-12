@@ -480,9 +480,21 @@ export const WorkspaceComposerContainer = memo(
 		const sessionPermissionMode = sessionIsConfigured
 			? currentSession?.permissionMode
 			: null;
+		// Preserve the full set of permission modes Helmor understands.
+		// Copilot adds "autopilot" as a third state alongside plan/
+		// bypassPermissions; Cursor & older sessions still collapse to
+		// the legacy default of bypassPermissions.
+		const knownModes = new Set([
+			"default",
+			"plan",
+			"bypassPermissions",
+			"autopilot",
+		]);
 		const effectivePermissionMode =
 			cachedPermissionMode ??
-			(sessionPermissionMode === "plan" ? "plan" : "bypassPermissions");
+			(sessionPermissionMode && knownModes.has(sessionPermissionMode)
+				? sessionPermissionMode
+				: "bypassPermissions");
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
 		const cachedFastMode = fastModes[composerContextKey];
 		const sessionFastMode = sessionIsConfigured
@@ -630,7 +642,9 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" ? provider : "claude";
+			provider === "codex" || provider === "cursor" || provider === "copilot"
+				? provider
+				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
 		// workspace yet, so fall back to the caller-supplied repoId hint.
 		const effectiveRepoId =
@@ -1000,11 +1014,11 @@ export const WorkspaceComposerContainer = memo(
 						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
 						agentType={
-							effectiveModel?.provider === "codex"
-								? "codex"
-								: effectiveModel?.provider === "cursor"
-									? "cursor"
-									: "claude"
+							effectiveModel?.provider === "codex" ||
+							effectiveModel?.provider === "cursor" ||
+							effectiveModel?.provider === "copilot"
+								? effectiveModel.provider
+								: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}

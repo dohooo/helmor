@@ -1108,6 +1108,98 @@ fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
 }
 
 // ---------------------------------------------------------------------------
+// Copilot model list — proxied to the sidecar's ACP probe
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotModelEntry {
+    pub id: String,
+    pub label: String,
+}
+
+/// 20s budget — the sidecar's own probe has a 15s internal timeout, so
+/// this outer cap catches sidecar hangs without leaving the Tauri command
+/// waiting forever.
+const LIST_COPILOT_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+pub fn fetch_copilot_models(
+    sidecar: &crate::sidecar::ManagedSidecar,
+) -> CmdResult<Vec<CopilotModelEntry>> {
+    let request_id = Uuid::new_v4().to_string();
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "listModels".to_string(),
+        params: serde_json::json!({ "provider": "copilot" }),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+    }
+
+    let mut models: Vec<CopilotModelEntry> = Vec::new();
+    let mut error: Option<String> = None;
+
+    loop {
+        match rx.recv_timeout(LIST_COPILOT_MODELS_TIMEOUT) {
+            Ok(event) => match event.event_type() {
+                "modelsListed" => {
+                    if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
+                        for entry in entries {
+                            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let label = entry
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or(id)
+                                .to_string();
+                            models.push(CopilotModelEntry {
+                                id: id.to_string(),
+                                label,
+                            });
+                        }
+                    }
+                    break;
+                }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some(format!(
+                    "Copilot model list timed out after {}s",
+                    LIST_COPILOT_MODELS_TIMEOUT.as_secs()
+                ));
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected during Copilot model list".to_string());
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+
+    if let Some(message) = error {
+        return Err(anyhow::anyhow!(message).into());
+    }
+    Ok(models)
+}
+
+// ---------------------------------------------------------------------------
 // Live context-usage (hover popover, Claude only)
 // ---------------------------------------------------------------------------
 

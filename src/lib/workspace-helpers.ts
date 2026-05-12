@@ -448,6 +448,9 @@ export function resolveSessionDisplayProvider({
 	if (session.agentType === "cursor") {
 		return "cursor";
 	}
+	if (session.agentType === "copilot") {
+		return "copilot";
+	}
 	return null;
 }
 

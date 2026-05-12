@@ -1,4 +1,5 @@
 import { Box } from "lucide-react";
+import { GithubBrandIcon } from "@/components/brand-icon";
 import {
 	ClaudeColorIcon,
 	CursorIcon,
@@ -20,6 +21,8 @@ export function ModelIcon({
 	className?: string;
 }) {
 	if (model?.provider === "cursor") return <CursorIcon className={className} />;
+	if (model?.provider === "copilot")
+		return <GithubBrandIcon className={className} />;
 	if (model?.provider === "codex")
 		return <OpenAIColorIcon className={className} />;
 	if (model?.providerKey === "custom")

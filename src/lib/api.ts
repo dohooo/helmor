@@ -117,7 +117,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type AgentProvider = "claude" | "codex" | "cursor" | "copilot";
 
 export type AgentModelOption = {
 	id: string;
@@ -758,12 +758,13 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor";
+export type AgentLoginProvider = "claude" | "codex" | "cursor" | "copilot";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	copilot: boolean;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -954,6 +955,22 @@ export async function listCursorModels(
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list Cursor models."),
+		);
+	}
+}
+
+export type CopilotModelEntry = {
+	id: string;
+	label: string;
+};
+
+/// Live Copilot model list via ACP probe (sidecar).
+export async function listCopilotModels(): Promise<CopilotModelEntry[]> {
+	try {
+		return await invoke<CopilotModelEntry[]>("list_copilot_models");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Copilot models."),
 		);
 	}
 }

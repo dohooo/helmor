@@ -93,6 +93,16 @@ export type CursorProviderSettings = {
 	cachedModels: CursorCachedModel[] | null;
 };
 
+export type CopilotCachedModel = {
+	id: string;
+	label: string;
+};
+
+export type CopilotProviderSettings = {
+	/** Last fetched model catalog from the ACP probe. `null` = not yet fetched. */
+	cachedModels: CopilotCachedModel[] | null;
+};
+
 /** Per-account toggles for which item kinds the inbox should pull from
  * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
  * `github:octocat`). Missing keys default to all `true` — newly added
@@ -231,6 +241,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	copilotProvider: CopilotProviderSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	kanbanViewState: KanbanViewState;
 	/** Sidebar grouping mode. Persisted to localStorage (sync read on boot
@@ -291,6 +302,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	cursorProvider: {
 		apiKey: "",
 		enabledModelIds: null,
+		cachedModels: null,
+	},
+	copilotProvider: {
 		cachedModels: null,
 	},
 	inboxSourceConfig: { accounts: {} },
@@ -359,6 +373,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	copilotProvider: "app.copilot_provider",
 	inboxSourceConfig: "app.inbox_source_config",
 	kanbanViewState: "app.kanban_view_state",
 };
@@ -644,6 +659,31 @@ function parseCursorProviderSettings(
 	}
 }
 
+function parseCopilotProviderSettings(
+	raw: string | undefined,
+): CopilotProviderSettings {
+	if (!raw) return DEFAULT_SETTINGS.copilotProvider;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		const cachedModels = parseCopilotCachedModels(parsed.cachedModels);
+		return { cachedModels };
+	} catch {
+		return DEFAULT_SETTINGS.copilotProvider;
+	}
+}
+
+function parseCopilotCachedModels(value: unknown): CopilotCachedModel[] | null {
+	if (!Array.isArray(value)) return null;
+	const models: CopilotCachedModel[] = [];
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.id !== "string" || typeof obj.label !== "string") continue;
+		models.push({ id: obj.id, label: obj.label });
+	}
+	return models;
+}
+
 function parseEnabledModelIds(value: unknown): string[] | null {
 	if (value === null) return null;
 	if (!Array.isArray(value)) return null;
@@ -851,6 +891,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			copilotProvider: parseCopilotProviderSettings(
+				raw[SETTINGS_KEY_MAP.copilotProvider],
+			),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
@@ -911,6 +954,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "copilotProvider" ||
 				key === "inboxSourceConfig" ||
 				key === "kanbanViewState"
 					? JSON.stringify(value)

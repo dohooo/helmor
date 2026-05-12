@@ -80,6 +80,7 @@ struct SidecarProcess {
 struct BundledAgentPaths {
     claude_bin: Option<PathBuf>,
     codex_bin: Option<PathBuf>,
+    copilot_bin: Option<PathBuf>,
 }
 
 fn resolve_bundled_agent_paths() -> BundledAgentPaths {
@@ -109,13 +110,24 @@ fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledA
         "claude"
     };
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    // The Copilot CLI ships as a Node ESM package (`@github/copilot`)
+    // with a `bin: copilot` shim — vendor staging may stage it as
+    // either a wrapper script or a compiled binary depending on
+    // platform support, but the on-disk name stays `copilot`.
+    let copilot_bin_name = if cfg!(windows) {
+        "copilot.exe"
+    } else {
+        "copilot"
+    };
 
     let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
+    let copilot_bin = resources_dir.join(format!("vendor/copilot/{copilot_bin_name}"));
 
     Some(BundledAgentPaths {
         claude_bin: claude_bin.is_file().then_some(claude_bin),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
+        copilot_bin: copilot_bin.is_file().then_some(copilot_bin),
     })
 }
 
@@ -173,6 +185,7 @@ impl SidecarProcess {
                 exe = ?exe,
                 claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
+                copilot_bin = ?bundled_paths.copilot_bin,
                 "Resolved bundled agent paths"
             );
             if let Some(path) = bundled_paths.claude_bin {
@@ -180,6 +193,9 @@ impl SidecarProcess {
             }
             if let Some(path) = bundled_paths.codex_bin {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
+            }
+            if let Some(path) = bundled_paths.copilot_bin {
+                cmd.env("HELMOR_COPILOT_BIN_PATH", &path);
             }
         }
         // Cursor key is NOT env-passed — pushed via `updateConfig` RPC
@@ -867,8 +883,10 @@ mod tests {
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
+        std::fs::create_dir_all(resources.join("copilot")).unwrap();
         std::fs::write(resources.join("claude-code/claude"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
+        std::fs::write(resources.join("copilot/copilot"), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
@@ -881,6 +899,11 @@ mod tests {
             paths.codex_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/codex/codex")
+        );
+        assert_eq!(
+            paths.copilot_bin.unwrap(),
+            root.path()
+                .join("Helmor.app/Contents/Resources/vendor/copilot/copilot")
         );
     }
 }
