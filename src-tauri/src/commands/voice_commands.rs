@@ -68,12 +68,29 @@ const DETACH_FIRST_LINE_TIMEOUT_SECS: u64 = 2;
 pub async fn run_helmor_cli(args: Vec<String>, detach: Option<bool>) -> CmdResult<HelmorCliResult> {
     let binary = helmor_binary_name();
     let detach = detach.unwrap_or(false);
+    // Voice-mode invocations are rare and high-signal — log every one so
+    // we can correlate "the agent said X" with what the CLI actually saw.
+    tracing::info!(binary, ?args, detach, "voice agent invoking helmor CLI");
     run_blocking(move || {
-        if detach {
-            run_detached(binary, args)
+        let result = if detach {
+            run_detached(binary, args.clone())
         } else {
-            run_sync(binary, args)
+            run_sync(binary, args.clone())
+        };
+        if let Ok(ref res) = result {
+            tracing::info!(
+                ok = res.ok,
+                exit_code = ?res.exit_code,
+                stdout_len = res.stdout.len(),
+                stderr_len = res.stderr.len(),
+                error = ?res.error,
+                stdout_preview = %res.stdout.chars().take(240).collect::<String>(),
+                stderr_preview = %res.stderr.chars().take(240).collect::<String>(),
+                ?args,
+                "voice agent helmor CLI completed"
+            );
         }
+        result
     })
     .await
 }

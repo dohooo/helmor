@@ -1,3 +1,4 @@
+import type { BorderBeamColorVariant } from "@/components/border-beam";
 import { BorderBeam } from "@/components/border-beam";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -18,26 +19,47 @@ type VoiceModeBarProps = {
 	className?: string;
 };
 
-/** Slow-flow base duration (seconds). Used for listening / speaking / done. */
+/** Slow-flow base duration (seconds). Used for listening / speaking. */
 const BEAM_SLOW_DURATION = 3;
-/** Fast-flow duration when the agent is busy (thinking / acting). */
+/** Fast-flow duration when the agent is busy (acting). */
 const BEAM_FAST_DURATION = 1.2;
+/** Extra-slow drift during the warmup phase — meant to read as "idle" /
+ *  "waiting", not "active". Keeps the bar present but un-distracting. */
+const BEAM_CONNECTING_DURATION = 5;
 /** Strength floor at idle / working states. Visible but restrained. */
 const BEAM_BASE_STRENGTH = 0.3;
+/** Strength while warming up. Much dimmer than the live floor so it's
+ *  clearly subordinate to the "ready" state when they transition. */
+const BEAM_CONNECTING_STRENGTH = 0.15;
 /** Headroom above the floor that the audio level can push strength into. */
 const BEAM_LEVEL_HEADROOM = 0.7;
 
 function deriveBeamProps(state: VoiceUiState): {
 	duration: number;
 	strength: number;
+	colorVariant: BorderBeamColorVariant;
 } {
-	const isWorking = state.phase === "thinking" || state.phase === "acting";
+	// During warmup the session isn't actually receiving audio yet, so
+	// we drop colour + reactivity and run a slow mono drift. The full
+	// `colorful` palette only lights up once `session.created` lands.
+	if (state.phase === "connecting") {
+		return {
+			duration: BEAM_CONNECTING_DURATION,
+			strength: BEAM_CONNECTING_STRENGTH,
+			colorVariant: "mono",
+		};
+	}
+	// Acting (tool call running) is the only "busy" phase now — fast
+	// loop, fixed strength, no level reactivity. Listening and speaking
+	// both ride the audio level (mic and TTS respectively).
+	const isWorking = state.phase === "acting";
 	const reactive = state.phase === "listening" || state.phase === "speaking";
 	return {
 		duration: isWorking ? BEAM_FAST_DURATION : BEAM_SLOW_DURATION,
 		strength: reactive
 			? BEAM_BASE_STRENGTH + state.level * BEAM_LEVEL_HEADROOM
 			: BEAM_BASE_STRENGTH,
+		colorVariant: "colorful",
 	};
 }
 
@@ -96,7 +118,7 @@ export function VoiceModeBar({
 			<BorderBeam
 				className="block h-full w-full"
 				size="md"
-				colorVariant="colorful"
+				colorVariant={beam.colorVariant}
 				duration={beam.duration}
 				strength={beam.strength}
 			>

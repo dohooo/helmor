@@ -1,4 +1,4 @@
-import { AlertCircle, Brain, Check, Loader2, Mic, Volume2 } from "lucide-react";
+import { AlertCircle, Loader2, Mic, Volume2 } from "lucide-react";
 import {
 	type ComponentType,
 	type CSSProperties,
@@ -9,23 +9,26 @@ import {
 import { cn } from "@/lib/utils";
 import type { VoiceUiPhase, VoiceUiState } from "./voice-mode-state";
 
+/** Phase → lucide icon. The lingering-transcript window inside the
+ *  listening phase swaps the icon to Volume2 at the call-site below;
+ *  the entry here is the *idle* listening visual. */
 const ICONS: Record<
 	VoiceUiPhase,
 	ComponentType<{ className?: string; strokeWidth?: number }>
 > = {
+	connecting: Loader2,
 	listening: Mic,
-	thinking: Brain,
 	acting: Loader2,
 	speaking: Volume2,
-	done: Check,
 };
 
 const DEFAULT_TEXT: Record<VoiceUiPhase, string> = {
+	connecting: "Connecting",
 	listening: "Listening",
-	thinking: "Thinking",
 	acting: "Working",
-	speaking: "Speaking",
-	done: "Done",
+	// Speaking's label is the streaming transcript; no default — when
+	// the first delta hasn't landed yet the bar simply shows the icon.
+	speaking: "",
 };
 
 /** Slide-up animation duration for scene transitions. Same easing as the
@@ -36,10 +39,22 @@ const ANIM_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 /** A scene is uniquely identified by phase + the dynamic content shown.
  *  When this string changes we slide a new layer in and slide the old one
  *  out; when it stays the same we just refresh the level / props on the
- *  current layer with no animation. */
+ *  current layer with no animation.
+ *
+ *  Speaking and the lingering-transcript window inside listening share
+ *  the same scene key (`transcript`) so the transition between them
+ *  doesn't slide — only the underlying BorderBeam mode + reactivity
+ *  changes. Acting is keyed on its label so successive tool calls each
+ *  slide in a fresh status line. Listening (idle) is its own scene so
+ *  the lingering-transcript → "Listening" transition (after the 600 ms
+ *  hold) gets a proper slide. Error is its own scene regardless of
+ *  phase. */
 function sceneKey(s: VoiceUiState): string {
+	if (s.tone === "error") return `error:${s.label ?? ""}`;
+	if (s.phase === "speaking" || (s.phase === "listening" && s.label)) {
+		return "transcript";
+	}
 	if (s.phase === "acting") return `acting:${s.label ?? ""}`;
-	if (s.phase === "done") return `done:${s.summary ?? ""}`;
 	return s.phase;
 }
 
@@ -53,14 +68,31 @@ function Scene({
 	style?: CSSProperties;
 }) {
 	const isError = state.tone === "error";
-	const Icon = isError ? AlertCircle : ICONS[state.phase];
-	const label =
-		state.phase === "acting" && state.label
-			? state.label
-			: state.phase === "done" && state.summary
-				? state.summary
-				: DEFAULT_TEXT[state.phase];
-	const spin = state.phase === "acting" && !isError;
+	const phase = state.phase;
+	// While listening, a non-empty label means the previous agent
+	// reply's transcript is still on screen (held for 600 ms after
+	// `response.done`). In that window the bar visually mirrors the
+	// `speaking` scene — Volume2 + text — so the transition between
+	// them is invisible. Once the hold expires, label clears and we
+	// fall back to the idle Mic + "Listening" visual.
+	const hasLingeringTranscript =
+		phase === "listening" && !isError && !!state.label;
+
+	const Icon = isError
+		? AlertCircle
+		: hasLingeringTranscript
+			? Volume2
+			: ICONS[phase];
+	const label = isError
+		? (state.label ?? "Voice session error")
+		: hasLingeringTranscript
+			? (state.label ?? "")
+			: phase === "speaking"
+				? (state.label ?? "")
+				: phase === "acting" && state.label
+					? state.label
+					: DEFAULT_TEXT[phase];
+	const spin = !isError && (phase === "acting" || phase === "connecting");
 
 	return (
 		<div
@@ -77,12 +109,14 @@ function Scene({
 			/>
 			{/* `leading-none` so the text's line-box equals its font-size --
 			    otherwise the default leading inflates the box vertically and
-			    `items-center` centers the inflated box (looks low). `flex-1
-			    min-w-0` lets the label fill the slack between icon and the
-			    progress chip while still respecting `truncate`. */}
+			    `items-center` centers the inflated box (looks low).
+			    `max-w-[80%]` caps the label at 80% of the bar so long
+			    transcripts truncate with `…` instead of pushing the bar
+			    or hiding the icon. `min-w-0 + flex-1` keep short labels
+			    left-aligned next to the icon. */}
 			<span
 				className={cn(
-					"min-w-0 flex-1 truncate text-[12px] leading-none tracking-tight",
+					"min-w-0 max-w-[80%] flex-1 truncate text-[12px] leading-none tracking-tight",
 					isError ? "text-destructive/90" : "text-foreground/85",
 				)}
 			>

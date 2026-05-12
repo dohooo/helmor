@@ -48,8 +48,28 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 		);
 	}
 
-	const clientSecret = await createOpenAiRealtimeClientSecret();
-	const stream = await getMicrophoneStream();
+	// Token mint (Rust → OpenAI HTTPS) and getUserMedia (macOS TCC
+	// prompt + first-frame negotiation) are independent and were the
+	// two biggest "Connecting" stalls. Running them in parallel cuts
+	// the perceived warmup by roughly one network round-trip.
+	// `allSettled` so we can stop a hot mic stream if token mint races
+	// to reject after mic succeeded — otherwise the yellow mic
+	// indicator would linger on a failed session.
+	const [tokenResult, micResult] = await Promise.allSettled([
+		createOpenAiRealtimeClientSecret(),
+		getMicrophoneStream(),
+	]);
+	if (tokenResult.status === "rejected") {
+		if (micResult.status === "fulfilled") {
+			for (const track of micResult.value.getTracks()) track.stop();
+		}
+		throw tokenResult.reason;
+	}
+	if (micResult.status === "rejected") {
+		throw micResult.reason;
+	}
+	const clientSecret = tokenResult.value;
+	const stream = micResult.value;
 	const peer = new RTCPeerConnection();
 	const audio = new Audio();
 	const dataChannel = peer.createDataChannel("oai-events");

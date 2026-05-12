@@ -17,12 +17,21 @@ type ToolName =
 	| "list_repos"
 	| "wait_for_user";
 
+/** Coarse-grained kinds of state the voice agent can mutate. The
+ *  dispatcher emits these so the host can invalidate the matching
+ *  React Query caches — without that wiring, the running GUI never
+ *  notices that an external CLI process changed the database, and
+ *  newly-created workspaces stay invisible until the app restarts. */
+export type AgentMutationKind = "workspaces" | "sessions" | "repos";
+
 /** How each declared tool maps to an actual `helmor` CLI invocation.
  *  `toArgs` translates the model-supplied argument JSON into argv;
- *  `detach: true` flips on fire-and-forget mode for streaming commands. */
+ *  `detach: true` flips on fire-and-forget mode for streaming commands;
+ *  `invalidates` lists which caches to refresh after a successful run. */
 type ToolSpec = {
 	toArgs: (args: Record<string, unknown>) => string[];
 	detach?: boolean;
+	invalidates?: AgentMutationKind[];
 };
 
 /** Tool name → CLI invocation recipe. The descriptions registered with
@@ -49,6 +58,7 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 			String(a.repo ?? ""),
 			"--json",
 		],
+		invalidates: ["workspaces"],
 	},
 	set_workspace_status: {
 		toArgs: (a) => [
@@ -58,6 +68,7 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 			String(a.ref ?? ""),
 			"--json",
 		],
+		invalidates: ["workspaces"],
 	},
 	list_sessions: {
 		toArgs: (a) => [
@@ -80,6 +91,10 @@ const TOOL_REGISTRY: Record<ToolName, ToolSpec> = {
 			return out;
 		},
 		detach: true,
+		// `helmor send` may create a new session item in the workspace
+		// (and updates last-message timestamps). Invalidate both lists
+		// so the GUI sees the freshly-spawned session.
+		invalidates: ["sessions", "workspaces"],
 	},
 	list_repos: {
 		toArgs: () => ["repo", "list", "--json"],
@@ -106,6 +121,11 @@ type PendingCall = {
 type DispatcherOptions = {
 	/** Forward client events back to the model over the data channel. */
 	send: (event: RealtimeClientEvent) => void;
+	/** Called after a successful write tool returns, with the kinds of
+	 *  state that changed. The host should map these to React Query
+	 *  invalidations so the GUI picks up the external DB mutation
+	 *  (`helmor` CLI writes to the same SQLite the desktop app reads). */
+	onMutation?: (kinds: AgentMutationKind[]) => void;
 };
 
 export type ToolDispatcher = {
@@ -199,6 +219,12 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// Only execute tools for completed responses; for everything
 			// else, drop the pending state so we don't run stale calls.
 			if (response?.status !== "completed") {
+				console.warn(
+					"[helmor voice] dropping",
+					callIds.length,
+					"tool call(s) — response status was",
+					response?.status,
+				);
 				for (const callId of callIds) pendingByCallId.delete(callId);
 				return;
 			}
@@ -210,7 +236,7 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// Fire-and-forget — execution races forward off the event
 			// loop. Errors are caught inside `executeCalls` so a single
 			// bad tool can't abort the whole response.
-			void executeCalls(calls, opts.send);
+			void executeCalls(calls, opts);
 			return;
 		}
 	}
@@ -221,16 +247,23 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 /** Run every function_call collected from one `response.done`, in
  *  parallel, then submit outputs + a single `response.create` to nudge
  *  the model into speaking the answer. */
-async function executeCalls(
-	calls: PendingCall[],
-	send: (event: RealtimeClientEvent) => void,
-) {
+async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
+	for (const c of calls) {
+		console.log(
+			"[helmor voice] tool call →",
+			c.name,
+			c.argsBuffer || "(no args)",
+		);
+	}
 	const results = await Promise.all(calls.map((c) => runCall(c)));
+	for (const r of results) {
+		console.log("[helmor voice] tool call ←", r.callId, r.output.slice(0, 200));
+	}
 	// Submit outputs sequentially — community reports race quirks if
 	// multiple `conversation.item.create` events race over the data
 	// channel. Then a single `response.create` re-enters speech.
 	for (const r of results) {
-		send({
+		opts.send({
 			type: "conversation.item.create",
 			item: {
 				type: "function_call_output",
@@ -239,13 +272,30 @@ async function executeCalls(
 			},
 		});
 	}
-	send({ type: "response.create" });
+	opts.send({ type: "response.create" });
+
+	// Aggregate mutation kinds across this turn and notify the host
+	// once. The Set keeps the callback idempotent when multiple write
+	// tools fired in parallel (e.g. create + set-status of the same
+	// workspace).
+	if (opts.onMutation) {
+		const kinds = new Set<AgentMutationKind>();
+		for (const r of results) {
+			if (r.invalidates) {
+				for (const kind of r.invalidates) kinds.add(kind);
+			}
+		}
+		if (kinds.size > 0) opts.onMutation(Array.from(kinds));
+	}
 }
 
-/** Run one tool call, return the JSON envelope the model will see. */
-async function runCall(
-	call: PendingCall,
-): Promise<{ callId: string; output: string }> {
+/** Run one tool call, return the JSON envelope the model will see plus
+ *  any cache-invalidation hints. */
+async function runCall(call: PendingCall): Promise<{
+	callId: string;
+	output: string;
+	invalidates?: AgentMutationKind[];
+}> {
 	const args = parseArgs(call.argsBuffer);
 	if (!isKnownTool(call.name)) {
 		return {
@@ -279,7 +329,15 @@ async function runCall(
 		};
 	}
 
-	return { callId: call.callId, output: JSON.stringify(envelopeFor(cli)) };
+	// Only request a cache flush when the CLI itself reported success;
+	// otherwise the DB hasn't actually changed and invalidating would
+	// just thrash queries.
+	const invalidates = cli.ok && !cli.error ? spec.invalidates : undefined;
+	return {
+		callId: call.callId,
+		output: JSON.stringify(envelopeFor(cli)),
+		invalidates,
+	};
 }
 
 function parseArgs(buffer: string): Record<string, unknown> {
@@ -297,22 +355,42 @@ function parseArgs(buffer: string): Record<string, unknown> {
 /** Wrap a `HelmorCliResult` in the shape the model expects. The CLI
  *  emits JSON on stdout when invoked with `--json`; we try to parse
  *  it so the model sees structured fields rather than a string blob,
- *  but fall back to the raw text if parsing fails. */
+ *  but fall back to the raw text if parsing fails.
+ *
+ *  Failure paths: when the CLI exits non-zero it usually prints a
+ *  `{"error":"..."}` JSON to stdout (see `helmor` Rust impl). We lift
+ *  that string up to the envelope's top-level `error` so the model
+ *  doesn't have to dig into `data` to phrase the failure — that step
+ *  was unreliable in practice and led to false "success" reports. */
 function envelopeFor(cli: HelmorCliResult): unknown {
 	if (cli.error) {
 		return {
 			ok: false,
 			error: cli.error,
 			exit_code: cli.exitCode,
-			stderr: cli.stderr,
+			stderr: cli.stderr || undefined,
 		};
 	}
 	const data = tryParseJson(cli.stdout);
+	let error: string | undefined;
+	if (
+		!cli.ok &&
+		data &&
+		typeof data === "object" &&
+		"error" in (data as Record<string, unknown>)
+	) {
+		const e = (data as Record<string, unknown>).error;
+		if (typeof e === "string" && e.length > 0) error = e;
+	}
+	if (!cli.ok && !error && cli.stderr) {
+		error = cli.stderr.trim().split("\n")[0];
+	}
 	return {
 		ok: cli.ok,
 		exit_code: cli.exitCode,
 		data,
-		stderr: cli.stderr || undefined,
+		...(error ? { error } : {}),
+		...(cli.stderr ? { stderr: cli.stderr } : {}),
 	};
 }
 
