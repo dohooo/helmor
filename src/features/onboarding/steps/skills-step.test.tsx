@@ -43,7 +43,7 @@ describe("SkillsStep", () => {
 			claude: false,
 			codex: false,
 			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+				"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 		});
 	});
 
@@ -130,7 +130,7 @@ describe("SkillsStep", () => {
 			claude: true,
 			codex: false,
 			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code",
+				"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code",
 		});
 
 		render(

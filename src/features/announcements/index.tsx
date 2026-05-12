@@ -14,15 +14,15 @@ import {
 	GITHUB_RELEASES_URL,
 	type ReleaseAnnouncement,
 	type ReleaseAnnouncementAction,
+	type ReleaseAnnouncementCatalogEntry,
 	type ReleaseAnnouncementItem,
 	selectReleaseAnnouncement,
 } from "@/features/announcements/announcements";
-import publishedReleaseAnnouncements from "@/features/announcements/published-release-announcements.json";
-import { RELEASE_ANNOUNCEMENT_CATALOG } from "@/features/announcements/release-announcement-catalog";
+import releaseAnnouncementCatalog from "@/features/announcements/release-announcement-catalog.json";
 import {
 	dismissReleaseAnnouncement,
 	isFirstHelmorBoot,
-	readDismissedReleaseAnnouncementIds,
+	readDismissedReleaseAnnouncementVersions,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
 } from "@/features/announcements/storage";
@@ -31,6 +31,8 @@ import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import packageJson from "../../../package.json";
 
 const APP_VERSION = packageJson.version;
+const RELEASE_ANNOUNCEMENT_CATALOG =
+	releaseAnnouncementCatalog.items as readonly ReleaseAnnouncementCatalogEntry[];
 
 type ReleaseAnnouncementToastHostProps = {
 	onOpenChangelog: () => void;
@@ -43,7 +45,7 @@ export function ReleaseAnnouncementToastHost({
 	onOpenSettings,
 	onSetRightSidebarMode,
 }: ReleaseAnnouncementToastHostProps) {
-	const shownIdsRef = useRef<string | null>(null);
+	const shownVersionsRef = useRef<string | null>(null);
 	const [announcement, setAnnouncement] = useState<ReleaseAnnouncement | null>(
 		null,
 	);
@@ -51,7 +53,6 @@ export function ReleaseAnnouncementToastHost({
 	useEffect(() => {
 		const nextAnnouncement = selectReleaseAnnouncement({
 			catalog: RELEASE_ANNOUNCEMENT_CATALOG,
-			published: publishedReleaseAnnouncements.items,
 			currentVersion: APP_VERSION,
 			lastSeenVersion: readLastSeenInstallVersion(),
 			// Distinguish "never used Helmor" (suppress) from "existing
@@ -61,7 +62,7 @@ export function ReleaseAnnouncementToastHost({
 			// classified as a fresh install — meaning the very toast that
 			// introduces the announcement system is never seen by anyone.
 			isFirstHelmorBoot: isFirstHelmorBoot(),
-			dismissedIds: readDismissedReleaseAnnouncementIds(),
+			dismissedReleaseVersions: readDismissedReleaseAnnouncementVersions(),
 		});
 		// Always advance: bootstraps first-install (so we never re-evaluate
 		// fresh installs as upgrades) and prevents re-showing the same
@@ -69,11 +70,11 @@ export function ReleaseAnnouncementToastHost({
 		writeLastSeenInstallVersion(APP_VERSION);
 		if (!nextAnnouncement) return;
 
-		// Same set of ids already shown this mount — React strict mode can
+		// Same set of versions already shown this mount — React strict mode can
 		// fire this effect twice in dev; the join key dedupes.
-		const idsKey = nextAnnouncement.ids.join(",");
-		if (shownIdsRef.current === idsKey) return;
-		shownIdsRef.current = idsKey;
+		const versionsKey = nextAnnouncement.releaseVersions.join(",");
+		if (shownVersionsRef.current === versionsKey) return;
+		shownVersionsRef.current = versionsKey;
 		setAnnouncement(nextAnnouncement);
 	}, []);
 
@@ -91,10 +92,10 @@ export function ReleaseAnnouncementToastHost({
 	};
 
 	const close = () => {
-		// Multi-id when the user skipped versions — dismiss every id so the
+		// Multi-version when the user skipped releases — dismiss every version so the
 		// next launch doesn't replay the same backlog.
-		for (const id of announcement.ids) {
-			dismissReleaseAnnouncement(id);
+		for (const version of announcement.releaseVersions) {
+			dismissReleaseAnnouncement(version);
 		}
 		setAnnouncement(null);
 	};

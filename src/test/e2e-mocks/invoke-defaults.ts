@@ -25,7 +25,7 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 		claude: false,
 		codex: false,
 		command:
-			"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+			"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 	}),
 	get_app_settings: () => ({}),
 	load_auto_close_action_kinds: () => [],
