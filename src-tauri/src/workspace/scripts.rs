@@ -280,12 +280,20 @@ fn is_process_group_gone(pgid: libc::pid_t) -> bool {
 }
 
 /// Workspace context passed to scripts as environment variables.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScriptContext {
     pub root_path: String,
     pub workspace_path: Option<String>,
     pub workspace_name: Option<String>,
     pub default_branch: Option<String>,
+    /// First port in the workspace's deterministic port block.
+    /// Surfaces to scripts as `HELMOR_PORT`. `None` for non-workspace
+    /// runs (onboarding auth terminals, etc.) where there is no
+    /// workspace to anchor a stable range to.
+    pub port_base: Option<u16>,
+    /// Size of the port block starting at `port_base`. Surfaces to
+    /// scripts as `HELMOR_PORT_COUNT`. Always paired with `port_base`.
+    pub port_count: Option<u16>,
 }
 
 /// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
@@ -501,6 +509,13 @@ pub(crate) fn run_script_with_shell(
     }
     if let Some(db) = &context.default_branch {
         cmd.env("HELMOR_DEFAULT_BRANCH", db);
+    }
+    // Per-workspace port range. Only emit both vars together so scripts
+    // can rely on `HELMOR_PORT_COUNT` being present whenever `HELMOR_PORT`
+    // is. Both are absent for non-workspace runs (onboarding terminals).
+    if let (Some(base), Some(count)) = (context.port_base, context.port_count) {
+        cmd.env("HELMOR_PORT", base.to_string());
+        cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
     // Set up the child's session and controlling terminal before exec.
@@ -883,6 +898,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -945,6 +962,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -1033,6 +1052,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -1121,6 +1142,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         run_script_with_shell(
             &mgr,
@@ -1176,6 +1199,157 @@ mod tests {
         );
     }
 
+    /// End-to-end: a script with a populated `ScriptContext.port_base`
+    /// sees `HELMOR_PORT` / `HELMOR_PORT_COUNT` in its env, and the
+    /// existing env vars (HELMOR_ROOT_PATH, HELMOR_WORKSPACE_NAME, …)
+    /// keep working alongside the new ones.
+    #[test]
+    fn script_env_includes_helmor_port_vars_when_range_present() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-port".into()),
+            default_branch: Some("main".into()),
+            port_base: Some(55_100),
+            port_count: Some(10),
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-port"),
+            // Sentinel-tag the output so we can spot the env values
+            // amid the interactive-shell prompt / wrapper banner the
+            // PTY also writes to stdout.
+            Some(
+                "printf 'PORT=%s|COUNT=%s|NAME=%s|ROOT=%s\\n' \
+                  \"$HELMOR_PORT\" \"$HELMOR_PORT_COUNT\" \
+                  \"$HELMOR_WORKSPACE_NAME\" \"$HELMOR_ROOT_PATH\"",
+            ),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    if combined.contains("PORT=55100|COUNT=10") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT=55100|COUNT=10|NAME=ws-port"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT alongside legacy env; got: {combined:?}"
+        );
+        assert!(
+            combined.contains(&format!("ROOT={}", dir.display())),
+            "expected HELMOR_ROOT_PATH still injected; got: {combined:?}"
+        );
+    }
+
+    /// When the workspace has no allocated range, the new env vars are
+    /// absent (vs. set to empty strings) so scripts that fall back with
+    /// `${HELMOR_PORT:-3000}` keep their default.
+    #[test]
+    fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-noport".into()),
+            default_branch: Some("main".into()),
+            port_base: None,
+            port_count: None,
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-noport"),
+            // `${var+set}` expands to "set" if set (even when empty) and
+            // to nothing otherwise. The sentinel intentionally puts the
+            // expansion between two delimiters so we can tell "unset"
+            // (PORT[]COUNT[]) apart from "set to empty" (PORT[set]COUNT[set])
+            // even after the wrapper echoes the literal source line back.
+            Some("printf 'PORT[%s]COUNT[%s]EOM\\n' \"${HELMOR_PORT+set}\" \"${HELMOR_PORT_COUNT+set}\""),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    // `PORT[]COUNT[]` only materialises post-substitution
+                    // — the source line carries `PORT[%s]COUNT[%s]`, so
+                    // matching the substituted form lets us distinguish
+                    // it from the wrapper's echo of the source line.
+                    if combined.contains("PORT[]COUNT[]EOM") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT[]COUNT[]EOM"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT to be unset; got: {combined:?}"
+        );
+    }
+
     #[test]
     fn run_script_rejects_empty() {
         let mgr = ScriptProcessManager::new();
@@ -1184,6 +1358,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let result = run_script(&mgr, "r", "s", None, "  ", "/tmp", &ctx, make_channel());
         assert!(result.is_err());
