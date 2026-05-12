@@ -442,7 +442,7 @@ fn map_stop_reason(parsed: Option<&Value>) -> MessageStatus {
 /// 1. **Merge tool_result** — fold into the preceding assistant in-place.
 /// 2. **Prompt fold** — subagent prompt (`parent_tool_use_id` set) becomes
 ///    a synthesized `Prompt` ToolCall for the grouping pass.
-/// 3. **Stray / normal** — drop malformed wrappers, render the rest.
+/// 3. **Stray SDK wrapper** — drop provider context that is not human input.
 fn convert_user_type_msg(
     msg: &IntermediateMessage,
     parsed: Option<&Value>,
@@ -494,15 +494,11 @@ fn convert_user_type_msg(
         return;
     }
 
-    // 3. Stray top-level user wrapper — non-tool_result with no preceding
-    //    assistant to attach context to. Treated as a malformed SDK event
-    //    and dropped. Anything else is a real user turn and renders
-    //    normally.
-    let has_prev_assistant = out.last().is_some_and(|m| m.role == MessageRole::Assistant);
-    if parsed.is_some() && !has_prev_assistant {
-        return;
+    // 3. Real human input is persisted as `user_prompt`; raw SDK
+    //    `type=user` wrappers can contain hidden provider context.
+    if parsed.is_none() {
+        out.push(convert_user_message(msg, parsed));
     }
-    out.push(convert_user_message(msg, parsed));
 }
 
 /// Convert a single `system` event into zero or one ThreadMessageLike,
