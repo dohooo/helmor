@@ -186,7 +186,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					},
 		[sidebarGrouping],
 	);
-	const { dragState, dropTarget, startLongPress } = useWorkspaceDnd({
+	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
 		onMoveWorkspace: onMoveWorkspaceInSidebar,
 		policy: dndPolicy,
 	});
@@ -677,7 +677,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
 						onDragPointerDown={(event, title) =>
-							startLongPress({
+							startDragGesture({
 								event,
 								row: item.row,
 								groupId: item.groupId,
@@ -719,7 +719,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onTogglePin,
 			onMoveWorkspaceInSidebar,
 			onSetWorkspaceStatus,
-			startLongPress,
+			startDragGesture,
 			archivingWorkspaceIds,
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,

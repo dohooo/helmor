@@ -704,8 +704,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 'test', 'ready')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, display_order) VALUES ('w1', 'r1', 'test', 'ready', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         ).unwrap();
         drop(conn);
         crate::models::db::init_pools().expect("failed to init test DB pools");

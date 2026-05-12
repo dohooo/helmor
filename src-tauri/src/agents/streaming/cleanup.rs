@@ -116,9 +116,9 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status)
-             VALUES ('w-1', 'r-1', 'd', 'ready', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order)
+             VALUES ('w-1', 'r-1', 'd', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
         conn.execute(

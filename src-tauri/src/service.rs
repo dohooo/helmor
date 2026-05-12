@@ -737,8 +737,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 
@@ -773,8 +773,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 

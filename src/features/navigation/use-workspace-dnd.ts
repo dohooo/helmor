@@ -9,8 +9,8 @@ import {
 import type { WorkspaceRow } from "@/lib/api";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 
-const LONG_PRESS_MS = 140;
 const MOVE_CANCEL_PX = 10;
+const MOVE_ACTIVATE_PX = 3;
 const DRAGGABLE_ROW_SELECTOR = "[data-workspace-dnd-row='true']";
 const DROP_GROUP_SELECTOR = "[data-workspace-drop-group-id]";
 export const WORKSPACE_DND_ACTIVE_ATTRIBUTE = "data-workspace-dnd-active";
@@ -69,7 +69,6 @@ export function useWorkspaceDnd({
 }) {
 	const [dragState, setDragState] = useState<WorkspaceDragState | null>(null);
 	const pendingStartRef = useRef<DragStart | null>(null);
-	const longPressTimerRef = useRef<number | null>(null);
 	const dragStateRef = useRef<WorkspaceDragState | null>(null);
 	dragStateRef.current = dragState;
 	const isDragging = dragState !== null;
@@ -100,11 +99,22 @@ export function useWorkspaceDnd({
 	}, [isDragging]);
 
 	const clearPendingStart = useCallback(() => {
-		if (longPressTimerRef.current !== null) {
-			window.clearTimeout(longPressTimerRef.current);
-			longPressTimerRef.current = null;
-		}
 		pendingStartRef.current = null;
+	}, []);
+
+	const beginDrag = useCallback((pending: DragStart, event: PointerEvent) => {
+		setDragState({
+			workspaceId: pending.workspaceId,
+			title: pending.title,
+			sourceGroupId: pending.groupId,
+			targetGroupId: pending.groupId,
+			beforeWorkspaceId: pending.workspaceId,
+			clientX: event.clientX,
+			clientY: event.clientY,
+			offsetY: pending.offsetY,
+			left: pending.left,
+			width: pending.width,
+		});
 	}, []);
 
 	const resolveDropTarget = useCallback(
@@ -185,6 +195,11 @@ export function useWorkspaceDnd({
 			const dy = event.clientY - pending.clientY;
 			if (Math.abs(dx) > MOVE_CANCEL_PX && Math.abs(dx) > Math.abs(dy)) {
 				clearPendingStart();
+				return;
+			}
+			if (Math.hypot(dx, dy) >= MOVE_ACTIVATE_PX) {
+				event.preventDefault();
+				beginDrag(pending, event);
 			}
 		};
 
@@ -225,9 +240,9 @@ export function useWorkspaceDnd({
 			window.removeEventListener("pointerup", handlePointerUp);
 			window.removeEventListener("pointercancel", handlePointerUp);
 		};
-	}, [clearPendingStart, onMoveWorkspace, resolveDropTarget]);
+	}, [beginDrag, clearPendingStart, onMoveWorkspace, resolveDropTarget]);
 
-	const startLongPress = useCallback(
+	const startDragGesture = useCallback(
 		({
 			event,
 			row,
@@ -264,23 +279,6 @@ export function useWorkspaceDnd({
 				width: rect.width,
 				pointerId: event.pointerId,
 			};
-
-			longPressTimerRef.current = window.setTimeout(() => {
-				const pending = pendingStartRef.current;
-				if (!pending) return;
-				setDragState({
-					workspaceId: pending.workspaceId,
-					title: pending.title,
-					sourceGroupId: pending.groupId,
-					targetGroupId: pending.groupId,
-					beforeWorkspaceId: row.id,
-					clientX: pending.clientX,
-					clientY: pending.clientY,
-					offsetY: pending.offsetY,
-					left: pending.left,
-					width: pending.width,
-				});
-			}, LONG_PRESS_MS);
 		},
 		[clearPendingStart, policy],
 	);
@@ -296,6 +294,6 @@ export function useWorkspaceDnd({
 	return {
 		dragState,
 		dropTarget,
-		startLongPress,
+		startDragGesture,
 	};
 }

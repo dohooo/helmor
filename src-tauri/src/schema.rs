@@ -586,40 +586,65 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.display_order column")?;
     }
 
-    migrate_workspace_display_order_to_packed(connection)?;
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "repo_display_order")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN repo_display_order INTEGER DEFAULT 0")
+            .context("Failed to add workspaces.repo_display_order column")?;
+    }
+
+    normalize_workspace_sidebar_orders(connection)?;
 
     Ok(())
 }
 
-fn migrate_workspace_display_order_to_packed(connection: &Connection) -> Result<()> {
-    if !has_table(connection, "settings") || !has_table(connection, "workspaces") {
+fn normalize_workspace_sidebar_orders(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces") {
         return Ok(());
     }
 
-    let already_migrated = connection
-        .prepare("SELECT 1 FROM settings WHERE key = 'workspace_display_order_packed_v1'")
-        .and_then(|mut stmt| stmt.exists([]))
-        .unwrap_or(false);
-    if already_migrated {
-        return Ok(());
-    }
+    let has_status = has_column(connection, "workspaces", "status");
+    let has_pinned_at = has_column(connection, "workspaces", "pinned_at");
+    let has_repository_id = has_column(connection, "workspaces", "repository_id");
+    let has_created_at = has_column(connection, "workspaces", "created_at");
+    let has_updated_at = has_column(connection, "workspaces", "updated_at");
 
-    let max_display_order = connection
-        .query_row(
-            "SELECT COALESCE(MAX(COALESCE(display_order, 0)), 0) FROM workspaces",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0);
-    if max_display_order >= sidebar_order::ORDER_BASE {
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES ('workspace_display_order_packed_v1', '1')",
-                [],
-            )
-            .context("Failed to mark packed workspace display_order migration")?;
-        return Ok(());
-    }
+    let status_expr = if has_status {
+        "COALESCE(status, 'in-progress')".to_string()
+    } else {
+        "'in-progress'".to_string()
+    };
+    let partition_status_expr = if has_pinned_at {
+        format!("CASE WHEN pinned_at IS NOT NULL THEN 'pinned' ELSE {status_expr} END")
+    } else {
+        status_expr.clone()
+    };
+    let partition_repo_expr = if has_repository_id {
+        "repository_id".to_string()
+    } else {
+        "NULL".to_string()
+    };
+    let status_order_source_expr = "COALESCE(display_order, 0)".to_string();
+    let repo_order_source_expr = if has_column(connection, "workspaces", "repo_display_order") {
+        "CASE
+            WHEN COALESCE(repo_display_order, 0) > 0 THEN repo_display_order
+            ELSE COALESCE(display_order, 0)
+         END"
+        .to_string()
+    } else {
+        "COALESCE(display_order, 0)".to_string()
+    };
+    let legacy_created_sort_expr = if has_created_at {
+        "datetime(created_at) DESC,".to_string()
+    } else {
+        String::new()
+    };
+    let updated_sort_expr = if has_updated_at {
+        "datetime(updated_at) DESC,".to_string()
+    } else {
+        String::new()
+    };
 
     let sql = format!(
         r#"
@@ -636,18 +661,19 @@ fn migrate_workspace_display_order_to_packed(connection: &Connection) -> Result<
             SELECT
                 id,
                 ROW_NUMBER() OVER (
-                    PARTITION BY
-                        CASE WHEN pinned_at IS NOT NULL THEN 'pinned' ELSE COALESCE(status, 'in-progress') END
-                    ORDER BY COALESCE(display_order, 0) ASC,
-                             datetime(created_at) DESC,
-                             datetime(updated_at) DESC,
+                    PARTITION BY {partition_status_expr}
+                    ORDER BY CASE WHEN {status_order_source_expr} > 0 THEN 0 ELSE 1 END ASC,
+                             CASE WHEN {status_order_source_expr} > 0 THEN {status_order_source_expr} END ASC,
+                             {legacy_created_sort_expr}
+                             {updated_sort_expr}
                              id DESC
                 ) * {step} AS status_order,
                 ROW_NUMBER() OVER (
-                    PARTITION BY repository_id
-                    ORDER BY COALESCE(display_order, 0) ASC,
-                             datetime(created_at) DESC,
-                             datetime(updated_at) DESC,
+                    PARTITION BY {partition_repo_expr}
+                    ORDER BY CASE WHEN {repo_order_source_expr} > 0 THEN 0 ELSE 1 END ASC,
+                             CASE WHEN {repo_order_source_expr} > 0 THEN {repo_order_source_expr} END ASC,
+                             {legacy_created_sort_expr}
+                             {updated_sort_expr}
                              id DESC
                 ) * {step} AS repo_order
             FROM workspaces
@@ -655,10 +681,15 @@ fn migrate_workspace_display_order_to_packed(connection: &Connection) -> Result<
 
         UPDATE workspaces
         SET display_order = (
-            SELECT status_order * {base} + repo_order
-            FROM tmp_workspace_sidebar_order
-            WHERE tmp_workspace_sidebar_order.id = workspaces.id
-        )
+                SELECT status_order
+                FROM tmp_workspace_sidebar_order
+                WHERE tmp_workspace_sidebar_order.id = workspaces.id
+            ),
+            repo_display_order = (
+                SELECT repo_order
+                FROM tmp_workspace_sidebar_order
+                WHERE tmp_workspace_sidebar_order.id = workspaces.id
+            )
         WHERE EXISTS (
             SELECT 1
             FROM tmp_workspace_sidebar_order
@@ -666,15 +697,19 @@ fn migrate_workspace_display_order_to_packed(connection: &Connection) -> Result<
         );
 
         DROP TABLE tmp_workspace_sidebar_order;
-        INSERT OR REPLACE INTO settings (key, value) VALUES ('workspace_display_order_packed_v1', '1');
         "#,
-        base = sidebar_order::ORDER_BASE,
+        partition_repo_expr = partition_repo_expr,
+        partition_status_expr = partition_status_expr,
+        repo_order_source_expr = repo_order_source_expr,
+        status_order_source_expr = status_order_source_expr,
+        legacy_created_sort_expr = legacy_created_sort_expr,
+        updated_sort_expr = updated_sort_expr,
         step = sidebar_order::ORDER_STEP,
     );
 
     connection
         .execute_batch(&sql)
-        .context("Failed to migrate workspace display_order to packed sidebar order")
+        .context("Failed to normalize workspace sidebar orders")
 }
 
 const SCHEMA_SQL: &str = r#"
@@ -742,7 +777,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     linked_directory_paths TEXT,
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
-    display_order INTEGER DEFAULT 0,
+    display_order INTEGER NOT NULL,
+    repo_display_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1083,15 +1119,11 @@ mod tests {
     }
 
     #[test]
-    fn migration_packs_legacy_workspace_display_order_once() {
+    fn migration_normalizes_workspace_display_orders_when_rows_are_mixed() {
         let (connection, _dir) = open_test_db();
         connection
             .execute_batch(
                 r#"
-                CREATE TABLE settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
                 CREATE TABLE repos (
                     id TEXT PRIMARY KEY,
                     name TEXT,
@@ -1132,32 +1164,32 @@ mod tests {
                 INSERT INTO repos (id, name, root_path) VALUES ('r1', 'repo', '/tmp/repo');
                 INSERT INTO workspaces (id, repository_id, directory_name, status, display_order, created_at)
                 VALUES
-                    ('w-low', 'r1', 'low', 'in-progress', 1000, '2024-01-01T00:00:00Z'),
-                    ('w-high', 'r1', 'high', 'in-progress', 2000, '2024-01-02T00:00:00Z');
+                    ('w-ordered', 'r1', 'ordered', 'in-progress', 1000, '2024-01-01T00:00:00Z'),
+                    ('w-legacy', 'r1', 'legacy', 'in-progress', 2000, '2024-01-02T00:00:00Z');
                 "#,
             )
             .unwrap();
 
         run_migrations(&connection).unwrap();
 
-        let read_order = |id: &str| -> i64 {
+        let read_orders = |id: &str| -> (i64, i64) {
             connection
                 .query_row(
-                    "SELECT display_order FROM workspaces WHERE id = ?1",
+                    "SELECT display_order, repo_display_order FROM workspaces WHERE id = ?1",
                     [id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .unwrap()
         };
-        let low_order = read_order("w-low");
-        let high_order = read_order("w-high");
+        let ordered_order = read_orders("w-ordered");
+        let legacy_order = read_orders("w-legacy");
 
-        assert!(low_order >= sidebar_order::ORDER_BASE);
-        assert!(sidebar_order::status_order(low_order) < sidebar_order::status_order(high_order));
-        assert!(sidebar_order::repo_order(low_order) < sidebar_order::repo_order(high_order));
+        assert_eq!(ordered_order, (1024, 1024));
+        assert_eq!(legacy_order, (2048, 2048));
 
         run_migrations(&connection).unwrap();
-        assert_eq!(low_order, read_order("w-low"));
+        assert_eq!(ordered_order, read_orders("w-ordered"));
+        assert_eq!(legacy_order, read_orders("w-legacy"));
     }
 
     /// Construct the full pre-drop legacy DDL once. Each migration test

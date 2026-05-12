@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
 use helmor_lib::data_dir;
 use helmor_lib::db;
+use helmor_lib::workspace::sidebar_order;
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -74,9 +75,9 @@ fn seed_workspace_session(
 ) {
     conn.execute(
         "INSERT INTO workspaces (id, repository_id, directory_name, state,
-         status, linked_directory_paths)
-         VALUES (?1, 'r-1', 'example', 'ready', 'in-progress', ?2)",
-        rusqlite::params![ws_id, linked],
+         status, linked_directory_paths, display_order)
+         VALUES (?1, 'r-1', 'example', 'ready', 'in-progress', ?2, ?3)",
+        rusqlite::params![ws_id, linked, sidebar_order::ORDER_STEP],
     )
     .unwrap();
     conn.execute(
