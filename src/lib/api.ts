@@ -1423,6 +1423,20 @@ export async function moveLocalWorkspaceToWorktree(
 /** How a workspace's filesystem is provisioned. */
 export type WorkspaceMode = "worktree" | "local";
 
+/**
+ * How a worktree-mode workspace acquires its git branch.
+ *
+ * - `newBranch` (default): allocate a fresh auto-named branch off
+ *   `sourceBranch` and create a worktree there.
+ * - `useExistingBranch`: attach the workspace to a branch that
+ *   already exists locally (named via `sourceBranch`). Reuses the
+ *   branch as-is — no `-B` reset, no upstream coupling.
+ *
+ * Local-mode workspaces ignore this flag — they always check out
+ * `sourceBranch` in place.
+ */
+export type WorkspaceBranchIntent = "newBranch" | "useExistingBranch";
+
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
 	reset: boolean;
@@ -2276,11 +2290,13 @@ export async function prepareWorkspaceFromRepo(
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
 	initialStatus?: WorkspaceStatus | null,
+	branchIntent?: WorkspaceBranchIntent | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
 	});
 }

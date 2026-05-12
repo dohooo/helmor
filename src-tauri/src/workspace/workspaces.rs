@@ -31,11 +31,11 @@ pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
     create_workspace_from_repo_impl, execute_archive_plan, finalize_workspace_from_repo_impl,
     move_local_workspace_to_worktree_impl, prepare_archive_plan, prepare_local_workspace_impl,
-    prepare_workspace_from_repo_impl, restore_workspace_impl, validate_archive_workspace,
-    validate_restore_workspace, ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename,
-    CreateWorkspaceResponse, FinalizeWorkspaceResponse, MoveLocalToWorktreeResponse,
-    PrepareWorkspaceResponse, RestoreWorkspaceResponse, TargetBranchConflict,
-    ValidateRestoreResponse,
+    prepare_workspace_from_existing_branch_impl, prepare_workspace_from_repo_impl,
+    restore_workspace_impl, validate_archive_workspace, validate_restore_workspace,
+    ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse,
+    FinalizeWorkspaceResponse, MoveLocalToWorktreeResponse, PrepareWorkspaceResponse,
+    RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,
 };
 
 #[derive(Debug, Clone, Serialize)]

@@ -674,6 +674,61 @@ pub fn verify_branch_exists(repo_root: &Path, branch: &str) -> Result<()> {
     .with_context(|| format!("Branch does not exist: {branch}"))
 }
 
+/// Information about a single `git worktree list` entry that's relevant
+/// to the existing-branch workspace flow: the worktree path and which
+/// local branch (if any) it has checked out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: String,
+    /// `None` for detached-HEAD worktrees and for the main worktree
+    /// when it's also detached.
+    pub branch: Option<String>,
+}
+
+/// Enumerate every worktree git tracks for this repo by parsing
+/// `git worktree list --porcelain`. The porcelain format pairs
+/// `worktree <path>` with either `branch refs/heads/<name>` or
+/// `detached`, separated by blank lines. We strip the `refs/heads/`
+/// prefix so callers can compare against short branch names directly.
+pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeEntry>> {
+    let repo_root = repo_root.display().to_string();
+    let output = run_git(
+        ["-C", repo_root.as_str(), "worktree", "list", "--porcelain"],
+        None,
+    )
+    .context("Failed to list worktrees")?;
+
+    let mut entries = Vec::new();
+    let mut current_path: Option<String> = None;
+    let mut current_branch: Option<String> = None;
+    let flush =
+        |path: &mut Option<String>, branch: &mut Option<String>, sink: &mut Vec<WorktreeEntry>| {
+            if let Some(p) = path.take() {
+                sink.push(WorktreeEntry {
+                    path: p,
+                    branch: branch.take(),
+                });
+            } else {
+                *branch = None;
+            }
+        };
+    for line in output.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            flush(&mut current_path, &mut current_branch, &mut entries);
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            flush(&mut current_path, &mut current_branch, &mut entries);
+            current_path = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            current_branch = Some(rest.strip_prefix("refs/heads/").unwrap_or(rest).to_string());
+        }
+    }
+    flush(&mut current_path, &mut current_branch, &mut entries);
+    Ok(entries)
+}
+
 /// Verify a commit exists in the repo.
 pub fn verify_commit_exists(repo_root: &Path, commit: &str) -> Result<()> {
     let repo_root = repo_root.display().to_string();
@@ -1747,5 +1802,81 @@ mod tests {
         let parsed = parse_unmerged_paths(raw);
         assert_eq!(parsed.len(), 1);
         assert!(parsed.contains("valid.txt"));
+    }
+
+    #[test]
+    fn list_worktrees_returns_main_and_secondary_entries() {
+        let dir = init_repo();
+        // Add a secondary worktree on a new branch so the porcelain
+        // output has two entries to parse.
+        run(dir.path(), &["branch", "feature-x"]);
+        let secondary = tempfile::tempdir().unwrap();
+        run(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                secondary.path().to_str().unwrap(),
+                "feature-x",
+            ],
+        );
+
+        let entries = list_worktrees(dir.path()).expect("list worktrees");
+        assert_eq!(entries.len(), 2);
+
+        let main = entries
+            .iter()
+            .find(|e| e.branch.as_deref() == Some("main"))
+            .expect("main worktree present with branch=main");
+        // Canonicalising both ends — tempdir on macOS surfaces as
+        // `/private/var/...` while git emits `/var/...`. Compare
+        // canonical forms instead of literal strings.
+        let main_canon = std::fs::canonicalize(&main.path).unwrap();
+        let main_expected = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(main_canon, main_expected);
+
+        let secondary_entry = entries
+            .iter()
+            .find(|e| e.branch.as_deref() == Some("feature-x"))
+            .expect("secondary worktree present with branch=feature-x");
+        let sec_canon = std::fs::canonicalize(&secondary_entry.path).unwrap();
+        let sec_expected = std::fs::canonicalize(secondary.path()).unwrap();
+        assert_eq!(sec_canon, sec_expected);
+    }
+
+    #[test]
+    fn list_worktrees_reports_detached_head_as_branchless() {
+        let dir = init_repo();
+        let head_sha = run_git(
+            ["-C", dir.path().to_str().unwrap(), "rev-parse", "HEAD"],
+            None,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        let detached = tempfile::tempdir().unwrap();
+        run(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                detached.path().to_str().unwrap(),
+                head_sha.as_str(),
+            ],
+        );
+
+        let entries = list_worktrees(dir.path()).expect("list worktrees");
+        assert_eq!(entries.len(), 2);
+        let detached_entry = entries
+            .iter()
+            .find(|e| {
+                std::fs::canonicalize(&e.path).ok() == std::fs::canonicalize(detached.path()).ok()
+            })
+            .expect("detached worktree present");
+        assert!(
+            detached_entry.branch.is_none(),
+            "detached worktree must report branch = None"
+        );
     }
 }

@@ -154,6 +154,26 @@ impl ToSql for WorkspaceMode {
     }
 }
 
+/// How a worktree-mode workspace acquires its git branch. Lives in
+/// memory only (no `workspaces` column) — once the worktree is
+/// materialised the branch already exists, so the intent is purely a
+/// dispatch choice during `prepare`.
+///
+/// `NewBranch` — the historical default: allocate a fresh
+/// auto-generated branch name and create it off `source_branch`.
+///
+/// `UseExistingBranch` — attach the workspace to a branch the user
+/// already has locally. Disabled for the local workspace mode (which
+/// always checks out the picked branch in-place); accepted only for
+/// `WorkspaceMode::Worktree`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceBranchIntent {
+    #[default]
+    NewBranch,
+    UseExistingBranch,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

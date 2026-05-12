@@ -223,6 +223,165 @@ pub fn prepare_workspace_from_repo_impl(
     })
 }
 
+/// Create a worktree-mode workspace anchored to an existing local
+/// branch rather than to a fresh auto-generated branch off
+/// `source_branch`. The picked branch is reused as-is — no `-B` reset,
+/// no upstream coupling, no commits dropped.
+///
+/// Errors clearly when:
+/// - the branch name is empty;
+/// - the branch doesn't exist locally;
+/// - the branch is already checked out by another worktree (Git would
+///   refuse the `worktree add`; we catch it up front so the user gets
+///   the offending worktree path in the error).
+///
+/// On success the DB row is already in `Ready` / `SetupPending` and
+/// the worktree exists on disk, so the frontend's follow-up call to
+/// `finalize_workspace_from_repo` is a no-op (it short-circuits on
+/// non-`Initializing` state).
+///
+/// Remote-only branches (e.g. `origin/feature-x` without a local
+/// equivalent) are explicitly out of scope for this slice — that's
+/// Track B / PR B2.
+pub fn prepare_workspace_from_existing_branch_impl(
+    repo_id: &str,
+    branch: &str,
+    initial_status: WorkspaceStatus,
+) -> Result<PrepareWorkspaceResponse> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        bail!("Existing-branch workspace requires a branch name");
+    }
+
+    let repository = repos::load_repository_by_id(repo_id)?
+        .with_context(|| format!("Repository not found: {repo_id}"))?;
+    let repo_root = PathBuf::from(repository.root_path.trim());
+    git_ops::ensure_git_repository(&repo_root)?;
+
+    git_ops::verify_branch_exists(&repo_root, branch).with_context(|| {
+        format!(
+            "Branch `{branch}` does not exist locally in {}. Fetch or create it before reusing.",
+            repo_root.display()
+        )
+    })?;
+
+    let workspaces = git_ops::list_worktrees(&repo_root).with_context(|| {
+        format!(
+            "Failed to enumerate existing worktrees in {} while validating branch reuse",
+            repo_root.display()
+        )
+    })?;
+    if let Some(other) = workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some(branch))
+    {
+        bail!(
+            "Branch `{branch}` is already checked out in another worktree at `{}`. \
+             Switch that worktree away from `{branch}` or pick a different branch.",
+            other.path
+        );
+    }
+
+    let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
+    // intended_target = repo default (typical PR target). init_parent
+    // = the picked branch itself, since the workspace WAS initialized
+    // from that branch — there's no separate `X` to record. This
+    // keeps realign logic intact (it will fast-forward against
+    // `origin/<branch>` when present).
+    let intended_target = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = db::current_timestamp()?;
+
+    workspace_models::insert_initializing_workspace_with_branches(
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        branch,
+        branch,
+        &intended_target,
+        WorkspaceMode::Worktree,
+        initial_status,
+        &timestamp,
+    )?;
+
+    let workspace_dir = crate::data_dir::workspace_dir(&repository.name, &directory_name)?;
+    if workspace_dir.exists() {
+        let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
+        bail!(
+            "Workspace target already exists at {}",
+            workspace_dir.display()
+        );
+    }
+
+    if let Err(error) = git_ops::create_worktree(&repo_root, &workspace_dir, branch) {
+        let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
+        return Err(error);
+    }
+
+    // Resolve setup script + auto-run intent the same way the
+    // newBranchFrom finalize step does so SetupPending/Ready semantics
+    // stay consistent between the two creation paths.
+    let has_setup = match resolve_setup_hook(&repository, &workspace_dir) {
+        Ok(Some(s)) if !s.trim().is_empty() => true,
+        Ok(_) => false,
+        Err(e) => {
+            tracing::warn!("Failed to resolve setup hook, skipping: {e:#}");
+            false
+        }
+    };
+    let final_state = if has_setup && repository.auto_run_setup {
+        WorkspaceState::SetupPending
+    } else {
+        WorkspaceState::Ready
+    };
+
+    if let Err(error) =
+        workspace_models::update_workspace_state(&workspace_id, final_state, &timestamp)
+    {
+        cleanup_failed_created_workspace(&workspace_id, &repo_root, &workspace_dir, branch, true);
+        return Err(error);
+    }
+
+    let repo_scripts =
+        repos::load_repo_scripts(repo_id, Some(&workspace_id)).unwrap_or_else(|_| {
+            repos::RepoScripts {
+                setup_script: None,
+                run_script: None,
+                archive_script: None,
+                setup_from_project: false,
+                run_from_project: false,
+                archive_from_project: false,
+                auto_run_setup: true,
+                run_script_mode: "concurrent".to_string(),
+            }
+        });
+
+    Ok(PrepareWorkspaceResponse {
+        workspace_id,
+        initial_session_id: session_id,
+        repo_id: repository.id,
+        repo_name: repository.name,
+        directory_name,
+        branch: branch.to_string(),
+        // Field name is legacy; for the existing-branch path the
+        // "base" is just the workspace branch itself.
+        default_branch: branch.to_string(),
+        state: final_state,
+        repo_scripts,
+        // Worktree is already on disk — finalize will short-circuit
+        // and the frontend's optimistic submit can use this path
+        // immediately.
+        working_directory: Some(workspace_dir.display().to_string()),
+    })
+}
+
 /// One-shot local workspace creation. Skips the prepare/finalize split
 /// since there's no worktree to create — the workspace operates
 /// directly on `repo.root_path`. If the user picked a `source_branch`
@@ -1404,5 +1563,137 @@ mod tests {
             ArchiveHookOutcome::ScriptError { code: Some(2) }
         );
         assert_ne!(ArchiveHookOutcome::Success, ArchiveHookOutcome::NoScript);
+    }
+
+    // ── existing-branch workspace mode ────────────────────────────────────
+
+    use crate::testkit::{GitTestRepo, TestEnv};
+
+    /// Seed a repo row in the DB pointing at the on-disk fixture so the
+    /// real prepare path can load it. Returns the repo id.
+    fn seed_repo_for_fixture(env: &TestEnv, name: &str, repo: &GitTestRepo) -> String {
+        let id = format!("repo-{name}");
+        env.db_connection()
+            .execute(
+                "INSERT INTO repos (id, name, default_branch, root_path, remote)
+                 VALUES (?1, ?2, 'main', ?3, 'origin')",
+                rusqlite::params![id, name, repo.path().display().to_string()],
+            )
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn existing_branch_happy_path_creates_worktree_and_persists_branches() {
+        let env = TestEnv::new("existing-branch-happy");
+        let (_origin, clone) = GitTestRepo::with_remote();
+        // Create a real local branch to reuse.
+        clone.git(&["branch", "feature-cool"]);
+        let repo_id = seed_repo_for_fixture(&env, "demo-happy", &clone);
+
+        let response = prepare_workspace_from_existing_branch_impl(
+            &repo_id,
+            "feature-cool",
+            WorkspaceStatus::default(),
+        )
+        .expect("existing-branch prepare succeeds");
+
+        assert_eq!(response.branch, "feature-cool");
+        // Worktree is already materialised inline, so the response
+        // state is Ready / SetupPending — no Initializing layover.
+        assert!(matches!(
+            response.state,
+            WorkspaceState::Ready | WorkspaceState::SetupPending
+        ));
+        let working_dir = response.working_directory.as_deref().expect("working dir");
+        assert!(std::path::Path::new(working_dir).is_dir());
+
+        // Persistence: init_parent = picked branch (provenance), but
+        // intended_target = repo default so PRs land where users expect.
+        let row: (String, String, String) = env
+            .db_connection()
+            .query_row(
+                "SELECT branch, initialization_parent_branch, intended_target_branch
+                 FROM workspaces WHERE id = ?1",
+                [&response.workspace_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "feature-cool");
+        assert_eq!(row.1, "feature-cool");
+        assert_eq!(row.2, "main");
+    }
+
+    #[test]
+    fn existing_branch_errors_when_branch_missing_locally() {
+        let env = TestEnv::new("existing-branch-missing");
+        let (_origin, clone) = GitTestRepo::with_remote();
+        let repo_id = seed_repo_for_fixture(&env, "demo-missing", &clone);
+
+        let err = prepare_workspace_from_existing_branch_impl(
+            &repo_id,
+            "no-such-branch",
+            WorkspaceStatus::default(),
+        )
+        .expect_err("missing branch must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("no-such-branch") && msg.contains("does not exist locally"),
+            "expected missing-branch error; got: {msg}"
+        );
+
+        // Refuses BEFORE touching the DB — no orphan row left behind.
+        let count: i64 = env
+            .db_connection()
+            .query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn existing_branch_errors_when_branch_already_checked_out_elsewhere() {
+        let env = TestEnv::new("existing-branch-checked-out");
+        let (_origin, clone) = GitTestRepo::with_remote();
+        // The clone has `main` checked out at its own root. Reusing it
+        // for a new worktree must error with the conflicting path
+        // surfaced to the user.
+        let repo_id = seed_repo_for_fixture(&env, "demo-checked-out", &clone);
+
+        let err = prepare_workspace_from_existing_branch_impl(
+            &repo_id,
+            "main",
+            WorkspaceStatus::default(),
+        )
+        .expect_err("branch in another worktree must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("already checked out")
+                && msg.contains(&clone.path().display().to_string()),
+            "expected checked-out-elsewhere error with offending path; got: {msg}"
+        );
+        let count: i64 = env
+            .db_connection()
+            .query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn existing_branch_errors_on_empty_branch_name() {
+        let env = TestEnv::new("existing-branch-empty");
+        let (_origin, clone) = GitTestRepo::with_remote();
+        let repo_id = seed_repo_for_fixture(&env, "demo-empty", &clone);
+
+        let err = prepare_workspace_from_existing_branch_impl(
+            &repo_id,
+            "   ",
+            WorkspaceStatus::default(),
+        )
+        .expect_err("empty branch must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("requires a branch name"),
+            "expected empty-branch error; got: {msg}"
+        );
     }
 }

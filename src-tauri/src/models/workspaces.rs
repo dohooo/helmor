@@ -259,6 +259,43 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
+    insert_initializing_workspace_with_branches(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        default_branch,
+        default_branch,
+        mode,
+        status,
+        timestamp,
+    )
+}
+
+/// Insert an initializing workspace + initial session, recording the
+/// initialization parent and intended-target branches independently.
+///
+/// The existing `_with_mode` helper collapses both to a single
+/// `default_branch` argument, which is right for "new branch from X"
+/// (parent == target == X) and for local mode (parent == target ==
+/// the checked-out branch). The "use existing branch" worktree flow
+/// breaks that symmetry: parent is the user's picked branch (it IS
+/// the workspace branch), but the intended merge target is the
+/// repo's default branch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_initializing_workspace_with_branches(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    init_parent_branch: &str,
+    intended_target_branch: &str,
+    mode: WorkspaceMode,
+    status: WorkspaceStatus,
+    timestamp: &str,
+) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
         .transaction()
@@ -304,8 +341,8 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 session_id,
                 branch,
                 WorkspaceState::Initializing,
-                default_branch,
-                default_branch,
+                init_parent_branch,
+                intended_target_branch,
                 mode,
                 next_order,
                 status,

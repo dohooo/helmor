@@ -21,27 +21,57 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 /// frontend should follow up with `finalize_workspace_from_repo` to kick
 /// off the slow git worktree creation; UI remains visible during that
 /// phase with state=initializing.
+///
+/// `branch_intent` defaults to `NewBranch` (the historical "branch off
+/// `source_branch`" flow). `UseExistingBranch` reuses `source_branch` as
+/// the workspace branch — accepted only for worktree mode and requires
+/// the branch to already exist locally. The existing-branch path
+/// materialises the worktree inline (so `finalize_workspace_from_repo`
+/// short-circuits as a no-op).
 #[tauri::command]
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
     source_branch: Option<String>,
     mode: Option<crate::workspace_state::WorkspaceMode>,
+    branch_intent: Option<crate::workspace_state::WorkspaceBranchIntent>,
     initial_status: Option<WorkspaceStatus>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let mode = mode.unwrap_or_default();
+    let branch_intent = branch_intent.unwrap_or_default();
     let initial_status = initial_status.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || match mode {
-            crate::workspace_state::WorkspaceMode::Worktree => {
+        run_blocking(move || match (mode, branch_intent) {
+            (
+                crate::workspace_state::WorkspaceMode::Worktree,
+                crate::workspace_state::WorkspaceBranchIntent::UseExistingBranch,
+            ) => {
+                let branch = source_branch
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|b| !b.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "UseExistingBranch requires `sourceBranch` to name an existing local branch"
+                        )
+                    })?;
+                workspaces::prepare_workspace_from_existing_branch_impl(
+                    &repo_id,
+                    branch,
+                    initial_status,
+                )
+            }
+            (crate::workspace_state::WorkspaceMode::Worktree, _) => {
                 workspaces::prepare_workspace_from_repo_impl(
                     &repo_id,
                     source_branch.as_deref(),
                     initial_status,
                 )
             }
-            crate::workspace_state::WorkspaceMode::Local => {
+            (crate::workspace_state::WorkspaceMode::Local, _) => {
+                // Local mode always checks out the picked branch
+                // in-place — UseExistingBranch is redundant there.
                 workspaces::prepare_local_workspace_impl(
                     &repo_id,
                     source_branch.as_deref(),
