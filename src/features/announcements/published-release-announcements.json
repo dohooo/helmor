@@ -1,4 +1,9 @@
 {
 	"_readme": "AUTO-GENERATED. Do NOT edit by hand. Written by scripts/stamp-release-announcements.ts during `bun run release:version`. Each item binds a catalog id to the release version it shipped in. Manual edits will be overwritten on the next release; renaming an id will orphan dismissal state and is irreversible.",
-	"items": []
+	"items": [
+		{
+			"id": "2026-05-11-2300",
+			"releaseVersion": "0.21.0"
+		}
+	]
 }

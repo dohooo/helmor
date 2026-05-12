@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0
+
+### Minor Changes
+
+- [#462](https://github.com/dohooo/helmor/pull/462) [`d02a9ad`](https://github.com/dohooo/helmor/commit/d02a9ad67293272807fb2ca2c609385a1d221763) Thanks [@dohooo](https://github.com/dohooo)! - Add sidebar repo grouping and surface release notes inside the app:
+  - Group workspaces in the sidebar by repository instead of status from General → "Group sidebar by repository".
+  - Show a "New in vX.Y.Z" toast on launch after upgrades, with quick actions that jump straight to the relevant feature or settings page.
+  - Mark new settings rows with a small "New feature" badge so recent additions are easy to spot when browsing Settings.
+  - "Save for later" on the start page now creates the workspace directly in Backlog instead of flashing through In progress.
+
 ## 0.20.5
 
 ### Patch Changes

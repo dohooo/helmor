@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.20.5"
+version = "0.21.0"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
