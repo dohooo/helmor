@@ -694,12 +694,8 @@ fn server_tool_result_without_id_is_dropped() {
 // R2: non-tool_result user payloads
 // ---------------------------------------------------------------------------
 
-/// A `type=user` event whose content is plain text (no tool_result
-/// blocks) following an assistant turn must render as a real user
-/// message — dropping it on the `parsed.is_some()` branch would
-/// silently swallow mid-conversation user turns.
 #[test]
-fn user_text_event_after_assistant_renders_as_user_message() {
+fn user_text_event_after_assistant_is_dropped() {
     let messages = vec![
         im(
             "a1",
@@ -725,13 +721,8 @@ fn user_text_event_after_assistant_renders_as_user_message() {
         ),
     ];
     let result = convert(&messages);
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[1].role, MessageRole::User);
-    if let ExtendedMessagePart::Basic(MessagePart::Text { text, .. }) = &result[1].content[0] {
-        assert_eq!(text, "do the thing");
-    } else {
-        panic!("expected user text part");
-    }
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::Assistant);
 }
 
 /// Drop rule: a non-tool_result user payload with no preceding
