@@ -86,6 +86,16 @@ export function useWorkspaceDnd({
 				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] * {
 					cursor: grabbing !important;
 				}
+				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] [data-workspace-row-body]:hover {
+					background-color: transparent !important;
+				}
+				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] .workspace-row-selected[data-workspace-row-body]:hover {
+					background: var(--workspace-sidebar-selected-bg) !important;
+				}
+				[${WORKSPACE_DND_ACTIVE_ATTRIBUTE}="true"] [data-workspace-row-actions] {
+					opacity: 0 !important;
+					pointer-events: none !important;
+				}
 			`;
 			document.head.appendChild(styleElement);
 		}

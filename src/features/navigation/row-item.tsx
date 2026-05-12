@@ -251,6 +251,7 @@ export const WorkspaceRowItem = memo(
 				tabIndex={0}
 				aria-label={displayTitle}
 				data-workspace-row-id={row.id}
+				data-workspace-row-body="true"
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				data-busy={isBusy ? "true" : undefined}
 				style={rowFadeStyle}
@@ -385,6 +386,7 @@ export const WorkspaceRowItem = memo(
 
 				{hasActionHandler ? (
 					<span
+						data-workspace-row-actions="true"
 						className={cn(
 							"pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-2.5",
 							"opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
