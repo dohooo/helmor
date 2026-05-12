@@ -22,7 +22,8 @@ type ToolName =
 	| "send_prompt"
 	| "list_repos"
 	| "select_workspace"
-	| "wait_for_user";
+	| "wait_for_user"
+	| "end_session";
 
 /** Re-export of the Rust-side mutation kind enum. Kept as a TS type
  *  alias rather than its own union so they can't drift independently. */
@@ -53,6 +54,13 @@ type DispatcherOptions = {
 	 *  The Rust handler guarantees the id is non-empty and the tool
 	 *  reported success — the host doesn't need defensive checks. */
 	onNavigateToWorkspace?: (workspaceId: string) => void;
+	/** Close the voice-mode session. Fires when the agent invokes the
+	 *  synthetic `end_session` tool — i.e. the user verbally signaled
+	 *  they're done ("that's all" / "拜拜"). The dispatcher gives the
+	 *  audio buffer a beat to flush before invoking this so the model's
+	 *  goodbye reply isn't cut off mid-word. Caller should flip
+	 *  `voiceModeStore.setActive(false)`. */
+	onEndSession?: () => void;
 };
 
 export type ToolDispatcher = {
@@ -226,6 +234,20 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 			}
 		}
 	}
+
+	// `end_session`: the user verbally said goodbye and the model
+	// called the synthetic tool. `response.done` has already fired by
+	// the time we're here, which means the server is done streaming
+	// audio — but the audio frames buffered on the client side are
+	// still playing out. Closing WebRTC immediately would clip the
+	// last word or two of the goodbye reply. Wait for the buffer to
+	// drain before tearing down. The 1500ms window matches the typical
+	// length of a short sign-off ("see ya." / "好的拜拜。") with some
+	// slack for jitter; longer goodbyes are the model's problem.
+	if (opts.onEndSession && results.some((r) => r.endSession)) {
+		const endSession = opts.onEndSession;
+		setTimeout(endSession, 1500);
+	}
 }
 
 type RunCallResult = {
@@ -233,14 +255,21 @@ type RunCallResult = {
 	output: string;
 	invalidates: AgentMutationKind[];
 	navigateToWorkspaceId?: string;
+	/** Flag set by the `end_session` short-circuit so `executeCalls`
+	 *  knows to fire `onEndSession` after the audio buffer flushes. */
+	endSession?: boolean;
 };
 
 /** Empty-success result for `wait_for_user` and front-end short-circuits. */
-function silentResult(callId: string): RunCallResult {
+function silentResult(
+	callId: string,
+	extra?: Partial<RunCallResult>,
+): RunCallResult {
 	return {
 		callId,
 		output: JSON.stringify({ ok: true }),
 		invalidates: [],
+		...extra,
 	};
 }
 
@@ -254,6 +283,14 @@ async function runCall(call: PendingCall): Promise<RunCallResult> {
 	// "agent has nothing to say" case.
 	if (call.name === "wait_for_user") {
 		return silentResult(call.callId);
+	}
+	// end_session is a UI-only signal: tear down the voice session.
+	// Short-circuit (no IPC) but mark the result so `executeCalls`
+	// fires the host's `onEndSession` callback after the audio buffer
+	// has had a chance to flush — calling it immediately would clip
+	// the model's goodbye reply.
+	if (call.name === "end_session") {
+		return silentResult(call.callId, { endSession: true });
 	}
 
 	const args = parseArgs(call.argsBuffer);

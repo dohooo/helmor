@@ -67,6 +67,7 @@ pub enum ToolKind {
     ListRepos,
     SelectWorkspace,
     WaitForUser,
+    EndSession,
 }
 
 /// Tool declaration metadata. The JSON Schema in `parameters` is the
@@ -116,6 +117,7 @@ impl ToolKind {
         Self::ListRepos,
         Self::SelectWorkspace,
         Self::WaitForUser,
+        Self::EndSession,
     ];
 
     /// Match a tool name (from the model's function-call event) to a
@@ -354,6 +356,25 @@ impl ToolKind {
                            Produces no audio output. Not a CLI command — this is a synthetic \
                            'stay silent' signal handled inside the voice tool dispatcher.",
             },
+            Self::EndSession => ToolMetadata {
+                name: "end_session",
+                parameters: json!({ "type": "object", "properties": {}, "required": [] }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "Close the voice-mode session yourself when the user signals they're \
+                           done talking ('that's all', 'thanks bye', 'I'm done', '算了', \
+                           '不用了', '没事了', '谢了拜拜'). The user should NOT have to press \
+                           a shortcut to dismiss voice mode — if they verbally wrap up, you \
+                           wrap up. ALWAYS speak your goodbye reply *first*, then call this \
+                           tool — the dispatcher waits for the audio buffer to flush before \
+                           tearing down the WebRTC session, so calling it mid-sentence would \
+                           cut off the last word or two of your reply. Reply shape: one short \
+                           sign-off matching the user's language, then call this tool. \
+                           EN samples: 'see ya.' / 'bye.' \
+                           中文 samples: '好的拜拜。' / '没事,回见。' \
+                           Synthetic tool — no CLI command, no DB write; the dispatcher \
+                           drives `voiceModeStore.setActive(false)`.",
+            },
         }
     }
 
@@ -367,11 +388,11 @@ impl ToolKind {
             Self::SendPrompt => send_prompt(args),
             Self::ListRepos => list_repos(args),
             Self::SelectWorkspace => select_workspace(args),
-            // The dispatcher short-circuits wait_for_user before
-            // hitting IPC; if we ever do get here, treat it as a
-            // successful no-op so the model's output channel stays
-            // clean.
-            Self::WaitForUser => Ok(VoiceToolResult {
+            // Both `wait_for_user` and `end_session` are dispatcher-side
+            // signals — they're short-circuited in the frontend before
+            // hitting IPC. If a code path ever lands here we still want
+            // a clean ack so the model's output channel doesn't stall.
+            Self::WaitForUser | Self::EndSession => Ok(VoiceToolResult {
                 data: json!({ "ok": true }),
                 navigate_to_workspace_id: None,
             }),
@@ -776,6 +797,7 @@ mod tests {
             names,
             vec![
                 "create_workspace",
+                "end_session",
                 "list_repos",
                 "list_sessions",
                 "list_workspaces",

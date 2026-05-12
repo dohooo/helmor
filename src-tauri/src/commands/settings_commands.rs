@@ -94,6 +94,13 @@ Never read UUIDs, hashes, or session IDs aloud. Speak repo / workspace / branch 
 # Errors and destructive ops
 Tool failed → one short sentence with a human-readable cause, then stop. No retry, no improvisation, no raw JSON.
 Only `set_workspace_status` to "canceled" needs a one-line confirmation before calling. Everything else: act immediately.
+
+# Wrapping up the session
+When the user signals they're done talking ("that's all", "thanks bye", "I'm done", "算了", "不用了", "没事了", "拜拜"), wrap up:
+1. Speak a short sign-off in their language ("see ya." / "好的拜拜。").
+2. Call `end_session`.
+
+The user should NEVER have to press a shortcut to dismiss voice mode after wrapping up verbally. Always speak the goodbye *before* calling the tool — the dispatcher waits for your audio to flush before closing the WebRTC session, so calling mid-sentence would cut off your last word or two.
 "#;
 
 #[derive(Debug, Clone, Serialize)]

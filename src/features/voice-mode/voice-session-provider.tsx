@@ -1,7 +1,13 @@
-import { createContext, type ReactNode, useContext, useMemo } from "react";
+import {
+	createContext,
+	type ReactNode,
+	useCallback,
+	useContext,
+	useMemo,
+} from "react";
 import { useRealtimeSequence } from "./use-realtime-sequence";
 import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
-import { useVoiceModeActive } from "./voice-mode-store";
+import { useVoiceModeActive, voiceModeStore } from "./voice-mode-store";
 
 /** Voice-mode session anchor. Hosts the WebRTC peer + UI state machine
  *  once, near the top of the app tree, and republishes the resulting
@@ -53,9 +59,18 @@ export function VoiceSessionProvider({
 	onNavigateToWorkspace,
 }: VoiceSessionProviderProps) {
 	const active = useVoiceModeActive();
+	// Synthetic `end_session` tool: the model invokes it after wrapping
+	// up verbally ("拜拜" / "see ya."), and the dispatcher's
+	// audio-flush delay has already elapsed by the time this fires —
+	// so flipping the store directly here is safe to terminate the
+	// session without clipping the goodbye reply.
+	const handleEndSession = useCallback(() => {
+		voiceModeStore.setActive(false);
+	}, []);
 	const realState = useRealtimeSequence(
 		active && hasApiKey,
 		onNavigateToWorkspace,
+		handleEndSession,
 	);
 	const demoState = useDemoSequence(active && !hasApiKey);
 	const state = hasApiKey ? realState : demoState;

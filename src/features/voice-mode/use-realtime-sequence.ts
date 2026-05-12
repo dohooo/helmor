@@ -21,8 +21,12 @@ import {
  *  label after `response.done`. After this window expires we drop back
  *  to Mic + "Listening". Long enough to read a short-to-medium reply,
  *  short enough that the bar doesn't feel stuck if the user wants to
- *  jump back in. */
-const TRANSCRIPT_LINGER_MS = 1000;
+ *  jump back in. The linger timer is cancelled the moment the user
+ *  starts speaking (`input_audio_buffer.speech_started`), so this is a
+ *  soft upper bound — if the user is going to keep talking they don't
+ *  pay the full wait. 2 seconds reads as "I have a beat to digest what
+ *  it said", which felt rushed at 1 second. */
+const TRANSCRIPT_LINGER_MS = 2000;
 
 /**
  * Realtime API-driven counterpart to `useDemoSequence`. Same output
@@ -71,17 +75,23 @@ const TRANSCRIPT_LINGER_MS = 1000;
 export function useRealtimeSequence(
 	active: boolean,
 	onNavigateToWorkspace?: (workspaceId: string) => void,
+	onEndSession?: () => void,
 ): VoiceUiState {
-	// Hold the latest navigation callback in a ref. Caller-side identity
-	// can change every render (App.tsx's `handleSelectWorkspace` closes
-	// over plenty of state), but we don't want a fresh closure to retrigger
-	// the WebRTC session lifecycle — that's exactly the bug this whole
-	// provider exists to fix. Reading through the ref keeps the latest
-	// behavior without participating in the effect's dep array.
+	// Hold the latest navigation / end-session callbacks in refs.
+	// Caller-side identity can change every render (App.tsx's
+	// `handleSelectWorkspace` closes over plenty of state), but we don't
+	// want a fresh closure to retrigger the WebRTC session lifecycle —
+	// that's exactly the bug this whole provider exists to fix. Reading
+	// through refs keeps the latest behavior without dragging callback
+	// identity into the effect dep array.
 	const navigateRef = useRef(onNavigateToWorkspace);
 	useEffect(() => {
 		navigateRef.current = onNavigateToWorkspace;
 	}, [onNavigateToWorkspace]);
+	const endSessionRef = useRef(onEndSession);
+	useEffect(() => {
+		endSessionRef.current = onEndSession;
+	}, [onEndSession]);
 
 	const [phase, setPhase] = useState<VoiceUiPhase>("listening");
 	const [label, setLabel] = useState<string | undefined>();
@@ -406,13 +416,15 @@ export function useRealtimeSequence(
 				const dispatcher = createToolDispatcher({
 					send: next.send,
 					onMutation: invalidateCaches,
-					// Route through the ref so the dispatcher always
-					// sees the latest App-side handler without forcing
-					// us to put `onNavigateToWorkspace` into this
-					// effect's deps (which would restart the session
-					// on every parent render).
+					// Route through refs so the dispatcher always sees
+					// the latest App-side handlers without forcing us
+					// to put them into this effect's deps (which would
+					// restart the session on every parent render).
 					onNavigateToWorkspace: (workspaceId) => {
 						navigateRef.current?.(workspaceId);
+					},
+					onEndSession: () => {
+						endSessionRef.current?.();
 					},
 				});
 				next.onEvent((event) => dispatcher.handleEvent(event));
