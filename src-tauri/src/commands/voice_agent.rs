@@ -154,8 +154,12 @@ impl ToolKind {
                 cli_path: Some(&["workspace", "list"]),
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'show/list/what workspaces do I have'. \
-                           Preamble samples (only if a noticeable delay seems likely): \
-                           'let me check.' / 'one sec.' / 'hmm, looking now.'",
+                           Reply shape: comma-separated counts, no opener. Match the user's \
+                           spoken language for the entire reply. \
+                           EN sample: 'three in progress, two done, one in review.' \
+                           中文 sample: '三个进行中,两个完成,一个待评审。' \
+                           Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'. \
+                           NEVER 'ok,' / '嗯,' as a default opener.",
             },
             Self::ShowWorkspace => ToolMetadata {
                 name: "show_workspace",
@@ -172,8 +176,13 @@ impl ToolKind {
                 cli_path: Some(&["workspace", "show"]),
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'what's the status of X', 'show me X', \
-                           'how's X doing'. Preamble samples (only if it might be slow): \
-                           'let me look.' / 'one sec.' / 'checking.'",
+                           'how's X doing'. Reply shape: one short sentence with the most \
+                           relevant facts (state, branch, status). Match the user's spoken \
+                           language for the entire reply. \
+                           EN sample: 'kale slash voice, in review, on the voice-mode branch.' \
+                           中文 sample: 'kale 的 voice 工作区,待评审,在 voice-mode 分支上。' \
+                           No 'ok,' / '嗯,' opener. Preamble (only if noticeably slow): \
+                           EN 'one sec.' / 中 '稍等'.",
             },
             Self::CreateWorkspace => ToolMetadata {
                 name: "create_workspace",
@@ -194,9 +203,15 @@ impl ToolKind {
                            Call immediately — no confirmation needed (creation is reversible \
                            via delete). If the repo name is unclear, run list_repos first to \
                            find the right one. After success, the UI auto-navigates to the \
-                           new workspace — report the repo name, not the new ID. \
-                           Preamble samples (creation can take a moment): 'ok, on it.' / \
-                           'sure, doing that now.' / 'one sec.'",
+                           new workspace. Reply shape: verb-first, name the repo, nothing else. \
+                           Match the user's spoken language for the entire reply. \
+                           EN samples: 'created in kale.' / 'created.' \
+                           中文 samples: 'kale 工作区建好了。' / '建好了。' \
+                           Do NOT add 'the agent is now working' / 'agent 已经开始处理了' or \
+                           'let me know if...' / '有需要再叫我' — the UI shows that itself. \
+                           Preamble (creation takes ~1s, so a short one is fine): \
+                           EN 'one sec.' / 中 '稍等'. NEVER 'ok, on it.' / '好的,我来弄' \
+                           (bureaucratic).",
             },
             Self::SetWorkspaceStatus => ToolMetadata {
                 name: "set_workspace_status",
@@ -219,10 +234,12 @@ impl ToolKind {
                 use_when: "Mark a workspace done / review / progress / backlog / canceled. \
                            USE WHEN: user says 'mark X done', 'move X to review', etc. \
                            **CONFIRM ONLY when status='canceled' (destructive — cannot be \
-                           undone without recreating).** For all other status changes, call \
-                           immediately without confirmation. Status changes return fast — \
-                           usually no preamble needed; just call and report briefly \
-                           ('done.' / 'moved to review.').",
+                           undone without recreating).** All other status changes: call \
+                           immediately. Reply shape: verb-first, the new status, nothing else. \
+                           Match the user's spoken language for the entire reply. \
+                           EN samples: 'done.' / 'moved to review.' / 'back to in progress.' \
+                           中文 samples: '标记完成。' / '移到待评审。' / '改回进行中。' \
+                           No preamble; this returns in milliseconds.",
             },
             Self::ListSessions => ToolMetadata {
                 name: "list_sessions",
@@ -239,7 +256,11 @@ impl ToolKind {
                 cli_path: Some(&["session", "list"]),
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'show sessions in X', 'what have we worked on \
-                           in X'. Preamble samples (only if slow): 'let me check.' / 'one sec.'",
+                           in X'. Reply shape: count + most recent title. Match the user's \
+                           spoken language for the entire reply. \
+                           EN sample: 'three sessions, latest is fix-readme-typo.' \
+                           中文 sample: '三个会话,最近的是 fix-readme-typo。' \
+                           Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'.",
             },
             Self::SendPrompt => ToolMetadata {
                 name: "send_prompt",
@@ -271,9 +292,16 @@ impl ToolKind {
                 use_when: "Send a prompt to the AI agent inside a workspace's session. \
                            USE WHEN: user says 'tell agent in X to do Y' or 'have agent fix \
                            the bug'. Call immediately — no confirmation needed. After success, \
-                           the UI auto-navigates to that workspace; report 'sent' without \
-                           reading the session ID. Preamble samples: 'sending.' / 'on it.' / \
-                           'ok, sending now.'",
+                           the UI auto-navigates to that workspace. Reply shape: one word. \
+                           Match the user's spoken language for the entire reply. \
+                           EN sample: 'sent.' \
+                           中文 sample: '发了。' \
+                           Do NOT add 'the agent is now working on it' / 'agent 已经开始处理了', \
+                           'I'll let you know when it's done' / '完成后告诉你', or session IDs \
+                           — the UI shows the streaming response itself. \
+                           Preamble (sending is fast, ~50ms): usually skip. If you must, \
+                           EN 'sending.' / 中 '在发了'. NEVER 'ok, sending now.' / \
+                           '好的,现在发' (bureaucratic).",
             },
             Self::ListRepos => ToolMetadata {
                 name: "list_repos",
@@ -282,7 +310,12 @@ impl ToolKind {
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'what repos do I have', or before \
                            create_workspace to find the right repo. \
-                           Preamble samples (only if slow): 'let me check.' / 'one sec.'",
+                           Reply shape: comma-separated names, no opener. Match the user's \
+                           spoken language for the entire reply (the repo names stay as-is \
+                           since they're proper nouns). \
+                           EN sample: 'helmor, dosu, ts-to-zod.' \
+                           中文 sample: 'helmor、dosu、ts-to-zod。' \
+                           Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'.",
             },
             Self::SelectWorkspace => ToolMetadata {
                 name: "select_workspace",
@@ -305,8 +338,11 @@ impl ToolKind {
                            modify any data). `create_workspace` and `send_prompt` already \
                            auto-navigate after success — only call this tool when the user \
                            explicitly wants to view a *different* workspace from the one \
-                           currently selected. Return is a tiny envelope; do not read the \
-                           workspace id aloud. Preamble samples (only if slow): 'one sec.' / 'ok.'",
+                           currently selected. Reply shape: verb-first, one word. \
+                           Match the user's spoken language for the entire reply. \
+                           EN samples: 'switched.' / 'switched to kale.' \
+                           中文 samples: '切过去了。' / '切到 kale 了。' \
+                           Do not read the workspace id aloud. No preamble; this is fast.",
             },
             Self::WaitForUser => ToolMetadata {
                 name: "wait_for_user",
