@@ -61,6 +61,14 @@ pub async fn prewarm_slash_commands_for_workspace(
     Ok(())
 }
 
+/// Tauri command — called from the start page on repo switch. There's no
+/// workspace yet, so we prewarm using the repo's local `root_path`.
+#[tauri::command]
+pub async fn prewarm_slash_commands_for_repo(app: AppHandle, repo_id: String) -> CmdResult<()> {
+    queries::prewarm_slash_command_cache_for_repo(&app, &repo_id);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Streaming event types
 // ---------------------------------------------------------------------------

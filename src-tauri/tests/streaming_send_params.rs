@@ -105,6 +105,7 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        claude_thinking_display: None,
         images: &[],
     }
 }

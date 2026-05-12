@@ -39,6 +39,10 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceRemote?: string | null;
 	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
+	/** Timestamp from `WorkspaceDetail.setupCompletedAt`. Null when setup
+	 * was never run (or skipped); drives the Setup tab placeholder copy
+	 * and the "default to Run tab" behaviour after restart. */
+	workspaceSetupCompletedAt?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
@@ -72,6 +76,7 @@ export function WorkspaceInspectorSidebar({
 	workspaceRemote,
 	workspaceRemoteUrl,
 	workspaceState,
+	workspaceSetupCompletedAt,
 	repoId,
 	editorMode,
 	activeEditorPath,
@@ -112,6 +117,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceRootPath,
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
+		workspaceState: workspaceState ?? null,
 	});
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
@@ -142,6 +148,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"setup",
 		!!repoScripts?.setupScript?.trim(),
+		workspaceSetupCompletedAt ?? null,
 	);
 	const runScriptState = useScriptStatus(
 		workspaceId ?? null,
@@ -456,6 +463,7 @@ export function WorkspaceInspectorSidebar({
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
 					setupScript={repoScripts?.setupScript ?? null}
+					setupCompletedAt={workspaceSetupCompletedAt ?? null}
 					isActive={activeTab === "setup"}
 					onOpenSettings={handleOpenSettings}
 				/>

@@ -25,6 +25,7 @@ import {
 	listConductorWorkspaces,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
@@ -252,12 +253,7 @@ export function ConductorImportPanel() {
 	}, [selectedIds.size, importableWorkspaces]);
 
 	const invalidateAfterImport = useCallback(() => {
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceGroups,
-		});
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.archivedWorkspaces,
-		});
+		requestSidebarReconcile(queryClient);
 		void queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.repositories,
 		});

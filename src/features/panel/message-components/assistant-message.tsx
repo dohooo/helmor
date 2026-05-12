@@ -6,6 +6,7 @@ import {
 	ReasoningTrigger,
 } from "@/components/ai/reasoning";
 import { LazyStreamdown } from "@/components/streamdown-loader";
+import { useSmoothStreamContent } from "@/features/conversation/hooks/use-smooth-stream-content";
 import {
 	type ExtendedMessagePart,
 	partKey,
@@ -39,14 +40,10 @@ import { AssistantToolCall, CollapsedToolGroup } from "./tool-call";
 
 // --- AssistantText ---
 
-const STREAMING_ANIMATED = {
-	animation: "blurIn" as const,
-	duration: 150,
-	easing: "linear" as const,
-	sep: "word" as const,
-	stagger: 30,
-};
-
+// `useSmoothStreamContent` paces character reveal at ~30 cps so streaming
+// feels steady. We deliberately disable streamdown's `animated` plugin —
+// per-char/word spans cause kerning re-shape on settle and balloon DOM size
+// during long streams.
 const AssistantText = memo(function AssistantText({
 	text,
 	streaming,
@@ -56,21 +53,22 @@ const AssistantText = memo(function AssistantText({
 }) {
 	const mode: StreamdownMode = streaming ? "streaming" : "static";
 	const { settings } = useSettings();
+	const smoothedText = useSmoothStreamContent(text, { enabled: streaming });
 
 	return (
 		<div
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
 			style={{ fontSize: `${settings.fontSize}px` }}
 		>
-			<Suspense fallback={<AssistantTextFallback text={text} />}>
+			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
 				<LazyStreamdown
-					animated={streaming ? STREAMING_ANIMATED : false}
+					animated={false}
 					caret={undefined}
 					className="conversation-streamdown"
-					isAnimating={streaming}
+					isAnimating={false}
 					mode={mode}
 				>
-					{text}
+					{smoothedText}
 				</LazyStreamdown>
 			</Suspense>
 		</div>
@@ -222,16 +220,20 @@ export function ChatAssistantMessage({
 						typeof part.durationMs === "number"
 							? Math.max(1, Math.ceil(part.durationMs / 1000))
 							: undefined;
+					const hasContent = part.text.trim().length > 0;
 					return (
 						<Reasoning
 							key={key}
 							lifecycle={reasoningLifecycle(part)}
 							duration={durationSeconds}
+							hasContent={hasContent}
 						>
 							<ReasoningTrigger />
-							<ReasoningContent fontSize={settings.fontSize}>
-								{part.text}
-							</ReasoningContent>
+							{hasContent ? (
+								<ReasoningContent fontSize={settings.fontSize}>
+									{part.text}
+								</ReasoningContent>
+							) : null}
 						</Reasoning>
 					);
 				}

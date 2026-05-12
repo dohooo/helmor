@@ -124,6 +124,16 @@ pub(super) fn stream_via_sidecar(
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
+    // Read the user's `Claude Code Thinking Display` preference. The setting
+    // is global (not per-message), so we resolve it here on every send rather
+    // than threading it through `AgentSendRequest`. Anything other than the
+    // two SDK-recognised values is treated as "no override" so a stray DB
+    // value can't reach the sidecar.
+    let claude_thinking_display =
+        match crate::models::settings::load_setting_value("app.claude_thinking_display") {
+            Ok(Some(v)) if v == "summarized" || v == "omitted" => Some(v),
+            _ => None,
+        };
     let params = build_send_message_params(BuildSendMessageParamsInput {
         sidecar_session_id: &sidecar_session_id,
         prompt: &combined_prompt,
@@ -137,6 +147,7 @@ pub(super) fn stream_via_sidecar(
         helmor_session_id: request.helmor_session_id.as_deref(),
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
+        claude_thinking_display: claude_thinking_display.as_deref(),
         images: &images_for_wire,
     });
 

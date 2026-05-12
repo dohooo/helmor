@@ -201,14 +201,25 @@ impl GitWatcherManager {
                 }
             });
 
-            // Restart fetchers whose workspace_dir changed (e.g. workspace deleted)
+            // Restart fetchers only when their recorded `-C` working
+            // directory is no longer usable on disk (the workspace it
+            // was bound to got archived / deleted). A `desired` entry
+            // for the same (repo, remote, branch) key that simply
+            // *prefers* a different workspace dir is NOT a reason to
+            // restart — `git fetch` writes to `.git/refs/remotes/...`
+            // and doesn't care which sibling worktree drove it, so
+            // rebinding the dir would just cancel a perfectly good
+            // background fetcher and spawn a new one that immediately
+            // hits the network. Doing that on every archive / restore
+            // / workspace churn (which all flow through this routine)
+            // means each user action effectively triggers one fresh
+            // network fetch per shared target, and a single unreachable
+            // remote freezes the UI for the SSH connect timeout — even
+            // though *another* fetcher for the very same target was
+            // already running fine moments ago.
             let restart_keys: Vec<FetchKey> = fetchers
                 .iter()
-                .filter(|(key, entry)| {
-                    desired
-                        .get(key)
-                        .is_some_and(|dir| *dir != entry.workspace_dir)
-                })
+                .filter(|(_key, entry)| !entry.workspace_dir.exists())
                 .map(|(key, _)| key.clone())
                 .collect();
             for key in &restart_keys {
@@ -500,8 +511,17 @@ fn start_auto_fetch(key: &FetchKey, workspace_dir: &Path) -> AutoFetchCancel {
     thread::Builder::new()
         .name(format!("auto-fetch-{repo}/{remote}/{branch}"))
         .spawn(move || {
-            run_fetch(&dir, &remote, &branch, &repo);
-
+            // No upfront fetch: any code path that started this thread
+            // (initial sync, restore, target-branch change, replacement
+            // of a stale dir) would otherwise pay a network round-trip
+            // *synchronously coupled to the UI action that triggered
+            // it*. When the remote is unreachable that round-trip is
+            // the SSH connect timeout — which is exactly the source of
+            // the post-restore UI freeze. Wait for the interval like
+            // every subsequent iteration so fetches stay decoupled from
+            // user input. Code paths that need a fetch right now should
+            // call `trigger_fetch_for_workspace` explicitly (it's
+            // throttled and runs off the main flow).
             loop {
                 if sleep_interruptible(&cancel_flag, AUTO_FETCH_INTERVAL) {
                     break;

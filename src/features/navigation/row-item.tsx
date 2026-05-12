@@ -26,6 +26,7 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HyperText } from "@/components/ui/hyper-text";
+import { ShineBorder } from "@/components/ui/shine-border";
 import {
 	Tooltip,
 	TooltipContent,
@@ -69,6 +70,14 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** Drop the per-row repo avatar — used when the surrounding group header
+	 *  already shows it (i.e. rows inside a real repo bucket in repo
+	 *  grouping mode), where rendering it again on every row is pure
+	 *  noise. The branch icon takes over the leading slot AND becomes
+	 *  the carrier for the unread / interaction-required status dot and
+	 *  the run-script ShineBorder, so those affordances aren't lost when
+	 *  the avatar is hidden. */
+	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -112,6 +121,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
+		hideRepoAvatar = false,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -239,19 +249,9 @@ export const WorkspaceRowItem = memo(
 					!selected && row.state === "archived" && "opacity-50",
 				)}
 			>
-				<div className="flex min-w-0 flex-1 items-center gap-2">
-					<WorkspaceAvatar
-						repoIconSrc={row.repoIconSrc}
-						repoInitials={row.repoInitials ?? row.avatar ?? null}
-						repoName={row.repoName}
-						title={displayTitle}
-						badgeClassName={showStatusDot ? statusDotClassName : null}
-						badgeAriaLabel={statusDotLabel ?? undefined}
-						isRunning={isRunScriptRunning}
-					/>
-					{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
-					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
-						{isSending && !isInteractionRequired ? (
+				{(() => {
+					const branchIcon =
+						isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
 						) : row.mode === "local" ? (
 							<Laptop
@@ -269,7 +269,42 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
-						)}
+						);
+					// When the repo avatar is suppressed (rows inside a repo
+					// bucket), the branch icon takes over as the carrier for
+					// unread / interaction-required / running indicators —
+					// otherwise those signals would silently vanish in repo
+					// grouping mode.
+					const branchSlot = hideRepoAvatar ? (
+						<span className="relative inline-flex shrink-0">
+							{branchIcon}
+							{showStatusDot ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"pointer-events-none absolute -top-1 -right-1 size-1.5 rounded-full ring-2 ring-sidebar",
+										statusDotClassName,
+									)}
+								/>
+							) : null}
+							{isRunScriptRunning ? (
+								<ShineBorder
+									borderWidth={1}
+									duration={6}
+									shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
+									style={{
+										inset: "-2px",
+										width: "calc(100% + 4px)",
+										height: "calc(100% + 4px)",
+										borderRadius: "6px",
+									}}
+								/>
+							) : null}
+						</span>
+					) : (
+						branchIcon
+					);
+					const titleSlot = (
 						<span
 							className={cn(
 								// leading-tight (1.25) instead of leading-none so descenders
@@ -287,8 +322,36 @@ export const WorkspaceRowItem = memo(
 						>
 							<HyperText text={displayTitle} className="inline" />
 						</span>
-					</div>
-				</div>
+					);
+					if (hideRepoAvatar) {
+						return (
+							<div className="flex min-w-0 flex-1 items-center gap-2">
+								{branchSlot}
+								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+									{titleSlot}
+								</div>
+							</div>
+						);
+					}
+					return (
+						<div className="flex min-w-0 flex-1 items-center gap-2">
+							<WorkspaceAvatar
+								repoIconSrc={row.repoIconSrc}
+								repoInitials={row.repoInitials ?? row.avatar ?? null}
+								repoName={row.repoName}
+								title={displayTitle}
+								badgeClassName={showStatusDot ? statusDotClassName : null}
+								badgeAriaLabel={statusDotLabel ?? undefined}
+								isRunning={isRunScriptRunning}
+							/>
+							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
+							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+								{branchSlot}
+								{titleSlot}
+							</div>
+						</div>
+					);
+				})()}
 
 				{hasActionHandler ? (
 					<span
@@ -483,6 +546,7 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
+			previous.hideRepoAvatar === next.hideRepoAvatar &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&

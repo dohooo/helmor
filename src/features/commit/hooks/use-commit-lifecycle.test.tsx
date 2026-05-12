@@ -144,7 +144,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 			] as WorkspaceGroup[],
 		);
 
-		const selectedWorkspaceIdRef = { current: "workspace-1" };
+		const getSelectedWorkspaceId = () => "workspace-1" as string | null;
 		const onSelectSession = vi.fn();
 
 		const { result, rerender } = renderHook(
@@ -160,7 +160,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef,
+					getSelectedWorkspaceId,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: null,
@@ -274,7 +274,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 			defaultOptions: { queries: { retry: false } },
 		});
 
-		const selectedWorkspaceIdRef = { current: "workspace-1" };
+		const getSelectedWorkspaceId = () => "workspace-1" as string | null;
 		const onSelectSession = vi.fn();
 
 		const { result, rerender } = renderHook(
@@ -290,7 +290,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef,
+					getSelectedWorkspaceId,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: null,
@@ -360,7 +360,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -433,7 +433,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -481,7 +481,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -564,7 +564,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,
@@ -663,7 +663,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,
@@ -719,7 +719,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: {
@@ -774,7 +774,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: null,
@@ -817,7 +817,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: null,
-					selectedWorkspaceIdRef: { current: null },
+					getSelectedWorkspaceId: () => null,
 					selectedRepoId: null,
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -859,7 +859,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,

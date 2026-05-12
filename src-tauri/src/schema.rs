@@ -563,6 +563,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.mode column")?;
     }
 
+    // Tracks the last successful run of the repo's setup script for this
+    // workspace. NULL means "never ran" (or the workspace was created
+    // before this column existed) — distinct from "ran but output got
+    // dropped at restart". The Setup inspector tab uses this to show a
+    // "ran in another session" notice instead of the default
+    // never-run placeholder.
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "setup_completed_at")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN setup_completed_at TEXT")
+            .context("Failed to add workspaces.setup_completed_at column")?;
+    }
+
     Ok(())
 }
 
@@ -630,6 +644,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     archive_commit TEXT,
     linked_directory_paths TEXT,
     mode TEXT DEFAULT 'worktree',
+    setup_completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

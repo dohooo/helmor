@@ -39,15 +39,10 @@ import type {
 } from "@/features/commit/button";
 import {
 	type ChangeRequestInfo,
-	continueWorkspaceFromTargetBranch,
-	discardWorkspaceFile,
 	type ForgeDetection,
 	revealPathInFinder,
-	stageWorkspaceFile,
-	unstageWorkspaceFile,
 } from "@/lib/api";
 import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
-import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
 	helmorQueryKeys,
 	workspaceForgeActionStatusQueryOptions,
@@ -55,13 +50,14 @@ import {
 } from "@/lib/query-client";
 import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
-import { showWorkspaceBrokenToast } from "@/lib/workspace-broken-toast";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import {
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	TABS_ANIMATION_MS,
 	TABS_EASING_CURVE,
 } from "../layout";
+import { useChangesState } from "./changes/use-changes-state";
+import { useGitMutations } from "./changes/use-git-mutations";
 import { GitSectionHeader } from "./git-section-header";
 
 const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
@@ -132,12 +128,18 @@ export function ChangesSection({
 		ease: TABS_EASING_CURVE,
 	};
 	const queryClient = useQueryClient();
-	const [changesTreeView, setChangesTreeView] = useState(true);
-	const [branchDiffTreeView, setBranchDiffTreeView] = useState(true);
-	const [changesOpen, setChangesOpen] = useState(true);
-	const [stagedOpen, setStagedOpen] = useState(true);
-	const [branchDiffOpen, setBranchDiffOpen] = useState(true);
-	const [isContinuingWorkspace, setIsContinuingWorkspace] = useState(false);
+	const {
+		changesOpen,
+		stagedOpen,
+		branchDiffOpen,
+		changesTreeView,
+		branchDiffTreeView,
+		toggleChangesOpen,
+		toggleStagedOpen,
+		toggleBranchDiffOpen,
+		toggleChangesTreeView,
+		toggleBranchDiffTreeView,
+	} = useChangesState();
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -225,123 +227,24 @@ export function ChangesSection({
 	const hasUncommittedChanges =
 		stagedChanges.length > 0 || unstagedChanges.length > 0;
 	const hasChanges = hasUncommittedChanges || committedChanges.length > 0;
-	const invalidateChanges = useCallback(() => {
-		if (!workspaceRootPath) {
-			return;
-		}
-		queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
-		});
-		if (workspaceId) {
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
-			});
-		}
-	}, [queryClient, workspaceId, workspaceRootPath]);
 
 	const pushToast = useWorkspaceToast();
-	// Surface backend mutation failures (which used to be silently
-	// swallowed). If the workspace is broken, show a persistent toast
-	// with "Permanently Delete" — never auto-deletes. Dismiss preserves
-	// the chat history (the startup reconcile has archived the row so
-	// the user can still find it).
-	const surfaceChangeError = useCallback(
-		(action: string, error: unknown) => {
-			const { code, message } = extractError(error, `Failed to ${action}.`);
-			if (isRecoverableByPurge(code) && workspaceId) {
-				showWorkspaceBrokenToast({
-					workspaceId,
-					pushToast,
-					queryClient,
-				});
-				return;
-			}
-			pushToast(message, `Unable to ${action}`, "destructive");
-		},
-		[pushToast, queryClient, workspaceId],
-	);
-
-	const stageFile = useCallback(
-		async (relativePath: string) => {
-			if (!workspaceRootPath) {
-				return;
-			}
-			try {
-				await stageWorkspaceFile(workspaceRootPath, relativePath);
-			} catch (error) {
-				surfaceChangeError("stage file", error);
-			} finally {
-				invalidateChanges();
-			}
-		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
-	);
-	const unstageFile = useCallback(
-		async (relativePath: string) => {
-			if (!workspaceRootPath) {
-				return;
-			}
-			try {
-				await unstageWorkspaceFile(workspaceRootPath, relativePath);
-			} catch (error) {
-				surfaceChangeError("unstage file", error);
-			} finally {
-				invalidateChanges();
-			}
-		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
-	);
-	const stageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
-			return;
-		}
-		const paths = unstagedChanges.map((change) => change.path);
-		try {
-			for (const path of paths) {
-				await stageWorkspaceFile(workspaceRootPath, path);
-			}
-		} catch (error) {
-			surfaceChangeError("stage files", error);
-		} finally {
-			invalidateChanges();
-		}
-	}, [
-		invalidateChanges,
-		surfaceChangeError,
-		unstagedChanges,
+	const {
+		isContinuingWorkspace,
+		stageFile,
+		unstageFile,
+		stageAll,
+		unstageAll,
+		discardFile,
+		continueWorkspace: handleContinueWorkspace,
+	} = useGitMutations({
+		workspaceId,
 		workspaceRootPath,
-	]);
-	const unstageAll = useCallback(async () => {
-		if (!workspaceRootPath) {
-			return;
-		}
-		const paths = stagedChanges.map((change) => change.path);
-		try {
-			for (const path of paths) {
-				await unstageWorkspaceFile(workspaceRootPath, path);
-			}
-		} catch (error) {
-			surfaceChangeError("unstage files", error);
-		} finally {
-			invalidateChanges();
-		}
-	}, [invalidateChanges, stagedChanges, surfaceChangeError, workspaceRootPath]);
-
-	const discardFile = useCallback(
-		async (relativePath: string) => {
-			if (!workspaceRootPath) {
-				return;
-			}
-			try {
-				await discardWorkspaceFile(workspaceRootPath, relativePath);
-			} catch (error) {
-				surfaceChangeError("discard changes", error);
-			} finally {
-				invalidateChanges();
-			}
-		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
-	);
+		stagedChanges,
+		unstagedChanges,
+		queryClient,
+		pushToast,
+	});
 
 	const handleCommitButtonClick = useCallback(async () => {
 		if (!onCommitAction) {
@@ -349,44 +252,6 @@ export function ChangesSection({
 		}
 		await onCommitAction(commitButtonMode);
 	}, [commitButtonMode, onCommitAction]);
-
-	const handleContinueWorkspace = useCallback(async () => {
-		if (!workspaceId || isContinuingWorkspace) return;
-		setIsContinuingWorkspace(true);
-		try {
-			const result = await continueWorkspaceFromTargetBranch(workspaceId);
-			pushToast(`Workspace moved to ${result.branch}.`, "Continued", "default");
-			await Promise.all([
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceChangeRequest(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
-				}),
-			]);
-			invalidateChanges();
-		} catch (error) {
-			surfaceChangeError("continue workspace", error);
-		} finally {
-			setIsContinuingWorkspace(false);
-		}
-	}, [
-		invalidateChanges,
-		isContinuingWorkspace,
-		pushToast,
-		queryClient,
-		surfaceChangeError,
-		workspaceId,
-	]);
 
 	// Header shimmer is owned by App: it knows when the change-request and
 	// forge-action-status queries are on their *first* cold fetch (vs. just a
@@ -431,10 +296,10 @@ export function ChangesSection({
 								label="Staged Changes"
 								count={stagedChanges.length}
 								open={stagedOpen}
-								onToggle={() => setStagedOpen((current) => !current)}
+								onToggle={() => toggleStagedOpen()}
 								changes={stagedChanges}
 								treeView={changesTreeView}
-								onToggleTreeView={() => setChangesTreeView((v) => !v)}
+								onToggleTreeView={() => toggleChangesTreeView()}
 								action="unstage"
 								onStageAction={unstageFile}
 								onBatchAction={unstageAll}
@@ -457,10 +322,10 @@ export function ChangesSection({
 								}
 								count={unstagedChanges.length}
 								open={changesOpen}
-								onToggle={() => setChangesOpen((current) => !current)}
+								onToggle={() => toggleChangesOpen()}
 								changes={unstagedChanges}
 								treeView={changesTreeView}
-								onToggleTreeView={() => setChangesTreeView((v) => !v)}
+								onToggleTreeView={() => toggleChangesTreeView()}
 								action="stage"
 								onStageAction={stageFile}
 								onBatchAction={stageAll}
@@ -482,10 +347,10 @@ export function ChangesSection({
 						count={committedChanges.length}
 						loading={branchSwitching}
 						open={branchDiffOpen}
-						onToggle={() => setBranchDiffOpen((current) => !current)}
+						onToggle={() => toggleBranchDiffOpen()}
 						changes={committedChanges}
 						treeView={branchDiffTreeView}
-						onToggleTreeView={() => setBranchDiffTreeView((v) => !v)}
+						onToggleTreeView={() => toggleBranchDiffTreeView()}
 						editorMode={editorMode}
 						activeEditorPath={activeEditorPath}
 						onOpenEditorFile={onOpenEditorFile}

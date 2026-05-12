@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	CheckCircle2,
 	ChevronDown,
+	HelpCircle,
 	Minus,
 	Monitor,
 	Moon,
@@ -34,6 +35,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	Tooltip,
 	TooltipContent,
+	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { getShortcut } from "@/features/shortcuts/registry";
@@ -50,8 +52,14 @@ import {
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { AppSettings, DarkTheme, ThemeMode } from "@/lib/settings";
+import type {
+	AppSettings,
+	ClaudeThinkingDisplay,
+	DarkTheme,
+	ThemeMode,
+} from "@/lib/settings";
 import { resolveTheme, useSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
@@ -122,17 +130,9 @@ const DARK_THEME_OPTIONS: Array<{
 	},
 ];
 
-export type SettingsSection =
-	| "general"
-	| "shortcuts"
-	| "appearance"
-	| "model"
-	| "experimental"
-	| "import"
-	| "developer"
-	| "account"
-	| "inbox"
-	| `repo:${string}`;
+export type { SettingsSection } from "./types";
+
+import type { SettingsSection } from "./types";
 
 /// Display labels for settings sections in the sidebar / dialog title.
 /// Most match the section key with a leading capital, but a few names
@@ -359,6 +359,20 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
+										title="Group sidebar by repository"
+										releaseMarker={{ kind: "feature" }}
+										description="Group workspaces in the sidebar by repository instead of status."
+									>
+										<Switch
+											checked={settings.sidebarGrouping === "repo"}
+											onCheckedChange={(checked) =>
+												updateSettings({
+													sidebarGrouping: checked ? "repo" : "status",
+												})
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"
 									>
@@ -441,6 +455,79 @@ export const SettingsDialog = memo(function SettingsDialog({
 												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Steer
+											</ToggleGroupItem>
+										</ToggleGroup>
+									</SettingsRow>
+									<SettingsRow
+										title={
+											<span className="inline-flex items-center gap-1.5">
+												Claude Code Thinking Display
+												{/* SettingsDialog renders outside AppShell's
+												 *  TooltipProvider tree, so panels need their
+												 *  own — same pattern as repository-settings /
+												 *  cursor-provider. */}
+												<TooltipProvider>
+													<Tooltip>
+														<TooltipTrigger asChild>
+															<HelpCircle
+																className="size-3 cursor-help text-muted-foreground/70"
+																strokeWidth={1.8}
+															/>
+														</TooltipTrigger>
+														<TooltipContent
+															side="top"
+															className="max-w-[320px] text-left"
+														>
+															<div className="space-y-1.5">
+																<div>
+																	<span className="font-medium">
+																		Summarized
+																	</span>
+																	{" — "}
+																	thinking blocks contain summarized text.
+																</div>
+																<div>
+																	<span className="font-medium">Omitted</span>
+																	{" — "}
+																	thinking blocks are empty. The server skips
+																	streaming thinking tokens, so the final text
+																	streams sooner. Reduces latency, not cost.
+																</div>
+															</div>
+														</TooltipContent>
+													</Tooltip>
+												</TooltipProvider>
+											</span>
+										}
+										releaseMarker={{ kind: "feature" }}
+										description="Controls how Claude Code returns thinking content."
+									>
+										<ToggleGroup
+											type="single"
+											value={settings.claudeThinkingDisplay}
+											onValueChange={(value) => {
+												if (value === "summarized" || value === "omitted") {
+													updateSettings({
+														claudeThinkingDisplay:
+															value as ClaudeThinkingDisplay,
+													});
+												}
+											}}
+											className="gap-1 bg-muted/40"
+										>
+											<ToggleGroupItem
+												value="summarized"
+												aria-label="Summarized"
+												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+											>
+												Summarized
+											</ToggleGroupItem>
+											<ToggleGroupItem
+												value="omitted"
+												aria-label="Omitted"
+												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+											>
+												Omitted
 											</ToggleGroupItem>
 										</ToggleGroup>
 									</SettingsRow>
@@ -676,9 +763,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 										// Invalidate all workspace detail caches so
 										// open panels pick up the new remote/branch.
 										void queryClient.invalidateQueries({
@@ -690,9 +775,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										void queryClient.invalidateQueries({
 											queryKey: helmorQueryKeys.repositories,
 										});
-										void queryClient.invalidateQueries({
-											queryKey: helmorQueryKeys.workspaceGroups,
-										});
+										requestSidebarReconcile(queryClient);
 									}}
 								/>
 							)}

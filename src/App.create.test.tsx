@@ -402,6 +402,7 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				null,
 			);
 		});
 		await waitFor(() => {
@@ -458,6 +459,7 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				null,
 			);
 		});
 		await waitFor(() => {

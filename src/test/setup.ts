@@ -209,7 +209,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_forge_logins":
 			case "list_forge_accounts":
-			case "list_github_labels":
+			case "list_forge_labels":
+			case "list_inbox_kind_labels":
 				return [];
 			case "spawn_forge_cli_auth_terminal":
 				return undefined;

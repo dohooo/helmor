@@ -100,6 +100,25 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
+/// Result of a windowed historical load: the tail-most records plus a flag
+/// indicating whether older records exist beyond what was returned.
+pub struct WindowedHistoricalRecords {
+    pub records: Vec<HistoricalRecord>,
+    pub has_more: bool,
+}
+
+/// Load the trailing `tail_limit` historical records for a session, ordered
+/// ascending (oldest -> newest within the window). When `tail_limit` is
+/// `None`, behaves like `list_session_historical_records` and reports
+/// `has_more = false`.
+pub fn list_session_historical_records_windowed(
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    let connection = db::read_conn()?;
+    list_session_historical_records_windowed_with_connection(&connection, session_id, tail_limit)
+}
+
 /// All `provider_session_id`s belonging to a workspace's Claude sessions.
 /// Includes hidden sessions — they can be unhidden and resumed later, so
 /// migrators (e.g. local→worktree cwd change) need to cover them too.
@@ -155,6 +174,58 @@ fn list_session_historical_records_with_connection(
     connection: &Connection,
     session_id: &str,
 ) -> Result<Vec<HistoricalRecord>> {
+    Ok(
+        list_session_historical_records_windowed_with_connection(connection, session_id, None)?
+            .records,
+    )
+}
+
+fn list_session_historical_records_windowed_with_connection(
+    connection: &Connection,
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    // Strategy:
+    //  - With `tail_limit`: count total rows so we know `has_more`, then
+    //    pull the trailing N rows via `ORDER BY ... DESC LIMIT N` and
+    //    reverse to restore chronological order. The DESC + LIMIT lets
+    //    SQLite stop early — for a 5000-msg session asking for the last
+    //    200 we touch ~200 rows, not 5000.
+    //  - Without `tail_limit`: original full scan.
+    if let Some(limit) = tail_limit {
+        let total: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .context("Failed to count session messages")?;
+
+        let mut statement = connection.prepare(
+            r#"
+                SELECT
+                  sm.id,
+                  sm.role,
+                  sm.content,
+                  sm.created_at
+                FROM session_messages sm
+                WHERE sm.session_id = ?1
+                ORDER BY sm.sent_at DESC, sm.rowid DESC
+                LIMIT ?2
+                "#,
+        )?;
+
+        let rows = statement.query_map(
+            rusqlite::params![session_id, limit as i64],
+            map_historical_row,
+        )?;
+
+        let mut records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        records.reverse();
+        let has_more = (total as usize) > records.len();
+        return Ok(WindowedHistoricalRecords { records, has_more });
+    }
+
     let mut statement = connection.prepare(
         r#"
             SELECT
@@ -168,24 +239,29 @@ fn list_session_historical_records_with_connection(
             "#,
     )?;
 
-    let rows = statement.query_map([session_id], |row| {
-        let content: String = row.get(2)?;
-        // After the user_prompt migration the column is JSON-only. We still
-        // try-parse instead of unwrapping so a corrupted row can't bring the
-        // whole load down — `None` flows through to the adapter which renders
-        // a system "Event" placeholder.
-        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+    let rows = statement.query_map([session_id], map_historical_row)?;
+    let records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(WindowedHistoricalRecords {
+        records,
+        has_more: false,
+    })
+}
 
-        Ok(HistoricalRecord {
-            id: row.get(0)?,
-            role: row.get(1)?,
-            content,
-            parsed_content,
-            created_at: row.get(3)?,
-        })
-    })?;
+fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRecord> {
+    let content: String = row.get(2)?;
+    // After the user_prompt migration the column is JSON-only. We still
+    // try-parse instead of unwrapping so a corrupted row can't bring the
+    // whole load down — `None` flows through to the adapter which renders
+    // a system "Event" placeholder.
+    let parsed_content = serde_json::from_str::<Value>(&content).ok();
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    Ok(HistoricalRecord {
+        id: row.get(0)?,
+        role: row.get(1)?,
+        content,
+        parsed_content,
+        created_at: row.get(3)?,
+    })
 }
 
 // ---- Session read/unread functions ----
@@ -833,6 +909,51 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn windowed_loader_returns_tail_and_reports_has_more() {
+        // Tail-window load: ask for the last N records out of M (where M > N).
+        // The query should:
+        //   - Return exactly N records.
+        //   - Restore chronological order (oldest -> newest within the window).
+        //   - Report has_more = true since older records exist.
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        for i in 1..=10 {
+            let id = format!("m{i:02}");
+            // sent_at lets us assert ordering deterministically; rowid would
+            // already do it but the production query orders on sent_at first.
+            let sent_at = format!("2026-01-01T00:00:{i:02}");
+            conn.execute(
+                "INSERT INTO session_messages (id, session_id, role, content, sent_at) VALUES (?1, 's1', 'user', '\"x\"', ?2)",
+                [&id, &sent_at],
+            )
+            .unwrap();
+        }
+
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(3)).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["m08", "m09", "m10"],
+            "tail window should return the trailing rows in chronological order",
+        );
+        assert!(has_more, "older records exist beyond the window");
+
+        // Window larger than the row count: returns everything, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(100))
+                .unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
+
+        // No window: full scan, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", None).unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
     }
 
     #[test]

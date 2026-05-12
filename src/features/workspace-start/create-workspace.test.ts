@@ -75,6 +75,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"repo-1",
 			"origin/main",
 			"worktree",
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -105,10 +106,14 @@ describe("createWorkspaceFromStartComposer", () => {
 			editorStateSnapshot,
 		});
 
+		// "Save for later" passes initialStatus=backlog directly into Phase 1
+		// so the DB row is born in the backlog bucket — no transient
+		// "in-progress → backlog" flip while finalize runs.
 		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
 			"repo-1",
 			"origin/dev",
 			"worktree",
+			"backlog",
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -117,10 +122,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"session-1",
 			editorStateSnapshot,
 		);
-		expect(apiMocks.setWorkspaceStatus).toHaveBeenCalledWith(
-			"workspace-1",
-			"backlog",
-		);
+		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
 		expect(result).toEqual({
 			outcome: { shouldStream: false },
 			workspaceId: "workspace-1",
@@ -144,6 +146,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"repo-1",
 			"origin/dev",
 			"worktree",
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",

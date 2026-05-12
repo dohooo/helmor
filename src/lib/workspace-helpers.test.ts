@@ -10,6 +10,7 @@ import {
 	clampEffortToModel,
 	createLiveThreadMessage,
 	findModelOption,
+	findReplacementWorkspaceIdAfterRemoval,
 	getWorkspaceBranchTone,
 	inferDefaultModelId,
 	insertRowByCreatedAtDesc,
@@ -613,5 +614,118 @@ describe("clampEffortToModel", () => {
 
 	it("uses default levels when model not found", () => {
 		expect(clampEffortToModel("high", "unknown", MODEL_SECTIONS)).toBe("high");
+	});
+});
+
+describe("findReplacementWorkspaceIdAfterRemoval", () => {
+	function row(id: string): WorkspaceRow {
+		return { id, title: id, state: "ready", status: "in-progress" };
+	}
+
+	function group(id: string, rows: string[]): WorkspaceGroup {
+		return {
+			id,
+			label: id,
+			tone: "progress",
+			rows: rows.map(row),
+		};
+	}
+
+	it("returns the row at the same flat index in the post-removal layout", () => {
+		const currentGroups = [group("progress", ["a", "b", "c"])];
+		const nextGroups = [group("progress", ["a", "c"])]; // removed: b
+		const next = findReplacementWorkspaceIdAfterRemoval({
+			currentGroups,
+			currentArchivedRows: [],
+			nextGroups,
+			nextArchivedRows: [],
+			removedWorkspaceId: "b",
+		});
+		// b was at index 1 → next layout's index 1 → c
+		expect(next).toBe("c");
+	});
+
+	it("falls back to the previous neighbor when removal was the last row", () => {
+		const currentGroups = [group("progress", ["a", "b"])];
+		const nextGroups = [group("progress", ["a"])];
+		const next = findReplacementWorkspaceIdAfterRemoval({
+			currentGroups,
+			currentArchivedRows: [],
+			nextGroups,
+			nextArchivedRows: [],
+			removedWorkspaceId: "b",
+		});
+		expect(next).toBe("a");
+	});
+
+	it("returns null when nothing is left to navigate to", () => {
+		const next = findReplacementWorkspaceIdAfterRemoval({
+			currentGroups: [group("progress", ["only"])],
+			currentArchivedRows: [],
+			nextGroups: [],
+			nextArchivedRows: [],
+			removedWorkspaceId: "only",
+		});
+		expect(next).toBeNull();
+	});
+
+	it("includes archived rows in the flat layout", () => {
+		const currentGroups = [group("progress", ["a"])];
+		const currentArchivedRows = [row("z")];
+		const nextGroups = [group("progress", [])];
+		const nextArchivedRows = [row("z")];
+		// Flat current: ["a", "z"], removed "a" at index 0
+		// Flat next:    ["z"]       → index 0 → "z"
+		const next = findReplacementWorkspaceIdAfterRemoval({
+			currentGroups,
+			currentArchivedRows,
+			nextGroups,
+			nextArchivedRows,
+			removedWorkspaceId: "a",
+		});
+		expect(next).toBe("z");
+	});
+
+	it("falls back to the first row when the removed id is unknown in current", () => {
+		const next = findReplacementWorkspaceIdAfterRemoval({
+			currentGroups: [group("progress", ["a", "b"])],
+			currentArchivedRows: [],
+			nextGroups: [group("progress", ["a", "b"])],
+			nextArchivedRows: [],
+			removedWorkspaceId: "ghost",
+		});
+		expect(next).toBe("a");
+	});
+
+	// Regression: caller MUST pass currentGroups and nextGroups in the same
+	// visual layout (both status-grouped or both repo-grouped). Mixing them
+	// causes the index lookup to land on a totally unrelated workspace.
+	// `projectVisualSidebar` is the convergence point that guarantees this.
+	it("respects flat-list ordering — caller is responsible for matching layouts", () => {
+		// Same data, two layouts:
+		// status layout flat: [done, progress, review] = ["x", "a", "b", "c"]
+		// repo   layout flat: [repoA(a, x), repoB(b, c)]
+		// If we removed "a" while viewing repo layout (flat index 1) but
+		// passed status layout as `nextGroups`, we'd jump to "b" — wrong.
+		// This test pins the function's contract: it just looks up by flat
+		// index, no layout normalization.
+		const repoLayoutCurrent = [
+			group("repo:A", ["a", "x"]),
+			group("repo:B", ["b", "c"]),
+		];
+		const repoLayoutNext = [
+			group("repo:A", ["x"]),
+			group("repo:B", ["b", "c"]),
+		];
+		// Removed "a" at flat index 0 → next flat index 0 → "x"
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups: repoLayoutCurrent,
+				currentArchivedRows: [],
+				nextGroups: repoLayoutNext,
+				nextArchivedRows: [],
+				removedWorkspaceId: "a",
+			}),
+		).toBe("x");
 	});
 });

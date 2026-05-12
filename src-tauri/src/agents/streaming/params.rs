@@ -21,6 +21,13 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    /// Forwarded as `claudeThinkingDisplay` to the sidecar. Expected
+    /// values: `"summarized"` or `"omitted"`. Omitted from the wire
+    /// payload when `None` so the sidecar falls back to its default.
+    /// Only the Claude Code sidecar reads this; the Codex sidecar
+    /// silently ignores the field, so we forward unconditionally rather
+    /// than gating on `provider`.
+    pub claude_thinking_display: Option<&'a str>,
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
@@ -62,6 +69,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
     if !input.images.is_empty() {
         if let Some(obj) = params.as_object_mut() {
             obj.insert("images".to_string(), Value::from(input.images.to_vec()));
+        }
+    }
+    if let Some(display) = input.claude_thinking_display {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("claudeThinkingDisplay".to_string(), Value::from(display));
         }
     }
     if let (Some(base_url), Some(auth_token)) = (input.claude_base_url, input.claude_auth_token) {

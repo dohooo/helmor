@@ -67,6 +67,10 @@ type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
 	workspaceId: string | null;
 	repoId: string | null;
+	/** Drives the auto-relocate-to-Run-tab heuristic on workspace switch.
+	 * `null` until the workspace detail query resolves; nothing happens
+	 * while loading. */
+	workspaceState?: string | null;
 };
 
 type DerivedSizes = {
@@ -124,10 +128,31 @@ export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
 	workspaceId,
 	repoId,
+	workspaceState,
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [actionsOpen, setActionsOpen] = useState(getInitialActionsOpen);
 	const [tabsOpen, setTabsOpen] = useState(getInitialTabsOpen);
 	const [activeTab, setActiveTab] = useState(getInitialActiveTab);
+
+	// On workspace switch, default the Setup/Run tab to whichever phase the
+	// workspace is currently in: `setup_pending` → "setup" so the user sees
+	// the script auto-running; anything else (`ready`, `archived`) → "run"
+	// because setup is already past. Only overrides when the active tab is
+	// already Setup/Run — leaves Terminal sub-tabs alone. Refs #460.
+	const lastWorkspaceIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!workspaceId) return;
+		if (lastWorkspaceIdRef.current === workspaceId) return;
+		// Wait until the parent has loaded workspaceState so we don't
+		// flip tabs based on a stale `null`.
+		if (workspaceState === null || workspaceState === undefined) return;
+		lastWorkspaceIdRef.current = workspaceId;
+		setActiveTab((current) => {
+			if (current !== "setup" && current !== "run") return current;
+			const target = workspaceState === "setup_pending" ? "setup" : "run";
+			return current === target ? current : target;
+		});
+	}, [workspaceId, workspaceState]);
 
 	const [containerHeight, setContainerHeight] = useState(0);
 	const [storedChangesBody, setStoredChangesBody] = useState(() =>
@@ -305,9 +330,18 @@ export function useWorkspaceInspectorSidebar({
 	const isActionsResizing = resizeState?.target === RESIZE_TARGET_ACTIONS;
 	const isTabsResizing = resizeState?.target === RESIZE_TARGET_TABS;
 
+	// Skip while the worktree isn't fully materialised. During
+	// `Initializing`, `git worktree add` is mid-checkout: `git diff`
+	// against the half-populated tree returns every tracked file as a
+	// phantom delete, and the inspector's auto-expanded tree stalls the
+	// JS thread for seconds. `Archived` has no worktree at all.
+	const changesQueryEnabled =
+		!!workspaceRootPath &&
+		workspaceState !== "initializing" &&
+		workspaceState !== "archived";
 	const changesQuery = useQuery({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
-		enabled: !!workspaceRootPath,
+		enabled: changesQueryEnabled,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
 

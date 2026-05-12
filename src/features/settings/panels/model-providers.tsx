@@ -4,7 +4,7 @@ import {
 	Box,
 	CheckCircle2,
 	ChevronDown,
-	ExternalLink,
+	SquareArrowOutUpRight,
 	Trash2,
 } from "lucide-react";
 import type { SVGProps } from "react";
@@ -158,8 +158,8 @@ export function ClaudeCustomProvidersPanel() {
 									aria-label={`Get ${builtinProvider.label} API key`}
 									onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
 								>
-									<ExternalLink className="size-3.5" />
 									Get your API key
+									<SquareArrowOutUpRight className="size-3.5" />
 								</Button>
 							)}
 						</div>

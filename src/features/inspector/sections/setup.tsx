@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, RotateCcw, Settings2, Square } from "lucide-react";
+import { CircleCheck, Play, RotateCcw, Settings2, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -25,6 +25,11 @@ type SetupTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
 	setupScript: string | null;
+	/** Persisted timestamp of the last successful setup-script run for
+	 * this workspace. Non-null + no live in-memory entry → setup ran in
+	 * a previous session whose terminal output didn't survive the
+	 * restart; show a notice instead of the never-run placeholder. */
+	setupCompletedAt: string | null;
 	isActive: boolean;
 	onOpenSettings: () => void;
 };
@@ -33,6 +38,7 @@ export function SetupTab({
 	repoId,
 	workspaceId,
 	setupScript,
+	setupCompletedAt,
 	isActive,
 	onOpenSettings,
 }: SetupTabProps) {
@@ -198,6 +204,26 @@ export function SetupTab({
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
 						Open settings
+					</Button>
+				</div>
+			) : setupCompletedAt ? (
+				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+					<CircleCheck
+						aria-label="Setup completed"
+						className="size-8 text-[var(--workspace-pr-open-accent)]"
+						strokeWidth={1.75}
+					/>
+					<p className="text-[13px] font-medium text-muted-foreground">
+						Setup completed
+					</p>
+					<Button
+						variant="outline"
+						size="sm"
+						className="mt-1 gap-1.5 text-[12px]"
+						onClick={handleRun}
+					>
+						<RotateCcw className="size-3" strokeWidth={2} />
+						Rerun setup
 					</Button>
 				</div>
 			) : (

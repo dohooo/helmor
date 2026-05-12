@@ -11,8 +11,15 @@ export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
  *  - `queue`: stash locally; auto-fire as a new turn once the agent finishes.
  */
 export type FollowUpBehavior = "steer" | "queue";
+
+/** Controls how Claude Code returns thinking content.
+ *  - `summarized`: thinking blocks contain summarized thinking text.
+ *  - `omitted`: server skips streaming thinking tokens; the final text
+ *    response begins streaming sooner. */
+export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
+export type SidebarGrouping = "status" | "repo";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
@@ -212,6 +219,9 @@ export type AppSettings = {
 	/** Webview zoom factor. 1.0 = 100%. Range 0.5–2.0. */
 	zoomLevel: number;
 	followUpBehavior: FollowUpBehavior;
+	/** How Claude Code returns thinking content. Plumbed through to the
+	 *  sidecar's `thinking.display` field. */
+	claudeThinkingDisplay: ClaudeThinkingDisplay;
 	/** Force the context-usage ring to always be visible. When false (the
 	 *  default), the ring auto-hides until usage crosses
 	 *  `CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD`. */
@@ -224,6 +234,10 @@ export type AppSettings = {
 	openAiRealtimeApiKey: string;
 	inboxSourceConfig: InboxSourceConfig;
 	kanbanViewState: KanbanViewState;
+	/** Sidebar grouping mode. Persisted to localStorage (sync read on boot
+	 *  to avoid the sidebar flashing the wrong grouping while SQLite-backed
+	 *  settings load asynchronously). */
+	sidebarGrouping: SidebarGrouping;
 };
 
 export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
@@ -264,6 +278,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	defaultFastMode: false,
 	zoomLevel: 1.0,
 	followUpBehavior: "steer",
+	claudeThinkingDisplay: "summarized",
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
 	onboardingCompleted: false,
@@ -282,10 +297,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	openAiRealtimeApiKey: "",
 	inboxSourceConfig: { accounts: {} },
 	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
+	sidebarGrouping: "status",
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
+export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
+
+const VALID_SIDEBAR_GROUPINGS: readonly SidebarGrouping[] = ["status", "repo"];
 
 const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"default",
@@ -295,9 +314,26 @@ const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"aurora",
 ];
 
-// theme + darkTheme are stored in localStorage (sync read for flash-free boot), not SQLite
+// Synchronous theme read for flash-free splash boot. The full settings
+// payload lives in SQLite and loads async; theme is mirrored to
+// localStorage so we can paint with the right colour scheme before that
+// returns.
+export function getPreloadedTheme(): ThemeMode {
+	if (typeof localStorage === "undefined") {
+		return DEFAULT_SETTINGS.theme;
+	}
+	const raw = localStorage.getItem(THEME_STORAGE_KEY);
+	return (raw as ThemeMode | null) ?? DEFAULT_SETTINGS.theme;
+}
+
+export function getPreloadedSettings(): AppSettings {
+	return { ...DEFAULT_SETTINGS, theme: getPreloadedTheme() };
+}
+
+// theme + darkTheme + sidebarGrouping are stored in localStorage
+// (sync read for flash-free boot), not SQLite
 const SETTINGS_KEY_MAP: Record<
-	Exclude<keyof AppSettings, "theme" | "darkTheme">,
+	Exclude<keyof AppSettings, "theme" | "darkTheme" | "sidebarGrouping">,
 	string
 > = {
 	fontSize: "app.font_size",
@@ -318,6 +354,7 @@ const SETTINGS_KEY_MAP: Record<
 	defaultFastMode: "app.default_fast_mode",
 	zoomLevel: "app.zoom_level",
 	followUpBehavior: "app.follow_up_behavior",
+	claudeThinkingDisplay: "app.claude_thinking_display",
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
 	onboardingCompleted: "app.onboarding_completed",
@@ -721,6 +758,12 @@ export async function loadSettings(): Promise<AppSettings> {
 					? (raw as DarkTheme)
 					: DEFAULT_SETTINGS.darkTheme;
 			})(),
+			sidebarGrouping: (() => {
+				const raw = localStorage.getItem(SIDEBAR_GROUPING_STORAGE_KEY);
+				return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)
+					? (raw as SidebarGrouping)
+					: DEFAULT_SETTINGS.sidebarGrouping;
+			})(),
 			notifications:
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
@@ -786,6 +829,12 @@ export async function loadSettings(): Promise<AppSettings> {
 					? v
 					: DEFAULT_SETTINGS.followUpBehavior;
 			})(),
+			claudeThinkingDisplay: (() => {
+				const v = raw[SETTINGS_KEY_MAP.claudeThinkingDisplay];
+				return v === "summarized" || v === "omitted"
+					? v
+					: DEFAULT_SETTINGS.claudeThinkingDisplay;
+			})(),
 			alwaysShowContextUsage:
 				raw[SETTINGS_KEY_MAP.alwaysShowContextUsage] !== undefined
 					? raw[SETTINGS_KEY_MAP.alwaysShowContextUsage] === "true"
@@ -843,9 +892,26 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		}
 	}
 
+	if (patch.sidebarGrouping !== undefined) {
+		try {
+			localStorage.setItem(SIDEBAR_GROUPING_STORAGE_KEY, patch.sidebarGrouping);
+		} catch (error) {
+			console.error(
+				`[helmor] sidebar grouping save failed for "${SIDEBAR_GROUPING_STORAGE_KEY}"`,
+				error,
+			);
+		}
+	}
+
 	const settings: Record<string, string> = {};
 	for (const [key, dbKey] of Object.entries(SETTINGS_KEY_MAP)) {
-		const value = patch[key as keyof Omit<AppSettings, "theme" | "darkTheme">];
+		const value =
+			patch[
+				key as keyof Omit<
+					AppSettings,
+					"theme" | "darkTheme" | "sidebarGrouping"
+				>
+			];
 		if (value !== undefined) {
 			settings[dbKey] =
 				key === "shortcuts" ||

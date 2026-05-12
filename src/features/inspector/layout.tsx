@@ -1,14 +1,6 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import {
-	createContext,
-	useCallback,
-	useContext,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
-import { suspendTerminalFit } from "@/components/terminal-output";
+import { createContext, useCallback, useContext } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -28,6 +20,7 @@ import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
+import { useHoverZoom } from "./layout/use-hover-zoom";
 import { ScriptStatusIcon } from "./script-status-icon";
 import {
 	getTerminalDisplayTitle,
@@ -261,280 +254,17 @@ export function InspectorTabsSection({
 	};
 	const chevronTransitionMs =
 		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
-	// `isHoverExpanded` drives the CSS transitions we CAN interpolate
-	// (width / height / box-shadow). Flipping it to `false` immediately starts
-	// the shrink animation.
-	const [isHoverExpanded, setIsHoverExpanded] = useState(false);
-	// `isZoomPresented` drives the properties the browser CANNOT transition
-	// (z-index, the `data-tabs-zoomed` flag that frees the aside's overflow,
-	// and the border-t that draws the top edge). It stays `true` for the full
-	// duration of BOTH the expand and the collapse animation so that the
-	// zoomed visual identity stays consistent while the size is changing — the
-	// collapsing panel looks exactly like the expanding one in reverse.
-	const [isZoomPresented, setIsZoomPresented] = useState(false);
-	// Short-lived flag that applies a gaussian blur to the inner
-	// header+body while the panel is mid-transition. Masks the frames where
-	// xterm's canvas is being GPU-scaled and then re-fit, which would
-	// otherwise look like "ugly stretched pixels, then a snap".
-	const [isContentBlurred, setIsContentBlurred] = useState(false);
-	const hoverTimerRef = useRef<number | null>(null);
-	const presentationClearTimerRef = useRef<number | null>(null);
-	const blurClearTimerRef = useRef<number | null>(null);
-	const pointerInsideContainerRef = useRef(false);
-	// Tracks whether the user is actively selecting text. When true, prevents
-	// the panel from collapsing on mouse-leave so text selection can extend
-	// beyond the container boundary without interruption.
-	const isSelectingRef = useRef(false);
-	// Right-click menu portal renders outside the container, so mouseleave
-	// fires the moment the cursor crosses into a menu item. Hold the zoom open
-	// until the menu closes, then re-check the pointer.
-	const isTabContextMenuOpenRef = useRef(false);
-	// Holds the outstanding `suspendTerminalFit()` release while the CSS
-	// width/height transition is running, plus the timer that will release it
-	// and trigger the final fit.
-	const terminalFitReleaseRef = useRef<(() => void) | null>(null);
-	const fitReleaseTimerRef = useRef<number | null>(null);
 
-	const clearHoverTimer = useCallback(() => {
-		if (hoverTimerRef.current !== null) {
-			window.clearTimeout(hoverTimerRef.current);
-			hoverTimerRef.current = null;
-		}
-	}, []);
-
-	const clearPresentationClearTimer = useCallback(() => {
-		if (presentationClearTimerRef.current !== null) {
-			window.clearTimeout(presentationClearTimerRef.current);
-			presentationClearTimerRef.current = null;
-		}
-	}, []);
-
-	const clearBlurTimer = useCallback(() => {
-		if (blurClearTimerRef.current !== null) {
-			window.clearTimeout(blurClearTimerRef.current);
-			blurClearTimerRef.current = null;
-		}
-	}, []);
-
-	// Run a quick fade-in → hold → fade-out blur over the inner content
-	// during the transition. Fires on both expand and collapse because the
-	// canvas artefacts and the xterm re-fit flash happen in both directions.
-	// Calling this while a pulse is already underway just extends the hold
-	// window, so rapid hover-in/out doesn't produce a stuttery blur.
-	const triggerContentBlurPulse = useCallback(() => {
-		clearBlurTimer();
-		setIsContentBlurred(true);
-		blurClearTimerRef.current = window.setTimeout(() => {
-			blurClearTimerRef.current = null;
-			setIsContentBlurred(false);
-		}, TABS_BLUR_HOLD_UNTIL_MS);
-	}, [clearBlurTimer]);
-
-	const releaseTerminalFitLock = useCallback(() => {
-		if (fitReleaseTimerRef.current !== null) {
-			window.clearTimeout(fitReleaseTimerRef.current);
-			fitReleaseTimerRef.current = null;
-		}
-		if (terminalFitReleaseRef.current) {
-			terminalFitReleaseRef.current();
-			terminalFitReleaseRef.current = null;
-		}
-	}, []);
-
-	// Pause every mounted `TerminalOutput`'s FitAddon for the duration of the
-	// CSS transition. Without this, each xterm re-fits once per animation
-	// frame (reflowing its 5000-line scrollback) which stutters the zoom.
-	// Calling this while a suspension is already active just extends the
-	// release timer — the suspend count stays at 1 throughout so the terminals
-	// only re-fit once the animation truly settles.
-	const beginZoomAnimation = useCallback(() => {
-		if (!terminalFitReleaseRef.current) {
-			terminalFitReleaseRef.current = suspendTerminalFit();
-		}
-		if (fitReleaseTimerRef.current !== null) {
-			window.clearTimeout(fitReleaseTimerRef.current);
-		}
-		fitReleaseTimerRef.current = window.setTimeout(() => {
-			fitReleaseTimerRef.current = null;
-			if (terminalFitReleaseRef.current) {
-				terminalFitReleaseRef.current();
-				terminalFitReleaseRef.current = null;
-			}
-			// A small safety margin beyond the CSS transition so the final
-			// fit uses the settled dimensions rather than the last interpolated
-			// frame's.
-		}, TABS_HOVER_TRANSITION_MS + 50);
-	}, []);
-
-	// Drives both the CSS-transitionable properties (`isHoverExpanded`) and
-	// the discrete ones (`isZoomPresented`). Expanding flips presentation on
-	// immediately; collapsing keeps presentation on until the shrink
-	// transition has run to completion, so z-index / overflow / border stay
-	// consistent with the shrinking box.
-	const setZoomTarget = useCallback(
-		(target: boolean) => {
-			// Fire the blur pulse on every direction change. It masks the
-			// canvas-stretch frames during the CSS transition AND the sharp
-			// re-fit flash that happens right after the transition ends.
-			triggerContentBlurPulse();
-			if (target) {
-				clearPresentationClearTimer();
-				setIsZoomPresented(true);
-			} else {
-				clearPresentationClearTimer();
-				presentationClearTimerRef.current = window.setTimeout(() => {
-					presentationClearTimerRef.current = null;
-					setIsZoomPresented(false);
-				}, TABS_HOVER_TRANSITION_MS + 20);
-			}
-			setIsHoverExpanded(target);
-		},
-		[clearPresentationClearTimer, triggerContentBlurPulse],
-	);
-
-	// Hover trigger is bound to the BODY only (not the header) so moving the
-	// cursor across the Setup/Run tabs or the chevron doesn't start a zoom.
-	// The 300ms "hover intent" timer still gives us the linger-to-engage feel,
-	// but the intent signal now requires engaging with the actual output area.
-	const handleBodyMouseEnter = useCallback(() => {
-		if (!open || !canHoverExpand) return;
-		if (isHoverExpanded) return;
-		clearHoverTimer();
-		hoverTimerRef.current = window.setTimeout(() => {
-			beginZoomAnimation();
-			setZoomTarget(true);
-			hoverTimerRef.current = null;
-		}, TABS_HOVER_ACTIVATION_MS);
-	}, [
-		open,
-		canHoverExpand,
-		isHoverExpanded,
-		clearHoverTimer,
-		beginZoomAnimation,
-		setZoomTarget,
-	]);
-
-	// Mark the start of a potential text selection. Used to prevent the panel
-	// from collapsing while the user is dragging to select text.
-	const handleBodyMouseDown = useCallback(() => {
-		isSelectingRef.current = true;
-	}, []);
-
-	// Un-zoom fires only when the cursor leaves the whole panel (header +
-	// body). Moving from body up into the header keeps the zoom alive so the
-	// Stop/Rerun action and the tab switcher stay reachable while zoomed.
-	// Also skips collapsing if the user is actively selecting text.
-	const handleContainerMouseLeave = useCallback(() => {
-		pointerInsideContainerRef.current = false;
-		const hadPendingHoverIntent = hoverTimerRef.current !== null;
-		clearHoverTimer();
-		// Don't collapse if user is selecting text — they might drag outside
-		// the container boundary during selection. The global mouseup handler
-		// will clear this flag, and then leaving will collapse normally.
-		if (isSelectingRef.current) {
-			return;
-		}
-		// Don't collapse while a tab's right-click menu is open. The menu
-		// renders in a portal outside the container, so moving the cursor
-		// onto it triggers mouseleave even though the user is still
-		// interacting with our UI. The menu's onOpenChange handler re-checks
-		// the pointer once it closes.
-		if (isTabContextMenuOpenRef.current) {
-			return;
-		}
-		if (hadPendingHoverIntent || (!isHoverExpanded && !isZoomPresented)) {
-			return;
-		}
-		beginZoomAnimation();
-		setZoomTarget(false);
-	}, [
-		clearHoverTimer,
+	const {
 		isHoverExpanded,
 		isZoomPresented,
-		beginZoomAnimation,
-		setZoomTarget,
-	]);
-
-	// On close, re-evaluate whether to collapse — the mouseleave that fired
-	// while the menu was open was suppressed.
-	const handleTabContextMenuOpenChange = useCallback(
-		(open: boolean) => {
-			isTabContextMenuOpenRef.current = open;
-			if (open) return;
-			if (pointerInsideContainerRef.current) return;
-			if (!isHoverExpanded && !isZoomPresented) return;
-			beginZoomAnimation();
-			setZoomTarget(false);
-		},
-		[isHoverExpanded, isZoomPresented, beginZoomAnimation, setZoomTarget],
-	);
-
-	// When the panel collapses we must drop any pending/active zoom so it
-	// doesn't linger over the neighbouring sections. Also release any
-	// outstanding terminal-fit lock immediately — the terminals are about to
-	// unmount or change size and shouldn't be held back.
-	useEffect(() => {
-		if (!open) {
-			clearHoverTimer();
-			clearPresentationClearTimer();
-			clearBlurTimer();
-			releaseTerminalFitLock();
-			setIsHoverExpanded(false);
-			setIsZoomPresented(false);
-			setIsContentBlurred(false);
-		}
-	}, [
-		open,
-		clearHoverTimer,
-		clearPresentationClearTimer,
-		clearBlurTimer,
-		releaseTerminalFitLock,
-	]);
-
-	// If the active tab no longer has output worth zooming (e.g. user switched
-	// from Run — with a live dev server — to Setup — never run), force the
-	// panel back to its resting size through the normal collapse transition.
-	useEffect(() => {
-		if (canHoverExpand) return;
-		clearHoverTimer();
-		if (pointerInsideContainerRef.current) return;
-		if (!isHoverExpanded && !isZoomPresented) return;
-		beginZoomAnimation();
-		setZoomTarget(false);
-	}, [
-		canHoverExpand,
-		isHoverExpanded,
-		isZoomPresented,
-		clearHoverTimer,
-		beginZoomAnimation,
-		setZoomTarget,
-	]);
-
-	// Clear the selection flag on any mouseup, even if it happens outside the
-	// panel. This ensures the collapse-on-leave behavior resumes after the
-	// user finishes a text selection.
-	useEffect(() => {
-		const handleGlobalMouseUp = () => {
-			isSelectingRef.current = false;
-		};
-		document.addEventListener("mouseup", handleGlobalMouseUp);
-		return () => document.removeEventListener("mouseup", handleGlobalMouseUp);
-	}, []);
-
-	// Clean up any pending timer on unmount.
-	useEffect(() => {
-		return () => {
-			clearHoverTimer();
-			clearPresentationClearTimer();
-			clearBlurTimer();
-			releaseTerminalFitLock();
-		};
-	}, [
-		clearHoverTimer,
-		clearPresentationClearTimer,
-		clearBlurTimer,
-		releaseTerminalFitLock,
-	]);
+		isContentBlurred,
+		onBodyMouseEnter: handleBodyMouseEnter,
+		onBodyMouseDown: handleBodyMouseDown,
+		onContainerMouseEnter: handleContainerMouseEnter,
+		onContainerMouseLeave: handleContainerMouseLeave,
+		onTabContextMenuOpenChange: handleTabContextMenuOpenChange,
+	} = useHoverZoom({ open, canHoverExpand });
 
 	const zoomedSize = `${TABS_HOVER_ZOOM_MULTIPLIER * 100}%`;
 
@@ -587,9 +317,7 @@ export function InspectorTabsSection({
 		>
 			<div
 				data-tabs-zoomed={isZoomPresented ? "true" : undefined}
-				onMouseEnter={() => {
-					pointerInsideContainerRef.current = true;
-				}}
+				onMouseEnter={handleContainerMouseEnter}
 				onMouseLeave={handleContainerMouseLeave}
 				className={cn(
 					// `bg-sidebar` is the safety floor — it guarantees the zoomed

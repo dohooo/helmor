@@ -211,10 +211,11 @@ impl ScriptProcessManager {
 }
 
 /// Send SIGTERM (and SIGKILL after a short grace period) to a process group
-/// and its leader. Polls `kill(pid, 0)` to detect when the process has been
+/// and its leader. Polls `kill(pid, 0)` to detect when the leader has been
 /// reaped by its parent — which is `run_script`'s `child.wait()` running on
-/// a separate thread. Zombies still report alive, so this effectively waits
-/// for the reap, which happens microseconds after the child actually dies.
+/// a separate thread. When the script owns a separate process group, also wait
+/// for that group to disappear so a fast leader exit cannot leave descendants
+/// running after Stop returns.
 fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
     let current_pgrp = unsafe { libc::getpgrp() };
     let can_signal_group = pgid > 0 && pgid != current_pgrp;
@@ -226,7 +227,7 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    if wait_for_pid_gone(pid, PROCESS_TERM_TIMEOUT) {
+    if wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_TERM_TIMEOUT) {
         return;
     }
 
@@ -237,26 +238,45 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGKILL);
     }
 
-    let _ = wait_for_pid_gone(pid, PROCESS_KILL_TIMEOUT);
+    let _ = wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_KILL_TIMEOUT);
 }
 
-/// Poll `kill(pid, 0)` until it returns ESRCH or the deadline passes.
-/// ESRCH means the pid is gone AND has been reaped — zombies still return 0.
-fn wait_for_pid_gone(pid: libc::pid_t, timeout: Duration) -> bool {
+fn wait_for_processes_gone(
+    pid: libc::pid_t,
+    pgid: libc::pid_t,
+    can_signal_group: bool,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let ret = unsafe { libc::kill(pid, 0) };
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ESRCH) {
-                return true;
-            }
+        let pid_gone = is_pid_gone(pid);
+        let group_gone = !can_signal_group || is_process_group_gone(pgid);
+        if pid_gone && group_gone {
+            return true;
         }
         if Instant::now() >= deadline {
             return false;
         }
         std::thread::sleep(PTY_POLL_INTERVAL);
     }
+}
+
+fn is_pid_gone(pid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::kill(pid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
+}
+
+fn is_process_group_gone(pgid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::killpg(pgid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
 }
 
 /// Workspace context passed to scripts as environment variables.
@@ -307,6 +327,33 @@ fn set_nonblocking(fd: libc::c_int) -> Result<()> {
 /// Escape a string for safe embedding inside single quotes.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn fish_shell_escape(s: &str) -> String {
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('$', "\\$")
+            .replace('"', "\\\"")
+    )
+}
+
+fn wrapped_script_for_shell(shell_path: &str, script: &str) -> String {
+    let shell_name = std::path::Path::new(shell_path)
+        .file_name()
+        .and_then(|name| name.to_str());
+
+    if shell_name == Some("fish") {
+        return format!(
+            "eval {}; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+            fish_shell_escape(script),
+        );
+    }
+
+    format!(
+        "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        shell_escape(script),
+    )
 }
 
 /// Spawn an interactive login shell on a PTY and feed it `script`.
@@ -551,10 +598,7 @@ pub(crate) fn run_script_with_shell(
     // the shell stays at its prompt and waits for input — the user typing
     // directly in the Terminal tab, or `boot_input` seeding it below.
     if let Some(script) = script {
-        let wrapped = format!(
-            "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-            shell_escape(script),
-        );
+        let wrapped = wrapped_script_for_shell(shell_path, script);
         let mut file = stdin.lock().expect("stdin mutex poisoned");
         if let Err(e) = file.write_all(wrapped.as_bytes()) {
             tracing::warn!(error = %e, "initial PTY write failed");
@@ -612,6 +656,22 @@ mod tests {
     #[test]
     fn shell_escape_single_quotes() {
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn fish_shell_escape_handles_fish_expansion_chars() {
+        assert_eq!(
+            fish_shell_escape("printf \"%s\" '$value' \\ done"),
+            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_fish_status_for_fish_shell() {
+        assert_eq!(
+            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
+            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        );
     }
 
     // ── Test helpers ───────────────────────────────────────────────────────
@@ -1053,7 +1113,7 @@ mod tests {
         })
     }
 
-    fn run_simple(script: &str) -> Option<i32> {
+    fn run_simple_with_shell(script: &str, shell_path: &str, shell_args: &[&str]) -> Option<i32> {
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1071,13 +1131,17 @@ mod tests {
             dir.to_str().unwrap(),
             &ctx,
             make_channel(),
-            // /bin/sh avoids the user's interactive zsh startup cost that
-            // makes tests flaky under `cargo test` parallelism.
-            "/bin/sh",
-            &[],
+            shell_path,
+            shell_args,
             None,
         )
         .unwrap()
+    }
+
+    fn run_simple(script: &str) -> Option<i32> {
+        // /bin/sh avoids the user's interactive zsh startup cost that
+        // makes tests flaky under `cargo test` parallelism.
+        run_simple_with_shell(script, "/bin/sh", &[])
     }
 
     #[test]
@@ -1088,6 +1152,28 @@ mod tests {
     #[test]
     fn run_script_failing_command_exits_nonzero() {
         assert_eq!(run_simple("exit 42"), Some(42));
+    }
+
+    #[test]
+    fn run_script_with_fish_shell_preserves_exit_status() {
+        let Ok(output) = StdCommand::new("fish")
+            .args(["-c", "command -s fish"])
+            .output()
+        else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        let fish_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if fish_path.is_empty() {
+            return;
+        }
+
+        assert_eq!(
+            run_simple_with_shell("printf '%s\\n' \"it's\"; exit 42", &fish_path, &[]),
+            Some(42),
+        );
     }
 
     #[test]

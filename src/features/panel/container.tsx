@@ -18,6 +18,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import {
@@ -445,15 +446,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
+		requestSidebarReconcile(queryClient);
 		await Promise.all([
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
 			}),
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
 			}),
 		]);
 	}, [displayedWorkspaceId, queryClient]);

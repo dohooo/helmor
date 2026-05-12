@@ -49,6 +49,7 @@ export const WorkspacesSidebarContainer = memo(
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
+			sidebarGrouping,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
@@ -75,6 +76,7 @@ export const WorkspacesSidebarContainer = memo(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={archivedRows}
+				sidebarGrouping={sidebarGrouping}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
@@ -94,6 +96,7 @@ export const WorkspacesSidebarContainer = memo(
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
 				onOpenNewWorkspace={onOpenNewWorkspace}
+				onCreateWorkspaceForRepo={onAddRepositoryNeedsStart}
 				onArchiveWorkspace={handleArchiveWorkspace}
 				onMoveLocalToWorktree={onMoveLocalToWorktree}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}

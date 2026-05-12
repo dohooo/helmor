@@ -9,7 +9,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/discord/1499667625267957920?style=flat&logo=discord&label=Discord&color=5865F2" alt="Discord" />
+  <a href="https://discord.gg/ukyyuNfnDp">
+    <img src="https://img.shields.io/discord/1499667625267957920?style=flat&logo=discord&label=Discord&color=5865F2" alt="Discord" />
+  </a>
 </p>
 
 > AI made coding faster.

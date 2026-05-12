@@ -1,6 +1,7 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
 	type AgentProvider,
@@ -11,6 +12,8 @@ import {
 	type ForgeAccount,
 	type ForgeActionStatus,
 	type ForgeDetection,
+	type ForgeProvider,
+	fetchSessionThreadMessagesPage,
 	getClaudeRateLimits,
 	getCodexRateLimits,
 	getLiveContextUsage,
@@ -20,7 +23,8 @@ import {
 	getWorkspaceForge,
 	listActiveStreams,
 	listForgeAccounts,
-	listGithubLabels,
+	listForgeLabels,
+	listInboxKindLabels,
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
@@ -41,6 +45,10 @@ import {
 	refreshWorkspaceChangeRequest,
 } from "./api";
 import { parsePrUrl } from "./pr-url";
+import {
+	getSessionThreadPaginationState,
+	setSessionThreadPaginationState,
+} from "./session-thread-pagination";
 
 const SESSION_STALE_TIME = 10 * 60_000;
 const CHANGES_STALE_TIME = 3_000;
@@ -103,8 +111,13 @@ export const helmorQueryKeys = {
 		source: string,
 		externalId: string,
 	) => ["inboxItemDetail", provider, login, source, externalId] as const,
-	githubLabels: (login: string, repos: string[]) =>
-		["githubLabels", login, ...repos] as const,
+	forgeLabels: (
+		provider: string,
+		host: string,
+		login: string,
+		repos: string[],
+	) => ["forgeLabels", provider, host, login, ...repos] as const,
+	inboxKindLabels: (provider: string) => ["inboxKindLabels", provider] as const,
 	workspaceGitActionStatus: (workspaceId: string) =>
 		["workspaceGitActionStatus", workspaceId] as const,
 	workspaceForgeActionStatus: (workspaceId: string) =>
@@ -119,12 +132,14 @@ export const helmorQueryKeys = {
 		provider: AgentProvider,
 		workingDirectory: string | null,
 		workspaceId: string | null,
+		repoId: string | null,
 	) =>
 		[
 			"slashCommands",
 			provider,
 			workingDirectory ?? "",
 			workspaceId ?? "",
+			repoId ?? "",
 		] as const,
 	workspaceLinkedDirectories: (workspaceId: string) =>
 		["workspaceLinkedDirectories", workspaceId] as const,
@@ -331,15 +346,49 @@ export function activeStreamsQueryOptions() {
 	});
 }
 
-export function githubLabelsQueryOptions(login: string, repos: string[]) {
-	const sortedRepos = [...repos].sort();
+/** Repo labels for the Settings → Context multi-select. Forge-aware:
+ *  GitHub hits `gh api /repos/.../labels`; GitLab hits `glab api
+ *  projects/.../labels`. Cached for 10 min — labels rarely churn. */
+export function forgeLabelsQueryOptions(args: {
+	provider: ForgeProvider;
+	login: string;
+	host: string | null;
+	repos: string[];
+}) {
+	const sortedRepos = [...args.repos].sort();
+	const host = args.host ?? "";
 	return queryOptions({
-		queryKey: helmorQueryKeys.githubLabels(login, sortedRepos),
-		queryFn: () => listGithubLabels({ login, repos: sortedRepos }),
+		queryKey: helmorQueryKeys.forgeLabels(
+			args.provider,
+			host,
+			args.login,
+			sortedRepos,
+		),
+		queryFn: () =>
+			listForgeLabels({
+				provider: args.provider,
+				login: args.login,
+				host: args.host,
+				repos: sortedRepos,
+			}),
 		initialData: [],
 		initialDataUpdatedAt: 0,
 		staleTime: 10 * 60_000,
 		gcTime: 24 * 60 * 60_000,
+	});
+}
+
+/// Inbox kind labels are static per provider (a given build's GitHub
+/// labels never change at runtime), so the cache is effectively
+/// permanent. We still go through the backend so frontend code is the
+/// pure consumer — every "PR" / "MR" / "Pull requests" / "Merge
+/// requests" string is owned by the Forge layer.
+export function inboxKindLabelsQueryOptions(provider: ForgeProvider) {
+	return queryOptions({
+		queryKey: helmorQueryKeys.inboxKindLabels(provider),
+		queryFn: () => listInboxKindLabels(provider),
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: Number.POSITIVE_INFINITY,
 	});
 }
 
@@ -559,13 +608,112 @@ export function workspaceCandidateDirectoriesQueryOptions(
 	});
 }
 
-/** Pipeline-rendered thread messages — ready for direct rendering. */
+/**
+ * Pipeline-rendered thread messages — ready for direct rendering.
+ *
+ * Defaults to tail-loading the most recent
+ * `DEFAULT_SESSION_THREAD_TAIL_LIMIT` records for snappy switches on huge
+ * sessions. Older messages are fetched on demand via `expandSessionThread`
+ * — that path writes into this same cache key (manual `setQueryData`
+ * prepend) so the streaming-tail / optimistic-user / setQueryData helpers
+ * stay tail-unaware.
+ *
+ * Pagination metadata (`hasMore`, `loadedTailLimit`) flows through the
+ * sibling `session-thread-pagination` store so the cache value can stay a
+ * plain `ThreadMessageLike[]`.
+ */
 export function sessionThreadMessagesQueryOptions(sessionId: string) {
 	return queryOptions({
 		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
+		// `loadSessionThreadMessages` updates the pagination store as a
+		// side effect — going through it (rather than the raw page fetch)
+		// keeps existing test mocks (`apiMocks.loadSessionThreadMessages`)
+		// working unchanged.
 		queryFn: () => loadSessionThreadMessages(sessionId),
 		gcTime: SESSION_GC_TIME,
 		staleTime: SESSION_STALE_TIME,
+	});
+}
+
+/**
+ * Step size for each "Load earlier" click. Roughly doubles the loaded
+ * window every two clicks (200 -> 400 -> 600 -> 800 -> 1000 -> jump-to-full).
+ * The "jump to full" guard exists because for very large sessions the user
+ * typically wants to stop adding tens of clicks and load the rest in one
+ * step once they're scrolling deep into history.
+ */
+const EXPAND_STEP = 200;
+const EXPAND_FULL_THRESHOLD = 1000;
+
+/**
+ * Fetch the next chunk of older messages and prepend them to the cached
+ * thread. Idempotent — a no-op when `hasMore` is already false. Resolves
+ * once the cache and pagination store are both updated.
+ *
+ * Strategy:
+ *   - Reads the currently loaded tailLimit from the pagination store.
+ *   - Fetches a trailing window of size `currentLimit + EXPAND_STEP` (or
+ *     a full load past `EXPAND_FULL_THRESHOLD`).
+ *   - Dedupes against the in-cache messages by id and prepends the
+ *     new "head only" portion to the cached array. This preserves
+ *     streaming-tail writes and optimistic user bubbles that the
+ *     backend doesn't know about yet.
+ */
+export async function expandSessionThread(
+	client: QueryClient,
+	sessionId: string,
+): Promise<void> {
+	const { hasMore, loadedTailLimit } =
+		getSessionThreadPaginationState(sessionId);
+	if (!hasMore) return;
+
+	const nextTailLimit: number | null = (() => {
+		if (loadedTailLimit === null) return null;
+		const proposed = loadedTailLimit + EXPAND_STEP;
+		return proposed >= EXPAND_FULL_THRESHOLD ? null : proposed;
+	})();
+
+	const page = await fetchSessionThreadMessagesPage(sessionId, {
+		tailLimit: nextTailLimit,
+	});
+
+	const cacheKey = [
+		...helmorQueryKeys.sessionMessages(sessionId),
+		"thread",
+	] as const;
+	client.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const previous = prev ?? [];
+		if (previous.length === 0) {
+			return page.messages;
+		}
+		// Keep every message currently in the cache (including streaming
+		// tails / optimistic ids the server doesn't know about) and
+		// prepend the newly-revealed older portion. Dedupe by id so we
+		// don't double-render rows that overlap the window.
+		const seenIds = new Set<string>();
+		for (const msg of previous) {
+			if (msg.id != null) seenIds.add(msg.id);
+		}
+		const head: ThreadMessageLike[] = [];
+		for (const msg of page.messages) {
+			if (msg.id != null && seenIds.has(msg.id)) {
+				// Stop at the first overlap — everything from here to the
+				// tail is already in `previous` in correct chronological
+				// order. (`page.messages` is the trailing window from the
+				// DB, so the overlap is contiguous at the boundary.)
+				break;
+			}
+			head.push(msg);
+		}
+		if (head.length === 0) {
+			return previous;
+		}
+		return [...head, ...previous];
+	});
+
+	setSessionThreadPaginationState(sessionId, {
+		hasMore: page.hasMore,
+		loadedTailLimit: nextTailLimit,
 	});
 }
 
@@ -580,6 +728,7 @@ export function slashCommandsQueryOptions(
 			provider,
 			workingDirectory,
 			workspaceId,
+			repoId,
 		),
 		queryFn: () =>
 			listSlashCommands({
@@ -734,22 +883,13 @@ export function workspaceForgeActionStatusQueryOptions(workspaceId: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 		queryFn: () => loadWorkspaceForgeActionStatus(workspaceId),
-		// Same `staleTime: Infinity` + `refetchOnWindowFocus: "always"`
-		// baseline as the other three identity-info queries.
-		//
-		// Unique to this query: `refetchOnMount: "always"`. Inspector's
-		// `Connect` CTA reads `remoteState` from here, so the moment the
-		// user switches workspaces we MUST re-probe the new workspace's
-		// remote — otherwise the previously-visited workspace's stale
-		// cache (with the same `staleTime: Infinity` rule) would render
-		// the wrong CTA state until the next focus event. The cached
-		// value still shows immediately (no loading flicker), only
-		// `isFetching` flips while the background refetch lands.
-		//
-		// The other three queries intentionally don't get this: their
-		// data either rarely changes (chip avatar, GitHub-vs-GitLab
-		// label) or isn't workspace-scoped (Settings roster), so the
-		// extra mount-time IPC isn't worth the cost.
+		// `staleTime: Infinity` + focus/mount `"always"` baseline shared
+		// with the other identity-info queries. CI-progress refetch on
+		// workspace switch is nudged by `useRefreshForgeOnWorkspaceSwitch`
+		// — a queryKey change goes through `setOptions` →
+		// `shouldFetchOptionally`, which gates on `isStale` (Infinity
+		// blocks it) and ignores `refetchOnMount` (that only fires on
+		// cold-start `onSubscribe`).
 		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: DEFAULT_GC_TIME,
 		refetchOnWindowFocus: "always",

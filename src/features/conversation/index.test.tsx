@@ -81,6 +81,7 @@ function renderContainer(
 				selectedSessionId="session-1"
 				displayedSessionId="session-1"
 				repoId="repo-1"
+				activeStreams={[]}
 				onSelectSession={vi.fn()}
 				onResolveDisplayedSession={vi.fn()}
 				pendingCreatedWorkspaceSubmit={{

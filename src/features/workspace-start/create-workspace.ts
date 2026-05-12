@@ -7,7 +7,6 @@ import {
 	finalizeWorkspaceFromRepo,
 	prepareWorkspaceFromRepo,
 	setWorkspaceLinkedDirectories,
-	setWorkspaceStatus,
 	updateSessionSettings,
 	type WorkspaceMode,
 } from "@/lib/api";
@@ -52,7 +51,17 @@ export async function createWorkspaceFromStartComposer({
 	 *  reads the workspace-scoped query) sees them on first mount. */
 	linkedDirectories?: readonly string[];
 }): Promise<WorkspaceStartCreateResult> {
-	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
+	// "Save for later" creates the workspace directly in `backlog` status
+	// — passing it through to Phase 1 means the DB row is born in the
+	// right group and the sidebar never flashes through "In progress"
+	// while finalize runs. Other submit modes default to in-progress.
+	const initialStatus = submitMode === "saveForLater" ? "backlog" : null;
+	const prepared = await prepareWorkspaceFromRepo(
+		repoId,
+		sourceBranch,
+		mode,
+		initialStatus,
+	);
 
 	// Persist pending /add-dir picks before kicking off finalize. The DB
 	// write is fast and the column is just a property of the existing
@@ -78,7 +87,6 @@ export async function createWorkspaceFromStartComposer({
 					})
 				: Promise.resolve(),
 		]);
-		await setWorkspaceStatus(prepared.workspaceId, "backlog");
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,

@@ -43,6 +43,7 @@ pub struct WorkspaceSidebarRow {
     pub title: String,
     pub avatar: String,
     pub directory_name: String,
+    pub repo_id: String,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
@@ -86,6 +87,7 @@ pub struct WorkspaceSummary {
     pub id: String,
     pub title: String,
     pub directory_name: String,
+    pub repo_id: String,
     pub repo_name: String,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
@@ -156,6 +158,11 @@ pub struct WorkspaceDetail {
     /// has been bound (auto-detect didn't find one); the UI shows the
     /// "Connect" prompt in that case.
     pub forge_login: Option<String>,
+    /// Timestamp of the most recent successful setup-script run for
+    /// this workspace. NULL if setup has never been run (or the
+    /// workspace was created before this column existed). Drives the
+    /// inspector's Setup tab "ran in another session" notice.
+    pub setup_completed_at: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -725,6 +732,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         title,
         id: record.id,
         directory_name: record.directory_name,
+        repo_id: record.repo_id,
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
@@ -764,6 +772,7 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         title: helpers::display_title(&record),
         id: record.id,
         directory_name: record.directory_name,
+        repo_id: record.repo_id,
         repo_name: record.repo_name,
         repo_icon_src: helpers::repo_icon_src_for_root_path(record.root_path.as_deref()),
         repo_initials,
@@ -847,6 +856,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         message_count: record.message_count,
         forge_provider: record.forge_provider,
         forge_login: record.forge_login,
+        setup_completed_at: record.setup_completed_at,
     }
 }
 

@@ -9,6 +9,7 @@ use crate::forge::ChangeRequestInfo;
 
 use super::api::{run_graphql, run_graphql_raw, GraphqlOutcome};
 use super::context::GithubContext;
+use super::pr_match::matches_workspace_pr;
 use super::types::{GraphqlEnvelope, PullRequestNode};
 
 // `first: 10` leaves room for the cross-repo filter to find the in-repo match.
@@ -23,6 +24,7 @@ query($owner: String!, $name: String!, $head: String!) {
         title
         merged
         isCrossRepository
+        headRepositoryOwner { login }
       }
     }
   }
@@ -33,7 +35,7 @@ const PR_NODE_ID_QUERY: &str = r#"
 query($owner: String!, $name: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(headRefName: $head, states: [OPEN], first: 5) {
-      nodes { id, url, number, state, title, merged, isCrossRepository }
+      nodes { id, url, number, state, title, merged, isCrossRepository, headRepositoryOwner { login } }
     }
   }
 }
@@ -149,13 +151,18 @@ pub(super) fn find_workspace_pr(context: &GithubContext) -> Result<Option<Change
     Ok(parsed
         .data
         .and_then(|d| d.repository)
-        .and_then(|r| pick_in_repo_pr(r.pull_requests.nodes))
+        .and_then(|r| pick_workspace_pr(r.pull_requests.nodes, &context.login))
         .map(pr_info))
 }
 
-/// Drop fork PRs; `headRefName:` alone matches across forks.
-fn pick_in_repo_pr(nodes: Vec<PullRequestNode>) -> Option<PullRequestNode> {
-    nodes.into_iter().find(|node| !node.is_cross_repository)
+fn pick_workspace_pr(nodes: Vec<PullRequestNode>, bound_login: &str) -> Option<PullRequestNode> {
+    nodes.into_iter().find(|node| {
+        matches_workspace_pr(
+            node.is_cross_repository,
+            node.head_repository_owner.as_ref(),
+            bound_login,
+        )
+    })
 }
 
 /// Convert a GraphQL pull-request node into the public
@@ -189,7 +196,7 @@ pub(super) fn fetch_open_pr_node_id(context: &GithubContext) -> Result<Option<St
     Ok(parsed
         .data
         .and_then(|d| d.repository)
-        .and_then(|r| pick_in_repo_pr(r.pull_requests.nodes))
+        .and_then(|r| pick_workspace_pr(r.pull_requests.nodes, &context.login))
         .and_then(|n| n.id))
 }
 
@@ -286,6 +293,7 @@ fn run_pr_mutation(login: &str, mutation: &str, pr_node_id: &str) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::HeadRepositoryOwner;
     use super::*;
 
     fn make_node(state: &str, merged: bool) -> PullRequestNode {
@@ -297,10 +305,16 @@ mod tests {
             title: "Update".to_string(),
             merged,
             is_cross_repository: false,
+            head_repository_owner: None,
         }
     }
 
-    fn make_node_with_cross_repo(state: &str, number: i64, cross: bool) -> PullRequestNode {
+    fn make_node_with_cross_repo(
+        state: &str,
+        number: i64,
+        cross: bool,
+        owner: Option<&str>,
+    ) -> PullRequestNode {
         PullRequestNode {
             id: None,
             url: format!("https://github.com/octocat/hello-world/pull/{number}"),
@@ -309,6 +323,9 @@ mod tests {
             title: "Update".to_string(),
             merged: false,
             is_cross_repository: cross,
+            head_repository_owner: owner.map(|login| HeadRepositoryOwner {
+                login: login.to_string(),
+            }),
         }
     }
 
@@ -381,28 +398,57 @@ mod tests {
 
     // Regression: workspace on `main` got auto-canceled by a fork's closed `main` PR.
     #[test]
-    fn pick_in_repo_pr_skips_cross_repository_nodes() {
+    fn pick_workspace_pr_skips_unrelated_cross_repository_nodes() {
         let nodes = vec![
-            make_node_with_cross_repo("CLOSED", 433, true),
-            make_node_with_cross_repo("OPEN", 100, false),
+            make_node_with_cross_repo("CLOSED", 433, true, Some("other-user")),
+            make_node_with_cross_repo("OPEN", 100, false, None),
         ];
-        let picked = pick_in_repo_pr(nodes).expect("expected an in-repo PR");
+        let picked = pick_workspace_pr(nodes, "octocat").expect("expected an in-repo PR");
         assert_eq!(picked.number, 100);
     }
 
     #[test]
-    fn pick_in_repo_pr_returns_none_when_only_cross_repo_matches() {
-        let nodes = vec![make_node_with_cross_repo("CLOSED", 433, true)];
-        assert!(pick_in_repo_pr(nodes).is_none());
+    fn pick_workspace_pr_matches_cross_repository_node_from_bound_login() {
+        let nodes = vec![make_node_with_cross_repo("OPEN", 473, true, Some("Aidxun"))];
+        let picked = pick_workspace_pr(nodes, "aidxun").expect("expected bound fork PR");
+        assert_eq!(picked.number, 473);
     }
 
     #[test]
-    fn pick_in_repo_pr_preserves_order_when_first_node_is_in_repo() {
+    fn pick_workspace_pr_does_not_match_cross_repository_node_for_different_login() {
+        let nodes = vec![make_node_with_cross_repo(
+            "OPEN",
+            473,
+            true,
+            Some("fork-owner"),
+        )];
+        assert!(pick_workspace_pr(nodes, "authorized-collaborator").is_none());
+    }
+
+    #[test]
+    fn pick_workspace_pr_returns_none_when_only_unrelated_cross_repo_matches() {
+        let nodes = vec![make_node_with_cross_repo(
+            "CLOSED",
+            433,
+            true,
+            Some("other-user"),
+        )];
+        assert!(pick_workspace_pr(nodes, "octocat").is_none());
+    }
+
+    #[test]
+    fn pick_workspace_pr_returns_none_for_cross_repo_without_owner() {
+        let nodes = vec![make_node_with_cross_repo("CLOSED", 433, true, None)];
+        assert!(pick_workspace_pr(nodes, "octocat").is_none());
+    }
+
+    #[test]
+    fn pick_workspace_pr_preserves_order_when_first_node_is_in_repo() {
         let nodes = vec![
-            make_node_with_cross_repo("OPEN", 100, false),
-            make_node_with_cross_repo("CLOSED", 99, false),
+            make_node_with_cross_repo("OPEN", 100, false, None),
+            make_node_with_cross_repo("CLOSED", 99, false, None),
         ];
-        let picked = pick_in_repo_pr(nodes).expect("expected first in-repo PR");
+        let picked = pick_workspace_pr(nodes, "octocat").expect("expected first in-repo PR");
         assert_eq!(picked.number, 100);
     }
 
