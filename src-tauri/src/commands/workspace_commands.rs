@@ -220,6 +220,28 @@ pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus)
     run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
 }
 
+/// Sidebar drag-and-drop entry point. `target_group_id` is a sidebar group
+/// id from the frontend — `"pinned"`, a status lane (`"done"` / `"review"`
+/// / `"progress"` / `"backlog"` / `"canceled"`), or a repo bucket
+/// (`"repo:<repo_id>"`). The backend writes the corresponding `pinned_at`
+/// / `status` mutation plus a single `display_order` cell, only falling
+/// back to a full-group rebalance when the sparse gap runs out.
+#[tauri::command]
+pub async fn move_workspace_in_sidebar(
+    workspace_id: String,
+    target_group_id: String,
+    before_workspace_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        workspaces::move_workspace_in_sidebar(
+            &workspace_id,
+            &target_group_id,
+            before_workspace_id.as_deref(),
+        )
+    })
+    .await
+}
+
 /// `/add-dir` feature: list the extra directories the user has linked to
 /// this workspace. These are sent as `additionalDirectories` to the agent
 /// SDKs on every turn.

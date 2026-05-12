@@ -4,7 +4,7 @@ import {
 	dismissReleaseAnnouncement,
 	isFirstHelmorBoot,
 	LAST_SEEN_INSTALL_VERSION_STORAGE_KEY,
-	readDismissedReleaseAnnouncementIds,
+	readDismissedReleaseAnnouncementVersions,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
 } from "./storage";
@@ -15,16 +15,24 @@ describe("dismissed-announcements storage", () => {
 	});
 
 	it("returns an empty set when nothing is stored", () => {
-		expect(readDismissedReleaseAnnouncementIds().size).toBe(0);
+		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
 	});
 
-	it("returns the persisted ids as a Set", () => {
+	it("returns the persisted versions as a Set", () => {
 		window.localStorage.setItem(
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify(["a", "b"]),
+			JSON.stringify(["0.20.0", "0.21.0"]),
 		);
-		const dismissed = readDismissedReleaseAnnouncementIds();
-		expect([...dismissed].sort()).toEqual(["a", "b"]);
+		const dismissed = readDismissedReleaseAnnouncementVersions();
+		expect([...dismissed].sort()).toEqual(["0.20.0", "0.21.0"]);
+	});
+
+	it("maps legacy dismissed ids to their release versions", () => {
+		window.localStorage.setItem(
+			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
+			JSON.stringify(["2026-05-11-2300"]),
+		);
+		expect([...readDismissedReleaseAnnouncementVersions()]).toEqual(["0.21.0"]);
 	});
 
 	it("recovers gracefully from invalid JSON", () => {
@@ -32,7 +40,7 @@ describe("dismissed-announcements storage", () => {
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
 			"{not json",
 		);
-		expect(readDismissedReleaseAnnouncementIds().size).toBe(0);
+		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
 	});
 
 	it("ignores non-array stored values", () => {
@@ -40,7 +48,7 @@ describe("dismissed-announcements storage", () => {
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
 			JSON.stringify({ rogue: "shape" }),
 		);
-		expect(readDismissedReleaseAnnouncementIds().size).toBe(0);
+		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
 	});
 
 	it("filters out non-string entries from the persisted array", () => {
@@ -48,27 +56,27 @@ describe("dismissed-announcements storage", () => {
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
 			JSON.stringify(["valid", 42, null, "also-valid"]),
 		);
-		expect([...readDismissedReleaseAnnouncementIds()].sort()).toEqual([
+		expect([...readDismissedReleaseAnnouncementVersions()].sort()).toEqual([
 			"also-valid",
 			"valid",
 		]);
 	});
 
-	it("appends an id without losing previously dismissed ones", () => {
-		dismissReleaseAnnouncement("first");
-		dismissReleaseAnnouncement("second");
-		expect([...readDismissedReleaseAnnouncementIds()].sort()).toEqual([
-			"first",
-			"second",
+	it("appends a version without losing previously dismissed ones", () => {
+		dismissReleaseAnnouncement("0.20.0");
+		dismissReleaseAnnouncement("0.21.0");
+		expect([...readDismissedReleaseAnnouncementVersions()].sort()).toEqual([
+			"0.20.0",
+			"0.21.0",
 		]);
 	});
 
-	it("is idempotent — dismissing the same id twice doesn't duplicate it", () => {
-		dismissReleaseAnnouncement("only");
-		dismissReleaseAnnouncement("only");
-		const dismissed = readDismissedReleaseAnnouncementIds();
+	it("is idempotent — dismissing the same version twice doesn't duplicate it", () => {
+		dismissReleaseAnnouncement("0.21.0");
+		dismissReleaseAnnouncement("0.21.0");
+		const dismissed = readDismissedReleaseAnnouncementVersions();
 		expect(dismissed.size).toBe(1);
-		expect(dismissed.has("only")).toBe(true);
+		expect(dismissed.has("0.21.0")).toBe(true);
 	});
 
 	it("doesn't throw when localStorage.setItem fails", () => {

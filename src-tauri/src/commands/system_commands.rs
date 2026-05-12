@@ -20,7 +20,7 @@ use super::common::{run_blocking, CmdResult};
 const ONBOARDING_WINDOW_WIDTH: f64 = 1300.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 810.0;
 const HELMOR_SKILL_NAME: &str = "helmor-cli";
-const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.codex/skills/helmor-cli";
+const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.agents/skills/helmor-cli";
 
 static ONBOARDING_WINDOW_STATE: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));

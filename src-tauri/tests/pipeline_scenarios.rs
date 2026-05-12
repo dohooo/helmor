@@ -281,6 +281,22 @@ fn user_json_text_swallowed() {
 }
 
 #[test]
+fn user_json_text_after_assistant_swallowed() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([{ "type": "text", "text": "Using skill..." }]),
+            None,
+        ),
+        user_json(
+            "u1",
+            json!([{ "type": "text", "text": "# Skill\n\nInternal instructions" }]),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_tool_result_only_no_prev() {
     let msgs = vec![user_json(
         "u1",

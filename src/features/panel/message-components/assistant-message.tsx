@@ -58,7 +58,7 @@ const AssistantText = memo(function AssistantText({
 	return (
 		<div
 			className="conversation-markdown assistant-markdown-scale max-w-none break-words text-foreground"
-			style={{ fontSize: `${settings.fontSize}px` }}
+			style={{ fontSize: `${settings.chatFontSize}px` }}
 		>
 			<Suspense fallback={<AssistantTextFallback text={smoothedText} />}>
 				<LazyStreamdown
@@ -230,7 +230,7 @@ export function ChatAssistantMessage({
 						>
 							<ReasoningTrigger />
 							{hasContent ? (
-								<ReasoningContent fontSize={settings.fontSize}>
+								<ReasoningContent fontSize={settings.chatFontSize}>
 									{part.text}
 								</ReasoningContent>
 							) : null}

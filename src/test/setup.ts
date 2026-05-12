@@ -139,7 +139,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 					claude: false,
 					codex: false,
 					command:
-						"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+						"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 				};
 			case "get_app_update_status":
 				return {

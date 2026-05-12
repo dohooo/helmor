@@ -4,6 +4,10 @@ export const DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY =
 export const LAST_SEEN_INSTALL_VERSION_STORAGE_KEY =
 	"helmor:last-seen-install-version";
 
+const LEGACY_DISMISSED_RELEASE_ANNOUNCEMENT_IDS: Record<string, string> = {
+	"2026-05-11-2300": "0.21.0",
+};
+
 /**
  * Best-effort detection of "this device has never run Helmor before".
  * We can't ask `LAST_SEEN_INSTALL_VERSION_STORAGE_KEY` directly — it's a
@@ -30,7 +34,7 @@ export function isFirstHelmorBoot(): boolean {
 	}
 }
 
-export function readDismissedReleaseAnnouncementIds(): Set<string> {
+export function readDismissedReleaseAnnouncementVersions(): Set<string> {
 	try {
 		const raw = window.localStorage.getItem(
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
@@ -40,15 +44,19 @@ export function readDismissedReleaseAnnouncementIds(): Set<string> {
 		const parsed: unknown = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return new Set();
 
-		return new Set(parsed.filter((id): id is string => typeof id === "string"));
+		return new Set(
+			parsed
+				.filter((id): id is string => typeof id === "string")
+				.map((id) => LEGACY_DISMISSED_RELEASE_ANNOUNCEMENT_IDS[id] ?? id),
+		);
 	} catch {
 		return new Set();
 	}
 }
 
-export function dismissReleaseAnnouncement(id: string): void {
-	const dismissed = readDismissedReleaseAnnouncementIds();
-	dismissed.add(id);
+export function dismissReleaseAnnouncement(releaseVersion: string): void {
+	const dismissed = readDismissedReleaseAnnouncementVersions();
+	dismissed.add(releaseVersion);
 	try {
 		window.localStorage.setItem(
 			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,

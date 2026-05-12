@@ -1,11 +1,14 @@
 ---
 name: helmor-release
-description: Prepare Helmor releases by inspecting the current branch, drafting a concise user-facing Changesets entry first (bump + body — keep it as short as possible: a single sentence by default, summary + bullets only when there are multiple distinct user-visible items), writing it to `.changeset/`, and then showing the user the result with a short menu of adjustments they can pick from. Use when the user wants to cut a release, write a changeset, decide patch/minor/major, draft GitHub release notes, or summarize branch changes into release-ready language.
+description: Prepare Helmor releases by inspecting the current branch, drafting a concise user-facing Changesets entry first (bump + body — keep it as short as possible), creating any needed pending in-app release announcement under `.announcements/`, and then showing the user the result with a short menu of adjustments they can pick from. Use when the user wants to cut a release, write a changeset, decide patch/minor/major, draft GitHub release notes, create a release announcement, or summarize branch changes into release-ready language.
 ---
 
 # Helmor Release
 
-Use this skill to turn a branch's real changes into a clean `.changeset/*.md` entry for Helmor.
+Use this skill to turn a branch's real changes into release metadata for Helmor:
+
+- a clean `.changeset/*.md` entry
+- a pending `.announcements/*.json` fragment when the change deserves an in-app "New in vX" toast
 
 ## Workflow
 
@@ -23,7 +26,11 @@ Use this skill to turn a branch's real changes into a clean `.changeset/*.md` en
 
    **Brevity bias.** Aim for the shortest sentence that names the user-visible change — if a clause can be dropped without losing meaning, drop it. Reserve summary+bullets for releases with ≥2 distinct user-visible items.
 4. Write the changeset to a single file under `.changeset/` right away. Do not wait for approval before creating the file — the user will adjust from a real draft, not a hypothetical one.
-5. Then, and only then, show the user what you created and offer the adjustment menu described in "Confirmation Style".
+5. Decide whether an in-app release announcement is warranted.
+   - Create one pending file under `.announcements/` only for new user-visible features or workflow changes.
+   - Skip bug fixes, internal refactors, routine performance work, and release plumbing unless users need to learn a new behavior.
+   - Do not write an id or version. `bun run release:version` consumes all pending announcement files and merges them into one catalog entry for the final version.
+6. Then, and only then, show the user what you created and offer the adjustment menu described in "Confirmation Style".
 
 ## Confirmation Style
 
@@ -32,8 +39,9 @@ Do not ask the user anything before the draft is written. Once the changeset fil
 Preferred pattern:
 
 1. State the file path you created.
-2. Echo back the chosen bump and the body (single sentence, or summary+bullets) in a compact block.
-3. Present a numbered menu of the things the user might want to change. The user picks any subset (e.g. "1 and 3") or says nothing / "looks good" to accept. Never phrase this as an open question like "do you approve?".
+2. If you created a release announcement fragment, state that file path too.
+3. Echo back the chosen bump, the changeset body, and the announcement text if present.
+4. Present a numbered menu of the things the user might want to change. The user picks any subset (e.g. "1 and 3") or says nothing / "looks good" to accept. Never phrase this as an open question like "do you approve?".
 
 Example (Shape A — single sentence):
 
@@ -46,8 +54,9 @@ I've written .changeset/brave-otters-smile.md:
 If you want to adjust anything, tell me which:
   1. Version bump (currently: patch — say "make it minor" / "make it major")
   2. Rewrite the body
-  3. Expand into summary + bullets
-  4. Add a thanks/credits line
+  3. Add or revise an in-app release announcement
+  4. Expand into summary + bullets
+  5. Add a thanks/credits line
 
 Otherwise we're done — no reply needed.
 ```
@@ -56,6 +65,7 @@ Example (Shape B — multi-change):
 
 ```text
 I've written .changeset/brave-otters-smile.md:
+I've also written .announcements/release-and-updates.json:
 
   bump:    minor
   summary: Ship a round of release and auto-update improvements:
@@ -68,8 +78,9 @@ If you want to adjust anything, tell me which:
   1. Version bump (currently: minor — say "make it patch" / "make it major")
   2. Summary line
   3. The bullet list (add / remove / rewrite specific items)
-  4. Collapse to a single sentence
-  5. Add a thanks/credits line
+  4. In-app announcement text
+  5. Collapse to a single sentence
+  6. Add a thanks/credits line
 
 Otherwise we're done — no reply needed.
 ```
@@ -161,6 +172,79 @@ That means:
 - this skill should focus on writing a strong user-facing changeset body
 
 Do not invent a separate release-note format unless the user asks for one.
+
+## In-App Release Announcements
+
+Create a pending announcement fragment when the PR adds a user-visible feature or workflow change that users should learn about in the app.
+
+Do:
+
+- write one short, concrete toast item per user-visible capability
+- add an action only when there is a useful direct destination
+- use a short kebab-case filename under `.announcements/`
+- keep the JSON shape exactly within the schema below
+
+Do not:
+
+- include `id` or `releaseVersion`
+- announce ordinary bug fixes, internal refactors, or routine performance work
+- edit `src/features/announcements/release-announcement-catalog.json` by hand during feature work
+
+Schema:
+
+```ts
+type PendingReleaseAnnouncement = {
+	items: Array<{
+		text: string;
+		action?: {
+			label: string;
+			value:
+				| { type: "openSettings"; section?: SettingsSection }
+				| { type: "setRightSidebarMode"; mode: WorkspaceRightSidebarMode };
+		};
+	}>;
+};
+```
+
+Allowed `openSettings.section` values come from `src/features/settings`.
+Allowed `setRightSidebarMode.mode` values come from `WorkspaceRightSidebarMode` in `src/lib/settings.ts`.
+
+Plain text example:
+
+```json
+{
+	"items": [
+		{
+			"text": "You can now drag workspaces in the sidebar to keep each section in your preferred order."
+		}
+	]
+}
+```
+
+Action example:
+
+```json
+{
+	"items": [
+		{
+			"text": "You can now group workspaces in the sidebar by repository.",
+			"action": {
+				"label": "Open General",
+				"value": { "type": "openSettings", "section": "general" }
+			}
+		},
+		{
+			"text": "Add Context now supports GitLab too.",
+			"action": {
+				"label": "Open Context",
+				"value": { "type": "setRightSidebarMode", "mode": "context" }
+			}
+		}
+	]
+}
+```
+
+At release-plan time, `bun run release:version` consumes every pending fragment, merges all items into one entry for the final package version, and deletes the pending files.
 
 ## Versioning Guidance
 

@@ -3,6 +3,7 @@ use rusqlite::Row;
 
 use crate::{
     repos,
+    workspace::sidebar_order,
     workspace_pr_sync::PrSyncState,
     workspace_state::{WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
@@ -52,6 +53,10 @@ pub struct WorkspaceRecord {
     /// auto-detect found no logged-in account with access (or the row
     /// predates the binding feature).
     pub forge_login: Option<String>,
+    pub display_order: i64,
+    /// `repos.display_order` for the parent repo — drives bucket ordering
+    /// in the sidebar's repo grouping mode.
+    pub repo_sidebar_order: i64,
     pub created_at: String,
     pub updated_at: String,
     /// Most recent `last_user_message_at` across all sessions in the
@@ -162,6 +167,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       r.remote,
       r.forge_provider,
       r.forge_login,
+      w.display_order AS display_order,
+      COALESCE(r.display_order, 0) AS repo_sidebar_order,
       w.created_at,
       w.updated_at,
       wss.last_user_message_at,
@@ -176,7 +183,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
     let sql = format!(
-        "{WORKSPACE_RECORD_SQL} ORDER BY datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
+        "{WORKSPACE_RECORD_SQL} ORDER BY w.display_order ASC, datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
     );
     let mut statement = connection.prepare(&sql)?;
 
@@ -256,6 +263,19 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     let transaction = connection
         .transaction()
         .context("Failed to start create-workspace transaction")?;
+    let next_order = transaction
+        .query_row(
+            r#"
+                SELECT COALESCE(MAX(display_order), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?3
+                "#,
+            rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace display order")?;
 
     transaction
         .execute(
@@ -270,11 +290,12 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               initialization_parent_branch,
               intended_target_branch,
               mode,
+              display_order,
               status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
             "#,
             (
                 workspace_id,
@@ -286,6 +307,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 default_branch,
                 mode,
+                next_order,
                 status,
                 timestamp,
             ),
@@ -573,9 +595,11 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         remote: row.get(30)?,
         forge_provider: row.get(31)?,
         forge_login: row.get(32)?,
-        created_at: row.get(33)?,
-        updated_at: row.get(34)?,
-        last_user_message_at: row.get(35)?,
-        setup_completed_at: row.get(36)?,
+        display_order: row.get(33)?,
+        repo_sidebar_order: row.get(34)?,
+        created_at: row.get(35)?,
+        updated_at: row.get(36)?,
+        last_user_message_at: row.get(37)?,
+        setup_completed_at: row.get(38)?,
     })
 }

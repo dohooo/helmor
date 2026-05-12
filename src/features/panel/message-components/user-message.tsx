@@ -23,7 +23,7 @@ export function ChatUserMessage({ message }: { message: RenderedMessage }) {
 			<div className="relative flex max-w-[75%] min-w-0 flex-col items-end pb-5">
 				<div
 					className="conversation-body-text w-full overflow-hidden rounded-md bg-accent/55 px-3 py-2 leading-7"
-					style={{ fontSize: `${settings.fontSize}px` }}
+					style={{ fontSize: `${settings.chatFontSize}px` }}
 				>
 					<p className="whitespace-pre-wrap break-words">
 						{parts.map((part, index) => {

@@ -7,12 +7,19 @@
     <title>Helmor</title>
     <script>
       ;(() => {
-        var t = localStorage.getItem('helmor-theme') || 'system'
+        var root = document.documentElement
+        var ls = localStorage
+        var t = ls.getItem('helmor-theme') || 'system'
         var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme:dark)').matches)
-        if (dark) document.documentElement.classList.add('dark')
-        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-        var ct = localStorage.getItem('helmor-dark-theme') || 'default'
-        if (ct !== 'default') document.documentElement.classList.add(`theme-${ct}`)
+        if (dark) root.classList.add('dark')
+        root.style.colorScheme = dark ? 'dark' : 'light'
+        var ct = ls.getItem('helmor-dark-theme') || 'default'
+        if (ct !== 'default') root.classList.add(`theme-${ct}`)
+        // User font overrides
+        var ui = ls.getItem('helmor-ui-font-family')
+        if (ui) root.style.setProperty('--font-sans-user', ui)
+        var mono = ls.getItem('helmor-code-font-family')
+        if (mono) root.style.setProperty('--font-mono-user', mono)
       })()
     </script>
     <style>

@@ -37,6 +37,10 @@ import {
 import { summarizeToolCall } from "@/lib/tool-summary";
 import { cn } from "@/lib/utils";
 import { WorkspaceAvatar } from "./avatar";
+import {
+	WORKSPACE_DND_ACTIVE_ATTRIBUTE,
+	WORKSPACE_DND_ACTIVE_CHANGE_EVENT,
+} from "./dnd/shared";
 import { humanizeBranch } from "./shared";
 
 const STATUS_LABEL: Record<NonNullable<WorkspaceRow["status"]>, string> = {
@@ -493,8 +497,38 @@ export function WorkspaceHoverCard({
 }) {
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
+	const [open, setOpen] = useState(false);
+	useEffect(() => {
+		const closeDuringDrag = () => {
+			if (
+				document.documentElement.getAttribute(
+					WORKSPACE_DND_ACTIVE_ATTRIBUTE,
+				) === "true"
+			) {
+				setOpen(false);
+			}
+		};
+
+		window.addEventListener(WORKSPACE_DND_ACTIVE_CHANGE_EVENT, closeDuringDrag);
+		closeDuringDrag();
+		return () =>
+			window.removeEventListener(
+				WORKSPACE_DND_ACTIVE_CHANGE_EVENT,
+				closeDuringDrag,
+			);
+	}, []);
 	const handleOpenChange = useCallback(
 		(open: boolean) => {
+			if (
+				open &&
+				document.documentElement.getAttribute(
+					WORKSPACE_DND_ACTIVE_ATTRIBUTE,
+				) === "true"
+			) {
+				setOpen(false);
+				return;
+			}
+			setOpen(open);
 			if (!open) return;
 			const rowEl = document.querySelector<HTMLElement>(
 				`[data-workspace-row-id="${row.id}"]`,
@@ -555,6 +589,7 @@ export function WorkspaceHoverCard({
 
 	return (
 		<HoverCardRoot
+			open={open}
 			openDelay={400}
 			closeDelay={80}
 			onOpenChange={handleOpenChange}

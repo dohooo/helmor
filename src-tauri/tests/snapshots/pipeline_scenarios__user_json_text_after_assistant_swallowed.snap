@@ -1,0 +1,14 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: text
+      text: Using skill...
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

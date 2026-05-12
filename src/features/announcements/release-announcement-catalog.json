@@ -1,0 +1,34 @@
+{
+	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
+	"items": [
+		{
+			"releaseVersion": "0.21.0",
+			"items": [
+				{
+					"text": "You can now group workspaces in the sidebar by repository — toggle it in Settings.",
+					"action": {
+						"label": "Open General",
+						"value": { "type": "openSettings", "section": "general" }
+					}
+				},
+				{
+					"text": "Add Context now supports GitLab too — auto-detected based on your current project.",
+					"action": {
+						"label": "Open Context",
+						"value": { "type": "setRightSidebarMode", "mode": "context" }
+					}
+				},
+				{
+					"text": "Claude Code thinking now offers two modes. Choosing Omitted lets the final text stream sooner.",
+					"action": {
+						"label": "Open General",
+						"value": { "type": "openSettings", "section": "general" }
+					}
+				},
+				{
+					"text": "Plus a batch of performance fixes across the app."
+				}
+			]
+		}
+	]
+}

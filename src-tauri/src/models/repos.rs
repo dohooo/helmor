@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{git_ops, helpers, workspace_state};
+use crate::{git_ops, helpers, workspace::sidebar_order, workspace_state};
 
 use super::db;
 
@@ -304,10 +304,12 @@ fn query_repository_candidates_by_name(
 
 pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<String> {
     let connection = db::write_conn()?;
+    // Append to the sparse 1024-step grid so drag-reorder later only has
+    // to write the moving row's `display_order`, not the whole table.
     let next_display_order: i64 = connection
         .query_row(
-            "SELECT COALESCE(MAX(display_order), 0) + 1 FROM repos",
-            [],
+            "SELECT COALESCE(MAX(display_order), 0) + ?1 FROM repos",
+            [sidebar_order::ORDER_STEP],
             |row| row.get(0),
         )
         .context("Failed to resolve next repository display order")?;
@@ -347,6 +349,118 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
         .with_context(|| format!("Failed to insert repository {}", repository.name))?;
 
     Ok(repo_id)
+}
+
+/// Reorder a repository inside the sidebar's repo bucket list. Common case
+/// is a single-row UPDATE — falls back to a full rebalance when the sparse
+/// gap between neighbours has run out.
+pub fn move_repository_in_sidebar(repo_id: &str, before_repo_id: Option<&str>) -> Result<()> {
+    if before_repo_id == Some(repo_id) {
+        bail!("Repository cannot be moved before itself");
+    }
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start repo move transaction")?;
+
+    let neighbours = load_repo_orders(&transaction, repo_id)?;
+    let (prev, next) = resolve_repo_neighbour_orders(&neighbours, before_repo_id)?;
+
+    let new_order = match sidebar_order::compute_midpoint(prev, next) {
+        Some(order) => order,
+        None => rebalance_repo_orders(&transaction, repo_id, before_repo_id)?,
+    };
+
+    let updated = transaction
+        .execute(
+            "UPDATE repos SET display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![repo_id, new_order],
+        )
+        .with_context(|| format!("Failed to update display order for repo {repo_id}"))?;
+    if updated != 1 {
+        bail!("Repo move affected {updated} rows for {repo_id}");
+    }
+
+    transaction
+        .commit()
+        .context("Failed to commit repo move transaction")
+}
+
+fn load_repo_orders(
+    transaction: &rusqlite::Transaction<'_>,
+    exclude_repo_id: &str,
+) -> Result<Vec<(String, i64)>> {
+    let rows: Vec<(String, i64)> = transaction
+        .prepare(
+            r#"
+            SELECT id, COALESCE(display_order, 0)
+            FROM repos
+            WHERE COALESCE(hidden, 0) = 0
+            ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
+            "#,
+        )?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|(id, _)| id != exclude_repo_id)
+        .collect())
+}
+
+fn resolve_repo_neighbour_orders(
+    neighbours: &[(String, i64)],
+    before_repo_id: Option<&str>,
+) -> Result<(Option<i64>, Option<i64>)> {
+    let Some(before_id) = before_repo_id else {
+        return Ok((neighbours.last().map(|(_, order)| *order), None));
+    };
+    let position = neighbours
+        .iter()
+        .position(|(id, _)| id == before_id)
+        .with_context(|| format!("Before-repo is not in sidebar repo list: {before_id}"))?;
+    let next = Some(neighbours[position].1);
+    let prev = if position == 0 {
+        None
+    } else {
+        Some(neighbours[position - 1].1)
+    };
+    Ok((prev, next))
+}
+
+fn rebalance_repo_orders(
+    transaction: &rusqlite::Transaction<'_>,
+    repo_id: &str,
+    before_repo_id: Option<&str>,
+) -> Result<i64> {
+    let neighbours = load_repo_orders(transaction, repo_id)?;
+    let insert_position = match before_repo_id {
+        None => neighbours.len(),
+        Some(id) => neighbours
+            .iter()
+            .position(|(rid, _)| rid == id)
+            .with_context(|| format!("Before-repo is not in sidebar repo list: {id}"))?,
+    };
+
+    let mut ordered_ids: Vec<&str> = neighbours.iter().map(|(s, _)| s.as_str()).collect();
+    ordered_ids.insert(insert_position, repo_id);
+
+    let mut moving_order = sidebar_order::ORDER_STEP;
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let order = sidebar_order::order_for_index(index)?;
+        if *id == repo_id {
+            moving_order = order;
+            continue;
+        }
+        transaction
+            .execute(
+                "UPDATE repos SET display_order = ?2 WHERE id = ?1",
+                rusqlite::params![id, order],
+            )
+            .with_context(|| format!("Failed to rebalance display order for repo {id}"))?;
+    }
+    Ok(moving_order)
 }
 
 /// Atomically update the remote and re-resolve default_branch from the new

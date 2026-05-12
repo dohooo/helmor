@@ -205,9 +205,9 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO workspaces (id, repository_id, directory_name, state,
-             status, linked_directory_paths) VALUES (?1, 'r-1', 'ws', 'ready',
-             'in-progress', ?2)",
-            rusqlite::params![ws_id, linked],
+             status, linked_directory_paths, display_order) VALUES (?1, 'r-1', 'ws', 'ready',
+             'in-progress', ?2, ?3)",
+            rusqlite::params![ws_id, linked, crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
         conn.execute(

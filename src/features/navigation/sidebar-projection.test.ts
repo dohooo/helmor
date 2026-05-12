@@ -341,6 +341,41 @@ describe("regroupByRepo", () => {
 		expect(repoGroups[1]?.rows.map((r) => r.id)).toEqual(["ws-done-B"]);
 	});
 
+	it("sorts rows inside a repo bucket by displayOrder", () => {
+		const result = regroupByRepo([
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{
+						id: "ws-late",
+						title: "Late",
+						state: "ready",
+						status: "in-progress",
+						repoId: "repo-A",
+						repoName: "alpha",
+						displayOrder: 2000,
+					},
+					{
+						id: "ws-early",
+						title: "Early",
+						state: "ready",
+						status: "in-progress",
+						repoId: "repo-A",
+						repoName: "alpha",
+						displayOrder: 1000,
+					},
+				],
+			},
+		]);
+
+		expect(result[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-early",
+			"ws-late",
+		]);
+	});
+
 	it("collects rows missing repoId into a single Unknown bucket", () => {
 		const result = regroupByRepo([
 			{

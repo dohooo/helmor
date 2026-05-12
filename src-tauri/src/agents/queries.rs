@@ -511,8 +511,7 @@ pub async fn list_slash_commands(
     let request = resolve_repo_fallback_cwd(request);
     let cwd = request.working_directory.as_deref().unwrap_or("");
     let repo_id = request.repo_id.as_deref().unwrap_or("");
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    let additional_directories = slash_command_scan_directories(&request);
     tracing::debug!(
         provider = %request.provider,
         cwd,
@@ -632,6 +631,37 @@ fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) 
             );
             Vec::new()
         }
+    }
+}
+
+fn slash_command_scan_directories(request: &ListSlashCommandsRequest) -> Vec<String> {
+    let mut dirs =
+        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    if request.provider == "codex" {
+        append_repo_root_scan_directory(request, &mut dirs);
+    }
+    dirs
+}
+
+fn append_repo_root_scan_directory(request: &ListSlashCommandsRequest, dirs: &mut Vec<String>) {
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return;
+    }
+    if request.working_directory.as_deref() == Some(root_path) {
+        return;
+    }
+    if !dirs.iter().any(|dir| dir == root_path) {
+        dirs.push(root_path.to_string());
     }
 }
 
@@ -915,8 +945,7 @@ fn spawn_background_refresh(
             let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
             let cache_state: tauri::State<'_, super::slash_commands::SlashCommandCache> =
                 app.state();
-            let additional_directories =
-                lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+            let additional_directories = slash_command_scan_directories(&request);
 
             match fetch_from_sidecar(&sidecar_state, &request, &additional_directories) {
                 Ok(commands) => {

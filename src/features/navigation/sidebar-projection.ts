@@ -138,19 +138,24 @@ export function projectVisualSidebar(
  *   group's title is the repository name.
  * - Rows with no `repoId` (legacy / optimistic) fall into a single
  *   "Unknown" bucket so they never silently disappear.
- * - Repo bucket order follows first-seen order in the flattened input,
- *   which inherits the server's status ordering (done → review → progress
- *   → canceled), so recently-completed repos surface near the top.
+ * - Repo bucket order is driven by the user-controllable
+ *   `repoSidebarOrder` field each row carries (mirrored from
+ *   `repos.display_order` on the backend). Ties fall back to first-seen
+ *   order so legacy rows without an order still surface stably.
+ * - Rows inside each repo bucket sort by `displayOrder` — the single
+ *   sparse order shared with status grouping.
  */
 export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 	const head: WorkspaceGroup[] = []; // pinned
 	const tail: WorkspaceGroup[] = []; // backlog
-	const repoOrder: string[] = [];
+	const firstSeen = new Map<string, number>();
+	const bucketOrder = new Map<string, number>();
 	const repoBuckets = new Map<
 		string,
 		{ label: string; rows: WorkspaceRow[] }
 	>();
 
+	let seen = 0;
 	for (const group of groups) {
 		if (group.id === "pinned") {
 			head.push(group);
@@ -168,13 +173,35 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 			if (!bucket) {
 				bucket = { label: row.repoName ?? "Unknown", rows: [] };
 				repoBuckets.set(bucketId, bucket);
-				repoOrder.push(bucketId);
+				firstSeen.set(bucketId, seen++);
 			}
 			bucket.rows.push(row);
+			// Lowest non-zero `repoSidebarOrder` across the bucket's rows is
+			// the canonical bucket order. They should all agree (a single
+			// repo's `repos.display_order` is broadcast to every row), but
+			// taking the min keeps us robust to mid-flight optimistic edits.
+			const candidate = row.repoSidebarOrder ?? 0;
+			if (candidate > 0) {
+				const current = bucketOrder.get(bucketId);
+				if (current === undefined || candidate < current) {
+					bucketOrder.set(bucketId, candidate);
+				}
+			}
 		}
 	}
 
-	const repoGroups: WorkspaceGroup[] = repoOrder.map((bucketId) => {
+	for (const bucket of repoBuckets.values()) {
+		bucket.rows.sort(compareRepoRows);
+	}
+
+	const sortedBucketIds = Array.from(repoBuckets.keys()).sort((left, right) => {
+		const leftOrder = bucketOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+		const rightOrder = bucketOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+		if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+		return (firstSeen.get(left) ?? 0) - (firstSeen.get(right) ?? 0);
+	});
+
+	const repoGroups: WorkspaceGroup[] = sortedBucketIds.map((bucketId) => {
 		const bucket = repoBuckets.get(bucketId);
 		if (!bucket) {
 			throw new Error(`regroupByRepo: missing bucket ${bucketId}`);
@@ -191,6 +218,18 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 	});
 
 	return [...head, ...repoGroups, ...tail];
+}
+
+function compareRepoRows(left: WorkspaceRow, right: WorkspaceRow) {
+	const leftOrder = left.displayOrder ?? 0;
+	const rightOrder = right.displayOrder ?? 0;
+	if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+
+	const leftCreated = Date.parse(left.createdAt ?? "") || 0;
+	const rightCreated = Date.parse(right.createdAt ?? "") || 0;
+	if (leftCreated !== rightCreated) return rightCreated - leftCreated;
+
+	return 0;
 }
 
 export function shouldReconcilePendingArchive(

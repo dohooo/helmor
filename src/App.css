@@ -11,13 +11,21 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Font stacks. `--font-sans-user` / `--font-mono-user` are written by
+ * `useThemeApplication` when the user picks a custom family in
+ * Appearance settings; absent, the cascade falls through to the bundled
+ * Geist variable fonts. This is a single source of truth — every other
+ * `--font-sans`/`--font-mono` declaration in this file chains through
+ * the same var() to keep the override consistent.
+ */
 @theme {
 	--font-sans:
-		"Geist Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont,
-		"Segoe UI", sans-serif;
+		var(--font-sans-user, "Geist Variable"), "SF Pro Display", -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
 	--font-mono:
-		"Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
-		Monaco, Consolas, monospace;
+		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
+		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root {
@@ -26,6 +34,18 @@
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	-webkit-text-size-adjust: 100%;
+}
+
+/*
+ * Pointer cursors. The whole app defaults to `cursor-pointer` on every
+ * interactive element (baked into base UI components — see CLAUDE.md).
+ * Users who prefer the platform default arrow can flip this off; the
+ * class below neutralises pointer cursors everywhere except text-input
+ * controls.
+ */
+html.no-pointer-cursors
+*:not(input):not(textarea):not([contenteditable="true"]) {
+	cursor: default !important;
 }
 
 html,
@@ -647,10 +667,10 @@ body {
 
 @theme inline {
 	--font-heading: var(--font-sans);
-	--font-sans: "Geist Variable", sans-serif;
+	--font-sans: var(--font-sans-user, "Geist Variable"), sans-serif;
 	--font-mono:
-		"Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
-		Monaco, Consolas, monospace;
+		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
+		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -796,7 +816,7 @@ body {
  * Inline code font-size.
  *
  * Streamdown hard-codes `text-sm` (14px absolute) on inline `<code>` elements,
- * which ignores the user's settings.fontSize and visibly bulges when the
+ * which ignores the user's chatFontSize and visibly bulges when the
  * surrounding text is smaller (e.g. 13px). Force inline code (not the
  * pre-wrapped block code, which uses our CodeBlock) to inherit the parent
  * font-size so it always matches the surrounding text.

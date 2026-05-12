@@ -1,17 +1,16 @@
 # Changesets
 
-This repository uses Changesets to produce user-facing release notes and keep
-the application version in sync across:
+Always use `.agents/skills/helmor-release/` to create release metadata.
 
-- `package.json`
-- `src-tauri/Cargo.toml`
-- `src-tauri/tauri.conf.json`
+Do not run `bun run changeset` directly for normal PR work.
 
-Create a changeset for user-visible changes with:
+The skill creates the Changesets entry and, when the PR deserves an in-app
+"New in vX" toast, the matching `.announcements/*.json` fragment.
 
-```bash
-bun run changeset
-```
+Changesets still owns release notes and version syncing for `package.json`,
+`src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; the release skill is
+the project wrapper that keeps those files and Helmor's in-app announcement
+flow aligned.
 
-Merge the generated release PR when the next Helmor release is ready, then run
-the macOS publish workflow.
+Only bypass the skill when you intentionally want a raw changeset with no
+announcement review.

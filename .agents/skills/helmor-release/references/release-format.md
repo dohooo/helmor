@@ -6,12 +6,13 @@ Use this reference when preparing a Helmor changeset or walking the user through
 
 1. Finish the feature branch.
 2. Add or update one changeset that describes the user-visible outcome.
-3. Push the branch and open the feature PR.
-4. Merge the PR into `main`.
-5. Let `Release Plan` create or update the release PR.
-6. Review the generated `CHANGELOG.md` and version bump.
-7. Merge the release PR.
-8. Run `Publish macOS Release` when ready to publish the signed build.
+3. Add a `.announcements/*.json` fragment when the PR deserves an in-app "New in vX" toast.
+4. Push the branch and open the feature PR.
+5. Merge the PR into `main`.
+6. Let `Release Plan` create or update the release PR. It consumes pending announcement fragments into one entry for the final version.
+7. Review the generated `CHANGELOG.md`, version bump, and release announcement catalog entry.
+8. Merge the release PR.
+9. Run `Publish macOS Release` when ready to publish the signed build.
 
 ## What the Changeset Should Capture
 
@@ -80,3 +81,19 @@ If the user wants credits, keep them short and explicit in the body. Example:
 - "Thanks @username for helping validate the release flow on macOS."
 
 Do not invent credits automatically.
+
+## In-App Announcement Fragments
+
+Use `.announcements/*.json` for user-visible features or workflow changes that should appear in the compact in-app release toast. Do not include an id or version; release planning binds all pending fragments to the final package version.
+
+Example:
+
+```json
+{
+	"items": [
+		{
+			"text": "You can now drag workspaces in the sidebar to keep each section in your preferred order."
+		}
+	]
+}
+```

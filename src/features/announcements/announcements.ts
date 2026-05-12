@@ -21,26 +21,19 @@ export type ReleaseAnnouncementItem = {
 	};
 };
 
-/** A content-only entry maintained by hand in the catalog. */
+/** A release-bound entry generated from pending announcement fragments. */
 export type ReleaseAnnouncementCatalogEntry = {
-	id: string;
+	releaseVersion: string;
 	items: readonly ReleaseAnnouncementItem[];
 };
 
-/** A catalog id stamped to a real release version by the release script. */
-export type PublishedReleaseAnnouncement = {
-	id: string;
-	releaseVersion: string;
-};
-
 /**
- * What the UI consumes — the join of catalog content and the stamped
- * version, possibly merged across several releases if the user skipped
- * versions. `ids` carries every catalog id whose content is folded in,
- * so the toast can dismiss them all when the user closes it.
+ * What the UI consumes, possibly merged across several releases if the
+ * user skipped versions. `releaseVersions` carries every release whose
+ * content is folded in, so closing the toast dismisses them all.
  */
 export type ReleaseAnnouncement = {
-	ids: readonly string[];
+	releaseVersions: readonly string[];
 	/** The user's current app version. Used as the "New in vX" header. */
 	version: string;
 	items: readonly ReleaseAnnouncementItem[];
@@ -84,7 +77,6 @@ function compareSemver(a: string, b: string): number {
  */
 export function selectReleaseAnnouncement(args: {
 	catalog: readonly ReleaseAnnouncementCatalogEntry[];
-	published: readonly PublishedReleaseAnnouncement[];
 	currentVersion: string;
 	lastSeenVersion: string | null;
 	/**
@@ -101,14 +93,13 @@ export function selectReleaseAnnouncement(args: {
 	 *             replay the full catalog backlog into one toast.
 	 */
 	isFirstHelmorBoot: boolean;
-	dismissedIds: ReadonlySet<string>;
+	dismissedReleaseVersions: ReadonlySet<string>;
 }): ReleaseAnnouncement | null {
 	const {
 		catalog,
-		published,
 		currentVersion,
 		isFirstHelmorBoot,
-		dismissedIds,
+		dismissedReleaseVersions,
 	} = args;
 	let { lastSeenVersion } = args;
 
@@ -126,31 +117,29 @@ export function selectReleaseAnnouncement(args: {
 	// Already at (or past) the current version — nothing new to surface.
 	if (compareSemver(lastSeenVersion, currentVersion) >= 0) return null;
 
-	const matches = published
+	const matches = catalog
 		.filter(
-			(p) =>
-				compareSemver(p.releaseVersion, lastSeenVersion) > 0 &&
-				compareSemver(p.releaseVersion, currentVersion) <= 0 &&
-				!dismissedIds.has(p.id),
+			(entry) =>
+				compareSemver(entry.releaseVersion, lastSeenVersion) > 0 &&
+				compareSemver(entry.releaseVersion, currentVersion) <= 0 &&
+				!dismissedReleaseVersions.has(entry.releaseVersion),
 		)
 		.slice()
 		// Newest version first. Stable sort preserves the original
-		// `published` ordering when two entries share a version, so
-		// the per-release author still controls the in-version order.
+		// catalog ordering when duplicate versions exist, though the
+		// release script normally merges each version into one entry.
 		.sort((a, b) => compareSemver(b.releaseVersion, a.releaseVersion));
 
 	if (matches.length === 0) return null;
 
-	const ids: string[] = [];
+	const releaseVersions: string[] = [];
 	const items: ReleaseAnnouncementItem[] = [];
 	for (const match of matches) {
-		const entry = catalog.find((c) => c.id === match.id);
-		if (!entry) continue;
-		ids.push(entry.id);
-		items.push(...entry.items);
+		releaseVersions.push(match.releaseVersion);
+		items.push(...match.items);
 	}
 
 	if (items.length === 0) return null;
 
-	return { ids, version: currentVersion, items };
+	return { releaseVersions, version: currentVersion, items };
 }

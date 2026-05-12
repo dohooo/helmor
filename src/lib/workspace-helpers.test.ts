@@ -6,6 +6,7 @@ import type {
 	WorkspaceSessionSummary,
 } from "./api";
 import {
+	applyRepoReorder,
 	clampEffort,
 	clampEffortToModel,
 	createLiveThreadMessage,
@@ -16,6 +17,7 @@ import {
 	insertRowByCreatedAtDesc,
 	isNewSession,
 	moveWorkspaceToGroup,
+	reorderWorkspaceInSidebar,
 	resolveSessionDisplayProvider,
 	resolveSessionSelectedModelId,
 	splitTextWithFiles,
@@ -322,6 +324,161 @@ describe("moveWorkspaceToGroup", () => {
 			?.find((g) => g.id === "canceled")
 			?.rows.find((r) => r.id === "target");
 		expect(moved?.status).toBe("canceled");
+	});
+});
+
+describe("reorderWorkspaceInSidebar", () => {
+	const row = (
+		id: string,
+		extras: Partial<WorkspaceRow> = {},
+	): WorkspaceRow => ({
+		id,
+		title: id,
+		status: "in-progress",
+		state: "ready",
+		repoId: "repo-1",
+		repoName: "repo-1",
+		...extras,
+	});
+
+	const buildGroups = (
+		init: Record<string, WorkspaceRow[]>,
+	): WorkspaceGroup[] =>
+		(
+			["pinned", "done", "review", "progress", "backlog", "canceled"] as const
+		).map((id) => ({
+			id,
+			label: id,
+			tone: "progress",
+			rows: init[id] ?? [],
+		}));
+
+	it("moves a row into a new status lane and assigns a midpoint displayOrder", () => {
+		const groups = buildGroups({
+			progress: [row("a", { displayOrder: 1024 })],
+			review: [
+				row("r1", { displayOrder: 1024, status: "review" }),
+				row("r2", { displayOrder: 2048, status: "review" }),
+			],
+		});
+
+		const next = reorderWorkspaceInSidebar(groups, "a", "review", "r2");
+
+		const review = next?.find((g) => g.id === "review");
+		expect(review?.rows.map((r) => r.id)).toEqual(["r1", "a", "r2"]);
+		const moved = review?.rows.find((r) => r.id === "a");
+		expect(moved?.status).toBe("review");
+		expect(moved?.pinnedAt).toBeNull();
+		// midpoint of 1024 and 2048
+		expect(moved?.displayOrder).toBe(1536);
+	});
+
+	it("appends after the last neighbour when beforeWorkspaceId is null", () => {
+		const groups = buildGroups({
+			progress: [row("a", { displayOrder: 1024 })],
+			review: [
+				row("r1", { displayOrder: 1024, status: "review" }),
+				row("r2", { displayOrder: 2048, status: "review" }),
+			],
+		});
+
+		const next = reorderWorkspaceInSidebar(groups, "a", "review", null);
+		const review = next?.find((g) => g.id === "review");
+		expect(review?.rows.map((r) => r.id)).toEqual(["r1", "r2", "a"]);
+		expect(review?.rows.find((r) => r.id === "a")?.displayOrder).toBe(3072);
+	});
+
+	it("pins the row when targetGroupId is `pinned`, preserving status", () => {
+		const groups = buildGroups({
+			progress: [row("a", { displayOrder: 1024, status: "in-progress" })],
+			pinned: [],
+		});
+
+		const next = reorderWorkspaceInSidebar(groups, "a", "pinned", null);
+		const pinned = next?.find((g) => g.id === "pinned");
+		expect(pinned?.rows.map((r) => r.id)).toEqual(["a"]);
+		const moved = pinned?.rows[0];
+		expect(moved?.pinnedAt).toBeTruthy();
+		expect(moved?.status).toBe("in-progress");
+		expect(next?.find((g) => g.id === "progress")?.rows).toHaveLength(0);
+	});
+
+	it("unpins when dragging a pinned row into a status lane", () => {
+		const groups = buildGroups({
+			pinned: [
+				row("a", {
+					displayOrder: 1024,
+					pinnedAt: "2026-01-01T00:00:00Z",
+					status: "in-progress",
+				}),
+			],
+		});
+
+		const next = reorderWorkspaceInSidebar(groups, "a", "done", null);
+		const done = next?.find((g) => g.id === "done");
+		expect(done?.rows.map((r) => r.id)).toEqual(["a"]);
+		const moved = done?.rows[0];
+		expect(moved?.pinnedAt).toBeNull();
+		expect(moved?.status).toBe("done");
+	});
+
+	it("returns groups unchanged when the workspace isn't anywhere", () => {
+		const groups = buildGroups({
+			progress: [row("a", { displayOrder: 1024 })],
+		});
+
+		expect(reorderWorkspaceInSidebar(groups, "missing", "review", null)).toBe(
+			groups,
+		);
+	});
+
+	it("returns undefined when groups is undefined", () => {
+		expect(
+			reorderWorkspaceInSidebar(undefined, "a", "review", null),
+		).toBeUndefined();
+	});
+
+	// Regression: in repo grouping mode the user can drag a workspace from
+	// one status lane in front of a workspace in a different status lane
+	// (both belong to the same repo bucket). The optimistic update has to
+	// scope its neighbour search to "every row of the target repo" — not
+	// just the row's home status lane — so the assigned `displayOrder`
+	// actually places the row before `beforeWorkspaceId` once
+	// `regroupByRepo` sorts the bucket by `displayOrder`.
+	it("repo target uses the whole repo bucket as neighbour set across status lanes", () => {
+		const groups = buildGroups({
+			done: [
+				row("w-done", {
+					displayOrder: 1024,
+					status: "done",
+					repoId: "repo-A",
+				}),
+			],
+			review: [
+				row("w-review", {
+					displayOrder: 1024,
+					status: "review",
+					repoId: "repo-A",
+				}),
+			],
+		});
+
+		const next = reorderWorkspaceInSidebar(
+			groups,
+			"w-done",
+			"repo:repo-A",
+			"w-review",
+		);
+
+		const done = next?.find((g) => g.id === "done");
+		const moved = done?.rows.find((r) => r.id === "w-done");
+		// Status stays "done" (repo target keeps status; only clears pinnedAt).
+		expect(moved?.status).toBe("done");
+		expect(moved?.pinnedAt).toBeNull();
+		// Neighbour set = [w-review @ 1024]; before=w-review → newOrder
+		// must end up STRICTLY LESS than 1024 so the repo bucket renders
+		// w-done before w-review after sort-by-displayOrder.
+		expect(moved?.displayOrder).toBeLessThan(1024);
 	});
 });
 
@@ -727,5 +884,81 @@ describe("findReplacementWorkspaceIdAfterRemoval", () => {
 				removedWorkspaceId: "a",
 			}),
 		).toBe("x");
+	});
+});
+
+describe("applyRepoReorder", () => {
+	function row(
+		id: string,
+		repoId: string,
+		repoSidebarOrder: number,
+	): WorkspaceRow {
+		return {
+			id,
+			title: id,
+			repoId,
+			repoName: repoId,
+			repoSidebarOrder,
+			status: "in-progress",
+			state: "ready",
+		};
+	}
+
+	// Regression: previously the optimistic walk used `groups[].rows[]`
+	// iteration order to infer the repo sequence — but that order is the
+	// workspace-level `display_order` inside each status lane, which has
+	// no relationship to repo bucket order. The result was that the
+	// optimistic splice agreed with the user's mental model only when the
+	// two happened to coincide; otherwise the row would render at one
+	// position immediately after release and snap to a different
+	// position once React Query refetched. Now both the optimistic and
+	// backend paths agree on "repos sorted by min(repoSidebarOrder)".
+	it("derives current repo order from repoSidebarOrder, not row iteration order", () => {
+		// Display: B (1024), A (2048), C (3072) by repoSidebarOrder.
+		// But the status-bucketed `groups` argument lists workspaces in
+		// workspace-display_order, which here happens to be repoA first:
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					row("w-a1", "repo-A", 2048),
+					row("w-c1", "repo-C", 3072),
+					row("w-b1", "repo-B", 1024),
+				],
+			},
+		];
+
+		// User drags C to before A — visually expects [B, C, A].
+		const next = applyRepoReorder(groups, "repo-C", "repo-A");
+		const orderByRepo = new Map<string, number>();
+		for (const group of next ?? []) {
+			for (const r of group.rows) {
+				if (r.repoId) orderByRepo.set(r.repoId, r.repoSidebarOrder ?? 0);
+			}
+		}
+		// repoB stays at the smallest order; repoC becomes the next; repoA last.
+		const b = orderByRepo.get("repo-B") ?? 0;
+		const c = orderByRepo.get("repo-C") ?? 0;
+		const a = orderByRepo.get("repo-A") ?? 0;
+		expect(b).toBeLessThan(c);
+		expect(c).toBeLessThan(a);
+	});
+
+	it("returns groups unchanged when moving repo isn't present", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [row("w-a", "repo-A", 1024)],
+			},
+		];
+		expect(applyRepoReorder(groups, "repo-missing", null)).toBe(groups);
+	});
+
+	it("returns undefined when groups is undefined", () => {
+		expect(applyRepoReorder(undefined, "repo-A", null)).toBeUndefined();
 	});
 });

@@ -6,6 +6,8 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use crate::workspace::sidebar_order;
+
 /// Identifier sanity check before string-interpolating into SQL. SQLite
 /// `pragma_table_info()` and `DROP TABLE` don't accept bound parameters
 /// for the table/column name, so we must interpolate. All call sites pass
@@ -59,6 +61,9 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("workspaces", "placeholder_branch_name"),
     ("workspaces", "pr_description"),
     ("workspaces", "secondary_directory_name"),
+    // The repo-grouped DnD prototype split sidebar order into two columns;
+    // we collapsed back to a single `display_order` before shipping.
+    ("workspaces", "repo_display_order"),
     // sessions: vestigial flags / counters never surfaced after a refactor.
     ("sessions", "agent_personality"),
     ("sessions", "context_token_count"),
@@ -577,7 +582,67 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.setup_completed_at column")?;
     }
 
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "display_order")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN display_order INTEGER DEFAULT 0")
+            .context("Failed to add workspaces.display_order column")?;
+    }
+
+    seed_workspace_display_orders(connection)?;
+
     Ok(())
+}
+
+/// One-shot init for rows that still carry `display_order = 0` — the column
+/// is freshly added or imported. Lays them out on the sparse 1024-step grid
+/// in a stable order (pinned first, then by recency). Subsequent reorders
+/// keep the gaps wide so a normal move is a single UPDATE.
+///
+/// Tolerant of legacy schemas that predate `pinned_at` / `created_at` so
+/// the migration test bench (which seeds bare-bones tables) can run it.
+fn seed_workspace_display_orders(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces") {
+        return Ok(());
+    }
+    let zero_rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM workspaces WHERE COALESCE(display_order, 0) <= 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if zero_rows == 0 {
+        return Ok(());
+    }
+    let pinned_priority = if has_column(connection, "workspaces", "pinned_at") {
+        "CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+                        datetime(COALESCE(pinned_at, created_at)) DESC,"
+    } else if has_column(connection, "workspaces", "created_at") {
+        "datetime(created_at) DESC,"
+    } else {
+        ""
+    };
+    connection
+        .execute_batch(&format!(
+            r#"
+            WITH ranked AS (
+                SELECT id, ROW_NUMBER() OVER (
+                    ORDER BY
+                        {pinned_priority}
+                        id DESC
+                ) AS rn
+                FROM workspaces
+            )
+            UPDATE workspaces
+            SET display_order = (SELECT rn * {step} FROM ranked WHERE ranked.id = workspaces.id)
+            WHERE COALESCE(display_order, 0) <= 0
+              AND EXISTS (SELECT 1 FROM ranked WHERE ranked.id = workspaces.id);
+            "#,
+            pinned_priority = pinned_priority,
+            step = sidebar_order::ORDER_STEP,
+        ))
+        .context("Failed to seed initial workspace display orders")
 }
 
 const SCHEMA_SQL: &str = r#"
@@ -645,6 +710,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     linked_directory_paths TEXT,
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
+    display_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -982,6 +1048,81 @@ mod tests {
 
         // Idempotent on second run
         run_migrations(&connection).unwrap();
+    }
+
+    #[test]
+    fn migration_seeds_display_orders_for_unset_rows_and_is_idempotent() {
+        let (connection, _dir) = open_test_db();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE repos (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    root_path TEXT,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
+                    status TEXT,
+                    provider_session_id TEXT,
+                    unread_count INTEGER DEFAULT 0,
+                    model TEXT,
+                    permission_mode TEXT DEFAULT 'default',
+                    is_hidden INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z',
+                    updated_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                CREATE TABLE session_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    sent_at TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT,
+                    directory_name TEXT,
+                    state TEXT DEFAULT 'ready',
+                    status TEXT DEFAULT 'in-progress',
+                    pinned_at TEXT,
+                    mode TEXT DEFAULT 'worktree',
+                    display_order INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT '2024-01-01T00:00:00Z',
+                    updated_at TEXT DEFAULT '2024-01-01T00:00:00Z'
+                );
+                INSERT INTO repos (id, name, root_path) VALUES ('r1', 'repo', '/tmp/repo');
+                INSERT INTO workspaces (id, repository_id, directory_name, status, display_order, created_at)
+                VALUES
+                    ('w-keep', 'r1', 'keep', 'in-progress', 1500, '2024-01-01T00:00:00Z'),
+                    ('w-zero', 'r1', 'zero', 'in-progress', 0, '2024-01-02T00:00:00Z');
+                "#,
+            )
+            .unwrap();
+
+        run_migrations(&connection).unwrap();
+
+        let read_order = |id: &str| -> i64 {
+            connection
+                .query_row(
+                    "SELECT display_order FROM workspaces WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        // Existing positive order is preserved untouched.
+        assert_eq!(read_order("w-keep"), 1500);
+        // Zero rows get seeded onto the sparse grid.
+        assert!(read_order("w-zero") > 0);
+
+        // Second run is a no-op.
+        let before = read_order("w-zero");
+        run_migrations(&connection).unwrap();
+        assert_eq!(read_order("w-zero"), before);
     }
 
     /// Construct the full pre-drop legacy DDL once. Each migration test

@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::workspace::sidebar_order;
 use crate::workspace_state::{WorkspaceMode, WorkspaceState};
 use crate::workspace_status::WorkspaceStatus;
 
@@ -233,6 +234,271 @@ fn list_branches_for_local_picker_merges_local_and_remote_deduped() {
     assert!(merged.contains(&"remote-only".to_string()));
     // `develop` exists on both sides — it must appear only once.
     assert_eq!(merged.iter().filter(|b| *b == "develop").count(), 1);
+}
+
+#[test]
+fn move_workspace_in_sidebar_updates_status_and_group_order() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+    harness.insert_workspace_name("charlie");
+
+    workspaces::move_workspace_in_sidebar("workspace-charlie", "review", None).unwrap();
+    workspaces::move_workspace_in_sidebar("workspace-alpha", "review", Some("workspace-charlie"))
+        .unwrap();
+
+    let groups = workspaces::list_workspace_groups().unwrap();
+    let review = groups.iter().find(|group| group.id == "review").unwrap();
+    let review_ids = review
+        .rows
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(review_ids, vec!["workspace-alpha", "workspace-charlie"]);
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (alpha_status, alpha_order): (String, i64) = connection
+        .query_row(
+            "SELECT status, display_order FROM workspaces WHERE id = 'workspace-alpha'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let charlie_order: i64 = connection
+        .query_row(
+            "SELECT display_order FROM workspaces WHERE id = 'workspace-charlie'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(alpha_status, "review");
+    assert!(alpha_order < charlie_order);
+}
+
+#[test]
+fn move_workspace_in_sidebar_only_updates_a_single_row_in_the_common_case() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+    harness.insert_workspace_name("charlie");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    // Lay down a sparse grid so the midpoint insertion never needs a rebalance.
+    for (index, name) in ["alpha", "bravo", "charlie"].iter().enumerate() {
+        connection
+            .execute(
+                "UPDATE workspaces SET status = 'review', display_order = ?2 WHERE id = ?1",
+                (
+                    format!("workspace-{name}"),
+                    ((index as i64) + 1) * sidebar_order::ORDER_STEP,
+                ),
+            )
+            .unwrap();
+    }
+
+    let before_neighbours: Vec<(String, i64)> = connection
+        .prepare(
+            "SELECT id, display_order FROM workspaces WHERE id IN ('workspace-alpha', 'workspace-bravo')",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+
+    workspaces::move_workspace_in_sidebar("workspace-charlie", "review", Some("workspace-bravo"))
+        .unwrap();
+
+    let after_neighbours: Vec<(String, i64)> = connection
+        .prepare(
+            "SELECT id, display_order FROM workspaces WHERE id IN ('workspace-alpha', 'workspace-bravo')",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    // Only the moved row should change order — its neighbours stay put.
+    assert_eq!(before_neighbours, after_neighbours);
+
+    let charlie_order: i64 = connection
+        .query_row(
+            "SELECT display_order FROM workspaces WHERE id = 'workspace-charlie'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // Sits between alpha (1024) and bravo (2048).
+    assert!(charlie_order > sidebar_order::ORDER_STEP);
+    assert!(charlie_order < 2 * sidebar_order::ORDER_STEP);
+}
+
+#[test]
+fn move_workspace_in_sidebar_supports_pinning_via_drag() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+
+    workspaces::move_workspace_in_sidebar("workspace-alpha", "pinned", None).unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (pinned_at, status): (Option<String>, String) = connection
+        .query_row(
+            "SELECT pinned_at, status FROM workspaces WHERE id = 'workspace-alpha'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(pinned_at.is_some(), "drag-to-pinned should set pinned_at");
+    // status is untouched — pinning preserves the original lane.
+    assert_eq!(status, "in-progress");
+}
+
+#[test]
+fn move_workspace_in_sidebar_drag_out_of_pinned_clears_pinned_at() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET pinned_at = datetime('now') WHERE id = 'workspace-alpha'",
+            [],
+        )
+        .unwrap();
+
+    workspaces::move_workspace_in_sidebar("workspace-alpha", "review", None).unwrap();
+
+    let (pinned_at, status): (Option<String>, String) = connection
+        .query_row(
+            "SELECT pinned_at, status FROM workspaces WHERE id = 'workspace-alpha'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(pinned_at.is_none());
+    assert_eq!(status, "review");
+}
+
+#[test]
+fn move_workspace_in_sidebar_rebalances_when_gap_runs_out() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+    harness.insert_workspace_name("charlie");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    // Pack alpha + bravo adjacent so there is no midpoint between them.
+    connection
+        .execute(
+            "UPDATE workspaces SET status = 'review', display_order = 100 WHERE id = 'workspace-alpha'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET status = 'review', display_order = 101 WHERE id = 'workspace-bravo'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workspaces SET status = 'review', display_order = 2048 WHERE id = 'workspace-charlie'",
+            [],
+        )
+        .unwrap();
+
+    workspaces::move_workspace_in_sidebar("workspace-charlie", "review", Some("workspace-bravo"))
+        .unwrap();
+
+    let mut rows: Vec<(String, i64)> = connection
+        .prepare("SELECT id, display_order FROM workspaces WHERE status = 'review'")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    rows.sort_by_key(|(_, order)| *order);
+    let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["workspace-alpha", "workspace-charlie", "workspace-bravo"]
+    );
+    // After rebalance every row sits on the 1024-step grid.
+    for (index, (_, order)) in rows.iter().enumerate() {
+        assert_eq!(*order, ((index as i64) + 1) * sidebar_order::ORDER_STEP);
+    }
+}
+
+#[test]
+fn move_workspace_in_sidebar_rejects_non_target_before_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+
+    let error =
+        workspaces::move_workspace_in_sidebar("workspace-alpha", "review", Some("workspace-bravo"))
+            .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("not reorderable in target group"),
+        "expected target-group reorder error, got {error:#}"
+    );
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let alpha_status: String = connection
+        .query_row(
+            "SELECT status FROM workspaces WHERE id = 'workspace-alpha'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(alpha_status, "in-progress");
+}
+
+#[test]
+fn move_workspace_in_sidebar_rejects_cross_repo_target() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO repos (id, name, root_path) VALUES ('repo-other', 'other', ?1)",
+            [harness.root.join("other").to_str().unwrap()],
+        )
+        .unwrap();
+
+    let error = workspaces::move_workspace_in_sidebar("workspace-alpha", "repo:repo-other", None)
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("same repository")
+            || format!("{error:#}").contains("own repository"),
+        "expected cross-repo rejection, got {error:#}"
+    );
 }
 
 #[test]

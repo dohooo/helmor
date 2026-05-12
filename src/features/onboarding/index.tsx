@@ -75,9 +75,16 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 	}, [refreshLoginItems]);
 
 	useEffect(() => {
-		void enterOnboardingWindowMode();
+		const entered = enterOnboardingWindowMode().catch((error) => {
+			console.error("[onboarding] failed to enter fixed window mode", error);
+		});
+
 		return () => {
-			void exitOnboardingWindowMode();
+			void entered.finally(() => {
+				void exitOnboardingWindowMode().catch((error) => {
+					console.error("[onboarding] failed to restore window mode", error);
+				});
+			});
 		};
 	}, []);
 

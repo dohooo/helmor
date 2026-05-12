@@ -816,6 +816,8 @@ mod tests {
             remote: Some("origin".to_string()),
             forge_provider: None,
             forge_login: None,
+            display_order: crate::workspace::sidebar_order::ORDER_STEP,
+            repo_sidebar_order: crate::workspace::sidebar_order::ORDER_STEP,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             last_user_message_at: None,
@@ -1216,8 +1218,12 @@ mod tests {
         let reserved = WORKSPACE_NAMES.last().unwrap();
         for name in &WORKSPACE_NAMES[..WORKSPACE_NAMES.len() - 1] {
             conn.execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
-                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+                "INSERT INTO workspaces (id, repository_id, directory_name, display_order) VALUES (?1, 'r1', ?2, ?3)",
+                rusqlite::params![
+                    &uuid::Uuid::new_v4().to_string(),
+                    &name.to_string(),
+                    crate::workspace::sidebar_order::ORDER_STEP
+                ],
             )
             .unwrap();
         }
@@ -1234,8 +1240,12 @@ mod tests {
         // Use all names
         for name in WORKSPACE_NAMES {
             conn.execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
-                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+                "INSERT INTO workspaces (id, repository_id, directory_name, display_order) VALUES (?1, 'r1', ?2, ?3)",
+                rusqlite::params![
+                    &uuid::Uuid::new_v4().to_string(),
+                    &name.to_string(),
+                    crate::workspace::sidebar_order::ORDER_STEP
+                ],
             )
             .unwrap();
         }
@@ -1280,8 +1290,8 @@ mod tests {
 
         // Insert with uppercase — should still be recognized as used
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'MERCURY')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, display_order) VALUES ('w1', 'r1', 'MERCURY', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 
@@ -1306,8 +1316,8 @@ mod tests {
 
         // Use "mercury" in repo r2
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name) VALUES ('w1', 'r2', 'mercury')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, display_order) VALUES ('w1', 'r2', 'mercury', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 
@@ -1317,8 +1327,12 @@ mod tests {
                 continue;
             }
             conn.execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name) VALUES (?1, 'r1', ?2)",
-                [&uuid::Uuid::new_v4().to_string(), &name.to_string()],
+                "INSERT INTO workspaces (id, repository_id, directory_name, display_order) VALUES (?1, 'r1', ?2, ?3)",
+                rusqlite::params![
+                    &uuid::Uuid::new_v4().to_string(),
+                    &name.to_string(),
+                    crate::workspace::sidebar_order::ORDER_STEP
+                ],
             )
             .unwrap();
         }
