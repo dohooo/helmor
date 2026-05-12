@@ -29,6 +29,12 @@ type DragStart = {
 	pointerId: number;
 };
 
+type DragPointerPosition = {
+	clientX: number;
+	clientY: number;
+	pointerId: number;
+};
+
 export type WorkspaceDragState = {
 	workspaceId: string;
 	title: string;
@@ -69,6 +75,8 @@ export function useWorkspaceDnd({
 }) {
 	const [dragState, setDragState] = useState<WorkspaceDragState | null>(null);
 	const pendingStartRef = useRef<DragStart | null>(null);
+	const latestPointerRef = useRef<DragPointerPosition | null>(null);
+	const dragFrameRef = useRef<number | null>(null);
 	const dragStateRef = useRef<WorkspaceDragState | null>(null);
 	dragStateRef.current = dragState;
 	const isDragging = dragState !== null;
@@ -110,31 +118,29 @@ export function useWorkspaceDnd({
 
 	const clearPendingStart = useCallback(() => {
 		pendingStartRef.current = null;
-	}, []);
-
-	const beginDrag = useCallback((pending: DragStart, event: PointerEvent) => {
-		setDragState({
-			workspaceId: pending.workspaceId,
-			title: pending.title,
-			sourceGroupId: pending.groupId,
-			targetGroupId: pending.groupId,
-			beforeWorkspaceId: pending.workspaceId,
-			clientX: event.clientX,
-			clientY: event.clientY,
-			offsetY: pending.offsetY,
-			left: pending.left,
-			width: pending.width,
-		});
+		latestPointerRef.current = null;
+		if (dragFrameRef.current !== null) {
+			window.cancelAnimationFrame(dragFrameRef.current);
+			dragFrameRef.current = null;
+		}
 	}, []);
 
 	const resolveDropTarget = useCallback(
-		(clientX: number, clientY: number): WorkspaceDropTarget | null => {
+		(
+			clientX: number,
+			clientY: number,
+			sourceGroupIdOverride?: string,
+			workspaceIdOverride?: string,
+		): WorkspaceDropTarget | null => {
 			const elements = document.elementsFromPoint(clientX, clientY);
 			const groupElement = elements
 				.map((element) => element.closest(DROP_GROUP_SELECTOR))
 				.find(Boolean) as HTMLElement | undefined;
 			const groupId = groupElement?.dataset.workspaceDropGroupId;
-			const sourceGroupId = dragStateRef.current?.sourceGroupId;
+			const sourceGroupId =
+				sourceGroupIdOverride ?? dragStateRef.current?.sourceGroupId;
+			const workspaceId =
+				workspaceIdOverride ?? dragStateRef.current?.workspaceId;
 			if (
 				!groupId ||
 				!sourceGroupId ||
@@ -150,11 +156,7 @@ export function useWorkspaceDnd({
 				document.querySelectorAll<HTMLElement>(
 					`${DRAGGABLE_ROW_SELECTOR}[data-workspace-dnd-group-id="${CSS.escape(groupId)}"]`,
 				),
-			).filter(
-				(element) =>
-					element.dataset.workspaceDndRowId !==
-					dragStateRef.current?.workspaceId,
-			);
+			).filter((element) => element.dataset.workspaceDndRowId !== workspaceId);
 
 			for (const element of rowElements) {
 				const rect = element.getBoundingClientRect();
@@ -171,6 +173,68 @@ export function useWorkspaceDnd({
 		[policy],
 	);
 
+	const beginDrag = useCallback(
+		(pending: DragStart, event: PointerEvent) => {
+			const target = resolveDropTarget(
+				event.clientX,
+				event.clientY,
+				pending.groupId,
+				pending.workspaceId,
+			);
+			const next: WorkspaceDragState = {
+				workspaceId: pending.workspaceId,
+				title: pending.title,
+				sourceGroupId: pending.groupId,
+				targetGroupId: target?.groupId ?? pending.groupId,
+				beforeWorkspaceId: target
+					? target.beforeWorkspaceId
+					: pending.workspaceId,
+				clientX: event.clientX,
+				clientY: event.clientY,
+				offsetY: pending.offsetY,
+				left: pending.left,
+				width: pending.width,
+			};
+			dragStateRef.current = next;
+			setDragState(next);
+		},
+		[resolveDropTarget],
+	);
+
+	const flushDragFrame = useCallback(() => {
+		dragFrameRef.current = null;
+		const active = dragStateRef.current;
+		const pointer = latestPointerRef.current;
+		if (!active || !pointer) return;
+		if (pointer.pointerId !== pendingStartRef.current?.pointerId) return;
+
+		const target = resolveDropTarget(pointer.clientX, pointer.clientY);
+		const next: WorkspaceDragState = {
+			...active,
+			clientX: pointer.clientX,
+			clientY: pointer.clientY,
+			targetGroupId: target?.groupId ?? active.targetGroupId,
+			beforeWorkspaceId: target
+				? target.beforeWorkspaceId
+				: active.beforeWorkspaceId,
+		};
+		dragStateRef.current = next;
+		setDragState(next);
+	}, [resolveDropTarget]);
+
+	const scheduleDragFrame = useCallback(
+		(event: PointerEvent) => {
+			latestPointerRef.current = {
+				clientX: event.clientX,
+				clientY: event.clientY,
+				pointerId: event.pointerId,
+			};
+			if (dragFrameRef.current !== null) return;
+			dragFrameRef.current = window.requestAnimationFrame(flushDragFrame);
+		},
+		[flushDragFrame],
+	);
+
 	useEffect(() => {
 		const handlePointerMove = (event: PointerEvent) => {
 			const active = dragStateRef.current;
@@ -179,20 +243,7 @@ export function useWorkspaceDnd({
 					return;
 				}
 				event.preventDefault();
-				const target = resolveDropTarget(event.clientX, event.clientY);
-				setDragState((current) =>
-					current
-						? {
-								...current,
-								clientX: event.clientX,
-								clientY: event.clientY,
-								targetGroupId: target?.groupId ?? current.targetGroupId,
-								beforeWorkspaceId: target
-									? target.beforeWorkspaceId
-									: current.beforeWorkspaceId,
-							}
-						: current,
-				);
+				scheduleDragFrame(event);
 				return;
 			}
 
@@ -214,6 +265,10 @@ export function useWorkspaceDnd({
 		};
 
 		const handlePointerUp = (event: PointerEvent) => {
+			if (dragFrameRef.current !== null) {
+				window.cancelAnimationFrame(dragFrameRef.current);
+				flushDragFrame();
+			}
 			const active = dragStateRef.current;
 			if (active && event.pointerId === pendingStartRef.current?.pointerId) {
 				event.preventDefault();
@@ -250,7 +305,13 @@ export function useWorkspaceDnd({
 			window.removeEventListener("pointerup", handlePointerUp);
 			window.removeEventListener("pointercancel", handlePointerUp);
 		};
-	}, [beginDrag, clearPendingStart, onMoveWorkspace, resolveDropTarget]);
+	}, [
+		beginDrag,
+		clearPendingStart,
+		flushDragFrame,
+		onMoveWorkspace,
+		scheduleDragFrame,
+	]);
 
 	const startDragGesture = useCallback(
 		({
