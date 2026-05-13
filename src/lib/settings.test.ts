@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DEFAULT_KANBAN_VIEW_STATE,
+	getPreloadedSettings,
 	loadSettings,
 	saveSettings,
 } from "./settings";
@@ -110,6 +111,36 @@ describe("settings", () => {
 				}),
 			}),
 		);
+	});
+
+	it("preloads terminal font from localStorage", () => {
+		window.localStorage.setItem("helmor-terminal-font-family", "Berkeley Mono");
+
+		const settings = getPreloadedSettings();
+
+		expect(settings.terminalFontFamily).toBe("Berkeley Mono");
+	});
+
+	it("hydrates and saves terminal font from localStorage", async () => {
+		window.localStorage.setItem(
+			"helmor-terminal-font-family",
+			"JetBrains Mono",
+		);
+		invokeMock.mockResolvedValue({});
+
+		const settings = await loadSettings();
+
+		expect(settings.terminalFontFamily).toBe("JetBrains Mono");
+
+		await saveSettings({ terminalFontFamily: "Berkeley Mono" });
+		expect(window.localStorage.getItem("helmor-terminal-font-family")).toBe(
+			"Berkeley Mono",
+		);
+
+		await saveSettings({ terminalFontFamily: null });
+		expect(
+			window.localStorage.getItem("helmor-terminal-font-family"),
+		).toBeNull();
 	});
 
 	it("hydrates and saves the last app surface", async () => {

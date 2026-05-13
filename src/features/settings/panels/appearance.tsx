@@ -71,16 +71,18 @@ const DARK_THEME_OPTIONS: readonly ColorThemeOption[] = [
 type EffectiveFonts = {
 	fontSans: string;
 	fontMono: string;
+	fontTerminal: string;
 };
 
 function sampleEffectiveFonts(): EffectiveFonts {
 	if (typeof document === "undefined") {
-		return { fontSans: "", fontMono: "" };
+		return { fontSans: "", fontMono: "", fontTerminal: "" };
 	}
 	const cs = getComputedStyle(document.documentElement);
 	return {
 		fontSans: cs.getPropertyValue("--font-sans").trim(),
 		fontMono: cs.getPropertyValue("--font-mono").trim(),
+		fontTerminal: cs.getPropertyValue("--font-terminal").trim(),
 	};
 }
 
@@ -106,7 +108,11 @@ export function AppearancePanel({
 			setEffective(sampleEffectiveFonts()),
 		);
 		return () => cancelAnimationFrame(id);
-	}, [settings.uiFontFamily, settings.codeFontFamily]);
+	}, [
+		settings.uiFontFamily,
+		settings.codeFontFamily,
+		settings.terminalFontFamily,
+	]);
 
 	return (
 		<SettingsGroup>
@@ -203,6 +209,15 @@ export function AppearancePanel({
 					onChange={(next) => updateSettings({ codeFontFamily: next })}
 					effectivePlaceholder={effective.fontMono}
 					ariaLabel="Code font family"
+				/>
+			</SettingsRow>
+
+			<SettingsRow title="Terminal font">
+				<FontPicker
+					value={settings.terminalFontFamily}
+					onChange={(next) => updateSettings({ terminalFontFamily: next })}
+					effectivePlaceholder={effective.fontTerminal}
+					ariaLabel="Terminal font family"
 				/>
 			</SettingsRow>
 

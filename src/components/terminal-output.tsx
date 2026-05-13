@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
+import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
 type TerminalOutputProps = {
@@ -9,6 +10,7 @@ type TerminalOutputProps = {
 	className?: string;
 	detectLinks?: boolean;
 	fontSize?: number;
+	fontFamily?: string;
 	lineHeight?: number;
 	padding?: string;
 	/**
@@ -219,6 +221,17 @@ function resolveTerminalTheme(): ITheme {
 	};
 }
 
+function resolveTerminalFontFamily(
+	fontFamily: string | null | undefined,
+): string {
+	if (fontFamily && fontFamily.length > 0) return fontFamily;
+	const root = getComputedStyle(document.documentElement);
+	return (
+		root.getPropertyValue("--font-terminal").trim() ||
+		"'GeistMono', 'SF Mono', Monaco, Menlo, monospace"
+	);
+}
+
 // Memoized so parent re-renders (e.g. inspector width drag) don't push a
 // fresh render through the heavy xterm wrapper.
 function TerminalOutputImpl({
@@ -226,11 +239,14 @@ function TerminalOutputImpl({
 	className,
 	detectLinks = false,
 	fontSize = 12,
+	fontFamily,
 	lineHeight = 1.3,
 	padding = "12px 2px 12px 12px",
 	onData,
 	onResize,
 }: TerminalOutputProps) {
+	const { settings } = useSettings();
+	const terminalFontFamily = fontFamily ?? settings.terminalFontFamily;
 	const containerRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<Terminal | null>(null);
 	const fitRef = useRef<FitAddon | null>(null);
@@ -251,7 +267,7 @@ function TerminalOutputImpl({
 			disableStdin: false,
 			scrollback: 5000,
 			fontSize,
-			fontFamily: "'GeistMono', 'SF Mono', Monaco, Menlo, monospace",
+			fontFamily: resolveTerminalFontFamily(terminalFontFamily),
 			lineHeight,
 			theme: resolveTerminalTheme(),
 			cursorBlink: false,
@@ -419,7 +435,7 @@ function TerminalOutputImpl({
 					null;
 			}
 		};
-	}, [detectLinks, fontSize, lineHeight, terminalRef]);
+	}, [detectLinks, fontSize, lineHeight, terminalFontFamily, terminalRef]);
 
 	return (
 		<div

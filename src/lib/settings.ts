@@ -192,6 +192,8 @@ export type AppSettings = {
 	uiFontFamily: string | null;
 	/** Override for the monospace code font stack. `null` = preset default. */
 	codeFontFamily: string | null;
+	/** Override for embedded terminal font stack. `null` = preset default. */
+	terminalFontFamily: string | null;
 	/** When true, all clickable elements show a pointer cursor on hover.
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
@@ -270,6 +272,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
+	terminalFontFamily: null,
 	usePointerCursors: true,
 	theme: "system",
 	darkTheme: "default",
@@ -317,6 +320,7 @@ export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
 export const UI_FONT_FAMILY_STORAGE_KEY = "helmor-ui-font-family";
 export const CODE_FONT_FAMILY_STORAGE_KEY = "helmor-code-font-family";
+export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
 
 /** Keys mirrored to localStorage for flash-free synchronous boot reads.
  *  Anything visible in the first paint must live here so we don't wait
@@ -327,6 +331,7 @@ const LOCALSTORAGE_KEYS = {
 	sidebarGrouping: SIDEBAR_GROUPING_STORAGE_KEY,
 	uiFontFamily: UI_FONT_FAMILY_STORAGE_KEY,
 	codeFontFamily: CODE_FONT_FAMILY_STORAGE_KEY,
+	terminalFontFamily: TERMINAL_FONT_FAMILY_STORAGE_KEY,
 } as const;
 
 type LocalStorageKey = keyof typeof LOCALSTORAGE_KEYS;
@@ -372,6 +377,9 @@ export function getPreloadedSettings(): AppSettings {
 		darkTheme,
 		uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 		codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+		terminalFontFamily: readLocalStorageString(
+			TERMINAL_FONT_FAMILY_STORAGE_KEY,
+		),
 	};
 }
 
@@ -819,6 +827,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			),
 			uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 			codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+			terminalFontFamily: readLocalStorageString(
+				TERMINAL_FONT_FAMILY_STORAGE_KEY,
+			),
 			usePointerCursors:
 				raw[SETTINGS_KEY_MAP.usePointerCursors] !== undefined
 					? raw[SETTINGS_KEY_MAP.usePointerCursors] === "true"
