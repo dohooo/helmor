@@ -41,6 +41,7 @@ import type {
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
+import { useShellEvent } from "@/shell/event-bus";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import { RepoDragGhost, WorkspaceDragGhost } from "./dnd/drag-ghosts";
@@ -748,21 +749,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
 
-	useEffect(() => {
-		const handleOpenSidebarFilter = () => {
-			setIsSidebarViewPopoverOpen(true);
-		};
-
-		window.addEventListener(
-			"helmor:open-sidebar-filter",
-			handleOpenSidebarFilter,
-		);
-		return () =>
-			window.removeEventListener(
-				"helmor:open-sidebar-filter",
-				handleOpenSidebarFilter,
-			);
-	}, []);
+	useShellEvent("open-sidebar-filter", () => {
+		setIsSidebarViewPopoverOpen(true);
+	});
 
 	// ── Toggle section ────────────────────────────────────────────────
 	const toggleSection = useCallback((groupId: string) => {
