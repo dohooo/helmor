@@ -451,13 +451,26 @@ fn launch_with_open(
     cmd.spawn().map(|_| ()).context("open command failed")
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux: hand the workspace directory to the user's default handler via
+/// `xdg-open`. Selecting a *specific* editor (the macOS `open -a` behavior)
+/// would require parsing `.desktop` files and per-DE conventions; we let the
+/// user configure their preferred handler at the OS level instead.
+#[cfg(target_os = "linux")]
+fn launch_with_open(
+    _app_path: Option<&str>,
+    _app_name: &str,
+    dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    xdg_open(dir)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn launch_with_open(
     _app_path: Option<&str>,
     _app_name: &str,
     _dir: &std::path::Path,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("Opening third-party editors is only supported on macOS")
+    anyhow::bail!("Opening third-party editors is only supported on macOS and Linux")
 }
 
 #[cfg(target_os = "macos")]
@@ -469,9 +482,37 @@ fn reveal_in_finder(dir: &std::path::Path) -> anyhow::Result<()> {
         .context("open command failed")
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux: `xdg-open` on the parent directory so the workspace is highlighted
+/// in the default file manager, matching the "reveal" semantics implied by
+/// the function name.
+#[cfg(target_os = "linux")]
+fn reveal_in_finder(dir: &std::path::Path) -> anyhow::Result<()> {
+    let target = dir.parent().unwrap_or(dir);
+    xdg_open(target)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn reveal_in_finder(_dir: &std::path::Path) -> anyhow::Result<()> {
-    anyhow::bail!("Opening Finder is only supported on macOS")
+    anyhow::bail!("Opening a file manager is only supported on macOS and Linux")
+}
+
+/// Spawn `xdg-open <path>`. On Linux this is the canonical "open this in the
+/// user's default handler" entry point; we deliberately don't probe Wayland
+/// vs X11 ourselves — `xdg-open` is the abstraction designed for that.
+///
+/// Detached spawn (no wait): the file manager / editor lives well past the
+/// point where the user expects this Tauri command to return.
+#[cfg(target_os = "linux")]
+fn xdg_open(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::process::Command;
+
+    match Command::new("xdg-open").arg(path).spawn() {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("xdg-open not found, please install xdg-utils")
+        }
+        Err(error) => Err(anyhow::Error::new(error).context("xdg-open spawn failed")),
+    }
 }
 
 #[tauri::command]
