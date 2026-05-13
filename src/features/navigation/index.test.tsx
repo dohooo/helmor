@@ -11,7 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
-import { WorkspacesSidebar } from "./index";
+import {
+	repoOrderFromGroups,
+	resolveWorkspaceDropBeforeId,
+	WorkspacesSidebar,
+} from "./index";
 
 const workspaceRow: WorkspaceRow = {
 	id: "workspace-1",
@@ -894,5 +898,79 @@ describe("WorkspacesSidebar", () => {
 			// Row hidden after toggle (collapsed).
 			expect(screen.queryByLabelText("Workspace 1")).toBeNull();
 		});
+	});
+});
+
+describe("repoOrderFromGroups", () => {
+	it("preserves filtered-out and empty repository positions", () => {
+		expect(
+			repoOrderFromGroups(
+				[
+					{ id: "repo:repo-c", label: "C", tone: "pinned", rows: [] },
+					{ id: "repo:repo-d", label: "D", tone: "pinned", rows: [] },
+				],
+				[
+					{ id: "repo-a", name: "A" },
+					{ id: "repo-b", name: "B" },
+					{ id: "repo-c", name: "C" },
+					{ id: "repo-d", name: "D" },
+					{ id: "repo-empty", name: "Empty" },
+				],
+			),
+		).toEqual(["repo-a", "repo-b", "repo-c", "repo-d", "repo-empty"]);
+	});
+});
+
+describe("resolveWorkspaceDropBeforeId", () => {
+	it("keeps a filtered drop after the last visible row before following hidden rows", () => {
+		const fullGroups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
+					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
+					{ ...workspaceRow, id: "ws-b", title: "B", repoId: "repo-2" },
+				],
+			},
+		];
+		const filteredGroups: WorkspaceGroup[] = [
+			{
+				...fullGroups[0]!,
+				rows: fullGroups[0]!.rows.filter((row) => row.repoId === "repo-1"),
+			},
+		];
+
+		expect(
+			resolveWorkspaceDropBeforeId({
+				groups: filteredGroups,
+				unfilteredGroups: fullGroups,
+				workspaceId: "ws-a",
+				targetGroupId: "progress",
+				beforeWorkspaceId: null,
+			}),
+		).toBe("ws-b");
+	});
+
+	it("drops before the first hidden row when a filtered target has no visible rows", () => {
+		const fullGroups: WorkspaceGroup[] = [
+			{
+				id: "review",
+				label: "In review",
+				tone: "review",
+				rows: [{ ...workspaceRow, id: "ws-hidden", repoId: "repo-2" }],
+			},
+		];
+
+		expect(
+			resolveWorkspaceDropBeforeId({
+				groups: [{ ...fullGroups[0]!, rows: [] }],
+				unfilteredGroups: fullGroups,
+				workspaceId: "ws-a",
+				targetGroupId: "review",
+				beforeWorkspaceId: null,
+			}),
+		).toBe("ws-hidden");
 	});
 });

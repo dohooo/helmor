@@ -107,27 +107,27 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
 }
 
-function repoOrderFromGroups(
+export function repoOrderFromGroups(
 	groups: WorkspaceGroup[],
 	repositories: RepositoryCreateOption[],
 ) {
 	const orderedIds: string[] = [];
 	const seen = new Set<string>();
+	for (const repository of repositories) {
+		if (seen.has(repository.id)) continue;
+		seen.add(repository.id);
+		orderedIds.push(repository.id);
+	}
 	for (const group of groups) {
 		const repoId = repoIdFromGroupId(group.id);
 		if (!repoId || seen.has(repoId)) continue;
 		seen.add(repoId);
 		orderedIds.push(repoId);
 	}
-	for (const repository of repositories) {
-		if (seen.has(repository.id)) continue;
-		seen.add(repository.id);
-		orderedIds.push(repository.id);
-	}
 	return orderedIds;
 }
 
-function moveRepoInOrder(
+export function moveRepoInOrder(
 	repoOrder: readonly string[],
 	repoId: string,
 	beforeRepoId: string | null,
@@ -146,12 +146,65 @@ function moveRepoInOrder(
 	];
 }
 
+export function resolveRepoOrderAfterDrop({
+	groups,
+	repositories,
+	repoId,
+	beforeRepoId,
+}: {
+	groups: WorkspaceGroup[];
+	repositories: RepositoryCreateOption[];
+	repoId: string;
+	beforeRepoId: string | null;
+}) {
+	return moveRepoInOrder(
+		repoOrderFromGroups(groups, repositories),
+		repoId,
+		beforeRepoId,
+	);
+}
+
+export function resolveWorkspaceDropBeforeId({
+	groups,
+	unfilteredGroups,
+	workspaceId,
+	targetGroupId,
+	beforeWorkspaceId,
+}: {
+	groups: WorkspaceGroup[];
+	unfilteredGroups: WorkspaceGroup[];
+	workspaceId: string;
+	targetGroupId: string;
+	beforeWorkspaceId: string | null;
+}) {
+	if (beforeWorkspaceId !== null) return beforeWorkspaceId;
+
+	const visibleRows =
+		groups
+			.find((group) => group.id === targetGroupId)
+			?.rows.filter((row) => row.id !== workspaceId) ?? [];
+	const fullRows =
+		unfilteredGroups
+			.find((group) => group.id === targetGroupId)
+			?.rows.filter((row) => row.id !== workspaceId) ?? [];
+	if (fullRows.length === 0) return null;
+	if (visibleRows.length === 0) return fullRows[0]?.id ?? null;
+
+	const previousVisibleId = visibleRows.at(-1)?.id;
+	const previousFullIndex = fullRows.findIndex(
+		(row) => row.id === previousVisibleId,
+	);
+	if (previousFullIndex === -1) return beforeWorkspaceId;
+	return fullRows[previousFullIndex + 1]?.id ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
+	unfilteredGroups = groups,
 	archivedRows,
 	availableRepositories = [],
 	sidebarGrouping = "status",
@@ -193,6 +246,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId,
 }: {
 	groups: WorkspaceGroup[];
+	unfilteredGroups?: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
 	availableRepositories?: RepositoryCreateOption[];
 	sidebarGrouping?: SidebarGrouping;
@@ -291,10 +345,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					},
 		[sidebarGrouping],
 	);
-	const visualRepoOrder = useMemo(
-		() => repoOrderFromGroups(groups, availableRepositories),
-		[availableRepositories, groups],
-	);
 	const switchToCustomSortAfterDrop = useCallback(() => {
 		if (sidebarSort !== "custom") {
 			onSidebarSortChange?.("custom");
@@ -306,18 +356,44 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			targetGroupId: string,
 			beforeWorkspaceId: string | null,
 		) => {
+			const resolvedBeforeWorkspaceId = resolveWorkspaceDropBeforeId({
+				groups,
+				unfilteredGroups,
+				workspaceId,
+				targetGroupId,
+				beforeWorkspaceId,
+			});
 			switchToCustomSortAfterDrop();
-			onMoveWorkspaceInSidebar?.(workspaceId, targetGroupId, beforeWorkspaceId);
+			onMoveWorkspaceInSidebar?.(
+				workspaceId,
+				targetGroupId,
+				resolvedBeforeWorkspaceId,
+			);
 		},
-		[onMoveWorkspaceInSidebar, switchToCustomSortAfterDrop],
+		[
+			groups,
+			onMoveWorkspaceInSidebar,
+			switchToCustomSortAfterDrop,
+			unfilteredGroups,
+		],
 	);
 	const handleMoveRepositoryAfterDrop = useCallback(
 		(repoId: string, beforeRepoId: string | null) => {
-			const repoOrder = moveRepoInOrder(visualRepoOrder, repoId, beforeRepoId);
+			const repoOrder = resolveRepoOrderAfterDrop({
+				groups,
+				repositories: availableRepositories,
+				repoId,
+				beforeRepoId,
+			});
 			switchToCustomSortAfterDrop();
 			onMoveRepositoryInSidebar?.(repoId, beforeRepoId, repoOrder);
 		},
-		[onMoveRepositoryInSidebar, switchToCustomSortAfterDrop, visualRepoOrder],
+		[
+			availableRepositories,
+			groups,
+			onMoveRepositoryInSidebar,
+			switchToCustomSortAfterDrop,
+		],
 	);
 	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
 		onMoveWorkspace: handleMoveWorkspaceAfterDrop,

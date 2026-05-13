@@ -205,7 +205,40 @@ export function useWorkspacesSidebarController({
 			settings.sidebarSort,
 		],
 	);
+	const unfilteredSidebar = useMemo(
+		() =>
+			projectVisualSidebar(
+				{
+					baseGroups,
+					baseArchivedSummaries,
+					pendingArchives,
+					pendingCreations: new Map(
+						Array.from(pendingCreations.entries()).map(
+							([workspaceId, pendingCreation]) => [
+								workspaceId,
+								pendingCreation.entry,
+							],
+						),
+					),
+				},
+				settings.sidebarGrouping,
+				{
+					availableRepoIds,
+					repoFilterIds: [],
+					sort: "custom",
+				},
+			),
+		[
+			availableRepoIds,
+			baseArchivedSummaries,
+			baseGroups,
+			pendingArchives,
+			pendingCreations,
+			settings.sidebarGrouping,
+		],
+	);
 	const groups = projectedSidebar.groups;
+	const unfilteredGroups = unfilteredSidebar.groups;
 	const archivedSummaries = useMemo(
 		() =>
 			projectedSidebar.archivedRows.map((row) => rowToWorkspaceSummary(row)),
@@ -1735,6 +1768,7 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		unfilteredGroups,
 		sidebarGrouping: settings.sidebarGrouping,
 		sidebarRepoFilterIds: settings.sidebarRepoFilterIds,
 		sidebarSort: settings.sidebarSort,
