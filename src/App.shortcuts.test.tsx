@@ -402,6 +402,12 @@ function emitTauriEvent(eventName: string) {
 	}
 }
 
+async function waitForTauriEventListener(eventName: string) {
+	await waitFor(() => {
+		expect(eventApiMocks.handlers.get(eventName)?.size ?? 0).toBeGreaterThan(0);
+	});
+}
+
 async function renderAppReady(expectedSessionTitle = "Done session 1") {
 	render(<App />);
 
@@ -981,6 +987,7 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.requestQuit.mockReset();
 		await renderAppReady();
 
+		await waitForTauriEventListener("helmor://quit-requested");
 		emitTauriEvent("helmor://quit-requested");
 
 		await waitFor(() => {
@@ -1007,6 +1014,7 @@ describe("App global navigation shortcuts", () => {
 			render(<App />);
 			await screen.findByLabelText("Helmor onboarding");
 
+			await waitForTauriEventListener("helmor://quit-requested");
 			emitTauriEvent("helmor://quit-requested");
 
 			await waitFor(() => {
@@ -1020,6 +1028,7 @@ describe("App global navigation shortcuts", () => {
 	it("closes the current session when macOS emits the close-current-session event", async () => {
 		await renderAppReady();
 
+		await waitForTauriEventListener("helmor://close-current-session");
 		emitTauriEvent("helmor://close-current-session");
 
 		await waitFor(() => {

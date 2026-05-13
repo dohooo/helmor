@@ -55,9 +55,8 @@ export type InlineBadgeProps = {
 	/** Extra classes on the label span. */
 	labelClassName?: string;
 	/**
-	 * If true (default), applies `select-none cursor-default` — correct for
-	 * non-editable decorator nodes inside Lexical. Bubble / inline contexts
-	 * should pass `false` so users can select and copy the label.
+	 * If true (default), prevents text selection for non-editable decorator
+	 * nodes inside Lexical. Bubble / inline contexts should pass `false`.
 	 */
 	nonSelectable?: boolean;
 };
@@ -180,8 +179,9 @@ export function InlineBadge({
 		<span
 			className={cn(
 				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-[14px] leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
-				nonSelectable && "cursor-default select-none",
-				canPreview && "cursor-pointer",
+				nonSelectable && "select-none",
+				nonSelectable && !canPreview && "cursor-default",
+				canPreview && "cursor-interactive",
 				className,
 			)}
 			onPointerEnter={openPreview}
@@ -207,7 +207,7 @@ export function InlineBadge({
 				<button
 					type="button"
 					aria-label={removeLabel}
-					className="mr-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+					className="mr-1 inline-flex size-4 shrink-0 cursor-interactive items-center justify-center self-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
 					onMouseDown={(event) => {
 						event.preventDefault();
 						event.stopPropagation();

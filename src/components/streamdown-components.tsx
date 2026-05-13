@@ -118,7 +118,7 @@ function TableDownloadMenu() {
 				<button
 					ref={triggerRef}
 					type="button"
-					className="cursor-pointer p-1 text-muted-foreground transition-all hover:text-foreground"
+					className="cursor-interactive p-1 text-muted-foreground transition-all hover:text-foreground"
 					title="Download table"
 				>
 					<DownloadIcon size={14} />

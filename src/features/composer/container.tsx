@@ -92,10 +92,19 @@ const CODEX_GOAL_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description: "Set a completion condition for Claude to work toward",
+	argumentHint: "<condition>",
+	source: "builtin",
+	providers: ["claude"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
 	CODEX_GOAL_COMMAND,
+	CLAUDE_GOAL_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {
@@ -653,16 +662,21 @@ export const WorkspaceComposerContainer = memo(
 		// Prepend Helmor's host-app commands (e.g. /add-dir) so they always
 		// show at the top of the popup, even before the agent-supplied list
 		// has loaded.
-		const slashCommands = useMemo<readonly SlashCommandEntry[]>(
-			() => [
-				...BUILTIN_CLIENT_COMMANDS.filter(
-					(command) =>
-						!command.providers || command.providers.includes(slashProvider),
+		const slashCommands = useMemo<readonly SlashCommandEntry[]>(() => {
+			const builtinCommands = BUILTIN_CLIENT_COMMANDS.filter(
+				(command) =>
+					!command.providers || command.providers.includes(slashProvider),
+			);
+			const builtinNames = new Set(
+				builtinCommands.map((command) => command.name),
+			);
+			return [
+				...builtinCommands,
+				...agentSlashCommands.filter(
+					(command) => !builtinNames.has(command.name),
 				),
-				...agentSlashCommands,
-			],
-			[agentSlashCommands, slashProvider],
-		);
+			];
+		}, [agentSlashCommands, slashProvider]);
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.

@@ -100,7 +100,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 				disabled={!expandable}
 				className={cn(
 					"flex w-full flex-wrap items-center gap-x-1.5 gap-y-0 py-0.5 text-left text-[12px] text-muted-foreground",
-					expandable ? "cursor-pointer" : "cursor-default",
+					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<Bot

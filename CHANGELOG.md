@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.21.3
+
+### Patch Changes
+
+- [#534](https://github.com/dohooo/helmor/pull/534) [`e5fdd36`](https://github.com/dohooo/helmor/commit/e5fdd364f6dfe53b7d4620a802d17e1ffdb3777f) Thanks [@natllian](https://github.com/natllian)! - Fix Codex `/goal` continuations so they inherit the current workspace permission mode instead of reusing stale context permissions.
+
+- [#533](https://github.com/dohooo/helmor/pull/533) [`02af06c`](https://github.com/dohooo/helmor/commit/02af06c9fbb3c550b205fd6b9fdae0cc9c15b05e) Thanks [@natllian](https://github.com/natllian)! - Fix automatic workspace branch renaming failing on Codex by making title/branch generation more reliable.
+
+- [#531](https://github.com/dohooo/helmor/pull/531) [`3df27c7`](https://github.com/dohooo/helmor/commit/3df27c7c32d5cbebf53aa9744d6e5dbb49a1c291) Thanks [@natllian](https://github.com/natllian)! - Fix the pointer cursor preference so markdown links and functional cursors like resize, help, text, disabled, and drag cursors still behave correctly.
+
+## 0.21.2
+
+### Patch Changes
+
+- [#520](https://github.com/dohooo/helmor/pull/520) [`2df888f`](https://github.com/dohooo/helmor/commit/2df888f879f54814b3bffdaaa2fdd87f56b38075) Thanks [@natllian](https://github.com/natllian)! - Add a round of appearance and command-discovery improvements:
+
+  - Let users customize chat size, UI and code fonts, and pointer cursors from Appearance settings.
+  - Make Codex slash commands discover skills from linked directories and the repository root.
+  - Restore the main window mode reliably after onboarding completes.
+
+- [#518](https://github.com/dohooo/helmor/pull/518) [`b6018d0`](https://github.com/dohooo/helmor/commit/b6018d05f8833be156ee7fac834298e0df53b0f7) Thanks [@natllian](https://github.com/natllian)! - Improve release planning so in-app announcements can be drafted per PR and merged into the final release catalog automatically.
+
+- [#524](https://github.com/dohooo/helmor/pull/524) [`91b8ed7`](https://github.com/dohooo/helmor/commit/91b8ed7f4a85033c5a1e16708b1f884535b3a28b) Thanks [@natllian](https://github.com/natllian)! - Upgrade the bundled Claude Code and Codex CLIs, and add Claude's `/goal` command to the composer.
+
 ## 0.21.1
 
 ### Patch Changes

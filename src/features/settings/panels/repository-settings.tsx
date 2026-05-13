@@ -143,7 +143,7 @@ export function RepositorySettingsPanel({
 							if (next) fetchRemotes();
 						}}
 					>
-						<PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+						<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong">
 							<span className="truncate">{currentRemote}</span>
 							<ChevronDown
 								className="size-3 shrink-0 text-app-muted"
@@ -204,7 +204,7 @@ export function RepositorySettingsPanel({
 					>
 						<button
 							type="button"
-							className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong"
+							className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong"
 						>
 							<GitBranch
 								className="size-3.5 text-app-foreground-soft"

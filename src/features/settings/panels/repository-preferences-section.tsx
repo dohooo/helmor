@@ -79,7 +79,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 									<CollapsibleTrigger asChild>
 										<button
 											type="button"
-											className="flex w-full cursor-pointer items-start justify-between gap-4 text-left"
+											className="flex w-full cursor-interactive items-start justify-between gap-4 text-left"
 										>
 											<div>
 												<div className="text-[13px] font-medium text-app-foreground">
@@ -116,7 +116,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 										<div className="mt-3 flex items-center justify-between gap-3">
 											<button
 												type="button"
-												className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
+												className="inline-flex cursor-interactive items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
 												onClick={() => setPreviewKey(key)}
 											>
 												<Eye className="size-3.5" strokeWidth={1.8} />

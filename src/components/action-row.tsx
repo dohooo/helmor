@@ -45,7 +45,7 @@ export function ActionRowButton({
 }: ActionRowButtonProps) {
 	const isActive = active ?? props["aria-pressed"] === true;
 	const buttonColorClass =
-		"h-7 cursor-pointer gap-1 rounded-[3px] px-2.5 text-[12px] leading-none tracking-[0.02em] disabled:cursor-not-allowed disabled:opacity-60";
+		"h-7 cursor-interactive gap-1 rounded-[3px] px-2.5 text-[12px] leading-none tracking-[0.02em] disabled:cursor-not-allowed disabled:opacity-60";
 
 	return (
 		<Button

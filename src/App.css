@@ -29,6 +29,7 @@
 }
 
 :root {
+	--helmor-interactive-cursor: pointer;
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
@@ -37,15 +38,20 @@
 }
 
 /*
- * Pointer cursors. The whole app defaults to `cursor-pointer` on every
- * interactive element (baked into base UI components — see CLAUDE.md).
- * Users who prefer the platform default arrow can flip this off; the
- * class below neutralises pointer cursors everywhere except text-input
- * controls.
+ * Pointer cursors. Use `cursor-interactive` for UI affordances controlled by
+ * the Appearance preference. Functional cursors and real links keep their own
+ * cursor semantics.
  */
-html.no-pointer-cursors
-*:not(input):not(textarea):not([contenteditable="true"]) {
-	cursor: default !important;
+html.no-pointer-cursors {
+	--helmor-interactive-cursor: default;
+}
+
+:where(.cursor-interactive) {
+	cursor: var(--helmor-interactive-cursor);
+}
+
+:where(.\!cursor-interactive) {
+	cursor: var(--helmor-interactive-cursor) !important;
 }
 
 html,
@@ -442,7 +448,7 @@ body {
 	color: var(--muted-foreground);
 	border-radius: 9999px;
 	padding: 0;
-	cursor: pointer;
+	cursor: var(--helmor-interactive-cursor);
 	opacity: 1;
 	transition:
 		opacity 200ms ease,
@@ -805,6 +811,11 @@ body {
 
 .conversation-streamdown :where(a) {
 	color: var(--chart-3);
+	cursor: pointer;
+}
+
+html.no-pointer-cursors .conversation-streamdown :where(a) {
+	cursor: pointer !important;
 }
 
 .conversation-streamdown :where(blockquote) {
