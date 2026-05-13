@@ -21,6 +21,8 @@ type ToolName =
 	| "list_sessions"
 	| "send_prompt"
 	| "list_repos"
+	| "list_context_items"
+	| "get_context_item_detail"
 	| "select_workspace"
 	| "wait_for_user"
 	| "end_session";

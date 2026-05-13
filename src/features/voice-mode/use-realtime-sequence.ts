@@ -507,6 +507,10 @@ function humanToolStatus(name: string): string {
 			return "Sending to agent";
 		case "list_repos":
 			return "Listing repos";
+		case "list_context_items":
+			return "Fetching contexts";
+		case "get_context_item_detail":
+			return "Reading context";
 		default:
 			return name
 				.replace(/_/g, " ")
