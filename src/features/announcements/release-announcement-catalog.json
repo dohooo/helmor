@@ -2,27 +2,60 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.21.2",
+			"items": [
+				{
+					"text": "Appearance settings now let you customize chat size, UI and code fonts, and pointer cursors.",
+					"action": {
+						"label": "Open Appearance",
+						"value": {
+							"type": "openSettings",
+							"section": "appearance"
+						}
+					}
+				},
+				{
+					"text": "Codex slash commands now include skills from linked directories and the repository root."
+				},
+				{
+					"text": "Claude sessions now include the /goal command for setting a completion condition that Claude keeps working toward."
+				},
+				{
+					"text": "You can now drag workspaces in the sidebar to keep each section in your preferred order."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.21.0",
 			"items": [
 				{
 					"text": "You can now group workspaces in the sidebar by repository — toggle it in Settings.",
 					"action": {
 						"label": "Open General",
-						"value": { "type": "openSettings", "section": "general" }
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
 					}
 				},
 				{
 					"text": "Add Context now supports GitLab too — auto-detected based on your current project.",
 					"action": {
 						"label": "Open Context",
-						"value": { "type": "setRightSidebarMode", "mode": "context" }
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
 					}
 				},
 				{
 					"text": "Claude Code thinking now offers two modes. Choosing Omitted lets the final text stream sooner.",
 					"action": {
 						"label": "Open General",
-						"value": { "type": "openSettings", "section": "general" }
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
 					}
 				},
 				{
