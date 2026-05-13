@@ -249,6 +249,7 @@ function TerminalOutputImpl({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<Terminal | null>(null);
 	const fitRef = useRef<FitAddon | null>(null);
+	const runFitRef = useRef<(() => void) | null>(null);
 	// Refs so xterm effect doesn't recreate on parent rerender.
 	const onDataRef = useRef<typeof onData>(onData);
 	const onResizeRef = useRef<typeof onResize>(onResize);
@@ -352,6 +353,7 @@ function TerminalOutputImpl({
 				}, FIT_THROTTLE_MS - elapsed);
 			}
 		};
+		runFitRef.current = runFit;
 
 		runFit();
 
@@ -429,12 +431,23 @@ function TerminalOutputImpl({
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;
+			runFitRef.current = null;
 			if (terminalRef) {
 				(terminalRef as React.MutableRefObject<TerminalHandle | null>).current =
 					null;
 			}
 		};
-	}, [detectLinks, fontSize, lineHeight, terminalFontFamily, terminalRef]);
+	}, [detectLinks, terminalRef]);
+
+	useEffect(() => {
+		const terminal = xtermRef.current;
+		if (!terminal) return;
+		terminal.options.fontSize = fontSize;
+		terminal.options.fontFamily = resolveTerminalFontFamily(terminalFontFamily);
+		terminal.options.lineHeight = lineHeight;
+		runFitRef.current?.();
+		terminal.refresh(0, terminal.rows - 1);
+	}, [fontSize, lineHeight, terminalFontFamily]);
 
 	return (
 		<div
