@@ -207,17 +207,20 @@ function sortGroupsForView(
 		),
 	}));
 
+	const hasRepoGroups = sortedGroups.some((group) =>
+		group.id.startsWith(REPO_GROUP_PREFIX),
+	);
+	if (!hasRepoGroups) return sortedGroups;
+
 	const head = sortedGroups.filter((group) => group.id === "pinned");
 	const tail = sortedGroups.filter((group) => group.id === "backlog");
 	const middle = sortedGroups.filter(
 		(group) => group.id !== "pinned" && group.id !== "backlog",
 	);
 
-	if (middle.some((group) => group.id.startsWith(REPO_GROUP_PREFIX))) {
-		middle.sort((left, right) =>
-			compareRepoGroupsBySidebarSort(left, right, sort),
-		);
-	}
+	middle.sort((left, right) =>
+		compareRepoGroupsBySidebarSort(left, right, sort),
+	);
 
 	return [...head, ...middle, ...tail];
 }
@@ -243,6 +246,8 @@ function bestTimestampForGroup(
 	group: WorkspaceGroup,
 	sort: Exclude<SidebarSort, "custom">,
 ): number {
+	if (group.rows.length === 0) return 0;
+
 	if (sort === "createdAt") {
 		return Math.max(
 			...group.rows.map((row) => Date.parse(row.createdAt ?? "") || 0),

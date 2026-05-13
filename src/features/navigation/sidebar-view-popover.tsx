@@ -35,11 +35,32 @@ import type { RepositoryCreateOption } from "@/lib/api";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { WorkspaceAvatar } from "./avatar";
 
-const SIDEBAR_SORT_OPTIONS: Array<{
+interface SidebarSortOption {
 	value: SidebarSort;
 	label: string;
 	icon: LucideIcon;
-}> = [
+}
+
+interface SidebarRepoFilterPickerProps {
+	repositories: RepositoryCreateOption[];
+	selectedRepoIds: string[];
+	onRepoFilterChange?: (repoIds: string[]) => void;
+}
+
+interface SidebarViewPopoverProps {
+	repositories: RepositoryCreateOption[];
+	grouping: SidebarGrouping;
+	selectedRepoIds: string[];
+	sort: SidebarSort;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	shortcut?: string | null;
+	onGroupingChange?: (grouping: SidebarGrouping) => void;
+	onRepoFilterChange?: (repoIds: string[]) => void;
+	onSortChange?: (sort: SidebarSort) => void;
+}
+
+const SIDEBAR_SORT_OPTIONS: SidebarSortOption[] = [
 	{ value: "custom", label: "Custom order", icon: RotateCcw },
 	{ value: "repoName", label: "Repository name", icon: ArrowDownAZ },
 	{ value: "updatedAt", label: "Last updated", icon: Clock3 },
@@ -64,11 +85,7 @@ function SidebarRepoFilterPicker({
 	repositories,
 	selectedRepoIds,
 	onRepoFilterChange,
-}: {
-	repositories: RepositoryCreateOption[];
-	selectedRepoIds: string[];
-	onRepoFilterChange?: (repoIds: string[]) => void;
-}) {
+}: SidebarRepoFilterPickerProps) {
 	const sortedRepositories = useMemo(
 		() =>
 			[...repositories].sort((left, right) =>
@@ -108,7 +125,7 @@ function SidebarRepoFilterPicker({
 				</Button>
 			</PopoverTrigger>
 			<CommandPopoverContent
-				align="end"
+				align="start"
 				className="w-[300px]"
 				commandClassName="max-h-[320px]"
 			>
@@ -159,18 +176,7 @@ export function SidebarViewPopover({
 	onGroupingChange,
 	onRepoFilterChange,
 	onSortChange,
-}: {
-	repositories: RepositoryCreateOption[];
-	grouping: SidebarGrouping;
-	selectedRepoIds: string[];
-	sort: SidebarSort;
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	shortcut?: string | null;
-	onGroupingChange?: (grouping: SidebarGrouping) => void;
-	onRepoFilterChange?: (repoIds: string[]) => void;
-	onSortChange?: (sort: SidebarSort) => void;
-}) {
+}: SidebarViewPopoverProps) {
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<Tooltip>
@@ -201,7 +207,7 @@ export function SidebarViewPopover({
 					) : null}
 				</TooltipContent>
 			</Tooltip>
-			<PopoverContent align="end" className="w-[260px] gap-2 p-2">
+			<PopoverContent align="start" className="w-[260px] gap-2 p-2">
 				<div className="px-1 text-[12px] font-medium text-muted-foreground">
 					Group by
 				</div>
@@ -218,7 +224,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() =>
 									onGroupingChange?.(option.value as SidebarGrouping)
 								}
@@ -257,7 +263,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() => onSortChange?.(option.value)}
 							>
 								<Icon className="size-3.5 shrink-0 text-muted-foreground" />

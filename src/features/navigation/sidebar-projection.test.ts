@@ -648,6 +648,62 @@ describe("applySidebarView", () => {
 		]);
 	});
 
+	it("keeps status groups in semantic order while sorting rows inside them", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{
+						id: "done",
+						label: "Done",
+						tone: "done",
+						rows: [
+							projected.groups[0]!.rows[0]!,
+							projected.groups[0]!.rows[1]!,
+						],
+					},
+					{
+						id: "review",
+						label: "In review",
+						tone: "review",
+						rows: [projected.groups[1]!.rows[0]!],
+					},
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [],
+					},
+					{
+						id: "backlog",
+						label: "Backlog",
+						tone: "backlog",
+						rows: [],
+					},
+					{
+						id: "canceled",
+						label: "Canceled",
+						tone: "canceled",
+						rows: [],
+					},
+				],
+				archivedRows: [],
+			},
+			{ sort: "repoName" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"done",
+			"review",
+			"progress",
+			"backlog",
+			"canceled",
+		]);
+		expect(result.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-alpha-new",
+			"ws-beta-old",
+		]);
+	});
+
 	it("sorts repo buckets without moving pinned and backlog sections", () => {
 		const result = applySidebarView(
 			{

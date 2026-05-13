@@ -971,7 +971,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		[
 			sectionOpenState,
 			sidebarGrouping,
-			sidebarSort,
 			toggleSection,
 			selectedWorkspaceId,
 			busyWorkspaceIds,

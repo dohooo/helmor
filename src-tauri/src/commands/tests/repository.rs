@@ -25,12 +25,13 @@ fn set_repository_sidebar_order_promotes_visual_order_and_appends_rest() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
+    let repo_create_id = harness.repo_id.clone();
     harness.insert_repo("repo-alpha", "alpha-repo", 2048, 0);
     harness.insert_repo("repo-beta", "beta-repo", 3072, 0);
 
     repos::set_repository_sidebar_order(&[
         "repo-beta".to_string(),
-        "repo-create".to_string(),
+        repo_create_id.clone(),
         "repo-missing".to_string(),
     ])
     .unwrap();
@@ -44,7 +45,14 @@ fn set_repository_sidebar_order_promotes_visual_order_and_appends_rest() {
         .collect::<std::result::Result<Vec<_>, _>>()
         .unwrap();
 
-    assert_eq!(rows, vec!["repo-beta", "repo-create", "repo-alpha"]);
+    assert_eq!(
+        rows,
+        vec![
+            "repo-beta".to_string(),
+            repo_create_id,
+            "repo-alpha".to_string()
+        ]
+    );
 }
 
 #[test]

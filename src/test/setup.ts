@@ -12,7 +12,7 @@ configure({ asyncUtilTimeout: 3000 });
 if (typeof window !== "undefined" && !window.localStorage) {
 	const store = new Map<string, string>();
 	const localStorageMock = Object.create(Storage.prototype) as Storage;
-	Object.defineProperties(Storage.prototype, {
+	Object.defineProperties(localStorageMock, {
 		clear: {
 			value: () => store.clear(),
 			configurable: true,
@@ -30,11 +30,15 @@ if (typeof window !== "undefined" && !window.localStorage) {
 			configurable: true,
 		},
 		removeItem: {
-			value: (key: string) => store.delete(key),
+			value: (key: string) => {
+				store.delete(key);
+			},
 			configurable: true,
 		},
 		setItem: {
-			value: (key: string, value: string) => store.set(key, String(value)),
+			value: (key: string, value: string) => {
+				store.set(key, String(value));
+			},
 			configurable: true,
 		},
 	});
