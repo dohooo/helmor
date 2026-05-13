@@ -394,6 +394,54 @@ fn move_workspace_in_sidebar_drag_out_of_pinned_clears_pinned_at() {
 }
 
 #[test]
+fn set_workspace_sidebar_order_can_persist_sorted_drop_order() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_workspace_name("alpha");
+    harness.insert_workspace_name("bravo");
+    harness.insert_workspace_name("charlie");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    for (index, name) in ["alpha", "charlie", "bravo"].iter().enumerate() {
+        connection
+            .execute(
+                "UPDATE workspaces SET status = 'review', display_order = ?2 WHERE id = ?1",
+                (
+                    format!("workspace-{name}"),
+                    ((index as i64) + 1) * sidebar_order::ORDER_STEP,
+                ),
+            )
+            .unwrap();
+    }
+
+    workspaces::set_workspace_sidebar_order(
+        "workspace-alpha",
+        "review",
+        &[
+            "workspace-bravo".to_string(),
+            "workspace-alpha".to_string(),
+            "workspace-charlie".to_string(),
+        ],
+    )
+    .unwrap();
+
+    let ids: Vec<String> = connection
+        .prepare("SELECT id FROM workspaces WHERE status = 'review' ORDER BY display_order ASC")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(
+        ids,
+        vec!["workspace-bravo", "workspace-alpha", "workspace-charlie"]
+    );
+}
+
+#[test]
 fn move_workspace_in_sidebar_rebalances_when_gap_runs_out() {
     let _guard = TEST_LOCK
         .lock()

@@ -20,6 +20,7 @@ import {
 	type RepositoryCreateOption,
 	restoreWorkspace,
 	setRepositorySidebarOrder,
+	setWorkspaceSidebarOrder,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
@@ -50,6 +51,7 @@ import {
 import {
 	applyRepoOrder,
 	applyRepoReorder,
+	applyWorkspaceOrder,
 	createOptimisticCreatingWorkspaceDetail,
 	describeUnknownError,
 	findInitialWorkspaceId,
@@ -828,6 +830,11 @@ export function useWorkspacesSidebarController({
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
+				if (repoOrder) {
+					void queryClient.invalidateQueries({
+						queryKey: helmorQueryKeys.repositories,
+					});
+				}
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to reorder repository."),
 				);
@@ -841,24 +848,35 @@ export function useWorkspacesSidebarController({
 			workspaceId: string,
 			targetGroupId: string,
 			beforeWorkspaceId: string | null,
+			workspaceOrder?: readonly string[],
 		) => {
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceGroups,
-				(current: WorkspaceGroup[] | undefined) =>
-					reorderWorkspaceInSidebar(
+				(current: WorkspaceGroup[] | undefined) => {
+					const reordered = reorderWorkspaceInSidebar(
 						current,
 						workspaceId,
 						targetGroupId,
 						beforeWorkspaceId,
-					),
+					);
+					return workspaceOrder
+						? applyWorkspaceOrder(reordered, workspaceOrder)
+						: reordered;
+				},
 			);
 
 			try {
-				await moveWorkspaceInSidebar(
-					workspaceId,
-					targetGroupId,
-					beforeWorkspaceId,
-				);
+				if (workspaceOrder) {
+					await setWorkspaceSidebarOrder(workspaceId, targetGroupId, [
+						...workspaceOrder,
+					]);
+				} else {
+					await moveWorkspaceInSidebar(
+						workspaceId,
+						targetGroupId,
+						beforeWorkspaceId,
+					);
+				}
 				// Detail invalidate is fine — it only affects the inspector,
 				// not the sidebar list — but we skip the sidebar flush so the
 				// optimistic cache stays in place and the row doesn't visibly

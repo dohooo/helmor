@@ -336,6 +336,28 @@ export function applyRepoOrder(
 	}));
 }
 
+export function applyWorkspaceOrder(
+	groups: WorkspaceGroup[] | undefined,
+	workspaceOrder: readonly string[],
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+	const nextOrderByWorkspace = new Map(
+		workspaceOrder.map((id, idx) => [id, (idx + 1) * SIDEBAR_ORDER_STEP]),
+	);
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows
+			.map((row) => {
+				const nextOrder = nextOrderByWorkspace.get(row.id);
+				return nextOrder === undefined
+					? row
+					: { ...row, displayOrder: nextOrder };
+			})
+			.sort(compareSidebarOrder),
+	}));
+}
+
 /**
  * Optimistic mirror of `move_workspace_in_sidebar`. Targets:
  *   - `"pinned"` — sets `pinnedAt`, keeps status

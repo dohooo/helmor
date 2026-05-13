@@ -15,6 +15,7 @@ import {
 	repoOrderFromGroups,
 	resolveWorkspaceDropBeforeId,
 	WorkspacesSidebar,
+	workspaceOrderAfterDrop,
 } from "./index";
 
 const workspaceRow: WorkspaceRow = {
@@ -1023,5 +1024,29 @@ describe("resolveWorkspaceDropBeforeId", () => {
 				beforeWorkspaceId: null,
 			}),
 		).toBeNull();
+	});
+});
+
+describe("workspaceOrderAfterDrop", () => {
+	it("builds the full sorted order for a visible before-row drop", () => {
+		expect(
+			workspaceOrderAfterDrop({
+				unfilteredGroups: [
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [
+							{ ...workspaceRow, id: "ws-a", title: "A" },
+							{ ...workspaceRow, id: "ws-b", title: "B" },
+							{ ...workspaceRow, id: "ws-c", title: "C" },
+						],
+					},
+				],
+				workspaceId: "ws-a",
+				targetGroupId: "progress",
+				beforeWorkspaceId: "ws-c",
+			}),
+		).toEqual(["ws-b", "ws-a", "ws-c"]);
 	});
 });

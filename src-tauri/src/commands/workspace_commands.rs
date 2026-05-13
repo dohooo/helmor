@@ -242,6 +242,18 @@ pub async fn move_workspace_in_sidebar(
     .await
 }
 
+#[tauri::command]
+pub async fn set_workspace_sidebar_order(
+    workspace_id: String,
+    target_group_id: String,
+    workspace_ids: Vec<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        workspaces::set_workspace_sidebar_order(&workspace_id, &target_group_id, &workspace_ids)
+    })
+    .await
+}
+
 /// `/add-dir` feature: list the extra directories the user has linked to
 /// this workspace. These are sent as `additionalDirectories` to the agent
 /// SDKs on every turn.

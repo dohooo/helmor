@@ -204,6 +204,35 @@ export function resolveWorkspaceDropBeforeId({
 	return fullRows[previousFullIndex + 1]?.id ?? null;
 }
 
+export function workspaceOrderAfterDrop({
+	unfilteredGroups,
+	workspaceId,
+	targetGroupId,
+	beforeWorkspaceId,
+}: {
+	unfilteredGroups: WorkspaceGroup[];
+	workspaceId: string;
+	targetGroupId: string;
+	beforeWorkspaceId: string | null;
+}) {
+	const targetRows =
+		unfilteredGroups.find((group) => group.id === targetGroupId)?.rows ?? [];
+	const withoutMoving = targetRows
+		.map((row) => row.id)
+		.filter((id) => id !== workspaceId);
+	const insertIndex =
+		beforeWorkspaceId === null
+			? withoutMoving.length
+			: withoutMoving.indexOf(beforeWorkspaceId);
+	const boundedInsertIndex =
+		insertIndex < 0 ? withoutMoving.length : insertIndex;
+	return [
+		...withoutMoving.slice(0, boundedInsertIndex),
+		workspaceId,
+		...withoutMoving.slice(boundedInsertIndex),
+	];
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -295,6 +324,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		workspaceId: string,
 		targetGroupId: string,
 		beforeWorkspaceId: string | null,
+		workspaceOrder?: readonly string[],
 	) => void;
 	onMoveRepositoryInSidebar?: (
 		repoId: string,
@@ -369,16 +399,27 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				targetGroupId,
 				beforeWorkspaceId,
 			});
+			const workspaceOrder =
+				sidebarSort === "custom"
+					? undefined
+					: workspaceOrderAfterDrop({
+							unfilteredGroups,
+							workspaceId,
+							targetGroupId,
+							beforeWorkspaceId,
+						});
 			switchToCustomSortAfterDrop();
 			onMoveWorkspaceInSidebar?.(
 				workspaceId,
 				targetGroupId,
 				resolvedBeforeWorkspaceId,
+				workspaceOrder,
 			);
 		},
 		[
 			groups,
 			onMoveWorkspaceInSidebar,
+			sidebarSort,
 			switchToCustomSortAfterDrop,
 			unfilteredGroups,
 		],
