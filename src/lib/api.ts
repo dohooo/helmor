@@ -2389,6 +2389,12 @@ export async function moveRepositoryInSidebar(
 	});
 }
 
+export async function setRepositorySidebarOrder(
+	repoIds: string[],
+): Promise<void> {
+	return invoke<void>("set_repository_sidebar_order", { repoIds });
+}
+
 // ---------------------------------------------------------------------------
 // Streaming agent API
 // ---------------------------------------------------------------------------

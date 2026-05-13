@@ -3,6 +3,7 @@ export type ShortcutId =
 	| "workspace.next"
 	| "workspace.new"
 	| "workspace.addRepository"
+	| "workspace.filterSidebar"
 	| "workspace.copyPath"
 	| "workspace.openInEditor"
 	| "session.previous"

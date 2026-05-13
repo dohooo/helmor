@@ -95,6 +95,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "workspace.filterSidebar",
+		title: "Filter and sort sidebar",
+		group: "Workspace",
+		defaultHotkey: "Mod+Shift+F",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "script.run",
 		title: "Run / stop script",
 		group: "Actions",

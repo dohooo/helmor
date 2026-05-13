@@ -32,8 +32,13 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
-import type { SidebarGrouping } from "@/lib/settings";
+import type {
+	RepositoryCreateOption,
+	WorkspaceGroup,
+	WorkspaceRow,
+	WorkspaceStatus,
+} from "@/lib/api";
+import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
@@ -56,6 +61,7 @@ import {
 	GroupIcon,
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
+import { SidebarViewPopover } from "./sidebar-view-popover";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -100,6 +106,45 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
 }
 
+function repoOrderFromGroups(
+	groups: WorkspaceGroup[],
+	repositories: RepositoryCreateOption[],
+) {
+	const orderedIds: string[] = [];
+	const seen = new Set<string>();
+	for (const group of groups) {
+		const repoId = repoIdFromGroupId(group.id);
+		if (!repoId || seen.has(repoId)) continue;
+		seen.add(repoId);
+		orderedIds.push(repoId);
+	}
+	for (const repository of repositories) {
+		if (seen.has(repository.id)) continue;
+		seen.add(repository.id);
+		orderedIds.push(repository.id);
+	}
+	return orderedIds;
+}
+
+function moveRepoInOrder(
+	repoOrder: readonly string[],
+	repoId: string,
+	beforeRepoId: string | null,
+) {
+	const withoutMoving = repoOrder.filter((id) => id !== repoId);
+	const insertIndex =
+		beforeRepoId === null
+			? withoutMoving.length
+			: withoutMoving.indexOf(beforeRepoId);
+	const boundedInsertIndex =
+		insertIndex < 0 ? withoutMoving.length : insertIndex;
+	return [
+		...withoutMoving.slice(0, boundedInsertIndex),
+		repoId,
+		...withoutMoving.slice(boundedInsertIndex),
+	];
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -107,13 +152,20 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
+	availableRepositories = [],
 	sidebarGrouping = "status",
+	sidebarRepoFilterIds = [],
+	sidebarSort = "custom",
+	onSidebarGroupingChange,
+	onSidebarRepoFilterChange,
+	onSidebarSortChange,
 	addingRepository,
 	selectedWorkspaceId,
 	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
+	sidebarFilterShortcut,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onOpenCloneDialog,
@@ -141,13 +193,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
+	availableRepositories?: RepositoryCreateOption[];
 	sidebarGrouping?: SidebarGrouping;
+	sidebarRepoFilterIds?: string[];
+	sidebarSort?: SidebarSort;
+	onSidebarGroupingChange?: (grouping: SidebarGrouping) => void;
+	onSidebarRepoFilterChange?: (repoIds: string[]) => void;
+	onSidebarSortChange?: (sort: SidebarSort) => void;
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
+	sidebarFilterShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
@@ -179,6 +238,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onMoveRepositoryInSidebar?: (
 		repoId: string,
 		beforeRepoId: string | null,
+		repoOrder?: readonly string[],
 	) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
 	archivingWorkspaceIds?: Set<string>;
@@ -186,6 +246,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId?: string | null;
 }) {
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
+		useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const dndPolicy = useMemo<WorkspaceDndPolicy>(
 		() =>
@@ -228,8 +290,36 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					},
 		[sidebarGrouping],
 	);
+	const visualRepoOrder = useMemo(
+		() => repoOrderFromGroups(groups, availableRepositories),
+		[availableRepositories, groups],
+	);
+	const switchToCustomSortAfterDrop = useCallback(() => {
+		if (sidebarSort !== "custom") {
+			onSidebarSortChange?.("custom");
+		}
+	}, [onSidebarSortChange, sidebarSort]);
+	const handleMoveWorkspaceAfterDrop = useCallback(
+		(
+			workspaceId: string,
+			targetGroupId: string,
+			beforeWorkspaceId: string | null,
+		) => {
+			switchToCustomSortAfterDrop();
+			onMoveWorkspaceInSidebar?.(workspaceId, targetGroupId, beforeWorkspaceId);
+		},
+		[onMoveWorkspaceInSidebar, switchToCustomSortAfterDrop],
+	);
+	const handleMoveRepositoryAfterDrop = useCallback(
+		(repoId: string, beforeRepoId: string | null) => {
+			const repoOrder = moveRepoInOrder(visualRepoOrder, repoId, beforeRepoId);
+			switchToCustomSortAfterDrop();
+			onMoveRepositoryInSidebar?.(repoId, beforeRepoId, repoOrder);
+		},
+		[onMoveRepositoryInSidebar, switchToCustomSortAfterDrop, visualRepoOrder],
+	);
 	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
-		onMoveWorkspace: onMoveWorkspaceInSidebar,
+		onMoveWorkspace: handleMoveWorkspaceAfterDrop,
 		policy: dndPolicy,
 	});
 	const {
@@ -237,7 +327,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		dropIndicator: repoDropIndicator,
 		startRepoDragGesture,
 	} = useRepoDnd({
-		onMoveRepo: onMoveRepositoryInSidebar,
+		onMoveRepo: handleMoveRepositoryAfterDrop,
 	});
 	const activeRepoDragId = repoDragState?.repoId ?? null;
 	const repoDropBeforeId = repoDropIndicator?.beforeRepoId ?? null;
@@ -658,6 +748,22 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
 
+	useEffect(() => {
+		const handleOpenSidebarFilter = () => {
+			setIsSidebarViewPopoverOpen(true);
+		};
+
+		window.addEventListener(
+			"helmor:open-sidebar-filter",
+			handleOpenSidebarFilter,
+		);
+		return () =>
+			window.removeEventListener(
+				"helmor:open-sidebar-filter",
+				handleOpenSidebarFilter,
+			);
+	}, []);
+
 	// ── Toggle section ────────────────────────────────────────────────
 	const toggleSection = useCallback((groupId: string) => {
 		setSectionOpenState((current) => ({
@@ -876,6 +982,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		[
 			sectionOpenState,
 			sidebarGrouping,
+			sidebarSort,
 			toggleSection,
 			selectedWorkspaceId,
 			busyWorkspaceIds,
@@ -929,6 +1036,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<SidebarViewPopover
+						repositories={availableRepositories}
+						grouping={sidebarGrouping}
+						selectedRepoIds={sidebarRepoFilterIds}
+						sort={sidebarSort}
+						open={isSidebarViewPopoverOpen}
+						onOpenChange={setIsSidebarViewPopoverOpen}
+						shortcut={sidebarFilterShortcut}
+						onGroupingChange={onSidebarGroupingChange}
+						onRepoFilterChange={onSidebarRepoFilterChange}
+						onSortChange={onSidebarSortChange}
+					/>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}

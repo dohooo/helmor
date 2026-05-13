@@ -6,6 +6,7 @@ import type {
 	WorkspaceSessionSummary,
 } from "./api";
 import {
+	applyRepoOrder,
 	applyRepoReorder,
 	clampEffort,
 	clampEffortToModel,
@@ -960,5 +961,31 @@ describe("applyRepoReorder", () => {
 
 	it("returns undefined when groups is undefined", () => {
 		expect(applyRepoReorder(undefined, "repo-A", null)).toBeUndefined();
+	});
+
+	it("can replace custom repo order with an explicit visual order", () => {
+		const groups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					row("w-a", "repo-A", 3072),
+					row("w-b", "repo-B", 1024),
+					row("w-c", "repo-C", 2048),
+				],
+			},
+		];
+
+		const next = applyRepoOrder(groups, ["repo-C", "repo-A", "repo-B"]);
+		const orderByRepo = new Map<string, number>();
+		for (const group of next ?? []) {
+			for (const r of group.rows) {
+				if (r.repoId) orderByRepo.set(r.repoId, r.repoSidebarOrder ?? 0);
+			}
+		}
+
+		expect(orderByRepo.get("repo-C")).toBeLessThan(orderByRepo.get("repo-A")!);
+		expect(orderByRepo.get("repo-A")).toBeLessThan(orderByRepo.get("repo-B")!);
 	});
 });

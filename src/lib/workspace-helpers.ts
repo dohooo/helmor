@@ -314,6 +314,28 @@ export function applyRepoReorder(
 	}));
 }
 
+export function applyRepoOrder(
+	groups: WorkspaceGroup[] | undefined,
+	repoOrder: readonly string[],
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+	const nextOrderByRepo = new Map(
+		repoOrder.map((id, idx) => [id, (idx + 1) * SIDEBAR_ORDER_STEP]),
+	);
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const nextOrder = row.repoId
+				? nextOrderByRepo.get(row.repoId)
+				: undefined;
+			return nextOrder === undefined
+				? row
+				: { ...row, repoSidebarOrder: nextOrder };
+		}),
+	}));
+}
+
 /**
  * Optimistic mirror of `move_workspace_in_sidebar`. Targets:
  *   - `"pinned"` — sets `pinnedAt`, keeps status

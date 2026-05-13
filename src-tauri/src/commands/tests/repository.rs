@@ -20,6 +20,34 @@ fn list_repositories_filters_hidden_and_sorts_by_display_order() {
 }
 
 #[test]
+fn set_repository_sidebar_order_promotes_visual_order_and_appends_rest() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.insert_repo("repo-alpha", "alpha-repo", 2048, 0);
+    harness.insert_repo("repo-beta", "beta-repo", 3072, 0);
+
+    repos::set_repository_sidebar_order(&[
+        "repo-beta".to_string(),
+        "repo-create".to_string(),
+        "repo-missing".to_string(),
+    ])
+    .unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let rows = connection
+        .prepare("SELECT id FROM repos WHERE COALESCE(hidden, 0) = 0 ORDER BY display_order ASC")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(rows, vec!["repo-beta", "repo-create", "repo-alpha"]);
+}
+
+#[test]
 fn add_repository_from_local_path_persists_repo_without_creating_workspace() {
     // Adding a repo no longer auto-creates a workspace — the start page
     // owns that handoff. We assert: repo row inserted, branch/remote

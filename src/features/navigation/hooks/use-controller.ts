@@ -18,6 +18,7 @@ import {
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
 	restoreWorkspace,
+	setRepositorySidebarOrder,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
@@ -46,6 +47,7 @@ import {
 	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import {
+	applyRepoOrder,
 	applyRepoReorder,
 	createOptimisticCreatingWorkspaceDetail,
 	describeUnknownError,
@@ -108,7 +110,7 @@ export function useWorkspacesSidebarController({
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
-	const { settings } = useSettings();
+	const { settings, updateSettings } = useSettings();
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
 	const [cloneDefaultDirectory, setCloneDefaultDirectory] = useState<
@@ -165,6 +167,10 @@ export function useWorkspacesSidebarController({
 
 	const baseGroups = groupsQuery.data ?? [];
 	const baseArchivedSummaries = archivedQuery.data ?? [];
+	const availableRepoIds = useMemo(
+		() => (repositoriesQuery.data ?? []).map((repository) => repository.id),
+		[repositoriesQuery.data],
+	);
 	const projectedSidebar = useMemo(
 		() =>
 			projectVisualSidebar(
@@ -182,13 +188,21 @@ export function useWorkspacesSidebarController({
 					),
 				},
 				settings.sidebarGrouping,
+				{
+					availableRepoIds,
+					repoFilterIds: settings.sidebarRepoFilterIds,
+					sort: settings.sidebarSort,
+				},
 			),
 		[
+			availableRepoIds,
 			baseArchivedSummaries,
 			baseGroups,
 			pendingArchives,
 			pendingCreations,
 			settings.sidebarGrouping,
+			settings.sidebarRepoFilterIds,
+			settings.sidebarSort,
 		],
 	);
 	const groups = projectedSidebar.groups;
@@ -739,7 +753,11 @@ export function useWorkspacesSidebarController({
 	);
 
 	const handleMoveRepositoryInSidebar = useCallback(
-		async (repoId: string, beforeRepoId: string | null) => {
+		async (
+			repoId: string,
+			beforeRepoId: string | null,
+			repoOrder?: readonly string[],
+		) => {
 			// Optimistic: rewrite `repoSidebarOrder` on every row whose repo
 			// participates in the reorder, so `regroupByRepo` re-buckets in
 			// the new order immediately.
@@ -753,11 +771,17 @@ export function useWorkspacesSidebarController({
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceGroups,
 				(current: WorkspaceGroup[] | undefined) =>
-					applyRepoReorder(current, repoId, beforeRepoId),
+					repoOrder
+						? applyRepoOrder(current, repoOrder)
+						: applyRepoReorder(current, repoId, beforeRepoId),
 			);
 
 			try {
-				await moveRepositoryInSidebar(repoId, beforeRepoId);
+				if (repoOrder) {
+					await setRepositorySidebarOrder([...repoOrder]);
+				} else {
+					await moveRepositoryInSidebar(repoId, beforeRepoId);
+				}
 			} catch (error) {
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
@@ -1712,6 +1736,9 @@ export function useWorkspacesSidebarController({
 		cloneDefaultDirectory,
 		groups,
 		sidebarGrouping: settings.sidebarGrouping,
+		sidebarRepoFilterIds: settings.sidebarRepoFilterIds,
+		sidebarSort: settings.sidebarSort,
+		updateSettings,
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,

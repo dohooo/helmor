@@ -1,5 +1,5 @@
 import type { WorkspaceGroup, WorkspaceRow, WorkspaceSummary } from "@/lib/api";
-import type { SidebarGrouping } from "@/lib/settings";
+import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { summaryToArchivedRow } from "@/lib/workspace-helpers";
 
 export const REPO_GROUP_PREFIX = "repo:";
@@ -119,10 +119,167 @@ export function projectSidebarLists({
 export function projectVisualSidebar(
 	args: Parameters<typeof projectSidebarLists>[0],
 	sidebarGrouping: SidebarGrouping,
+	viewOptions?: SidebarViewOptions,
 ): ReturnType<typeof projectSidebarLists> {
 	const projected = projectSidebarLists(args);
-	if (sidebarGrouping !== "repo") return projected;
-	return { ...projected, groups: regroupByRepo(projected.groups) };
+	const grouped =
+		sidebarGrouping === "repo"
+			? { ...projected, groups: regroupByRepo(projected.groups) }
+			: projected;
+	return applySidebarView(grouped, viewOptions);
+}
+
+export type SidebarViewOptions = {
+	availableRepoIds?: readonly string[];
+	repoFilterIds?: readonly string[];
+	sort?: SidebarSort;
+};
+
+export function applySidebarView(
+	projected: ReturnType<typeof projectSidebarLists>,
+	options?: SidebarViewOptions,
+): ReturnType<typeof projectSidebarLists> {
+	const filterIds = effectiveRepoFilterIds(
+		projected.groups,
+		projected.archivedRows,
+		options?.availableRepoIds,
+		options?.repoFilterIds ?? [],
+	);
+	const hasRepoFilter = filterIds.size > 0;
+	const sort = options?.sort ?? "custom";
+
+	const filteredGroups = projected.groups
+		.map((group) => ({
+			...group,
+			rows: hasRepoFilter
+				? group.rows.filter((row) => row.repoId && filterIds.has(row.repoId))
+				: group.rows,
+		}))
+		.filter((group) => !hasRepoFilter || group.rows.length > 0);
+	const filteredArchivedRows = hasRepoFilter
+		? projected.archivedRows.filter(
+				(row) => row.repoId && filterIds.has(row.repoId),
+			)
+		: projected.archivedRows;
+
+	if (sort === "custom") {
+		return {
+			groups: filteredGroups,
+			archivedRows: filteredArchivedRows,
+		};
+	}
+
+	return {
+		groups: sortGroupsForView(filteredGroups, sort),
+		archivedRows: [...filteredArchivedRows].sort((left, right) =>
+			compareRowsBySidebarSort(left, right, sort),
+		),
+	};
+}
+
+function effectiveRepoFilterIds(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+	availableRepoIds: readonly string[] | undefined,
+	repoFilterIds: readonly string[],
+): Set<string> {
+	if (repoFilterIds.length === 0) return new Set();
+	const validRepoIds = new Set(availableRepoIds);
+	for (const group of groups) {
+		for (const row of group.rows) {
+			if (row.repoId) validRepoIds.add(row.repoId);
+		}
+	}
+	for (const row of archivedRows) {
+		if (row.repoId) validRepoIds.add(row.repoId);
+	}
+	return new Set(repoFilterIds.filter((repoId) => validRepoIds.has(repoId)));
+}
+
+function sortGroupsForView(
+	groups: WorkspaceGroup[],
+	sort: Exclude<SidebarSort, "custom">,
+): WorkspaceGroup[] {
+	const sortedGroups = groups.map((group) => ({
+		...group,
+		rows: [...group.rows].sort((left, right) =>
+			compareRowsBySidebarSort(left, right, sort),
+		),
+	}));
+
+	const head = sortedGroups.filter((group) => group.id === "pinned");
+	const tail = sortedGroups.filter((group) => group.id === "backlog");
+	const middle = sortedGroups.filter(
+		(group) => group.id !== "pinned" && group.id !== "backlog",
+	);
+
+	if (middle.some((group) => group.id.startsWith(REPO_GROUP_PREFIX))) {
+		middle.sort((left, right) =>
+			compareRepoGroupsBySidebarSort(left, right, sort),
+		);
+	}
+
+	return [...head, ...middle, ...tail];
+}
+
+function compareRepoGroupsBySidebarSort(
+	left: WorkspaceGroup,
+	right: WorkspaceGroup,
+	sort: Exclude<SidebarSort, "custom">,
+): number {
+	if (sort === "repoName") {
+		const byName = compareStrings(left.label, right.label);
+		if (byName !== 0) return byName;
+	}
+
+	const leftBest = bestTimestampForGroup(left, sort);
+	const rightBest = bestTimestampForGroup(right, sort);
+	if (leftBest !== rightBest) return rightBest - leftBest;
+
+	return compareStrings(left.label, right.label);
+}
+
+function bestTimestampForGroup(
+	group: WorkspaceGroup,
+	sort: Exclude<SidebarSort, "custom">,
+): number {
+	if (sort === "createdAt") {
+		return Math.max(
+			...group.rows.map((row) => Date.parse(row.createdAt ?? "") || 0),
+		);
+	}
+	return Math.max(
+		...group.rows.map((row) => Date.parse(row.updatedAt ?? "") || 0),
+	);
+}
+
+function compareRowsBySidebarSort(
+	left: WorkspaceRow,
+	right: WorkspaceRow,
+	sort: Exclude<SidebarSort, "custom">,
+): number {
+	if (sort === "repoName") {
+		const byRepo = compareStrings(left.repoName ?? "", right.repoName ?? "");
+		if (byRepo !== 0) return byRepo;
+		const byTitle = compareStrings(left.title, right.title);
+		if (byTitle !== 0) return byTitle;
+		return compareStrings(left.id, right.id);
+	}
+
+	const leftTime =
+		Date.parse(
+			sort === "createdAt" ? (left.createdAt ?? "") : (left.updatedAt ?? ""),
+		) || 0;
+	const rightTime =
+		Date.parse(
+			sort === "createdAt" ? (right.createdAt ?? "") : (right.updatedAt ?? ""),
+		) || 0;
+	if (leftTime !== rightTime) return rightTime - leftTime;
+	return compareStrings(left.title, right.title);
+}
+
+function compareStrings(left: string, right: string): number {
+	return left.localeCompare(right, undefined, { sensitivity: "base" });
 }
 
 /**
