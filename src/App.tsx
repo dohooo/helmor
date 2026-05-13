@@ -96,7 +96,10 @@ import {
 } from "./lib/settings";
 import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { summaryToArchivedRow } from "./lib/workspace-helpers";
+import {
+	pickWorkspaceTargetBranch,
+	summaryToArchivedRow,
+} from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
 	WorkspaceToastProvider,
@@ -782,10 +785,9 @@ function AppShell({
 		selectedWorkspaceId,
 		getSelectedWorkspaceId: () => selectionActions.getSnapshot().workspaceId,
 		selectedRepoId: selectedWorkspaceDetailQuery.data?.repoId ?? null,
-		selectedWorkspaceTargetBranch:
-			selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
-			selectedWorkspaceDetailQuery.data?.defaultBranch ??
-			null,
+		selectedWorkspaceTargetBranch: pickWorkspaceTargetBranch(
+			selectedWorkspaceDetailQuery.data ?? null,
+		),
 		selectedWorkspaceRemote: selectedWorkspaceDetailQuery.data?.remote ?? null,
 		changeRequest: workspaceChangeRequest,
 		forgeDetection: workspaceForge,

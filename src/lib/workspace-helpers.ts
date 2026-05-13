@@ -475,6 +475,36 @@ export type WorkspaceBranchTone =
 	| "closed"
 	| "inactive";
 
+/**
+ * Pick the branch a workspace's PR / review / resolve-conflicts prompts should
+ * target. Mirrors the data the inspector commit-button prompts need.
+ *
+ * - **Worktree mode**: the workspace was branched off a parent, so
+ *   `intendedTargetBranch` (the persisted parent) is the right PR base.
+ *   Falls back to the repo's `defaultBranch` when the parent isn't recorded.
+ * - **Local mode**: the workspace IS its own branch. The backend stores the
+ *   workspace branch in `intendedTargetBranch` for symmetry with worktrees,
+ *   so using it would set the change-request target to the current branch
+ *   (head == base, rejected by every forge). The repo's default branch is
+ *   the correct target instead.
+ *
+ * Returns `null` when neither is known — callers must handle that (the
+ * commit-button prompts throw with a clear message rather than emitting a
+ * literal `<target>` placeholder).
+ */
+export function pickWorkspaceTargetBranch(
+	detail: Pick<
+		WorkspaceDetail,
+		"mode" | "intendedTargetBranch" | "defaultBranch"
+	> | null,
+): string | null {
+	if (!detail) return null;
+	if (detail.mode === "local") {
+		return detail.defaultBranch ?? null;
+	}
+	return detail.intendedTargetBranch ?? detail.defaultBranch ?? null;
+}
+
 export function getWorkspaceBranchTone({
 	workspaceState,
 	status,

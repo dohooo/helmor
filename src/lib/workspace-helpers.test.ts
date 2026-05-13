@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
 	AgentModelSection,
+	WorkspaceDetail,
 	WorkspaceGroup,
 	WorkspaceRow,
 	WorkspaceSessionSummary,
@@ -17,6 +18,7 @@ import {
 	insertRowByCreatedAtDesc,
 	isNewSession,
 	moveWorkspaceToGroup,
+	pickWorkspaceTargetBranch,
 	reorderWorkspaceInSidebar,
 	resolveSessionDisplayProvider,
 	resolveSessionSelectedModelId,
@@ -960,5 +962,86 @@ describe("applyRepoReorder", () => {
 
 	it("returns undefined when groups is undefined", () => {
 		expect(applyRepoReorder(undefined, "repo-A", null)).toBeUndefined();
+	});
+});
+
+describe("pickWorkspaceTargetBranch", () => {
+	function detail(
+		overrides: Partial<
+			Pick<WorkspaceDetail, "mode" | "intendedTargetBranch" | "defaultBranch">
+		>,
+	): Pick<WorkspaceDetail, "mode" | "intendedTargetBranch" | "defaultBranch"> {
+		return {
+			mode: "worktree",
+			intendedTargetBranch: null,
+			defaultBranch: null,
+			...overrides,
+		};
+	}
+
+	it("returns null when detail is null", () => {
+		expect(pickWorkspaceTargetBranch(null)).toBeNull();
+	});
+
+	it("uses intendedTargetBranch for worktree workspaces", () => {
+		expect(
+			pickWorkspaceTargetBranch(
+				detail({
+					mode: "worktree",
+					intendedTargetBranch: "feat/parent",
+					defaultBranch: "main",
+				}),
+			),
+		).toBe("feat/parent");
+	});
+
+	it("falls back to defaultBranch for worktree workspaces with no parent", () => {
+		expect(
+			pickWorkspaceTargetBranch(
+				detail({
+					mode: "worktree",
+					intendedTargetBranch: null,
+					defaultBranch: "main",
+				}),
+			),
+		).toBe("main");
+	});
+
+	it("ignores intendedTargetBranch for local workspaces (would be the workspace branch itself)", () => {
+		// Local-mode persists `intended_target_branch = <current branch>` for
+		// symmetry with worktrees. Using it as a PR base would yield head==base.
+		expect(
+			pickWorkspaceTargetBranch(
+				detail({
+					mode: "local",
+					intendedTargetBranch: "feat/my-local-branch",
+					defaultBranch: "main",
+				}),
+			),
+		).toBe("main");
+	});
+
+	it("returns null for a local workspace with no repo default", () => {
+		expect(
+			pickWorkspaceTargetBranch(
+				detail({
+					mode: "local",
+					intendedTargetBranch: "feat/my-local-branch",
+					defaultBranch: null,
+				}),
+			),
+		).toBeNull();
+	});
+
+	it("returns null when neither field is set", () => {
+		expect(
+			pickWorkspaceTargetBranch(
+				detail({
+					mode: "worktree",
+					intendedTargetBranch: null,
+					defaultBranch: null,
+				}),
+			),
+		).toBeNull();
 	});
 });
