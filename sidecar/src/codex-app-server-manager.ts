@@ -553,6 +553,10 @@ export class CodexAppServerManager implements SessionManager {
 				sessionId,
 				effectiveResume,
 			);
+			effectiveResume = this.recycleIdleContextForGoal(
+				sessionId,
+				effectiveResume,
+			);
 		}
 
 		const ctx = await this.ensureContext(
@@ -1490,6 +1494,41 @@ export class CodexAppServerManager implements SessionManager {
 		this.pendingUserInputs.clear();
 	}
 
+	private clearPendingSessionState(sessionId: string): void {
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+	}
+
+	private recycleIdleContextForGoal(
+		sessionId: string,
+		callerResume: string | undefined,
+	): string | undefined {
+		const stale = this.sessions.get(sessionId);
+		if (!stale || stale.server.killed) return callerResume;
+		if (stale.turnResolve || stale.turnReject || stale.activeTurnId) {
+			logger.info("Skipping /goal context recycle while turn is active", {
+				sessionId,
+				providerThreadId: stale.providerThreadId ?? "(none)",
+				activeTurnId: stale.activeTurnId ?? "(none)",
+			});
+			return callerResume;
+		}
+
+		const reuseThread = stale.providerThreadId ?? undefined;
+		logger.info("Recycling idle Codex context before /goal", {
+			sessionId,
+			providerThreadId: reuseThread ?? "(none)",
+		});
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		this.clearPendingSessionState(sessionId);
+		return callerResume ?? reuseThread;
+	}
+
 	// ── Private ──────────────────────────────────────────────────────────
 
 	private settleUnexpectedExit(
@@ -1594,9 +1633,21 @@ export class CodexAppServerManager implements SessionManager {
 		if (resume) {
 			try {
 				logger.info(`Attempting thread/resume`, { threadId: resume });
+				const resumeParams: Record<string, unknown> = {
+					threadId: resume,
+					cwd,
+					approvalPolicy:
+						toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
+					sandbox:
+						permissionMode === "plan"
+							? "workspace-write"
+							: "danger-full-access",
+				};
+				if (model) resumeParams.model = model;
+				if (fastMode) resumeParams.serviceTier = "fast";
 				const response = await server.sendRequest<Record<string, unknown>>(
 					"thread/resume",
-					{ threadId: resume },
+					resumeParams,
 				);
 				threadId = (deepGet(response, "thread", "id") as string) ?? resume;
 				logger.info(`Resumed Codex thread`, { threadId });

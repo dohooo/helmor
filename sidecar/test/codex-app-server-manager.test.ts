@@ -795,6 +795,73 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		});
 	});
 
+	test("/goal recycles idle context so continuation inherits full access", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-seed-full-access",
+			{
+				sessionId: "s-goal-full-access",
+				prompt: "warm-up",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+		const stale = serverState.instances[0];
+		expect(stale?.killed).toBe(false);
+
+		serverState.requests = [];
+
+		await manager.sendMessage(
+			"REQ-goal-full-access",
+			{
+				sessionId: "s-goal-full-access",
+				prompt: "/goal finish the migration",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(stale?.killed).toBe(true);
+		expect(serverState.instances).toHaveLength(2);
+		const resume = serverState.requests.find(
+			(r) => r.method === "thread/resume",
+		);
+		expect(resume?.params).toMatchObject({
+			threadId: "thread-1",
+			cwd: "/tmp",
+			approvalPolicy: {
+				granular: {
+					sandbox_approval: false,
+					rules: false,
+					skill_approval: false,
+					request_permissions: false,
+					mcp_elicitations: true,
+				},
+			},
+			sandbox: "danger-full-access",
+		});
+		const goalSet = serverState.requests.find(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSet?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "finish the migration",
+		});
+	});
+
 	test("/goal pre-flight: recycles stale codex and resumes its thread when toml had to be modified", async () => {
 		const manager = new CodexAppServerManager();
 
