@@ -532,7 +532,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									/>
 									<ModelSettingRow
 										title="Action model"
-										description="Model for creating or reopening PRs/MRs and commit-and-push"
+										description="Model for PRs/MRs and commit-and-push"
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
