@@ -140,7 +140,7 @@ export const INSPECTOR_SECTION_TITLE_CLASS =
 	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-pointer items-center justify-center gap-1.5 px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
 
 /** Zoom state published to tab bodies (e.g. corner Stop/Rerun button). */
 type TabsZoomState = {
@@ -507,7 +507,7 @@ export function InspectorTabsSection({
 														// stable on mask toggle). `transform-gpu` keeps it
 														// on its own compositing layer.
 														className={cn(
-															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-pointer items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
 															isActive && "text-foreground",
 														)}
 														onClick={() => handleTabClick(instance.id)}
@@ -539,7 +539,7 @@ export function InspectorTabsSection({
 															}}
 															// Visibility-only toggle (no opacity transition) —
 															// matches session-tab + workspace-row patterns.
-															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-pointer items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
+															className="pointer-events-none invisible absolute inset-y-0 right-0 flex w-3 cursor-interactive items-center justify-center text-muted-foreground/70 hover:text-foreground group-hover/tab:pointer-events-auto group-hover/tab:visible focus-visible:pointer-events-auto focus-visible:visible"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</button>
@@ -597,7 +597,7 @@ export function InspectorTabsSection({
 											aria-label="New terminal"
 											onClick={handleNewTerminalClick}
 											disabled={!canSpawnTerminal}
-											className="ml-1 flex h-full w-6 shrink-0 cursor-pointer items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-1 flex h-full w-6 shrink-0 cursor-interactive items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<Plus className="size-3.5" strokeWidth={1.8} />
 										</button>

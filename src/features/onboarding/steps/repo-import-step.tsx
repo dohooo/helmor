@@ -63,7 +63,7 @@ export function RepoImportStep({
 						onClick={onAddLocalRepository}
 						disabled={isAddingLocalRepository}
 						aria-busy={isAddingLocalRepository}
-						className="flex cursor-pointer flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:hover:bg-card"
+						className="flex cursor-interactive flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:hover:bg-card"
 					>
 						<div className="flex size-10 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
 							{isAddingLocalRepository ? (
@@ -87,7 +87,7 @@ export function RepoImportStep({
 						type="button"
 						onClick={onOpenCloneDialog}
 						disabled={githubImportProgress !== null}
-						className="flex cursor-pointer flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:opacity-70"
+						className="flex cursor-interactive flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:opacity-70"
 					>
 						<div className="flex size-10 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
 							<Cloud className="size-5" />
@@ -150,7 +150,7 @@ export function RepoImportStep({
 											onClick={() => {
 												onRemoveRepository(repo.id);
 											}}
-											className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50"
+											className="flex size-6 shrink-0 cursor-interactive items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50"
 										>
 											<X className="size-3.5" />
 										</button>

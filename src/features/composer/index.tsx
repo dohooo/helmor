@@ -376,7 +376,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		);
 	}, []);
 	const composerToolbarTriggerClassName =
-		"cursor-pointer rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+		"cursor-interactive rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	// Shared gate for Send and Steer — the only difference is whether a
 	// stream is currently running. When sending, ⌘Enter / Enter still
 	// fires `handleSubmit`; the use-streaming hook dispatches to the
@@ -1054,7 +1054,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Request Changes"
 										onClick={handlePlanRequestChanges}
 										disabled={disabled || !hasContent}
-										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
 									>
 										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 										Request Changes
@@ -1065,7 +1065,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Implement"
 										onClick={handlePlanImplement}
 										disabled={disabled}
-										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none"
 									>
 										<Check className="size-3.5" strokeWidth={2} />
 										Implement

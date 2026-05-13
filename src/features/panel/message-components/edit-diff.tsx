@@ -77,7 +77,7 @@ export function EditDiffTrigger({
 				className={cn(
 					"items-center gap-1.5 text-[12px] leading-4 text-muted-foreground transition-colors",
 					variant === "row"
-						? "flex w-full cursor-pointer rounded-md px-2 py-1 hover:bg-accent/60"
+						? "flex w-full cursor-interactive rounded-md px-2 py-1 hover:bg-accent/60"
 						: "inline-flex self-start rounded-md border border-border/60 px-1.5 py-0.5 hover:border-muted-foreground/40 hover:bg-accent/40",
 				)}
 			>

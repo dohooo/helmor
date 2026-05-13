@@ -798,7 +798,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 		const openButton = screen.getByRole("button", { name: "Open changes" });
 
-		expect(appendButton).toHaveClass("cursor-pointer");
+		expect(appendButton).toHaveClass("cursor-interactive");
 		expect(appendButton).toHaveClass("size-4");
 		expect(appendButton).toHaveClass("opacity-0");
 		expect(appendButton).toHaveClass("pointer-events-none");
@@ -808,7 +808,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		);
 		expect(appendButton).toHaveClass("hover:opacity-100");
 
-		expect(openButton).toHaveClass("cursor-pointer");
+		expect(openButton).toHaveClass("cursor-interactive");
 		expect(openButton).toHaveClass("size-5");
 		expect(openButton).toHaveClass("opacity-55");
 		expect(openButton).toHaveClass("hover:opacity-100");

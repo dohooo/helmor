@@ -232,7 +232,7 @@ function ReleaseAnnouncementListItem({
 				{action ? (
 					<button
 						type="button"
-						className="ml-1.5 inline cursor-pointer align-baseline text-[12px] leading-[inherit] font-semibold text-foreground hover:underline"
+						className="ml-1.5 inline cursor-interactive align-baseline text-[12px] leading-[inherit] font-semibold text-foreground hover:underline"
 						onClick={() => onRunAction(action.value)}
 					>
 						<ActionIcon
