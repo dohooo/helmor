@@ -40,7 +40,7 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -1063,6 +1063,7 @@ export class CodexAppServerManager implements SessionManager {
 			if (!threadId) throw new Error("thread/start did not return thread id");
 
 			let raw = "";
+			let failure: string | null = null;
 			const done = new Promise<void>((resolve) => {
 				server.setHandlers(
 					(n) => {
@@ -1070,7 +1071,26 @@ export class CodexAppServerManager implements SessionManager {
 							const delta = deepGet(n.params, "delta");
 							if (typeof delta === "string") raw += delta;
 						}
-						if (n.method === "turn/completed") resolve();
+						if (n.method === "error") {
+							const message = deepGet(n.params, "error", "message");
+							const asText =
+								typeof message === "string"
+									? message
+									: "Codex app-server error during title generation";
+							failure = asText;
+							return;
+						}
+						if (n.method === "turn/completed") {
+							const status = deepGet(n.params, "turn", "status");
+							if (status === "failed") {
+								const message = deepGet(n.params, "turn", "error", "message");
+								failure =
+									typeof message === "string"
+										? message
+										: "Codex turn failed during title generation";
+							}
+							resolve();
+						}
 					},
 					(req) => {
 						if (APPROVAL_METHODS.has(req.method)) {
@@ -1094,14 +1114,29 @@ export class CodexAppServerManager implements SessionManager {
 					},
 				],
 				model,
-				effort: "minimal",
+				effort: "low",
 				approvalPolicy: BYPASS_GRANULAR_POLICY,
 			};
 			if (fastMode) turnStartParams.serviceTier = "fast";
 			await server.sendRequest("turn/start", turnStartParams);
 
 			await done;
-			const { title, branchName } = parseTitleAndBranch(raw);
+			if (failure) {
+				logger.error(`[${requestId}] title generation failed`, {
+					model,
+					generateBranch,
+					message: failure,
+				});
+			}
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					model,
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);

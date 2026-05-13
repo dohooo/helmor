@@ -36,7 +36,7 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -815,12 +815,14 @@ export class ClaudeSessionManager implements SessionManager {
 				}
 			}
 
-			const { title, branchName } = parseTitleAndBranch(raw);
-			logger.info(`[${requestId}] titleGenerated`, {
-				title,
-				branchName: branchName ?? "(empty)",
-				rawPreview: raw.slice(0, 200),
-			});
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
