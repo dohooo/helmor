@@ -21,6 +21,7 @@ import type {
 	ThreadMessageLike,
 } from "@/lib/api";
 import {
+	findProviderCapabilities,
 	generateSessionTitle,
 	loadRepoPreferences,
 	mutateCodexGoal,
@@ -36,6 +37,7 @@ import { extractError, isRecoverableByPurge } from "@/lib/errors";
 import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
+	providerCapabilitiesQueryOptions,
 	sessionThreadMessagesQueryOptions,
 } from "@/lib/query-client";
 import { resolveGeneralPreferencePrefix } from "@/lib/repo-preferences-prompts";
@@ -222,6 +224,15 @@ export function useConversationStreaming({
 	);
 
 	const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
+	// Provider capability table — looked up in `handleStop` to decide
+	// whether the active provider has a long-running goal loop that
+	// needs an out-of-band pause before the abort. The query is
+	// effectively static (persisted, never refetched), so reading it
+	// here costs one ref-cell lookup per render.
+	const providerCapabilitiesQuery = useQuery(
+		providerCapabilitiesQueryOptions(),
+	);
+	const providerCapabilitiesTable = providerCapabilitiesQuery.data ?? null;
 	// Value-stable fingerprint for effects that only care about the set
 	// of active session ids, not the array's reference.
 	const activeSessionIdsKey = useMemo(
@@ -445,14 +456,19 @@ export function useConversationStreaming({
 			return;
 		}
 
-		// For codex sessions with an active goal, flip the goal to paused
-		// FIRST so codex doesn't auto-spawn a fresh continuation turn the
-		// moment we abort the current one. Sequential: mutate -> stop, so
-		// the codex child is still alive when mutateCodexGoal needs it.
-		// (mutateCodexGoal is best-effort on the sidecar side too — if a
-		// race somehow kills the child first it just no-ops.) The user
-		// resumes by typing `/goal resume`.
-		if (provider === "codex") {
+		// For providers with a long-running goal loop, flip the goal to
+		// paused FIRST so the provider doesn't auto-spawn a fresh
+		// continuation turn the moment we abort the current one.
+		// Sequential: mutate -> stop, so the child is still alive when
+		// mutateCodexGoal needs it. (mutateCodexGoal is best-effort on
+		// the sidecar side too — if a race somehow kills the child
+		// first it just no-ops.) The user resumes by typing
+		// `/goal resume`.
+		const caps = findProviderCapabilities(
+			providerCapabilitiesTable ?? [],
+			provider,
+		);
+		if (caps?.supportsActiveGoal) {
 			const goal = queryClient.getQueryData<CodexGoalState | null>(
 				helmorQueryKeys.sessionCodexGoal(sessionId),
 			);
@@ -466,7 +482,13 @@ export function useConversationStreaming({
 			}
 		}
 		await stopAgentStream(sessionId, provider);
-	}, [activeSessionByContext, activeStreams, composerContextKey, queryClient]);
+	}, [
+		activeSessionByContext,
+		activeStreams,
+		composerContextKey,
+		providerCapabilitiesTable,
+		queryClient,
+	]);
 
 	const handlePermissionResponse = useCallback(
 		(

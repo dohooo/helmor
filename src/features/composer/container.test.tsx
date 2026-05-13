@@ -1085,6 +1085,24 @@ describe("WorkspaceComposerContainer", () => {
 				helmorQueryKeys.agentModelSections,
 				MODEL_SECTIONS,
 			);
+			// Seed the provider-capability table so the composer's
+			// `/goal` interception path treats Codex as an active-goal
+			// provider. Without this the helper falls back to "no caps
+			// loaded yet → supportsActiveGoal=false" and the pause/clear
+			// branches no-op.
+			queryClient.setQueryData(helmorQueryKeys.providerCapabilities, [
+				{
+					provider: "codex",
+					displayName: "Codex",
+					supportsPlanMode: true,
+					supportsActiveGoal: true,
+					supportsContextUsage: true,
+					supportsSteer: true,
+					supportsSlashCommands: true,
+					requiresApiKey: false,
+					permissionModes: ["default", "bypassPermissions"],
+				},
+			]);
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceDetail("workspace-1"),
 				WORKSPACE_DETAIL,

@@ -13,6 +13,7 @@ mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
 mod persistence;
+pub mod provider_capabilities;
 mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
@@ -203,6 +204,20 @@ pub(crate) struct ExchangeContext {
 #[tauri::command]
 pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
     Ok(queries::fetch_agent_model_sections())
+}
+
+/// Return the provider-capability table for every provider Helmor
+/// ships today. Static — no DB hit, no IPC fan-out — so callers are
+/// expected to cache the result for the lifetime of the app. Drives
+/// the composer's feature-flag branches (active-goal interception,
+/// permission-mode dropdown, etc.).
+#[tauri::command]
+pub async fn list_provider_capabilities(
+) -> CmdResult<Vec<provider_capabilities::ProviderCapabilities>> {
+    Ok(provider_capabilities::KNOWN_PROVIDERS
+        .iter()
+        .map(|p| provider_capabilities::capabilities_for_provider(p))
+        .collect())
 }
 
 #[tauri::command]

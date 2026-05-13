@@ -226,6 +226,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::list_cursor_models,
+            agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
