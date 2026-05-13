@@ -53,6 +53,41 @@ Artifacts land in:
 
 For development, `bun run dev` works the same as on macOS.
 
+### AppImage may need a manual repackage step
+
+`tauri build --bundles appimage` invokes `linuxdeploy`, which by default
+walks every executable in the AppDir and runs `ldd` / `patchelf` on
+each one to deploy shared-library deps. Helmor ships several binaries
+linuxdeploy chokes on:
+
+- `helmor-sidecar`, `vendor/claude-code/claude`, `vendor/codex/codex`
+  are produced by `bun build --compile`. The runtime+bytecode embedding
+  format upsets `ldd` (exits 1 with no output) and linuxdeploy aborts
+  with `Failed to run ldd: exited with code 1`.
+- `vendor/gh/gh`, `vendor/glab/glab` are static Go binaries with no
+  `.dynamic` section, so linuxdeploy's patchelf step aborts with
+  `cannot find section .dynamic`.
+
+When this happens the `.deb` bundle from the same `tauri build`
+invocation succeeds, but `.AppImage` is never written. Repackage with
+`scripts/bundle-appimage-linux.sh`, which hides those binaries from
+linuxdeploy and squashes them back in afterwards:
+
+```bash
+# Initial build — .deb succeeds, AppImage step fails (we'll redo it).
+bun run tauri build --bundles deb,appimage --target x86_64-unknown-linux-gnu || true
+
+# Repackage the AppDir tauri left behind into a working AppImage.
+version=$(node -p "require('./package.json').version")
+appimage_dir="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage"
+
+scripts/bundle-appimage-linux.sh \
+  "${appimage_dir}/Helmor.AppDir" \
+  "${appimage_dir}/Helmor_${version}_amd64.AppImage"
+```
+
+The `.deb` flow is unaffected — Debian packaging doesn't use linuxdeploy.
+
 ## Install
 
 `.deb`:

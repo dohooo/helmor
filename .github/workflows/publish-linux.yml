@@ -140,6 +140,23 @@ jobs:
         with:
           target-triple: ${{ matrix.target-triple }}
 
+      # TODO(linux-appimage): tauri-action will fail on `--bundles appimage`
+      #   because linuxdeploy aborts on our self-contained binaries
+      #   (helmor-sidecar, vendor/claude-code, vendor/codex are bun
+      #   --compile; vendor/gh, vendor/glab are static Go). The .deb
+      #   bundle in the same step succeeds. Before this workflow goes
+      #   live, swap in scripts/bundle-appimage-linux.sh:
+      #     1. Run tauri-action with `--bundles deb` only (or this step
+      #        with `|| true` so the appimage failure doesn't fail the
+      #        job).
+      #     2. Add a follow-up `run:` step that invokes
+      #        scripts/bundle-appimage-linux.sh on the AppDir tauri
+      #        leaves behind, producing the final .AppImage.
+      #     3. Manually upload both artifacts to the GitHub release
+      #        (since tauri-action would otherwise miss the .AppImage
+      #        we built outside its flow).
+      #   See LINUX_BUILD.md "AppImage may need a manual repackage step"
+      #   for the local equivalent.
       - name: Build and publish (${{ matrix.target-triple }})
         id: tauri
         uses: tauri-apps/tauri-action@v0.6
