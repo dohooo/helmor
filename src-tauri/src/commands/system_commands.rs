@@ -310,6 +310,10 @@ fn build_elevated_install_script(
 
 /// Quote a path so it survives both `do shell script "..."` (AppleScript string
 /// literal) and the shell that AppleScript hands the script to.
+///
+/// Only `build_elevated_install_script` (macOS-only) calls this in the lib build;
+/// its unit tests run on every platform via `#[cfg(test)]`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn applescript_shell_arg(path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     // 1. Single-quote for the shell, escaping embedded single quotes via `'\''`.
@@ -1122,6 +1126,7 @@ fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Copying images is only supported on macOS")
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }

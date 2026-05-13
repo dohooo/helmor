@@ -30,6 +30,9 @@ pub struct EditorSpec {
     pub id: &'static str,
     pub name: &'static str,
     /// macOS `CFBundleIdentifier`s. Multiple entries cover stable/preview/CE variants.
+    /// Only `mdfind_candidate_paths` (macOS-only) reads this in the lib build;
+    /// catalog tests read it on every platform via `#[cfg(test)]`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub bundle_ids: &'static [&'static str],
     /// Well-known install paths. `$HOME` is expanded at runtime.
     pub known_paths: &'static [&'static str],
