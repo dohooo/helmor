@@ -420,7 +420,7 @@ export function InboxSettingsPanel({
 						type="button"
 						size="sm"
 						onClick={openAccountSettings}
-						className="mt-1 cursor-pointer gap-1.5"
+						className="mt-1 cursor-interactive gap-1.5"
 					>
 						<Plus className="size-3.5" strokeWidth={2} />
 						Add account
@@ -593,7 +593,7 @@ function ProviderTabs({
 					aria-pressed={value === tab.id}
 					onClick={() => onChange(tab.id)}
 					className={cn(
-						"flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-[background-color,color,box-shadow]",
+						"flex h-8 cursor-interactive items-center justify-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-[background-color,color,box-shadow]",
 						"hover:bg-accent/60 hover:text-foreground",
 						value === tab.id && "bg-accent text-foreground shadow-xs",
 					)}

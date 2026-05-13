@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { INSPECTOR_SECTION_HEADER_CLASS } from "./shared";
 
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-pointer items-center justify-center gap-1.5 px-0 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-0 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
 
 /**
  * Pure-UI Setup/Run tab strip header with optional chevron + body slot.

@@ -143,7 +143,7 @@ export function ContextUsageRing({
 					disabled={disabled}
 					aria-label={ariaLabel}
 					className={cn(
-						"flex size-7 cursor-pointer items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
+						"flex size-7 cursor-interactive items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
 						className,
 					)}
 				>

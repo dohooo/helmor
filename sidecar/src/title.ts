@@ -71,6 +71,18 @@ export interface ParsedTitle {
 	readonly branchName: string | undefined;
 }
 
+export type TitleGenerationErrorLogger = (
+	message: string,
+	meta: Record<string, unknown>,
+) => void;
+
+export interface TitleGenerationDiagnosticsOptions {
+	readonly generateBranch: boolean;
+	readonly model?: string;
+	readonly previewLimit?: number;
+	readonly logError: TitleGenerationErrorLogger;
+}
+
 export function parseTitleAndBranch(raw: string): ParsedTitle {
 	let title = "";
 	let branch = "";
@@ -96,4 +108,37 @@ export function parseTitleAndBranch(raw: string): ParsedTitle {
 	}
 
 	return { title, branchName: branch || undefined };
+}
+
+export function parseTitleAndBranchWithDiagnostics(
+	requestId: string,
+	raw: string,
+	options: TitleGenerationDiagnosticsOptions,
+): ParsedTitle {
+	const parsed = parseTitleAndBranch(raw);
+	const previewLimit = options.previewLimit ?? 200;
+	const rawPreview = raw.slice(0, previewLimit);
+	const model = options.model;
+	const generateBranch = options.generateBranch;
+
+	if (!parsed.title) {
+		options.logError(`[${requestId}] title generation returned empty title`, {
+			...(model ? { model } : {}),
+			generateBranch,
+			rawPreview,
+		});
+	}
+
+	if (generateBranch && !parsed.branchName) {
+		options.logError(
+			`[${requestId}] title generation returned empty branch name`,
+			{
+				...(model ? { model } : {}),
+				generateBranch,
+				rawPreview,
+			},
+		);
+	}
+
+	return parsed;
 }

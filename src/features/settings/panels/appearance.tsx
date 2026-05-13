@@ -157,7 +157,7 @@ export function AppearancePanel({
 								aria-label={opt.label}
 								aria-pressed={isSelected}
 								className={cn(
-									"h-7 w-7 cursor-pointer rounded-full transition-transform duration-150",
+									"h-7 w-7 cursor-interactive rounded-full transition-transform duration-150",
 									isSelected ? "scale-105" : "hover:scale-105",
 								)}
 								style={{

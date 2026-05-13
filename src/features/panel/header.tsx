@@ -303,7 +303,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Rename branch"
 											onClick={branchRename.startBranchRename}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											<Pencil className="size-3" strokeWidth={2} />
 										</span>
@@ -311,7 +311,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Copy branch name"
 											onClick={branchRename.copyBranchName}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											{branchRename.branchCopied ? (
 												<Check
@@ -508,7 +508,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																event.stopPropagation();
 																onCloseContextPreview?.();
 															}}
-															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+															className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</span>
@@ -623,7 +623,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	onClick={(event) =>
 																		sessionActions.startRename(session, event)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<Pencil className="size-3" strokeWidth={2} />
 																</span>
@@ -637,7 +637,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																			event,
 																		)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<X className="size-3" strokeWidth={2} />
 																</span>

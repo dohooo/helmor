@@ -76,7 +76,7 @@ export function OnboardingTerminalPreview({
 							type="button"
 							onClick={onClose}
 							aria-label="Close login terminal"
-							className="group/close grid size-2.5 cursor-pointer place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-[#ff5c5f]"
+							className="group/close grid size-2.5 cursor-interactive place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-[#ff5c5f]"
 						>
 							<X
 								strokeWidth={4.5}

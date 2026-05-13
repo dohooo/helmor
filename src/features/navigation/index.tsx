@@ -912,7 +912,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							data-repo-dnd-id={repoId}
 							className={cn(
 								headerClassName,
-								item.canCollapse ? "cursor-pointer" : "cursor-default",
+								item.canCollapse ? "cursor-interactive" : "cursor-default",
 								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 							)}
 							data-empty-group={isEmptyGroup ? "true" : "false"}
@@ -968,7 +968,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						type="button"
 						className={cn(
 							headerClassName,
-							item.canCollapse ? "cursor-pointer" : "cursor-default",
+							item.canCollapse ? "cursor-interactive" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
 						data-workspace-drop-group-id={item.groupId}

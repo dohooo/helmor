@@ -92,7 +92,7 @@ function ContextMenuItem({
 			data-inset={inset}
 			data-variant={variant}
 			className={cn(
-				"group/context-menu-item relative flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 focus:*:[svg]:text-accent-foreground data-[variant=destructive]:*:[svg]:text-destructive",
+				"group/context-menu-item relative flex cursor-interactive items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 focus:*:[svg]:text-accent-foreground data-[variant=destructive]:*:[svg]:text-destructive",
 				className,
 			)}
 			{...props}
@@ -113,7 +113,7 @@ function ContextMenuSubTrigger({
 			data-slot="context-menu-sub-trigger"
 			data-inset={inset}
 			className={cn(
-				"flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-open:bg-accent data-open:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+				"flex cursor-interactive items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-open:bg-accent data-open:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
 				className,
 			)}
 			{...props}
@@ -154,7 +154,7 @@ function ContextMenuCheckboxItem({
 			data-slot="context-menu-checkbox-item"
 			data-inset={inset}
 			className={cn(
-				"relative flex cursor-pointer items-center gap-1 rounded-[5px] py-0.5 pr-7 pl-1.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+				"relative flex cursor-interactive items-center gap-1 rounded-[5px] py-0.5 pr-7 pl-1.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
 				className,
 			)}
 			checked={checked}
@@ -183,7 +183,7 @@ function ContextMenuRadioItem({
 			data-slot="context-menu-radio-item"
 			data-inset={inset}
 			className={cn(
-				"relative flex cursor-pointer items-center gap-1 rounded-[5px] py-0.5 pr-7 pl-1.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+				"relative flex cursor-interactive items-center gap-1 rounded-[5px] py-0.5 pr-7 pl-1.5 text-[13px] leading-5 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-6 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
 				className,
 			)}
 			{...props}
