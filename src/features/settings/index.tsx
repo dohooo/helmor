@@ -531,15 +531,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="PR / MR model"
-										description="Model for PRs and MRs"
+										title="Action model"
+										description="Model for creating or reopening PRs/MRs and commit-and-push"
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={settings.prModelId ?? settings.defaultModelId}
 										effort={settings.prEffort ?? settings.defaultEffort}
 										fastMode={settings.prFastMode ?? settings.defaultFastMode}
-										ariaPrefix="PR / MR"
+										ariaPrefix="Action"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined) patch.prModelId = p.modelId;

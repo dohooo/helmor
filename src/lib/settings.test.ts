@@ -122,4 +122,18 @@ describe("settings", () => {
 			}),
 		);
 	});
+
+	it("keeps default as a valid model id", async () => {
+		invokeMock.mockResolvedValue({
+			"app.default_model_id": "gpt-5.5",
+			"app.review_model_id": "default",
+			"app.pr_model_id": "default",
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.defaultModelId).toBe("gpt-5.5");
+		expect(settings.reviewModelId).toBe("default");
+		expect(settings.prModelId).toBe("default");
+	});
 });

@@ -57,6 +57,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
+import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import {
 	activeStreamsQueryOptions,
@@ -798,12 +799,11 @@ function AppShell({
 		pushToast: pushWorkspaceToast,
 	});
 
-	// Wrapper that injects the configured PR/MR model overrides for the
-	// "create-pr" mode so the action runs on the user's preferred PR model
-	// (with effort + fast-mode falling back to defaults when null).
+	// Action model covers simple, bounded helper sessions. More involved
+	// fix/resolve flows keep following the default model.
 	const handleCommitAction = useCallback(
 		(mode: WorkspaceCommitButtonMode) => {
-			if (mode === "create-pr") {
+			if (usesActionModelOverride(mode)) {
 				return handleInspectorCommitAction(mode, {
 					modelId: appSettings.prModelId ?? appSettings.defaultModelId,
 					effort: appSettings.prEffort ?? appSettings.defaultEffort,
@@ -1080,7 +1080,7 @@ function AppShell({
 			},
 			{
 				id: "action.commitAndPush" as const,
-				callback: () => void handleInspectorCommitAction("commit-and-push"),
+				callback: () => void handleCommitAction("commit-and-push"),
 			},
 			{
 				id: "action.pullLatest" as const,

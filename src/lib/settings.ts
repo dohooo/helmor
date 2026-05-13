@@ -213,14 +213,13 @@ export type AppSettings = {
 	/** Fast-mode flag for the Review helper. When null, falls back to
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
-	/** Model used when the inspector "Create PR/MR" action starts a session.
-	 *  Applies to both GitHub PRs and GitLab MRs. When null, falls back to
-	 *  `defaultModelId`. */
+	/** Model used by simple action sessions: create/reopen PR/MR and
+	 *  commit-and-push. When null, falls back to `defaultModelId`. */
 	prModelId: string | null;
-	/** Effort level for the Create PR/MR helper. When null, falls back to
+	/** Effort level for simple action sessions. When null, falls back to
 	 *  `defaultEffort`. */
 	prEffort: string | null;
-	/** Fast-mode flag for the Create PR/MR helper. When null, falls back to
+	/** Fast-mode flag for simple action sessions. When null, falls back to
 	 *  `defaultFastMode`. */
 	prFastMode: boolean | null;
 	defaultEffort: string | null;
@@ -791,6 +790,10 @@ function readClampedInt(
 	return Math.min(max, Math.max(min, Math.round(n)));
 }
 
+function readModelId(value: string | undefined): string | null {
+	return value && value !== "" ? value : null;
+}
+
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
@@ -849,14 +852,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
 					? "context"
 					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
-			defaultModelId:
-				rawDefaultModelId && rawDefaultModelId !== "default"
-					? rawDefaultModelId
-					: DEFAULT_SETTINGS.defaultModelId,
-			reviewModelId:
-				rawReviewModelId && rawReviewModelId !== "default"
-					? rawReviewModelId
-					: DEFAULT_SETTINGS.reviewModelId,
+			defaultModelId: readModelId(rawDefaultModelId),
+			reviewModelId: readModelId(rawReviewModelId),
 			reviewEffort:
 				rawReviewEffort && rawReviewEffort !== ""
 					? rawReviewEffort
@@ -867,10 +864,7 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
-			prModelId:
-				rawPrModelId && rawPrModelId !== "default"
-					? rawPrModelId
-					: DEFAULT_SETTINGS.prModelId,
+			prModelId: readModelId(rawPrModelId),
 			prEffort:
 				rawPrEffort && rawPrEffort !== ""
 					? rawPrEffort
