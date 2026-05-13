@@ -919,6 +919,23 @@ describe("repoOrderFromGroups", () => {
 			),
 		).toEqual(["repo-a", "repo-b", "repo-c", "repo-d", "repo-empty"]);
 	});
+
+	it("seeds a full repo order from the visible sorted order", () => {
+		expect(
+			repoOrderFromGroups(
+				[
+					{ id: "repo:repo-a", label: "A", tone: "pinned", rows: [] },
+					{ id: "repo:repo-b", label: "B", tone: "pinned", rows: [] },
+					{ id: "repo:repo-c", label: "C", tone: "pinned", rows: [] },
+				],
+				[
+					{ id: "repo-c", name: "C" },
+					{ id: "repo-a", name: "A" },
+					{ id: "repo-b", name: "B" },
+				],
+			),
+		).toEqual(["repo-a", "repo-b", "repo-c"]);
+	});
 });
 
 describe("resolveWorkspaceDropBeforeId", () => {
@@ -972,5 +989,39 @@ describe("resolveWorkspaceDropBeforeId", () => {
 				beforeWorkspaceId: null,
 			}),
 		).toBe("ws-hidden");
+	});
+
+	it("resolves filtered drops against the supplied sorted full order", () => {
+		const filteredGroups: WorkspaceGroup[] = [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
+					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
+				],
+			},
+		];
+		const sortedFullGroups: WorkspaceGroup[] = [
+			{
+				...filteredGroups[0]!,
+				rows: [
+					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
+					{ ...workspaceRow, id: "ws-b", title: "B", repoId: "repo-2" },
+					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
+				],
+			},
+		];
+
+		expect(
+			resolveWorkspaceDropBeforeId({
+				groups: filteredGroups,
+				unfilteredGroups: sortedFullGroups,
+				workspaceId: "ws-a",
+				targetGroupId: "progress",
+				beforeWorkspaceId: null,
+			}),
+		).toBeNull();
 	});
 });

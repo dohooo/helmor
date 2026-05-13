@@ -17,6 +17,7 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
+	type RepositoryCreateOption,
 	restoreWorkspace,
 	setRepositorySidebarOrder,
 	setWorkspaceStatus,
@@ -225,7 +226,7 @@ export function useWorkspacesSidebarController({
 				{
 					availableRepoIds,
 					repoFilterIds: [],
-					sort: "custom",
+					sort: settings.sidebarSort,
 				},
 			),
 		[
@@ -235,6 +236,7 @@ export function useWorkspacesSidebarController({
 			pendingArchives,
 			pendingCreations,
 			settings.sidebarGrouping,
+			settings.sidebarSort,
 		],
 	);
 	const groups = projectedSidebar.groups;
@@ -808,6 +810,13 @@ export function useWorkspacesSidebarController({
 						? applyRepoOrder(current, repoOrder)
 						: applyRepoReorder(current, repoId, beforeRepoId),
 			);
+			if (repoOrder) {
+				queryClient.setQueryData(
+					helmorQueryKeys.repositories,
+					(current: RepositoryCreateOption[] | undefined) =>
+						applyRepositoryOptionOrder(current, repoOrder),
+				);
+			}
 
 			try {
 				if (repoOrder) {
@@ -1790,4 +1799,20 @@ export function useWorkspacesSidebarController({
 		prefetchWorkspace,
 		setIsCloneDialogOpen,
 	};
+}
+
+function applyRepositoryOptionOrder(
+	repositories: RepositoryCreateOption[] | undefined,
+	repoOrder: readonly string[],
+): RepositoryCreateOption[] | undefined {
+	if (!repositories) return repositories;
+	const orderByRepo = new Map(repoOrder.map((id, index) => [id, index]));
+	return [...repositories].sort((left, right) => {
+		const leftIndex = orderByRepo.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+		const rightIndex = orderByRepo.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+		if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+		return left.name.localeCompare(right.name, undefined, {
+			sensitivity: "base",
+		});
+	});
 }

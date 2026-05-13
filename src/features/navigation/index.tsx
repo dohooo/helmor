@@ -111,17 +111,23 @@ export function repoOrderFromGroups(
 	groups: WorkspaceGroup[],
 	repositories: RepositoryCreateOption[],
 ) {
-	const orderedIds: string[] = [];
-	const seen = new Set<string>();
-	for (const repository of repositories) {
-		if (seen.has(repository.id)) continue;
-		seen.add(repository.id);
-		orderedIds.push(repository.id);
-	}
+	const baseOrder = repositories.map((repository) => repository.id);
+	const visibleIds: string[] = [];
+	const visibleSet = new Set<string>();
 	for (const group of groups) {
 		const repoId = repoIdFromGroupId(group.id);
-		if (!repoId || seen.has(repoId)) continue;
-		seen.add(repoId);
+		if (!repoId || visibleSet.has(repoId)) continue;
+		visibleSet.add(repoId);
+		visibleIds.push(repoId);
+	}
+
+	let visibleIndex = 0;
+	const orderedIds = baseOrder.map((repoId) =>
+		visibleSet.has(repoId) ? (visibleIds[visibleIndex++] ?? repoId) : repoId,
+	);
+
+	for (const repoId of visibleIds) {
+		if (baseOrder.includes(repoId)) continue;
 		orderedIds.push(repoId);
 	}
 	return orderedIds;

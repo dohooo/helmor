@@ -612,8 +612,108 @@ describe("applySidebarView", () => {
 			sort: "custom",
 		});
 
-		expect(result.groups).toEqual([]);
+		expect(result.groups.map((group) => [group.id, group.rows])).toEqual([
+			["progress", []],
+			["done", []],
+		]);
 		expect(result.archivedRows).toEqual([]);
+	});
+
+	it("keeps empty status drop targets while filtering", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{
+						id: "pinned",
+						label: "Pinned",
+						tone: "pinned",
+						rows: [],
+					},
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [
+							{
+								id: "ws-alpha",
+								title: "Alpha",
+								state: "ready",
+								repoId: "repo-alpha",
+								repoName: "Alpha",
+							},
+						],
+					},
+					{
+						id: "review",
+						label: "In review",
+						tone: "review",
+						rows: [],
+					},
+					{
+						id: "backlog",
+						label: "Backlog",
+						tone: "backlog",
+						rows: [],
+					},
+				],
+				archivedRows: [],
+			},
+			{ repoFilterIds: ["repo-alpha"], sort: "custom" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"pinned",
+			"progress",
+			"review",
+			"backlog",
+		]);
+	});
+
+	it("removes empty repo buckets while keeping pinned and backlog drop targets", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{ id: "pinned", label: "Pinned", tone: "pinned", rows: [] },
+					{
+						id: `${REPO_GROUP_PREFIX}repo-alpha`,
+						label: "Alpha",
+						tone: "pinned",
+						rows: [
+							{
+								id: "ws-alpha",
+								title: "Alpha",
+								state: "ready",
+								repoId: "repo-alpha",
+								repoName: "Alpha",
+							},
+						],
+					},
+					{
+						id: `${REPO_GROUP_PREFIX}repo-beta`,
+						label: "Beta",
+						tone: "pinned",
+						rows: [
+							{
+								id: "ws-beta",
+								title: "Beta",
+								state: "ready",
+								repoId: "repo-beta",
+								repoName: "Beta",
+							},
+						],
+					},
+					{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
+				],
+				archivedRows: [],
+			},
+			{ repoFilterIds: ["repo-alpha"], sort: "custom" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"pinned",
+			`${REPO_GROUP_PREFIX}repo-alpha`,
+			"backlog",
+		]);
 	});
 
 	it("keeps custom order unchanged", () => {

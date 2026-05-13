@@ -155,7 +155,12 @@ export function applySidebarView(
 				? group.rows.filter((row) => row.repoId && filterIds.has(row.repoId))
 				: group.rows,
 		}))
-		.filter((group) => !hasRepoFilter || group.rows.length > 0);
+		.filter(
+			(group) =>
+				!hasRepoFilter ||
+				group.rows.length > 0 ||
+				repoIdFromGroupId(group.id) === null,
+		);
 	const filteredArchivedRows = hasRepoFilter
 		? projected.archivedRows.filter(
 				(row) => row.repoId && filterIds.has(row.repoId),
