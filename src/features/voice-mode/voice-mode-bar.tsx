@@ -1,4 +1,4 @@
-import type { BorderBeamColorVariant } from "@/components/border-beam";
+import type { CSSProperties } from "react";
 import { BorderBeam } from "@/components/border-beam";
 import { cn } from "@/lib/utils";
 import type { VoiceUiState } from "./voice-mode-state";
@@ -18,64 +18,153 @@ type VoiceModeBarProps = {
 	className?: string;
 };
 
-/** Slow-flow base duration (seconds). Used for listening / speaking. */
-const BEAM_SLOW_DURATION = 3;
-/** Fast-flow duration when the agent is busy (acting). */
-const BEAM_FAST_DURATION = 1.2;
-/** Extra-slow drift during the warmup phase — meant to read as "idle" /
- *  "waiting", not "active". Keeps the bar present but un-distracting. */
-const BEAM_CONNECTING_DURATION = 5;
-/** Strength floor at idle / working states. Visible but restrained. */
-const BEAM_BASE_STRENGTH = 0.3;
-/** Strength while warming up. Much dimmer than the live floor so it's
- *  clearly subordinate to the "ready" state when they transition. */
-const BEAM_CONNECTING_STRENGTH = 0.15;
-/** Headroom above the floor that the audio level can push strength into. */
-const BEAM_LEVEL_HEADROOM = 0.7;
+const HELMOR_MARK_BLOCKS = [
+	{
+		key: "tl",
+		d: "M162 306.673V80.582L375.51 193.625V419.709L162 306.673Z",
+	},
+	{
+		key: "ml",
+		d: "M376.057 454.357L162.553 341.314V567.399L376.057 680.442V454.357Z",
+	},
+	{
+		key: "bl",
+		d: "M162 828.14V602.047L375.51 715.089V941.174L162 828.14Z",
+	},
+	{
+		key: "bridge",
+		d: "M404.308 680.442V454.357L617.918 341.314V567.399L404.308 680.442Z",
+	},
+	{
+		key: "br",
+		d: "M646.615 828.14V602.047L860.126 715.089V941.174L646.615 828.14Z",
+	},
+	{
+		key: "mr",
+		d: "M860.667 454.357L647.165 341.314V567.399L860.667 680.442V454.357Z",
+	},
+	{
+		key: "tr",
+		d: "M646.615 306.673V80.582L860.126 193.625V419.709L646.615 306.673Z",
+	},
+] as const;
 
-function deriveBeamProps(state: VoiceUiState): {
-	duration: number;
-	strength: number;
-	colorVariant: BorderBeamColorVariant;
-} {
-	// During warmup the session isn't actually receiving audio yet, so
-	// we drop colour + reactivity and run a slow mono drift. The full
-	// `colorful` palette only lights up once `session.created` lands.
-	if (state.phase === "connecting") {
-		return {
-			duration: BEAM_CONNECTING_DURATION,
-			strength: BEAM_CONNECTING_STRENGTH,
-			colorVariant: "mono",
-		};
+const ENDCAP_BEAM_BASE_STRENGTH = 0.25;
+const ENDCAP_BEAM_LEVEL_HEADROOM = 1.5;
+
+function VoiceModeStyles() {
+	return (
+		<style>{`
+			@keyframes voice-mark-orbit {
+				0%, 30% { transform: rotate(0deg); }
+				65%, 100% { transform: rotate(360deg); }
+			}
+			@keyframes voice-mark-scatter {
+				0%, 12% { transform: translate(0, 0); }
+				30%, 65% { transform: translate(var(--voice-mark-x, 0), var(--voice-mark-y, 0)); }
+				83%, 100% { transform: translate(0, 0); }
+			}
+			.voice-mark-block-1 { fill: oklch(0.82 0.18 25); --voice-mark-x: -19px; --voice-mark-y: 44px; animation-delay: 0ms; }
+			.voice-mark-block-2 { fill: oklch(0.82 0.18 75); --voice-mark-x: -77px; --voice-mark-y: 67px; animation-delay: 70ms; }
+			.voice-mark-block-3 { fill: oklch(0.82 0.18 145); --voice-mark-x: 85px; --voice-mark-y: 39px; animation-delay: 140ms; }
+			.voice-mark-block-4 { fill: oklch(0.82 0.18 200); --voice-mark-x: 1px; --voice-mark-y: -300px; animation-delay: 210ms; }
+			.voice-mark-block-5 { fill: oklch(0.82 0.18 255); --voice-mark-x: 21px; --voice-mark-y: 44px; animation-delay: 280ms; }
+			.voice-mark-block-6 { fill: oklch(0.82 0.18 305); --voice-mark-x: 79px; --voice-mark-y: 67px; animation-delay: 350ms; }
+			.voice-mark-block-7 { fill: oklch(0.82 0.18 355); --voice-mark-x: -83px; --voice-mark-y: 39px; animation-delay: 420ms; }
+			@media (prefers-reduced-motion: reduce) {
+				[data-voice-mark] * {
+					animation-duration: 0.01ms !important;
+					animation-iteration-count: 1 !important;
+				}
+			}
+		`}</style>
+	);
+}
+
+function deriveEndcapBeamStrength(state: VoiceUiState): number {
+	if (state.phase !== "listening") {
+		return ENDCAP_BEAM_BASE_STRENGTH;
 	}
-	// Acting (tool call running) is the only "busy" phase now — fast
-	// loop, fixed strength, no level reactivity. Listening and speaking
-	// both ride the audio level (mic and TTS respectively).
-	const isWorking = state.phase === "acting";
-	const reactive = state.phase === "listening" || state.phase === "speaking";
+
+	return Math.min(
+		1,
+		ENDCAP_BEAM_BASE_STRENGTH + state.level * ENDCAP_BEAM_LEVEL_HEADROOM,
+	);
+}
+
+function VoiceModeEndcap({ state }: { state: VoiceUiState }) {
+	const loading = state.phase === "connecting" || state.phase === "acting";
+	const error = state.tone === "error";
+	const strength = deriveEndcapBeamStrength(state);
+
+	return (
+		<BorderBeam
+			className="relative z-10 size-7 shrink-0"
+			colorVariant="colorful"
+			duration={2}
+			size="sm"
+			strength={strength}
+		>
+			<div
+				className={cn(
+					"relative flex size-7 items-center justify-center overflow-hidden rounded-[14px]",
+					"bg-secondary shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--foreground)_7%,transparent),inset_0_0_6px_color-mix(in_oklch,black_42%,transparent)]",
+					error && "bg-destructive/15",
+				)}
+				data-voice-endcap=""
+			>
+				<svg
+					aria-hidden="true"
+					className={cn(
+						"relative z-10 size-4 overflow-visible",
+						state.phase === "connecting" && "saturate-[0.4] brightness-75",
+					)}
+					data-voice-mark=""
+					viewBox="0 0 1024 1024"
+				>
+					<g
+						className={cn(
+							"[transform-box:view-box] [transform-origin:512px_511px]",
+							loading &&
+								"[animation:voice-mark-orbit_var(--voice-mark-duration,8s)_ease-in-out_infinite]",
+						)}
+					>
+						{HELMOR_MARK_BLOCKS.map((block, index) => (
+							<path
+								className={cn(
+									`voice-mark-block-${index + 1}`,
+									"[transform-box:view-box]",
+									loading &&
+										"[animation:voice-mark-scatter_var(--voice-mark-duration,8s)_ease-in-out_infinite]",
+									error && "fill-destructive",
+								)}
+								d={block.d}
+								key={block.key}
+							/>
+						))}
+					</g>
+				</svg>
+			</div>
+		</BorderBeam>
+	);
+}
+
+function deriveVoiceBarStyle(state: VoiceUiState): CSSProperties {
 	return {
-		duration: isWorking ? BEAM_FAST_DURATION : BEAM_SLOW_DURATION,
-		strength: reactive
-			? BEAM_BASE_STRENGTH + state.level * BEAM_LEVEL_HEADROOM
-			: BEAM_BASE_STRENGTH,
-		colorVariant: "colorful",
-	};
+		"--voice-mark-duration":
+			state.phase === "connecting"
+				? "14s"
+				: state.phase === "acting"
+					? "3.5s"
+					: "8s",
+	} as CSSProperties;
 }
 
 /**
- * Voice-mode bar slot. Outer occupies `height` px when voice is active (0
- * otherwise) with a `gap`-px top padding so the visible bar sits below
- * the composer.
+ * Voice-mode bar slot. The visible bar is a static pill; motion is
+ * concentrated in the left endcap around the Helmor mark.
  *
- * Visual state is concentrated on the BorderBeam: `duration` controls
- * flow speed (slow at idle / speaking, fast while the agent is working);
- * `strength` controls intensity (low floor + audio-level headroom while
- * the user or TTS is speaking).
- *
- * The status content (icon + text) is a thin overlay -- lucide icons and
- * text that slides up between scenes.
- *
- * The bar is now a passive consumer: state comes from `VoiceSessionProvider`
+ * The bar is a passive consumer: state comes from `VoiceSessionProvider`
  * (mounted near the top of the app tree), which owns the WebRTC peer and
  * the demo fallback. That makes the bar safe to mount in two mutually-
  * exclusive subtrees (the `workspaceViewMode === "start"` vs
@@ -89,41 +178,32 @@ export function VoiceModeBar({
 }: VoiceModeBarProps) {
 	const active = useVoiceModeActive();
 	const state = useVoiceSession();
-	const beam = deriveBeamProps(state);
+	const style = deriveVoiceBarStyle(state);
 
 	return (
-		<div
-			className="transition-[height,padding-top] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
-			data-voice-bar=""
-			data-voice-active={active ? "" : undefined}
-			style={{
-				height: active ? `${height}px` : "0px",
-				paddingTop: active ? `${gap}px` : "0px",
-				// Slot-level overflow hidden so the bar's visible content
-				// disappears when voice mode is off (height: 0). Note: this
-				// also clips the BorderBeam's bloom that paints just outside
-				// the bar's border -- if the bloom needs to spill, lift the
-				// hidden onto a wrapping element with extra padding instead.
-				overflow: "hidden",
-			}}
-		>
-			<BorderBeam
-				className="block h-full w-full"
-				size="md"
-				colorVariant={beam.colorVariant}
-				duration={beam.duration}
-				strength={beam.strength}
+		<>
+			<VoiceModeStyles />
+			<div
+				className="transition-[height,padding-top] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+				data-voice-active={active ? "" : undefined}
+				data-voice-bar=""
+				style={{
+					height: active ? `${height}px` : "0px",
+					paddingTop: active ? `${gap}px` : "0px",
+					overflow: "hidden",
+				}}
 			>
 				<div
 					className={cn(
-						"h-full w-full rounded-md border border-border bg-muted/30 transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+						"relative flex h-full w-full items-center gap-2 overflow-visible rounded-full border border-border bg-muted/30 py-0.5 pl-0.5 pr-3 transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 						className,
 					)}
-					style={{ opacity: active ? 1 : 0 }}
+					style={{ ...style, opacity: active ? 1 : 0 }}
 				>
+					<VoiceModeEndcap state={state} />
 					<VoiceModeStatus state={state} />
 				</div>
-			</BorderBeam>
-		</div>
+			</div>
+		</>
 	);
 }

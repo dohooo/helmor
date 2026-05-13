@@ -96,7 +96,7 @@ function Scene({
 
 	return (
 		<div
-			className={cn("flex h-full w-full items-center gap-2 px-3", className)}
+			className={cn("flex h-full w-full items-center gap-2", className)}
 			style={style}
 		>
 			<Icon
@@ -116,9 +116,10 @@ function Scene({
 			    left-aligned next to the icon. */}
 			<span
 				className={cn(
-					"min-w-0 max-w-[80%] flex-1 truncate text-[12px] leading-none tracking-tight",
+					"min-w-0 flex-1 truncate text-[13px] leading-none tracking-tight",
 					isError ? "text-destructive/90" : "text-foreground/85",
 				)}
+				title={label}
 			>
 				{label}
 			</span>
@@ -158,7 +159,7 @@ export function VoiceModeStatus({ state }: { state: VoiceUiState }) {
 	}, [state]);
 
 	return (
-		<div className="relative h-full w-full overflow-hidden">
+		<div className="relative h-full min-w-0 flex-1 overflow-hidden">
 			{/* Keyframes are scoped via class names so they don't clash with
 			    other inline-styled keyframes elsewhere in the app. */}
 			<style>{`
