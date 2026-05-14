@@ -1,6 +1,5 @@
 ---
 source: tests/streaming_send_params.rs
-assertion_line: 139
 expression: "&params"
 ---
 claudeEnvironment:

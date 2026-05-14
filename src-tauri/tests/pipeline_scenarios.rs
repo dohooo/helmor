@@ -184,6 +184,60 @@ fn user_prompt_files_array_present_but_empty() {
 }
 
 #[test]
+fn user_prompt_with_image_path_containing_spaces() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "Clicking on @/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg queues",
+        &[],
+        &[
+            "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg",
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_file_path_containing_spaces() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "open @/Users/me/My Project/notes.md please",
+        &["/Users/me/My Project/notes.md"],
+        &[],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_with_files_and_images_mixed() {
+    let msgs = vec![user_prompt_with_files_and_images(
+        "u1",
+        "compare @/abs path/notes.md with @/abs path/shot.png",
+        &["/abs path/notes.md"],
+        &["/abs path/shot.png"],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_prompt_steer_with_image_path_containing_spaces() {
+    // Mid-turn steer with an image attachment whose absolute path
+    // contains whitespace. Persisted JSON carries `images: [...]`
+    // because the sidecar's synthetic event MUST forward both `files`
+    // and `images` — without `images`, the adapter has no needle to
+    // find the `@<path>` substring with and the badge would vanish on
+    // reload while still appearing in the optimistic render.
+    let msgs = vec![user_prompt_steer_with_files_and_images(
+        "u1",
+        "actually look at @/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg first",
+        &[],
+        &[
+            "/Users/me/Library/Application Support/CleanShot/CleanShot 2026-04-29 at 08.24.35@2x.jpg",
+        ],
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_prompt_steer_flag_renders_as_user() {
     // A steer prompt is a regular user turn with `steer: true` added to
     // the JSON payload. The adapter should ignore the flag for rendering
@@ -223,6 +277,22 @@ fn user_json_text_swallowed() {
         "u1",
         json!([{ "type": "text", "text": "please do X" }]),
     )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn user_json_text_after_assistant_swallowed() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([{ "type": "text", "text": "Using skill..." }]),
+            None,
+        ),
+        user_json(
+            "u1",
+            json!([{ "type": "text", "text": "# Skill\n\nInternal instructions" }]),
+        ),
+    ];
     assert_yaml_snapshot!(run_normalized(msgs));
 }
 
@@ -1394,6 +1464,158 @@ fn codex_file_change_empty_changes() {
     });
     let msgs = vec![make_record(
         "fc4",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+// ----------------------------------------------------------------------------
+// collab_agent_tool_call (sub-agent spawn / wait / send_input / resume / close)
+// ----------------------------------------------------------------------------
+
+#[test]
+fn codex_collab_spawn_agent_renders_with_nickname_and_role() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "call_1",
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "senderThreadId": "thread_main",
+            "receiverThreadIds": ["thread_sub_a"],
+            "prompt": "Agent A: list .ts files and total LOC.",
+            "model": "gpt-5.5",
+            "reasoningEffort": "low",
+            "agentsStates": {
+                "thread_sub_a": {
+                    "status": "pendingInit",
+                    "message": null,
+                    "agentNickname": "Hubble",
+                    "agentRole": "explorer",
+                }
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "spawn1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_collab_wait_completed_collects_subagent_messages() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "call_2",
+            "type": "collab_agent_tool_call",
+            "tool": "wait",
+            "status": "completed",
+            "senderThreadId": "thread_main",
+            "receiverThreadIds": ["thread_sub_a", "thread_sub_b"],
+            "agentsStates": {
+                "thread_sub_a": {
+                    "status": "completed",
+                    "message": "Total: 6409 lines across 22 .ts files.",
+                    "agentNickname": "Hubble",
+                    "agentRole": "explorer",
+                },
+                "thread_sub_b": {
+                    "status": "completed",
+                    "message": "Total: 13420 lines across 53 .rs files.",
+                    "agentNickname": "Dewey",
+                    "agentRole": "explorer",
+                }
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "wait1",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+/// `inProgress` collab items should never reach the historical-reload path
+/// (accumulator only persists on `item.completed`), but if one slips through
+/// — e.g. legacy DB rows — we want the result text to be empty rather than
+/// surface the literal status word "inProgress" as user-visible content.
+#[test]
+fn codex_collab_in_progress_renders_empty_result() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "call_3",
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "status": "inProgress",
+            "senderThreadId": "thread_main",
+            "receiverThreadIds": [],
+            "prompt": "Agent: do something.",
+            "agentsStates": {}
+        }
+    });
+    let msgs = vec![make_record(
+        "spawn3",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_collab_unknown_nickname_falls_back_to_thread_id() {
+    // When sidecar's thread/read enrichment fails (timeout / network error),
+    // agentNickname / agentRole are missing. The wait result must still
+    // render — it falls back to the thread id as the agent label.
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "call_4",
+            "type": "collab_agent_tool_call",
+            "tool": "wait",
+            "status": "completed",
+            "senderThreadId": "thread_main",
+            "receiverThreadIds": ["thread_sub_x"],
+            "agentsStates": {
+                "thread_sub_x": {
+                    "status": "completed",
+                    "message": "Done."
+                }
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "wait4",
+        "assistant",
+        &serde_json::to_string(&parsed).unwrap(),
+    )];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn codex_collab_close_agent() {
+    let parsed = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "call_5",
+            "type": "collab_agent_tool_call",
+            "tool": "closeAgent",
+            "status": "completed",
+            "senderThreadId": "thread_main",
+            "receiverThreadIds": ["thread_sub_a"],
+            "agentsStates": {
+                "thread_sub_a": {"status": "shutdown"}
+            }
+        }
+    });
+    let msgs = vec![make_record(
+        "close5",
         "assistant",
         &serde_json::to_string(&parsed).unwrap(),
     )];

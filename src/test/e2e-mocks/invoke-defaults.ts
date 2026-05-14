@@ -8,34 +8,6 @@
 export type InvokeHandler = (args?: unknown) => unknown | Promise<unknown>;
 
 export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
-	get_github_identity_session: () => ({
-		status: "connected",
-		session: {
-			provider: "test",
-			githubUserId: 0,
-			login: "test",
-			name: "Test User",
-			avatarUrl: null,
-			primaryEmail: null,
-			tokenExpiresAt: null,
-			refreshTokenExpiresAt: null,
-		},
-	}),
-	get_github_cli_status: () => ({
-		status: "ready",
-		host: "github.com",
-		login: "test",
-		version: "test",
-		message: "ok",
-	}),
-	get_github_cli_user: () => ({
-		login: "test",
-		id: 0,
-		name: "Test",
-		avatarUrl: null,
-		email: null,
-	}),
-	list_github_accessible_repositories: () => [],
 	list_repositories: () => [],
 	list_workspace_groups: () => [],
 	list_archived_workspaces: () => [],
@@ -53,7 +25,7 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 		claude: false,
 		codex: false,
 		command:
-			"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+			"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 	}),
 	get_app_settings: () => ({}),
 	load_auto_close_action_kinds: () => [],
@@ -62,6 +34,8 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 	list_workspace_files: () => [],
 	list_workspace_changes_with_content: () => ({ items: [], prefetched: [] }),
 	list_slash_commands: () => [],
+	list_forge_labels: () => [],
+	list_inbox_kind_labels: () => [],
 	refresh_workspace_change_request: () => null,
 	get_workspace_forge: () => ({
 		provider: "unknown",
@@ -76,17 +50,9 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 			changeRequestFullName: "change request",
 			connectAction: "Connect Forge",
 		},
-		cli: null,
 		detectionSignals: [],
 	}),
-	get_forge_cli_status: () => ({
-		status: "unauthenticated",
-		provider: "gitlab",
-		host: "gitlab.com",
-		cliName: "glab",
-		message: "Run `glab auth login --hostname gitlab.com`.",
-		loginCommand: "glab auth login --hostname gitlab.com",
-	}),
+	list_forge_logins: () => [],
 	get_workspace_git_action_status: () => ({
 		uncommittedCount: 0,
 		conflictCount: 0,
@@ -107,7 +73,6 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 		message: null,
 	}),
 	get_workspace_forge_check_insert_text: () => "",
-	open_forge_cli_auth_terminal: () => undefined,
 	spawn_forge_cli_auth_terminal: () => undefined,
 	stop_forge_cli_auth_terminal: () => false,
 	write_forge_cli_auth_terminal_stdin: () => false,

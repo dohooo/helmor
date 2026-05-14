@@ -156,25 +156,26 @@ pub fn send_message(
                         .permission_mode
                         .as_deref()
                         .filter(|mode| *mode == "plan"),
+                    crate::models::sessions::CreateSessionOverrides::default(),
                 )?
                 .session_id
             }
         },
     };
 
-    // 3. Resolve model — explicit param > session row > user setting > "default"
+    // 3. Resolve model — param > session row > "default". Provider hint
+    //    is required so cursor's `default` doesn't infer to claude.
+    let (session_model, session_provider) =
+        crate::models::sessions::get_session_model_and_provider(&session_id)
+            .unwrap_or((None, None));
     let model_id = params
         .model
         .as_deref()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            crate::models::sessions::get_session_model(&session_id)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "default".to_string())
-        });
-    let model_id = model_id.as_str();
-    let model = crate::agents::resolve_model(model_id);
+        .map(str::to_string)
+        .or(session_model)
+        .unwrap_or_else(|| "default".to_string());
+    let provider_hint = session_provider.as_deref();
+    let model = crate::agents::resolve_model(&model_id, provider_hint);
 
     // ── App delegation ──────────────────────────────────────────────
     // When the desktop app is running, queue the prompt as a pending
@@ -199,11 +200,27 @@ pub fn send_message(
             params![user_msg_id, session_id, user_content, timestamp],
         )?;
 
+        // Pin the resolved model + (optional) permission_mode onto the
+        // session row before queuing. The App composer reads these off
+        // `currentSession` when it auto-submits the drained prompt — so
+        // without this the row still has model=NULL and the composer
+        // falls back to settings.defaultModelId, ignoring the CLI's
+        // --model / --plan override.
+        conn.execute(
+            "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
+            params![
+                session_id,
+                model_id,
+                params.permission_mode.as_deref(),
+                timestamp,
+            ],
+        )?;
+
         insert_pending_cli_send(
             &workspace_id,
             &session_id,
             &params.prompt,
-            Some(model_id),
+            Some(&model_id),
             params.permission_mode.as_deref(),
         )?;
 
@@ -720,12 +737,18 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 
-        let response = create_session("w1", None, Some("plan")).unwrap();
+        let response = create_session(
+            "w1",
+            None,
+            Some("plan"),
+            crate::models::sessions::CreateSessionOverrides::default(),
+        )
+        .unwrap();
         let permission_mode: String = conn
             .query_row(
                 "SELECT permission_mode FROM sessions WHERE id = ?1",
@@ -750,13 +773,18 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'ready', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
 
-        let response =
-            create_session("w1", Some(crate::agents::ActionKind::CreatePr), None).unwrap();
+        let response = create_session(
+            "w1",
+            Some(crate::agents::ActionKind::CreatePr),
+            None,
+            crate::models::sessions::CreateSessionOverrides::default(),
+        )
+        .unwrap();
         let title: String = conn
             .query_row(
                 "SELECT title FROM sessions WHERE id = ?1",

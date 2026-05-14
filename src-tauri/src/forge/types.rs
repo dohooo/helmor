@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum ForgeProvider {
     Github,
@@ -45,34 +45,6 @@ pub struct ForgeLabels {
     pub connect_action: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "camelCase")]
-pub enum ForgeCliStatus {
-    Ready {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        login: String,
-        version: String,
-        message: String,
-    },
-    Unauthenticated {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        version: Option<String>,
-        message: String,
-        login_command: String,
-    },
-    Error {
-        provider: ForgeProvider,
-        host: String,
-        cli_name: String,
-        version: Option<String>,
-        message: String,
-    },
-}
-
 /// Human-readable signal that the layered detector fired on. Surfaced in
 /// the frontend tooltip so the user can see *why* we classified their
 /// remote a given way.
@@ -92,7 +64,6 @@ pub struct ForgeDetection {
     pub repo: Option<String>,
     pub remote_url: Option<String>,
     pub labels: ForgeLabels,
-    pub cli: Option<ForgeCliStatus>,
     /// Signals that led to the current provider classification — shown in
     /// the UI tooltip. Empty for `Unknown`.
     pub detection_signals: Vec<DetectionSignal>,
@@ -153,6 +124,7 @@ pub struct ForgeActionStatus {
     pub change_request: Option<ChangeRequestInfo>,
     pub review_decision: Option<String>,
     pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
     pub deployments: Vec<ForgeActionItem>,
     pub checks: Vec<ForgeActionItem>,
     pub remote_state: RemoteState,
@@ -165,6 +137,7 @@ impl ForgeActionStatus {
             change_request: None,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             deployments: Vec::new(),
             checks: Vec::new(),
             remote_state: RemoteState::Unavailable,
@@ -177,6 +150,7 @@ impl ForgeActionStatus {
             change_request: None,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             deployments: Vec::new(),
             checks: Vec::new(),
             remote_state: RemoteState::Unauthenticated,
@@ -189,6 +163,7 @@ impl ForgeActionStatus {
             change_request: None,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             deployments: Vec::new(),
             checks: Vec::new(),
             remote_state: RemoteState::NoPr,
@@ -201,6 +176,7 @@ impl ForgeActionStatus {
             change_request: None,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             deployments: Vec::new(),
             checks: Vec::new(),
             remote_state: RemoteState::Error,
@@ -224,4 +200,12 @@ mod tests {
             assert_eq!(ForgeProvider::from_str(encoded).unwrap(), provider);
         }
     }
+
+    // Note: the old `forge_cli_status_serializes_struct_variant_fields_as_camel_case`
+    // regression test was deleted along with the `ForgeCliStatus` enum
+    // it guarded. Multi-account architecture replaced that single
+    // global-status enum with per-account / per-host primitives; the
+    // serde-rename pitfall it documented (use `rename_all_fields` on
+    // enums with struct variants) is still recorded next to
+    // `UiMutationEvent` in `ui_sync::events`.
 }

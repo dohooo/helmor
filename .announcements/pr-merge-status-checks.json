@@ -1,0 +1,7 @@
+{
+	"items": [
+		{
+			"text": "The Git header now shows when PR checks are still running or GitHub is blocking a merge."
+		}
+	]
+}

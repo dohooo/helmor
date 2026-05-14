@@ -43,6 +43,7 @@ export function createOptimisticCreatingWorkspaceDetail(
 		branch: row.branch ?? null,
 		initializationParentBranch: null,
 		intendedTargetBranch: null,
+		mode: row.mode ?? "worktree",
 		pinnedAt: row.pinnedAt ?? null,
 		prTitle: null,
 		archiveCommit: null,
@@ -163,6 +164,25 @@ export function workspaceGroupIdFromStatus(
 	}
 }
 
+export function workspaceStatusFromGroupId(
+	groupId: string,
+): WorkspaceStatus | null {
+	switch (groupId) {
+		case "done":
+			return "done";
+		case "review":
+			return "review";
+		case "progress":
+			return "in-progress";
+		case "backlog":
+			return "backlog";
+		case "canceled":
+			return "canceled";
+		default:
+			return null;
+	}
+}
+
 /**
  * Insert `row` into `rows` preserving `createdAt DESC` order (matching the
  * backend's `ORDER BY datetime(created_at) DESC` for non-archived groups).
@@ -221,6 +241,231 @@ export function moveWorkspaceToGroup(
 			? { ...group, rows: insertRowByCreatedAtDesc(group.rows, updatedRow) }
 			: group,
 	);
+}
+
+const SIDEBAR_ORDER_STEP = 1024;
+
+/**
+ * Optimistic mirror of `move_repository_in_sidebar`. Rewrites each row's
+ * `repoSidebarOrder` so `regroupByRepo` re-orders buckets immediately.
+ *
+ * `repoOrder` must match what the user visually sees — i.e. repos sorted
+ * by `min(repoSidebarOrder)` ASC, same as `regroupByRepo` and the
+ * backend. Walking `groups[].rows[]` directly would yield the workspace
+ * display-order sequence instead, which causes a snap-on-refetch.
+ */
+export function applyRepoReorder(
+	groups: WorkspaceGroup[] | undefined,
+	movingRepoId: string,
+	beforeRepoId: string | null,
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+	if (beforeRepoId === movingRepoId) return groups;
+
+	const firstSeen = new Map<string, number>();
+	const minRepoOrder = new Map<string, number>();
+	let seen = 0;
+	for (const group of groups) {
+		for (const row of group.rows) {
+			const id = row.repoId;
+			if (!id) continue;
+			if (!firstSeen.has(id)) firstSeen.set(id, seen++);
+			const candidate = row.repoSidebarOrder ?? 0;
+			if (candidate <= 0) continue;
+			const current = minRepoOrder.get(id);
+			if (current === undefined || candidate < current) {
+				minRepoOrder.set(id, candidate);
+			}
+		}
+	}
+	if (!firstSeen.has(movingRepoId)) return groups;
+
+	const repoOrder = Array.from(firstSeen.keys()).sort((a, b) => {
+		const left = minRepoOrder.get(a) ?? Number.MAX_SAFE_INTEGER;
+		const right = minRepoOrder.get(b) ?? Number.MAX_SAFE_INTEGER;
+		if (left !== right) return left - right;
+		return (firstSeen.get(a) ?? 0) - (firstSeen.get(b) ?? 0);
+	});
+
+	const withoutMoving = repoOrder.filter((id) => id !== movingRepoId);
+	const insertIndex =
+		beforeRepoId === null
+			? withoutMoving.length
+			: withoutMoving.indexOf(beforeRepoId);
+	if (beforeRepoId !== null && insertIndex === -1) return groups;
+	const boundedInsertIndex =
+		insertIndex === -1 ? withoutMoving.length : insertIndex;
+	withoutMoving.splice(boundedInsertIndex, 0, movingRepoId);
+
+	const nextOrderByRepo = new Map(
+		withoutMoving.map((id, idx) => [id, (idx + 1) * SIDEBAR_ORDER_STEP]),
+	);
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const nextOrder = row.repoId
+				? nextOrderByRepo.get(row.repoId)
+				: undefined;
+			return nextOrder === undefined
+				? row
+				: { ...row, repoSidebarOrder: nextOrder };
+		}),
+	}));
+}
+
+/**
+ * Optimistic mirror of `move_workspace_in_sidebar`. Targets:
+ *   - `"pinned"` — sets `pinnedAt`, keeps status
+ *   - status lane — clears `pinnedAt`, sets status
+ *   - `"repo:<id>"` — clears `pinnedAt`, keeps status
+ * Computes a midpoint `displayOrder` so the row lands correctly in
+ * either grouping mode.
+ */
+export function reorderWorkspaceInSidebar(
+	groups: WorkspaceGroup[] | undefined,
+	workspaceId: string,
+	targetGroupId: string,
+	beforeWorkspaceId: string | null,
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+
+	let original: WorkspaceRow | null = null;
+	const stripped = groups.map((group) => {
+		const idx = group.rows.findIndex((row) => row.id === workspaceId);
+		if (idx === -1) return group;
+		original = group.rows[idx]!;
+		return {
+			...group,
+			rows: group.rows.filter((_, i) => i !== idx),
+		};
+	});
+	if (!original) return groups;
+	const sourceRow: WorkspaceRow = original;
+
+	const mutation = resolveTargetGroup(targetGroupId, sourceRow);
+	if (!mutation) return groups;
+	const updatedRow: WorkspaceRow = {
+		...sourceRow,
+		status: mutation.status ?? sourceRow.status,
+		pinnedAt: mutation.pinnedAt,
+	};
+
+	const homeGroupId = workspaceGroupIdFromStatus(
+		updatedRow.status,
+		updatedRow.pinnedAt,
+	);
+
+	// Neighbour scope must match the backend — for a repo target that's
+	// every row of the repo (cross-status), not just the row's own lane.
+	const neighbours = collectNeighboursForTarget(
+		targetGroupId,
+		updatedRow,
+		stripped,
+	);
+	const beforeIndex =
+		beforeWorkspaceId === null
+			? -1
+			: neighbours.findIndex((row) => row.id === beforeWorkspaceId);
+
+	updatedRow.displayOrder = pickInsertionOrder(neighbours, beforeIndex);
+
+	// Insert back into the row's status group; `regroupByRepo` re-buckets
+	// for the repo view using `displayOrder` as the sort key.
+	return stripped.map((group) =>
+		group.id === homeGroupId
+			? {
+					...group,
+					rows: [...group.rows, updatedRow].sort(compareSidebarOrder),
+				}
+			: group,
+	);
+}
+
+/** Mirrors the backend's three `MoveTarget` scopes. */
+function collectNeighboursForTarget(
+	targetGroupId: string,
+	row: WorkspaceRow,
+	groups: WorkspaceGroup[],
+): WorkspaceRow[] {
+	if (targetGroupId === "pinned") {
+		const pinned = groups.find((g) => g.id === "pinned");
+		return [...(pinned?.rows ?? [])].sort(compareSidebarOrder);
+	}
+	if (targetGroupId.startsWith("repo:")) {
+		const repoId = targetGroupId.slice("repo:".length);
+		return groups
+			.flatMap((g) => g.rows)
+			.filter(
+				(r) => r.repoId === repoId && !r.pinnedAt && r.state !== "archived",
+			)
+			.sort(compareSidebarOrder);
+	}
+	const homeId = workspaceGroupIdFromStatus(row.status, row.pinnedAt);
+	const homeGroup = groups.find((g) => g.id === homeId);
+	return [...(homeGroup?.rows ?? [])].sort(compareSidebarOrder);
+}
+
+function pickInsertionOrder(
+	sorted: WorkspaceRow[],
+	beforeIndex: number,
+): number {
+	if (beforeIndex === -1) {
+		const last = sorted[sorted.length - 1];
+		return (last?.displayOrder ?? 0) + SIDEBAR_ORDER_STEP;
+	}
+	if (beforeIndex === 0) {
+		const first = sorted[0];
+		const firstOrder = first?.displayOrder ?? SIDEBAR_ORDER_STEP;
+		return firstOrder > 1 ? Math.max(1, Math.floor(firstOrder / 2)) : 1;
+	}
+	const prev = sorted[beforeIndex - 1];
+	const next = sorted[beforeIndex];
+	const prevOrder = prev?.displayOrder ?? 0;
+	const nextOrder = next?.displayOrder ?? prevOrder + SIDEBAR_ORDER_STEP;
+	if (nextOrder - prevOrder >= 2) {
+		return prevOrder + Math.floor((nextOrder - prevOrder) / 2);
+	}
+	// Gap exhausted — squeeze in; backend rebalances on commit.
+	return prevOrder + 1;
+}
+
+function compareSidebarOrder(left: WorkspaceRow, right: WorkspaceRow) {
+	const leftOrder = left.displayOrder ?? 0;
+	const rightOrder = right.displayOrder ?? 0;
+	if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+	const leftCreated = Date.parse(left.createdAt ?? "") || 0;
+	const rightCreated = Date.parse(right.createdAt ?? "") || 0;
+	return rightCreated - leftCreated;
+}
+
+type TargetMutation = {
+	status: WorkspaceRow["status"] | null;
+	pinnedAt: string | null;
+};
+
+function resolveTargetGroup(
+	targetGroupId: string,
+	row: WorkspaceRow,
+): TargetMutation | null {
+	if (targetGroupId === "pinned") {
+		return {
+			status: row.status ?? null,
+			pinnedAt: row.pinnedAt ?? new Date().toISOString(),
+		};
+	}
+	if (targetGroupId.startsWith("repo:")) {
+		// A backlog row dragged into its repo bucket needs to leave the
+		// backlog lane, otherwise it stays in the Backlog group regardless
+		// of how we reorder its `displayOrder`. Promote to in-progress so
+		// it surfaces in the bucket.
+		const status =
+			row.status === "backlog" ? "in-progress" : (row.status ?? null);
+		return { status, pinnedAt: null };
+	}
+	const status = workspaceStatusFromGroupId(targetGroupId);
+	if (!status) return null;
+	return { status, pinnedAt: null };
 }
 
 export type WorkspaceBranchTone =
@@ -357,10 +602,12 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		id: summary.id,
 		title: summary.title,
 		directoryName: summary.directoryName,
+		repoId: summary.repoId,
 		repoName: summary.repoName,
 		repoIconSrc: summary.repoIconSrc ?? null,
 		repoInitials: summary.repoInitials ?? null,
 		state: summary.state,
+		mode: summary.mode ?? "worktree",
 		hasUnread: summary.hasUnread,
 		workspaceUnread: summary.workspaceUnread,
 		unreadSessionCount: summary.unreadSessionCount,
@@ -388,18 +635,21 @@ export function resolveSessionSelectedModelId({
 	modelSelections,
 	modelSections,
 	settingsDefaultModelId,
+	contextKey,
 }: {
 	session: Pick<
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	> | null;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
+	contextKey?: string | null;
 }): string | null {
-	const selectedModelId = session
-		? (modelSelections[getComposerContextKey(null, session.id)] ?? null)
-		: null;
+	let selectedModelId = contextKey ? modelSelections[contextKey] : undefined;
+	if (!selectedModelId && session) {
+		selectedModelId = modelSelections[getComposerContextKey(null, session.id)];
+	}
 	return (
 		selectedModelId ??
 		inferDefaultModelId(session, modelSections, settingsDefaultModelId)
@@ -416,7 +666,7 @@ export function resolveSessionDisplayProvider({
 		WorkspaceSessionSummary,
 		"id" | "agentType" | "model" | "lastUserMessageAt"
 	>;
-	modelSelections: Record<string, string>;
+	modelSelections: Partial<Record<string, string>>;
 	modelSections: AgentModelSection[];
 	settingsDefaultModelId?: string | null;
 }): AgentProvider | null {
@@ -439,6 +689,9 @@ export function resolveSessionDisplayProvider({
 	if (session.agentType === "claude") {
 		return "claude";
 	}
+	if (session.agentType === "cursor") {
+		return "cursor";
+	}
 	return null;
 }
 
@@ -457,10 +710,12 @@ export function rowToWorkspaceSummary(
 		id: row.id,
 		title: row.title,
 		directoryName: row.directoryName ?? "",
+		repoId: row.repoId ?? "",
 		repoName: row.repoName ?? "",
 		repoIconSrc: row.repoIconSrc ?? null,
 		repoInitials: row.repoInitials ?? null,
 		state: row.state ?? "archived",
+		mode: row.mode ?? "worktree",
 		hasUnread: row.hasUnread ?? false,
 		workspaceUnread: row.workspaceUnread ?? 0,
 		unreadSessionCount: row.unreadSessionCount ?? 0,
@@ -520,12 +775,13 @@ export function inferDefaultModelId(
 ): string | null {
 	const allOptions = modelSections.flatMap((section) => section.options);
 
-	// Existing session with history → respect whatever model it used
-	if (!isNewSession(session)) {
-		const sessionModel = session?.model ?? null;
-		if (sessionModel && findModelOption(modelSections, sessionModel)) {
-			return sessionModel;
-		}
+	// If the session row carries an explicit model — either from history
+	// (streaming finalizer) or from a saveForLater pre-config — respect it.
+	// Fresh sessions are created with `model = NULL` so this safely falls
+	// through to the user's current settings default below.
+	const sessionModel = session?.model ?? null;
+	if (sessionModel && findModelOption(modelSections, sessionModel)) {
+		return sessionModel;
 	}
 
 	// New session or no valid session model → user setting is the only source.
@@ -570,18 +826,24 @@ export function findModelOption(
  * `msgId` namespaces the per-part ids to match the Rust side's
  * `{msgId}:txt:N` / `{msgId}:mention:N` scheme so optimistic ids survive
  * the round-trip through the adapter without remounting.
+ *
+ * `files` and `images` are merged into a single needle pool. Both must
+ * be passed in — paths with whitespace can only round-trip when matched
+ * against a structured needle, never via regex.
  */
 export function splitTextWithFiles(
 	text: string,
 	files: readonly string[],
 	msgId: string,
+	images: readonly string[] = [],
 ): MessagePart[] {
 	const textId = (idx: number): string => `${msgId}:txt:${idx}`;
 	const mentionId = (idx: number): string => `${msgId}:mention:${idx}`;
-	if (files.length === 0 || text.length === 0) {
+	const needles = [...files, ...images];
+	if (needles.length === 0 || text.length === 0) {
 		return [{ type: "text", id: textId(0), text }];
 	}
-	const sorted = [...files].sort((a, b) => b.length - a.length);
+	const sorted = [...needles].sort((a, b) => b.length - a.length);
 	const matches: { start: number; end: number; path: string }[] = [];
 	for (const file of sorted) {
 		if (!file) continue;
@@ -630,18 +892,20 @@ export function createLiveThreadMessage({
 	text,
 	createdAt,
 	files = [],
+	images = [],
 }: {
 	id: string;
 	role: "user" | "assistant" | "system";
 	text: string;
 	createdAt: string;
 	files?: readonly string[];
+	images?: readonly string[];
 }): ThreadMessageLike {
 	return {
 		role,
 		id,
 		createdAt,
-		content: splitTextWithFiles(text, files, id),
+		content: splitTextWithFiles(text, files, id, images),
 	};
 }
 

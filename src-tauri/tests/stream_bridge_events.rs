@@ -13,8 +13,8 @@ mod common;
 
 use common::*;
 use helmor_lib::agents::{
-    bridge_aborted_event, bridge_deferred_tool_use_event, bridge_done_event, bridge_error_event,
-    bridge_permission_request_event, bridge_user_input_request_event, AgentStreamEvent,
+    bridge_aborted_event, bridge_done_event, bridge_error_event, bridge_permission_request_event,
+    bridge_user_input_request_event, AgentStreamEvent,
 };
 use helmor_lib::pipeline::PipelineEmit;
 use insta::assert_yaml_snapshot;
@@ -53,19 +53,6 @@ fn replay_stream(provider: &str, lines: &[Value]) -> StreamBridgeSnapshot {
                 control_events.push(serialize_event(bridge_permission_request_event(value)));
                 continue;
             }
-            "deferredToolUse" => {
-                let resolved_model = pipeline.accumulator.resolved_model().to_string();
-                control_events.push(serialize_event(bridge_deferred_tool_use_event(
-                    provider,
-                    "model-id",
-                    &resolved_model,
-                    resolved_session_id(),
-                    working_directory,
-                    Some("default".to_string()),
-                    value,
-                )));
-                continue;
-            }
             "userInputRequest" => {
                 let resolved_model = pipeline.accumulator.resolved_model().to_string();
                 control_events.push(serialize_event(bridge_user_input_request_event(
@@ -74,6 +61,7 @@ fn replay_stream(provider: &str, lines: &[Value]) -> StreamBridgeSnapshot {
                     &resolved_model,
                     resolved_session_id(),
                     working_directory,
+                    Some("default".to_string()),
                     value,
                 )));
                 continue;
@@ -189,12 +177,13 @@ fn permission_request_emits_alongside_assistant_text() {
 }
 
 #[test]
-fn deferred_tool_use_terminates_stream_with_pending_state() {
-    // Claude emits `deferredToolUse` mid-turn for AskUserQuestion. The
-    // turn pauses; the frontend renders the deferred-tool overlay and
-    // resumes via `respondToDeferredTool`. The pause is expressed by
-    // emitting the bridge event; the pipeline state up to that point
-    // becomes the final render.
+fn ask_user_question_user_input_pauses_stream_with_pending_state() {
+    // Claude emits a unified `userInputRequest` for AskUserQuestion via
+    // its `canUseTool` callback. The turn pauses; the frontend renders
+    // the user-input overlay (AUQ flavor) and resumes via
+    // `respondToUserInput`. The pause is expressed by emitting the
+    // bridge event; the pipeline state up to that point is the snapshot
+    // the frontend caches behind the panel.
     let snapshot = replay_stream(
         "claude",
         &[
@@ -215,12 +204,13 @@ fn deferred_tool_use_terminates_stream_with_pending_state() {
                 }
             }),
             json!({
-                "type": "deferredToolUse",
-                "toolUseId": "tool-1",
-                "toolName": "AskUserQuestion",
-                "toolInput": {
-                    "question": "Pick one",
-                    "options": ["a", "b"]
+                "type": "userInputRequest",
+                "userInputId": "tool-1",
+                "source": "Claude",
+                "message": "Claude is asking for your input.",
+                "payload": {
+                    "kind": "ask-user-question",
+                    "questions": [{ "question": "Pick one", "options": [] }]
                 }
             }),
         ],
@@ -231,24 +221,35 @@ fn deferred_tool_use_terminates_stream_with_pending_state() {
 }
 
 #[test]
-fn user_input_request_synthesizes_form_schema_for_codex() {
+fn codex_user_input_passes_form_payload_through() {
+    // Codex's `requestUserInput` is now synthesized into a JSON-Schema
+    // form on the SIDECAR side; Rust just forwards the unified
+    // `userInputRequest` with `payload.kind = form`.
     let snapshot = replay_stream(
         "codex",
         &[json!({
             "type": "userInputRequest",
             "userInputId": "user-input-1",
-            "questions": [
-                {
-                    "id": "approval",
-                    "header": "Approval",
-                    "question": "Approve plan?",
-                    "isOther": false,
-                    "options": [
-                        { "label": "Yes", "description": "Proceed" },
-                        { "label": "No", "description": "Stop" }
-                    ]
+            "source": "Codex",
+            "message": "Codex needs your input.",
+            "payload": {
+                "kind": "form",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "approval": {
+                            "type": "string",
+                            "title": "Approval",
+                            "description": "Approve plan?",
+                            "oneOf": [
+                                { "const": "Yes", "title": "Yes", "description": "Proceed" },
+                                { "const": "No", "title": "No", "description": "Stop" }
+                            ]
+                        }
+                    },
+                    "required": ["approval"]
                 }
-            ]
+            }
         })],
     );
 

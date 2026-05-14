@@ -12,6 +12,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use helmor_lib::agents::{build_send_message_params, BuildSendMessageParamsInput};
 use helmor_lib::data_dir;
+use helmor_lib::db;
+use helmor_lib::workspace::sidebar_order;
 use insta::assert_yaml_snapshot;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -39,6 +41,10 @@ impl TestEnv {
         data_dir::ensure_directory_structure().unwrap();
         let conn = rusqlite::Connection::open(data_dir::db_path().unwrap()).unwrap();
         helmor_lib::schema::ensure_schema(&conn).unwrap();
+        // Rebuild the connection pool so `read_conn()` sees the fresh
+        // data dir. The lib's prod fast path caches the pool path, and
+        // integration tests link against the lib in non-test mode.
+        db::init_pools().unwrap();
         conn.execute(
             "INSERT INTO repos (id, name, default_branch) VALUES ('r-1', 'Repo One', 'main')",
             [],
@@ -69,9 +75,9 @@ fn seed_workspace_session(
 ) {
     conn.execute(
         "INSERT INTO workspaces (id, repository_id, directory_name, state,
-         status, linked_directory_paths)
-         VALUES (?1, 'r-1', 'example', 'ready', 'in-progress', ?2)",
-        rusqlite::params![ws_id, linked],
+         status, linked_directory_paths, display_order)
+         VALUES (?1, 'r-1', 'example', 'ready', 'in-progress', ?2, ?3)",
+        rusqlite::params![ws_id, linked, sidebar_order::ORDER_STEP],
     )
     .unwrap();
     conn.execute(
@@ -100,6 +106,8 @@ fn base_input<'a>(session_id: Option<&'a str>) -> BuildSendMessageParamsInput<'a
         helmor_session_id: session_id,
         claude_base_url: None,
         claude_auth_token: None,
+        claude_thinking_display: None,
+        images: &[],
     }
 }
 
@@ -157,4 +165,19 @@ fn malformed_linked_column_falls_back_to_no_directories() {
 
     let params = build(base_input(Some("s-4")));
     assert_yaml_snapshot!("params_malformed_linked_column", &params);
+}
+
+#[test]
+fn includes_source_repo_path_when_repo_has_root_path() {
+    let env = TestEnv::new();
+    let conn = env.connection();
+    conn.execute(
+        "UPDATE repos SET root_path = '/Users/me/repos/my-repo' WHERE id = 'r-1'",
+        [],
+    )
+    .unwrap();
+    seed_workspace_session(&conn, "w-5", "s-5", None);
+
+    let params = build(base_input(Some("s-5")));
+    assert_yaml_snapshot!("params_with_source_repo_path", &params);
 }

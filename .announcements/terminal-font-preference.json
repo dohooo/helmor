@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "You can now choose a separate font for embedded terminals.",
+			"action": {
+				"label": "Open Appearance",
+				"value": { "type": "openSettings", "section": "appearance" }
+			}
+		}
+	]
+}

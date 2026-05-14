@@ -1,4 +1,11 @@
-import { ArrowLeft, ArrowRight, Cloud, FolderOpen, X } from "lucide-react";
+import {
+	ArrowLeft,
+	ArrowRight,
+	Cloud,
+	FolderOpen,
+	Loader2,
+	X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ImportedRepository, OnboardingStep } from "../types";
 
@@ -55,23 +62,32 @@ export function RepoImportStep({
 						type="button"
 						onClick={onAddLocalRepository}
 						disabled={isAddingLocalRepository}
-						className="flex cursor-pointer flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:opacity-70"
+						aria-busy={isAddingLocalRepository}
+						className="flex cursor-interactive flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:hover:bg-card"
 					>
 						<div className="flex size-10 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
-							<FolderOpen className="size-5" />
+							{isAddingLocalRepository ? (
+								<Loader2 className="size-5 animate-spin text-muted-foreground" />
+							) : (
+								<FolderOpen className="size-5" />
+							)}
 						</div>
 						<div className="mt-4 text-sm font-medium text-foreground">
-							Choose local project
+							{isAddingLocalRepository
+								? "Adding repository…"
+								: "Choose local project"}
 						</div>
 						<p className="mt-1 text-xs leading-5 text-muted-foreground">
-							Add a folder already on this machine.
+							{isAddingLocalRepository
+								? "Pick a folder, then we'll wire it up."
+								: "Add a folder already on this machine."}
 						</p>
 					</button>
 					<button
 						type="button"
 						onClick={onOpenCloneDialog}
 						disabled={githubImportProgress !== null}
-						className="flex cursor-pointer flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:opacity-70"
+						className="flex cursor-interactive flex-col items-start rounded-lg border border-border/55 bg-card p-4 text-left text-foreground transition-colors hover:bg-muted/50 disabled:cursor-default disabled:opacity-70"
 					>
 						<div className="flex size-10 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
 							<Cloud className="size-5" />
@@ -134,7 +150,7 @@ export function RepoImportStep({
 											onClick={() => {
 												onRemoveRepository(repo.id);
 											}}
-											className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50"
+											className="flex size-6 shrink-0 cursor-interactive items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50"
 										>
 											<X className="size-3.5" />
 										</button>

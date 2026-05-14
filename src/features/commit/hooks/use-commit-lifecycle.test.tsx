@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ChangeRequestInfo,
@@ -47,6 +47,7 @@ const EMPTY_GIT_ACTION_STATUS: WorkspaceGitActionStatus = {
 	behindTargetCount: 0,
 	remoteTrackingRef: null,
 	aheadOfRemoteCount: 0,
+	aheadOfTargetCount: 0,
 	pushStatus: "unknown",
 };
 
@@ -66,6 +67,22 @@ function createWrapper(queryClient: QueryClient) {
 			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 		);
 	};
+}
+
+type ConfirmDialogProbe = {
+	open: boolean;
+	title: string;
+	description: string;
+	confirmLabel: string;
+	onOpenChange: (open: boolean) => void;
+	onConfirm: () => void;
+};
+
+function getConfirmDialogProps(node: ReactNode): ConfirmDialogProbe {
+	if (!isValidElement<ConfirmDialogProbe>(node)) {
+		throw new Error("Expected confirm dialog element");
+	}
+	return node.props;
 }
 
 describe("useWorkspaceCommitLifecycle", () => {
@@ -98,6 +115,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 
 	afterEach(() => {
 		vi.clearAllMocks();
+		vi.restoreAllMocks();
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {
@@ -143,23 +161,23 @@ describe("useWorkspaceCommitLifecycle", () => {
 			] as WorkspaceGroup[],
 		);
 
-		const selectedWorkspaceIdRef = { current: "workspace-1" };
+		const getSelectedWorkspaceId = () => "workspace-1" as string | null;
 		const onSelectSession = vi.fn();
 
 		const { result, rerender } = renderHook(
 			({
 				completedSessionIds,
 				interactionRequiredSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				interactionRequiredSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef,
+					getSelectedWorkspaceId,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: null,
@@ -167,14 +185,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds,
 					interactionRequiredSessionIds,
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -184,8 +202,16 @@ describe("useWorkspaceCommitLifecycle", () => {
 			await result.current.handleInspectorCommitAction("create-pr");
 		});
 
+		// create-pr without inspector overrides forwards null model /
+		// effortLevel / fastMode — meaning "follow workspace defaults" — so
+		// the session row stays clean and the composer's normal fallback
+		// chain (settings.defaultEffort / .defaultFastMode / inferred model)
+		// kicks in.
 		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
 			actionKind: "create-pr",
+			model: null,
+			effortLevel: null,
+			fastMode: null,
 		});
 		expect(result.current.pendingPromptForSession).toMatchObject({
 			sessionId: "session-action",
@@ -199,13 +225,13 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
 		rerender({
 			completedSessionIds: new Set(["session-action"]),
 			interactionRequiredSessionIds: new Set<string>(),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -265,23 +291,23 @@ describe("useWorkspaceCommitLifecycle", () => {
 			defaultOptions: { queries: { retry: false } },
 		});
 
-		const selectedWorkspaceIdRef = { current: "workspace-1" };
+		const getSelectedWorkspaceId = () => "workspace-1" as string | null;
 		const onSelectSession = vi.fn();
 
 		const { result, rerender } = renderHook(
 			({
 				completedSessionIds,
 				abortedSessionIds,
-				sendingSessionIds,
+				busySessionIds,
 			}: {
 				completedSessionIds: Set<string>;
 				abortedSessionIds: Set<string>;
-				sendingSessionIds: Set<string>;
+				busySessionIds: Set<string>;
 			}) =>
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef,
+					getSelectedWorkspaceId,
 					selectedRepoId: "repo-1",
 					selectedWorkspaceTargetBranch: "main",
 					changeRequest: null,
@@ -290,14 +316,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 					completedSessionIds,
 					abortedSessionIds,
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds,
+					busySessionIds,
 					onSelectSession,
 				}),
 			{
 				initialProps: {
 					completedSessionIds: new Set<string>(),
 					abortedSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 				},
 				wrapper: createWrapper(queryClient),
 			},
@@ -317,15 +343,15 @@ describe("useWorkspaceCommitLifecycle", () => {
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set<string>(),
-			sendingSessionIds: new Set(["session-action"]),
+			busySessionIds: new Set(["session-action"]),
 		});
 
-		// User aborts: session leaves sendingSessionIds and enters
+		// User aborts: session leaves busySessionIds and enters
 		// abortedSessionIds without ever reaching completedSessionIds.
 		rerender({
 			completedSessionIds: new Set<string>(),
 			abortedSessionIds: new Set(["session-action"]),
-			sendingSessionIds: new Set<string>(),
+			busySessionIds: new Set<string>(),
 		});
 
 		await waitFor(() => {
@@ -351,7 +377,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -361,7 +387,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession,
 					pushToast,
 				}),
@@ -424,7 +450,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
@@ -434,7 +460,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					},
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -472,14 +498,14 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: null,
 					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),
@@ -555,7 +581,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,
@@ -571,7 +597,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 				}),
 			{ wrapper: createWrapper(queryClient) },
@@ -615,6 +641,272 @@ describe("useWorkspaceCommitLifecycle", () => {
 		});
 	});
 
+	it("asks before merging while checks are still running", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "running",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("checks-running");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Merge before checks pass?");
+		expect(dialog.description).toBe(
+			"GitHub checks have not passed yet. Merge anyway and bypass them?",
+		);
+		expect(dialog.confirmLabel).toBe("Merge anyway");
+
+		act(() => {
+			dialog.onOpenChange(false);
+		});
+
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+			});
+		});
+	});
+
+	it("merges from the running-checks state after explicit bypass confirmation", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.mergeWorkspaceChangeRequest.mockResolvedValueOnce({
+			number: 53,
+			title: "Fix overflow",
+			url: "https://github.com/example/repo/pull/53",
+			state: "MERGED",
+			isMerged: true,
+		} satisfies ChangeRequestInfo);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		act(() => {
+			getConfirmDialogProps(result.current.mergeConfirmDialogNode).onConfirm();
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.mergeWorkspaceChangeRequest).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		expect(
+			queryClient.getQueryData<ChangeRequestInfo | null>(
+				helmorQueryKeys.workspaceChangeRequest("workspace-1"),
+			),
+		).toMatchObject({ state: "MERGED", isMerged: true });
+	});
+
+	it("keeps the checks confirmation when pending checks also block merge state", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "required gate",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("checks-running");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Merge before checks pass?");
+		expect(dialog.description).toBe(
+			"GitHub checks have not passed yet. Merge anyway and bypass them?",
+		);
+	});
+
+	it("asks before trying to merge when GitHub reports merge blocked", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("merge-blocked");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("merge-blocked");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Try blocked merge?");
+		expect(dialog.description).toBe(
+			"GitHub says this merge is blocked. Try anyway?",
+		);
+		expect(dialog.confirmLabel).toBe("Try anyway");
+
+		act(() => {
+			dialog.onOpenChange(false);
+		});
+
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+			});
+		});
+	});
+
 	it("rolls back optimistic group + detail moves when merge fails", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -654,7 +946,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,
@@ -670,7 +962,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast: vi.fn(),
 				}),
@@ -699,6 +991,139 @@ describe("useWorkspaceCommitLifecycle", () => {
 		).toBe("review");
 	});
 
+	it("queues a review prompt with the configured modelId when handleInspectorReviewAction runs", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: {
+						number: 99,
+						title: "Add Review PR button",
+						url: "https://github.com/example/repo/pull/99",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({
+				modelId: "review-model",
+			});
+		});
+
+		// Review pins the configured model on the session row at create
+		// time so the composer reads it off `currentSession`. The pending
+		// prompt itself is now just `{ sessionId, prompt }`.
+		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+			actionKind: "review",
+			model: "review-model",
+			effortLevel: null,
+			fastMode: null,
+		});
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+		});
+		// New review prompt diffs against the target ref, no PR/MR machinery.
+		expect(result.current.pendingPromptForSession?.prompt ?? "").toContain(
+			"Review the changes on this branch relative to `origin/main`",
+		);
+		expect(onSelectSession).toHaveBeenCalledWith("session-action");
+	});
+
+	it("forwards a null modelId untouched (composer falls back to the workspace default)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					selectedWorkspaceTargetBranch: "main",
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({ modelId: null });
+		});
+
+		// A null modelId means "follow workspace default" — it's forwarded
+		// to createSession as null so the row stays NULL and the composer's
+		// inferDefaultModelId chain takes over.
+		expect(apiMocks.createSession).toHaveBeenCalledWith("workspace-1", {
+			actionKind: "review",
+			model: null,
+			effortLevel: null,
+			fastMode: null,
+		});
+		expect(result.current.pendingPromptForSession).toMatchObject({
+			sessionId: "session-action",
+		});
+	});
+
+	it("ignores handleInspectorReviewAction when no workspace is selected", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectSession = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: null,
+					getSelectedWorkspaceId: () => null,
+					selectedRepoId: null,
+					changeRequest: null,
+					forgeActionStatus: EMPTY_FORGE_ACTION_STATUS,
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await act(async () => {
+			await result.current.handleInspectorReviewAction({
+				modelId: "review-model",
+			});
+		});
+
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+		expect(onSelectSession).not.toHaveBeenCalled();
+		expect(result.current.pendingPromptForSession).toBeNull();
+	});
+
 	it("shows a destructive workspace toast when merge fails", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: {
@@ -717,7 +1142,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 				useWorkspaceCommitLifecycle({
 					queryClient,
 					selectedWorkspaceId: "workspace-1",
-					selectedWorkspaceIdRef: { current: "workspace-1" },
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
 					selectedRepoId: "repo-1",
 					changeRequest: {
 						number: 53,
@@ -733,7 +1158,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
 					completedSessionIds: new Set<string>(),
 					interactionRequiredSessionIds: new Set<string>(),
-					sendingSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
 					onSelectSession: vi.fn(),
 					pushToast,
 				}),

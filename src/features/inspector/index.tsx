@@ -24,6 +24,7 @@ import { TerminalInstancePanel } from "./sections/terminal";
 import {
 	closeTerminal,
 	createTerminal,
+	setTerminalHoverZoomDisabled,
 	subscribeToWorkspaceList,
 	TERMINAL_INSTANCE_LIMIT,
 	type TerminalInstance,
@@ -36,12 +37,18 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceBranch?: string | null;
 	workspaceTargetBranch?: string | null;
 	workspaceRemote?: string | null;
+	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
+	/** Timestamp from `WorkspaceDetail.setupCompletedAt`. Null when setup
+	 * was never run (or skipped); drives the Setup tab placeholder copy
+	 * and the "default to Run tab" behaviour after restart. */
+	workspaceSetupCompletedAt?: string | null;
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
+	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
 	onQueuePendingPromptForSession?: (request: {
 		sessionId: string;
@@ -64,14 +71,18 @@ type WorkspaceInspectorSidebarProps = {
 export function WorkspaceInspectorSidebar({
 	workspaceId,
 	workspaceRootPath,
+	workspaceBranch,
 	workspaceTargetBranch,
 	workspaceRemote,
+	workspaceRemoteUrl,
 	workspaceState,
+	workspaceSetupCompletedAt,
 	repoId,
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
 	onCommitAction,
+	onReviewAction,
 	currentSessionId,
 	onQueuePendingPromptForSession,
 	commitButtonMode,
@@ -82,6 +93,7 @@ export function WorkspaceInspectorSidebar({
 }: WorkspaceInspectorSidebarProps) {
 	const {
 		actionsHeight,
+		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
@@ -89,19 +101,23 @@ export function WorkspaceInspectorSidebar({
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
+		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
+		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
+		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
 		workspaceRootPath,
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
+		workspaceState: workspaceState ?? null,
 	});
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
@@ -132,6 +148,7 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"setup",
 		!!repoScripts?.setupScript?.trim(),
+		workspaceSetupCompletedAt ?? null,
 	);
 	const runScriptState = useScriptStatus(
 		workspaceId ?? null,
@@ -165,6 +182,14 @@ export function WorkspaceInspectorSidebar({
 		const next = createTerminal(repoId, workspaceId);
 		if (next) setActiveTab(next.id);
 	}, [repoId, workspaceId, setActiveTab]);
+
+	const handleToggleTerminalHoverZoom = useCallback(
+		(instanceId: string, disabled: boolean) => {
+			if (!workspaceId) return;
+			setTerminalHoverZoomDisabled(workspaceId, instanceId, disabled);
+		},
+		[workspaceId],
+	);
 
 	const handleCloseTerminal = useCallback(
 		(instanceId: string) => {
@@ -345,11 +370,16 @@ export function WorkspaceInspectorSidebar({
 	// that doesn't benefit from — and shouldn't trigger — the enlargement.
 	const scriptTabState =
 		activeTab === "setup" ? setupScriptState : runScriptState;
+	const activeTerminalInstance = isTerminalTabActive
+		? terminalInstances.find((t) => t.id === activeTab)
+		: undefined;
 	const canHoverExpand = isTerminalTabActive
-		? true
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
+		? appSettings.terminalHoverExpansion &&
+			!activeTerminalInstance?.hoverZoomDisabled
+		: appSettings.terminalHoverExpansion &&
+			(scriptTabState === "running" ||
+				scriptTabState === "success" ||
+				scriptTabState === "failure");
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -362,9 +392,10 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<ChangesSection
-				bodyHeight={changesHeight}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
+				workspaceBranch={workspaceBranch ?? null}
+				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
@@ -376,36 +407,41 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
+				bodyHeight={changesHeight}
+				animatePanelToggle={isPanelToggleAnimating}
+				isResizing={isResizing}
 			/>
-
-			<HorizontalResizeHandle
-				onMouseDown={handleResizeStart("actions")}
-				isActive={isActionsResizing}
-			/>
-
+			{actionsOpen ? (
+				<HorizontalResizeHandle
+					onMouseDown={handleResizeStart("actions")}
+					isActive={isActionsResizing}
+				/>
+			) : null}
 			<ActionsSection
 				workspaceId={workspaceId ?? null}
 				workspaceState={workspaceState ?? null}
 				repoId={repoId ?? null}
 				workspaceRemote={workspaceRemote ?? null}
 				sectionRef={actionsRef}
+				open={actionsOpen}
+				onToggle={handleToggleActions}
 				bodyHeight={actionsHeight}
-				expanded={!tabsOpen}
+				isResizing={isResizing}
 				onCommitAction={onCommitAction}
+				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
 				onQueuePendingPromptForSession={onQueuePendingPromptForSession}
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
+				animatePanelToggle={isPanelToggleAnimating}
 			/>
-
-			{tabsOpen && (
+			{tabsOpen ? (
 				<HorizontalResizeHandle
 					onMouseDown={handleResizeStart("tabs")}
 					isActive={isTabsResizing}
 				/>
-			)}
-
+			) : null}
 			<InspectorTabsSection
 				wrapperRef={tabsWrapperRef}
 				open={tabsOpen}
@@ -418,13 +454,18 @@ export function WorkspaceInspectorSidebar({
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
+				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
+				bodyHeight={tabsBodyHeight}
+				animatePanelToggle={isPanelToggleAnimating}
+				isResizing={isResizing}
 			>
 				<SetupTab
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
 					setupScript={repoScripts?.setupScript ?? null}
+					setupCompletedAt={workspaceSetupCompletedAt ?? null}
 					isActive={activeTab === "setup"}
 					onOpenSettings={handleOpenSettings}
 				/>

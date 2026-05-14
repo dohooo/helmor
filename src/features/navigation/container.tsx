@@ -8,11 +8,15 @@ type WorkspaceToastVariant = "default" | "destructive";
 
 type WorkspacesSidebarContainerProps = {
 	selectedWorkspaceId: string | null;
-	sendingWorkspaceIds?: Set<string>;
+	autoSelectEnabled?: boolean;
+	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
+	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -27,27 +31,32 @@ type WorkspacesSidebarContainerProps = {
 export const WorkspacesSidebarContainer = memo(
 	function WorkspacesSidebarContainer({
 		selectedWorkspaceId,
-		sendingWorkspaceIds,
+		autoSelectEnabled = true,
+		busyWorkspaceIds,
 		interactionRequiredWorkspaceIds,
 		newWorkspaceShortcut,
 		addRepositoryShortcut,
 		onSelectWorkspace,
+		onOpenNewWorkspace,
+		onAddRepositoryNeedsStart,
+		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
 			addingRepository,
 			archivingWorkspaceIds,
 			archivedRows,
-			availableRepositories,
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
+			sidebarGrouping,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
-			handleCreateWorkspaceFromRepo,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
+			handleMoveRepositoryInSidebar,
+			handleMoveWorkspaceInSidebar,
 			handleOpenCloneDialog,
 			handleRestoreWorkspace,
 			handleSelectWorkspace,
@@ -58,7 +67,10 @@ export const WorkspacesSidebarContainer = memo(
 			setIsCloneDialogOpen,
 		} = useWorkspacesSidebarController({
 			selectedWorkspaceId,
+			autoSelectEnabled,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
+			onAddRepositoryNeedsStart,
 			pushWorkspaceToast,
 		});
 
@@ -66,11 +78,11 @@ export const WorkspacesSidebarContainer = memo(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={archivedRows}
-				availableRepositories={availableRepositories}
+				sidebarGrouping={sidebarGrouping}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
-				sendingWorkspaceIds={sendingWorkspaceIds}
+				busyWorkspaceIds={busyWorkspaceIds}
 				interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 				newWorkspaceShortcut={newWorkspaceShortcut}
 				addRepositoryShortcut={addRepositoryShortcut}
@@ -85,10 +97,10 @@ export const WorkspacesSidebarContainer = memo(
 				onSubmitClone={handleCloneFromUrl}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
-				onCreateWorkspace={(repoId) => {
-					void handleCreateWorkspaceFromRepo(repoId);
-				}}
+				onOpenNewWorkspace={onOpenNewWorkspace}
+				onCreateWorkspaceForRepo={onAddRepositoryNeedsStart}
 				onArchiveWorkspace={handleArchiveWorkspace}
+				onMoveLocalToWorktree={onMoveLocalToWorktree}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}
 				onDeleteWorkspace={handleDeleteWorkspace}
@@ -100,6 +112,20 @@ export const WorkspacesSidebarContainer = memo(
 				}}
 				onTogglePin={(workspaceId, pinned) => {
 					void handleTogglePin(workspaceId, pinned);
+				}}
+				onMoveWorkspaceInSidebar={(
+					workspaceId,
+					targetGroupId,
+					beforeWorkspaceId,
+				) => {
+					void handleMoveWorkspaceInSidebar(
+						workspaceId,
+						targetGroupId,
+						beforeWorkspaceId,
+					);
+				}}
+				onMoveRepositoryInSidebar={(repoId, beforeRepoId) => {
+					void handleMoveRepositoryInSidebar(repoId, beforeRepoId);
 				}}
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);

@@ -1,5 +1,5 @@
 import { ChevronsRight, ExternalLink } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,6 +58,8 @@ function getShortcutIdForCommitMode(
 		case "fix":
 		case "resolve-conflicts":
 			return "action.fixErrors";
+		case "checks-running":
+		case "merge-blocked":
 		case "merge":
 			return "action.mergePr";
 		default:
@@ -133,17 +135,27 @@ export function GitSectionHeader({
 	//   - Background polling on stable data (would be noisy).
 	//   - Active lifecycle phases (creating/streaming/verifying) — the button
 	//     itself shows a busy spinner, additional shimmer is redundant.
-	const isComputing = isRefreshing || commitButtonState === "disabled";
+	const [forgeConnecting, setForgeConnecting] = useState(false);
+	const isComputing =
+		isRefreshing || commitButtonState === "disabled" || forgeConnecting;
 	const showShimmer = useMinDisplayDuration(
 		isComputing,
 		SHIMMER_MIN_DISPLAY_MS,
 	);
 
-	const cliStatus = forgeDetection?.cli ?? null;
-	const cliNeedsAttention =
-		cliStatus?.status === "unauthenticated" ||
-		forgeRemoteState === "unauthenticated";
-	const showForgeOnboarding = cliNeedsAttention && forgeDetection !== null;
+	// Per-repo auth state is the source of truth in the multi-account
+	// architecture: `forgeRemoteState` already covers both "no accounts
+	// at all" (per-repo lookup fails because there's nothing to bind)
+	// and "this repo's bound account is broken". The legacy
+	// `cliStatus.status === "unauthenticated"` clause was redundant
+	// global-state plumbing.
+	const showForgeOnboarding =
+		forgeRemoteState === "unauthenticated" && forgeDetection !== null;
+	useEffect(() => {
+		if (!showForgeOnboarding) {
+			setForgeConnecting(false);
+		}
+	}, [showForgeOnboarding]);
 	const showButton =
 		hasChanges ||
 		commitButtonState === "busy" ||
@@ -275,12 +287,15 @@ export function GitSectionHeader({
 								variant="outline"
 								size="xs"
 								className={cn(
-									"self-center bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
+									"self-center rounded-md bg-transparent font-normal tracking-[0.01em] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:opacity-80",
 									(commitButtonMode === "fix" ||
+										commitButtonMode === "merge-blocked" ||
 										commitButtonMode === "closed") &&
 										"border-[var(--workspace-pr-closed-accent)] text-[var(--workspace-pr-closed-accent)] hover:text-[var(--workspace-pr-closed-accent)]",
 									commitButtonMode === "resolve-conflicts" &&
 										"border-[var(--workspace-pr-conflicts-accent)] text-[var(--workspace-pr-conflicts-accent)] hover:text-[var(--workspace-pr-conflicts-accent)]",
+									commitButtonMode === "checks-running" &&
+										"border-[var(--workspace-pr-checks-running-accent)] text-[var(--workspace-pr-checks-running-accent)] hover:text-[var(--workspace-pr-checks-running-accent)]",
 									commitButtonMode === "merge" &&
 										"border-[var(--workspace-pr-open-accent)] text-[var(--workspace-pr-open-accent)] hover:text-[var(--workspace-pr-open-accent)]",
 									commitButtonMode === "merged" &&
@@ -333,7 +348,8 @@ export function GitSectionHeader({
 					<ForgeCliTrigger
 						detection={forgeDetection}
 						workspaceId={workspaceId}
-						authRequired={forgeRemoteState === "unauthenticated"}
+						connecting={forgeConnecting}
+						onConnectingChange={setForgeConnecting}
 					/>
 				) : (
 					<div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
@@ -344,7 +360,7 @@ export function GitSectionHeader({
 								size="xs"
 								aria-label="Continue workspace"
 								className={cn(
-									"shrink-0 justify-start overflow-hidden self-center border-dashed border-[var(--workspace-pr-merged-accent)] bg-transparent px-0 font-normal text-[var(--workspace-pr-merged-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-200 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-merged-accent)] hover:opacity-80",
+									"shrink-0 justify-start overflow-hidden self-center rounded-md border-dashed border-[var(--workspace-pr-merged-accent)] bg-transparent px-0 font-normal text-[var(--workspace-pr-merged-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-200 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-merged-accent)] hover:opacity-80",
 								)}
 								style={{ width: continueWidth }}
 								disabled={isContinuingWorkspace}
@@ -373,7 +389,7 @@ export function GitSectionHeader({
 											mode={commitButtonMode}
 											state={commitButtonState}
 											changeRequestName={changeRequestName}
-											className="self-center"
+											className="self-center rounded-md"
 											onCommit={onCommit}
 										/>
 									</span>

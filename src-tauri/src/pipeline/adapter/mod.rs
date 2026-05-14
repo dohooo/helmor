@@ -162,6 +162,21 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
+        // codex /goal lifecycle markers (Goal paused / resumed / cleared
+        // / set: <objective>). Inserted by `codex_goal::write_codex_goal_meta`
+        // out-of-band whenever the goal state transitions in a way the
+        // user should see in chat history.
+        if msg_type == Some("goal_status") {
+            let text = parsed
+                .and_then(|p| p.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("Goal updated")
+                .to_string();
+            result.push(make_system(msg, &text));
+            i += 1;
+            continue;
+        }
+
         // assistant (by JSON type or by role for plain-text live messages)
         if msg_type == Some("assistant") || (parsed.is_none() && msg.role == MessageRole::Assistant)
         {
@@ -274,16 +289,20 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let files: Vec<String> = parsed
-                .and_then(|p| p.get("files"))
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let parts = grouping::split_user_text_with_files(&text, &files, &msg.id);
+            let extract_strs = |key: &str| -> Vec<String> {
+                parsed
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let files = extract_strs("files");
+            let images = extract_strs("images");
+            let parts = grouping::split_user_text_with_files(&text, &files, &images, &msg.id);
             result.push(ThreadMessageLike {
                 role: MessageRole::User,
                 id: Some(msg.id.clone()),
@@ -423,7 +442,7 @@ fn map_stop_reason(parsed: Option<&Value>) -> MessageStatus {
 /// 1. **Merge tool_result** — fold into the preceding assistant in-place.
 /// 2. **Prompt fold** — subagent prompt (`parent_tool_use_id` set) becomes
 ///    a synthesized `Prompt` ToolCall for the grouping pass.
-/// 3. **Stray / normal** — drop malformed wrappers, render the rest.
+/// 3. **Stray SDK wrapper** — drop provider context that is not human input.
 fn convert_user_type_msg(
     msg: &IntermediateMessage,
     parsed: Option<&Value>,
@@ -475,15 +494,11 @@ fn convert_user_type_msg(
         return;
     }
 
-    // 3. Stray top-level user wrapper — non-tool_result with no preceding
-    //    assistant to attach context to. Treated as a malformed SDK event
-    //    and dropped. Anything else is a real user turn and renders
-    //    normally.
-    let has_prev_assistant = out.last().is_some_and(|m| m.role == MessageRole::Assistant);
-    if parsed.is_some() && !has_prev_assistant {
-        return;
+    // 3. Real human input is persisted as `user_prompt`; raw SDK
+    //    `type=user` wrappers can contain hidden provider context.
+    if parsed.is_none() {
+        out.push(convert_user_message(msg, parsed));
     }
-    out.push(convert_user_message(msg, parsed));
 }
 
 /// Convert a single `system` event into zero or one ThreadMessageLike,

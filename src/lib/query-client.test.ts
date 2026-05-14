@@ -1,3 +1,4 @@
+import { dehydrate } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type {
 	ChangeRequestInfo,
@@ -7,7 +8,9 @@ import type {
 } from "./api";
 import {
 	changeRequestRefetchInterval,
+	createHelmorQueryClient,
 	forgeActionStatusRefetchInterval,
+	PERSIST_META,
 	workspaceForgeRefetchInterval,
 } from "./query-client";
 
@@ -74,7 +77,6 @@ function forgeDetection(
 			changeRequestFullName: "pull request",
 			connectAction: "Connect GitHub",
 		},
-		cli: null,
 		detectionSignals: [],
 		...overrides,
 	};
@@ -236,5 +238,66 @@ describe("workspaceForgeRefetchInterval", () => {
 		expect(
 			workspaceForgeRefetchInterval(forgeDetection({ provider: "unknown" })),
 		).toBe(false);
+	});
+});
+
+describe("createHelmorQueryClient dehydrate filter", () => {
+	it("only persists queries that opt in via meta.persist", () => {
+		const client = createHelmorQueryClient();
+		// Two queries explicitly opted in.
+		client
+			.getQueryCache()
+			.build(client, {
+				queryKey: ["workspaceGroups"],
+				queryFn: async () => [{ id: "g1" }],
+				meta: PERSIST_META,
+			})
+			.setData([{ id: "g1" }]);
+		client
+			.getQueryCache()
+			.build(client, {
+				queryKey: ["workspaceForge", "ws-1"],
+				queryFn: async () => ({ provider: "github" }),
+				meta: PERSIST_META,
+			})
+			.setData({ provider: "github" });
+		// Two without meta — must be excluded.
+		client.setQueryData(["workspaceFiles", "/path"], [{ name: "a.ts" }]);
+		client.setQueryData(["sessionMessages", "s1", "thread"], []);
+
+		const dumped = dehydrate(client);
+		const roots = dumped.queries.map((q) => q.queryKey[0]).sort();
+		expect(roots).toEqual(["workspaceForge", "workspaceGroups"]);
+	});
+
+	it("skips pending queries even when meta.persist is set", () => {
+		const client = createHelmorQueryClient();
+		// A query that's never been fulfilled stays in `pending` state; the
+		// default hydration contract drops those, and our override must too.
+		client.getQueryCache().build(client, {
+			queryKey: ["workspaceGroups"],
+			queryFn: () => new Promise(() => {}),
+			meta: PERSIST_META,
+		});
+
+		const dumped = dehydrate(client);
+		expect(dumped.queries).toHaveLength(0);
+	});
+
+	it("ignores meta values that are not the literal `{ persist: true }`", () => {
+		const client = createHelmorQueryClient();
+		// `meta: {}` and absent meta both fall through.
+		client
+			.getQueryCache()
+			.build(client, {
+				queryKey: ["workspaceGroups"],
+				queryFn: async () => [],
+				meta: {},
+			})
+			.setData([]);
+		client.setQueryData(["repositories"], []);
+
+		const dumped = dehydrate(client);
+		expect(dumped.queries).toHaveLength(0);
 	});
 });

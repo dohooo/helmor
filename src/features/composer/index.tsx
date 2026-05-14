@@ -3,13 +3,15 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
-import type { LexicalEditor } from "lexical";
+import type { LexicalEditor, SerializedEditorState } from "lexical";
 import { $getRoot } from "lexical";
 import {
 	ArrowUp,
 	Check,
 	ChevronDown,
 	ClipboardList,
+	Clock3,
+	Layers,
 	MessageSquareMore,
 	Plus,
 	Square,
@@ -18,6 +20,7 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -33,8 +36,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
@@ -53,11 +56,6 @@ import { clampEffort } from "@/lib/workspace-helpers";
 import { ComposerButton } from "./button";
 import { ContextBar } from "./context-bar";
 import { ContextUsageRing } from "./context-usage-ring";
-import type {
-	DeferredToolResponseHandler,
-	DeferredToolResponseOptions,
-} from "./deferred-tool";
-import { DeferredToolPanel } from "./deferred-tool-panel";
 import { clearPersistedDraft } from "./draft-storage";
 import { $insertAddDirTrigger } from "./editor/add-dir/insert";
 import { AddDirTriggerNode } from "./editor/add-dir/trigger-node";
@@ -81,10 +79,13 @@ import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
-import type { ElicitationResponseHandler } from "./elicitation";
-import { ElicitationPanel } from "./elicitation-panel";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
+import { GoalReplaceConfirm } from "./goal-replace-confirm";
+import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
+import type { UserInputResponseHandler } from "./user-input";
+import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
 
@@ -100,6 +101,13 @@ type WorkspaceComposerProps = {
 			/** Submit with the opposite follow-up behavior (queue ↔ steer)
 			 *  for this single message, leaving the persistent setting alone. */
 			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+			/** Snapshot of the editor's full Lexical state at submit time.
+			 *  Captured synchronously before the editor clears so callers
+			 *  that need to round-trip chips/text/images (e.g. the kanban
+			 *  "backlog" submit handler that copies the draft into a freshly
+			 *  created session) can do so without a re-encode pass. */
+			editorStateSnapshot?: SerializedEditorState;
 		},
 	) => void;
 	disabled?: boolean;
@@ -138,11 +146,20 @@ type WorkspaceComposerProps = {
 	addDirCandidates?: readonly CandidateDirectory[];
 	/** Called when the user selects an entry from the /add-dir popup. */
 	onPickAddDir?: (entry: AddDirPickerEntry) => void;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
+	/** When set, the composer body is replaced with a GoalReplaceConfirm
+	 *  panel asking the user whether to overwrite the active codex goal.
+	 *  Same in-place takeover pattern as `pendingUserInput`. */
+	goalReplace?: {
+		currentObjective: string;
+		newObjective: string;
+		onReplace: () => void;
+		onCancel: () => void;
+	} | null;
 	hasPlanReview?: boolean;
 	/** When true, the ring is always rendered next to the send button.
 	 *  When false (the default), the ring auto-reveals only after usage
@@ -153,25 +170,36 @@ type WorkspaceComposerProps = {
 	/** Provider's own session id (Claude Code UUID). Threaded into the
 	 *  context-usage ring for its hover-triggered live fetch. */
 	providerSessionId?: string | null;
-	/** Agent provider for this session — gates the Claude-only rich fetch. */
-	agentType?: "claude" | "codex" | null;
+	/** Agent provider for this session — gates the Claude-only rich fetch
+	 *  and selects which rate-limits API to query. `"cursor"` exists but
+	 *  Cursor's SDK doesn't expose rate-limit / context-usage endpoints
+	 *  yet, so the indicators just hide for cursor sessions. */
+	agentType?: "claude" | "codex" | "cursor" | null;
 	focusShortcut?: string | null;
 	togglePlanShortcut?: string | null;
 	/** Hotkey that submits the current draft with the opposite follow-up
 	 *  behavior (queue ↔ steer) for one message. */
 	toggleFollowUpShortcut?: string | null;
+	toggleContextPanelShortcut?: string | null;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	/** Custom placeholder string. When omitted, falls back to the default
+	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
+	 *  nudges the user toward composing inbox sources for new workspaces. */
+	placeholder?: string;
+	startSubmitMenu?: boolean;
+	startSubmitMode?: StartSubmitMode;
+	onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
 const EMPTY_CANDIDATE_DIRECTORIES: readonly CandidateDirectory[] = [];
 const noopPickAddDir = (_entry: AddDirPickerEntry) => {};
-const noopDeferredToolResponse = (
-	_deferred: PendingDeferredTool,
-	_behavior: "allow" | "deny",
-	_options?: DeferredToolResponseOptions,
-) => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerProps["onPermissionResponse"]
+> = () => {};
 // ---------------------------------------------------------------------------
 // Lexical editor config (stable reference — defined outside component)
 // ---------------------------------------------------------------------------
@@ -212,6 +240,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
+	placeholder,
 	slashCommands = EMPTY_SLASH_COMMANDS,
 	slashCommandsLoading = false,
 	slashCommandsError = false,
@@ -222,11 +251,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	linkedDirectoriesDisabled = false,
 	addDirCandidates = EMPTY_CANDIDATE_DIRECTORIES,
 	onPickAddDir = noopPickAddDir,
-	pendingElicitation = null,
-	onElicitationResponse = noopElicitationResponse,
-	elicitationResponsePending = false,
-	pendingDeferredTool = null,
-	onDeferredToolResponse = noopDeferredToolResponse,
+	pendingUserInput = null,
+	onUserInputResponse = noopUserInputResponse,
+	userInputResponsePending = false,
+	pendingPermission = null,
+	onPermissionResponse = noopPermissionResponse,
+	goalReplace = null,
 	hasPlanReview = false,
 	alwaysShowContextUsage = false,
 	sessionId = null,
@@ -235,6 +265,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	focusShortcut = null,
 	togglePlanShortcut = null,
 	toggleFollowUpShortcut = null,
+	toggleContextPanelShortcut = null,
+	contextPanelOpen = false,
+	onToggleContextPanel,
+	startSubmitMenu = false,
+	startSubmitMode = "startNow",
+	onStartSubmitModeChange,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -290,6 +326,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const supportsEffort = availableEffortLevels.length > 0;
 	const supportsFastMode = selectedModel?.supportsFastMode === true;
 	const supportsContextUsage = selectedModel?.supportsContextUsage !== false;
+	// Cursor SDK auto-handles plans internally — no toggle to expose.
+	const supportsPlanMode = selectedModel?.provider !== "cursor";
 	const effectiveEffort = useMemo(
 		() => clampEffort(effortLevel, availableEffortLevels),
 		[effortLevel, availableEffortLevels],
@@ -310,9 +348,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		effortLevel,
 		onSelectEffort,
 	]);
-	const hasPendingElicitation = pendingElicitation !== null;
-	const hasPendingDeferredTool = pendingDeferredTool !== null;
-	const hasPendingInteraction = hasPendingElicitation || hasPendingDeferredTool;
+	const hasPendingUserInput = pendingUserInput !== null;
+	const hasPendingPermission = pendingPermission !== null;
+	const hasGoalReplace = goalReplace !== null;
+	const hasPendingInteraction =
+		hasPendingUserInput || hasPendingPermission || hasGoalReplace;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	useEffect(() => {
@@ -336,7 +376,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		);
 	}, []);
 	const composerToolbarTriggerClassName =
-		"cursor-pointer rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+		"cursor-interactive rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	// Shared gate for Send and Steer — the only difference is whether a
 	// stream is currently running. When sending, ⌘Enter / Enter still
 	// fires `handleSubmit`; the use-streaming hook dispatches to the
@@ -346,7 +386,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		!submitDisabled &&
 		!hasPendingInteraction &&
 		Boolean(selectedModel) &&
-		hasContent;
+		(hasContent || startSubmitMenu);
 	const sendDisabled = !submitEnabled || sending;
 	const steerDisabled = !submitEnabled || !sending;
 	const submitDisabledForPlugin = !submitEnabled;
@@ -434,7 +474,10 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	}, [hasPlanReview, onSubmit, contextKey]);
 
 	const submitDraft = useCallback(
-		(options?: { oppositeFollowUp?: boolean }) => {
+		(options?: {
+			oppositeFollowUp?: boolean;
+			startSubmitMode?: StartSubmitMode;
+		}) => {
 			const editor = editorRef.current;
 			if (!editor) return;
 			let prompt = "";
@@ -454,30 +497,69 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				files.length === 0 &&
 				customTags.length === 0
 			)
-				return;
-			if (options?.oppositeFollowUp) {
-				onSubmit(prompt, images, files, customTags, {
-					oppositeFollowUp: true,
-				});
-			} else {
-				onSubmit(prompt, images, files, customTags);
-			}
+				if (!startSubmitMenu) return;
+			// Snapshot the editor's full Lexical state BEFORE the clear below
+			// wipes it. Synchronous capture is critical because callers that
+			// want to round-trip the draft (e.g. kanban "backlog" submit
+			// copying chips/text/images into a freshly-created session) read
+			// from this snapshot — by the time their async work runs, the
+			// editor is already empty.
+			const editorStateSnapshot = editor
+				.getEditorState()
+				.toJSON() as SerializedEditorState;
+			onSubmit(prompt, images, files, customTags, {
+				oppositeFollowUp: options?.oppositeFollowUp,
+				startSubmitMode:
+					prompt ||
+					images.length > 0 ||
+					files.length > 0 ||
+					customTags.length > 0
+						? options?.startSubmitMode
+						: "createOnly",
+				editorStateSnapshot,
+			});
 			editor.update(() => {
 				$getRoot().clear();
 			});
 			clearPersistedDraft(contextKey);
 			setHasContent(false);
 		},
-		[onSubmit, contextKey],
+		[onSubmit, contextKey, startSubmitMenu],
 	);
 
 	const handleSubmit = useCallback(() => {
-		submitDraft();
-	}, [submitDraft]);
+		submitDraft(startSubmitMenu ? { startSubmitMode } : undefined);
+	}, [startSubmitMenu, startSubmitMode, submitDraft]);
 
 	const handleSubmitOpposite = useCallback(() => {
 		submitDraft({ oppositeFollowUp: true });
 	}, [submitDraft]);
+
+	const handleStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			submitDraft({ startSubmitMode: mode });
+		},
+		[submitDraft],
+	);
+
+	const handleSelectStartSubmitMode = useCallback(
+		(mode: StartSubmitMode) => {
+			onStartSubmitModeChange?.(mode);
+			handleStartSubmitMode(mode);
+		},
+		[handleStartSubmitMode, onStartSubmitModeChange],
+	);
+	const alternateStartSubmitMode: StartSubmitMode =
+		startSubmitMode === "saveForLater" ? "startNow" : "saveForLater";
+	const preferredStartSubmitLabel = !hasContent
+		? "New Workspace"
+		: startSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
+	const alternateStartSubmitLabel =
+		alternateStartSubmitMode === "saveForLater"
+			? "Save for later"
+			: "Start now";
 
 	const handleComposerKeyDownCapture = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -499,7 +581,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
-			if (togglePlanShortcut && hotkey === togglePlanShortcut) {
+			if (
+				togglePlanShortcut &&
+				hotkey === togglePlanShortcut &&
+				supportsPlanMode
+			) {
 				event.preventDefault();
 				event.stopPropagation();
 				onChangePermissionMode(permissionMode === "plan" ? "default" : "plan");
@@ -509,6 +595,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			inputDisabled,
 			onChangePermissionMode,
 			permissionMode,
+			supportsPlanMode,
 			togglePlanShortcut,
 			toggleFollowUpShortcut,
 			handleSubmitOpposite,
@@ -537,17 +624,25 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				Workspace input
 			</label>
 
-			{hasPendingElicitation ? (
-				<ElicitationPanel
-					elicitation={pendingElicitation!}
-					disabled={disabled || elicitationResponsePending}
-					onResponse={onElicitationResponse}
+			{hasPendingUserInput ? (
+				<UserInputPanel
+					userInput={pendingUserInput!}
+					disabled={disabled || userInputResponsePending}
+					onResponse={onUserInputResponse}
 				/>
-			) : hasPendingDeferredTool ? (
-				<DeferredToolPanel
-					deferred={pendingDeferredTool!}
+			) : hasPendingPermission ? (
+				<PermissionPanel
+					permission={pendingPermission!}
 					disabled={disabled}
-					onResponse={onDeferredToolResponse}
+					onResponse={onPermissionResponse}
+				/>
+			) : hasGoalReplace ? (
+				<GoalReplaceConfirm
+					currentObjective={goalReplace.currentObjective}
+					newObjective={goalReplace.newObjective}
+					onReplace={goalReplace.onReplace}
+					onCancel={goalReplace.onCancel}
+					disabled={disabled}
 				/>
 			) : (
 				<>
@@ -612,7 +707,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
 										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
-											: "Ask to make changes, @mention files, run /commands"}
+											: (placeholder ??
+												"Ask to make changes, @mention files, run /commands")}
 									</div>
 								}
 								ErrorBoundary={LexicalErrorBoundary}
@@ -808,14 +904,21 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										<DropdownMenu>
 											<DropdownMenuTrigger
 												disabled={toolbarDisabled}
+												// Always-on muted baseline: `effort-max-text`
+												// paints via `-webkit-text-fill-color: transparent`
+												// without setting `color`, so without this
+												// removing the gradient class would briefly expose
+												// `text-foreground` and `transition-colors`
+												// animates the flash. Hover stays muted to avoid
+												// a second flash on dropdown close.
 												className={cn(
 													`flex items-center gap-0.5 ${composerToolbarTriggerClassName}`,
-													effectiveEffort === "max" ||
-														effectiveEffort === "xhigh"
-														? "effort-max-text"
-														: "text-muted-foreground",
+													"text-muted-foreground hover:text-muted-foreground",
+													(effectiveEffort === "max" ||
+														effectiveEffort === "xhigh") &&
+														"effort-max-text",
 													toolbarDisabled
-														? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+														? "cursor-not-allowed opacity-45 hover:bg-transparent"
 														: null,
 												)}
 											>
@@ -861,26 +964,67 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											</DropdownMenuContent>
 										</DropdownMenu>
 									)}
-									<ComposerButton
-										aria-label="Plan mode"
-										disabled={toolbarDisabled}
-										className={cn(
-											`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
-											permissionMode === "plan"
-												? "text-plan hover:text-plan"
-												: "text-muted-foreground/70 hover:text-muted-foreground/70",
-										)}
-										onClick={() =>
-											onChangePermissionMode(
+									{supportsPlanMode ? (
+										<ComposerButton
+											aria-label="Plan mode"
+											disabled={toolbarDisabled}
+											className={cn(
+												`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
 												permissionMode === "plan"
-													? "bypassPermissions"
-													: "plan",
-											)
-										}
-									>
-										<ClipboardList className="size-[13px]" strokeWidth={1.8} />
-										<span>Plan</span>
-									</ComposerButton>
+													? "text-plan hover:text-plan"
+													: "text-muted-foreground/70 hover:text-muted-foreground/70",
+											)}
+											onClick={() =>
+												onChangePermissionMode(
+													permissionMode === "plan"
+														? "bypassPermissions"
+														: "plan",
+												)
+											}
+										>
+											<ClipboardList
+												className="size-[13px]"
+												strokeWidth={1.8}
+											/>
+											<span>Plan</span>
+										</ComposerButton>
+									) : null}
+									{onToggleContextPanel ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<ComposerButton
+													aria-label="Add context"
+													aria-pressed={contextPanelOpen}
+													disabled={toolbarDisabled}
+													className={cn(
+														composerToolbarTriggerClassName,
+														contextPanelOpen
+															? "text-foreground"
+															: "text-muted-foreground/70 hover:text-muted-foreground/70",
+														toolbarDisabled
+															? "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground"
+															: null,
+													)}
+													onClick={onToggleContextPanel}
+												>
+													<Layers className="size-[13px]" strokeWidth={1.8} />
+												</ComposerButton>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+											>
+												<span>Add context</span>
+												{toggleContextPanelShortcut ? (
+													<InlineShortcutDisplay
+														hotkey={toggleContextPanelShortcut}
+														className="text-background/60"
+													/>
+												) : null}
+											</TooltipContent>
+										</Tooltip>
+									) : null}
 								</>
 							)}
 						</div>
@@ -910,7 +1054,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Request Changes"
 										onClick={handlePlanRequestChanges}
 										disabled={disabled || !hasContent}
-										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
 									>
 										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 										Request Changes
@@ -921,7 +1065,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Implement"
 										onClick={handlePlanImplement}
 										disabled={disabled}
-										className="my-0.5 h-7 cursor-pointer gap-1 rounded-lg px-2 text-[12px] transition-none"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none"
 									>
 										<Check className="size-3.5" strokeWidth={2} />
 										Implement
@@ -953,23 +1097,84 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 									) : null}
 								</div>
 							) : (
-								<Button
-									variant="outline"
-									size="icon"
-									aria-label="Send"
-									onClick={handleSubmit}
-									disabled={sendDisabled}
-									className="ml-1.5 rounded-[9px]"
-								>
-									<ArrowUp className="size-[15px]" strokeWidth={2.2} />
-								</Button>
+								<div className="ml-1.5 flex items-center">
+									{startSubmitMenu ? (
+										<DropdownMenu>
+											<ButtonGroup className="rounded-[9px]">
+												<Button
+													variant="outline"
+													size="sm"
+													aria-label={preferredStartSubmitLabel}
+													onClick={() => handleStartSubmitMode(startSubmitMode)}
+													disabled={sendDisabled}
+													className="gap-1.5 px-2.5"
+												>
+													{startSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2.2} />
+													)}
+													<span>{preferredStartSubmitLabel}</span>
+												</Button>
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="outline"
+														size="sm"
+														aria-label="Start options"
+														disabled={sendDisabled}
+														className="px-2.5"
+													>
+														<ChevronDown
+															className="size-3 text-muted-foreground"
+															strokeWidth={2}
+														/>
+													</Button>
+												</DropdownMenuTrigger>
+											</ButtonGroup>
+											<DropdownMenuContent
+												side="bottom"
+												align="end"
+												sideOffset={6}
+												className="min-w-[133px] -translate-x-px"
+											>
+												<DropdownMenuItem
+													onClick={() =>
+														handleSelectStartSubmitMode(
+															alternateStartSubmitMode,
+														)
+													}
+													disabled={sendDisabled}
+													className="gap-2"
+												>
+													{alternateStartSubmitMode === "saveForLater" ? (
+														<Clock3 className="size-3.5" strokeWidth={1.8} />
+													) : (
+														<ArrowUp className="size-3.5" strokeWidth={2} />
+													)}
+													<span>{alternateStartSubmitLabel}</span>
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : (
+										<Button
+											variant="outline"
+											size="icon"
+											aria-label="Send"
+											onClick={handleSubmit}
+											disabled={sendDisabled}
+											className="rounded-[9px]"
+										>
+											<ArrowUp className="size-[15px]" strokeWidth={2.2} />
+										</Button>
+									)}
+								</div>
 							)}
 						</div>
 					</div>
 				</>
 			)}
 
-			{sendError && hasPendingElicitation ? (
+			{sendError && hasPendingUserInput ? (
 				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
 					{sendError}
 				</div>

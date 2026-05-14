@@ -25,6 +25,7 @@ import {
 	listConductorWorkspaces,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
@@ -132,7 +133,7 @@ function ImportWorkspaceRow({
 	return (
 		<label
 			htmlFor={checkboxId}
-			className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
+			className="flex w-full cursor-interactive items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
 		>
 			<Checkbox
 				id={checkboxId}
@@ -252,12 +253,7 @@ export function ConductorImportPanel() {
 	}, [selectedIds.size, importableWorkspaces]);
 
 	const invalidateAfterImport = useCallback(() => {
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceGroups,
-		});
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.archivedWorkspaces,
-		});
+		requestSidebarReconcile(queryClient);
 		void queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.repositories,
 		});

@@ -1,0 +1,34 @@
+[
+	{
+		"call_id": "tool_a801f24d-be1a-409c-8b87-0f0ff97d019",
+		"name": "edit",
+		"status": "running",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/hello.md"
+		}
+	},
+	{
+		"call_id": "tool_a801f24d-be1a-409c-8b87-0f0ff97d019",
+		"name": "edit",
+		"status": "running",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/hello.md"
+		}
+	},
+	{
+		"call_id": "tool_a801f24d-be1a-409c-8b87-0f0ff97d019",
+		"name": "edit",
+		"status": "completed",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/hello.md"
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"linesAdded": 3,
+				"linesRemoved": 0,
+				"diffString": "--- /dev/null\n+++ b//tmp/cursor-tools-probe/probe-workspace/hello.md\n@@ -1 +1,4 @@\n+# Hello\n \n+This is a test file.\n+"
+			}
+		}
+	}
+]

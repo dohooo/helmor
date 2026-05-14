@@ -51,11 +51,11 @@ impl EditorFilesHarness {
             )
             .unwrap();
         connection
-			.execute(
-				"INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('workspace-1', 'repo-1', 'editor-mode', 'ready', 'in-progress')",
-				[],
-			)
-			.unwrap();
+				.execute(
+					"INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('workspace-1', 'repo-1', 'editor-mode', 'ready', 'in-progress', ?1)",
+					[crate::workspace::sidebar_order::ORDER_STEP],
+				)
+				.unwrap();
 
         let workspace_dir = crate::data_dir::workspace_dir("helmor", "editor-mode").unwrap();
         fs::create_dir_all(&workspace_dir).unwrap();
@@ -132,9 +132,12 @@ pub(super) fn test_db_with_workspace(
     )
     .unwrap();
     conn.execute(
-		"INSERT INTO workspaces (id, repository_id, directory_name, state, status, intended_target_branch)
-		 VALUES ('w1', 'r1', 'ws-dir', 'ready', 'in-progress', ?1)",
-		rusqlite::params![target],
+		"INSERT INTO workspaces (id, repository_id, directory_name, state, status, intended_target_branch, display_order)
+		 VALUES ('w1', 'r1', 'ws-dir', 'ready', 'in-progress', ?1, ?2)",
+		rusqlite::params![
+			target,
+			crate::workspace::sidebar_order::ORDER_STEP
+		],
 	)
 	.unwrap();
     conn

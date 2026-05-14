@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, RotateCcw, Settings2, Square } from "lucide-react";
+import { CircleCheck, Play, RotateCcw, Settings2, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -25,6 +25,11 @@ type SetupTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
 	setupScript: string | null;
+	/** Persisted timestamp of the last successful setup-script run for
+	 * this workspace. Non-null + no live in-memory entry → setup ran in
+	 * a previous session whose terminal output didn't survive the
+	 * restart; show a notice instead of the never-run placeholder. */
+	setupCompletedAt: string | null;
 	isActive: boolean;
 	onOpenSettings: () => void;
 };
@@ -33,6 +38,7 @@ export function SetupTab({
 	repoId,
 	workspaceId,
 	setupScript,
+	setupCompletedAt,
 	isActive,
 	onOpenSettings,
 }: SetupTabProps) {
@@ -47,10 +53,29 @@ export function SetupTab({
 	useEffect(() => {
 		if (!workspaceId) return;
 
+		// Only true when attach() ran before any entry existed — i.e. the
+		// auto-run case. Flipped off after the first lazy-mount replay (or
+		// when attach finds an existing entry) so subsequent status changes
+		// don't re-clear and re-write the whole buffer.
+		let needsLazyMount = true;
+
 		const existing = attach(workspaceId, "setup", {
 			onChunk: (data) => termRef.current?.write(data),
 			onStatusChange: (s) => {
 				setStatus(s);
+				if (s !== "idle" && needsLazyMount) {
+					needsLazyMount = false;
+					setHasRun(true);
+					// Replay chunks buffered before TerminalOutput mounted.
+					requestAnimationFrame(() => {
+						const entry = getScriptState(workspaceId, "setup");
+						const t = termRef.current;
+						if (!entry || !t) return;
+						t.clear();
+						if (entry.truncated) t.write(TRUNCATION_NOTICE);
+						for (const chunk of entry.chunks) t.write(chunk);
+					});
+				}
 				if (s === "exited") {
 					const state = getScriptState(workspaceId, "setup");
 					if (state?.exitCode === 0) {
@@ -63,6 +88,7 @@ export function SetupTab({
 		});
 
 		if (existing) {
+			needsLazyMount = false;
 			setHasRun(true);
 			setStatus(existing.status);
 			const replay = () => {
@@ -178,6 +204,26 @@ export function SetupTab({
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
 						Open settings
+					</Button>
+				</div>
+			) : setupCompletedAt ? (
+				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+					<CircleCheck
+						aria-label="Setup completed"
+						className="size-8 text-[var(--workspace-pr-open-accent)]"
+						strokeWidth={1.75}
+					/>
+					<p className="text-[13px] font-medium text-muted-foreground">
+						Setup completed
+					</p>
+					<Button
+						variant="outline"
+						size="sm"
+						className="mt-1 gap-1.5 text-[12px]"
+						onClick={handleRun}
+					>
+						<RotateCcw className="size-3" strokeWidth={2} />
+						Rerun setup
 					</Button>
 				</div>
 			) : (

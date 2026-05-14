@@ -99,6 +99,60 @@ impl ScriptProcessManager {
         }
     }
 
+    /// Signal every live script that matches `repo_id` and `script_type`
+    /// except the one whose workspace_id equals `keep_workspace_id`. Used
+    /// by the non-concurrent run mode to make a fresh run stop any other
+    /// run in the same repo before spawning. Returns the number of handles
+    /// that were signaled.
+    pub fn kill_others_in_repo(
+        &self,
+        repo_id: &str,
+        script_type: &str,
+        keep_workspace_id: Option<&str>,
+    ) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.iter()
+                .filter(|(k, _)| {
+                    k.0 == repo_id && k.1 == script_type && k.2.as_deref() != keep_workspace_id
+                })
+                .map(|(_, h)| h.clone())
+                .collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
+    /// Signal every live script and terminal handle the manager currently
+    /// owns. Used by the graceful-quit path so Run-tab scripts and
+    /// embedded-terminal PTY sessions don't outlive Helmor as orphan
+    /// process trees. Returns the number of handles that were signaled.
+    ///
+    /// Mirrors `kill_others_in_repo`'s lock discipline: snapshot the
+    /// handles under the map lock, drop the lock, then call
+    /// `escalating_kill` for each. Holding the lock across the signal
+    /// would block `run_script`'s post-wait `unregister` (which takes
+    /// the same lock) and deadlock the quit path.
+    ///
+    /// Does **not** reap — each `run_script` thread still owns its own
+    /// `child.wait()`.
+    pub fn kill_all(&self) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.values().cloned().collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
     /// Signal the process group (and leader as a fallback) with SIGTERM,
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
@@ -183,10 +237,11 @@ impl ScriptProcessManager {
 }
 
 /// Send SIGTERM (and SIGKILL after a short grace period) to a process group
-/// and its leader. Polls `kill(pid, 0)` to detect when the process has been
+/// and its leader. Polls `kill(pid, 0)` to detect when the leader has been
 /// reaped by its parent — which is `run_script`'s `child.wait()` running on
-/// a separate thread. Zombies still report alive, so this effectively waits
-/// for the reap, which happens microseconds after the child actually dies.
+/// a separate thread. When the script owns a separate process group, also wait
+/// for that group to disappear so a fast leader exit cannot leave descendants
+/// running after Stop returns.
 fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
     let current_pgrp = unsafe { libc::getpgrp() };
     let can_signal_group = pgid > 0 && pgid != current_pgrp;
@@ -198,7 +253,7 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    if wait_for_pid_gone(pid, PROCESS_TERM_TIMEOUT) {
+    if wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_TERM_TIMEOUT) {
         return;
     }
 
@@ -209,20 +264,21 @@ fn escalating_kill(pid: libc::pid_t, pgid: libc::pid_t) {
         libc::kill(pid, libc::SIGKILL);
     }
 
-    let _ = wait_for_pid_gone(pid, PROCESS_KILL_TIMEOUT);
+    let _ = wait_for_processes_gone(pid, pgid, can_signal_group, PROCESS_KILL_TIMEOUT);
 }
 
-/// Poll `kill(pid, 0)` until it returns ESRCH or the deadline passes.
-/// ESRCH means the pid is gone AND has been reaped — zombies still return 0.
-fn wait_for_pid_gone(pid: libc::pid_t, timeout: Duration) -> bool {
+fn wait_for_processes_gone(
+    pid: libc::pid_t,
+    pgid: libc::pid_t,
+    can_signal_group: bool,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let ret = unsafe { libc::kill(pid, 0) };
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ESRCH) {
-                return true;
-            }
+        let pid_gone = is_pid_gone(pid);
+        let group_gone = !can_signal_group || is_process_group_gone(pgid);
+        if pid_gone && group_gone {
+            return true;
         }
         if Instant::now() >= deadline {
             return false;
@@ -231,13 +287,39 @@ fn wait_for_pid_gone(pid: libc::pid_t, timeout: Duration) -> bool {
     }
 }
 
+fn is_pid_gone(pid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::kill(pid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
+}
+
+fn is_process_group_gone(pgid: libc::pid_t) -> bool {
+    let ret = unsafe { libc::killpg(pgid, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::ESRCH);
+    }
+    false
+}
+
 /// Workspace context passed to scripts as environment variables.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScriptContext {
     pub root_path: String,
     pub workspace_path: Option<String>,
     pub workspace_name: Option<String>,
     pub default_branch: Option<String>,
+    /// First port in the workspace's deterministic port block.
+    /// Surfaces to scripts as `HELMOR_PORT`. `None` for non-workspace
+    /// runs (onboarding auth terminals, etc.) where there is no
+    /// workspace to anchor a stable range to.
+    pub port_base: Option<u16>,
+    /// Size of the port block starting at `port_base`. Surfaces to
+    /// scripts as `HELMOR_PORT_COUNT`. Always paired with `port_base`.
+    pub port_count: Option<u16>,
 }
 
 /// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
@@ -281,6 +363,33 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn fish_shell_escape(s: &str) -> String {
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('$', "\\$")
+            .replace('"', "\\\"")
+    )
+}
+
+fn wrapped_script_for_shell(shell_path: &str, script: &str) -> String {
+    let shell_name = std::path::Path::new(shell_path)
+        .file_name()
+        .and_then(|name| name.to_str());
+
+    if shell_name == Some("fish") {
+        return format!(
+            "eval {}; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+            fish_shell_escape(script),
+        );
+    }
+
+    format!(
+        "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        shell_escape(script),
+    )
+}
+
 /// Spawn an interactive login shell on a PTY and feed it `script`.
 ///
 /// After the initial command is sent, the PTY stays open so the user can
@@ -310,6 +419,7 @@ pub fn run_script(
         channel,
         &shell,
         &["-i", "-l"],
+        None,
     )
 }
 
@@ -333,6 +443,7 @@ pub fn run_terminal_session(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     run_script_with_shell(
@@ -346,6 +457,7 @@ pub fn run_terminal_session(
         channel,
         &shell,
         &["-i", "-l"],
+        boot_input,
     )
 }
 
@@ -357,7 +469,12 @@ pub fn run_terminal_session(
 /// once the command completes. When `script` is `None`, the shell starts
 /// blank — used by the Terminal tab (user types commands directly) and by
 /// the onboarding embedded auth terminals (caller drives input via
-/// `write_stdin`).
+/// `write_stdin` or via `boot_input`).
+///
+/// `boot_input` is written to the PTY master right after the shell is
+/// spawned and registered. Use it to seed an interactive shell with an
+/// initial command (e.g. `gh auth login\n`) without racing against
+/// `write_stdin`'s "process not yet registered" polling.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_script_with_shell(
     manager: &ScriptProcessManager,
@@ -370,6 +487,7 @@ pub(crate) fn run_script_with_shell(
     channel: Channel<ScriptEvent>,
     shell_path: &str,
     shell_args: &[&str],
+    boot_input: Option<&str>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
         if s.trim().is_empty() {
@@ -417,6 +535,13 @@ pub(crate) fn run_script_with_shell(
     }
     if let Some(db) = &context.default_branch {
         cmd.env("HELMOR_DEFAULT_BRANCH", db);
+    }
+    // Per-workspace port range. Only emit both vars together so scripts
+    // can rely on `HELMOR_PORT_COUNT` being present whenever `HELMOR_PORT`
+    // is. Both are absent for non-workspace runs (onboarding terminals).
+    if let (Some(base), Some(count)) = (context.port_base, context.port_count) {
+        cmd.env("HELMOR_PORT", base.to_string());
+        cmd.env("HELMOR_PORT_COUNT", count.to_string());
     }
 
     // Set up the child's session and controlling terminal before exec.
@@ -512,15 +637,23 @@ pub(crate) fn run_script_with_shell(
     //
     // Skipped when `script == None` (Terminal tab / onboarding auth terminals):
     // the shell stays at its prompt and waits for input — the user typing
-    // directly in the Terminal tab, or the caller driving via `write_stdin`.
+    // directly in the Terminal tab, or `boot_input` seeding it below.
     if let Some(script) = script {
-        let wrapped = format!(
-            "eval {}; __helmor_ec=$?; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
-            shell_escape(script),
-        );
+        let wrapped = wrapped_script_for_shell(shell_path, script);
         let mut file = stdin.lock().expect("stdin mutex poisoned");
         if let Err(e) = file.write_all(wrapped.as_bytes()) {
             tracing::warn!(error = %e, "initial PTY write failed");
+        }
+    } else if let Some(input) = boot_input {
+        // Bytes go into the PTY master here — synchronously, while we
+        // still own the only handle. The shell will read them once its
+        // init completes. Doing this inline (instead of via a spawned
+        // polling thread that calls `write_stdin`) means a
+        // re-render-driven cleanup → respawn cycle on the frontend can't
+        // race ahead and drop the bytes.
+        let mut file = stdin.lock().expect("stdin mutex poisoned");
+        if let Err(e) = file.write_all(input.as_bytes()) {
+            tracing::warn!(error = %e, "boot_input PTY write failed");
         }
     }
 
@@ -564,6 +697,22 @@ mod tests {
     #[test]
     fn shell_escape_single_quotes() {
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn fish_shell_escape_handles_fish_expansion_chars() {
+        assert_eq!(
+            fish_shell_escape("printf \"%s\" '$value' \\ done"),
+            "\"printf \\\"%s\\\" '\\$value' \\\\ done\"",
+        );
+    }
+
+    #[test]
+    fn wrapped_script_uses_fish_status_for_fish_shell() {
+        assert_eq!(
+            wrapped_script_for_shell("/opt/homebrew/bin/fish", "echo \"it's\""),
+            "eval \"echo \\\"it's\\\"\"; set __helmor_ec $status; printf '\\r\\n\\033[2m[Completed with exit code %d]\\033[0m\\r\\n' $__helmor_ec; exit $__helmor_ec\n",
+        );
     }
 
     // ── Test helpers ───────────────────────────────────────────────────────
@@ -656,6 +805,161 @@ mod tests {
         let _ = child2.wait();
     }
 
+    // ── kill_others_in_repo (non-concurrent run mode) ──────────────────────
+
+    #[test]
+    fn kill_others_in_repo_signals_matching_run_scripts_only() {
+        let mgr = ScriptProcessManager::new();
+        // Three live "run" scripts in repo A, plus one "setup" in A and
+        // one "run" in repo B. Non-concurrent kill should hit only the
+        // two other "run" scripts in A.
+        let a_run_keep: ProcessKey = ("A".into(), "run".into(), Some("ws-keep".into()));
+        let a_run_other1: ProcessKey = ("A".into(), "run".into(), Some("ws-other-1".into()));
+        let a_run_other2: ProcessKey = ("A".into(), "run".into(), Some("ws-other-2".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-keep".into()));
+        let b_run: ProcessKey = ("B".into(), "run".into(), Some("ws-keep".into()));
+
+        let (mut keep_child, _, _, keep_killed) = spawn_and_register(&mgr, a_run_keep.clone());
+        let (mut other1_child, _, _, other1_killed) =
+            spawn_and_register(&mgr, a_run_other1.clone());
+        let (mut other2_child, _, _, other2_killed) =
+            spawn_and_register(&mgr, a_run_other2.clone());
+        let (mut setup_child, _, _, setup_killed) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut b_run_child, _, _, b_run_killed) = spawn_and_register(&mgr, b_run.clone());
+
+        let signaled = mgr.kill_others_in_repo("A", "run", Some("ws-keep"));
+        assert_eq!(signaled, 2);
+
+        // Reap the two victims to release pid resources.
+        let _ = other1_child.wait();
+        let _ = other2_child.wait();
+        assert!(other1_killed.load(Ordering::Acquire));
+        assert!(other2_killed.load(Ordering::Acquire));
+
+        // The kept run, the setup script, and the other repo's run are all
+        // still untouched.
+        assert!(!keep_killed.load(Ordering::Acquire));
+        assert!(!setup_killed.load(Ordering::Acquire));
+        assert!(!b_run_killed.load(Ordering::Acquire));
+
+        mgr.kill(&a_run_keep);
+        mgr.kill(&a_setup);
+        mgr.kill(&b_run);
+        let _ = keep_child.wait();
+        let _ = setup_child.wait();
+        let _ = b_run_child.wait();
+    }
+
+    #[test]
+    fn kill_others_in_repo_with_no_matches_is_noop() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
+    }
+
+    // ── kill_all (graceful-quit path) ──────────────────────────────────────
+
+    #[test]
+    fn kill_all_signals_every_registered_handle_across_repos_and_script_types() {
+        let mgr = ScriptProcessManager::new();
+        // Mixed registry: two scripts in one repo, one terminal in
+        // another, and a forge-auth-style no-workspace entry. kill_all
+        // must hit every single one.
+        let a_run: ProcessKey = ("A".into(), "run".into(), Some("ws-1".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-1".into()));
+        let b_terminal: ProcessKey = ("B".into(), "terminal:abc".into(), Some("ws-other".into()));
+        let auth: ProcessKey = ("__auth__".into(), "agent-login:claude".into(), None);
+
+        let (mut c1, _, _, k1) = spawn_and_register(&mgr, a_run.clone());
+        let (mut c2, _, _, k2) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut c3, _, _, k3) = spawn_and_register(&mgr, b_terminal.clone());
+        let (mut c4, _, _, k4) = spawn_and_register(&mgr, auth.clone());
+
+        let signaled = mgr.kill_all();
+        assert_eq!(signaled, 4);
+
+        // Reap each child to release pid resources, then prove the
+        // killed flag was flipped on every handle.
+        let _ = c1.wait();
+        let _ = c2.wait();
+        let _ = c3.wait();
+        let _ = c4.wait();
+        assert!(k1.load(Ordering::Acquire));
+        assert!(k2.load(Ordering::Acquire));
+        assert!(k3.load(Ordering::Acquire));
+        assert!(k4.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn kill_all_with_empty_manager_is_zero() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_all(), 0);
+    }
+
+    /// Regression: `kill_all` must drop the process-map lock BEFORE
+    /// signaling, otherwise the `run_script` thread's post-wait
+    /// `unregister` — which takes the same lock — would deadlock the
+    /// quit path. We exercise the exact ordering by spawning a real
+    /// `run_script` that exits the moment it's signaled (so its reaper
+    /// thread calls `unregister` while `kill_all` is still iterating
+    /// over its victim list). The test would hang the suite if the
+    /// lock were held; finishing under the timeout proves the
+    /// invariant.
+    #[test]
+    fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let mgr = std::sync::Arc::new(ScriptProcessManager::new());
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+            port_base: None,
+            port_count: None,
+        };
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let runner = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                Some("sleep 60"),
+                &tempdir,
+                &ctx,
+                make_channel(),
+                "/bin/sh",
+                &[],
+                None,
+            )
+        });
+
+        // Wait for run_script to register before we issue kill_all.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(&key) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "run_script never registered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert_eq!(mgr.kill_all(), 1);
+        // run_script's reaper must have unregistered + returned. If
+        // kill_all held the map lock past the signal, the unregister
+        // would have blocked and this join would hang.
+        let _ = runner.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "kill_all + reap took too long: {:?}",
+            start.elapsed()
+        );
+        assert!(mgr.processes.lock().unwrap().is_empty());
+    }
+
     // ── escalating_kill kills the process group ────────────────────────────
 
     #[test]
@@ -724,6 +1028,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -743,6 +1049,7 @@ mod tests {
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -785,6 +1092,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -822,6 +1131,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -872,6 +1182,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -909,6 +1221,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
             )
         });
 
@@ -951,7 +1264,7 @@ mod tests {
         })
     }
 
-    fn run_simple(script: &str) -> Option<i32> {
+    fn run_simple_with_shell(script: &str, shell_path: &str, shell_args: &[&str]) -> Option<i32> {
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -959,6 +1272,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         run_script_with_shell(
             &mgr,
@@ -969,12 +1284,17 @@ mod tests {
             dir.to_str().unwrap(),
             &ctx,
             make_channel(),
-            // /bin/sh avoids the user's interactive zsh startup cost that
-            // makes tests flaky under `cargo test` parallelism.
-            "/bin/sh",
-            &[],
+            shell_path,
+            shell_args,
+            None,
         )
         .unwrap()
+    }
+
+    fn run_simple(script: &str) -> Option<i32> {
+        // /bin/sh avoids the user's interactive zsh startup cost that
+        // makes tests flaky under `cargo test` parallelism.
+        run_simple_with_shell(script, "/bin/sh", &[])
     }
 
     #[test]
@@ -988,6 +1308,179 @@ mod tests {
     }
 
     #[test]
+    fn run_script_with_fish_shell_preserves_exit_status() {
+        let Ok(output) = StdCommand::new("fish")
+            .args(["-c", "command -s fish"])
+            .output()
+        else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        let fish_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if fish_path.is_empty() {
+            return;
+        }
+
+        assert_eq!(
+            run_simple_with_shell("printf '%s\\n' \"it's\"; exit 42", &fish_path, &[]),
+            Some(42),
+        );
+    }
+
+    /// End-to-end: a script with a populated `ScriptContext.port_base`
+    /// sees `HELMOR_PORT` / `HELMOR_PORT_COUNT` in its env, and the
+    /// existing env vars (HELMOR_ROOT_PATH, HELMOR_WORKSPACE_NAME, …)
+    /// keep working alongside the new ones.
+    #[test]
+    fn script_env_includes_helmor_port_vars_when_range_present() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-port".into()),
+            default_branch: Some("main".into()),
+            port_base: Some(55_100),
+            port_count: Some(10),
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-port"),
+            // Sentinel-tag the output so we can spot the env values
+            // amid the interactive-shell prompt / wrapper banner the
+            // PTY also writes to stdout.
+            Some(
+                "printf 'PORT=%s|COUNT=%s|NAME=%s|ROOT=%s\\n' \
+                  \"$HELMOR_PORT\" \"$HELMOR_PORT_COUNT\" \
+                  \"$HELMOR_WORKSPACE_NAME\" \"$HELMOR_ROOT_PATH\"",
+            ),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    if combined.contains("PORT=55100|COUNT=10") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT=55100|COUNT=10|NAME=ws-port"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT alongside legacy env; got: {combined:?}"
+        );
+        assert!(
+            combined.contains(&format!("ROOT={}", dir.display())),
+            "expected HELMOR_ROOT_PATH still injected; got: {combined:?}"
+        );
+    }
+
+    /// When the workspace has no allocated range, the new env vars are
+    /// absent (vs. set to empty strings) so scripts that fall back with
+    /// `${HELMOR_PORT:-3000}` keep their default.
+    #[test]
+    fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-noport".into()),
+            default_branch: Some("main".into()),
+            port_base: None,
+            port_count: None,
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-noport"),
+            // `${var+set}` expands to "set" if set (even when empty) and
+            // to nothing otherwise. The sentinel intentionally puts the
+            // expansion between two delimiters so we can tell "unset"
+            // (PORT[]COUNT[]) apart from "set to empty" (PORT[set]COUNT[set])
+            // even after the wrapper echoes the literal source line back.
+            Some("printf 'PORT[%s]COUNT[%s]EOM\\n' \"${HELMOR_PORT+set}\" \"${HELMOR_PORT_COUNT+set}\""),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    // `PORT[]COUNT[]` only materialises post-substitution
+                    // — the source line carries `PORT[%s]COUNT[%s]`, so
+                    // matching the substituted form lets us distinguish
+                    // it from the wrapper's echo of the source line.
+                    if combined.contains("PORT[]COUNT[]EOM") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT[]COUNT[]EOM"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT to be unset; got: {combined:?}"
+        );
+    }
+
+    #[test]
     fn run_script_rejects_empty() {
         let mgr = ScriptProcessManager::new();
         let ctx = ScriptContext {
@@ -995,6 +1488,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let result = run_script(&mgr, "r", "s", None, "  ", "/tmp", &ctx, make_channel());
         assert!(result.is_err());

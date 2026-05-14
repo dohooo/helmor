@@ -11,7 +11,7 @@ use tauri::{
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
-use crate::{agents, git_watcher, models::db, service, sidecar};
+use crate::{agents, data_dir, git_watcher, models::db, service, sidecar};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -20,7 +20,7 @@ use super::common::{run_blocking, CmdResult};
 const ONBOARDING_WINDOW_WIDTH: f64 = 1300.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 810.0;
 const HELMOR_SKILL_NAME: &str = "helmor-cli";
-const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.codex/skills/helmor-cli";
+const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.agents/skills/helmor-cli";
 
 static ONBOARDING_WINDOW_STATE: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -46,6 +46,7 @@ pub struct DataInfo {
 pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
+    pub cursor: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -392,6 +393,7 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
         &AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
+            cursor: cursor_login_ready(),
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -426,6 +428,88 @@ pub fn get_cli_status() -> CmdResult<CliStatus> {
     Ok(cli_status_for_paths(&install_path, &cli_binary))
 }
 
+/// File-backed React Query persister storage. The cache lives in the
+/// data dir (next to `helmor.db`) instead of localStorage, so it isn't
+/// bound by the webview's ~5–10 MB localStorage quota. The frontend
+/// addresses each cache key as a distinct file under
+/// `<data_dir>/query-cache/<key>` — only one key is in use today
+/// (`helmor-query-cache`), but the namespacing keeps the door open for
+/// the persister's optional `entries()` extension.
+fn query_cache_dir() -> anyhow::Result<PathBuf> {
+    let dir = data_dir::data_dir()?.join("query-cache");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create query cache dir at {dir:?}"))?;
+    Ok(dir)
+}
+
+/// Reject anything that could escape the cache dir (`..`, `/`, etc.) —
+/// the key comes from JS and must round-trip cleanly to a flat
+/// filename. Allowed chars cover the keys TanStack Query persister uses
+/// in practice (alphanumeric, `-`, `_`, `:`, `.`).
+fn sanitize_cache_key(key: &str) -> anyhow::Result<String> {
+    if key.is_empty() {
+        anyhow::bail!("Empty query cache key");
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' || c == '.')
+    {
+        anyhow::bail!("Invalid query cache key: {key:?}");
+    }
+    Ok(key.to_string())
+}
+
+fn query_cache_path(key: &str) -> anyhow::Result<PathBuf> {
+    let safe = sanitize_cache_key(key)?;
+    Ok(query_cache_dir()?.join(format!("{safe}.json")))
+}
+
+#[tauri::command]
+pub async fn read_query_cache(key: String) -> CmdResult<Option<String>> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => {
+                Err(anyhow::Error::from(err)
+                    .context(format!("Failed to read query cache at {path:?}")))
+            }
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn write_query_cache(key: String, value: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        // Atomic write: stage to a sibling tmp file then rename. Avoids
+        // a half-written cache surviving a crash mid-flush.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &value)
+            .with_context(|| format!("Failed to stage query cache at {tmp:?}"))?;
+        std::fs::rename(&tmp, &path)
+            .with_context(|| format!("Failed to commit query cache to {path:?}"))?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_query_cache(key: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let path = query_cache_path(&key)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(anyhow::Error::from(err)
+                .context(format!("Failed to delete query cache at {path:?}"))),
+        }
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn install_cli() -> CmdResult<CliStatus> {
     run_blocking(|| {
@@ -449,6 +533,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
+            cursor: cursor_login_ready(),
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -579,11 +664,33 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
             codex: codex.ready,
+            cursor: cursor_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
+}
+
+/// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
+fn cursor_login_ready() -> bool {
+    let raw = match crate::models::settings::load_setting_value("app.cursor_provider") {
+        Ok(Some(value)) => value,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::debug!("Failed to read app.cursor_provider: {error}");
+            return false;
+        }
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("apiKey")
+                .and_then(serde_json::Value::as_str)
+                .map(|key| !key.trim().is_empty())
+        })
+        .unwrap_or(false)
 }
 
 fn claude_login_ready() -> bool {
@@ -593,9 +700,12 @@ fn claude_login_ready() -> bool {
     {
         Ok(output) if output.status.success() => parse_claude_login_status(&output.stdout),
         Ok(output) => {
-            tracing::debug!(
-                "Claude auth status failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            // Claude exits non-zero when the user isn't authenticated —
+            // that's a normal "false" answer, not an error. Log at trace
+            // so it doesn't look like something went wrong.
+            tracing::trace!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Claude not logged in (auth status returned non-zero)"
             );
             false
         }
@@ -648,9 +758,15 @@ fn codex_login_ready() -> bool {
             parse_codex_login_status(&format!("{stdout}\n{stderr}"))
         }
         Ok(output) => {
-            tracing::debug!(
-                "Codex login status failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+            // `codex login status` exits non-zero with stderr "Not
+            // logged in" when the user is signed out — that's a
+            // routine "no session" answer, not a check failure. Logging
+            // it as "failed" makes legitimate aborts (user closes the
+            // login terminal mid-flow) look like crashes. Demote to
+            // trace.
+            tracing::trace!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "Codex not logged in (login status returned non-zero)"
             );
             false
         }
@@ -735,12 +851,31 @@ const AGENT_LOGIN_REPO_ID: &str = "__helmor_onboarding__";
 
 #[tauri::command]
 pub async fn spawn_agent_login_terminal(
+    app: tauri::AppHandle,
     manager: State<'_, ScriptProcessManager>,
     provider: String,
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
     let command = agent_login_command(&provider)?.to_string();
+    tracing::info!(
+        provider = %provider,
+        instance_id = %instance_id,
+        command = %command,
+        "spawn_agent_login_terminal: dispatching"
+    );
+
+    // Defensive: some agent CLIs (codex login in particular) shell out
+    // to the system `open` command for OAuth. On macOS that can let the
+    // browser steal foreground, and in some configurations the calling
+    // app gets implicitly hidden. Force the window back to front before
+    // we spawn so the embedded terminal stays visible regardless.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+
     let working_dir = std::env::var("HOME")
         .ok()
         .filter(|home| !home.trim().is_empty())
@@ -755,32 +890,23 @@ pub async fn spawn_agent_login_terminal(
         workspace_path: None,
         workspace_name: None,
         default_branch: None,
+        port_base: None,
+        port_count: None,
     };
     let mgr = manager.inner().clone();
     let script_type = agent_login_script_type(&provider, &instance_id);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let key = (
-            AGENT_LOGIN_REPO_ID.to_string(),
-            script_type.clone(),
-            None::<String>,
+        tracing::debug!(
+            provider = %provider,
+            instance_id = %instance_id,
+            "spawn_agent_login_terminal: entering run_terminal_session"
         );
-        let command_to_send = format!("{command}; exit\n");
-        let stdin_manager = mgr.clone();
-        std::thread::spawn(move || {
-            for _ in 0..80 {
-                match stdin_manager.write_stdin(&key, command_to_send.as_bytes()) {
-                    Ok(true) => return,
-                    Ok(false) => std::thread::sleep(std::time::Duration::from_millis(25)),
-                    Err(error) => {
-                        tracing::debug!("Agent login terminal stdin unavailable: {error}");
-                        return;
-                    }
-                }
-            }
-            tracing::debug!("Agent login terminal was not ready for initial command");
-        });
-
+        // Auto-type the login command via the run_terminal_session boot
+        // input — written synchronously to the PTY master right after
+        // the shell registers, so a frontend re-render-driven
+        // cleanup→respawn can't drop the bytes.
+        let boot_input = format!("{command}; exit\n");
         if let Err(error) = crate::workspace::scripts::run_terminal_session(
             &mgr,
             AGENT_LOGIN_REPO_ID,
@@ -789,10 +915,23 @@ pub async fn spawn_agent_login_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            Some(&boot_input),
         ) {
+            tracing::warn!(
+                provider = %provider,
+                instance_id = %instance_id,
+                error = %format!("{error:#}"),
+                "spawn_agent_login_terminal: run_terminal_session failed"
+            );
             let _ = channel.send(ScriptEvent::Error {
                 message: error.to_string(),
             });
+        } else {
+            tracing::debug!(
+                provider = %provider,
+                instance_id = %instance_id,
+                "spawn_agent_login_terminal: run_terminal_session returned"
+            );
         }
     });
 
@@ -925,6 +1064,40 @@ pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<St
     .await
 }
 
+/// Write a UTF-8 string to an absolute path the user picked from the
+/// `plugin-dialog` Save dialog.
+///
+/// We don't ship `tauri-plugin-fs`, and Tauri's webview also doesn't honour
+/// the browser-style `<a download>` click that streamdown uses internally —
+/// so the chat view's "Download as CSV / Markdown" buttons are dead unless
+/// we route the write through the host process. The dialog already gates
+/// the path on user intent, so we just make the parent dir if needed and
+/// write.
+#[tauri::command]
+pub async fn save_text_file_as(path: String, contents: String) -> CmdResult<()> {
+    run_blocking(move || {
+        use std::fs;
+
+        let target = std::path::PathBuf::from(&path);
+        if !target.is_absolute() {
+            anyhow::bail!(
+                "Refusing to save to non-absolute path: {}",
+                target.display()
+            );
+        }
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+            }
+        }
+        fs::write(&target, contents.as_bytes())
+            .with_context(|| format!("Failed to write file {}", target.display()))?;
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn show_image_in_finder(path: String) -> CmdResult<()> {
     run_blocking(move || {
@@ -936,6 +1109,25 @@ pub async fn show_image_in_finder(path: String) -> CmdResult<()> {
             ));
         }
         reveal_file_in_finder(&source).context("Failed to show image in Finder")
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reveal_path_in_finder(path: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let source = std::path::PathBuf::from(&path);
+        if source.exists() {
+            return reveal_file_in_finder(&source).context("Failed to reveal in Finder");
+        }
+        // File may have been deleted (e.g. a `D` change). Fall back to the
+        // closest existing ancestor so the user still gets a useful Finder
+        // window pointed at the right area of the workspace.
+        if let Some(parent) = source.ancestors().skip(1).find(|p| p.exists()) {
+            return open_directory_in_finder(parent)
+                .context("Failed to open parent directory in Finder");
+        }
+        Err(anyhow::anyhow!("Path not found: {}", source.display()))
     })
     .await
 }
@@ -968,6 +1160,20 @@ fn reveal_file_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn reveal_file_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::bail!("Showing images in Finder is only supported on macOS")
+}
+
+#[cfg(target_os = "macos")]
+fn open_directory_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .context("open command failed")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_directory_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("Opening Finder is only supported on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -1042,7 +1248,22 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         );
     }
 
-    // 3. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
+    // 3. Signal every Run-tab script and embedded-terminal PTY so dev
+    //    servers, watch processes, and shell sessions don't outlive
+    //    Helmor as orphan process trees. Unconditional (not gated on
+    //    `force`) — even a normal quit needs to clean up the processes
+    //    Helmor itself spawned. Each handle's owning `run_script` thread
+    //    reaps its own `Child`, so we just need to deliver the signal.
+    let scripts = app.state::<ScriptProcessManager>();
+    let signaled = scripts.kill_all();
+    if signaled > 0 {
+        tracing::info!(
+            signaled,
+            "request_quit: signaled live script/terminal handles"
+        );
+    }
+
+    // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     let (cooperative, escalation) = if force {
         (
@@ -1057,7 +1278,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     };
     sidecar.shutdown(cooperative, escalation);
 
-    // 4. Done — terminate the process.
+    // 5. Done — terminate the process.
     app.exit(0);
 }
 

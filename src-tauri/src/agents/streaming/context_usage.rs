@@ -45,6 +45,15 @@ pub(super) fn write_context_usage_meta(
     Ok(ContextUsageWriteOutcome::Wrote(session_id.to_string()))
 }
 
+/// Frontend-driven write: persist a verified meta blob (e.g. from a
+/// trustworthy hover-time live fetch) and broadcast the same
+/// `ContextUsageChanged` event the sidecar path uses, so observers in
+/// other windows refresh without us touching their query cache directly.
+pub(crate) fn persist_context_usage_meta(app: &AppHandle, session_id: &str, meta: &str) {
+    let raw = serde_json::json!({ "sessionId": session_id, "meta": meta });
+    persist_context_usage_event(app, &raw);
+}
+
 /// Persist a `contextUsageUpdated` event and broadcast `ContextUsageChanged`.
 /// Payload-free — the frontend refetches via React Query on invalidation.
 pub(super) fn persist_context_usage_event(app: &AppHandle, raw: &Value) {

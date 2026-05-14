@@ -402,6 +402,7 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
         rusqlite::params![workspace_id, canonical_repo.id],
     )
     .context("Failed to import workspace")?;
+    crate::schema::ensure_schema(conn).context("Failed to normalize imported workspace order")?;
 
     // 3. Insert sessions (handles claude_session_id → provider_session_id rename)
     let (sess_main, sess_src) = import_column_lists(conn, "sessions")?;
@@ -551,12 +552,6 @@ fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
     }
 }
 
-/// Encode a filesystem path into a Claude Code project directory name.
-/// Claude uses `path.replace('/', '-').replace('.', '-')`.
-fn encode_claude_project_dir(path: &Path) -> String {
-    path.display().to_string().replace(['/', '.'], "-")
-}
-
 /// Copy Claude Code session .jsonl files from the Conductor project dir
 /// to the Helmor project dir so that imported sessions can be resumed.
 fn copy_claude_sessions_for_workspace(
@@ -584,8 +579,12 @@ fn copy_claude_sessions_for_workspace(
         .join(repo_name)
         .join(directory_name);
 
-    let src_dir = claude_projects.join(encode_claude_project_dir(&conductor_ws_path));
-    let dst_dir = claude_projects.join(encode_claude_project_dir(&helmor_ws_path));
+    let src_dir = claude_projects.join(crate::agents::claude_project_files::encode_project_dir(
+        &conductor_ws_path,
+    ));
+    let dst_dir = claude_projects.join(crate::agents::claude_project_files::encode_project_dir(
+        &helmor_ws_path,
+    ));
 
     if !src_dir.is_dir() {
         return;
@@ -892,6 +891,20 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
             continue;
         }
 
+        if col == "display_order" {
+            main_parts.push(col.clone());
+            // Imported rows arrive with display_order = 0; the schema migration
+            // (`seed_workspace_display_orders`) lays them out on the sparse
+            // grid on the next startup. Avoids leaking Conductor's ordering
+            // (which used a different column) into Helmor's sidebar.
+            source_parts.push(if source_set.contains("display_order") {
+                "COALESCE(display_order, 0) AS display_order".to_string()
+            } else {
+                "0 AS display_order".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             main_parts.push(col.clone());
             source_parts.push(col.clone());
@@ -990,7 +1003,7 @@ mod tests {
         conn.execute_batch(
             r#"
             INSERT INTO main.repos (id, name) VALUES ('r1', 'my-repo');
-            INSERT INTO main.workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'boston');
+            INSERT INTO main.workspaces (id, repository_id, directory_name, display_order) VALUES ('w1', 'r1', 'boston', 1024);
 
             ATTACH DATABASE ':memory:' AS source;
             CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
@@ -1208,17 +1221,6 @@ mod tests {
     }
 
     #[test]
-    fn encode_claude_project_dir_encodes_correctly() {
-        let path = PathBuf::from("/Users/me/conductor/workspaces/repo/ws");
-        let encoded = encode_claude_project_dir(&path);
-        assert_eq!(encoded, "-Users-me-conductor-workspaces-repo-ws");
-
-        let path2 = PathBuf::from("/Users/me/helmor-dev/workspaces/repo/ws");
-        let encoded2 = encode_claude_project_dir(&path2);
-        assert_eq!(encoded2, "-Users-me-helmor-dev-workspaces-repo-ws");
-    }
-
-    #[test]
     fn import_conductor_workspaces_cleans_up_failed_active_workspace_imports() {
         let _env = TestEnv::new("failed-import-cleanup");
         let fake_home = tempfile::tempdir().unwrap();
@@ -1239,8 +1241,14 @@ mod tests {
             .unwrap();
         conductor_conn
             .execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, datetime('now'), datetime('now'))",
-                rusqlite::params!["w1", "r1", "broken-import", "missing/branch"],
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, datetime('now'), datetime('now'))",
+                rusqlite::params![
+                    "w1",
+                    "r1",
+                    "broken-import",
+                    "missing/branch",
+                    crate::workspace::sidebar_order::ORDER_STEP,
+                ],
             )
             .unwrap();
         conductor_conn

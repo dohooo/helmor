@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { GitBranch, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import {
 	CommandEmpty,
@@ -24,7 +24,10 @@ const scrollbarStyle = `
  * and repository settings. Renders a searchable list of branches.
  *
  * Pass the trigger element as `children` — it will be wrapped in
- * a `PopoverTrigger`.
+ * a `PopoverTrigger`. The optional `footer` slot renders a sticky
+ * row below the list (e.g. "Create and checkout new branch...").
+ * `renderFooter` receives a `close` helper so the footer item can
+ * dismiss the popover before opening a follow-up dialog.
  */
 export function BranchPickerPopover({
 	currentBranch,
@@ -34,6 +37,7 @@ export function BranchPickerPopover({
 	onSelect,
 	align = "start",
 	children,
+	renderFooter,
 }: {
 	currentBranch: string;
 	branches: string[];
@@ -42,8 +46,10 @@ export function BranchPickerPopover({
 	onSelect: (branch: string) => void;
 	align?: "start" | "center" | "end";
 	children: React.ReactNode;
+	renderFooter?: (helpers: { close: () => void }) => React.ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
+	const close = () => setOpen(false);
 
 	return (
 		<Popover
@@ -78,8 +84,12 @@ export function BranchPickerPopover({
 									onSelect(branch);
 									setOpen(false);
 								}}
-								className="rounded-lg text-[12px]"
+								className="gap-2 rounded-lg text-[12px]"
 							>
+								<GitBranch
+									className="size-3.5 shrink-0 text-muted-foreground"
+									strokeWidth={1.8}
+								/>
 								<span
 									className={cn(
 										"min-w-0 flex-1 truncate",
@@ -91,6 +101,11 @@ export function BranchPickerPopover({
 							</CommandItem>
 						))}
 					</CommandList>
+					{renderFooter ? (
+						<div className="border-border/40 border-t px-1 pt-1">
+							{renderFooter({ close })}
+						</div>
+					) : null}
 				</div>
 			</CommandPopoverContent>
 		</Popover>

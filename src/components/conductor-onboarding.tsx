@@ -861,7 +861,7 @@ export function ConductorOnboarding({
 									<button
 										type="button"
 										onClick={onComplete}
-										className="text-[11px] text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+										className="text-[11px] text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 									>
 										Skip for now
 									</button>
@@ -871,7 +871,7 @@ export function ConductorOnboarding({
 												<button
 													type="button"
 													aria-label="About importing"
-													className="absolute left-full ml-2 flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+													className="absolute left-full ml-2 flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 												>
 													<Info className="size-3.5" strokeWidth={2} />
 												</button>

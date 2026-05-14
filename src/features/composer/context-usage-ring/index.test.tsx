@@ -11,7 +11,9 @@ import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 const apiMockState = vi.hoisted(() => ({
 	getSessionContextUsage: vi.fn(),
 	getLiveContextUsage: vi.fn(),
+	setSessionContextUsage: vi.fn(),
 	subscribeUiMutations: vi.fn(),
+	unlistenUiMutations: vi.fn(),
 	capturedCallback: null as null | ((event: unknown) => void),
 }));
 
@@ -21,6 +23,7 @@ vi.mock("@/lib/api", async () => {
 		...actual,
 		getSessionContextUsage: apiMockState.getSessionContextUsage,
 		getLiveContextUsage: apiMockState.getLiveContextUsage,
+		setSessionContextUsage: apiMockState.setSessionContextUsage,
 		subscribeUiMutations: apiMockState.subscribeUiMutations,
 	};
 });
@@ -60,7 +63,6 @@ function BridgeHost({
 		queryClient,
 		processPendingCliSends: vi.fn(),
 		reloadSettings: vi.fn(),
-		refreshGithubIdentity: vi.fn(),
 	});
 	return null;
 }
@@ -69,12 +71,16 @@ describe("ContextUsageRing end-to-end with UI sync bridge", () => {
 	beforeEach(() => {
 		apiMockState.getSessionContextUsage.mockReset();
 		apiMockState.getLiveContextUsage.mockReset();
+		apiMockState.setSessionContextUsage.mockReset();
+		apiMockState.setSessionContextUsage.mockResolvedValue(undefined);
 		apiMockState.subscribeUiMutations.mockReset();
+		apiMockState.unlistenUiMutations.mockReset();
 		apiMockState.capturedCallback = null;
 
 		apiMockState.subscribeUiMutations.mockImplementation(
 			async (callback: (event: unknown) => void) => {
 				apiMockState.capturedCallback = callback;
+				return apiMockState.unlistenUiMutations;
 			},
 		);
 	});
@@ -157,7 +163,9 @@ describe("ContextUsageRing end-to-end with UI sync bridge", () => {
 		expect(apiMockState.getSessionContextUsage).toHaveBeenCalledTimes(1);
 	});
 
-	it("degrades to tokensOnly aria-label when composer's model differs from the recorded one", async () => {
+	it("keeps showing the recorded percentage when composer's model differs from the recorded one", async () => {
+		// Switching the composer's model in-place must not blank the ring —
+		// the last recorded usage stays visible until the next turn refreshes it.
 		apiMockState.getSessionContextUsage.mockResolvedValue(
 			JSON.stringify({
 				modelId: "gpt-5.4",
@@ -167,14 +175,13 @@ describe("ContextUsageRing end-to-end with UI sync bridge", () => {
 			}),
 		);
 
-		const { findByRole, queryByRole } = render(
+		const { findByRole } = render(
 			<Harness
 				sessionId="session-mismatch"
 				composerModelId="gpt-5.5-preview"
 			/>,
 		);
 
-		await findByRole("button", { name: "Context usage" });
-		expect(queryByRole("button", { name: /2%/i })).toBeNull();
+		await findByRole("button", { name: /context usage 2%/i });
 	});
 });

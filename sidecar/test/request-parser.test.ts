@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
 	errorMessage,
 	optionalString,
-	parseElicitationResultContent,
 	parseListSlashCommandsParams,
 	parseProvider,
 	parseRequest,
@@ -95,55 +94,6 @@ describe("optionalString", () => {
 	});
 });
 
-describe("parseElicitationResultContent", () => {
-	test("accepts scalar values and string arrays", () => {
-		expect(
-			parseElicitationResultContent(
-				{
-					content: {
-						name: "Helmor",
-						count: 2,
-						enabled: true,
-						tags: ["sdk", "plan"],
-					},
-				},
-				"content",
-			),
-		).toEqual({
-			name: "Helmor",
-			count: 2,
-			enabled: true,
-			tags: ["sdk", "plan"],
-		});
-	});
-
-	test("returns undefined when content is missing", () => {
-		expect(parseElicitationResultContent({}, "content")).toBeUndefined();
-	});
-
-	test("rejects nested objects", () => {
-		expect(() =>
-			parseElicitationResultContent(
-				{ content: { answer: { text: "nope" } } },
-				"content",
-			),
-		).toThrow(
-			"params.content.answer must be a string, number, boolean, or string[]",
-		);
-	});
-
-	test("rejects non-string arrays", () => {
-		expect(() =>
-			parseElicitationResultContent(
-				{ content: { answer: ["yes", 1] } },
-				"content",
-			),
-		).toThrow(
-			"params.content.answer must be a string, number, boolean, or string[]",
-		);
-	});
-});
-
 describe("parseProvider", () => {
 	test("accepts 'claude'", () => {
 		expect(parseProvider("claude")).toBe("claude");
@@ -192,6 +142,7 @@ describe("parseSendMessageParams", () => {
 			permissionMode: "plan",
 			effortLevel: "high",
 			fastMode: undefined,
+			images: [],
 			additionalDirectories: undefined,
 		});
 	});

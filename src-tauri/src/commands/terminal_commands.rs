@@ -53,16 +53,37 @@ pub async fn spawn_terminal(
     // we couldn't resolve the workspace directory.
     let workspace_root = workspace
         .as_ref()
-        .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok());
+        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
     let working_dir = workspace_root
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| repo.root_path.clone());
+
+    // See script_commands.rs for the rationale — embedded terminals
+    // share the same per-workspace HELMOR_PORT range as the run/setup
+    // scripts so a `npm run dev` typed into the terminal binds the
+    // same ports the script docs reference.
+    let port_range = workspace.as_ref().and_then(|ws| {
+        match crate::workspace::port_allocation::ensure_workspace_port_range(&ws.id) {
+            Ok(range) => range,
+            Err(error) => {
+                tracing::warn!(
+                    workspace_id = %ws.id,
+                    %error,
+                    "Failed to allocate workspace port range; skipping HELMOR_PORT env vars"
+                );
+                None
+            }
+        }
+    });
+
     let context = ScriptContext {
         root_path: repo.root_path.clone(),
         workspace_path: Some(working_dir.clone()),
         workspace_name: workspace.as_ref().map(|ws| ws.directory_name.clone()),
         default_branch: repo.default_branch.clone(),
+        port_base: port_range.map(|r| r.base),
+        port_count: port_range.map(|r| r.count),
     };
     let mgr = manager.inner().clone();
     let script_type = make_script_type(&instance_id);
@@ -76,6 +97,7 @@ pub async fn spawn_terminal(
             &working_dir,
             &context,
             channel.clone(),
+            None,
         ) {
             let _ = channel.send(ScriptEvent::Error {
                 message: e.to_string(),

@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
+import type { SerializedEditorState } from "lexical";
 import { CircleAlert, TimerReset } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ActionRow, ActionRowButton } from "@/components/action-row";
 import { ShimmerText } from "@/components/ui/shimmer-text";
 import { ShineBorder } from "@/components/ui/shine-border";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
+import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import {
 	getShortcut,
 	getShortcutConflicts,
@@ -21,9 +22,11 @@ import type {
 } from "@/lib/api";
 import {
 	createSession,
+	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
 } from "@/lib/api";
+import { isAutoHideableActionKind } from "@/lib/commit-button-prompts";
 import type {
 	ComposerCustomTag,
 	ResolvedComposerInsertRequest,
@@ -32,6 +35,7 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
@@ -48,11 +52,13 @@ import {
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
-import type { DeferredToolResponseHandler } from "./deferred-tool";
+import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
-import type { ElicitationResponseHandler } from "./elicitation";
 import { WorkspaceComposer } from "./index";
+import type { PermissionPanelProps } from "./permission-panel";
+import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
+import type { UserInputResponseHandler } from "./user-input";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
@@ -77,15 +83,50 @@ const CODEX_COMPACT_COMMAND: SlashCommandEntry = {
 	providers: ["codex"],
 };
 
+const CODEX_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description:
+		"Set a persistent goal Codex pursues turn-after-turn until done or paused",
+	argumentHint: "<objective>",
+	source: "builtin",
+	providers: ["codex"],
+};
+
+const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
+	name: "goal",
+	description: "Set a completion condition for Claude to work toward",
+	argumentHint: "<condition>",
+	source: "builtin",
+	providers: ["claude"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
+	CODEX_GOAL_COMMAND,
+	CLAUDE_GOAL_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {
 	displayedWorkspaceId: string | null;
 	displayedSessionId: string | null;
+	/** Repo ID hint used when there's no workspace yet (start page). Lets the
+	 *  slash-command query hit the backend's repo-level cache fallback so the
+	 *  popup is populated before the user has created a workspace. */
+	repoId?: string | null;
 	disabled: boolean;
+	/** When true, treat the composer as available even if no workspace is
+	 *  selected — the bottom composer in kanban mode uses this so it can
+	 *  collect a prompt before any workspace exists. */
+	forceAvailable?: boolean;
+	/** Custom placeholder text. When omitted, the composer falls back to
+	 *  the default "Ask to make changes…" copy. */
+	placeholder?: string;
+	/** Override the composer's context key. Without this the key falls
+	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
+	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  own draft. */
+	contextKeyOverride?: string;
 	onStop?: () => void;
 	sending: boolean;
 	sendError: string | null;
@@ -94,11 +135,11 @@ type WorkspaceComposerContainerProps = {
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
 	restoreNonce: number;
-	pendingElicitation?: PendingElicitation | null;
-	onElicitationResponse?: ElicitationResponseHandler;
-	elicitationResponsePending?: boolean;
-	pendingDeferredTool?: PendingDeferredTool | null;
-	onDeferredToolResponse?: DeferredToolResponseHandler;
+	pendingUserInput?: PendingUserInput | null;
+	onUserInputResponse?: UserInputResponseHandler;
+	userInputResponsePending?: boolean;
+	pendingPermission?: PendingPermission | null;
+	onPermissionResponse?: PermissionPanelProps["onResponse"];
 	hasPlanReview?: boolean;
 	modelSelections: Record<string, string>;
 	effortLevels: Record<string, string>;
@@ -126,14 +167,22 @@ type WorkspaceComposerContainerProps = {
 		 *  one submit (queue ↔ steer). Used by the "send with opposite
 		 *  follow-up" composer shortcut. Ignored when `forceQueue` is true. */
 		followUpBehaviorOverride?: "queue" | "steer";
+		startSubmitMode?: StartSubmitMode;
+		/** Snapshot of the editor's full Lexical state at submit time, so
+		 *  callers that need to round-trip chips/text/images (e.g. the kanban
+		 *  "backlog" handler that copies the draft into a freshly-created
+		 *  session's `sessions.draft_state`) can do so without re-encoding
+		 *  the badge nodes. */
+		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
-	 * session matches `sessionId`. */
+	 *  session matches `sessionId`. Per-session config (model / effort /
+	 *  fast-mode / permission mode) lives on the session row by the time
+	 *  this fires — the composer reads it off `currentSession` rather than
+	 *  having it ride along here. */
 	pendingPromptForSession?: {
 		sessionId: string;
 		prompt: string;
-		modelId?: string | null;
-		permissionMode?: string | null;
 		/** Force queue (bypass `followUpBehavior`) if a turn is streaming. */
 		forceQueue?: boolean;
 	} | null;
@@ -146,16 +195,34 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	contextPanelOpen?: boolean;
+	onToggleContextPanel?: () => void;
+	startSubmitMenu?: boolean;
+	/** External owner of the linked-directories list. When provided, the
+	 *  composer reads from `directories` and writes via `onChange` instead of
+	 *  the workspace-scoped query/mutation. Used by the start-page composer
+	 *  where no workspace exists yet — picks accumulate in a parent-owned
+	 *  pending list and get applied at workspace creation time. */
+	linkedDirectoriesController?: {
+		directories: readonly string[];
+		onChange: (next: readonly string[]) => void;
+	} | null;
 };
 
-const noopDeferredToolResponse: DeferredToolResponseHandler = () => {};
-const noopElicitationResponse: ElicitationResponseHandler = () => {};
+const noopUserInputResponse: UserInputResponseHandler = () => {};
+const noopPermissionResponse: NonNullable<
+	WorkspaceComposerContainerProps["onPermissionResponse"]
+> = () => {};
 
 export const WorkspaceComposerContainer = memo(
 	function WorkspaceComposerContainer({
 		displayedWorkspaceId,
 		displayedSessionId,
+		repoId: propRepoId = null,
 		disabled,
+		forceAvailable = false,
+		placeholder,
+		contextKeyOverride,
 		onStop,
 		sending,
 		sendError,
@@ -164,11 +231,11 @@ export const WorkspaceComposerContainer = memo(
 		restoreFiles,
 		restoreCustomTags = [],
 		restoreNonce,
-		pendingElicitation = null,
-		onElicitationResponse = noopElicitationResponse,
-		elicitationResponsePending = false,
-		pendingDeferredTool = null,
-		onDeferredToolResponse = noopDeferredToolResponse,
+		pendingUserInput = null,
+		onUserInputResponse = noopUserInputResponse,
+		userInputResponsePending = false,
+		pendingPermission = null,
+		onPermissionResponse = noopPermissionResponse,
 		hasPlanReview = false,
 		modelSelections,
 		effortLevels = {},
@@ -188,9 +255,28 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		contextPanelOpen = false,
+		onToggleContextPanel,
+		startSubmitMenu = false,
+		linkedDirectoriesController = null,
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
-		const { settings } = useSettings();
+		const { settings, updateSettings } = useSettings();
+		const startSubmitMode: StartSubmitMode =
+			settings.kanbanViewState.createState === "backlog"
+				? "saveForLater"
+				: "startNow";
+		const handleStartSubmitModeChange = useCallback(
+			(mode: StartSubmitMode) => {
+				void updateSettings({
+					kanbanViewState: {
+						...settings.kanbanViewState,
+						createState: mode === "saveForLater" ? "backlog" : "in-progress",
+					},
+				});
+			},
+			[settings.kanbanViewState, updateSettings],
+		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
@@ -204,19 +290,25 @@ export const WorkspaceComposerContainer = memo(
 			...workspaceLinkedDirectoriesQueryOptions(
 				displayedWorkspaceId ?? "__none__",
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			// Skip the query when an external controller is supplying the list
+			// (start page) — the controller is the source of truth there.
+			enabled: Boolean(displayedWorkspaceId) && !linkedDirectoriesController,
 		});
-		const linkedDirectories =
-			linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES;
+		const linkedDirectories: readonly string[] = linkedDirectoriesController
+			? linkedDirectoriesController.directories
+			: (linkedDirectoriesQuery.data ?? EMPTY_LINKED_DIRECTORIES);
 
 		// Candidate workspaces the /add-dir popup offers as quick picks.
 		// Excludes the currently-active workspace (you're already in it —
-		// linking self to self is a no-op).
+		// linking self to self is a no-op). On the start page no workspace
+		// is selected yet but a controller is in play; pass null exclude so
+		// the backend returns every workspace.
 		const candidateDirectoriesQuery = useQuery({
 			...workspaceCandidateDirectoriesQueryOptions(
 				displayedWorkspaceId ?? null,
 			),
-			enabled: Boolean(displayedWorkspaceId),
+			enabled:
+				Boolean(displayedWorkspaceId) || Boolean(linkedDirectoriesController),
 		});
 		const candidateDirectories =
 			candidateDirectoriesQuery.data ?? EMPTY_CANDIDATE_DIRECTORIES;
@@ -254,16 +346,32 @@ export const WorkspaceComposerContainer = memo(
 			},
 		});
 
+		// One-stop commit: routes to the parent controller when present,
+		// otherwise to the workspace-scoped mutation. Returns false when
+		// neither path is available (no workspace and no controller — should
+		// not happen in practice, but keeps the call sites honest).
+		const commitLinkedDirectories = useCallback(
+			(next: readonly string[]): boolean => {
+				if (linkedDirectoriesController) {
+					linkedDirectoriesController.onChange(next);
+					return true;
+				}
+				if (!displayedWorkspaceId) return false;
+				linkedDirectoriesMutation.mutate([...next]);
+				return true;
+			},
+			[
+				linkedDirectoriesController,
+				displayedWorkspaceId,
+				linkedDirectoriesMutation,
+			],
+		);
+
 		const handleRemoveLinkedDirectory = useCallback(
 			(path: string) => {
-				if (!displayedWorkspaceId) return;
-				// `mutate` (not `mutateAsync`) sends errors through the
-				// `onError` callback configured above — no need to catch.
-				linkedDirectoriesMutation.mutate(
-					linkedDirectories.filter((d) => d !== path),
-				);
+				commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[commitLinkedDirectories, linkedDirectories],
 		);
 
 		// Handle a pick from the AddDirTypeaheadPlugin popup. For
@@ -272,7 +380,9 @@ export const WorkspaceComposerContainer = memo(
 		// the popup). For "browse" we open the native directory picker.
 		const handlePickAddDir = useCallback(
 			async (entry: AddDirPickerEntry) => {
-				if (!displayedWorkspaceId) return;
+				// Either a real workspace or a parent-supplied controller is
+				// required — without one of them there's nowhere to commit.
+				if (!displayedWorkspaceId && !linkedDirectoriesController) return;
 				if (entry.kind === "browse") {
 					let picked: string | null = null;
 					try {
@@ -291,19 +401,22 @@ export const WorkspaceComposerContainer = memo(
 					}
 					if (!picked) return;
 					if (linkedDirectories.includes(picked)) return;
-					linkedDirectoriesMutation.mutate([...linkedDirectories, picked]);
+					commitLinkedDirectories([...linkedDirectories, picked]);
 					return;
 				}
 				const path = entry.candidate.absolutePath;
 				if (entry.alreadyLinked) {
-					linkedDirectoriesMutation.mutate(
-						linkedDirectories.filter((d) => d !== path),
-					);
+					commitLinkedDirectories(linkedDirectories.filter((d) => d !== path));
 				} else {
-					linkedDirectoriesMutation.mutate([...linkedDirectories, path]);
+					commitLinkedDirectories([...linkedDirectories, path]);
 				}
 			},
-			[displayedWorkspaceId, linkedDirectories, linkedDirectoriesMutation],
+			[
+				displayedWorkspaceId,
+				linkedDirectoriesController,
+				linkedDirectories,
+				commitLinkedDirectories,
+			],
 		);
 
 		const modelSections = modelSectionsQuery.data ?? EMPTY_MODEL_SECTIONS;
@@ -314,15 +427,15 @@ export const WorkspaceComposerContainer = memo(
 			(sessionsQuery.data ?? []).find(
 				(session) => session.id === displayedSessionId,
 			) ?? null;
-		const composerContextKey = getComposerContextKey(
-			displayedWorkspaceId,
-			displayedSessionId,
-		);
+		const composerContextKey =
+			contextKeyOverride ??
+			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
 		const selectedModelId = resolveSessionSelectedModelId({
 			session: currentSession,
 			modelSelections,
 			modelSections,
 			settingsDefaultModelId: settings.defaultModelId,
+			contextKey: composerContextKey,
 		});
 		const selectedModel = useMemo(
 			() => findModelOption(modelSections, selectedModelId),
@@ -345,30 +458,26 @@ export const WorkspaceComposerContainer = memo(
 		]
 			? null
 			: getShortcut(settings.shortcuts, "composer.toggleFollowUpBehavior");
-		const pendingOverrideActive =
-			pendingPromptForSession?.sessionId === displayedSessionId;
-		const pendingModel = useMemo(
-			() =>
-				pendingOverrideActive && pendingPromptForSession?.modelId
-					? findModelOption(modelSections, pendingPromptForSession.modelId)
-					: null,
-			[
-				displayedSessionId,
-				modelSections,
-				pendingOverrideActive,
-				pendingPromptForSession,
-			],
-		);
-		const effectiveModel = pendingModel ?? selectedModel;
+		const toggleContextPanelShortcut = shortcutConflicts.conflictById[
+			"composer.toggleContextPanel"
+		]
+			? null
+			: getShortcut(settings.shortcuts, "composer.toggleContextPanel");
+		const effectiveModel = selectedModel;
 		const effectiveSelectedModelId = effectiveModel?.id ?? selectedModelId;
 		const provider =
 			effectiveModel?.provider ?? currentSession?.agentType ?? "claude";
-		const cachedEffort = composerContextKey.startsWith("session:")
-			? effortLevels[composerContextKey]
-			: undefined;
-		// For new sessions, use user setting; for existing sessions with history, use session's effort
+		// "User-configured" = the session row carries an explicit model. Fresh
+		// sessions get `model = NULL` *unless* an inspector helper (Create
+		// PR/MR, Review) pinned one at create time — in which case
+		// effort/fastMode/permissionMode were pinned in the same INSERT, so
+		// trusting the row here picks them up. The streaming finalizer
+		// continues to overwrite these on every turn.
+		const sessionIsConfigured =
+			!isNewSession(currentSession) || Boolean(currentSession?.model);
+		const cachedEffort = effortLevels[composerContextKey];
 		const sessionEffort =
-			(!isNewSession(currentSession) && currentSession?.effortLevel) || null;
+			(sessionIsConfigured && currentSession?.effortLevel) || null;
 		const rawEffort =
 			cachedEffort ?? sessionEffort ?? settings.defaultEffort ?? "high";
 		const effortLevel = clampEffortToModel(
@@ -376,24 +485,16 @@ export const WorkspaceComposerContainer = memo(
 			effectiveSelectedModelId,
 			modelSections,
 		);
-		const cachedPermissionMode = composerContextKey.startsWith("session:")
-			? permissionModes[composerContextKey]
-			: undefined;
-		const sessionPermissionMode = !isNewSession(currentSession)
+		const cachedPermissionMode = permissionModes[composerContextKey];
+		const sessionPermissionMode = sessionIsConfigured
 			? currentSession?.permissionMode
 			: null;
-		const permissionMode =
+		const effectivePermissionMode =
 			cachedPermissionMode ??
 			(sessionPermissionMode === "plan" ? "plan" : "bypassPermissions");
-		const effectivePermissionMode =
-			pendingOverrideActive && pendingPromptForSession?.permissionMode
-				? pendingPromptForSession.permissionMode
-				: permissionMode;
 		const supportsFastMode = effectiveModel?.supportsFastMode === true;
-		const cachedFastMode = composerContextKey.startsWith("session:")
-			? fastModes[composerContextKey]
-			: undefined;
-		const sessionFastMode = !isNewSession(currentSession)
+		const cachedFastMode = fastModes[composerContextKey];
+		const sessionFastMode = sessionIsConfigured
 			? currentSession?.fastMode
 			: undefined;
 		const fastMode = supportsFastMode
@@ -417,8 +518,9 @@ export const WorkspaceComposerContainer = memo(
 		//     finalize. The typical ~200-500ms window ends long before the
 		//     user finishes typing, so there is no visible transition.
 		const composerUnavailable =
-			displayedWorkspaceId === null ||
-			workspaceDetailQuery.data?.state === "archived";
+			!forceAvailable &&
+			(displayedWorkspaceId === null ||
+				workspaceDetailQuery.data?.state === "archived");
 		const composerAwaitingFinalize =
 			workspaceDetailQuery.data?.state === "initializing";
 
@@ -431,7 +533,12 @@ export const WorkspaceComposerContainer = memo(
 			[autoCloseQuery.data],
 		);
 		const sessionActionKind = currentSession?.actionKind ?? null;
-		const isActionSession = Boolean(sessionActionKind);
+		// "Action session" here drives the Auto-Close composer affordance.
+		// Some kinds (e.g. "review") are auto-created but explicitly NOT
+		// auto-hideable — they exist for the user to read — so we hide the
+		// toggle UI for them.
+		const isActionSession =
+			sessionActionKind !== null && isAutoHideableActionKind(sessionActionKind);
 		const autoCloseEnabled = sessionActionKind
 			? autoCloseActionKinds.has(sessionActionKind)
 			: false;
@@ -526,20 +633,28 @@ export const WorkspaceComposerContainer = memo(
 
 		// Narrow `provider` (which can be the loosely-typed agentType from a
 		// historical session) to a real AgentProvider before keying the
-		// query — anything else degrades to claude so we never miss the popup.
+		// query. Anything outside the known set degrades to claude so we
+		// never miss the popup. NOTE: the prior version of this branch
+		// collapsed everything except codex into claude, which masked
+		// cursor sessions as claude — the Rust cache then served cached
+		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" ? "codex" : "claude";
-		// Slash command list — keyed by (provider, workingDirectory). The
-		// composer popup is hidden until this resolves; on error we fall back
-		// to an empty list and the popup never opens (no UI breakage).
+			provider === "codex" || provider === "cursor" ? provider : "claude";
+		// Prefer the repoId from a real workspace; on the start page there's no
+		// workspace yet, so fall back to the caller-supplied repoId hint.
+		const effectiveRepoId =
+			workspaceDetailQuery.data?.repoId ?? propRepoId ?? null;
+		// Slash command list — keyed by (provider, workingDirectory). On the
+		// start page workingDirectory is null, but the backend has a repo-level
+		// cache fallback, so we still fire the query when we know the repoId.
 		const slashCommandsQuery = useQuery({
 			...slashCommandsQueryOptions(
 				slashProvider,
 				workingDirectory,
-				workspaceDetailQuery.data?.repoId ?? null,
+				effectiveRepoId,
 				displayedWorkspaceId,
 			),
-			enabled: Boolean(workingDirectory),
+			enabled: Boolean(workingDirectory) || Boolean(effectiveRepoId),
 		});
 		const slashCommandsResponse = slashCommandsQuery.data;
 		const agentSlashCommands =
@@ -547,30 +662,52 @@ export const WorkspaceComposerContainer = memo(
 		// Prepend Helmor's host-app commands (e.g. /add-dir) so they always
 		// show at the top of the popup, even before the agent-supplied list
 		// has loaded.
-		const slashCommands = useMemo<readonly SlashCommandEntry[]>(
-			() => [
-				...BUILTIN_CLIENT_COMMANDS.filter(
-					(command) =>
-						!command.providers || command.providers.includes(slashProvider),
+		const slashCommands = useMemo<readonly SlashCommandEntry[]>(() => {
+			const builtinCommands = BUILTIN_CLIENT_COMMANDS.filter(
+				(command) =>
+					!command.providers || command.providers.includes(slashProvider),
+			);
+			const builtinNames = new Set(
+				builtinCommands.map((command) => command.name),
+			);
+			return [
+				...builtinCommands,
+				...agentSlashCommands.filter(
+					(command) => !builtinNames.has(command.name),
 				),
-				...agentSlashCommands,
-			],
-			[agentSlashCommands, slashProvider],
-		);
+			];
+		}, [agentSlashCommands, slashProvider]);
 		// Pending only (`isPending`) covers the very first fetch with no data
 		// yet; once we have data, `isFetching` covers background refetches but
 		// users don't need a spinner for those — the cached list is fine.
+		const slashQueryActive =
+			Boolean(workingDirectory) || Boolean(effectiveRepoId);
 		const slashCommandsLoading =
-			Boolean(workingDirectory) &&
+			slashQueryActive &&
 			slashCommandsQuery.isPending &&
 			!slashCommandsQuery.isError;
-		const slashCommandsError =
-			Boolean(workingDirectory) && slashCommandsQuery.isError;
+		const slashCommandsError = slashQueryActive && slashCommandsQuery.isError;
 		const refetchSlashCommands = useCallback(() => {
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
-		const handleComposerSubmit = useCallback(
+		// Pull the active codex goal so we can intercept `/goal X` submissions
+		// when one is already in flight and ask the user for confirmation
+		// before replacing it.
+		const codexGoalQuery = useQuery({
+			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
+			enabled: Boolean(displayedSessionId) && provider === "codex",
+		});
+		const activeGoal = codexGoalQuery.data ?? null;
+
+		type PendingGoalReplace = {
+			newObjective: string;
+			args: Parameters<typeof handleComposerSubmitInner>;
+		};
+		const [goalReplaceConfirm, setGoalReplaceConfirm] =
+			useState<PendingGoalReplace | null>(null);
+
+		const handleComposerSubmitInner = useCallback(
 			(
 				prompt: string,
 				imagePaths: string[],
@@ -579,6 +716,8 @@ export const WorkspaceComposerContainer = memo(
 				options?: {
 					permissionModeOverride?: string;
 					oppositeFollowUp?: boolean;
+					startSubmitMode?: StartSubmitMode;
+					editorStateSnapshot?: SerializedEditorState;
 				},
 			) => {
 				if (!effectiveModel) {
@@ -604,6 +743,8 @@ export const WorkspaceComposerContainer = memo(
 						options?.permissionModeOverride ?? effectivePermissionMode,
 					fastMode: supportsFastMode ? fastMode : false,
 					followUpBehaviorOverride,
+					startSubmitMode: options?.startSubmitMode,
+					editorStateSnapshot: options?.editorStateSnapshot,
 				});
 			},
 			[
@@ -618,6 +759,83 @@ export const WorkspaceComposerContainer = memo(
 			],
 		);
 
+		const handleComposerSubmit = useCallback(
+			(
+				prompt: string,
+				imagePaths: string[],
+				filePaths: string[],
+				customTags: ComposerCustomTag[],
+				options?: {
+					permissionModeOverride?: string;
+					oppositeFollowUp?: boolean;
+				},
+			) => {
+				// `/goal …` interception for codex sessions. Three flavors:
+				//   - `/goal pause` / `/goal clear`  → out-of-band mutate IPC,
+				//     no chat bubble (matches the banner-button behaviour).
+				//   - `/goal resume`                 → falls through to send-
+				//     Message so the resulting stream subscription catches
+				//     the goal-continuation turn codex auto-spawns.
+				//   - `/goal <new objective>` while a goal already exists
+				//                                    → confirm-replace panel.
+				if (provider === "codex" && displayedSessionId) {
+					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
+					const arg = match ? (match[1]?.trim() ?? "") : "";
+					if (arg === "pause" || arg === "clear") {
+						if (activeGoal) {
+							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+								toast.error(
+									err instanceof Error ? err.message : `Failed to ${arg} goal`,
+								);
+							});
+						}
+						return;
+					}
+					if (
+						arg &&
+						arg !== "resume" &&
+						activeGoal &&
+						arg !== activeGoal.objective
+					) {
+						setGoalReplaceConfirm({
+							newObjective: arg,
+							args: [prompt, imagePaths, filePaths, customTags, options],
+						});
+						return;
+					}
+				}
+				handleComposerSubmitInner(
+					prompt,
+					imagePaths,
+					filePaths,
+					customTags,
+					options,
+				);
+			},
+			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+		);
+
+		const handleGoalReplaceConfirm = useCallback(() => {
+			if (!goalReplaceConfirm) return;
+			const args = goalReplaceConfirm.args;
+			setGoalReplaceConfirm(null);
+			handleComposerSubmitInner(...args);
+		}, [goalReplaceConfirm, handleComposerSubmitInner]);
+
+		const handleGoalReplaceCancel = useCallback(() => {
+			setGoalReplaceConfirm(null);
+		}, []);
+
+		// Resume button on the goal banner — synthesises a `/goal resume`
+		// submit so it travels through the normal sendMessage path. The
+		// resulting stream subscription is what catches the
+		// goal-continuation turn codex auto-spawns server-side; routing
+		// resume through `mutateCodexGoal` would skip that subscription
+		// and the chat would go silent even though the agent is working.
+		const handleResumeGoal = useCallback(() => {
+			handleComposerSubmitInner("/goal resume", [], [], []);
+		}, [handleComposerSubmitInner]);
+
 		// Track which queued prompt we've already dispatched so a re-render
 		// (e.g. due to query invalidation refreshing the session list) can't
 		// resubmit the same prompt twice before the parent clears the queue.
@@ -631,10 +849,6 @@ export const WorkspaceComposerContainer = memo(
 			if (pendingPromptForSession.sessionId !== displayedSessionId) {
 				return;
 			}
-			if (pendingPromptForSession.modelId && !pendingModel) {
-				// Wait for the model sections query to resolve the queued model.
-				return;
-			}
 			if (!effectiveModel) {
 				// Wait for the model sections query to resolve.
 				return;
@@ -643,8 +857,6 @@ export const WorkspaceComposerContainer = memo(
 			const dispatchKey = [
 				pendingPromptForSession.sessionId,
 				pendingPromptForSession.prompt,
-				pendingPromptForSession.modelId ?? "",
-				pendingPromptForSession.permissionMode ?? "",
 				pendingPromptForSession.forceQueue ? "q" : "",
 			].join("|");
 			if (dispatchedPromptKeyRef.current === dispatchKey) {
@@ -673,7 +885,6 @@ export const WorkspaceComposerContainer = memo(
 			fastMode,
 			onPendingPromptConsumed,
 			onSubmit,
-			pendingModel,
 			pendingPromptForSession,
 			supportsFastMode,
 			workingDirectory,
@@ -781,7 +992,15 @@ export const WorkspaceComposerContainer = memo(
 				) : null}
 
 				<div className="relative z-10">
-					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex justify-center">
+					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						{displayedSessionId ? (
+							<CodexGoalBanner
+								sessionId={displayedSessionId}
+								hasQueueBelow={queueItems.length > 0}
+								disabled={composerUnavailable}
+								onResume={handleResumeGoal}
+							/>
+						) : null}
 						<SubmitQueueList
 							items={queueItems}
 							onSteer={(id) => onSteerQueued?.(id)}
@@ -792,13 +1011,19 @@ export const WorkspaceComposerContainer = memo(
 					<WorkspaceComposer
 						contextKey={composerContextKey}
 						sessionId={displayedSessionId}
+						placeholder={placeholder}
 						providerSessionId={currentSession?.providerSessionId ?? null}
 						agentType={
-							effectiveModel?.provider === "codex" ? "codex" : "claude"
+							effectiveModel?.provider === "codex"
+								? "codex"
+								: effectiveModel?.provider === "cursor"
+									? "cursor"
+									: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
 						toggleFollowUpShortcut={toggleFollowUpShortcut}
+						toggleContextPanelShortcut={toggleContextPanelShortcut}
 						alwaysShowContextUsage={settings.alwaysShowContextUsage}
 						onSubmit={handleComposerSubmit}
 						disabled={composerUnavailable}
@@ -827,11 +1052,21 @@ export const WorkspaceComposerContainer = memo(
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
 						restoreNonce={restoreNonce}
-						pendingElicitation={pendingElicitation}
-						onElicitationResponse={onElicitationResponse}
-						elicitationResponsePending={elicitationResponsePending}
-						pendingDeferredTool={pendingDeferredTool}
-						onDeferredToolResponse={onDeferredToolResponse}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={onUserInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={pendingPermission}
+						onPermissionResponse={onPermissionResponse}
+						goalReplace={
+							goalReplaceConfirm && activeGoal
+								? {
+										currentObjective: activeGoal.objective,
+										newObjective: goalReplaceConfirm.newObjective,
+										onReplace: handleGoalReplaceConfirm,
+										onCancel: handleGoalReplaceCancel,
+									}
+								: null
+						}
 						hasPlanReview={hasPlanReview}
 						pendingInsertRequests={pendingInsertRequests}
 						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
@@ -842,9 +1077,18 @@ export const WorkspaceComposerContainer = memo(
 						workspaceRootPath={workingDirectory}
 						linkedDirectories={linkedDirectories}
 						onRemoveLinkedDirectory={handleRemoveLinkedDirectory}
-						linkedDirectoriesDisabled={linkedDirectoriesMutation.isPending}
+						linkedDirectoriesDisabled={
+							linkedDirectoriesController
+								? false
+								: linkedDirectoriesMutation.isPending
+						}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={startSubmitMenu}
+						startSubmitMode={startSubmitMode}
+						onStartSubmitModeChange={handleStartSubmitModeChange}
 					/>
 				</div>
 			</div>

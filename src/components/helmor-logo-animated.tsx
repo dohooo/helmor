@@ -1,82 +1,8 @@
-import lottie from "lottie-web/build/player/lottie_svg";
-import { useEffect, useMemo, useRef } from "react";
-import logoAnimation from "@/assets/helmor-logo-animation.json";
+import { useEffect, useState } from "react";
+import logoDarkSrc from "@/assets/helmor-logo.png";
+import logoLightSrc from "@/assets/helmor-logo-light.png";
 import { resolveTheme, useSettings } from "@/lib/settings";
-
-// The original animation has a ~1.7s hold between flip cascades and
-// 0.6s dead frames at the end. Compress keyframe timing so the loop
-// feels continuous: shrink the gap between cascades from ~100 frames
-// to 20, and trim trailing dead frames.
-const HOLD_GAP = 76; // frames between first and second cascade
-const TAIL_PAD = 6; // frames after last keyframe before loop restarts
-
-function compressKeyframes(data: Record<string, unknown>) {
-	// Collect all shape layers and find their two cascade regions
-	for (const layer of (data as { layers: Array<Record<string, unknown>> })
-		.layers) {
-		if ((layer as { ty: number }).ty !== 4) continue;
-		const ks = layer.ks as Record<string, unknown>;
-		for (const prop of Object.values(ks)) {
-			const p = prop as { a?: number; k?: Array<{ t: number }> };
-			if (!p || p.a !== 1 || !Array.isArray(p.k)) continue;
-			const kfs = p.k;
-			// Split keyframes into first cascade (t <= 80) and second (t > 80)
-			const first = kfs.filter((kf) => kf.t <= 80);
-			const second = kfs.filter((kf) => kf.t > 80);
-			if (second.length === 0) continue;
-			// Find where first cascade ends and second starts
-			const firstEnd = Math.max(...first.map((kf) => kf.t));
-			const secondStart = Math.min(...second.map((kf) => kf.t));
-			const shift = secondStart - firstEnd - HOLD_GAP;
-			if (shift <= 0) continue;
-			// Shift second cascade earlier
-			for (const kf of second) {
-				kf.t -= shift;
-			}
-		}
-	}
-	// Find new last keyframe and set out point
-	let lastKf = 0;
-	for (const layer of (data as { layers: Array<Record<string, unknown>> })
-		.layers) {
-		const ks = layer.ks as Record<string, unknown> | undefined;
-		if (!ks) continue;
-		for (const prop of Object.values(ks)) {
-			const p = prop as { a?: number; k?: Array<{ t: number }> };
-			if (!p || p.a !== 1 || !Array.isArray(p.k)) continue;
-			for (const kf of p.k) {
-				if (kf.t > lastKf) lastKf = kf.t;
-			}
-		}
-	}
-	(data as { op: number }).op = lastKf + TAIL_PAD;
-}
-
-// Deep-clone the animation JSON, compress timing, swap colours per theme.
-// Background layer is always transparent (container provides bg).
-function themedAnimationData(theme: "light" | "dark") {
-	const data = JSON.parse(JSON.stringify(logoAnimation));
-	compressKeyframes(data);
-
-	const darkFill = [0.055, 0.055, 0.055, 1]; // #0E0E0E
-	for (const layer of data.layers) {
-		// Light mode: recolour shape fills to dark
-		if (theme === "light" && layer.ty === 4 && layer.shapes) {
-			for (const group of layer.shapes) {
-				for (const item of group.it ?? []) {
-					if (item.ty === "fl") {
-						item.c.k = darkFill;
-					}
-				}
-			}
-		}
-		// Always make background layer transparent
-		if (layer.ty === 1) {
-			layer.sc = "#00000000";
-		}
-	}
-	return data;
-}
+import { cn } from "@/lib/utils";
 
 interface HelmorLogoAnimatedProps {
 	/** CSS width/height */
@@ -86,40 +12,104 @@ interface HelmorLogoAnimatedProps {
 	className?: string;
 }
 
+function usePrefersReducedMotion() {
+	const [reducedMotion, setReducedMotion] = useState(false);
+
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") {
+			return;
+		}
+
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const handleChange = () => setReducedMotion(query.matches);
+
+		handleChange();
+		query.addEventListener("change", handleChange);
+		return () => query.removeEventListener("change", handleChange);
+	}, []);
+
+	return reducedMotion;
+}
+
 export function HelmorLogoAnimated({
 	size,
 	loop = true,
 	autoplay = true,
 	className,
 }: HelmorLogoAnimatedProps) {
-	const containerRef = useRef<HTMLDivElement>(null);
 	const { settings } = useSettings();
 	const effectiveTheme = resolveTheme(settings.theme);
-	const animData = useMemo(
-		() => themedAnimationData(effectiveTheme),
-		[effectiveTheme],
-	);
+	const reducedMotion = usePrefersReducedMotion();
+	const shouldAnimate = autoplay && loop && !reducedMotion;
 
-	useEffect(() => {
-		const el = containerRef.current;
-		if (!el) return;
+	if (shouldAnimate) {
+		return (
+			<HelmorLogoCss size={size} className={className} theme={effectiveTheme} />
+		);
+	}
 
-		const anim = lottie.loadAnimation({
-			container: el,
-			renderer: "svg",
-			loop,
-			autoplay,
-			animationData: animData,
-		});
-
-		return () => anim.destroy();
-	}, [loop, autoplay, animData]);
+	const src = effectiveTheme === "light" ? logoDarkSrc : logoLightSrc;
 
 	return (
-		<div
-			ref={containerRef}
-			className={className}
+		<img
+			aria-hidden="true"
+			alt=""
+			className={cn("block", className)}
+			draggable={false}
+			src={src}
 			style={{ width: size, height: size }}
 		/>
+	);
+}
+
+function HelmorLogoCss({
+	size,
+	className,
+	theme,
+}: {
+	size?: string | number;
+	className?: string;
+	theme: "light" | "dark";
+}) {
+	const color = theme === "light" ? "#0E0E0E" : "#FEFEFE";
+
+	return (
+		<svg
+			aria-hidden="true"
+			className={cn("block", className)}
+			fill="none"
+			style={{ width: size, height: size, color }}
+			viewBox="0 0 1024 1024"
+			xmlns="http://www.w3.org/2000/svg"
+		>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-tl"
+				d="M162 306.673V80.582L375.51 193.625V419.709L162 306.673Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-ml"
+				d="M376.057 454.357L162.553 341.314V567.399L376.057 680.442V454.357Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-bl"
+				d="M162 828.14V602.047L375.51 715.089V941.174L162 828.14Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-bridge"
+				d="M404.308 680.442V454.357L617.918 341.314V567.399L404.308 680.442Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-br"
+				d="M646.615 828.14V602.047L860.126 715.089V941.174L646.615 828.14Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-mr"
+				d="M860.667 454.357L647.165 341.314V567.399L860.667 680.442V454.357Z"
+			/>
+			<path
+				className="helmor-logo-css-piece helmor-logo-css-piece-tr"
+				d="M646.615 306.673V80.582L860.126 193.625V419.709L646.615 306.673Z"
+			/>
+		</svg>
 	);
 }

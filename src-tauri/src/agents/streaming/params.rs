@@ -21,15 +21,26 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub helmor_session_id: Option<&'a str>,
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
+    /// Forwarded as `claudeThinkingDisplay` to the sidecar. Expected
+    /// values: `"summarized"` or `"omitted"`. Omitted from the wire
+    /// payload when `None` so the sidecar falls back to its default.
+    /// Only the Claude Code sidecar reads this; the Codex sidecar
+    /// silently ignores the field, so we forward unconditionally rather
+    /// than gating on `provider`.
+    pub claude_thinking_display: Option<&'a str>,
+    /// Image attachments to forward to the sidecar. Omitted from the
+    /// wire payload when empty.
+    pub images: &'a [String],
 }
 
 /// Build the `sendMessage` request params that the sidecar receives.
 ///
-/// `additionalDirectories` is omitted when empty so the sidecar payload
-/// stays tight and existing snapshot fixtures for untouched sessions
-/// don't churn.
+/// `additionalDirectories` and `sourceRepoPath` are omitted when absent
+/// so the sidecar payload stays tight and existing snapshot fixtures
+/// for untouched sessions don't churn.
 pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Value {
     let additional_directories = lookup_workspace_linked_directories(input.helmor_session_id);
+    let source_repo_path = lookup_workspace_repo_root_path(input.helmor_session_id);
 
     let mut params = serde_json::json!({
         "sessionId": input.sidecar_session_id,
@@ -48,6 +59,21 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
                 "additionalDirectories".to_string(),
                 Value::from(additional_directories),
             );
+        }
+    }
+    if let Some(path) = source_repo_path {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("sourceRepoPath".to_string(), Value::from(path));
+        }
+    }
+    if !input.images.is_empty() {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("images".to_string(), Value::from(input.images.to_vec()));
+        }
+    }
+    if let Some(display) = input.claude_thinking_display {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("claudeThinkingDisplay".to_string(), Value::from(display));
         }
     }
     if let (Some(base_url), Some(auth_token)) = (input.claude_base_url, input.claude_auth_token) {
@@ -107,6 +133,46 @@ pub fn lookup_workspace_linked_directories(helmor_session_id: Option<&str>) -> V
     crate::workspaces::parse_linked_directory_paths(raw.as_deref())
 }
 
+/// Resolve the source repo root path for a helmor session. Sidecar uses
+/// it to read project-scope MCP servers from `~/.claude.json` (the
+/// worktree cwd never matches the user's registered project key, so
+/// without this hint Claude sees only user-scope MCPs).
+pub fn lookup_workspace_repo_root_path(helmor_session_id: Option<&str>) -> Option<String> {
+    let hsid = helmor_session_id?;
+    let conn = match crate::models::db::read_conn() {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(
+                helmor_session_id = %hsid,
+                error = %err,
+                "Failed to open DB for repo root_path lookup; falling back to None",
+            );
+            return None;
+        }
+    };
+    match conn.query_row(
+        r#"SELECT r.root_path
+           FROM sessions s
+           JOIN workspaces w ON w.id = s.workspace_id
+           JOIN repos r ON r.id = w.repository_id
+           WHERE s.id = ?1"#,
+        [hsid],
+        |row| row.get::<_, Option<String>>(0),
+    ) {
+        Ok(Some(path)) if !path.is_empty() => Some(path),
+        Ok(_) => None,
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(err) => {
+            tracing::warn!(
+                helmor_session_id = %hsid,
+                error = %err,
+                "repo root_path query failed; falling back to None",
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,9 +205,9 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO workspaces (id, repository_id, directory_name, state,
-             status, linked_directory_paths) VALUES (?1, 'r-1', 'ws', 'ready',
-             'in-progress', ?2)",
-            rusqlite::params![ws_id, linked],
+             status, linked_directory_paths, display_order) VALUES (?1, 'r-1', 'ws', 'ready',
+             'in-progress', ?2, ?3)",
+            rusqlite::params![ws_id, linked, crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
         conn.execute(

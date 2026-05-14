@@ -100,6 +100,7 @@ pub async fn get_workspace_git_action_status(
             behind_target_count: 0,
             remote_tracking_ref: None,
             ahead_of_remote_count: 0,
+            ahead_of_target_count: 0,
             push_status: git_ops::WorkspacePushStatus::Unpublished,
         };
         // Non-operational workspaces (Initializing / Archived) have no live
@@ -111,8 +112,7 @@ pub async fn get_workspace_git_action_status(
         if !record.state.is_operational() {
             return Ok(quiet_status());
         }
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
         // Defensive: if the worktree directory was removed externally (e.g.
         // user `rm -rf`ed it while the row is still `ready`), return quiet
         // status rather than erroring on every poll. User-triggered paths

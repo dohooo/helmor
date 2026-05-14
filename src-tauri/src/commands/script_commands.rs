@@ -24,9 +24,9 @@ pub async fn execute_repo_script(
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
 
     let script = match script_type.as_str() {
-        "setup" => scripts.setup_script,
-        "run" => scripts.run_script,
-        "archive" => scripts.archive_script,
+        "setup" => scripts.setup_script.clone(),
+        "run" => scripts.run_script.clone(),
+        "archive" => scripts.archive_script.clone(),
         _ => None,
     };
 
@@ -36,6 +36,13 @@ pub async fn execute_repo_script(
         });
         return Ok(());
     };
+
+    // Non-concurrent run mode: starting a run script stops any other live
+    // run script in the same repo first. Only applies to "run" — setup
+    // and archive each have their own one-off lifecycle.
+    if script_type == "run" && scripts.run_script_mode == "non-concurrent" {
+        manager.kill_others_in_repo(&repo_id, "run", workspace_id.as_deref());
+    }
 
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
@@ -56,16 +63,38 @@ pub async fn execute_repo_script(
     // Run in the workspace directory when available, otherwise repo root.
     let workspace_root = workspace
         .as_ref()
-        .and_then(|ws| crate::data_dir::workspace_dir(&ws.repo_name, &ws.directory_name).ok());
+        .and_then(|ws| crate::workspace::helpers::workspace_path(ws).ok());
     let working_dir = workspace_root
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| repo.root_path.clone());
+
+    // Allocate a stable per-workspace port range so HELMOR_PORT /
+    // HELMOR_PORT_COUNT can be injected below. Lazy: only allocates if
+    // the workspace has no range yet. Best-effort — a DB error here
+    // must not block the script run, scripts that don't read
+    // HELMOR_PORT continue to work exactly as before.
+    let port_range = workspace.as_ref().and_then(|ws| {
+        match crate::workspace::port_allocation::ensure_workspace_port_range(&ws.id) {
+            Ok(range) => range,
+            Err(error) => {
+                tracing::warn!(
+                    workspace_id = %ws.id,
+                    %error,
+                    "Failed to allocate workspace port range; skipping HELMOR_PORT env vars"
+                );
+                None
+            }
+        }
+    });
+
     let context = ScriptContext {
         root_path: repo.root_path.clone(),
         workspace_path: Some(working_dir.clone()),
         workspace_name: workspace.as_ref().map(|ws| ws.directory_name.clone()),
         default_branch: repo.default_branch.clone(),
+        port_base: port_range.map(|r| r.base),
+        port_count: port_range.map(|r| r.count),
     };
     let mgr = manager.inner().clone();
 
@@ -83,11 +112,7 @@ pub async fn execute_repo_script(
             Ok(Some(0)) if script_type == "setup" => {
                 if let Some(ws_id) = &workspace_id {
                     if let Ok(ts) = crate::models::db::current_timestamp() {
-                        let _ = crate::models::workspaces::update_workspace_state(
-                            ws_id,
-                            crate::workspace_state::WorkspaceState::Ready,
-                            &ts,
-                        );
+                        let _ = crate::models::workspaces::mark_setup_completed(ws_id, &ts);
                     }
                     crate::git::watcher::notify_workspace_changed(&app);
                 }

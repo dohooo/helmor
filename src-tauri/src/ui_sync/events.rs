@@ -17,6 +17,16 @@ pub enum UiMutationEvent {
     ContextUsageChanged {
         session_id: String,
     },
+    CodexGoalChanged {
+        session_id: String,
+    },
+    /// Fires when a `goal_status` system message has been synthesised into
+    /// the conversation history out-of-band — the streaming pipeline owns
+    /// real assistant messages, this exists for the lifecycle markers
+    /// (Goal paused / resumed / cleared) we insert ourselves.
+    SessionMessagesAppended {
+        session_id: String,
+    },
     WorkspaceFilesChanged {
         workspace_id: String,
     },
@@ -36,7 +46,6 @@ pub enum UiMutationEvent {
     SettingsChanged {
         key: Option<String>,
     },
-    GithubIdentityChanged,
     PendingCliSendQueued {
         workspace_id: String,
         session_id: String,
@@ -44,6 +53,11 @@ pub enum UiMutationEvent {
         model_id: Option<String>,
         permission_mode: Option<String>,
     },
+    /// The set of in-flight agent streams changed (a turn started or
+    /// ended). Carries no payload — frontends invalidate and re-fetch
+    /// `list_active_streams`. See `agents::streaming::active_streams` for
+    /// the source of truth this notification mirrors.
+    ActiveStreamsChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +102,12 @@ mod tests {
             UiMutationEvent::ContextUsageChanged {
                 session_id: "s".into(),
             },
+            UiMutationEvent::CodexGoalChanged {
+                session_id: "s".into(),
+            },
+            UiMutationEvent::SessionMessagesAppended {
+                session_id: "s".into(),
+            },
             UiMutationEvent::WorkspaceFilesChanged {
                 workspace_id: "w".into(),
             },
@@ -111,6 +131,7 @@ mod tests {
                 model_id: None,
                 permission_mode: None,
             },
+            UiMutationEvent::ActiveStreamsChanged,
         ];
         for event in cases {
             let s = serde_json::to_string(&event).unwrap();
@@ -141,8 +162,8 @@ mod tests {
                 "repositoryListChanged",
             ),
             (
-                UiMutationEvent::GithubIdentityChanged,
-                "githubIdentityChanged",
+                UiMutationEvent::ActiveStreamsChanged,
+                "activeStreamsChanged",
             ),
         ];
         for (event, expected) in cases {

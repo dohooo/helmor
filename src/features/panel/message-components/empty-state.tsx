@@ -102,7 +102,7 @@ export function EmptyState({
 								key={scriptType}
 								type="button"
 								onClick={() => onInitializeScript(scriptType)}
-								className="group flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border/70 bg-background px-2.5 py-2 text-left transition-[background-color,border-color] hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+								className="group flex w-full cursor-interactive items-center gap-2.5 rounded-lg border border-border/70 bg-background px-2.5 py-2 text-left transition-[background-color,border-color] hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							>
 								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/75 transition-colors group-hover:text-foreground">
 									<Icon className="size-5" strokeWidth={1.75} />

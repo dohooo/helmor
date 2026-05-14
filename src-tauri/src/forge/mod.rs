@@ -3,43 +3,50 @@
 //!
 //! Layout:
 //!
-//! - [`types`] — serialisable public types (`ForgeProvider`, `ForgeDetection`,
-//!   `ForgeCliStatus`, `DetectionSignal`, `ForgeLabels`, change-request and
-//!   action-status shapes).
+//! - [`types`] — serialisable public types (`ForgeProvider`,
+//!   `ForgeDetection`, `DetectionSignal`, `ForgeLabels`, change-request
+//!   and action-status shapes).
 //! - [`remote`] — git remote URL parsing.
 //! - [`command`] — bounded subprocess execution for forge CLIs.
 //! - [`detect`] — the layered detector that classifies a repo's forge at
 //!   creation time and backs the "Why do we think so?" tooltip.
-//! - [`cli_status`] — gh / glab CLI probes + install paths.
-//! - [`workspace`] — per-workspace router that dispatches change-request calls
-//!   to the right backend once a provider is resolved.
-//! - [`github`] — GitHub SDK (auth, CLI helpers, GraphQL). Moved here from
-//!   the old crate-root `github` module so everything forge-shaped lives
-//!   in one place. The crate-root aliases (`github_cli`, `github_graphql`,
-//!   `auth`) in `lib.rs` still resolve, so existing call sites don't need
-//!   to change.
+//! - [`cli_status`] — terminal-side helpers for the auth-login flow
+//!   (open terminal + render auth command).
+//! - [`accounts`] — per-account / per-host helpers (list logins, probe
+//!   repo access, run CLI as a specific account, auto-bind on add-repo).
+//! - [`workspace`] — per-workspace router that dispatches change-request
+//!   calls to the right backend once a provider is resolved.
+//! - [`github`] — GitHub SDK (CLI helpers, GraphQL).
 //! - [`gitlab`] — GitLab REST client using `glab api`.
 
+pub(crate) mod accounts;
+pub(crate) mod avatar_cache;
+mod branch;
 mod bundled;
 mod cli_status;
 mod command;
 mod detect;
 pub mod github;
 mod gitlab;
+pub mod inbox;
 mod provider;
 pub(crate) mod remote;
-pub(crate) mod status_cache;
 mod types;
 mod workspace;
 
 pub use bundled::init as init_bundled_cli_paths;
 pub(crate) use cli_status::forge_cli_auth_command;
-pub use cli_status::{get_forge_cli_status, open_forge_cli_auth_terminal};
 pub use detect::detect_provider_for_repo;
 pub(crate) use detect::detect_provider_for_repo_offline;
+pub use inbox::{
+    ForgeLabelOption, InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxKind,
+    InboxKindLabels, InboxPage, InboxScopeFilter, InboxSortFilter, InboxSource, InboxState,
+    InboxStateFilter, InboxStateTone, InboxToggles,
+};
+pub(crate) use provider::backend_for as forge_backend_for;
 pub use types::{
     ActionProvider, ActionStatusKind, ChangeRequestInfo, DetectionSignal, ForgeActionItem,
-    ForgeActionStatus, ForgeCliStatus, ForgeDetection, ForgeLabels, ForgeProvider, RemoteState,
+    ForgeActionStatus, ForgeDetection, ForgeLabels, ForgeProvider, RemoteState,
 };
 pub use workspace::{
     close_workspace_change_request, get_workspace_forge, lookup_workspace_forge_action_status,

@@ -1,0 +1,14 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+model: claude-opus-4
+permissionMode: bypassPermissions
+prompt: hello
+provider: claude
+resume: ~
+sessionId: sidecar-sess-1
+sourceRepoPath: /Users/me/repos/my-repo

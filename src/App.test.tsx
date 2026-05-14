@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { WorkspacesSidebar } from "./features/navigation";
 import { WorkspacePanel } from "./features/panel";
-import type { RepositoryCreateOption, WorkspaceGroup } from "./lib/api";
+import type { WorkspaceGroup } from "./lib/api";
 import { renderWithProviders } from "./test/render-with-providers";
 
 vi.mock("./App.css", () => ({}));
@@ -123,6 +123,18 @@ describe("App", () => {
 		const user = userEvent.setup();
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
+		const tabsToggle = screen.getByLabelText("Toggle inspector tabs section");
+		const tabsChevron = tabsToggle.querySelector("svg");
+		const actionsChevron = screen
+			.getByLabelText("Toggle inspector actions section")
+			.querySelector("svg");
+
+		expect(tabsChevron).toHaveStyle({
+			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+		});
+		expect(actionsChevron).toHaveStyle({
+			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+		});
 
 		// Default: tabs section collapsed; changes + actions bodies present.
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
@@ -132,20 +144,60 @@ describe("App", () => {
 		).not.toBeInTheDocument();
 
 		// Clicking the toggle expands the tabs body.
-		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
+		await user.click(tabsToggle);
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
+		expect(tabsChevron).toHaveStyle({
+			transition: "transform 350ms cubic-bezier(0.32, 0.72, 0, 1)",
+		});
 
 		// Clicking again collapses it back.
-		await user.click(screen.getByLabelText("Toggle inspector tabs section"));
+		await user.click(tabsToggle);
 
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(
 			screen.queryByLabelText("Inspector tabs body"),
 		).not.toBeInTheDocument();
+	});
+
+	it("measures the inspector height before the first visible frame", async () => {
+		const getBoundingClientRect = vi
+			.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+			.mockReturnValue({
+				x: 0,
+				y: 0,
+				width: 336,
+				height: 900,
+				top: 0,
+				right: 336,
+				bottom: 900,
+				left: 0,
+				toJSON: () => ({}),
+			});
+
+		try {
+			render(<App />);
+			await screen.findByRole("main", { name: "Application shell" });
+
+			await waitFor(() => {
+				expect(screen.getByLabelText("Inspector section Git")).toHaveStyle({
+					height: "273px",
+				});
+			});
+			expect(screen.getByLabelText("Inspector section Actions")).toHaveStyle({
+				height: "594px",
+			});
+			const tabsWrapper = screen.getByLabelText("Inspector section Tabs")
+				.parentElement?.parentElement;
+			expect(tabsWrapper).toHaveStyle({
+				height: "33px",
+			});
+		} finally {
+			getBoundingClientRect.mockRestore();
+		}
 	});
 
 	it("resizes the sidebar and persists the width", async () => {
@@ -265,7 +317,9 @@ describe("App", () => {
 			await screen.findByRole("main", { name: "Application shell" });
 
 			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
+				await screen.findByRole("button", {
+					name: "Update Helmor to 1.1.0",
+				}),
 			).toBeInTheDocument();
 
 			await user.click(
@@ -273,7 +327,9 @@ describe("App", () => {
 			);
 
 			expect(
-				screen.getByRole("button", { name: "Update Helmor to 1.1.0" }),
+				await screen.findByRole("button", {
+					name: "Update Helmor to 1.1.0",
+				}),
 			).toBeInTheDocument();
 		} finally {
 			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));
@@ -365,30 +421,15 @@ describe("App", () => {
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});
 
-	it("opens the repo picker and creates a workspace from a selected repository", async () => {
+	it("opens the workspace start page from the new workspace button", async () => {
 		const user = userEvent.setup();
-		const onCreateWorkspace = vi.fn();
-		const repositories: RepositoryCreateOption[] = [
-			{
-				id: "repo-1",
-				name: "dosu-cli",
-				defaultBranch: "main",
-				repoInitials: "DC",
-			},
-			{
-				id: "repo-2",
-				name: "helmor",
-				defaultBranch: "main",
-				repoInitials: "H",
-			},
-		];
+		const onOpenNewWorkspace = vi.fn();
 
 		renderWithProviders(
 			<WorkspacesSidebar
 				groups={[]}
 				archivedRows={[]}
-				availableRepositories={repositories}
-				onCreateWorkspace={onCreateWorkspace}
+				onOpenNewWorkspace={onOpenNewWorkspace}
 			/>,
 		);
 
@@ -396,13 +437,7 @@ describe("App", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
-		expect(
-			screen.getByRole("option", { name: /dosu-cli/i }),
-		).toBeInTheDocument();
-
-		await user.click(screen.getByText("dosu-cli"));
-
-		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
+		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
 	});
 
 	it("opens a workspace context menu and calls mark as unread", async () => {

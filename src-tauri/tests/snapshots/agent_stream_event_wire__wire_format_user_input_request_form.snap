@@ -1,0 +1,23 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::UserInputRequest\n{\n    provider: \"claude\".into(), model_id: \"opus-1m\".into(), resolved_model:\n    \"claude-opus-4-20250514\".into(), session_id:\n    Some(\"provider-session-1\".into()), working_directory:\n    \"/tmp/helmor\".into(), permission_mode: None, user_input_id:\n    \"elicitation-1\".into(), source: \"design-server\".into(), message:\n    \"Need structured input\".into(), payload:\n    json!({\n        \"kind\": \"form\", \"schema\":\n        {\n            \"type\": \"object\", \"properties\": { \"name\": { \"type\": \"string\" } },\n            \"required\": [\"name\"]\n        },\n    }),\n})"
+---
+kind: userInputRequest
+message: Need structured input
+model_id: opus-1m
+payload:
+  kind: form
+  schema:
+    properties:
+      name:
+        type: string
+    required:
+      - name
+    type: object
+permission_mode: ~
+provider: claude
+resolved_model: claude-opus-4-20250514
+session_id: provider-session-1
+source: design-server
+userInputId: elicitation-1
+working_directory: /tmp/helmor

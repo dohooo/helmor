@@ -19,13 +19,11 @@ const GITLAB_FORGE: ForgeDetection = {
 		changeRequestFullName: "merge request",
 		connectAction: "Connect GitLab",
 	},
-	cli: null,
 	detectionSignals: [],
 };
 
 describe("repo preference prompts", () => {
 	const targetRefPlaceholder = "$" + "{TARGET_REF}";
-	const dirtyWorktreePlaceholder = "$" + "{DIRTY_WORKTREE}";
 
 	it("leaves the general preview empty when no override exists", () => {
 		expect(resolveRepoPreferencePreview("general", {})).toBe("");
@@ -93,16 +91,28 @@ describe("repo preference prompts", () => {
 		expect(prompt).toContain("`glab ci list` / `glab ci view`");
 	});
 
-	it("renders the dynamic resolve-conflicts fallback", () => {
+	it("renders the intent-only resolve-conflicts prompt for merge conflicts", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
+		);
+	});
+
+	it("renders a narrow prompt for stash-pop conflicts", () => {
+		expect(
+			resolveRepoPreferencePrompt({
+				key: "resolveConflicts",
+				repoPreferences: {},
+				targetRef: "origin/main",
+				resolveConflictsKind: "stashPopConflict",
+			}),
+		).toBe(
+			"Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.",
 		);
 	});
 
@@ -137,18 +147,17 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("appends resolve-conflicts overrides after the dynamic fallback", () => {
+	it("appends resolve-conflicts overrides after the intent-only prompt", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {
-					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}. Dirty: ${dirtyWorktreePlaceholder}.`,
+					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}.`,
 				},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main. Dirty: true.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main.",
 		);
 	});
 
@@ -156,5 +165,72 @@ describe("repo preference prompts", () => {
 		expect(prependGeneralPreferencePrompt("Fix the failing tests.", {})).toBe(
 			"Fix the failing tests.",
 		);
+	});
+
+	it("returns the review default prompt diffing against the target ref when no override is set", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+		});
+		expect(prompt).toContain("relative to `origin/main`");
+		expect(prompt).toContain("IN THIS CHAT ONLY");
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		// Forge-agnostic — no PR / MR machinery.
+		expect(prompt).not.toContain("pull request");
+		expect(prompt).not.toContain("merge request");
+		expect(prompt).not.toContain("gh pr");
+		expect(prompt).not.toContain("glab mr");
+		// Side-effect ban must be explicit.
+		expect(prompt).toContain("Do NOT modify files");
+		expect(prompt).not.toContain("### User Preferences");
+	});
+
+	it("appends review overrides after the built-in prompt", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: { review: "Always check for missing tests." },
+			targetBranch: "main",
+			remote: "origin",
+		});
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		expect(prompt).toContain(
+			"### User Preferences\n\nAlways check for missing tests.",
+		);
+	});
+
+	it("is forge-agnostic — same prompt regardless of GitLab vs GitHub", () => {
+		const githubPrompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+		});
+		const gitlabPrompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+			forge: GITLAB_FORGE,
+		});
+		expect(gitlabPrompt).toBe(githubPrompt);
+	});
+
+	it("throws when the review prompt is built without a target branch", () => {
+		expect(() =>
+			resolveRepoPreferencePrompt({
+				key: "review",
+				repoPreferences: {},
+				remote: "origin",
+			}),
+		).toThrow(/target branch/i);
+	});
+
+	it("uses generic prose in the review preview (no live workspace ref)", () => {
+		const preview = resolveRepoPreferencePreview("review", {});
+		expect(preview).toContain("relative to the target branch");
+		expect(preview).toContain("IN THIS CHAT ONLY");
+		expect(preview).not.toContain("origin/");
 	});
 });

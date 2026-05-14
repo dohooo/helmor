@@ -1,0 +1,19 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::UserInputRequest\n{\n    provider: \"claude\".into(), model_id: \"opus-1m\".into(), resolved_model:\n    \"claude-opus-4-20250514\".into(), session_id:\n    Some(\"provider-session-1\".into()), working_directory:\n    \"/tmp/helmor\".into(), permission_mode: Some(\"default\".into()),\n    user_input_id: \"tool-1\".into(), source: \"Claude\".into(), message:\n    \"Claude is asking for your input.\".into(), payload:\n    json!({\n        \"kind\": \"ask-user-question\", \"questions\":\n        [{ \"question\": \"Pick one\", \"options\": [] }],\n    }),\n})"
+---
+kind: userInputRequest
+message: Claude is asking for your input.
+model_id: opus-1m
+payload:
+  kind: ask-user-question
+  questions:
+    - options: []
+      question: Pick one
+permission_mode: default
+provider: claude
+resolved_model: claude-opus-4-20250514
+session_id: provider-session-1
+source: Claude
+userInputId: tool-1
+working_directory: /tmp/helmor

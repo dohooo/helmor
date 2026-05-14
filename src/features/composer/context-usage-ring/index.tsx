@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
 	HoverCard,
 	HoverCardContent,
 	HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { setSessionContextUsage } from "@/lib/api";
 import {
 	claudeRichContextUsageQueryOptions,
 	sessionContextUsageQueryOptions,
@@ -12,6 +13,7 @@ import {
 import { CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
+	isTrustedRich,
 	parseClaudeRichMeta,
 	parseStoredMeta,
 	resolveContextUsageDisplay,
@@ -27,8 +29,8 @@ type Props = {
 	 *  right project config. */
 	cwd: string | null;
 	/** Only Claude supports the rich hover breakdown. */
-	agentType: "claude" | "codex" | null;
-	/** Composer's current model id; used for rich fetches and stale checks. */
+	agentType: "claude" | "codex" | "cursor" | null;
+	/** Composer's current model id; used as the rich-fetch cache key. */
 	composerModelId: string | null;
 	alwaysShow: boolean;
 	disabled?: boolean;
@@ -78,9 +80,34 @@ export function ContextUsageRing({
 	const rich = useMemo(() => parseClaudeRichMeta(richJson), [richJson]);
 
 	const display = useMemo(
-		() => resolveContextUsageDisplay(baseline, rich, composerModelId),
-		[baseline, rich, composerModelId],
+		() => resolveContextUsageDisplay(baseline, rich),
+		[baseline, rich],
 	);
+
+	// Promote a trustworthy rich fetch back to the DB so cold starts
+	// see the freshest numbers. The backend broadcasts
+	// `ContextUsageChanged`, which invalidates the baseline query and
+	// brings everyone in sync. Skip when baseline already matches.
+	useEffect(() => {
+		if (!isTrustedRich(rich)) return;
+		if (
+			baseline &&
+			baseline.modelId === rich.modelId &&
+			baseline.usedTokens === rich.usedTokens &&
+			baseline.maxTokens === rich.maxTokens
+		) {
+			return;
+		}
+		void setSessionContextUsage(
+			sessionId,
+			JSON.stringify({
+				modelId: rich.modelId,
+				usedTokens: rich.usedTokens,
+				maxTokens: rich.maxTokens,
+				percentage: rich.percentage,
+			}),
+		);
+	}, [rich, baseline, sessionId]);
 
 	const visible =
 		alwaysShow ||
@@ -116,7 +143,7 @@ export function ContextUsageRing({
 					disabled={disabled}
 					aria-label={ariaLabel}
 					className={cn(
-						"flex size-7 cursor-pointer items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
+						"flex size-7 cursor-interactive items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
 						className,
 					)}
 				>

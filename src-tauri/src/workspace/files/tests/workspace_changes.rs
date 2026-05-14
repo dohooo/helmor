@@ -179,3 +179,106 @@ fn classification_discard_removes_from_changes() {
         "discarded file should NOT show"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Per-area line counts. Each area (committed / staged / unstaged) reports
+// its own insertions/deletions; numbers must NOT be summed across areas.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn line_counts_unstaged_only() {
+    let repo = GitRepoHarness::new();
+    repo.write_file("app.ts", "line1\nline2\nline3\n");
+    repo.git(&["add", "app.ts"]);
+    repo.git(&["commit", "-m", "add app"]);
+    // Edit on top of HEAD — unstaged only.
+    repo.write_file("app.ts", "line1\nline2 changed\nline3\nline4\n");
+
+    let item = repo.find("app.ts").expect("file should appear");
+    assert_eq!(item.unstaged_insertions, 2);
+    assert_eq!(item.unstaged_deletions, 1);
+    assert_eq!(item.staged_insertions, 0);
+    assert_eq!(item.staged_deletions, 0);
+}
+
+#[test]
+fn line_counts_staged_and_unstaged_kept_separate() {
+    let repo = GitRepoHarness::new();
+    repo.write_file("app.ts", "v1\n");
+    repo.git(&["add", "app.ts"]);
+    repo.git(&["commit", "-m", "add app"]);
+    // Stage a 1-for-1 swap.
+    repo.write_file("app.ts", "v2\n");
+    repo.git(&["add", "app.ts"]);
+    // Then make a different unstaged edit on top.
+    repo.write_file("app.ts", "v3\nv4\n");
+
+    let item = repo.find("app.ts").expect("file should appear");
+    // Areas keep their own numbers — no summing.
+    assert_eq!(item.staged_insertions, 1, "staged: v1 -> v2 (1/1)");
+    assert_eq!(item.staged_deletions, 1);
+    assert_eq!(item.unstaged_insertions, 2, "unstaged: v2 -> v3+v4 (2/1)");
+    assert_eq!(item.unstaged_deletions, 1);
+}
+
+#[test]
+fn line_counts_committed_and_unstaged_kept_separate() {
+    let repo = GitRepoHarness::new();
+    // 5 lines committed on the branch (relative to main).
+    repo.write_file("feature.ts", "a\nb\nc\nd\ne\n");
+    repo.git(&["add", "feature.ts"]);
+    repo.git(&["commit", "-m", "add feature"]);
+    // Then 2 unstaged tweaks on top of the new commit.
+    repo.write_file("feature.ts", "a\nb changed\nc\nd\ne\nf\n");
+
+    let item = repo.find("feature.ts").expect("file should appear");
+    // Committed area sees +5/-0 (target_ref..HEAD).
+    assert_eq!(item.committed_insertions, 5);
+    assert_eq!(item.committed_deletions, 0);
+    // Unstaged sees +2/-1 (HEAD vs working tree). Crucially this is NOT
+    // the same number as committed, and NOT a sum.
+    assert_eq!(item.unstaged_insertions, 2);
+    assert_eq!(item.unstaged_deletions, 1);
+}
+
+#[test]
+fn line_counts_untracked_file_reports_unstaged_lines() {
+    let repo = GitRepoHarness::new();
+    // Brand-new file, nothing staged. Without explicit handling these
+    // would all be zero (numstat doesn't see untracked).
+    repo.write_file("notes.md", "one\ntwo\nthree\n");
+
+    let item = repo.find("notes.md").expect("file should appear");
+    assert_eq!(item.unstaged_insertions, 3);
+    assert_eq!(item.unstaged_deletions, 0);
+    assert_eq!(item.committed_insertions, 0);
+    assert_eq!(item.staged_insertions, 0);
+    assert!(!item.is_binary);
+}
+
+#[test]
+fn line_counts_untracked_no_trailing_newline_still_counts_last_line() {
+    let repo = GitRepoHarness::new();
+    repo.write_file("oneliner.txt", "no newline at end");
+
+    let item = repo.find("oneliner.txt").expect("file should appear");
+    assert_eq!(item.unstaged_insertions, 1);
+}
+
+#[test]
+fn line_counts_binary_file_marked_and_zeroed() {
+    let repo = GitRepoHarness::new();
+    // Bytes that aren't valid UTF-8 — both git numstat and our untracked
+    // line counter should classify this as binary.
+    let absolute = std::path::Path::new(repo_root(&repo)).join("logo.bin");
+    std::fs::write(&absolute, [0u8, 159, 146, 150, 0, 1, 2]).unwrap();
+
+    let item = repo.find("logo.bin").expect("file should appear");
+    assert!(item.is_binary, "binary untracked file: {item:?}");
+    assert_eq!(item.unstaged_insertions, 0);
+    assert_eq!(item.unstaged_deletions, 0);
+}
+
+fn repo_root(repo: &GitRepoHarness) -> &str {
+    repo.path_str()
+}

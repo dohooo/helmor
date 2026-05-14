@@ -4,7 +4,7 @@ import {
 	Box,
 	CheckCircle2,
 	ChevronDown,
-	ExternalLink,
+	SquareArrowOutUpRight,
 	Trash2,
 } from "lucide-react";
 import type { SVGProps } from "react";
@@ -26,12 +26,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { ClaudeCustomProviderSettings } from "@/lib/settings";
 import { useSettings } from "@/lib/settings";
@@ -156,22 +150,18 @@ export function ClaudeCustomProvidersPanel() {
 								placeholder={`${builtinProvider.label} API key`}
 								className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
 							/>
-							<TooltipProvider>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											type="button"
-											variant="outline"
-											size="icon-sm"
-											aria-label={`Get ${builtinProvider.label} API key`}
-											onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
-										>
-											<ExternalLink className="size-3.5" />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent>Get API key</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>
+							{!draft.apiKey && (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									aria-label={`Get ${builtinProvider.label} API key`}
+									onClick={() => void openUrl(builtinProvider.apiKeyUrl)}
+								>
+									Get your API key
+									<SquareArrowOutUpRight className="size-3.5" />
+								</Button>
+							)}
 						</div>
 					) : (
 						<div className="grid gap-2">
@@ -242,7 +232,7 @@ function ProviderPicker({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				className={cn(
-					"flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+					"flex h-8 min-w-0 flex-1 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 				)}
 			>
 				<span className="flex min-w-0 items-center gap-2">

@@ -5,11 +5,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, extname } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import {
 	type ElicitationResult,
-	type HookInput,
-	type HookJSONOutput,
 	type PermissionUpdate,
 	type Query,
 	query,
@@ -17,8 +15,9 @@ import {
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { isAbortError, isQueryClosedTransient } from "./abort.js";
+import { loadProjectMcpServers } from "./claude-project-mcp.js";
 import { buildClaudeRichMeta, buildClaudeStoredMeta } from "./context-usage.js";
-import type { SidecarEmitter } from "./emitter.js";
+import type { SidecarEmitter, UserInputPayload } from "./emitter.js";
 import { readImageWithResize } from "./image-resize.js";
 import { parseImageRefs } from "./images.js";
 import { prependLinkedDirectoriesContext } from "./linked-directories-context.js";
@@ -33,10 +32,11 @@ import type {
 	SendMessageParams,
 	SessionManager,
 	SlashCommandInfo,
+	UserInputResolution,
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -59,64 +59,61 @@ const SLASH_COMMANDS_TIMEOUT_MS = 20_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 30_000;
 
 /**
- * Resolve the path to `@anthropic-ai/claude-code`'s `cli.js`, used as the
- * explicit `pathToClaudeCodeExecutable` for every SDK `query()` call.
- *
- * Resolution order:
- *   1. `HELMOR_CLAUDE_CODE_CLI_PATH` — set by the Tauri host process in
- *      release builds, pointing at the bundled resource copy inside
- *      `Helmor.app/Contents/Resources/vendor/claude-code/cli.js`.
- *   2. `createRequire` lookup against `node_modules` — used in dev
- *      (`bun run src/index.ts`) and in `bun test`, where `@anthropic-ai/
- *      claude-code` is a direct sidecar dep.
- *
- * We never fall back to the SDK's bundled cli.js: that version is pinned
- * to whatever `@anthropic-ai/claude-agent-sdk` shipped and can drift from
- * what we ship via `sidecar/dist/vendor/`. Failing loudly here surfaces
- * install-state problems at sidecar startup instead of mid-conversation.
+ * Resolve the Claude Code native binary for `pathToClaudeCodeExecutable`.
+ * Prefers `HELMOR_CLAUDE_CODE_BIN_PATH` (release), then the platform
+ * sub-package (dev/test); falls back to the wrapper bin for `--omit=optional`.
+ * Mirrors the codex resolver in `codex-app-server-manager.ts`.
  */
-function resolveClaudeCliPath(): string {
-	const override = process.env.HELMOR_CLAUDE_CODE_CLI_PATH;
+function resolveClaudeBinPath(): string {
+	const override = process.env.HELMOR_CLAUDE_CODE_BIN_PATH;
 	if (override) {
 		return override;
 	}
 	const require = createRequire(import.meta.url);
-	return require.resolve("@anthropic-ai/claude-code/cli.js");
+	const binName = process.platform === "win32" ? "claude.exe" : "claude";
+	const platformPkg = `@anthropic-ai/claude-code-${claudePlatformShort()}`;
+	try {
+		const pkgJson = require.resolve(`${platformPkg}/package.json`);
+		return join(dirname(pkgJson), binName);
+	} catch {
+		const pkgJson = require.resolve("@anthropic-ai/claude-code/package.json");
+		return join(dirname(pkgJson), "bin", "claude.exe");
+	}
 }
 
-const CLAUDE_CLI_PATH = resolveClaudeCliPath();
+function claudePlatformShort(): string {
+	const arch = process.arch === "x64" ? "x64" : "arm64";
+	if (process.platform === "darwin") return `darwin-${arch}`;
+	if (process.platform === "win32") return `win32-${arch}`;
+	if (process.platform === "linux") {
+		// claude-code ships separate -musl variants; glibcVersionRuntime is absent on musl.
+		const report =
+			typeof process.report?.getReport === "function"
+				? (process.report.getReport() as {
+						header?: { glibcVersionRuntime?: string };
+					})
+				: null;
+		const musl = !!report && report.header?.glibcVersionRuntime === undefined;
+		return `linux-${arch}${musl ? "-musl" : ""}`;
+	}
+	return `${process.platform}-${arch}`;
+}
 
-/**
- * Optional absolute path to a bundled `bun` binary, used as the SDK's
- * `executable` option when set.
- *
- * Background: the Claude Agent SDK spawns `cli.js` through a JS interpreter
- * (`bun` or `node`) resolved off `PATH`. Inside a Finder-launched `.app`
- * bundle, `PATH = /usr/bin:/bin:/usr/sbin:/sbin` — neither `bun` nor `node`
- * are there, so the spawn fails with ENOENT and the SDK misreports it as
- * "Claude Code executable not found at …/cli.js". To fix this for release
- * builds, Tauri stages the host's bun binary under `vendor/bun/bun` and
- * `lib.rs` exports `HELMOR_BUN_PATH` before spawning us.
- *
- * Dev mode leaves the env unset — `bun run src/index.ts` is already running
- * under a bun instance that's on the developer's PATH, so the SDK's default
- * `"bun"` lookup succeeds.
- */
-const CLAUDE_EXECUTABLE_OVERRIDE = process.env.HELMOR_BUN_PATH || undefined;
+const CLAUDE_BIN_PATH = resolveClaudeBinPath();
 
-/**
- * Build the `executable` / `executableArgs` half of a query() options bag.
- * Returned as a plain object so callers can spread it inline and the SDK's
- * type narrowing still applies. The `as "bun"` cast is deliberate: at
- * runtime the SDK passes `executable` straight to `child_process.spawn`,
- * which accepts absolute paths — but the TS declaration narrows it to the
- * literal `"bun" | "deno" | "node"`. See `sdk.d.ts` line 987.
- */
-function executableOptions(): {
-	executable?: "bun" | "deno" | "node";
-} {
-	if (!CLAUDE_EXECUTABLE_OVERRIDE) return {};
-	return { executable: CLAUDE_EXECUTABLE_OVERRIDE as "bun" };
+// SDK's `env` option REPLACES process.env when set (per its docstring:
+// "Defaults to process.env"). Without spreading process.env back in, the
+// spawned claude-code child loses HOME / PATH / cached OAuth creds and
+// reports "Not logged in". Returns undefined when no overrides are
+// supplied so the SDK keeps its default-process.env path.
+function mergeQueryEnv(
+	...overrides: (Record<string, string> | undefined)[]
+): { [key: string]: string | undefined } | undefined {
+	const present = overrides.filter(
+		(o): o is Record<string, string> => o !== undefined,
+	);
+	if (present.length === 0) return undefined;
+	return Object.assign({}, process.env, ...present);
 }
 
 interface LiveSession {
@@ -154,24 +151,43 @@ type ClaudePermissionMode = (typeof VALID_PERMISSION_MODES)[number];
 const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 type ClaudeEffort = (typeof VALID_EFFORT_LEVELS)[number];
 
-const DEFERRED_TOOL_NAMES = new Set(["AskUserQuestion"]);
+/**
+ * Tools that require interactive user input mid-execution. They go
+ * through the unified `userInputRequest` UI flow instead of being
+ * auto-approved by `canUseTool`.
+ */
+const USER_INPUT_TOOL_NAMES = new Set(["AskUserQuestion"]);
+
+/**
+ * MCP elicitation `content` must be a flat object whose values are
+ * `string | number | boolean | string[]` (per the MCP 2025-11 spec).
+ * Returns the input unchanged if valid, `null` otherwise.
+ */
+function validateMcpElicitationContent(
+	content: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+	if (!content) return {};
+	for (const value of Object.values(content)) {
+		if (
+			typeof value === "string" ||
+			typeof value === "number" ||
+			typeof value === "boolean"
+		) {
+			continue;
+		}
+		if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+			continue;
+		}
+		return null;
+	}
+	return content;
+}
 
 interface PermissionResolution {
 	readonly behavior: "allow" | "deny";
 	readonly updatedPermissions?: PermissionUpdate[];
 	readonly message?: string;
 }
-
-type DeferredToolBehavior = "allow" | "deny";
-
-interface DeferredToolResolution {
-	readonly behavior: DeferredToolBehavior;
-	readonly reason: string | undefined;
-	readonly updatedInput: Record<string, unknown> | undefined;
-	readonly createdAt: number;
-}
-
-const DEFERRED_TOOL_RESPONSE_TTL_MS = 5 * 60 * 1000;
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
 	if (
@@ -289,22 +305,20 @@ export class ClaudeSessionManager implements SessionManager {
 		string,
 		(resolution: PermissionResolution) => void
 	>();
-	private readonly pendingElicitations = new Map<
+	/**
+	 * In-flight callbacks waiting on the user's answer to a unified
+	 * `userInputRequest` (covers both AskUserQuestion via `canUseTool`
+	 * and MCP `onElicitation`). Resolving runs the closure stored at
+	 * emit-time, which encapsulates the SDK-specific conversion from
+	 * the generic `UserInputResolution` shape back into either an AUQ
+	 * `updatedInput` or an `ElicitationResult`. Keyed by
+	 * `userInputId` (the wire-level round-trip key — same as the
+	 * tool_use_id for AUQ and the elicitationId for MCP).
+	 */
+	private readonly pendingUserInputs = new Map<
 		string,
-		(result: ElicitationResult) => void
+		{ sessionId: string; resolve: (resolution: UserInputResolution) => void }
 	>();
-	private readonly deferredToolResponses = new Map<
-		string,
-		DeferredToolResolution
-	>();
-
-	private pruneExpiredDeferredToolResponses(now = Date.now()): void {
-		for (const [toolUseId, resolution] of this.deferredToolResponses) {
-			if (now - resolution.createdAt > DEFERRED_TOOL_RESPONSE_TTL_MS) {
-				this.deferredToolResponses.delete(toolUseId);
-			}
-		}
-	}
 
 	resolvePermission(
 		permissionId: string,
@@ -319,66 +333,15 @@ export class ClaudeSessionManager implements SessionManager {
 		}
 	}
 
-	resolveElicitation(elicitationId: string, result: ElicitationResult): void {
-		const resolve = this.pendingElicitations.get(elicitationId);
-		if (resolve) {
-			this.pendingElicitations.delete(elicitationId);
-			resolve(result);
-		}
-	}
-
-	resolveDeferredTool(
-		toolUseId: string,
-		behavior: DeferredToolBehavior,
-		reason: string | undefined,
-		updatedInput: Record<string, unknown> | undefined,
-	): void {
-		this.pruneExpiredDeferredToolResponses();
-		this.deferredToolResponses.set(toolUseId, {
-			behavior,
-			reason,
-			updatedInput,
-			createdAt: Date.now(),
-		});
-	}
-
-	private async handleDeferredToolHook(
-		input: HookInput,
-		toolUseID: string | undefined,
-	): Promise<HookJSONOutput> {
-		if (input.hook_event_name !== "PreToolUse") {
-			return {};
-		}
-		if (!toolUseID || !DEFERRED_TOOL_NAMES.has(input.tool_name)) {
-			return {};
-		}
-		this.pruneExpiredDeferredToolResponses();
-		const resolved = this.deferredToolResponses.get(toolUseID);
-		if (resolved) {
-			// Consume once: the SDK invokes the hook exactly once per
-			// tool_use lifecycle before executing the tool, so leaving the
-			// resolution in the map only risks stale reads if the same
-			// toolUseID is re-evaluated within TTL (5 min).
-			this.deferredToolResponses.delete(toolUseID);
-			return {
-				hookSpecificOutput: {
-					hookEventName: "PreToolUse",
-					permissionDecision: resolved.behavior,
-					...(resolved.reason
-						? { permissionDecisionReason: resolved.reason }
-						: {}),
-					...(resolved.updatedInput
-						? { updatedInput: resolved.updatedInput }
-						: {}),
-				},
-			};
-		}
-		return {
-			hookSpecificOutput: {
-				hookEventName: "PreToolUse",
-				permissionDecision: "defer",
-			},
-		};
+	resolveUserInput(
+		userInputId: string,
+		resolution: UserInputResolution,
+	): boolean {
+		const entry = this.pendingUserInputs.get(userInputId);
+		if (!entry) return false;
+		this.pendingUserInputs.delete(userInputId);
+		entry.resolve(resolution);
+		return true;
 	}
 
 	async sendMessage(
@@ -395,7 +358,10 @@ export class ClaudeSessionManager implements SessionManager {
 			permissionMode,
 			effortLevel,
 			fastMode,
+			claudeThinkingDisplay,
 			claudeEnvironment,
+			images,
+			sourceRepoPath,
 		} = params;
 		const abortController = new AbortController();
 		const additionalDirectories = [...(params.additionalDirectories ?? [])];
@@ -408,32 +374,17 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories,
 		);
 
-		const { text, imagePaths } = parseImageRefs(promptWithContext);
-		// Resume-only streams (AskUserQuestion answer submission) arrive with
-		// `prompt === ""` — the Rust command layer rejects empty prompts in
-		// every other case (see `agents.rs: "Prompt cannot be empty"`), so
-		// this check is unambiguous. In that path we pass `""` as a plain
-		// string to `query()` (pre-Steer shape) so the SDK replays the
-		// session and re-invokes PreToolUse for the pending tool_use, which
-		// is how the stored `deferredToolResponses` resolution reaches
-		// Claude. Pushing a synthetic `{ role: "user", content: "" }` into
-		// the pushable — what streaming-input mode would do — makes the SDK
-		// treat it as a new empty user turn and skip that re-evaluation.
+		const { text, imagePaths } = parseImageRefs(promptWithContext, images);
 		const promptSource = createPushable<SDKUserMessage>();
-		const isResumeOnly = text === "" && imagePaths.length === 0;
-		if (isResumeOnly) {
-			promptSource.close();
-		} else {
-			const initialMessage =
-				imagePaths.length === 0
-					? ({
-							type: "user",
-							message: { role: "user", content: text },
-							parent_tool_use_id: null,
-						} as SDKUserMessage)
-					: await buildUserMessageWithImages(text, imagePaths);
-			promptSource.push(initialMessage);
-		}
+		const initialMessage =
+			imagePaths.length === 0
+				? ({
+						type: "user",
+						message: { role: "user", content: text },
+						parent_tool_use_id: null,
+					} as SDKUserMessage)
+				: await buildUserMessageWithImages(text, imagePaths);
+		promptSource.push(initialMessage);
 
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("claude", model);
@@ -445,17 +396,20 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
-		const queryEnv =
-			claudeEnv || additionalDirectoryEnv
-				? { ...claudeEnv, ...additionalDirectoryEnv }
-				: undefined;
+		const queryEnv = mergeQueryEnv(claudeEnv, additionalDirectoryEnv);
+		const projectMcpServers = loadProjectMcpServers(sourceRepoPath);
+		if (projectMcpServers) {
+			logger.info(`[${requestId}] claude project MCPs injected`, {
+				sourceRepoPath,
+				servers: Object.keys(projectMcpServers),
+			});
+		}
 
 		const q = query({
-			prompt: isResumeOnly ? "" : promptSource,
+			prompt: promptSource,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
 				...(queryEnv ? { env: queryEnv } : {}),
@@ -464,48 +418,141 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: parsePermissionMode(permissionMode),
 				allowDangerouslySkipPermissions: true,
 				effort: parseEffort(effortLevel),
-				thinking: { type: "adaptive", display: "summarized" },
-				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
-				hooks: {
-					PreToolUse: [
-						{
-							hooks: [
-								async (input, toolUseID) =>
-									this.handleDeferredToolHook(input, toolUseID),
-							],
-						},
-					],
+				thinking: {
+					type: "adaptive",
+					display: claudeThinkingDisplay ?? "summarized",
 				},
+				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
+				...(projectMcpServers ? { mcpServers: projectMcpServers } : {}),
 				onElicitation: async (request, options) => {
+					// MCP elicitation: surface as a unified userInputRequest
+					// with `kind: "form"` (schema-driven) or `kind: "url"`
+					// (URL launcher). The frontend's existing form / URL
+					// renderers handle both shapes verbatim. The generic
+					// `UserInputResolution` we get back maps 1:1 onto the
+					// SDK's `ElicitationResult` shape.
 					const elicitationId = request.elicitationId ?? randomUUID();
-					emitter.elicitationRequest(
+					const isUrl = request.mode === "url";
+					const payload: UserInputPayload = isUrl
+						? { kind: "url", url: request.url ?? "" }
+						: {
+								kind: "form",
+								schema:
+									(request.requestedSchema as
+										| Record<string, unknown>
+										| undefined) ?? {},
+							};
+					emitter.userInputRequest(
 						requestId,
+						elicitationId,
 						request.serverName,
 						request.message,
-						request.mode,
-						request.url,
-						elicitationId,
-						request.requestedSchema as Record<string, unknown> | undefined,
+						payload,
 					);
-					return await new Promise<ElicitationResult>((resolve) => {
-						this.pendingElicitations.set(elicitationId, resolve);
-						options.signal.addEventListener(
-							"abort",
-							() => {
-								this.pendingElicitations.delete(elicitationId);
-								resolve({ action: "cancel" });
-							},
-							{ once: true },
-						);
-					});
+					const resolution = await new Promise<UserInputResolution>(
+						(resolve) => {
+							this.pendingUserInputs.set(elicitationId, {
+								sessionId,
+								resolve,
+							});
+							options.signal.addEventListener(
+								"abort",
+								() => {
+									this.pendingUserInputs.delete(elicitationId);
+									resolve({ action: "cancel" });
+								},
+								{ once: true },
+							);
+						},
+					);
+					if (resolution.action === "submit") {
+						// MCP elicitation requires field values be primitives
+						// (`string | number | boolean | string[]`). Validate
+						// before handing off — a non-primitive would otherwise
+						// surface as an opaque SDK error far from the cause.
+						const validated = validateMcpElicitationContent(resolution.content);
+						if (validated === null) {
+							logger.error(
+								`[${requestId}] MCP elicitation content rejected (non-primitive)`,
+								{ elicitationId },
+							);
+							return { action: "cancel" };
+						}
+						return {
+							action: "accept",
+							content: validated as unknown as ElicitationResult extends {
+								content?: infer C;
+							}
+								? C
+								: never,
+						};
+					}
+					if (resolution.action === "decline") {
+						return { action: "decline" };
+					}
+					return { action: "cancel" };
 				},
 				includePartialMessages: true,
 				settingSources: ["user", "project", "local"],
 				canUseTool: async (_toolName, input, options) => {
-					if (DEFERRED_TOOL_NAMES.has(_toolName)) {
+					// AskUserQuestion: pause this `canUseTool` callback on the
+					// same live `query()`, surface the question through the
+					// unified `userInputRequest` flow (form mode with a
+					// synthesized JSON Schema), then return the user's answer
+					// via `updatedInput` so the SDK executes the tool normally.
+					// No `--resume`, no extra process (issue #397 / #402).
+					if (USER_INPUT_TOOL_NAMES.has(_toolName)) {
+						const toolUseId = options.toolUseID;
+						const auqInput = input as Record<string, unknown>;
+						const rawQuestions = Array.isArray(auqInput.questions)
+							? (auqInput.questions as Array<Record<string, unknown>>)
+							: [];
+						const metadata =
+							typeof auqInput.metadata === "object" &&
+							auqInput.metadata !== null &&
+							!Array.isArray(auqInput.metadata)
+								? (auqInput.metadata as Record<string, unknown>)
+								: undefined;
+						emitter.userInputRequest(
+							requestId,
+							toolUseId,
+							"Claude",
+							"Claude is asking for your input.",
+							{
+								kind: "ask-user-question",
+								questions: rawQuestions,
+								...(metadata ? { metadata } : {}),
+							},
+						);
+						const resolution = await new Promise<UserInputResolution>(
+							(resolve) => {
+								this.pendingUserInputs.set(toolUseId, {
+									sessionId,
+									resolve,
+								});
+								options.signal.addEventListener(
+									"abort",
+									() => {
+										this.pendingUserInputs.delete(toolUseId);
+										resolve({ action: "cancel" });
+									},
+									{ once: true },
+								);
+							},
+						);
+						if (resolution.action === "submit") {
+							// The frontend AUQ renderer produces the full
+							// `updatedInput` shape directly (questions +
+							// answers + annotations), matching what the SDK
+							// expects — no conversion needed here.
+							return {
+								behavior: "allow" as const,
+								updatedInput: resolution.content,
+							};
+						}
 						return {
-							behavior: "allow" as const,
-							updatedInput: input,
+							behavior: "deny" as const,
+							message: "User declined",
 						};
 					}
 					// Intercept ExitPlanMode: capture plan content and deny to
@@ -579,16 +626,7 @@ export class ClaudeSessionManager implements SessionManager {
 		try {
 			for await (const message of q) {
 				logger.sdkEvent(requestId, message);
-				if (isDeferredToolResult(message)) {
-					emitter.deferredToolUse(
-						requestId,
-						message.deferred_tool_use.id,
-						message.deferred_tool_use.name,
-						message.deferred_tool_use.input,
-					);
-					continue;
-				}
-				const passthroughMessage = stripDeferredToolUseFromAssistant(message);
+				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
 				if (passthroughMessage) {
 					emitter.passthrough(requestId, passthroughMessage);
 				}
@@ -634,9 +672,13 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 			promptSource.close();
 			this.sessions.delete(sessionId);
-			for (const [elicitationId, resolve] of this.pendingElicitations) {
-				this.pendingElicitations.delete(elicitationId);
-				resolve({ action: "cancel" });
+			// Only cancel waiters belonging to THIS session — `pendingUserInputs`
+			// is manager-wide and other sessions may have parked AUQs / MCP
+			// elicitations on it.
+			for (const [userInputId, entry] of this.pendingUserInputs) {
+				if (entry.sessionId !== sessionId) continue;
+				this.pendingUserInputs.delete(userInputId);
+				entry.resolve({ action: "cancel" });
 			}
 		}
 	}
@@ -680,6 +722,7 @@ export class ClaudeSessionManager implements SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		images: readonly string[],
 	): Promise<boolean> {
 		const session = this.sessions.get(sessionId);
 		if (!session || session.promptSource.closed) {
@@ -689,7 +732,7 @@ export class ClaudeSessionManager implements SessionManager {
 		// Strip image refs to build the SDK's base64 image content. Keep
 		// the raw prompt separately — that's what the synthetic event +
 		// DB row need so `@-refs` survive the round-trip.
-		const { text: stripped, imagePaths } = parseImageRefs(prompt);
+		const { text: stripped, imagePaths } = parseImageRefs(prompt, images);
 		const sdkMessage =
 			imagePaths.length === 0
 				? ({
@@ -707,13 +750,20 @@ export class ClaudeSessionManager implements SessionManager {
 			return false;
 		}
 
+		// Both `files` AND `images` must travel on the synthetic event so
+		// the persisted DB row matches what `createLiveThreadMessage`
+		// optimistically rendered. Without `images`, image badges in the
+		// steer bubble would vanish on reload because the adapter has no
+		// needle pool to find the `@<path>` substring with.
 		const event: {
 			type: "user_prompt";
 			text: string;
 			steer: true;
 			files?: string[];
+			images?: string[];
 		} = { type: "user_prompt", text: prompt, steer: true };
 		if (files.length > 0) event.files = [...files];
+		if (imagePaths.length > 0) event.images = [...imagePaths];
 		session.emitter.passthrough(session.requestId, event);
 		session.promptSource.push(sdkMessage);
 		logger.info(`steer ${sessionId}`, {
@@ -741,16 +791,19 @@ export class ClaudeSessionManager implements SessionManager {
 				? options.claudeEnvironment
 				: undefined;
 
+		const generateBranch = options?.generateBranch ?? true;
 		const q = query({
-			prompt: buildTitlePrompt(userMessage, branchRenamePrompt),
+			prompt: buildTitlePrompt(userMessage, branchRenamePrompt, generateBranch),
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				...(claudeEnv ? { env: claudeEnv } : {}),
 				model,
-				permissionMode: "plan",
+				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
+				thinking: { type: "disabled" },
+				settingSources: [],
+				tools: [],
 			},
 		});
 
@@ -762,12 +815,14 @@ export class ClaudeSessionManager implements SessionManager {
 				}
 			}
 
-			const { title, branchName } = parseTitleAndBranch(raw);
-			logger.info(`[${requestId}] titleGenerated`, {
-				title,
-				branchName: branchName ?? "(empty)",
-				rawPreview: raw.slice(0, 200),
-			});
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
@@ -820,6 +875,7 @@ export class ClaudeSessionManager implements SessionManager {
 			additionalDirectories.length > 0
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
+		const queryEnv = mergeQueryEnv(additionalDirectoryEnv);
 
 		let resolveDone: () => void = () => undefined;
 		const donePromise = new Promise<void>((resolve) => {
@@ -844,11 +900,10 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
-				...(additionalDirectoryEnv ? { env: additionalDirectoryEnv } : {}),
+				...(queryEnv ? { env: queryEnv } : {}),
 				permissionMode: "bypassPermissions",
 				allowDangerouslySkipPermissions: true,
 				includePartialMessages: false,
@@ -951,7 +1006,9 @@ export class ClaudeSessionManager implements SessionManager {
 		}
 	}
 
-	async listModels(): Promise<readonly ProviderModelInfo[]> {
+	async listModels(_opts?: {
+		apiKey?: string;
+	}): Promise<readonly ProviderModelInfo[]> {
 		return listProviderModels("claude");
 	}
 
@@ -1000,8 +1057,7 @@ export class ClaudeSessionManager implements SessionManager {
 			prompt: promptIter,
 			options: {
 				abortController,
-				pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-				...executableOptions(),
+				pathToClaudeCodeExecutable: CLAUDE_BIN_PATH,
 				cwd: cwd || undefined,
 				model: model || undefined,
 				...(providerSessionId ? { resume: providerSessionId } : {}),
@@ -1083,9 +1139,9 @@ export class ClaudeSessionManager implements SessionManager {
 			}
 		}
 		this.sessions.clear();
-		for (const [elicitationId, resolve] of this.pendingElicitations) {
-			this.pendingElicitations.delete(elicitationId);
-			resolve({ action: "cancel" });
+		for (const [userInputId, entry] of this.pendingUserInputs) {
+			this.pendingUserInputs.delete(userInputId);
+			entry.resolve({ action: "cancel" });
 		}
 	}
 }
@@ -1100,39 +1156,17 @@ function isResultMessage(
 	);
 }
 
-function isDeferredToolResult(message: SDKMessage): message is SDKMessage & {
-	type: "result";
-	deferred_tool_use: {
-		id: string;
-		name: string;
-		input: Record<string, unknown>;
-	};
-} {
-	if (message.type !== "result") return false;
-	if (!("deferred_tool_use" in message)) return false;
-	const deferred = (message as { deferred_tool_use?: unknown })
-		.deferred_tool_use;
-	if (typeof deferred !== "object" || deferred === null) return false;
-	const value = deferred as { id?: unknown; name?: unknown; input?: unknown };
-	return (
-		typeof value.id === "string" &&
-		typeof value.name === "string" &&
-		typeof value.input === "object" &&
-		value.input !== null
-	);
-}
-
-/** Terminal result — success OR error, but NOT a deferred-tool pause.
- *  Deferred results are intermediate (the stream continues) and must
- *  not trigger `end`. Error results DO end the turn and still carry
- *  `usage`/`modelUsage`, so the ring gets updated on errors too. */
+/** Terminal result — success OR error. Both shapes carry
+ *  `usage`/`modelUsage`, so both should update the ring. AskUserQuestion
+ *  pauses live inside `canUseTool` instead of producing a result event,
+ *  so any `result` we see here is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
-	if (message.type !== "result") return false;
-	if (isDeferredToolResult(message)) return false;
-	return true;
+	return message.type === "result";
 }
 
-function stripDeferredToolUseFromAssistant(message: SDKMessage): object | null {
+function stripUserInputToolUseFromAssistant(
+	message: SDKMessage,
+): object | null {
 	if (message.type !== "assistant") {
 		return message;
 	}
@@ -1152,7 +1186,7 @@ function stripDeferredToolUseFromAssistant(message: SDKMessage): object | null {
 
 	let removedDeferredTool = false;
 	const filteredContent = content.filter((block) => {
-		if (!isDeferredToolUseBlock(block)) {
+		if (!isUserInputToolUseBlock(block)) {
 			return true;
 		}
 		removedDeferredTool = true;
@@ -1175,7 +1209,7 @@ function stripDeferredToolUseFromAssistant(message: SDKMessage): object | null {
 	};
 }
 
-function isDeferredToolUseBlock(block: unknown): boolean {
+function isUserInputToolUseBlock(block: unknown): boolean {
 	if (typeof block !== "object" || block === null) {
 		return false;
 	}
@@ -1184,7 +1218,7 @@ function isDeferredToolUseBlock(block: unknown): boolean {
 	return (
 		value.type === "tool_use" &&
 		typeof value.name === "string" &&
-		DEFERRED_TOOL_NAMES.has(value.name)
+		USER_INPUT_TOOL_NAMES.has(value.name)
 	);
 }
 

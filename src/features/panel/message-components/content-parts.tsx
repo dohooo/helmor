@@ -198,7 +198,7 @@ type MenuPosition = {
 };
 
 const imageMenuItemClassName =
-	"relative flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground disabled:pointer-events-none";
+	"relative flex w-full cursor-interactive items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground disabled:pointer-events-none";
 
 function positionMenu(event: React.MouseEvent): MenuPosition {
 	const width = 176;

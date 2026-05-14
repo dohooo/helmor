@@ -80,6 +80,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 		return {
 			getVirtualItems: () => items,
 			getTotalSize: () => offset,
+			measureElement: () => {},
 			scrollToIndex: () => {},
 		};
 	},
@@ -117,38 +118,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return {
 					"app.onboarding_completed": "true",
 				};
-			case "get_github_identity_session":
-				return {
-					status: "connected",
-					session: {
-						provider: "test",
-						githubUserId: 0,
-						login: "test",
-						name: "Test User",
-						avatarUrl: null,
-						primaryEmail: null,
-						tokenExpiresAt: null,
-						refreshTokenExpiresAt: null,
-					},
-				};
-			case "get_github_cli_status":
-				return {
-					status: "ready",
-					host: "github.com",
-					login: "test",
-					version: "test",
-					message: "ok",
-				};
-			case "get_github_cli_user":
-				return {
-					login: "test",
-					id: 0,
-					name: "Test",
-					avatarUrl: null,
-					email: null,
-				};
-			case "list_github_accessible_repositories":
-				return [];
 			case "list_repositories":
 				return [];
 			case "list_agent_model_sections":
@@ -170,7 +139,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 					claude: false,
 					codex: false,
 					command:
-						"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+						"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 				};
 			case "get_app_update_status":
 				return {
@@ -217,15 +186,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 					cli: null,
 					detectionSignals: [],
 				};
-			case "get_forge_cli_status":
-				return {
-					status: "unauthenticated",
-					provider: "gitlab",
-					host: "gitlab.com",
-					cliName: "glab",
-					message: "Run `glab auth login --hostname gitlab.com`.",
-					loginCommand: "glab auth login --hostname gitlab.com",
-				};
 			case "get_workspace_git_action_status":
 				return {
 					uncommittedCount: 0,
@@ -247,8 +207,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 					remoteState: "unavailable",
 					message: null,
 				};
-			case "open_forge_cli_auth_terminal":
-				return undefined;
+			case "list_forge_logins":
+			case "list_forge_accounts":
+			case "list_forge_labels":
+			case "list_inbox_kind_labels":
+				return [];
 			case "spawn_forge_cli_auth_terminal":
 				return undefined;
 			case "stop_forge_cli_auth_terminal":

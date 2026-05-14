@@ -356,30 +356,94 @@ fn sync_workspace_target_branch_reports_conflict() {
 }
 
 #[test]
-fn sync_workspace_target_branch_reports_dirty_worktree_without_error() {
+fn sync_workspace_target_branch_dirty_unrelated_change_pulls_and_preserves_dirty() {
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = BranchSwitchTestHarness::new();
-    harness.dirty_tracked_file();
+    harness.dirty_tracked_file(); // README.md = "user edits"
     harness.upstream_advance("main", "main2.txt", "fresh", "advance main");
 
     let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
 
     assert_eq!(
         result.outcome,
-        workspaces::SyncWorkspaceTargetOutcome::DirtyWorktree
+        workspaces::SyncWorkspaceTargetOutcome::Updated
     );
     assert!(result.conflicted_files.is_empty());
+    let merged = fs::read_to_string(harness.workspace_dir().join("main2.txt")).unwrap();
+    assert_eq!(merged, "fresh", "target's commit must land in workspace");
+    let dirty_readme = fs::read_to_string(harness.workspace_dir().join("README.md")).unwrap();
     assert_eq!(
-        harness.workspace_head(),
-        harness.workspace_remote_ref_sha("main")
+        dirty_readme, "user edits",
+        "uncommitted edits must survive the stash + merge + pop dance"
     );
     let status =
         git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
             .unwrap();
     assert_eq!(status.conflict_count, 0);
-    assert_eq!(status.uncommitted_count, 1);
+    assert_eq!(
+        status.uncommitted_count, 1,
+        "dirty README.md should remain uncommitted after pull"
+    );
+}
+
+#[test]
+fn sync_workspace_target_branch_dirty_with_overlapping_change_returns_conflict() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    // Workspace HEAD diverges (committed change) AND has uncommitted edits.
+    harness.commit_in_workspace("README.md", "workspace change", "workspace change");
+    harness.add_untracked_file();
+    harness.upstream_advance("main", "README.md", "upstream change", "advance readme");
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::Conflict
+    );
+    assert_eq!(result.conflicted_files, vec!["README.md".to_string()]);
+    // Preflight catches the conflict before we touch the worktree, so the
+    // user's untracked scratchpad must still be there.
+    assert!(harness.workspace_dir().join("scratch.txt").exists());
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert_eq!(
+        status.conflict_count, 0,
+        "preflight conflicts must not dirty the real workspace"
+    );
+}
+
+#[test]
+fn sync_workspace_target_branch_stash_pop_conflict_reports_outcome() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = BranchSwitchTestHarness::new();
+    // HEAD is clean (preflight will be clean), but the worktree has
+    // uncommitted edits to README.md and the upstream commits a competing
+    // change to the same file. Pop will conflict after merge succeeds.
+    harness.dirty_tracked_file(); // README.md = "user edits" (uncommitted)
+    harness.upstream_advance("main", "README.md", "upstream rewrite", "rewrite readme");
+
+    let result = workspaces::sync_workspace_with_target_branch(&harness.workspace_id).unwrap();
+
+    assert_eq!(
+        result.outcome,
+        workspaces::SyncWorkspaceTargetOutcome::StashPopConflict
+    );
+    assert!(result.conflicted_files.is_empty());
+    let status =
+        git_ops::workspace_action_status(&harness.workspace_dir(), Some("origin"), Some("main"))
+            .unwrap();
+    assert!(
+        status.conflict_count > 0,
+        "stash pop conflict should leave unmerged paths in the worktree"
+    );
 }
 
 #[test]

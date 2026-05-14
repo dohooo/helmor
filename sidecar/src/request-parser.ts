@@ -4,15 +4,12 @@
  * missing or wrong-shaped field.
  */
 
-import type { ElicitationResult } from "@anthropic-ai/claude-agent-sdk";
 import type {
 	GetContextUsageParams,
 	ListSlashCommandsParams,
 	Provider,
 	SendMessageParams,
 } from "./session-manager.js";
-
-type ElicitationContent = NonNullable<ElicitationResult["content"]>;
 
 export interface RawRequest {
 	readonly id: string;
@@ -62,7 +59,16 @@ function optionalBoolean(
 	return typeof value === "boolean" ? value : undefined;
 }
 
-function optionalObject(
+/** Narrows the raw `claudeThinkingDisplay` field. Anything other than the
+ *  two SDK-recognised values is treated as absent so a stray override
+ *  can't reach the SDK. */
+function parseClaudeThinkingDisplay(
+	value: unknown,
+): "summarized" | "omitted" | undefined {
+	return value === "summarized" || value === "omitted" ? value : undefined;
+}
+
+export function optionalObject(
 	params: Record<string, unknown>,
 	key: string,
 ): Record<string, unknown> | undefined {
@@ -76,41 +82,9 @@ function optionalObject(
 	throw new Error(`params.${key} must be an object`);
 }
 
-function isElicitationContentValue(
-	value: unknown,
-): value is ElicitationContent[string] {
-	return (
-		typeof value === "string" ||
-		typeof value === "number" ||
-		typeof value === "boolean" ||
-		(Array.isArray(value) && value.every((item) => typeof item === "string"))
-	);
-}
-
-export function parseElicitationResultContent(
-	params: Record<string, unknown>,
-	key: string,
-): ElicitationResult["content"] | undefined {
-	const content = optionalObject(params, key);
-	if (!content) {
-		return undefined;
-	}
-
-	const parsedContent: ElicitationContent = {};
-	for (const [contentKey, value] of Object.entries(content)) {
-		if (!isElicitationContentValue(value)) {
-			throw new Error(
-				`params.${key}.${contentKey} must be a string, number, boolean, or string[]`,
-			);
-		}
-		parsedContent[contentKey] = value;
-	}
-
-	return parsedContent;
-}
-
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex") return value;
+	if (value === "claude" || value === "codex" || value === "cursor")
+		return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }
 
@@ -126,11 +100,20 @@ export function parseSendMessageParams(
 		permissionMode: optionalString(params, "permissionMode"),
 		effortLevel: optionalString(params, "effortLevel"),
 		fastMode: optionalBoolean(params, "fastMode"),
+		claudeThinkingDisplay: parseClaudeThinkingDisplay(
+			params.claudeThinkingDisplay,
+		),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
 		additionalDirectories: parseOptionalStringArray(
 			params,
 			"additionalDirectories",
 		),
+		sourceRepoPath: optionalString(params, "sourceRepoPath"),
+		// Always normalize to an array. Symmetric with
+		// `parseSteerSessionParams` so neither path needs to disambiguate
+		// "field absent" vs "no images" — both mean `[]`. The structured
+		// list is the single source of truth (see `parseImageRefs`).
+		images: parseOptionalStringArray(params, "images") ?? [],
 	};
 }
 
@@ -200,6 +183,7 @@ export interface SteerSessionParams {
 	readonly sessionId: string;
 	readonly prompt: string;
 	readonly files: readonly string[];
+	readonly images: readonly string[];
 }
 
 export function parseSteerSessionParams(
@@ -209,10 +193,15 @@ export function parseSteerSessionParams(
 	const files: string[] = Array.isArray(rawFiles)
 		? rawFiles.filter((f): f is string => typeof f === "string")
 		: [];
+	const rawImages = params.images;
+	const images: string[] = Array.isArray(rawImages)
+		? rawImages.filter((i): i is string => typeof i === "string")
+		: [];
 	return {
 		sessionId: requireString(params, "sessionId"),
 		prompt: requireString(params, "prompt"),
 		files,
+		images,
 	};
 }
 

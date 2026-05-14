@@ -178,33 +178,38 @@ function estimateAssistantPartHeight(
 }
 
 /**
- * Reasoning height has two regimes, matching what `ReasoningContent` actually
- * renders:
+ * Reasoning has two height regimes, matching what `ReasoningContent`
+ * actually renders:
  *
- *   - historical reload → collapsed by default → just the trigger (~24px).
- *   - streaming / just-finished → expanded by default → trigger + chrome +
- *     the wrapped-text height of the body. The body has no max-height
- *     anymore (was capturing wheel events), so it grows with the text;
- *     the virtual list reconciles via `resolveConversationRowHeight` +
- *     ResizeObserver.
- *
- * Keeps the estimate *monotonic* against the measured height:
- * `resolveConversationRowHeight` uses `max(measured, estimated)` while
- * streaming, so a slightly conservative estimate just means a harmless bit
- * of bottom padding if the live reasoning turns out to be short.
+ *   - `streaming` → expanded → trigger + chrome + wrapped text height.
+ *   - `just-finished` and `historical` → collapsed → just the trigger
+ *     (~24px). The `Reasoning` component now defaults `just-finished`
+ *     blocks closed (matching `historical`), so the DOM is the same
+ *     whether the user watched the stream finish or switched away and
+ *     came back. Aligning the estimate with that DOM keeps the
+ *     streaming row's `max(measured, estimated)` from inflating
+ *     `totalRowsHeight` — the source of the bottom gap below the last
+ *     visible content.
  */
 function estimateReasoningHeight(
 	part: ReasoningPart,
 	options: { fontSize: number; contentWidth: number },
 ) {
-	if (reasoningLifecycle(part) === "historical") {
+	// Empty body (e.g. Claude Thinking Display = Omitted) renders flat.
+	if (
+		reasoningLifecycle(part) !== "streaming" ||
+		part.text.trim().length === 0
+	) {
 		return REASONING_SUMMARY_HEIGHT;
 	}
 	const bodyWidth = Math.max(
 		MIN_TEXT_WIDTH,
 		options.contentWidth - REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING,
 	);
-	const textHeight = measureTextHeight(part.text, {
+	// Streaming row is mounted, so ResizeObserver feeds the real height back.
+	// Skip the per-tick `prepare()` + `layout()` cost (cache miss every frame
+	// since the text grows) and use the cheap fallback estimate as a placeholder.
+	const textHeight = fallbackTextHeight(part.text, {
 		fontSize: options.fontSize,
 		lineHeight: ASSISTANT_LINE_HEIGHT,
 		maxWidth: bodyWidth,

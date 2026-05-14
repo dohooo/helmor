@@ -21,33 +21,29 @@ import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-	CommandEmpty,
-	CommandItem,
-	CommandList,
-} from "@/components/ui/command";
-import { CommandPopoverContent } from "@/components/ui/command-popover";
-import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type {
-	RepositoryCreateOption,
-	WorkspaceGroup,
-	WorkspaceRow,
-	WorkspaceStatus,
-} from "@/lib/api";
+import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
+import type { SidebarGrouping } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
+import { RepoDragGhost, WorkspaceDragGhost } from "./dnd/drag-ghosts";
+import { useRepoDnd } from "./dnd/use-repo-dnd";
+import {
+	useWorkspaceDnd,
+	type WorkspaceDndPolicy,
+} from "./dnd/use-workspace-dnd";
 import {
 	createInitialSectionOpenState,
 	readStoredSectionOpenState,
@@ -59,6 +55,7 @@ import {
 	findSelectedSectionId,
 	GroupIcon,
 } from "./shared";
+import { repoIdFromGroupId } from "./sidebar-projection";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -72,6 +69,20 @@ type VirtualItem =
 			canCollapse: boolean;
 	  }
 	| { kind: "row"; groupId: string; row: WorkspaceRow; isArchived: boolean }
+	| {
+			kind: "drop-placeholder";
+			groupId: string;
+			beforeWorkspaceId: string | null;
+	  }
+	// Drop slot for a repo drag — height = full moving-group height,
+	// inserted before `beforeRepoId`. Mirrors `drop-placeholder` for
+	// workspace drag: dynamic key (so each new target is a fresh mount),
+	// invisible, just makes way for other groups whose keys stay stable.
+	| {
+			kind: "repo-drop-placeholder";
+			beforeRepoId: string | null;
+			height: number;
+	  }
 	| { kind: "group-gap"; size: number }
 	| { kind: "bottom-padding" };
 
@@ -96,10 +107,10 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
-	availableRepositories,
+	sidebarGrouping = "status",
 	addingRepository,
 	selectedWorkspaceId,
-	sendingWorkspaceIds,
+	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
@@ -112,13 +123,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onSubmitClone,
 	onSelectWorkspace,
 	onPrefetchWorkspace,
-	onCreateWorkspace,
+	onOpenNewWorkspace,
+	onCreateWorkspaceForRepo,
 	onArchiveWorkspace,
+	onMoveLocalToWorktree,
 	onMarkWorkspaceUnread,
 	onRestoreWorkspace,
 	onDeleteWorkspace,
 	onOpenInFinder,
 	onTogglePin,
+	onMoveWorkspaceInSidebar,
+	onMoveRepositoryInSidebar,
 	onSetWorkspaceStatus,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
@@ -126,10 +141,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
-	availableRepositories?: RepositoryCreateOption[];
+	sidebarGrouping?: SidebarGrouping;
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
-	sendingWorkspaceIds?: Set<string>;
+	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
@@ -145,26 +160,157 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	}) => Promise<void>;
 	onSelectWorkspace?: (workspaceId: string) => void;
 	onPrefetchWorkspace?: (workspaceId: string) => void;
-	onCreateWorkspace?: (repoId: string) => void;
+	onOpenNewWorkspace?: () => void;
+	/** Open the start page with this repo preselected. Wired on repo
+	 *  group headers in `repo` grouping mode. */
+	onCreateWorkspaceForRepo?: (repoId: string) => void;
 	onArchiveWorkspace?: (workspaceId: string) => void;
+	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	onMarkWorkspaceUnread?: (workspaceId: string) => void;
 	onRestoreWorkspace?: (workspaceId: string) => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onOpenInFinder?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
+	onMoveWorkspaceInSidebar?: (
+		workspaceId: string,
+		targetGroupId: string,
+		beforeWorkspaceId: string | null,
+	) => void;
+	onMoveRepositoryInSidebar?: (
+		repoId: string,
+		beforeRepoId: string | null,
+	) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 }) {
-	const [isRepoPickerOpen, setIsRepoPickerOpen] = useState(false);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
-	const repoCommandListRef = useRef<HTMLDivElement | null>(null);
+	const dndPolicy = useMemo<WorkspaceDndPolicy>(
+		() =>
+			sidebarGrouping === "repo"
+				? {
+						// Repo mode: same-bucket reorder + drag-to-pin /
+						// drag-to-backlog + the inverse (un-pin / un-backlog) back
+						// to the row's own repo bucket. No cross-repo moves.
+						canDragRow: (_row, sourceGroupId) =>
+							sourceGroupId === "pinned" ||
+							sourceGroupId === "backlog" ||
+							repoIdFromGroupId(sourceGroupId) !== null,
+						canDropIntoGroup: (
+							sourceGroupId,
+							targetGroupId,
+							{ sourceRepoId },
+						) => {
+							if (targetGroupId === "pinned") return true;
+							if (targetGroupId === "backlog") return true;
+							const targetRepoId = repoIdFromGroupId(targetGroupId);
+							if (targetRepoId === null) return false;
+							if (sourceGroupId === targetGroupId) return true;
+							// pinned / backlog → repo bucket: only the row's own repo.
+							if (
+								(sourceGroupId === "pinned" || sourceGroupId === "backlog") &&
+								sourceRepoId === targetRepoId
+							)
+								return true;
+							return false;
+						},
+					}
+				: {
+						// Status mode: any lane + pinned (drag to pin / unpin).
+						canDragRow: (_row, sourceGroupId) =>
+							sourceGroupId === "pinned" ||
+							workspaceStatusFromGroupId(sourceGroupId) !== null,
+						canDropIntoGroup: (_sourceGroupId, targetGroupId) =>
+							targetGroupId === "pinned" ||
+							workspaceStatusFromGroupId(targetGroupId) !== null,
+					},
+		[sidebarGrouping],
+	);
+	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
+		onMoveWorkspace: onMoveWorkspaceInSidebar,
+		policy: dndPolicy,
+	});
+	const {
+		dragState: repoDragState,
+		dropIndicator: repoDropIndicator,
+		startRepoDragGesture,
+	} = useRepoDnd({
+		onMoveRepo: onMoveRepositoryInSidebar,
+	});
+	const activeRepoDragId = repoDragState?.repoId ?? null;
+	const repoDropBeforeId = repoDropIndicator?.beforeRepoId ?? null;
+	const activeDragWorkspaceId = dragState?.workspaceId ?? null;
+	const dropTargetGroupId = dropTarget?.groupId ?? null;
+	const dropTargetBeforeWorkspaceId = dropTarget?.beforeWorkspaceId ?? null;
+	// Stable derived booleans — dragState/repoDragState get a new ref
+	// every pointermove frame; using these keeps downstream memos hot.
+	const isWorkspaceDragging = dragState !== null;
+	const isRepoDragging = repoDragState !== null;
+	const isAnyDragging = isWorkspaceDragging || isRepoDragging;
+	const activeDragRow = useMemo(() => {
+		if (!activeDragWorkspaceId) return null;
+		for (const group of groups) {
+			const row = group.rows.find((item) => item.id === activeDragWorkspaceId);
+			if (row) return row;
+		}
+		return archivedRows.find((row) => row.id === activeDragWorkspaceId) ?? null;
+	}, [activeDragWorkspaceId, archivedRows, groups]);
+	/** Group currently under repo-drag — rows feed the ghost. */
+	const repoDragGroup = useMemo(() => {
+		if (!activeRepoDragId) return null;
+		const groupId = `repo:${activeRepoDragId}`;
+		return groups.find((g) => g.id === groupId) ?? null;
+	}, [activeRepoDragId, groups]);
+	// Empty `pinned` reveals only after the user drags near the top of the
+	// list (avoids a visible jump on every drag start), and is sticky for
+	// the rest of the drag — once shown it stays shown until release, so
+	// dragging back down doesn't flicker the slot away.
+	const [pinnedSlotReady, setPinnedSlotReady] = useState(false);
+	useEffect(() => {
+		if (!dragState) {
+			setPinnedSlotReady(false);
+			return;
+		}
+		setPinnedSlotReady((current) => {
+			if (current) return current;
+			const sidebar = scrollContainerRef.current;
+			if (!sidebar) return current;
+			const sidebarTop = sidebar.getBoundingClientRect().top;
+			const ghostCentre =
+				dragState.clientY - dragState.offsetY + dragState.height / 2;
+			return ghostCentre < sidebarTop + HEADER_HEIGHT + ROW_HEIGHT;
+		});
+	}, [dragState]);
 	const [sectionOpenState, setSectionOpenState] = useState(() => ({
 		...createInitialSectionOpenState(groups),
-		...readStoredSectionOpenState(),
+		...readStoredSectionOpenState(sidebarGrouping),
 	}));
+
+	// Each grouping mode (status / repo) keeps its own expand-collapse
+	// memory under a distinct localStorage key. Switching modes
+	// re-hydrates from the new key; subsequent edits flow back to that
+	// key. The rehydrate + write are intentionally in the SAME effect
+	// (`return` after rehydrate, write on the fallthrough branch) so
+	// they can't race: on the render that bumps `sidebarGrouping`, the
+	// effect rehydrates and bails out — the next render then runs the
+	// write branch with the freshly-loaded state. Splitting these into
+	// two effects briefly persists the previous mode's state under the
+	// new key, and any hot-reload / crash inside that window corrupts
+	// the persisted blob.
+	const previousGroupingRef = useRef(sidebarGrouping);
+	useEffect(() => {
+		if (previousGroupingRef.current !== sidebarGrouping) {
+			previousGroupingRef.current = sidebarGrouping;
+			setSectionOpenState({
+				...createInitialSectionOpenState(groups),
+				...readStoredSectionOpenState(sidebarGrouping),
+			});
+			return;
+		}
+		writeStoredSectionOpenState(sidebarGrouping, sectionOpenState);
+	}, [groups, sidebarGrouping, sectionOpenState]);
 
 	useEffect(() => {
 		setSectionOpenState((current) => {
@@ -192,10 +338,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			return changed ? next : current;
 		});
 	}, [archivedRows, groups]);
-
-	useEffect(() => {
-		writeStoredSectionOpenState(sectionOpenState);
-	}, [sectionOpenState]);
 
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
@@ -231,20 +373,81 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	// ── Flatten groups into virtual items ──────────────────────────────
 	const flatItems = useMemo(() => {
 		const items: VirtualItem[] = [];
+		// Reveal empty pinned only when the user drags up to it, to avoid
+		// a layout jump on every drag start.
+		const showEmptyPinned = pinnedSlotReady;
 		const visibleGroups = groups.filter(
-			(g) => g.id !== "pinned" || g.rows.length > 0,
+			(g) => g.id !== "pinned" || g.rows.length > 0 || showEmptyPinned,
 		);
+
+		// Repo drag works the same way as workspace drag now: don't reorder
+		// `visibleGroups`. Instead, skip the moving group entirely and
+		// inject a single repo-drop-placeholder before whichever group
+		// `repoDropBeforeId` points at. Other groups keep their stable
+		// (key, position) pair so CSS transitions trigger reliably in both
+		// directions.
+		const draggingGroupId = activeRepoDragId
+			? `repo:${activeRepoDragId}`
+			: null;
+		const movingGroupHeight = ((): number => {
+			if (!draggingGroupId) return 0;
+			const moving = visibleGroups.find((g) => g.id === draggingGroupId);
+			if (!moving) return 0;
+			const isOpen = sectionOpenState[moving.id] !== false;
+			return HEADER_HEIGHT + (isOpen ? moving.rows.length * ROW_HEIGHT : 0);
+		})();
+		const repoDropTargetGroupId =
+			activeRepoDragId && repoDropBeforeId ? `repo:${repoDropBeforeId}` : null;
+		let repoPlaceholderEmitted = false;
 
 		for (let gi = 0; gi < visibleGroups.length; gi++) {
 			const group = visibleGroups[gi];
-			if (gi > 0) {
-				const previousGroup = visibleGroups[gi - 1];
+
+			// Skip the group being dragged entirely — its visual lives in
+			// the floating ghost.
+			if (group.id === draggingGroupId) {
+				continue;
+			}
+
+			// Emit the repo-drop placeholder before this group when this is
+			// the chosen drop target. `repoDropBeforeId === null` means "after
+			// the last repo bucket"; the natural anchor for that is right
+			// before the Backlog header — emitting it later (after the loop)
+			// would push the placeholder past Backlog and make Backlog appear
+			// to shift up by the moving group's height.
+			const isExplicitTarget =
+				repoDropTargetGroupId !== null && group.id === repoDropTargetGroupId;
+			const isEndOfReposAnchor =
+				activeRepoDragId !== null &&
+				repoDropBeforeId === null &&
+				group.id === "backlog";
+			if (
+				activeRepoDragId &&
+				!repoPlaceholderEmitted &&
+				(isExplicitTarget || isEndOfReposAnchor)
+			) {
+				if (items.length > 0) {
+					items.push({ kind: "group-gap", size: GROUP_GAP });
+				}
+				items.push({
+					kind: "repo-drop-placeholder",
+					beforeRepoId: repoDropBeforeId,
+					height: movingGroupHeight,
+				});
+				repoPlaceholderEmitted = true;
+			}
+
+			if (items.length > 0) {
+				// Walk previous non-placeholder/gap item to decide gap size.
+				const lastReal = [...items]
+					.reverse()
+					.find((it) => it.kind !== "group-gap");
+				const previousHasRows =
+					lastReal?.kind === "row" ||
+					(lastReal?.kind === "group-header" && lastReal.group.rows.length > 0);
 				items.push({
 					kind: "group-gap",
-					size: getGroupGapSize(
-						previousGroup.rows.length > 0,
-						group.rows.length > 0,
-					),
+					size: getGroupGapSize(previousHasRows, group.rows.length > 0),
 				});
 			}
 
@@ -256,8 +459,22 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				canCollapse,
 			});
 
-			if (sectionOpenState[group.id] !== false && group.rows.length > 0) {
+			const isGroupOpen = sectionOpenState[group.id] !== false;
+			if (isGroupOpen && group.rows.length > 0) {
 				for (const row of group.rows) {
+					if (
+						dropTargetGroupId === group.id &&
+						dropTargetBeforeWorkspaceId === row.id
+					) {
+						items.push({
+							kind: "drop-placeholder",
+							groupId: group.id,
+							beforeWorkspaceId: row.id,
+						});
+					}
+					if (activeDragWorkspaceId === row.id) {
+						continue;
+					}
 					items.push({
 						kind: "row",
 						groupId: group.id,
@@ -266,6 +483,30 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					});
 				}
 			}
+			if (
+				dropTargetGroupId === group.id &&
+				dropTargetBeforeWorkspaceId === null
+			) {
+				items.push({
+					kind: "drop-placeholder",
+					groupId: group.id,
+					beforeWorkspaceId: null,
+				});
+			}
+		}
+
+		// Repo drag dropping to the very end (after the last repo bucket).
+		if (
+			activeRepoDragId &&
+			repoDropBeforeId === null &&
+			!repoPlaceholderEmitted
+		) {
+			items.push({ kind: "group-gap", size: GROUP_GAP });
+			items.push({
+				kind: "repo-drop-placeholder",
+				beforeRepoId: null,
+				height: movingGroupHeight,
+			});
 		}
 
 		// Archived section
@@ -302,7 +543,18 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 		items.push({ kind: "bottom-padding" });
 		return items;
-	}, [groups, archivedRows, sectionOpenState]);
+	}, [
+		groups,
+		archivedRows,
+		sectionOpenState,
+		activeDragWorkspaceId,
+		dropTargetGroupId,
+		dropTargetBeforeWorkspaceId,
+		pinnedSlotReady,
+		activeRepoDragId,
+		repoDropBeforeId,
+		sidebarGrouping,
+	]);
 
 	// ── Virtualizer ───────────────────────────────────────────────────
 	const virtualizer = useVirtualizer({
@@ -315,6 +567,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					return getGroupHeaderHeight(item.group.rows.length > 0);
 				case "row":
 					return ROW_HEIGHT;
+				case "drop-placeholder":
+					return ROW_HEIGHT;
+				case "repo-drop-placeholder":
+					return item.height;
 				case "group-gap":
 					return item.size;
 				case "bottom-padding":
@@ -328,13 +584,26 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					return `header-${item.groupId}`;
 				case "row":
 					return `row-${item.groupId}-${item.row.id}`;
+				case "drop-placeholder":
+					return `drop-${item.groupId}-${item.beforeWorkspaceId ?? "__end__"}`;
+				case "repo-drop-placeholder":
+					// Dynamic key like `drop-placeholder` — each new target
+					// is a fresh mount; the placeholder is invisible so
+					// the lack of transition doesn't matter.
+					return `repo-drop-${item.beforeRepoId ?? "__end__"}`;
 				case "group-gap":
 					return `gap-${index}`;
 				case "bottom-padding":
 					return "bottom-padding";
 			}
 		},
-		overscan: 12,
+		// Boost overscan while dragging so items that the reorder shifts into
+		// view are already mounted — a freshly-mounted item has no previous
+		// transform to interpolate from and would otherwise "jump" into its
+		// new slot instead of sliding. Asymmetric because reorder only pulls
+		// new items into view in one direction (the side the placeholder is
+		// moving toward).
+		overscan: isAnyDragging ? 200 : 12,
 	});
 
 	// ── Scroll selected into view ─────────────────────────────────────
@@ -354,12 +623,11 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	);
 	const createBusy = Boolean(creatingWorkspaceRepoId);
 	const addRepositoryBusy = Boolean(addingRepository);
-	const repositories = availableRepositories ?? [];
 
 	useEffect(() => {
 		const handleOpenNewWorkspace = () => {
 			if (addRepositoryBusy || createBusy || workspaceActionsBusy) return;
-			setIsRepoPickerOpen(true);
+			onOpenNewWorkspace?.();
 		};
 
 		window.addEventListener(
@@ -371,7 +639,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				"helmor:open-new-workspace",
 				handleOpenNewWorkspace,
 			);
-	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
+	}, [addRepositoryBusy, createBusy, onOpenNewWorkspace, workspaceActionsBusy]);
 
 	useEffect(() => {
 		const handleOpenAddRepository = () => {
@@ -401,8 +669,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	// ── Render a single virtual item ──────────────────────────────────
 	const renderItem = useCallback(
 		(item: VirtualItem) => {
-			if (item.kind === "group-gap" || item.kind === "bottom-padding") {
+			if (
+				item.kind === "group-gap" ||
+				item.kind === "bottom-padding" ||
+				item.kind === "repo-drop-placeholder"
+			) {
 				return null;
+			}
+
+			if (item.kind === "drop-placeholder") {
+				// Empty ROW_HEIGHT slot — makes neighbours give way and lets
+				// hit-test still resolve the group via the data attr.
+				return (
+					<div className="h-full" data-workspace-drop-group-id={item.groupId} />
+				);
 			}
 
 			if (item.kind === "group-header") {
@@ -412,30 +692,119 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						: (sectionOpenState[item.groupId] ?? true);
 				const isArchived = item.groupId === ARCHIVED_SECTION_ID;
 				const isEmptyGroup = item.group.rows.length === 0;
+				const repoId = repoIdFromGroupId(item.groupId);
+				const isRepoGroup = repoId !== null;
+				const repoSampleRow: WorkspaceRow | undefined = isRepoGroup
+					? item.group.rows[0]
+					: undefined;
+
+				const headerLabel = (
+					<span className="flex items-center gap-2">
+						{isArchived ? (
+							<Archive
+								className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
+								strokeWidth={1.9}
+							/>
+						) : isRepoGroup ? (
+							<WorkspaceAvatar
+								repoIconSrc={repoSampleRow?.repoIconSrc}
+								repoInitials={repoSampleRow?.repoInitials ?? null}
+								repoName={item.group.label}
+								title={item.group.label}
+							/>
+						) : (
+							<GroupIcon tone={item.group.tone} />
+						)}
+						<span>{item.group.label}</span>
+					</span>
+				);
+
+				const headerClassName = cn(
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+				);
+
+				// Repo header: no chevron/badge, but the header still toggles
+				// the section; hover reveals `+` for new workspace.
+				// `role="button"` because the `+` is a nested button.
+				if (isRepoGroup && repoId) {
+					const repoToggleSection = () => {
+						if (item.canCollapse) toggleSection(item.groupId);
+					};
+					const repoDndHandleEnabled = Boolean(onMoveRepositoryInSidebar);
+					return (
+						<div
+							role="button"
+							tabIndex={item.canCollapse ? 0 : -1}
+							aria-expanded={item.canCollapse ? isOpen : undefined}
+							aria-disabled={item.canCollapse ? undefined : true}
+							data-repo-dnd-handle={repoDndHandleEnabled ? "true" : undefined}
+							data-repo-dnd-id={repoId}
+							className={cn(
+								headerClassName,
+								item.canCollapse ? "cursor-interactive" : "cursor-default",
+								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+							)}
+							data-empty-group={isEmptyGroup ? "true" : "false"}
+							onPointerDown={(event) => {
+								if (!repoDndHandleEnabled) return;
+								startRepoDragGesture({
+									event,
+									repoId,
+									label: item.group.label,
+								});
+							}}
+							onClick={repoToggleSection}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									repoToggleSection();
+								}
+							}}
+						>
+							{headerLabel}
+							{onCreateWorkspaceForRepo ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											type="button"
+											aria-label={`New workspace in ${item.group.label}`}
+											variant="ghost"
+											size="icon-xs"
+											className="size-5 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/trigger:opacity-100 focus-visible:opacity-100"
+											onClick={(event) => {
+												event.stopPropagation();
+												onCreateWorkspaceForRepo(repoId);
+											}}
+										>
+											<Plus className="size-3.5" strokeWidth={2.2} />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={4}
+										className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+									>
+										New workspace in {item.group.label}
+									</TooltipContent>
+								</Tooltip>
+							) : null}
+						</div>
+					);
+				}
 
 				return (
 					<button
 						type="button"
 						className={cn(
-							"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
-							"py-1",
-							item.canCollapse ? "cursor-pointer" : "cursor-default",
+							headerClassName,
+							item.canCollapse ? "cursor-interactive" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
+						data-workspace-drop-group-id={item.groupId}
 						disabled={!item.canCollapse}
 						onClick={() => toggleSection(item.groupId)}
 					>
-						<span className="flex items-center gap-2">
-							{isArchived ? (
-								<Archive
-									className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
-									strokeWidth={1.9}
-								/>
-							) : (
-								<GroupIcon tone={item.group.tone} />
-							)}
-							<span>{item.group.label}</span>
-						</span>
+						{headerLabel}
 
 						{item.group.rows.length > 0 ? (
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
@@ -460,21 +829,34 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 
 			// kind === "row"
 			return (
-				<div className="pl-2">
+				<div
+					className="pl-2"
+					data-workspace-drop-group-id={item.groupId}
+					data-workspace-dnd-row="true"
+					data-workspace-dnd-row-id={item.row.id}
+					data-workspace-dnd-group-id={item.groupId}
+				>
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
-						isSending={sendingWorkspaceIds?.has(item.row.id)}
+						isSending={busyWorkspaceIds?.has(item.row.id)}
 						isInteractionRequired={interactionRequiredWorkspaceIds?.has(
 							item.row.id,
 						)}
+						// Hide per-row avatar inside a real repo bucket — header
+						// already shows it. Pinned/backlog/archived keep theirs.
+						hideRepoAvatar={repoIdFromGroupId(item.groupId) !== null}
 						onSelect={onSelectWorkspace}
 						onPrefetch={onPrefetchWorkspace}
 						onArchiveWorkspace={onArchiveWorkspace}
+						onMoveLocalToWorktree={onMoveLocalToWorktree}
 						onMarkWorkspaceUnread={onMarkWorkspaceUnread}
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
+						groupId={item.groupId}
+						onDragPointerDown={startDragGesture}
+						disableHoverCard={isAnyDragging}
 						archivingWorkspaceIds={archivingWorkspaceIds}
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
 						restoringWorkspaceId={restoringWorkspaceId}
@@ -493,18 +875,26 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		},
 		[
 			sectionOpenState,
+			sidebarGrouping,
 			toggleSection,
 			selectedWorkspaceId,
-			sendingWorkspaceIds,
+			busyWorkspaceIds,
 			interactionRequiredWorkspaceIds,
+			onCreateWorkspaceForRepo,
 			onSelectWorkspace,
 			onPrefetchWorkspace,
 			onArchiveWorkspace,
+			onMoveLocalToWorktree,
 			onMarkWorkspaceUnread,
 			onRestoreWorkspace,
 			onDeleteWorkspace,
 			onTogglePin,
+			onMoveWorkspaceInSidebar,
+			onMoveRepositoryInSidebar,
 			onSetWorkspaceStatus,
+			startDragGesture,
+			startRepoDragGesture,
+			isAnyDragging,
 			archivingWorkspaceIds,
 			markingUnreadWorkspaceId,
 			restoringWorkspaceId,
@@ -533,7 +923,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<div data-tauri-drag-region className="h-full flex-1" />
 			</div>
 
-			<div className="flex items-center justify-between px-3">
+			<div className="mt-1 flex items-center justify-between px-3">
 				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
@@ -589,7 +979,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<DropdownMenuContent align="end" className="min-w-40">
 							<DropdownMenuItem
 								onSelect={() => {
-									setIsRepoPickerOpen(false);
 									onAddRepository?.();
 								}}
 							>
@@ -598,7 +987,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								onSelect={() => {
-									setIsRepoPickerOpen(false);
 									onOpenCloneDialog?.();
 								}}
 							>
@@ -608,112 +996,48 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						</DropdownMenuContent>
 					</DropdownMenu>
 
-					<Popover open={isRepoPickerOpen} onOpenChange={setIsRepoPickerOpen}>
-						<PopoverAnchor asChild>
-							<span className="inline-flex">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											type="button"
-											aria-label="New workspace"
-											aria-expanded={isRepoPickerOpen}
-											aria-haspopup="dialog"
-											variant="ghost"
-											size="icon-xs"
-											disabled={
-												addRepositoryBusy || createBusy || workspaceActionsBusy
-											}
-											onClick={() => {
-												if (
-													addRepositoryBusy ||
-													createBusy ||
-													workspaceActionsBusy
-												) {
-													return;
-												}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								type="button"
+								aria-label="New workspace"
+								variant="ghost"
+								size="icon-xs"
+								disabled={
+									addRepositoryBusy || createBusy || workspaceActionsBusy
+								}
+								onClick={() => {
+									if (addRepositoryBusy || createBusy || workspaceActionsBusy) {
+										return;
+									}
 
-												setIsRepoPickerOpen((open) => !open);
-											}}
-										>
-											{createBusy ? (
-												<LoaderCircle
-													className="size-4 animate-spin"
-													strokeWidth={2.1}
-												/>
-											) : (
-												<Plus className="size-4" strokeWidth={2.4} />
-											)}
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent
-										side="top"
-										sideOffset={4}
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-									>
-										<span>Create new workspace</span>
-										{newWorkspaceShortcut ? (
-											<InlineShortcutDisplay
-												hotkey={newWorkspaceShortcut}
-												className="text-background/60"
-											/>
-										) : null}
-									</TooltipContent>
-								</Tooltip>
-							</span>
-						</PopoverAnchor>
-						<CommandPopoverContent
-							align="end"
-							sideOffset={4}
-							className="w-fit min-w-[220px] max-w-[min(90vw,28rem)]"
-							onOpenAutoFocus={(event) => {
-								event.preventDefault();
-								window.requestAnimationFrame(() =>
-									repoCommandListRef.current?.focus(),
-								);
-							}}
-						>
-							<CommandList
-								ref={repoCommandListRef}
-								tabIndex={0}
-								className="max-h-64 outline-none"
+									onOpenNewWorkspace?.();
+								}}
 							>
-								<CommandEmpty>No repositories found.</CommandEmpty>
-								{repositories.map((repository) => (
-									<CommandItem
-										key={repository.id}
-										value={`${repository.name} ${repository.defaultBranch ?? ""}`}
-										onSelect={() => {
-											setIsRepoPickerOpen(false);
-											onCreateWorkspace?.(repository.id);
-										}}
-										className="rounded-lg [&>svg:last-child]:hidden"
-									>
-										<div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-											<div className="flex min-w-0 items-center gap-2">
-												<WorkspaceAvatar
-													repoIconSrc={repository.repoIconSrc}
-													repoInitials={repository.repoInitials}
-													repoName={repository.name}
-													title={repository.name}
-													className="size-5 rounded-md"
-													fallbackClassName="text-[8px]"
-												/>
-												<span className="truncate font-medium">
-													{repository.name}
-												</span>
-											</div>
-											{repository.defaultBranch ? (
-												<span className="shrink-0 text-right whitespace-nowrap text-xs text-muted-foreground">
-													{repository.remote ?? "origin"}/
-													{repository.defaultBranch.toLowerCase()}
-												</span>
-											) : null}
-										</div>
-									</CommandItem>
-								))}
-							</CommandList>
-						</CommandPopoverContent>
-					</Popover>
+								{createBusy ? (
+									<LoaderCircle
+										className="size-4 animate-spin"
+										strokeWidth={2.1}
+									/>
+								) : (
+									<Plus className="size-4" strokeWidth={2.4} />
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="top"
+							sideOffset={4}
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						>
+							<span>Create new workspace</span>
+							{newWorkspaceShortcut ? (
+								<InlineShortcutDisplay
+									hotkey={newWorkspaceShortcut}
+									className="text-background/60"
+								/>
+							) : null}
+						</TooltipContent>
+					</Tooltip>
 				</div>
 			</div>
 
@@ -730,23 +1054,68 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						position: "relative",
 					}}
 				>
-					{virtualizer.getVirtualItems().map((vItem) => (
-						<div
-							key={vItem.key}
-							style={{
-								position: "absolute",
-								top: 0,
-								left: 0,
-								width: "100%",
-								height: `${vItem.size}px`,
-								transform: `translateY(${vItem.start}px)`,
-							}}
-						>
-							{renderItem(flatItems[vItem.index])}
-						</div>
-					))}
+					{virtualizer.getVirtualItems().map((vItem) => {
+						const item = flatItems[vItem.index];
+						return (
+							<div
+								key={vItem.key}
+								style={{
+									position: "absolute",
+									top: 0,
+									left: 0,
+									width: "100%",
+									height: `${vItem.size}px`,
+									// `translate3d` forces a compositor layer in WebKit
+									// (Tauri's webview) so transitions during the drag
+									// stay smooth in both directions.
+									transform: `translate3d(0, ${vItem.start}px, 0)`,
+									// Transition is ONLY on during the drag. The
+									// moment the user releases, `isAnyDragging` flips
+									// false and any layout shift caused by the
+									// optimistic commit (status/repo lane change,
+									// reorder, etc.) snaps instantly into place — no
+									// landing animation.
+									transition:
+										isAnyDragging && item.kind !== "drop-placeholder"
+											? "transform 150ms cubic-bezier(0.16, 1, 0.3, 1)"
+											: "none",
+									willChange: isAnyDragging ? "transform" : "auto",
+								}}
+							>
+								{renderItem(item)}
+							</div>
+						);
+					})}
 				</div>
 			</div>
+			{dragState && activeDragRow ? (
+				<WorkspaceDragGhost
+					dragState={dragState}
+					row={activeDragRow}
+					selected={selectedWorkspaceId === activeDragRow.id}
+					isSending={busyWorkspaceIds?.has(activeDragRow.id)}
+					isInteractionRequired={interactionRequiredWorkspaceIds?.has(
+						activeDragRow.id,
+					)}
+					hideRepoAvatar={repoIdFromGroupId(dragState.sourceGroupId) !== null}
+				/>
+			) : null}
+			{repoDragState && repoDragGroup ? (
+				<RepoDragGhost
+					dragState={repoDragState}
+					// Only carry rows when the group is expanded in the sidebar.
+					rows={
+						sectionOpenState[repoDragGroup.id] !== false
+							? repoDragGroup.rows
+							: []
+					}
+					repoIconSrc={repoDragGroup.rows[0]?.repoIconSrc ?? null}
+					repoInitials={repoDragGroup.rows[0]?.repoInitials ?? null}
+					selectedWorkspaceId={selectedWorkspaceId}
+					busyWorkspaceIds={busyWorkspaceIds}
+					interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
+				/>
+			) : null}
 		</div>
 	);
 });

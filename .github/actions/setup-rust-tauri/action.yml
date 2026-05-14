@@ -13,6 +13,24 @@ runs:
         # hits. Disable incremental in CI only.
         echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
 
+    # Workaround actions/runner-images#14099 — macos-15-arm64/20260511.0048+ and
+    # macos-26-arm64/20260512.0067 ship a broken brew rustup shim at
+    # /opt/homebrew/bin/cargo that intermittently shadows ~/.cargo/bin/cargo and
+    # rejects all cargo subcommands ("Usage: rustup-init[EXE]"). Remove once GHA
+    # publishes a fixed image.
+    - name: Purge brew rust shims (workaround actions/runner-images#14099)
+      shell: bash
+      run: |
+        set -eu
+        sudo rm -f \
+          /opt/homebrew/bin/cargo \
+          /opt/homebrew/bin/cargo-* \
+          /opt/homebrew/bin/rustc \
+          /opt/homebrew/bin/rustdoc \
+          /opt/homebrew/bin/rustup \
+          /opt/homebrew/bin/rustup-init 2>/dev/null || true
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
@@ -21,6 +39,9 @@ runs:
       with:
         cache-on-failure: true
         cache-workspace-crates: true
+        # cache-bin: false — avoids replaying a poisoned ~/.cargo/bin captured on
+        # a bad macos image (Swatinem/rust-cache#341, see #14099 above).
+        cache-bin: false
         shared-key: macos-tauri-v1
         workspaces: src-tauri -> target
 

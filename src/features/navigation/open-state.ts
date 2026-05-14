@@ -1,8 +1,15 @@
 import type { WorkspaceGroup } from "@/lib/api";
+import type { SidebarGrouping } from "@/lib/settings";
 import { ARCHIVED_SECTION_ID } from "./shared";
 
-const SECTION_OPEN_STATE_STORAGE_KEY =
-	"helmor:workspaces-sidebar:section-open-state";
+const SECTION_OPEN_STATE_STORAGE_KEYS: Record<SidebarGrouping, string> = {
+	status: "helmor:workspaces-sidebar:section-open-state",
+	repo: "helmor:workspaces-sidebar:section-open-state:repo",
+};
+
+function storageKeyFor(grouping: SidebarGrouping): string {
+	return SECTION_OPEN_STATE_STORAGE_KEYS[grouping];
+}
 
 export function createInitialSectionOpenState(groups: WorkspaceGroup[]) {
 	return Object.fromEntries([
@@ -11,13 +18,13 @@ export function createInitialSectionOpenState(groups: WorkspaceGroup[]) {
 	]) as Record<string, boolean>;
 }
 
-export function readStoredSectionOpenState() {
+export function readStoredSectionOpenState(grouping: SidebarGrouping) {
 	if (typeof window === "undefined") {
 		return null;
 	}
 
 	try {
-		const raw = window.localStorage.getItem(SECTION_OPEN_STATE_STORAGE_KEY);
+		const raw = window.localStorage.getItem(storageKeyFor(grouping));
 		if (!raw) {
 			return null;
 		}
@@ -33,19 +40,20 @@ export function readStoredSectionOpenState() {
 	}
 }
 
-export function writeStoredSectionOpenState(state: Record<string, boolean>) {
+export function writeStoredSectionOpenState(
+	grouping: SidebarGrouping,
+	state: Record<string, boolean>,
+) {
 	if (typeof window === "undefined") {
 		return;
 	}
 
+	const key = storageKeyFor(grouping);
 	try {
-		window.localStorage.setItem(
-			SECTION_OPEN_STATE_STORAGE_KEY,
-			JSON.stringify(state),
-		);
+		window.localStorage.setItem(key, JSON.stringify(state));
 	} catch (error) {
 		console.error(
-			`[helmor] sidebar section state save failed for "${SECTION_OPEN_STATE_STORAGE_KEY}"`,
+			`[helmor] sidebar section state save failed for "${key}"`,
 			error,
 		);
 	}

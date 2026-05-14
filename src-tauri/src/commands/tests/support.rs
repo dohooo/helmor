@@ -275,14 +275,15 @@ impl CreateTestHarness {
                 INSERT INTO workspaces (
                   id, repository_id, directory_name, active_session_id, branch,
                   state, initialization_parent_branch,
-                  intended_target_branch, status, unread
-                ) VALUES (?1, ?2, ?3, NULL, ?4, 'ready', 'main', 'main', 'in-progress', 0)
+                  intended_target_branch, status, unread, display_order
+                ) VALUES (?1, ?2, ?3, NULL, ?4, 'ready', 'main', 'main', 'in-progress', 0, ?5)
                 "#,
                 (
                     format!("workspace-{directory_name}"),
                     &self.repo_id,
                     directory_name,
                     format!("testuser/{directory_name}"),
+                    crate::workspace::sidebar_order::ORDER_STEP,
                 ),
             )
             .unwrap();
@@ -316,6 +317,40 @@ impl CreateTestHarness {
                 ),
             )
             .unwrap();
+    }
+
+    /// Create a sibling branch off main with one committed file, then
+    /// switch back to main. Used to seed a non-default branch for
+    /// "create from this branch" tests.
+    pub(crate) fn create_remote_branch_with_file(
+        &self,
+        branch: &str,
+        relative_path: &str,
+        contents: &str,
+    ) {
+        let root = self.source_repo_root.to_str().unwrap();
+        git_ops::run_git(["-C", root, "checkout", "-b", branch], None).unwrap();
+        fs::write(self.source_repo_root.join(relative_path), contents).unwrap();
+        git_ops::run_git(["-C", root, "add", relative_path], None).unwrap();
+        git_ops::run_git(
+            [
+                "-C",
+                root,
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Helmor",
+                "-c",
+                "user.email=helmor@example.com",
+                "commit",
+                "-m",
+                &format!("add {relative_path}"),
+            ],
+            None,
+        )
+        .unwrap();
+        git_ops::run_git(["-C", root, "checkout", "main"], None).unwrap();
+        git_ops::run_git(["-C", root, "fetch", "origin"], None).unwrap();
     }
 
     pub(crate) fn commit_repo_files(&self, files: &[(&str, &str)]) {
@@ -663,22 +698,16 @@ fn create_workspace_fixture_db(
     repo_name: &str,
 ) {
     let connection = open_fixture_db(db_path);
+    // Prefix lives on the repo row in the multi-account world. Pin
+    // `custom + testuser/` directly on the repo so create_workspace
+    // produces the `testuser/<directory>` branch the assertions expect.
     connection
         .execute(
-            r#"INSERT INTO repos (id, remote_url, name, default_branch, root_path, display_order, hidden) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0)"#,
+            r#"INSERT INTO repos (
+                id, remote_url, name, default_branch, root_path, display_order, hidden,
+                branch_prefix_type, branch_prefix_custom
+              ) VALUES (?1, NULL, ?2, 'main', ?3, 1, 0, 'custom', 'testuser/')"#,
             (repo_id, repo_name, source_repo_root.to_str().unwrap()),
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_type', 'custom')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO settings (key, value) VALUES ('branch_prefix_custom', 'testuser/')",
-            [],
         )
         .unwrap();
 }
@@ -703,8 +732,15 @@ fn create_archived_fixture_db(
         .unwrap();
     connection
         .execute(
-            r#"INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, active_session_id, archive_commit) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', ?3, ?4, ?5)"#,
-            [workspace_id, directory_name, branch, session_id, archive_commit],
+            r#"INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, active_session_id, archive_commit, display_order) VALUES (?1, 'repo-1', ?2, 'archived', 'in-progress', ?3, ?4, ?5, ?6)"#,
+            rusqlite::params![
+                workspace_id,
+                directory_name,
+                branch,
+                session_id,
+                archive_commit,
+                crate::workspace::sidebar_order::ORDER_STEP
+            ],
         )
         .unwrap();
     connection
@@ -733,8 +769,14 @@ fn create_ready_fixture_db(
         .unwrap();
     connection
         .execute(
-            r#"INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, active_session_id) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', ?3, ?4)"#,
-            (workspace_id, directory_name, branch, session_id),
+            r#"INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, active_session_id, display_order) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', ?3, ?4, ?5)"#,
+            rusqlite::params![
+                workspace_id,
+                directory_name,
+                branch,
+                session_id,
+                crate::workspace::sidebar_order::ORDER_STEP
+            ],
         )
         .unwrap();
     connection
@@ -787,9 +829,14 @@ fn create_branch_switch_fixture_db(
         .execute(
             r#"INSERT INTO workspaces (
                 id, repository_id, directory_name, state, status,
-                branch, initialization_parent_branch, intended_target_branch
-              ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', ?3, 'main', 'main')"#,
-            (workspace_id, directory_name, branch),
+                branch, initialization_parent_branch, intended_target_branch, display_order
+              ) VALUES (?1, 'repo-1', ?2, 'ready', 'in-progress', ?3, 'main', 'main', ?4)"#,
+            rusqlite::params![
+                workspace_id,
+                directory_name,
+                branch,
+                crate::workspace::sidebar_order::ORDER_STEP
+            ],
         )
         .unwrap();
 }

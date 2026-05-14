@@ -1,0 +1,58 @@
+[
+	{
+		"call_id": "tool_6e898e93-58fe-4954-9c57-3b900af1c89",
+		"name": "read",
+		"status": "running",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/notes.txt"
+		}
+	},
+	{
+		"call_id": "tool_6e898e93-58fe-4954-9c57-3b900af1c89",
+		"name": "read",
+		"status": "completed",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/notes.txt"
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"content": "TODO: replace this\n",
+				"totalLines": 2,
+				"fileSize": 19
+			}
+		}
+	},
+	{
+		"call_id": "tool_f8e42730-b09f-4514-a318-38dd42a6b94",
+		"name": "edit",
+		"status": "running",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/notes.txt"
+		}
+	},
+	{
+		"call_id": "tool_f8e42730-b09f-4514-a318-38dd42a6b94",
+		"name": "edit",
+		"status": "running",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/notes.txt"
+		}
+	},
+	{
+		"call_id": "tool_f8e42730-b09f-4514-a318-38dd42a6b94",
+		"name": "edit",
+		"status": "completed",
+		"args": {
+			"path": "/tmp/cursor-tools-probe/probe-workspace/notes.txt"
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"linesAdded": 1,
+				"linesRemoved": 1,
+				"diffString": "--- a//tmp/cursor-tools-probe/probe-workspace/notes.txt\n+++ b//tmp/cursor-tools-probe/probe-workspace/notes.txt\n@@ -1 +1 @@\n-TODO: replace this\n+TODO: was replaced"
+			}
+		}
+	}
+]

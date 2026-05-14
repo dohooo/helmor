@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
 	cleanup,
 	fireEvent,
@@ -21,7 +22,10 @@ const apiMocks = vi.hoisted(() => ({
 	loadSessionThreadMessages: vi.fn(),
 	getSessionContextUsage: vi.fn(),
 	getCodexRateLimits: vi.fn(),
+	getClaudeRateLimits: vi.fn(),
 	loadRepoScripts: vi.fn(),
+	listRepositories: vi.fn(),
+	listSessionDrafts: vi.fn(),
 	getWorkspaceForge: vi.fn(),
 	refreshWorkspaceChangeRequest: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
@@ -84,7 +88,10 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
 		getSessionContextUsage: apiMocks.getSessionContextUsage,
 		getCodexRateLimits: apiMocks.getCodexRateLimits,
+		getClaudeRateLimits: apiMocks.getClaudeRateLimits,
 		loadRepoScripts: apiMocks.loadRepoScripts,
+		listRepositories: apiMocks.listRepositories,
+		listSessionDrafts: apiMocks.listSessionDrafts,
 		getWorkspaceForge: apiMocks.getWorkspaceForge,
 		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
@@ -254,6 +261,7 @@ function createWorkspaceDetail(
 		branch: archived ? "archive/main" : "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
+		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,
@@ -394,6 +402,12 @@ function emitTauriEvent(eventName: string) {
 	}
 }
 
+async function waitForTauriEventListener(eventName: string) {
+	await waitFor(() => {
+		expect(eventApiMocks.handlers.get(eventName)?.size ?? 0).toBeGreaterThan(0);
+	});
+}
+
 async function renderAppReady(expectedSessionTitle = "Done session 1") {
 	render(<App />);
 
@@ -421,7 +435,10 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadSessionThreadMessages.mockReset();
 		apiMocks.getSessionContextUsage.mockReset();
 		apiMocks.getCodexRateLimits.mockReset();
+		apiMocks.getClaudeRateLimits.mockReset();
 		apiMocks.loadRepoScripts.mockReset();
+		apiMocks.listRepositories.mockReset();
+		apiMocks.listSessionDrafts.mockReset();
 		apiMocks.getWorkspaceForge.mockReset();
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
@@ -549,7 +566,17 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
 		apiMocks.getSessionContextUsage.mockResolvedValue(null);
 		apiMocks.getCodexRateLimits.mockResolvedValue(null);
+		apiMocks.getClaudeRateLimits.mockResolvedValue(null);
 		apiMocks.loadRepoScripts.mockResolvedValue(EMPTY_REPO_SCRIPTS);
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "H",
+			},
+		]);
+		apiMocks.listSessionDrafts.mockResolvedValue([]);
 		apiMocks.getWorkspaceForge.mockResolvedValue(UNKNOWN_FORGE_DETECTION);
 		apiMocks.refreshWorkspaceChangeRequest.mockResolvedValue(null);
 		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
@@ -637,7 +664,7 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("opens the new workspace picker on Command+N", async () => {
+	it("opens the workspace start composer on Command+N", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
@@ -646,7 +673,30 @@ describe("App global navigation shortcuts", () => {
 			metaKey: true,
 		});
 
-		await screen.findByRole("dialog");
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "New Workspace" }),
+		).toBeDisabled();
+	});
+
+	it("focuses the start composer on Command+L", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		await renderAppReady();
+
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		const input = await screen.findByLabelText("Workspace input");
+		input.blur();
+		expect(input).not.toHaveFocus();
+
+		fireEvent.keyDown(window, {
+			key: "l",
+			code: "KeyL",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(input).toHaveFocus();
+		});
 	});
 
 	it("opens the add repository menu on Command+Shift+N", async () => {
@@ -660,6 +710,19 @@ describe("App global navigation shortcuts", () => {
 		});
 
 		await screen.findByRole("menuitem", { name: /Open project/i });
+	});
+
+	it("toggles the context panel on Option+Command+C", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "c",
+			code: "KeyC",
+			metaKey: true,
+			altKey: true,
+		});
+
+		await screen.findByRole("heading", { name: "Contexts" });
 	});
 
 	it("does not wrap session navigation on Option+Command+Left from the first session", async () => {
@@ -761,32 +824,8 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedSession("Done session 2");
 		});
 
-		const newWorkspaceButton = screen.getByRole("button", {
-			name: "New workspace",
-		});
-		await user.click(newWorkspaceButton);
-		await screen.findByRole("dialog");
-		const repositoryPicker = await screen.findByRole("listbox", {
-			name: "Suggestions",
-		});
-		// Picker focus is moved on the rAF after `onOpenAutoFocus`. Under load
-		// from prior tests the rAF can land after the synchronous assertion,
-		// so wait for it.
-		await waitFor(() => {
-			expect(repositoryPicker).toHaveFocus();
-		});
-
-		fireEvent.keyDown(repositoryPicker, {
-			key: "ArrowDown",
-			code: "ArrowDown",
-			metaKey: true,
-			altKey: true,
-		});
-
-		await waitFor(() => {
-			expectSelectedWorkspace("Review workspace");
-			expectSelectedSession("Review session 1");
-		});
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 	});
 
 	it("only responds to the exact Option shortcut combination", async () => {
@@ -948,6 +987,7 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.requestQuit.mockReset();
 		await renderAppReady();
 
+		await waitForTauriEventListener("helmor://quit-requested");
 		emitTauriEvent("helmor://quit-requested");
 
 		await waitFor(() => {
@@ -955,9 +995,40 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
+	it("quits from onboarding when Rust emits quit-requested", async () => {
+		const invokeMock = vi.mocked(invoke);
+		const baseInvokeImpl = invokeMock.getMockImplementation();
+		invokeMock.mockImplementation(
+			async (command: string, ...args: unknown[]) => {
+				if (command === "get_app_settings") {
+					return {
+						"app.onboarding_completed": "false",
+					};
+				}
+				return baseInvokeImpl?.(command, args[0] as undefined);
+			},
+		);
+
+		try {
+			apiMocks.requestQuit.mockReset();
+			render(<App />);
+			await screen.findByLabelText("Helmor onboarding");
+
+			await waitForTauriEventListener("helmor://quit-requested");
+			emitTauriEvent("helmor://quit-requested");
+
+			await waitFor(() => {
+				expect(apiMocks.requestQuit).toHaveBeenCalledWith(false);
+			});
+		} finally {
+			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));
+		}
+	});
+
 	it("closes the current session when macOS emits the close-current-session event", async () => {
 		await renderAppReady();
 
+		await waitForTauriEventListener("helmor://close-current-session");
 		emitTauriEvent("helmor://close-current-session");
 
 		await waitFor(() => {

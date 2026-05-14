@@ -100,6 +100,43 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
+/// Result of a windowed historical load: the tail-most records plus a flag
+/// indicating whether older records exist beyond what was returned.
+pub struct WindowedHistoricalRecords {
+    pub records: Vec<HistoricalRecord>,
+    pub has_more: bool,
+}
+
+/// Load the trailing `tail_limit` historical records for a session, ordered
+/// ascending (oldest -> newest within the window). When `tail_limit` is
+/// `None`, behaves like `list_session_historical_records` and reports
+/// `has_more = false`.
+pub fn list_session_historical_records_windowed(
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    let connection = db::read_conn()?;
+    list_session_historical_records_windowed_with_connection(&connection, session_id, tail_limit)
+}
+
+/// All `provider_session_id`s belonging to a workspace's Claude sessions.
+/// Includes hidden sessions — they can be unhidden and resumed later, so
+/// migrators (e.g. local→worktree cwd change) need to cover them too.
+pub fn list_claude_provider_session_ids(workspace_id: &str) -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+            SELECT provider_session_id
+            FROM sessions
+            WHERE workspace_id = ?1
+              AND agent_type = 'claude'
+              AND provider_session_id IS NOT NULL
+            "#,
+    )?;
+    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 fn adjacent_visible_session_id(
     transaction: &Transaction<'_>,
     workspace_id: &str,
@@ -137,6 +174,58 @@ fn list_session_historical_records_with_connection(
     connection: &Connection,
     session_id: &str,
 ) -> Result<Vec<HistoricalRecord>> {
+    Ok(
+        list_session_historical_records_windowed_with_connection(connection, session_id, None)?
+            .records,
+    )
+}
+
+fn list_session_historical_records_windowed_with_connection(
+    connection: &Connection,
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    // Strategy:
+    //  - With `tail_limit`: count total rows so we know `has_more`, then
+    //    pull the trailing N rows via `ORDER BY ... DESC LIMIT N` and
+    //    reverse to restore chronological order. The DESC + LIMIT lets
+    //    SQLite stop early — for a 5000-msg session asking for the last
+    //    200 we touch ~200 rows, not 5000.
+    //  - Without `tail_limit`: original full scan.
+    if let Some(limit) = tail_limit {
+        let total: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .context("Failed to count session messages")?;
+
+        let mut statement = connection.prepare(
+            r#"
+                SELECT
+                  sm.id,
+                  sm.role,
+                  sm.content,
+                  sm.created_at
+                FROM session_messages sm
+                WHERE sm.session_id = ?1
+                ORDER BY sm.sent_at DESC, sm.rowid DESC
+                LIMIT ?2
+                "#,
+        )?;
+
+        let rows = statement.query_map(
+            rusqlite::params![session_id, limit as i64],
+            map_historical_row,
+        )?;
+
+        let mut records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        records.reverse();
+        let has_more = (total as usize) > records.len();
+        return Ok(WindowedHistoricalRecords { records, has_more });
+    }
+
     let mut statement = connection.prepare(
         r#"
             SELECT
@@ -150,24 +239,29 @@ fn list_session_historical_records_with_connection(
             "#,
     )?;
 
-    let rows = statement.query_map([session_id], |row| {
-        let content: String = row.get(2)?;
-        // After the user_prompt migration the column is JSON-only. We still
-        // try-parse instead of unwrapping so a corrupted row can't bring the
-        // whole load down — `None` flows through to the adapter which renders
-        // a system "Event" placeholder.
-        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+    let rows = statement.query_map([session_id], map_historical_row)?;
+    let records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(WindowedHistoricalRecords {
+        records,
+        has_more: false,
+    })
+}
 
-        Ok(HistoricalRecord {
-            id: row.get(0)?,
-            role: row.get(1)?,
-            content,
-            parsed_content,
-            created_at: row.get(3)?,
-        })
-    })?;
+fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRecord> {
+    let content: String = row.get(2)?;
+    // After the user_prompt migration the column is JSON-only. We still
+    // try-parse instead of unwrapping so a corrupted row can't bring the
+    // whole load down — `None` flows through to the adapter which renders
+    // a system "Event" placeholder.
+    let parsed_content = serde_json::from_str::<Value>(&content).ok();
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    Ok(HistoricalRecord {
+        id: row.get(0)?,
+        role: row.get(1)?,
+        content,
+        parsed_content,
+        created_at: row.get(3)?,
+    })
 }
 
 // ---- Session read/unread functions ----
@@ -346,23 +440,39 @@ fn default_session_title_for_action_kind_with_workspace(
     Ok(kind.default_title_for_change_request(change_request_name))
 }
 
+/// Optional per-session config carried at create time. Inspector helpers
+/// (Create PR/MR, Review) push the user's configured model/effort/fast-mode
+/// here so the new session row is born with the right values — the composer
+/// then reads them off the row via the normal `currentSession` chain instead
+/// of routing them through a transient pendingPromptForSession override.
+#[derive(Debug, Default, Clone)]
+pub struct CreateSessionOverrides<'a> {
+    pub model: Option<&'a str>,
+    pub effort_level: Option<&'a str>,
+    pub fast_mode: Option<bool>,
+}
+
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
+    overrides: CreateSessionOverrides<'_>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::write_conn()?;
 
-    // `model` is left NULL on create: the frontend owns model selection via
-    // `settings.defaultModelId` (kept valid by `useEnsureDefaultModel`), and
-    // the value gets persisted into `sessions.model` by the agent streaming
-    // finalizer on the first message. Reading settings here would be a
-    // redundant second source of truth.
-    let default_effort = settings::load_setting_value("app.default_effort")
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "high".to_string());
+    // Effort falls back to the user setting when the caller doesn't pin one
+    // (matches the historical behaviour). Callers that want to force a value
+    // — e.g. PR/MR creation using settings.prEffort — pass it via overrides.
+    let effort_level = match overrides.effort_level {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => settings::load_setting_value("app.default_effort")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "high".to_string()),
+    };
+    let model = overrides.model.filter(|s| !s.is_empty());
+    let fast_mode = overrides.fast_mode.unwrap_or(false);
 
     let transaction = connection
         .transaction()
@@ -392,8 +502,8 @@ pub fn create_session(
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             (
                 &session_id,
@@ -401,7 +511,9 @@ pub fn create_session(
                 &title,
                 permission_mode.unwrap_or("default"),
                 action_kind,
-                &default_effort,
+                model,
+                &effort_level,
+                fast_mode as i64,
             ),
         )
         .context("Failed to create session")?;
@@ -438,6 +550,25 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
+/// (model, agent_type) for a session — provider hint for `resolve_model`
+/// when ids like `"default"` are ambiguous.
+pub fn get_session_model_and_provider(
+    session_id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let conn = db::read_conn()?;
+    let row: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT model, agent_type FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("Failed to read model+provider for session {session_id}"))?;
+    Ok((
+        row.0.filter(|s| !s.is_empty()),
+        row.1.filter(|s| !s.is_empty()),
+    ))
+}
+
 /// Read the opaque `context_usage_meta` JSON for the composer's
 /// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
 /// the ring renders a placeholder either way and the frontend RPC contract
@@ -463,6 +594,84 @@ fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Opt
         }
     };
     Ok(meta.filter(|s| !s.is_empty()))
+}
+
+/// Read the opaque `codex_goal_meta` JSON for the panel-header goal banner.
+/// `None` means no active goal (cleared, never set, or unknown session).
+pub fn get_session_codex_goal(session_id: &str) -> Result<Option<String>> {
+    let conn = db::read_conn()?;
+    let meta: Option<String> = match conn.query_row(
+        "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to read codex_goal_meta for session {session_id}")
+            });
+        }
+    };
+    Ok(meta.filter(|s| !s.is_empty()))
+}
+
+/// One row in `list_session_drafts`. The `state` payload is whatever
+/// JSON the frontend stored — opaque to Rust (Lexical SerializedEditorState
+/// for chat composer drafts). Empty / NULL rows are filtered out before
+/// returning so the caller never has to distinguish "no draft" from
+/// "empty-string draft".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDraftRow {
+    pub session_id: String,
+    pub draft_state: String,
+}
+
+/// Bulk-load every session that currently has a non-empty draft. Called
+/// once at app boot to hydrate the in-memory draft map; subsequent
+/// reads / writes go through the per-session `set_session_draft` path.
+pub fn list_session_drafts() -> Result<Vec<SessionDraftRow>> {
+    let conn = db::read_conn()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, draft_state FROM sessions \
+             WHERE draft_state IS NOT NULL AND draft_state <> ''",
+        )
+        .context("Failed to prepare list_session_drafts query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SessionDraftRow {
+                session_id: row.get(0)?,
+                draft_state: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            })
+        })
+        .context("Failed to query session drafts")?;
+    let mut out = Vec::new();
+    for row in rows {
+        let row = row.context("Failed to read draft row")?;
+        if !row.draft_state.is_empty() {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+/// Persist (or clear) a single session's draft. Pass `None` to clear.
+/// Returns `Ok(false)` if the session row doesn't exist — caller can
+/// silently drop the write rather than surface an error.
+pub fn set_session_draft(session_id: &str, draft_state: Option<&str>) -> Result<bool> {
+    let conn = db::write_conn()?;
+    // Treat "" as "clear" — frontend can't always send None cleanly
+    // through the IPC layer, and the loader filter already drops empties.
+    let normalized = draft_state.map(str::trim).filter(|s| !s.is_empty());
+    let updated = conn
+        .execute(
+            "UPDATE sessions SET draft_state = ?1 WHERE id = ?2",
+            (normalized, session_id),
+        )
+        .with_context(|| format!("Failed to update draft for session {session_id}"))?;
+    Ok(updated > 0)
 }
 
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
@@ -672,8 +881,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, status) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         ).unwrap();
         conn.execute(
             "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test Session')",
@@ -700,6 +909,51 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn windowed_loader_returns_tail_and_reports_has_more() {
+        // Tail-window load: ask for the last N records out of M (where M > N).
+        // The query should:
+        //   - Return exactly N records.
+        //   - Restore chronological order (oldest -> newest within the window).
+        //   - Report has_more = true since older records exist.
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        for i in 1..=10 {
+            let id = format!("m{i:02}");
+            // sent_at lets us assert ordering deterministically; rowid would
+            // already do it but the production query orders on sent_at first.
+            let sent_at = format!("2026-01-01T00:00:{i:02}");
+            conn.execute(
+                "INSERT INTO session_messages (id, session_id, role, content, sent_at) VALUES (?1, 's1', 'user', '\"x\"', ?2)",
+                [&id, &sent_at],
+            )
+            .unwrap();
+        }
+
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(3)).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["m08", "m09", "m10"],
+            "tail window should return the trailing rows in chronological order",
+        );
+        assert!(has_more, "older records exist beyond the window");
+
+        // Window larger than the row count: returns everything, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(100))
+                .unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
+
+        // No window: full scan, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", None).unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
     }
 
     #[test]
