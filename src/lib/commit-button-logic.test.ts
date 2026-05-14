@@ -339,6 +339,28 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("merge-blocked");
 		});
 
+		it("returns merge when GitHub reports passing checks with hooks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "HAS_HOOKS",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("merge");
+		});
+
 		it("returns checks-running when GitHub reports blocked because checks are active", () => {
 			expect(
 				deriveCommitButtonMode(

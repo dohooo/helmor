@@ -197,7 +197,7 @@ describe("GitSectionHeader forge onboarding", () => {
 		expect(screen.getByText("!182").closest("button")?.className).toContain(
 			"border-[var(--workspace-pr-checks-running-accent)]",
 		);
-		expect(screen.getByTestId("git-header-shimmer")).toBeInTheDocument();
+		expect(screen.queryByTestId("git-header-shimmer")).not.toBeInTheDocument();
 	});
 
 	it("shows branch-protection blocks as a blocked merge state", () => {
@@ -218,7 +218,7 @@ describe("GitSectionHeader forge onboarding", () => {
 		expect(button.className).toContain(
 			"border-[var(--workspace-pr-closed-accent)]",
 		);
-		expect(screen.getByTestId("git-header-shimmer")).toBeInTheDocument();
+		expect(screen.queryByTestId("git-header-shimmer")).not.toBeInTheDocument();
 	});
 
 	it("shows the shimmer on the first cold fetch (isRefreshing)", () => {

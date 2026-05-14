@@ -131,20 +131,13 @@ export function GitSectionHeader({
 	//      mergeability (`mergeable === "UNKNOWN"`). Without this cue, a
 	//      grayed-out merge button looks broken — the user can't tell whether
 	//      it's a transient sync or a permanent block.
-	//   3. Pending/running checks: the CTA stays clickable for an explicit
-	//      bypass, but the shimmer makes clear this is not the green path.
-	//   4. Branch protection blocks, such as unresolved conversations.
 	// We deliberately do NOT shimmer for:
 	//   - Background polling on stable data (would be noisy).
 	//   - Active lifecycle phases (creating/streaming/verifying) — the button
 	//     itself shows a busy spinner, additional shimmer is redundant.
 	const [forgeConnecting, setForgeConnecting] = useState(false);
 	const isComputing =
-		isRefreshing ||
-		commitButtonState === "disabled" ||
-		commitButtonMode === "checks-running" ||
-		commitButtonMode === "merge-blocked" ||
-		forgeConnecting;
+		isRefreshing || commitButtonState === "disabled" || forgeConnecting;
 	const showShimmer = useMinDisplayDuration(
 		isComputing,
 		SHIMMER_MIN_DISPLAY_MS,

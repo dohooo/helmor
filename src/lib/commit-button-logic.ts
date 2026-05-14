@@ -52,7 +52,6 @@ const BLOCKED_MERGE_STATE_STATUSES = new Set([
 	"BEHIND",
 	"BLOCKED",
 	"DRAFT",
-	"HAS_HOOKS",
 	"UNSTABLE",
 ]);
 
