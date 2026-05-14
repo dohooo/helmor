@@ -137,7 +137,7 @@ function SpawnAgentRow({
 				className={cn(
 					"flex w-full flex-wrap items-center gap-x-1.5 gap-y-0 text-left",
 					tokens.muted,
-					expandable ? "cursor-pointer" : "cursor-default",
+					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<Bot
@@ -204,7 +204,7 @@ export function SubAgentSpawnGroup({ parts }: { parts: ToolCallPart[] }) {
 			<button
 				type="button"
 				onClick={() => setOpen((v) => !v)}
-				className="flex w-fit cursor-pointer items-center gap-1.5 py-0.5 text-left text-[12px] text-muted-foreground"
+				className="flex w-fit cursor-interactive items-center gap-1.5 py-0.5 text-left text-[12px] text-muted-foreground"
 			>
 				<Sparkles
 					className="size-3.5 shrink-0 text-muted-foreground"
@@ -281,7 +281,7 @@ function SubAgentWaitRow({ part }: { part: ToolCallPart }) {
 				disabled={!hasBodies}
 				className={cn(
 					"flex w-fit items-center gap-1.5 py-0.5 text-left text-[12px] text-muted-foreground",
-					hasBodies ? "cursor-pointer" : "cursor-default",
+					hasBodies ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<Sparkles

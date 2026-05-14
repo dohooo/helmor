@@ -55,9 +55,9 @@ const GLAB_SHA256 = {
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
 const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.128.0": {
-		arm64: "25499d957ae18d317cd13012750e681a60a1d7ce45f577c6f07e53d374199d9b",
-		x64: "1f4ffa3c70c243c2993dedb67635f6a98c13d3f2b86a5caa445ef762532fc21f",
+	"0.130.0": {
+		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
+		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
 	},
 };
 
@@ -67,9 +67,9 @@ const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
 const CLAUDE_CODE_SHA256: Readonly<
 	Record<string, { arm64: string; x64: string }>
 > = {
-	"2.1.126": {
-		arm64: "8ef17e23ed2987a3fdd39beae7750acef7b45026c9b7a9384d98a8808c4ba5f8",
-		x64: "0aa89a9bfc0b3667bc652c21df2e8cb09a26b32f8c4faf11b94d2128b96acffc",
+	"2.1.139": {
+		arm64: "ed9a4c64c8b5374da8389ff6aa4b58fce7a792f90ef2261a14445d9082a80799",
+		x64: "71d18ce1d457f37b427bdcb5933424c83bf22b39b2b7628415028585b832fe6c",
 	},
 };
 

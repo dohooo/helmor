@@ -58,7 +58,7 @@ import {
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-pointer",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -420,7 +420,7 @@ export const WorkspaceRowItem = memo(
 										"size-5 rounded-md p-0 text-muted-foreground",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
-											: "cursor-pointer hover:text-foreground",
+											: "cursor-interactive hover:text-foreground",
 									)}
 								>
 									{actionIcon}
@@ -459,7 +459,7 @@ export const WorkspaceRowItem = memo(
 									"size-5 rounded-md p-0 text-muted-foreground",
 									workspaceActionsDisabled
 										? "cursor-not-allowed opacity-60"
-										: "cursor-pointer hover:text-destructive",
+										: "cursor-interactive hover:text-destructive",
 								)}
 							>
 								<Trash2 className="size-3.5" strokeWidth={2.1} />

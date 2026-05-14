@@ -315,6 +315,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Expand terminals on hover"
+										releaseMarker={{ kind: "feature" }}
+										description="Enlarge inspector terminals when the cursor rests over them."
+									>
+										<Switch
+											checked={settings.terminalHoverExpansion}
+											onCheckedChange={(checked) =>
+												updateSettings({ terminalHoverExpansion: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Always show context usage"
 										description="By default, context usage is only shown when more than 70% is used."
 									>
@@ -531,15 +543,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="PR / MR model"
-										description="Model for PRs and MRs"
+										title="Action model"
+										description="Model for PRs/MRs and commit-and-push"
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={settings.prModelId ?? settings.defaultModelId}
 										effort={settings.prEffort ?? settings.defaultEffort}
 										fastMode={settings.prFastMode ?? settings.defaultFastMode}
-										ariaPrefix="PR / MR"
+										ariaPrefix="Action"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined) patch.prModelId = p.modelId;
@@ -680,7 +692,7 @@ function ModelSettingRow({
 				<DropdownMenu>
 					<DropdownMenuTrigger
 						className={cn(
-							"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+							"flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 							"min-w-0 flex-1 gap-1.5",
 						)}
 					>
@@ -724,7 +736,7 @@ function ModelSettingRow({
 							"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 							"shrink-0 gap-1.5",
 							supportsEffort
-								? "cursor-pointer text-foreground hover:bg-muted/50"
+								? "cursor-interactive text-foreground hover:bg-muted/50"
 								: "cursor-not-allowed text-muted-foreground opacity-60",
 						)}
 					>
@@ -745,7 +757,7 @@ function ModelSettingRow({
 				</DropdownMenu>
 				<div
 					className={cn(
-						"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+						"flex h-8 cursor-interactive items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 						"shrink-0 gap-2",
 					)}
 				>

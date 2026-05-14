@@ -2002,6 +2002,7 @@ export type ForgeActionStatus = {
 	changeRequest: ChangeRequestInfo | null;
 	reviewDecision?: string | null;
 	mergeable?: string | null;
+	mergeStateStatus?: string | null;
 	deployments: ForgeActionItem[];
 	checks: ForgeActionItem[];
 	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";

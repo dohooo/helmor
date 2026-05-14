@@ -337,7 +337,7 @@ export function AskUserQuestionRenderer({
 				<div
 					data-ask-option-row="other"
 					className={cn(
-						"cursor-pointer px-2 py-1.5",
+						"cursor-interactive px-2 py-1.5",
 						disabled && "cursor-not-allowed opacity-60",
 					)}
 					onClick={() => {

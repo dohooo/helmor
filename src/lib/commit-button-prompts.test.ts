@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ForgeDetection } from "./api";
-import { buildCommitButtonPrompt } from "./commit-button-prompts";
+import {
+	buildCommitButtonPrompt,
+	usesActionModelOverride,
+} from "./commit-button-prompts";
 
 const GITLAB_FORGE: ForgeDetection = {
 	provider: "gitlab",
@@ -35,6 +38,15 @@ const GITHUB_FORGE: ForgeDetection = {
 };
 
 describe("buildCommitButtonPrompt", () => {
+	it("uses the action model only for simple bounded action sessions", () => {
+		expect(usesActionModelOverride("create-pr")).toBe(true);
+		expect(usesActionModelOverride("commit-and-push")).toBe(true);
+		expect(usesActionModelOverride("open-pr")).toBe(true);
+		expect(usesActionModelOverride("fix")).toBe(false);
+		expect(usesActionModelOverride("resolve-conflicts")).toBe(false);
+		expect(usesActionModelOverride("push")).toBe(false);
+	});
+
 	it("appends create-pr preferences after the built-in prompt", () => {
 		expect(
 			buildCommitButtonPrompt(

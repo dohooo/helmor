@@ -409,7 +409,7 @@ export function ActionsSection({
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
 											aria-label={reviewPending ? "Reviewing" : undefined}
-											className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
 												{reviewPending ? (
@@ -463,7 +463,7 @@ export function ActionsSection({
 												}
 												void onCommitAction?.(action.mode!);
 											}}
-											className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
 											disabled={
 												action.kind === "commit" ? actionDisabled : syncPending
 											}

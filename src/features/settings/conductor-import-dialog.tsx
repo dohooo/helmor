@@ -475,7 +475,7 @@ function WorkspaceRow({
 	return (
 		<label
 			htmlFor={checkboxId}
-			className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
+			className="flex w-full cursor-interactive items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
 		>
 			<Checkbox
 				id={checkboxId}

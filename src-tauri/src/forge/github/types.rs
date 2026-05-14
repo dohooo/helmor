@@ -90,6 +90,7 @@ pub(super) struct ActionPullRequestNode {
     pub merged: bool,
     pub review_decision: Option<String>,
     pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
     pub is_cross_repository: bool,
     pub head_repository_owner: Option<HeadRepositoryOwner>,
     pub commits: ActionCommitConnection,

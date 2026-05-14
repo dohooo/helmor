@@ -340,7 +340,7 @@ function ShortcutRow({
 										<button
 											type="button"
 											aria-label="Reset to default"
-											className="inline-flex size-[18px] cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
+											className="inline-flex size-[18px] cursor-interactive items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
 											onClick={handleReset}
 										>
 											<RotateCcw className="size-[11px]" strokeWidth={2} />
@@ -358,7 +358,7 @@ function ShortcutRow({
 								ref={shortcutButtonRef}
 								type="button"
 								className={cn(
-									"inline-flex h-8 min-w-[3.75rem] shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border/55 bg-background px-2 text-[12.5px] font-medium text-muted-foreground shadow-sm outline-none transition-[border-color,box-shadow,color,background-color] hover:border-primary/60 hover:bg-background focus:outline-none focus-visible:outline-none focus-visible:ring-0",
+									"inline-flex h-8 min-w-[3.75rem] shrink-0 cursor-interactive items-center justify-center rounded-lg border border-border/55 bg-background px-2 text-[12.5px] font-medium text-muted-foreground shadow-sm outline-none transition-[border-color,box-shadow,color,background-color] hover:border-primary/60 hover:bg-background focus:outline-none focus-visible:outline-none focus-visible:ring-0",
 									isRecording &&
 										"shortcut-recording-pulse relative overflow-visible border-primary bg-background text-primary shadow-none hover:border-primary hover:bg-background hover:text-primary",
 									shake && "shortcut-conflict-shake",

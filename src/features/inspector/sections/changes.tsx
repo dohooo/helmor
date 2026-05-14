@@ -763,7 +763,7 @@ function TreeNodeList({
 					return (
 						<div key={node.path}>
 							<div
-								className="flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
+								className="flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
 								style={{ paddingLeft: `${depth * 12 + 8}px` }}
 								onClick={() => onToggle(node.path)}
 								onKeyDown={(event) => {
@@ -817,7 +817,7 @@ function TreeNodeList({
 				const row = (
 					<div
 						className={cn(
-							"group/row flex cursor-pointer items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+							"group/row flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 							selected &&
 								(editorMode
 									? "bg-accent text-foreground"
@@ -916,7 +916,7 @@ function ChangesFlatView({
 				>
 					<div
 						className={cn(
-							"group/row flex cursor-pointer items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+							"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
 							change.absolutePath === activeEditorPath &&
 								(editorMode
 									? "bg-accent text-foreground"

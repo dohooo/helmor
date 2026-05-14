@@ -81,7 +81,7 @@ export function ScopeMultiSelect<T extends string>({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -102,7 +102,7 @@ export function ScopeMultiSelect<T extends string>({
 										event.stopPropagation();
 										toggleValue(option.value);
 									}}
-									className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+									className="inline-flex size-4 cursor-interactive items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 								>
 									<X className="size-3" strokeWidth={2} />
 								</button>
@@ -177,7 +177,7 @@ export function LabelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -200,7 +200,7 @@ export function LabelMultiSelect({
 											event.stopPropagation();
 											toggleValue(label);
 										}}
-										className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+										className="inline-flex size-4 cursor-interactive items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 									>
 										<X className="size-3" strokeWidth={2} />
 									</button>
@@ -275,7 +275,7 @@ export function SettingsSelect<T extends string>({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-9 w-[180px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
+					className="h-9 w-[180px] cursor-interactive justify-between gap-2 px-3 text-[13px]"
 				>
 					<span className="truncate">{selected.label}</span>
 					<ChevronDown
@@ -292,7 +292,7 @@ export function SettingsSelect<T extends string>({
 					<DropdownMenuItem
 						key={option.value}
 						onSelect={() => onChange(option.value)}
-						className="cursor-pointer text-[13px]"
+						className="cursor-interactive text-[13px]"
 					>
 						{option.label}
 					</DropdownMenuItem>
@@ -323,7 +323,7 @@ export function RepoPicker({
 					type="button"
 					variant="outline"
 					disabled={repositories.length === 0}
-					className="h-10 w-[280px] cursor-pointer justify-between gap-2 px-3 text-[13px]"
+					className="h-10 w-[280px] cursor-interactive justify-between gap-2 px-3 text-[13px]"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						{selected ? (
@@ -349,7 +349,7 @@ export function RepoPicker({
 					<DropdownMenuItem
 						key={entry.repoFilter}
 						onSelect={() => onSelect(entry.repoFilter)}
-						className="cursor-pointer gap-2 text-[13px]"
+						className="cursor-interactive gap-2 text-[13px]"
 					>
 						<RepoAvatar repo={entry.repository} />
 						<span className="min-w-0 flex-1 truncate">
