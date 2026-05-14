@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- [#297](https://github.com/dohooo/helmor/pull/297) [`bea9849`](https://github.com/dohooo/helmor/commit/bea984907dd119e3d889eb5d2e6af56867dd570c) Thanks [@harmonyvt](https://github.com/harmonyvt)! - Support Codex API-key providers like Azure: onboarding detects them from `~/.codex/config.toml`, and Helmor inherits the matching environment variable from your login shell so Codex works even when launched from Finder.
+
+### Patch Changes
+
+- [#554](https://github.com/dohooo/helmor/pull/554) [`6613c85`](https://github.com/dohooo/helmor/commit/6613c853b2a56380169c80068e65308b35366fda) Thanks [@natllian](https://github.com/natllian)! - Fix local workspaces so PR targets stay separate from the current branch and checkout changes update Helmor's branch state.
+
+- [#545](https://github.com/dohooo/helmor/pull/545) [`ab30148`](https://github.com/dohooo/helmor/commit/ab30148501e3972628d1e7baefc718cb61999629) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Show PR check and merge-blocking status before merging so the Git header no longer treats pending checks as ready to merge.
+
+- [#525](https://github.com/dohooo/helmor/pull/525) [`ad578f7`](https://github.com/dohooo/helmor/commit/ad578f764458d8827260043d15cb5fa6178077c8) Thanks [@david-engelmann](https://github.com/david-engelmann)! - Stop run-script and embedded-terminal process groups on graceful quit so dev servers, watch processes, and shell sessions don't outlive Helmor as orphan process trees.
+
+- [#539](https://github.com/dohooo/helmor/pull/539) [`829332b`](https://github.com/dohooo/helmor/commit/829332bf2861004b61afbf677d57a665529746e3) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Add an Appearance setting for terminal fonts so embedded terminals can use a separate custom font without losing their buffer when it changes.
+
+- [#523](https://github.com/dohooo/helmor/pull/523) [`33e6d0b`](https://github.com/dohooo/helmor/commit/33e6d0b3b63269d8083dace11bda602a63a9f095) Thanks [@david-engelmann](https://github.com/david-engelmann)! - Inject per-workspace `HELMOR_PORT` and `HELMOR_PORT_COUNT` env vars into run/setup scripts and embedded terminals so dev servers in parallel workspaces bind deterministic, non-overlapping port ranges.
+
 ## 0.21.4
 
 ### Patch Changes

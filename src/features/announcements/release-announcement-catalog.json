@@ -2,6 +2,24 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.22.0",
+			"items": [
+				{
+					"text": "The Git header now shows when PR checks are still running or GitHub is blocking a merge."
+				},
+				{
+					"text": "You can now choose a separate font for embedded terminals.",
+					"action": {
+						"label": "Open Appearance",
+						"value": {
+							"type": "openSettings",
+							"section": "appearance"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.21.4",
 			"items": [
 				{
