@@ -23,6 +23,8 @@
 mod cache;
 mod credentials;
 mod keychain;
+#[cfg(target_os = "linux")]
+mod linux_credentials;
 mod process;
 mod refresh;
 mod user_agent;

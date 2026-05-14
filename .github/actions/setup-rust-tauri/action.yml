@@ -1,5 +1,5 @@
 name: Setup Rust Tauri
-description: Setup Rust toolchain and cache for macOS Tauri builds
+description: Setup Rust toolchain and cache for Tauri builds (macOS + Linux)
 
 runs:
   using: composite
@@ -12,6 +12,14 @@ runs:
         # are host-local and invalidate sccache lookups, so sccache never
         # hits. Disable incremental in CI only.
         echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+        # sccache object cache lives in different default dirs per OS.
+        # Pin via SCCACHE_DIR so actions/cache below can target it
+        # without an OS-conditional path expression.
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
+        else
+          echo "SCCACHE_DIR=$HOME/Library/Caches/Mozilla.sccache" >> "$GITHUB_ENV"
+        fi
 
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -21,7 +29,7 @@ runs:
       with:
         cache-on-failure: true
         cache-workspace-crates: true
-        shared-key: macos-tauri-v1
+        shared-key: ${{ runner.os }}-tauri-v1
         workspaces: src-tauri -> target
 
     # Persist sccache's default object cache to complement rust-cache's
@@ -30,9 +38,9 @@ runs:
     - name: Cache sccache objects
       uses: actions/cache@v4
       with:
-        path: ~/Library/Caches/Mozilla.sccache
-        key: sccache-macos-${{ hashFiles('src-tauri/Cargo.lock') }}
-        restore-keys: sccache-macos-
+        path: ${{ env.SCCACHE_DIR }}
+        key: sccache-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+        restore-keys: sccache-${{ runner.os }}-
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest

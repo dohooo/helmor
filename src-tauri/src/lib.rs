@@ -462,7 +462,9 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
+#[cfg(target_os = "macos")]
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
 
 #[cfg(target_os = "macos")]
@@ -530,6 +532,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_close_current_session_requested(app_handle: &tauri::AppHandle) {
     if let Err(e) = app_handle.emit("helmor://close-current-session", ()) {
         tracing::warn!(error = %e, "Failed to emit close-current-session event");

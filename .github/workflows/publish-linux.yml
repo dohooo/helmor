@@ -1,0 +1,226 @@
+name: Publish Release (Linux)
+
+# Linux-only publish for the jcadmin/helmor fork. Matrix produces:
+#   - Linux x86_64 .deb + .AppImage updater artifact
+# Triggered separately from the upstream macOS publish so they don't
+# collide on the same tag namespace — Linux releases use `v*-linux*`
+# (e.g. v0.21.3-linux1), upstream uses plain `v*`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the GitHub release as a draft"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "v*-linux*"
+
+concurrency:
+  group: publish-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+
+jobs:
+  preflight:
+    name: Release Preflight
+    # ubuntu-22.04 (glibc 2.35) — wider runtime compat than 24.04. Match
+    # this against the runners used in build-and-publish to keep glibc
+    # symbol versions consistent between toolchain and bundled binary.
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+      draft: ${{ steps.release-mode.outputs.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Verify release config
+        run: |
+          bun run release:verify
+          test -n "${HELMOR_UPDATER_PUBKEY}"
+          test -n "${HELMOR_UPDATER_ENDPOINTS}"
+          test -n "${TAURI_SIGNING_PRIVATE_KEY}"
+        env:
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate pushed tag matches app version
+        if: github.ref_type == 'tag'
+        run: |
+          # Linux tags follow `v<semver>-linux<n>` so strip the `-linux*`
+          # suffix before comparing against the app version in package.json.
+          stripped="${GITHUB_REF_NAME%-linux*}"
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "${stripped}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} (stripped: ${stripped}) does not match app version ${expected}"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          {
+            echo 'release_body<<EOF'
+            bun run release:notes -- "${{ steps.version.outputs.version }}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release mode
+        id: release-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build and Publish (${{ matrix.target-triple }})
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target-triple: x86_64-unknown-linux-gnu
+            tauri-args: "--target x86_64-unknown-linux-gnu --bundles deb,appimage"
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux Tauri system dependencies
+        # Tauri v2 on Linux needs WebKit + GTK headers to compile and a
+        # FUSE2 runtime for the AppImage bundler (linuxdeploy). patchelf
+        # is required by the AppImage post-processor; rsvg loads the
+        # tray icon at runtime; libayatana-appindicator hosts the tray.
+        # On 22.04 the FUSE2 package is `libfuse2`; 24.04 renamed it
+        # to `libfuse2t64`. Pin to 22.04 so we can use the stable name.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            libfuse2
+
+      - name: Setup JS toolchain
+        uses: ./.github/actions/setup-js
+
+      - name: Setup Rust Tauri
+        uses: ./.github/actions/setup-rust-tauri
+
+      - name: Build + stage bundle binaries
+        uses: ./.github/actions/build-sidecar
+        with:
+          target-triple: ${{ matrix.target-triple }}
+
+      # TODO(linux-appimage): tauri-action will fail on `--bundles appimage`
+      #   because linuxdeploy aborts on our self-contained binaries
+      #   (helmor-sidecar, vendor/claude-code, vendor/codex are bun
+      #   --compile; vendor/gh, vendor/glab are static Go). The .deb
+      #   bundle in the same step succeeds. Before this workflow goes
+      #   live, swap in scripts/bundle-appimage-linux.sh:
+      #     1. Run tauri-action with `--bundles deb` only (or this step
+      #        with `|| true` so the appimage failure doesn't fail the
+      #        job).
+      #     2. Add a follow-up `run:` step that invokes
+      #        scripts/bundle-appimage-linux.sh on the AppDir tauri
+      #        leaves behind, producing the final .AppImage.
+      #     3. Manually upload both artifacts to the GitHub release
+      #        (since tauri-action would otherwise miss the .AppImage
+      #        we built outside its flow).
+      #   See LINUX_BUILD.md "AppImage may need a manual repackage step"
+      #   for the local equivalent.
+      - name: Build and publish (${{ matrix.target-triple }})
+        id: tauri
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          TAURI_TARGET_TRIPLE: ${{ matrix.target-triple }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HELMOR_UPDATER_PUBKEY: ${{ secrets.HELMOR_UPDATER_PUBKEY }}
+          HELMOR_UPDATER_ENDPOINTS: ${{ secrets.HELMOR_UPDATER_ENDPOINTS }}
+        with:
+          tagName: v__VERSION__-linux1
+          releaseName: Helmor v__VERSION__ (Linux)
+          releaseBody: ${{ needs.preflight.outputs.release_body }}
+          releaseDraft: ${{ needs.preflight.outputs.draft == 'true' }}
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.tauri-args }}
+          # Force tauri-action to use bun instead of auto-detecting (it only knows npm/yarn/pnpm)
+          tauriScript: bun run tauri
+
+      - name: Verify Linux bundles (${{ matrix.target-triple }})
+        shell: bash
+        run: |
+          bundle_root="src-tauri/target/${{ matrix.target-triple }}/release/bundle"
+
+          deb_path=$(ls "${bundle_root}"/deb/Helmor_*_amd64.deb 2>/dev/null | head -1)
+          appimage_path=$(ls "${bundle_root}"/appimage/Helmor_*_amd64.AppImage 2>/dev/null | head -1)
+
+          if [ -z "${deb_path}" ] || [ ! -f "${deb_path}" ]; then
+            echo "::error::.deb bundle missing under ${bundle_root}/deb/"
+            exit 1
+          fi
+          if [ -z "${appimage_path}" ] || [ ! -f "${appimage_path}" ]; then
+            echo "::error::.AppImage bundle missing under ${bundle_root}/appimage/"
+            exit 1
+          fi
+
+          echo ".deb:"
+          file "${deb_path}"
+          ls -lh "${deb_path}"
+          dpkg-deb --info "${deb_path}" | head -20
+
+          echo ".AppImage:"
+          file "${appimage_path}"
+          ls -lh "${appimage_path}"
+
+  notify-marketing:
+    name: Notify marketing site
+    needs: [preflight, build-and-publish]
+    if: needs.preflight.outputs.draft == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Revalidate helmor.ai
+        env:
+          SECRET: ${{ secrets.HELMOR_MARKETING_REVALIDATE_SECRET }}
+        run: |
+          if [ -z "${SECRET}" ]; then
+            echo "HELMOR_MARKETING_REVALIDATE_SECRET not set; skipping"
+            exit 0
+          fi
+          curl --fail --silent --show-error \
+            --retry 3 --retry-delay 10 --retry-connrefused \
+            -X POST "https://helmor.ai/api/revalidate" \
+            -H "x-revalidate-secret: ${SECRET}" \
+            -H "content-type: application/json"

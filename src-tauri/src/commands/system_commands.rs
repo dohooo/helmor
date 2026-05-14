@@ -67,7 +67,26 @@ pub struct HelmorSkillsStatus {
     pub command: String,
 }
 
-/// Where Helmor installs its managed CLI entrypoint on macOS.
+/// Where Helmor installs its managed CLI entrypoint.
+///
+/// macOS: `/usr/local/bin/<name>` — the canonical Homebrew-style path that
+/// `$PATH` already covers for most users.
+///
+/// Linux: `~/.local/bin/<name>` — the XDG-recommended user-local bindir,
+/// which avoids needing `sudo` to drop a symlink in a system directory.
+/// The freedesktop.org `user-dirs` spec ensures this is on `$PATH` for
+/// modern distros; on older setups the user is told to add it.
+#[cfg(target_os = "macos")]
+fn cli_install_target() -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/usr/local/bin/{}", installed_cli_name()))
+}
+
+#[cfg(target_os = "linux")]
+fn cli_install_target() -> std::path::PathBuf {
+    home_dir().join(".local/bin").join(installed_cli_name())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn cli_install_target() -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/usr/local/bin/{}", installed_cli_name()))
 }
@@ -196,7 +215,19 @@ fn install_cli_symlink(
     {
         install_cli_symlink_elevated(bundled_cli, install_path)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        // Linux installs to ~/.local/bin (user-writable) so the unprivileged
+        // path above should normally succeed. Hitting this branch means the
+        // user-local install dir itself is not writable — likely a permissions
+        // problem on $HOME, not something `sudo` would fix.
+        anyhow::bail!(
+            "Failed to install the CLI to {}. Check write permissions on the directory, or run:\n  {}",
+            install_path.display(),
+            cli_install_remediation(bundled_cli, install_path)
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         anyhow::bail!(
             "Installing the CLI requires elevated privileges. Run:\n  {}",
@@ -310,6 +341,10 @@ fn build_elevated_install_script(
 
 /// Quote a path so it survives both `do shell script "..."` (AppleScript string
 /// literal) and the shell that AppleScript hands the script to.
+///
+/// Only `build_elevated_install_script` (macOS-only) calls this in the lib build;
+/// its unit tests run on every platform via `#[cfg(test)]`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn applescript_shell_arg(path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     // 1. Single-quote for the shell, escaping embedded single quotes via `'\''`.
@@ -1067,9 +1102,27 @@ fn reveal_file_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
         .context("open command failed")
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux: file managers vary widely in their "select this exact file" RPC
+/// surface (Nautilus, Dolphin, Nemo all differ). Falling back to opening
+/// the parent directory in the default file manager keeps a single code
+/// path that works everywhere — the user can spot the file there.
+#[cfg(target_os = "linux")]
+fn reveal_file_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
+    let target = path.parent().unwrap_or(path);
+    let status = std::process::Command::new("xdg-open").arg(target).status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => anyhow::bail!("xdg-open exited with status {s}"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("xdg-open not found, please install xdg-utils")
+        }
+        Err(error) => Err(anyhow::Error::new(error).context("xdg-open spawn failed")),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn reveal_file_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
-    anyhow::bail!("Showing images in Finder is only supported on macOS")
+    anyhow::bail!("Showing images in a file manager is only supported on macOS and Linux")
 }
 
 #[cfg(target_os = "macos")]
@@ -1081,9 +1134,23 @@ fn open_directory_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
         .context("open command failed")
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux: hand the directory to the default file manager via `xdg-open`.
+#[cfg(target_os = "linux")]
+fn open_directory_in_finder(path: &std::path::Path) -> anyhow::Result<()> {
+    let status = std::process::Command::new("xdg-open").arg(path).status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => anyhow::bail!("xdg-open exited with status {s}"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("xdg-open not found, please install xdg-utils")
+        }
+        Err(error) => Err(anyhow::Error::new(error).context("xdg-open spawn failed")),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn open_directory_in_finder(_path: &std::path::Path) -> anyhow::Result<()> {
-    anyhow::bail!("Opening Finder is only supported on macOS")
+    anyhow::bail!("Opening a file manager is only supported on macOS and Linux")
 }
 
 #[cfg(target_os = "macos")]
@@ -1117,11 +1184,100 @@ fn copy_image_file_to_clipboard(path: &std::path::Path) -> anyhow::Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
-    anyhow::bail!("Copying images is only supported on macOS")
+/// Linux: pipe the image bytes into a clipboard utility. Prefer `wl-copy`
+/// under Wayland and `xclip` under X11; treat the absence of both as a
+/// hard error rather than silently dropping the copy.
+#[cfg(target_os = "linux")]
+fn copy_image_file_to_clipboard(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mime = mime_for_image_path(path);
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("Failed to read image at {}", path.display()))?;
+
+    let prefer_wayland = std::env::var("XDG_SESSION_TYPE")
+        .map(|value| value.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false);
+
+    let attempts: &[(&str, &[&str])] = if prefer_wayland {
+        &[
+            ("wl-copy", &["--type", mime]),
+            ("xclip", &["-selection", "clipboard", "-t", mime, "-i"]),
+        ]
+    } else {
+        &[
+            ("xclip", &["-selection", "clipboard", "-t", mime, "-i"]),
+            ("wl-copy", &["--type", mime]),
+        ]
+    };
+
+    let mut last_spawn_error: Option<std::io::Error> = None;
+    for (program, args) in attempts {
+        let mut command = Command::new(program);
+        command.args(*args);
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::null());
+        command.stderr(Stdio::piped());
+
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                last_spawn_error = Some(error);
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!("{program} spawn failed")))
+            }
+        };
+
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin
+                .write_all(&bytes)
+                .with_context(|| format!("Failed to write image bytes to {program}"))?;
+        }
+        // Closing stdin signals EOF to wl-copy / xclip so they finish reading.
+        drop(child.stdin.take());
+
+        let output = child
+            .wait_with_output()
+            .with_context(|| format!("Failed to wait on {program}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "{program} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let _ = last_spawn_error;
+    anyhow::bail!("wl-copy or xclip required to copy images on Linux")
 }
 
+#[cfg(target_os = "linux")]
+fn mime_for_image_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        _ => "image/png",
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn copy_image_file_to_clipboard(_path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("Copying images is only supported on macOS and Linux")
+}
+
+#[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }

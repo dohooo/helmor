@@ -100,23 +100,43 @@ pub fn load_cursor_api_key() -> Option<String> {
 }
 
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {
-    let exe_dir = exe.parent()?;
-    let contents_dir = exe_dir.parent()?;
-    let resources_dir = contents_dir.join("Resources");
-    let claude_bin_name = if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
-    };
-    let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    // Linux dpkg / AppImage layout: `<prefix>/bin/helmor` with vendored
+    // agent binaries under `<prefix>/lib/Helmor/vendor/`. Same shape as
+    // `forge::bundled::resolve_for_exe` — keep them aligned.
+    #[cfg(target_os = "linux")]
+    {
+        let exe_dir = exe.parent()?;
+        let vendor = exe_dir.parent()?.join("lib").join("Helmor").join("vendor");
+        let claude_bin = vendor.join("claude-code/claude");
+        let codex_bin = vendor.join("codex/codex");
+        return Some(BundledAgentPaths {
+            claude_bin: claude_bin.is_file().then_some(claude_bin),
+            codex_bin: codex_bin.is_file().then_some(codex_bin),
+        });
+    }
 
-    let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
-    let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
+    // macOS: `<root>/Helmor.app/Contents/MacOS/Helmor` → `Resources/vendor/`.
+    // Windows: NSIS bundle uses the same `Resources/vendor/` shape.
+    #[cfg_attr(target_os = "linux", allow(unreachable_code))]
+    {
+        let exe_dir = exe.parent()?;
+        let contents_dir = exe_dir.parent()?;
+        let resources_dir = contents_dir.join("Resources");
+        let claude_bin_name = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
+        let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
 
-    Some(BundledAgentPaths {
-        claude_bin: claude_bin.is_file().then_some(claude_bin),
-        codex_bin: codex_bin.is_file().then_some(codex_bin),
-    })
+        let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
+        let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
+
+        Some(BundledAgentPaths {
+            claude_bin: claude_bin.is_file().then_some(claude_bin),
+            codex_bin: codex_bin.is_file().then_some(codex_bin),
+        })
+    }
 }
 
 impl SidecarProcess {
@@ -860,6 +880,7 @@ mod tests {
             .is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn bundled_agent_paths_resolve_from_running_app() {
         let root = tempfile::tempdir().unwrap();
@@ -882,5 +903,26 @@ mod tests {
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/codex/codex")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_dpkg_layout_resolves_bundled_agents() {
+        let root = tempfile::tempdir().unwrap();
+        let usr = root.path().join("usr");
+        let bin = usr.join("bin");
+        let vendor = usr.join("lib/Helmor/vendor");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(vendor.join("claude-code")).unwrap();
+        std::fs::create_dir_all(vendor.join("codex")).unwrap();
+        let exe = bin.join("helmor");
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(vendor.join("claude-code/claude"), b"x").unwrap();
+        std::fs::write(vendor.join("codex/codex"), b"x").unwrap();
+
+        let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
+
+        assert_eq!(paths.claude_bin.unwrap(), vendor.join("claude-code/claude"));
+        assert_eq!(paths.codex_bin.unwrap(), vendor.join("codex/codex"));
     }
 }

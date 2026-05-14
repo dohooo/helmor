@@ -71,20 +71,41 @@ fn resolve_from_running_exe() -> BundledForgeCliPaths {
 }
 
 fn resolve_for_exe(exe: &Path) -> Option<BundledForgeCliPaths> {
-    let exe_dir = exe.parent()?;
-    let contents_dir = exe_dir.parent()?;
-    let resources_dir = contents_dir.join("Resources");
+    // Linux dpkg / AppImage layout: `<prefix>/bin/helmor` with vendored
+    // binaries under `<prefix>/lib/Helmor/vendor/`. On a system .deb the
+    // prefix is `/usr`; under an AppImage AppDir it's `<AppDir>/usr`.
+    #[cfg(target_os = "linux")]
+    {
+        let exe_dir = exe.parent()?;
+        let prefix = exe_dir.parent()?;
+        let vendor = prefix.join("lib").join("Helmor").join("vendor");
+        let gh = vendor.join("gh/gh");
+        let glab = vendor.join("glab/glab");
+        return Some(BundledForgeCliPaths {
+            gh: gh.is_file().then_some(gh),
+            glab: glab.is_file().then_some(glab),
+        });
+    }
 
-    let gh_name = if cfg!(windows) { "gh.exe" } else { "gh" };
-    let glab_name = if cfg!(windows) { "glab.exe" } else { "glab" };
+    // macOS: `<root>/Helmor.app/Contents/MacOS/Helmor` → `Resources/vendor/`.
+    // Windows: NSIS bundle uses the same `<root>/Resources/vendor/` shape.
+    #[cfg_attr(target_os = "linux", allow(unreachable_code))]
+    {
+        let exe_dir = exe.parent()?;
+        let contents_dir = exe_dir.parent()?;
+        let resources_dir = contents_dir.join("Resources");
 
-    let gh = resources_dir.join(format!("vendor/gh/{gh_name}"));
-    let glab = resources_dir.join(format!("vendor/glab/{glab_name}"));
+        let gh_name = if cfg!(windows) { "gh.exe" } else { "gh" };
+        let glab_name = if cfg!(windows) { "glab.exe" } else { "glab" };
 
-    Some(BundledForgeCliPaths {
-        gh: gh.is_file().then_some(gh),
-        glab: glab.is_file().then_some(glab),
-    })
+        let gh = resources_dir.join(format!("vendor/gh/{gh_name}"));
+        let glab = resources_dir.join(format!("vendor/glab/{glab_name}"));
+
+        Some(BundledForgeCliPaths {
+            gh: gh.is_file().then_some(gh),
+            glab: glab.is_file().then_some(glab),
+        })
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -124,6 +145,7 @@ fn resolve_for_dev_workspace(workspace_root: &Path) -> BundledForgeCliPaths {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn resolve_finds_binaries_under_resources_vendor() {
         let root = tempfile::tempdir().unwrap();
@@ -146,6 +168,27 @@ mod tests {
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/glab/glab")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_dpkg_layout_resolves_vendor() {
+        let root = tempfile::tempdir().unwrap();
+        let usr = root.path().join("usr");
+        let bin = usr.join("bin");
+        let vendor = usr.join("lib/Helmor/vendor");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(vendor.join("gh")).unwrap();
+        std::fs::create_dir_all(vendor.join("glab")).unwrap();
+        let exe = bin.join("helmor");
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(vendor.join("gh/gh"), b"x").unwrap();
+        std::fs::write(vendor.join("glab/glab"), b"x").unwrap();
+
+        let paths = resolve_for_exe(&exe).unwrap();
+
+        assert_eq!(paths.gh.unwrap(), vendor.join("gh/gh"));
+        assert_eq!(paths.glab.unwrap(), vendor.join("glab/glab"));
     }
 
     #[test]
@@ -173,7 +216,7 @@ mod tests {
         assert_eq!(paths.glab.unwrap(), vendor.join("glab/glab"));
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, target_os = "macos"))]
     #[test]
     fn app_bundle_paths_win_over_debug_vendor() {
         let root = tempfile::tempdir().unwrap();
