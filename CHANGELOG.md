@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.21.4
+
+### Patch Changes
+
+- [#536](https://github.com/dohooo/helmor/pull/536) [`c1e0fa1`](https://github.com/dohooo/helmor/commit/c1e0fa19d659ab323fb44f380870854b6b9e975c) Thanks [@natllian](https://github.com/natllian)! - Fix model settings for action helpers:
+
+  - Keep Opus 4.7 selections for Review and Action models after restarting Helmor.
+  - Rename the PR/MR model setting to Action model and use it for create PR/MR, reopen PR/MR, and commit-and-push helpers.
+
+- [#541](https://github.com/dohooo/helmor/pull/541) [`1918264`](https://github.com/dohooo/helmor/commit/191826417ca272b198b29d296d61279497dc3373) Thanks [@baptisteArno](https://github.com/baptisteArno)! - Add a setting to disable inspector terminal expansion on hover while keeping it enabled by default.
+
 ## 0.21.3
 
 ### Patch Changes

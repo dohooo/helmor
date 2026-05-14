@@ -2,6 +2,21 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.21.4",
+			"items": [
+				{
+					"text": "You can now turn inspector terminal hover expansion on or off in Settings.",
+					"action": {
+						"label": "Open General",
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.21.3",
 			"items": [
 				{
