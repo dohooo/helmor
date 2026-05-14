@@ -790,43 +790,9 @@ fn parse_codex_login_status(output: &str) -> bool {
 }
 
 fn codex_api_key_provider_ready() -> Option<String> {
-    let config = std::fs::read_to_string(codex_config_path()).ok()?;
-    let provider = codex_api_key_provider_from_config(&config)?;
+    let config = std::fs::read_to_string(crate::codex_config::config_path()).ok()?;
+    let provider = crate::codex_config::active_api_key_provider(&config)?;
     env_var_is_present(&provider.env_key).then_some(provider.name)
-}
-
-fn codex_config_path() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
-        .join("config.toml")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CodexApiKeyProvider {
-    name: String,
-    env_key: String,
-}
-
-fn codex_api_key_provider_from_config(config: &str) -> Option<CodexApiKeyProvider> {
-    let value = toml::from_str::<toml::Value>(config).ok()?;
-    let provider = value
-        .get("model_provider")
-        .and_then(toml::Value::as_str)
-        .map(str::trim)
-        .filter(|provider| !provider.is_empty())?;
-    let env_key = value
-        .get("model_providers")
-        .and_then(|providers| providers.get(provider))
-        .and_then(|provider_config| provider_config.get("env_key"))
-        .and_then(toml::Value::as_str)
-        .map(str::trim)
-        .filter(|env_key| !env_key.is_empty())?;
-
-    Some(CodexApiKeyProvider {
-        name: provider.to_string(),
-        env_key: env_key.to_string(),
-    })
 }
 
 fn env_var_is_present(key: &str) -> bool {
@@ -1496,58 +1462,6 @@ mod tests {
             applescript_shell_arg(std::path::Path::new("/foo\"bar\\baz")),
             r#"'/foo\"bar\\baz'"#
         );
-    }
-
-    #[test]
-    fn codex_config_provider_reads_active_azure_env_key() {
-        let provider = codex_api_key_provider_from_config(
-            r#"
-model = "gpt-5.5"
-model_provider = "azure"
-
-[model_providers.azure]
-name = "Azure"
-base_url = "https://example.openai.azure.com/openai/v1"
-env_key = "AZURE_OPENAI_API_KEY"
-wire_api = "responses"
-"#,
-        );
-
-        assert_eq!(
-            provider,
-            Some(CodexApiKeyProvider {
-                name: "azure".to_string(),
-                env_key: "AZURE_OPENAI_API_KEY".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn codex_config_provider_ignores_missing_provider_section() {
-        let provider = codex_api_key_provider_from_config(
-            r#"
-model_provider = "azure"
-
-[model_providers.openai]
-env_key = "OPENAI_API_KEY"
-"#,
-        );
-
-        assert_eq!(provider, None);
-    }
-
-    #[test]
-    fn codex_config_provider_ignores_provider_without_env_key() {
-        let provider = codex_api_key_provider_from_config(
-            r#"
-model_provider = "azure"
-
-[model_providers.azure]
-base_url = "https://example.openai.azure.com/openai/v1"
-"#,
-        );
-
-        assert_eq!(provider, None);
     }
 
     #[cfg(target_os = "macos")]

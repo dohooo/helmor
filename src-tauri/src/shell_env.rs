@@ -92,11 +92,75 @@ mod unix {
             }
         }
 
+        let codex_merged = inherit_codex_provider_env_keys(&env_map);
+
         tracing::info!(
             merged,
+            codex_keys_merged = codex_merged,
             total_captured = env_map.len(),
             "Inherited login-shell environment"
         );
+    }
+
+    /// Look up the user's `~/.codex/config.toml`, find every `env_key`
+    /// it declares under `[model_providers.*]`, and copy that env var
+    /// from the captured login-shell environment into the current
+    /// process. Uses `merge_missing_env` semantics so a value already
+    /// present (e.g. set via `launchctl setenv` or `LSEnvironment`)
+    /// wins over the shell copy.
+    ///
+    /// Returns the number of variables actually inherited (helpful for
+    /// the startup log line).
+    fn inherit_codex_provider_env_keys(env_map: &HashMap<String, String>) -> usize {
+        let config_path = crate::codex_config::config_path();
+        let Ok(config) = std::fs::read_to_string(&config_path) else {
+            // No config file is the common case for users who only use
+            // Claude — silently no-op rather than warning.
+            return 0;
+        };
+
+        let (count, declared) = apply_codex_env_keys_from_config(&config, env_map);
+
+        tracing::debug!(
+            config = %config_path.display(),
+            declared,
+            inherited = count,
+            "Considered Codex provider env_keys for inheritance"
+        );
+
+        count
+    }
+
+    /// Pure-ish helper: given a Codex config string and a captured
+    /// login-shell env map, inject the declared API-key env vars into
+    /// the current process. Returns `(newly_set, declared)` for
+    /// diagnostics.
+    fn apply_codex_env_keys_from_config(
+        config: &str,
+        env_map: &HashMap<String, String>,
+    ) -> (usize, usize) {
+        let keys = crate::codex_config::declared_env_keys(config);
+        let declared = keys.len();
+        if declared == 0 {
+            return (0, 0);
+        }
+
+        let mut count = 0;
+        for key in &keys {
+            let Some(value) = env_map.get(key) else {
+                continue;
+            };
+            if value.trim().is_empty() {
+                continue;
+            }
+            let before = std::env::var_os(key).is_some_and(|v| !v.is_empty());
+            merge_missing_env(key, value);
+            let after = std::env::var_os(key).is_some_and(|v| !v.is_empty());
+            if !before && after {
+                count += 1;
+            }
+        }
+        (count, declared)
     }
 
     fn capture_shell_env(shell: &str) -> anyhow::Result<Vec<u8>> {
@@ -297,6 +361,74 @@ mod unix {
                 std::env::var("HELMOR_TEST_EXISTING_ENV").as_deref(),
                 Ok("/tmp/existing.sock")
             );
+        }
+
+        #[test]
+        fn apply_codex_env_keys_injects_declared_var_from_login_shell() {
+            // Unique name to avoid colliding with anything in the
+            // ambient test environment.
+            let key = "HELMOR_TEST_CODEX_AZURE_KEY_1";
+            unsafe { std::env::remove_var(key) };
+
+            let config = format!(
+                r#"
+model_provider = "azure"
+
+[model_providers.azure]
+env_key = "{key}"
+"#
+            );
+            let mut env_map = HashMap::new();
+            env_map.insert(key.to_string(), "abc123".to_string());
+
+            let (count, declared) = apply_codex_env_keys_from_config(&config, &env_map);
+            assert_eq!(declared, 1);
+            assert_eq!(count, 1);
+            assert_eq!(std::env::var(key).as_deref(), Ok("abc123"));
+
+            unsafe { std::env::remove_var(key) };
+        }
+
+        #[test]
+        fn apply_codex_env_keys_does_not_clobber_preexisting_value() {
+            let key = "HELMOR_TEST_CODEX_AZURE_KEY_2";
+            unsafe { std::env::set_var(key, "preexisting") };
+
+            let config = format!(
+                r#"
+[model_providers.azure]
+env_key = "{key}"
+"#
+            );
+            let mut env_map = HashMap::new();
+            env_map.insert(key.to_string(), "from-login-shell".to_string());
+
+            let (count, declared) = apply_codex_env_keys_from_config(&config, &env_map);
+            assert_eq!(declared, 1);
+            assert_eq!(count, 0, "should not count as newly set");
+            assert_eq!(std::env::var(key).as_deref(), Ok("preexisting"));
+
+            unsafe { std::env::remove_var(key) };
+        }
+
+        #[test]
+        fn apply_codex_env_keys_skips_when_shell_has_no_value() {
+            let key = "HELMOR_TEST_CODEX_AZURE_KEY_3";
+            unsafe { std::env::remove_var(key) };
+
+            let config = format!(
+                r#"
+[model_providers.azure]
+env_key = "{key}"
+"#
+            );
+            // Login shell didn't have the key.
+            let env_map = HashMap::new();
+
+            let (count, declared) = apply_codex_env_keys_from_config(&config, &env_map);
+            assert_eq!(declared, 1);
+            assert_eq!(count, 0);
+            assert!(std::env::var_os(key).is_none());
         }
     }
 }
