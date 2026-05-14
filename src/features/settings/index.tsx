@@ -316,6 +316,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Expand terminals on hover"
+										releaseMarker={{ kind: "feature" }}
 										description="Enlarge inspector terminals when the cursor rests over them."
 									>
 										<Switch
