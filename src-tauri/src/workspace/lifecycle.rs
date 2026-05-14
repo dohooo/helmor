@@ -255,6 +255,13 @@ pub fn prepare_local_workspace_impl(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| current_branch.clone());
+    let base_branch = repository
+        .default_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "main".to_string());
 
     // Tracked-only check — `git checkout` is fine with untracked files.
     if target_branch != current_branch
@@ -279,7 +286,7 @@ pub fn prepare_local_workspace_impl(
         &session_id,
         &directory_name,
         &target_branch,
-        &target_branch,
+        &base_branch,
         crate::workspace_state::WorkspaceMode::Local,
         initial_status,
         &timestamp,
@@ -324,7 +331,8 @@ pub fn prepare_local_workspace_impl(
         repo_name: repository.name,
         directory_name,
         branch: target_branch.clone(),
-        default_branch: target_branch,
+        // Field name is legacy; value is the initial PR/review base.
+        default_branch: base_branch,
         state: WorkspaceState::Ready,
         repo_scripts,
         // Local mode operates directly on the repo root — already on disk,

@@ -101,6 +101,7 @@ fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
 
     assert_eq!(response.state, WorkspaceState::Ready);
     assert_eq!(response.branch, "main");
+    assert_eq!(response.default_branch, "main");
     assert_eq!(response.directory_name, "");
     // Local mode: prepare returns the cwd immediately so the start-page
     // submit flow can pin it onto the pending payload without waiting for
@@ -162,10 +163,27 @@ fn prepare_local_workspace_switches_branch_when_source_differs() {
 
     assert_eq!(response.state, WorkspaceState::Ready);
     assert_eq!(response.branch, "develop");
+    assert_eq!(response.default_branch, "main");
 
     // Verify the source repo's HEAD actually moved.
     let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
     assert_eq!(head, "develop");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (branch, init_parent, target_branch): (String, String, String) = connection
+        .query_row(
+            r#"
+            SELECT branch, initialization_parent_branch, intended_target_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&response.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(branch, "develop");
+    assert_eq!(init_parent, "main");
+    assert_eq!(target_branch, "main");
 }
 
 #[test]
@@ -191,6 +209,7 @@ fn prepare_local_workspace_checks_out_remote_only_branch_via_dwim() {
     .unwrap();
 
     assert_eq!(response.branch, "remote-only");
+    assert_eq!(response.default_branch, "main");
     let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
     assert_eq!(head, "remote-only");
     // DWIM should have created a local tracking branch.
