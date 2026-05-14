@@ -175,6 +175,52 @@ describe("GitSectionHeader forge onboarding", () => {
 		expect(screen.getByTestId("git-header-shimmer")).toBeInTheDocument();
 	});
 
+	it("shows running checks as a non-green merge state", () => {
+		renderWithProviders(
+			<GitSectionHeader
+				commitButtonMode="checks-running"
+				commitButtonState="idle"
+				changeRequest={changeRequest}
+				changeRequestName="MR"
+				forgeDetection={gitlabDetection()}
+				forgeRemoteState="ok"
+				workspaceId="workspace-1"
+			/>,
+		);
+
+		const button = screen.getByRole("button", { name: /checks running/i });
+		expect(button).toHaveAttribute("data-variant", "outline");
+		expect(button.className).toContain("rounded-md");
+		expect(button.className).toContain(
+			"border-[var(--workspace-pr-checks-running-accent)]",
+		);
+		expect(screen.getByText("!182").closest("button")?.className).toContain(
+			"border-[var(--workspace-pr-checks-running-accent)]",
+		);
+		expect(screen.queryByTestId("git-header-shimmer")).not.toBeInTheDocument();
+	});
+
+	it("shows branch-protection blocks as a blocked merge state", () => {
+		renderWithProviders(
+			<GitSectionHeader
+				commitButtonMode="merge-blocked"
+				commitButtonState="idle"
+				changeRequest={changeRequest}
+				changeRequestName="MR"
+				forgeDetection={gitlabDetection()}
+				forgeRemoteState="ok"
+				workspaceId="workspace-1"
+			/>,
+		);
+
+		const button = screen.getByRole("button", { name: /merge blocked/i });
+		expect(button).toHaveAttribute("data-variant", "outline");
+		expect(button.className).toContain(
+			"border-[var(--workspace-pr-closed-accent)]",
+		);
+		expect(screen.queryByTestId("git-header-shimmer")).not.toBeInTheDocument();
+	});
+
 	it("shows the shimmer on the first cold fetch (isRefreshing)", () => {
 		renderWithProviders(
 			<GitSectionHeader

@@ -40,7 +40,7 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -550,6 +550,10 @@ export class CodexAppServerManager implements SessionManager {
 		let effectiveResume = resume;
 		if (goalCommand) {
 			effectiveResume = await this.ensureCodexGoalsReady(
+				sessionId,
+				effectiveResume,
+			);
+			effectiveResume = this.recycleIdleContextForGoal(
 				sessionId,
 				effectiveResume,
 			);
@@ -1063,6 +1067,7 @@ export class CodexAppServerManager implements SessionManager {
 			if (!threadId) throw new Error("thread/start did not return thread id");
 
 			let raw = "";
+			let failure: string | null = null;
 			const done = new Promise<void>((resolve) => {
 				server.setHandlers(
 					(n) => {
@@ -1070,7 +1075,26 @@ export class CodexAppServerManager implements SessionManager {
 							const delta = deepGet(n.params, "delta");
 							if (typeof delta === "string") raw += delta;
 						}
-						if (n.method === "turn/completed") resolve();
+						if (n.method === "error") {
+							const message = deepGet(n.params, "error", "message");
+							const asText =
+								typeof message === "string"
+									? message
+									: "Codex app-server error during title generation";
+							failure = asText;
+							return;
+						}
+						if (n.method === "turn/completed") {
+							const status = deepGet(n.params, "turn", "status");
+							if (status === "failed") {
+								const message = deepGet(n.params, "turn", "error", "message");
+								failure =
+									typeof message === "string"
+										? message
+										: "Codex turn failed during title generation";
+							}
+							resolve();
+						}
 					},
 					(req) => {
 						if (APPROVAL_METHODS.has(req.method)) {
@@ -1094,14 +1118,29 @@ export class CodexAppServerManager implements SessionManager {
 					},
 				],
 				model,
-				effort: "minimal",
+				effort: "low",
 				approvalPolicy: BYPASS_GRANULAR_POLICY,
 			};
 			if (fastMode) turnStartParams.serviceTier = "fast";
 			await server.sendRequest("turn/start", turnStartParams);
 
 			await done;
-			const { title, branchName } = parseTitleAndBranch(raw);
+			if (failure) {
+				logger.error(`[${requestId}] title generation failed`, {
+					model,
+					generateBranch,
+					message: failure,
+				});
+			}
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					model,
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);
@@ -1455,6 +1494,41 @@ export class CodexAppServerManager implements SessionManager {
 		this.pendingUserInputs.clear();
 	}
 
+	private clearPendingSessionState(sessionId: string): void {
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+	}
+
+	private recycleIdleContextForGoal(
+		sessionId: string,
+		callerResume: string | undefined,
+	): string | undefined {
+		const stale = this.sessions.get(sessionId);
+		if (!stale || stale.server.killed) return callerResume;
+		if (stale.turnResolve || stale.turnReject || stale.activeTurnId) {
+			logger.info("Skipping /goal context recycle while turn is active", {
+				sessionId,
+				providerThreadId: stale.providerThreadId ?? "(none)",
+				activeTurnId: stale.activeTurnId ?? "(none)",
+			});
+			return callerResume;
+		}
+
+		const reuseThread = stale.providerThreadId ?? undefined;
+		logger.info("Recycling idle Codex context before /goal", {
+			sessionId,
+			providerThreadId: reuseThread ?? "(none)",
+		});
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		this.clearPendingSessionState(sessionId);
+		return callerResume ?? reuseThread;
+	}
+
 	// ── Private ──────────────────────────────────────────────────────────
 
 	private settleUnexpectedExit(
@@ -1559,9 +1633,21 @@ export class CodexAppServerManager implements SessionManager {
 		if (resume) {
 			try {
 				logger.info(`Attempting thread/resume`, { threadId: resume });
+				const resumeParams: Record<string, unknown> = {
+					threadId: resume,
+					cwd,
+					approvalPolicy:
+						toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
+					sandbox:
+						permissionMode === "plan"
+							? "workspace-write"
+							: "danger-full-access",
+				};
+				if (model) resumeParams.model = model;
+				if (fastMode) resumeParams.serviceTier = "fast";
 				const response = await server.sendRequest<Record<string, unknown>>(
 					"thread/resume",
-					{ threadId: resume },
+					resumeParams,
 				);
 				threadId = (deepGet(response, "thread", "id") as string) ?? resume;
 				logger.info(`Resumed Codex thread`, { threadId });

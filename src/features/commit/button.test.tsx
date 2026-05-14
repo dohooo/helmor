@@ -52,4 +52,28 @@ describe("WorkspaceCommitButton ghost variants", () => {
 		// Filled CTA — no transparent bg.
 		expect(btn.className).not.toContain("bg-transparent");
 	});
+
+	it("renders running checks as a warning ghost", () => {
+		render(<WorkspaceCommitButton mode="checks-running" state="idle" />);
+		const btn = screen.getByRole("button", { name: /checks running/i });
+		expect(btn).toHaveAttribute("data-variant", "outline");
+		expect(btn.className).toContain("bg-transparent");
+		expect(btn.className).toContain(
+			"border-[var(--workspace-pr-checks-running-accent)]",
+		);
+		expect(btn.className).toContain(
+			"text-[var(--workspace-pr-checks-running-accent)]",
+		);
+	});
+
+	it("renders blocked merge as a red ghost", () => {
+		render(<WorkspaceCommitButton mode="merge-blocked" state="idle" />);
+		const btn = screen.getByRole("button", { name: /merge blocked/i });
+		expect(btn).toHaveAttribute("data-variant", "outline");
+		expect(btn.className).toContain("bg-transparent");
+		expect(btn.className).toContain(
+			"border-[var(--workspace-pr-closed-accent)]",
+		);
+		expect(btn.className).toContain("text-[var(--workspace-pr-closed-accent)]");
+	});
 });

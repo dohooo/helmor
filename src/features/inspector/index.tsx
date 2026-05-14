@@ -374,10 +374,12 @@ export function WorkspaceInspectorSidebar({
 		? terminalInstances.find((t) => t.id === activeTab)
 		: undefined;
 	const canHoverExpand = isTerminalTabActive
-		? !activeTerminalInstance?.hoverZoomDisabled
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
+		? appSettings.terminalHoverExpansion &&
+			!activeTerminalInstance?.hoverZoomDisabled
+		: appSettings.terminalHoverExpansion &&
+			(scriptTabState === "running" ||
+				scriptTabState === "success" ||
+				scriptTabState === "failure");
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 

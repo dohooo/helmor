@@ -13,7 +13,7 @@ const closeButtonClass = [
 	// Position: top-right, flush with the padding.
 	"!absolute !left-auto !right-2 !top-2",
 	// Target size — roomy hit area, small visible glyph.
-	"!size-6 !p-0 !cursor-pointer !rounded-md",
+	"!size-6 !p-0 !cursor-interactive !rounded-md",
 	// Base look: invisible chrome; reveal on hover.
 	"!bg-transparent !border-none !shadow-none !transform-none",
 	"!text-foreground/40 hover:!text-foreground",

@@ -43,6 +43,8 @@ function changeRequestForMode(
 		case "commit-and-push":
 		case "push":
 		case "resolve-conflicts":
+		case "checks-running":
+		case "merge-blocked":
 		case "merge":
 		case "fix":
 			return CHANGE_REQUEST_OPEN;
@@ -66,6 +68,8 @@ const ALL_MODES: WorkspaceCommitButtonMode[] = [
 	"push",
 	"resolve-conflicts",
 	"fix",
+	"checks-running",
+	"merge-blocked",
 	"merge",
 	"merged",
 	"closed",
@@ -86,6 +90,8 @@ const MODE_LABELS: Record<WorkspaceCommitButtonMode, string> = {
 	push: "Push",
 	"resolve-conflicts": "Resolve Conflicts",
 	fix: "Fix CI",
+	"checks-running": "Checks Running",
+	"merge-blocked": "Merge Blocked",
 	merge: "Merge",
 	merged: "Merged",
 	closed: "Closed",

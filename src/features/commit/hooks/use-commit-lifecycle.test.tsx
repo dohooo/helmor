@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ChangeRequestInfo,
@@ -69,6 +69,22 @@ function createWrapper(queryClient: QueryClient) {
 	};
 }
 
+type ConfirmDialogProbe = {
+	open: boolean;
+	title: string;
+	description: string;
+	confirmLabel: string;
+	onOpenChange: (open: boolean) => void;
+	onConfirm: () => void;
+};
+
+function getConfirmDialogProps(node: ReactNode): ConfirmDialogProbe {
+	if (!isValidElement<ConfirmDialogProbe>(node)) {
+		throw new Error("Expected confirm dialog element");
+	}
+	return node.props;
+}
+
 describe("useWorkspaceCommitLifecycle", () => {
 	beforeEach(() => {
 		apiMocks.closeWorkspaceChangeRequest.mockReset();
@@ -99,6 +115,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 
 	afterEach(() => {
 		vi.clearAllMocks();
+		vi.restoreAllMocks();
 	});
 
 	it("verifies and auto-closes an action session once it has completed", async () => {
@@ -621,6 +638,272 @@ describe("useWorkspaceCommitLifecycle", () => {
 				isMerged: true,
 			});
 			await Promise.resolve();
+		});
+	});
+
+	it("asks before merging while checks are still running", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "running",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("checks-running");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Merge before checks pass?");
+		expect(dialog.description).toBe(
+			"GitHub checks have not passed yet. Merge anyway and bypass them?",
+		);
+		expect(dialog.confirmLabel).toBe("Merge anyway");
+
+		act(() => {
+			dialog.onOpenChange(false);
+		});
+
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+			});
+		});
+	});
+
+	it("merges from the running-checks state after explicit bypass confirmation", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		apiMocks.mergeWorkspaceChangeRequest.mockResolvedValueOnce({
+			number: 53,
+			title: "Fix overflow",
+			url: "https://github.com/example/repo/pull/53",
+			state: "MERGED",
+			isMerged: true,
+		} satisfies ChangeRequestInfo);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		act(() => {
+			getConfirmDialogProps(result.current.mergeConfirmDialogNode).onConfirm();
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.mergeWorkspaceChangeRequest).toHaveBeenCalledWith(
+				"workspace-1",
+			);
+		});
+		expect(
+			queryClient.getQueryData<ChangeRequestInfo | null>(
+				helmorQueryKeys.workspaceChangeRequest("workspace-1"),
+			),
+		).toMatchObject({ state: "MERGED", isMerged: true });
+	});
+
+	it("keeps the checks confirmation when pending checks also block merge state", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "required gate",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("checks-running");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("checks-running");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Merge before checks pass?");
+		expect(dialog.description).toBe(
+			"GitHub checks have not passed yet. Merge anyway and bypass them?",
+		);
+	});
+
+	it("asks before trying to merge when GitHub reports merge blocked", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const invalidateQueriesSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+		const { result } = renderHook(
+			() =>
+				useWorkspaceCommitLifecycle({
+					queryClient,
+					selectedWorkspaceId: "workspace-1",
+					getSelectedWorkspaceId: () => "workspace-1" as string | null,
+					selectedRepoId: "repo-1",
+					changeRequest: {
+						number: 53,
+						title: "Fix overflow",
+						url: "https://github.com/example/repo/pull/53",
+						state: "OPEN",
+						isMerged: false,
+					},
+					forgeActionStatus: {
+						...EMPTY_FORGE_ACTION_STATUS,
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+					},
+					workspaceGitActionStatus: EMPTY_GIT_ACTION_STATUS,
+					completedSessionIds: new Set<string>(),
+					interactionRequiredSessionIds: new Set<string>(),
+					busySessionIds: new Set<string>(),
+					onSelectSession: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		expect(result.current.commitButtonMode).toBe("merge-blocked");
+
+		act(() => {
+			void result.current.handleInspectorCommitAction("merge-blocked");
+		});
+
+		await waitFor(() => {
+			expect(
+				getConfirmDialogProps(result.current.mergeConfirmDialogNode).open,
+			).toBe(true);
+		});
+		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
+		expect(dialog.title).toBe("Try blocked merge?");
+		expect(dialog.description).toBe(
+			"GitHub says this merge is blocked. Try anyway?",
+		);
+		expect(dialog.confirmLabel).toBe("Try anyway");
+
+		act(() => {
+			dialog.onOpenChange(false);
+		});
+
+		expect(apiMocks.mergeWorkspaceChangeRequest).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus("workspace-1"),
+			});
 		});
 	});
 

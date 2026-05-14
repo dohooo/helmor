@@ -346,7 +346,7 @@ export function WorkspaceStartPage({
 									<button
 										type="button"
 										disabled={repositories.length === 0}
-										className="inline-flex h-7 max-w-[13rem] cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{selectedRepository ? (
 											<>
@@ -401,7 +401,7 @@ export function WorkspaceStartPage({
 										<button
 											type="button"
 											disabled={!selectedRepository}
-											className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											{mode === "local" ? (
 												<Laptop
@@ -463,7 +463,7 @@ export function WorkspaceStartPage({
 										? ({ close }) => (
 												<button
 													type="button"
-													className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+													className="flex w-full cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 													onClick={() => {
 														close();
 														setCreateBranchOpen(true);
@@ -480,7 +480,7 @@ export function WorkspaceStartPage({
 									<button
 										type="button"
 										disabled={!selectedRepository}
-										className="inline-flex h-7 max-w-[13rem] cursor-pointer items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										<GitBranch
 											className="size-3.5 shrink-0"

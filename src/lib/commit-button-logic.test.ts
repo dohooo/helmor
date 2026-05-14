@@ -277,7 +277,7 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("merge");
 		});
 
-		it("returns merge when checks are pending (not failure)", () => {
+		it("returns checks-running when checks are pending", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
@@ -294,7 +294,93 @@ describe("deriveCommitButtonMode", () => {
 					}),
 					makeGitActionStatus(),
 				),
+			).toBe("checks-running");
+		});
+
+		it("returns checks-running when checks are running", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "running",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("checks-running");
+		});
+
+		it("returns merge-blocked when GitHub reports a blocked merge state", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("merge-blocked");
+		});
+
+		it("returns merge when GitHub reports passing checks with hooks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "HAS_HOOKS",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
 			).toBe("merge");
+		});
+
+		it("returns checks-running when GitHub reports blocked because checks are active", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "required gate",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("checks-running");
 		});
 	});
 
@@ -456,6 +542,8 @@ describe("deriveCommitButtonState", () => {
 		"push",
 		"commit-and-push",
 		"resolve-conflicts",
+		"checks-running",
+		"merge-blocked",
 	] as const)("returns idle for %s mode even when mergeable is UNKNOWN", (mode) => {
 		expect(
 			deriveCommitButtonState(
