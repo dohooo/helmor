@@ -24,12 +24,14 @@
 //! `std::thread` for blocking work and the binary will start the same
 //! way.
 
+pub mod client;
 pub mod codec;
 pub mod methods;
 pub mod protocol;
 pub mod runtime;
 pub mod server;
 
+pub use client::{RemoteSshRuntime, RpcClient};
 pub use codec::{read_frame, write_frame, FrameError};
 pub use methods::{
     Method, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
