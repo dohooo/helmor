@@ -196,6 +196,10 @@ export type WorkspaceSummary = {
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
 	pinnedAt?: string | null;
+	/** Sparse sidebar order. Mirrors `WorkspaceRow.displayOrder`; carried
+	 * through the archived list so restore can predict the live-group
+	 * position without waiting for refetch. */
+	displayOrder?: number;
 	sessionCount?: number;
 	messageCount?: number;
 	createdAt: string;

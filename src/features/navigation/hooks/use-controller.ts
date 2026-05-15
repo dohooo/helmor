@@ -52,7 +52,7 @@ import {
 	findInitialWorkspaceId,
 	findReplacementWorkspaceIdAfterRemoval,
 	hasWorkspaceId,
-	insertRowByCreatedAtDesc,
+	insertRowBySidebarOrder,
 	reorderWorkspaceInSidebar,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
@@ -1590,16 +1590,18 @@ export function useWorkspacesSidebarController({
 				archivedSummary.status,
 				archivedSummary.pinnedAt,
 			);
-			// Sorted insert by createdAt DESC so the row lands where the server
-			// will place it on refetch — avoids the reorder flicker we'd get from
-			// unconditionally prepending.
+			// Sorted insert by `display_order ASC, created_at DESC` (same key the
+			// backend uses for live groups) so the row lands where the refetch
+			// will place it — avoids the reorder flicker we'd get from a naive
+			// prepend or a createdAt-only sort. The archived summary carries
+			// `displayOrder`, which restore_workspace_impl does NOT reset.
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) =>
 				Array.isArray(current)
 					? (current as typeof groups).map((group) =>
 							group.id === targetGroupId
 								? {
 										...group,
-										rows: insertRowByCreatedAtDesc(group.rows, placeholderRow),
+										rows: insertRowBySidebarOrder(group.rows, placeholderRow),
 									}
 								: group,
 						)

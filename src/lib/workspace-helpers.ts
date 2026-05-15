@@ -184,21 +184,19 @@ export function workspaceStatusFromGroupId(
 }
 
 /**
- * Insert `row` into `rows` preserving `createdAt DESC` order (matching the
- * backend's `ORDER BY datetime(created_at) DESC` for non-archived groups).
- * Used for optimistic insertions — placing the row in its final spot avoids
- * the reorder flicker that happens when the refetch returns and re-sorts.
- *
- * Rows without a `createdAt` are treated as newest (sort to the front), so
- * freshly-created workspaces still land at the top as before.
+ * Insert `row` into `rows` preserving the backend's sidebar order for
+ * non-archived groups: `display_order ASC, created_at DESC`. Mirrors
+ * `load_workspace_records` so optimistic inserts land in their final spot
+ * and the refetch doesn't visibly reshuffle. Missing `displayOrder` is
+ * treated as 0; missing `createdAt` as newest.
  */
-export function insertRowByCreatedAtDesc(
+export function insertRowBySidebarOrder(
 	rows: WorkspaceRow[],
 	row: WorkspaceRow,
 ): WorkspaceRow[] {
-	const key = (r: WorkspaceRow): string => r.createdAt ?? "\uFFFF";
-	const incoming = key(row);
-	const index = rows.findIndex((existing) => key(existing) < incoming);
+	const index = rows.findIndex(
+		(existing) => compareSidebarOrder(existing, row) > 0,
+	);
 	if (index === -1) return [...rows, row];
 	return [...rows.slice(0, index), row, ...rows.slice(index)];
 }
@@ -206,7 +204,7 @@ export function insertRowByCreatedAtDesc(
 /**
  * Move a workspace row from its current sidebar group to the group implied by
  * `nextStatus`. Preserves the row's existing fields (createdAt, pinnedAt, …)
- * and uses `insertRowByCreatedAtDesc` so the optimistic position matches the
+ * and uses `insertRowBySidebarOrder` so the optimistic position matches the
  * spot the server will place the row on refetch — no reorder flicker.
  *
  * Returns `groups` unchanged when the workspace isn't in any live group
@@ -238,7 +236,7 @@ export function moveWorkspaceToGroup(
 
 	return stripped.map((group) =>
 		group.id === targetGroupId
-			? { ...group, rows: insertRowByCreatedAtDesc(group.rows, updatedRow) }
+			? { ...group, rows: insertRowBySidebarOrder(group.rows, updatedRow) }
 			: group,
 	);
 }
@@ -622,6 +620,7 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		primarySessionAgentType: summary.primarySessionAgentType ?? null,
 		prTitle: summary.prTitle ?? null,
 		pinnedAt: summary.pinnedAt ?? null,
+		displayOrder: summary.displayOrder,
 		sessionCount: summary.sessionCount,
 		messageCount: summary.messageCount,
 		createdAt: summary.createdAt,
@@ -730,6 +729,7 @@ export function rowToWorkspaceSummary(
 		primarySessionAgentType: row.primarySessionAgentType ?? null,
 		prTitle: row.prTitle ?? null,
 		pinnedAt: row.pinnedAt ?? null,
+		displayOrder: row.displayOrder,
 		sessionCount: row.sessionCount,
 		messageCount: row.messageCount,
 		createdAt: row.createdAt ?? new Date().toISOString(),
