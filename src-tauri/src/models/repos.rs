@@ -29,6 +29,7 @@ pub struct RepositoryCreateOption {
     /// account had access at add-repo time; UI surfaces a "Connect"
     /// affordance.
     pub forge_login: Option<String>,
+    pub root_path: Option<String>,
     pub repo_icon_src: Option<String>,
     pub repo_initials: String,
 }
@@ -138,6 +139,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
                 remote_url: row.get(5)?,
                 forge_provider: row.get(6)?,
                 forge_login: row.get(7)?,
+                root_path,
                 branch_prefix_type,
                 branch_prefix_custom: row.get(9)?,
                 default_branch: row.get(2)?,

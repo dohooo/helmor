@@ -35,6 +35,12 @@ const repositoryOptions = [
 	{ id: "repo-gamma", name: "Gamma" },
 ];
 
+const duplicateNameRepositoryOptions = [
+	{ id: "repo-alpha-primary", name: "Alpha", rootPath: "/tmp/one/Alpha" },
+	{ id: "repo-alpha-secondary", name: "Alpha", rootPath: "/tmp/two/Alpha" },
+	{ id: "repo-beta", name: "Beta", rootPath: "/tmp/Beta" },
+];
+
 const repoWorkspaceGroups: WorkspaceGroup[] = [
 	{
 		id: "progress",
@@ -204,6 +210,43 @@ describe("WorkspacesSidebar", () => {
 			screen.getByRole("button", { name: "Gamma workspace" }),
 		).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Beta workspace" })).toBeNull();
+	});
+
+	it("distinguishes same-name repositories in the sidebar filter", async () => {
+		const user = userEvent.setup();
+		const onSidebarRepoFilterChange = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={repoWorkspaceGroups}
+					archivedRows={[]}
+					availableRepositories={duplicateNameRepositoryOptions}
+					sidebarRepoFilterIds={["repo-alpha-primary"]}
+					onSidebarRepoFilterChange={onSidebarRepoFilterChange}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Alpha" }));
+
+		expect(screen.getByText("/tmp/one/Alpha")).toBeInTheDocument();
+		expect(screen.getByText("/tmp/two/Alpha")).toBeInTheDocument();
+
+		const alphaItems = screen.getAllByRole("option", { name: /Alpha/ });
+		expect(alphaItems).toHaveLength(2);
+		expect(alphaItems[0]).toHaveAttribute("data-checked", "true");
+		expect(alphaItems[1]).toHaveAttribute("data-checked", "false");
+
+		await user.click(alphaItems[1]!);
+
+		expect(onSidebarRepoFilterChange).toHaveBeenCalledWith([
+			"repo-alpha-primary",
+			"repo-alpha-secondary",
+		]);
 	});
 
 	it("opens sidebar filter controls from the app shortcut event", () => {
