@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub mod rate_limits;
+pub mod remote;
 pub mod schema;
 pub mod service;
 mod shell_env;

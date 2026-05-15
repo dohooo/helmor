@@ -67,6 +67,15 @@ path = "src/bin/helmor-cli.rs"
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
 
+# `helmor-server` is the headless agent half of the future remote-workspace
+# story (#453). The local Helmor app drives it over JSON-RPC via stdio —
+# either directly for loopback tests or `ssh host helmor-server` for the
+# real remote case. The binary is part of the `helmor` crate so it can
+# reuse the workspace / scripts / git modules instead of duplicating them.
+[[bin]]
+name = "helmor-server"
+path = "src/bin/helmor-server.rs"
+
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"
