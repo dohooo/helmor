@@ -4,7 +4,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleAlertIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
@@ -33,6 +33,12 @@ import {
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
+import {
+	QuickSwitchOverlay,
+	type QuickSwitchSnapshot,
+	useQuickSwitch,
+	WorkspaceMruStack,
+} from "@/features/quick-switch";
 import { SettingsDialog, type SettingsSection } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
 import {
@@ -50,6 +56,7 @@ import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import {
 	findAdjacentSessionId,
 	findAdjacentWorkspaceId,
+	flattenWorkspaceRows,
 	PREFERRED_EDITOR_STORAGE_KEY,
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
@@ -405,6 +412,9 @@ function AppShell({
 	]);
 	const workspaceGroups = navigationSidebar.groups;
 	const archivedRows = navigationSidebar.archivedRows;
+	// MRU stack of workspace ids — drives Ctrl+Tab quick switch order.
+	// In-memory only; resets on app restart by design.
+	const workspaceMruRef = useRef<WorkspaceMruStack>(new WorkspaceMruStack());
 	const { state: selection, actions: selectionActions } =
 		useSelectionController({
 			queryClient,
@@ -624,6 +634,27 @@ function AppShell({
 	}, []);
 	const handlePullLatest = usePullLatest({ queryClient, selectedWorkspaceId });
 
+	// Map workspace id -> live row (excluding archived). Used by the
+	// quick-switch overlay to render cards and by buildSnapshot to filter
+	// stale MRU ids.
+	const liveWorkspaceRowMap = useMemo(() => {
+		const map = new Map<
+			string,
+			(typeof workspaceGroups)[number]["rows"][number]
+		>();
+		for (const group of workspaceGroups) {
+			for (const row of group.rows) map.set(row.id, row);
+		}
+		return map;
+	}, [workspaceGroups]);
+
+	// Whenever the selection changes, mark the workspace as most-recently-used.
+	// All entry points (sidebar click, navigation hotkeys, quick-switch itself,
+	// session restore) flow through `selection.selectedWorkspaceId`, so a
+	// single effect here covers them all.
+	useEffect(() => {
+		if (selectedWorkspaceId) workspaceMruRef.current.touch(selectedWorkspaceId);
+	}, [selectedWorkspaceId]);
 	const selectedWorkspaceDetailQuery = useQuery({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
@@ -1017,6 +1048,45 @@ function AppShell({
 		[archivedRows, handleSelectWorkspace, selectionActions, workspaceGroups],
 	);
 
+	// MRU-ordered, archived-filtered, deduped list, capped at 4 cards
+	// (current + 3 most recent). Live workspaces never touched by MRU are
+	// appended in sidebar order so the overlay can still reach them on a
+	// cold MRU.
+	const buildQuickSwitchSnapshot = useCallback(
+		(direction: "next" | "previous"): QuickSwitchSnapshot | null => {
+			const QUICK_SWITCH_MAX_CARDS = 4;
+			const orderedLive = flattenWorkspaceRows(workspaceGroups, []).map(
+				(row) => row.id,
+			);
+			const liveSet = new Set(orderedLive);
+			const mruIds = workspaceMruRef.current
+				.list()
+				.filter((id) => liveSet.has(id));
+			const seen = new Set(mruIds);
+			const tailIds = orderedLive.filter((id) => !seen.has(id));
+			const ids = [...mruIds, ...tailIds].slice(0, QUICK_SWITCH_MAX_CARDS);
+			if (ids.length < 2) return null;
+			// MRU[0] is the current workspace (touched most recently); start
+			// at index 1 for "next" so a single Ctrl+Tab tap commits the
+			// previous workspace, exactly like Cmd+Tab.
+			const initialIndex = direction === "next" ? 1 : ids.length - 1;
+			return { ids, initialIndex };
+		},
+		[workspaceGroups],
+	);
+
+	const handleQuickSwitchCommit = useCallback(
+		(workspaceId: string) => {
+			handleSelectWorkspace(workspaceId);
+		},
+		[handleSelectWorkspace],
+	);
+
+	const quickSwitch = useQuickSwitch({
+		buildSnapshot: buildQuickSwitchSnapshot,
+		onCommit: handleQuickSwitchCommit,
+	});
+
 	const globalShortcutHandlers = useMemo<ShortcutHandler[]>(
 		() => [
 			{
@@ -1052,6 +1122,14 @@ function AppShell({
 			{
 				id: "workspace.next" as const,
 				callback: () => handleNavigateWorkspaces(1),
+			},
+			{
+				id: "workspace.quickSwitchNext" as const,
+				callback: () => quickSwitch.open("next"),
+			},
+			{
+				id: "workspace.quickSwitchPrevious" as const,
+				callback: () => quickSwitch.open("previous"),
 			},
 			{
 				id: "session.previous" as const,
@@ -1189,6 +1267,7 @@ function AppShell({
 			handleToggleZenMode,
 			preferredEditor,
 			pullRequestUrl,
+			quickSwitch,
 			selectedWorkspaceId,
 			setInspectorCollapsed,
 			setSidebarCollapsed,
@@ -1670,6 +1749,15 @@ function AppShell({
 							onOpenChangelog={handleOpenReleaseChangelog}
 							onOpenSettings={handleOpenAnnouncementSettings}
 							onSetRightSidebarMode={contextPanelActions.setMode}
+						/>
+						<QuickSwitchOverlay
+							state={quickSwitch.state}
+							getRow={(id) => liveWorkspaceRowMap.get(id) ?? null}
+							onSelectIndex={quickSwitch.selectIndex}
+							onCommitIndex={(index) => {
+								quickSwitch.selectIndex(index);
+								quickSwitch.commit();
+							}}
 						/>
 						{closeConfirmDialog}
 						{mergeConfirmDialogNode}

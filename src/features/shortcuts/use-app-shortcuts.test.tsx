@@ -1,5 +1,10 @@
 import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	_resetQuickSwitchActiveForTesting,
+	beginQuickSwitch,
+	endQuickSwitch,
+} from "@/features/quick-switch/active-state";
 import { _resetActiveScopeForTesting } from "./focus-scope";
 import {
 	beginShortcutRecording,
@@ -28,6 +33,7 @@ function fireModT() {
 describe("useAppShortcuts", () => {
 	beforeEach(() => {
 		_resetActiveScopeForTesting();
+		_resetQuickSwitchActiveForTesting();
 	});
 	afterEach(() => {
 		endShortcutRecording();
@@ -179,6 +185,76 @@ describe("useAppShortcuts", () => {
 			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
 		);
 		expect(togglePlanMode).not.toHaveBeenCalled();
+	});
+
+	it("mutes ALL global shortcuts while quick-switch is active", () => {
+		// Why "all" — even the quick-switch hotkey itself must not callback
+		// through `useAppShortcuts` while active. Otherwise a repeat
+		// Ctrl+Tab while holding Ctrl would cycle twice: once via this
+		// dispatcher and once via the overlay's own capture-phase listener
+		// (they're both registered on window, capture phase, and the
+		// dispatcher only does `stopPropagation`, not
+		// `stopImmediatePropagation`). The overlay's listener is the
+		// single source of truth while engaged.
+		const themeToggle = vi.fn();
+		const quickSwitchNext = vi.fn();
+
+		function Harness() {
+			useAppShortcuts({
+				overrides: {},
+				handlers: [
+					{ id: "theme.toggle", callback: themeToggle },
+					{ id: "workspace.quickSwitchNext", callback: quickSwitchNext },
+				],
+			});
+			return null;
+		}
+
+		render(<Harness />);
+		beginQuickSwitch();
+
+		// theme.toggle (Mod+Alt+T) muted.
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "t",
+				code: "KeyT",
+				metaKey: true,
+				altKey: true,
+			}),
+		);
+		expect(themeToggle).not.toHaveBeenCalled();
+
+		// quick-switch's own hotkey is ALSO muted at this layer — the
+		// overlay's capture-phase listener handles repeats directly.
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Tab",
+				code: "Tab",
+				ctrlKey: true,
+			}),
+		);
+		expect(quickSwitchNext).not.toHaveBeenCalled();
+
+		endQuickSwitch();
+
+		// Once inactive, everything works again.
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "t",
+				code: "KeyT",
+				metaKey: true,
+				altKey: true,
+			}),
+		);
+		expect(themeToggle).toHaveBeenCalledTimes(1);
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Tab",
+				code: "Tab",
+				ctrlKey: true,
+			}),
+		);
+		expect(quickSwitchNext).toHaveBeenCalledTimes(1);
 	});
 
 	it("fires app-scope shortcuts regardless of focus scope", () => {

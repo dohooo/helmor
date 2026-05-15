@@ -538,6 +538,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 .execute_batch("ALTER TABLE workspaces DROP COLUMN derived_status")
                 .context("Failed to drop workspace derived_status column")?;
         }
+
+        // Normalize legacy status spellings on existing rows. Older builds
+        // wrote "in-review" / "cancelled"; the canonical form is
+        // "review" / "canceled". The SELECT-time COALESCE only handles
+        // NULL, so without this the legacy string survives and the
+        // frontend's status-dot dict lookup misses (rendering a
+        // transparent, visually grey-white dot).
+        connection
+            .execute_batch(
+                "UPDATE workspaces SET status = 'review' WHERE status = 'in-review';\
+                 UPDATE workspaces SET status = 'canceled' WHERE status = 'cancelled';\
+                 UPDATE workspaces SET status = 'in-progress' WHERE status NOT IN ('in-progress', 'done', 'review', 'backlog', 'canceled');",
+            )
+            .context("Failed to normalize workspace status values")?;
     }
 
     drop_dead_schema(connection)?;

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { isQuickSwitchActive } from "@/features/quick-switch/active-state";
 import { getActiveScopes } from "./focus-scope";
 import { normalizeShortcutEvent } from "./format";
 import { isShortcutRecordingActive } from "./recording-state";
@@ -66,6 +67,14 @@ export function useAppShortcuts({ overrides, handlers }: UseAppShortcutsArgs) {
 						registration.scopes.some((scope) => activeScopes.includes(scope))),
 			);
 			if (!match) return;
+			// Once quick-switch is engaged (warming or open), the overlay's
+			// own capture-phase listener owns every keystroke until it
+			// commits or cancels. We must NOT also fire `quickSwitch.open()`
+			// from here for repeat Ctrl+Tab presses — otherwise the same
+			// keydown cycles twice (once via this callback, once via the
+			// overlay listener), producing the "stuck between two tabs"
+			// bug. Hard short-circuit instead of carving exceptions.
+			if (isQuickSwitchActive()) return;
 			event.preventDefault();
 			event.stopPropagation();
 			match.callback();
