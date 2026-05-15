@@ -23,6 +23,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "workspace.quickSwitchNext",
+		title: "Quick switch workspace",
+		group: "Navigation",
+		defaultHotkey: "Control+Tab",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "workspace.quickSwitchPrevious",
+		title: "Quick switch workspace (reverse)",
+		group: "Navigation",
+		defaultHotkey: "Control+Shift+Tab",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "session.previous",
 		title: "Previous session",
 		group: "Navigation",

@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "You can now hold Ctrl+Tab to cycle through recently used workspaces — release to switch, just like Cmd+Tab.",
+			"action": {
+				"label": "Customize Shortcut",
+				"value": { "type": "openSettings", "section": "shortcuts" }
+			}
+		}
+	]
+}

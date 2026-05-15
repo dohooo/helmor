@@ -1,6 +1,8 @@
 export type ShortcutId =
 	| "workspace.previous"
 	| "workspace.next"
+	| "workspace.quickSwitchNext"
+	| "workspace.quickSwitchPrevious"
 	| "workspace.new"
 	| "workspace.addRepository"
 	| "workspace.copyPath"
