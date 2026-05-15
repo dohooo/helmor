@@ -5,6 +5,7 @@ import {
 	useContext,
 	useMemo,
 } from "react";
+import type { VoiceDispatchActionKind } from "@/lib/api";
 import { useRealtimeSequence } from "./use-realtime-sequence";
 import { useDemoSequence, type VoiceUiState } from "./voice-mode-state";
 import { useVoiceModeActive, voiceModeStore } from "./voice-mode-store";
@@ -51,26 +52,48 @@ type VoiceSessionProviderProps = {
 	 *  realtime session is restarted whenever this changes, which
 	 *  reopens WebRTC + remints the OpenAI client secret. */
 	onNavigateToWorkspace?: (workspaceId: string) => void;
+	/** Triggered after `run_workspace_action` resolves with one of the
+	 *  four agent-dispatched action kinds. Caller should route through
+	 *  the GUI's `handleInspectorCommitAction` so the canned prompts +
+	 *  post-stream verifier behavior stay identical between voice and
+	 *  click. Direct actions (`merge_pr` / `pull_latest`) execute
+	 *  inline in Rust and do NOT fire this. */
+	onDispatchWorkspaceAction?: (
+		workspaceId: string,
+		actionKind: VoiceDispatchActionKind,
+	) => void;
+	/** Extra side-effect to run when the model invokes `end_session`,
+	 *  alongside the unconditional `voiceModeStore.setActive(false)`.
+	 *  Used by the desktop voice-panel webview to also hide the
+	 *  always-on-top OS window — the main window doesn't need this
+	 *  (its sidebar bar collapses purely from the store flipping). */
+	onEndSession?: () => void;
 };
 
 export function VoiceSessionProvider({
 	children,
 	hasApiKey,
 	onNavigateToWorkspace,
+	onDispatchWorkspaceAction,
+	onEndSession,
 }: VoiceSessionProviderProps) {
 	const active = useVoiceModeActive();
 	// Synthetic `end_session` tool: the model invokes it after wrapping
 	// up verbally ("拜拜" / "see ya."), and the dispatcher's
 	// audio-flush delay has already elapsed by the time this fires —
 	// so flipping the store directly here is safe to terminate the
-	// session without clipping the goodbye reply.
+	// session without clipping the goodbye reply. The optional
+	// `onEndSession` prop lets callers attach an extra teardown step
+	// (e.g. the voice-panel webview hides its OS window).
 	const handleEndSession = useCallback(() => {
 		voiceModeStore.setActive(false);
-	}, []);
+		onEndSession?.();
+	}, [onEndSession]);
 	const realState = useRealtimeSequence(
 		active && hasApiKey,
 		onNavigateToWorkspace,
 		handleEndSession,
+		onDispatchWorkspaceAction,
 	);
 	const demoState = useDemoSequence(active && !hasApiKey);
 	const state = hasApiKey ? realState : demoState;

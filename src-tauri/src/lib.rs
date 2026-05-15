@@ -388,6 +388,8 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             commands::voice_agent::run_voice_tool,
             global_hotkey::sync_global_hotkey,
+            global_hotkey::hide_voice_panel,
+            record_voice_panel_event,
             ui_sync::subscribe_ui_mutations,
             ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
@@ -483,6 +485,22 @@ fn build_main_window(app: &mut tauri::App) -> tauri::Result<()> {
 
     builder.build()?;
     Ok(())
+}
+
+/// Forward-and-tag a structured event from the voice-panel webview
+/// into the Rust tracing log. The voice-panel is a transparent
+/// chrome-less window with no surfaceable devtools, so this is the
+/// only channel by which its lifecycle / WebRTC peer churn / Realtime
+/// session activity becomes visible to an operator. Cheap enough to
+/// leave wired up even outside active debugging.
+#[tauri::command]
+fn record_voice_panel_event(event: String, data: Option<serde_json::Value>) {
+    tracing::info!(
+        target: "helmor_lib::voice_panel",
+        event = %event,
+        data = ?data,
+        "voice panel event",
+    );
 }
 
 fn build_voice_panel_window(app: &mut tauri::App) -> tauri::Result<()> {

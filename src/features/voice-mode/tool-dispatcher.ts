@@ -232,7 +232,17 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 			},
 		});
 	}
-	opts.send({ type: "response.create" });
+	// `end_session` is a synthetic UI-only signal — the model already
+	// spoke its goodbye before invoking it, and the session is about to
+	// be torn down. Sending `response.create` would prompt the model to
+	// generate *another* turn (which we observed as "拜拜" being
+	// spoken twice — see voice-panel phase log around the
+	// speaking → acting → speaking → listening replay). Skip the
+	// nudge whenever any call in this batch ended the session.
+	const isEndSessionBatch = results.some((r) => r.endSession);
+	if (!isEndSessionBatch) {
+		opts.send({ type: "response.create" });
+	}
 
 	// Aggregate mutation kinds across this turn and notify the host
 	// once. The Set keeps the callback idempotent when multiple write

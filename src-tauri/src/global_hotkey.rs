@@ -141,10 +141,7 @@ fn toggle_voice_panel(app: &AppHandle) -> Result<()> {
         .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
 
     if panel.is_visible()? && panel.is_focused()? {
-        panel
-            .emit(VOICE_PANEL_ACTIVE_EVENT, false)
-            .context("Failed to deactivate voice panel")?;
-        panel.hide()?;
+        deactivate_voice_panel(app, &panel)?;
         return Ok(());
     }
 
@@ -152,10 +149,43 @@ fn toggle_voice_panel(app: &AppHandle) -> Result<()> {
     panel.show()?;
     panel.unminimize()?;
     panel.set_focus()?;
-    panel
-        .emit(VOICE_PANEL_ACTIVE_EVENT, true)
-        .context("Failed to activate voice panel")?;
+    app.emit(VOICE_PANEL_ACTIVE_EVENT, true)
+        .context("Failed to broadcast voice panel activation")?;
     Ok(())
+}
+
+/// Single point of truth for "tear down the voice panel" — broadcasts
+/// deactivation (so the main window's voice session and the panel's
+/// own session both stand down) and hides the OS window. Shared by
+/// the global-hotkey toggle (user pressed the hotkey while the panel
+/// was focused) and the `hide_voice_panel` command (the voice agent
+/// invoked `end_session` from inside the panel).
+fn deactivate_voice_panel(app: &AppHandle, panel: &tauri::WebviewWindow) -> Result<()> {
+    // Broadcast (not panel-scoped) so the main window can also listen
+    // and tear down its own voice session — voice is a 1-of-2 resource
+    // (WebRTC peer + mic), the two webviews shouldn't both be active
+    // simultaneously.
+    app.emit(VOICE_PANEL_ACTIVE_EVENT, false)
+        .context("Failed to broadcast voice panel deactivation")?;
+    panel.hide()?;
+    Ok(())
+}
+
+/// Tauri command for the voice-panel webview to hide itself after the
+/// agent invokes the synthetic `end_session` tool. Without this the
+/// panel's React tree would tear down its WebRTC peer (via
+/// `voiceModeStore.setActive(false)`) but the always-on-top OS window
+/// would still hover over the desktop, looking like the voice flow
+/// hadn't actually ended. No-op if the panel is already hidden.
+#[tauri::command]
+pub fn hide_voice_panel(app: AppHandle) -> Result<(), CommandError> {
+    let panel = app
+        .get_webview_window(VOICE_PANEL_WINDOW_LABEL)
+        .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
+    if !panel.is_visible().unwrap_or(false) {
+        return Ok(());
+    }
+    Ok(deactivate_voice_panel(&app, &panel)?)
 }
 
 fn position_voice_panel(panel: &tauri::WebviewWindow) -> Result<()> {

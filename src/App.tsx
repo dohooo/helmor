@@ -56,6 +56,7 @@ import {
 	createSession,
 	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
+	type VoiceDispatchActionKind,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
@@ -832,6 +833,83 @@ function AppShell({
 		],
 	);
 
+	/** Voice agent → GUI commit-button bridge. The Rust voice handler
+	 *  for `run_workspace_action` sets `dispatchWorkspaceAction` on the
+	 *  envelope for the four agent-dispatched action kinds; the
+	 *  dispatcher hands them here so they run through the same code
+	 *  path the inspector buttons use — keeping `buildCommitButtonPrompt`,
+	 *  the post-stream verifier, and auto-close behavior identical
+	 *  between voice and click. The `workspaceId` override skips the
+	 *  GUI selection race (voice's navigate hint is async and would
+	 *  otherwise lag the action). Direct actions (`merge_pr` /
+	 *  `pull_latest`) execute inline in Rust and never reach here. */
+	const handleVoiceWorkspaceAction = useCallback(
+		(workspaceId: string, actionKind: VoiceDispatchActionKind) => {
+			void handleInspectorCommitAction(actionKind, { workspaceId });
+		},
+		[handleInspectorCommitAction],
+	);
+
+	// Voice-panel ↔ main window bridge. The desktop voice panel is a
+	// separate webview (see `voice-panel-main.tsx`); when the user
+	// summons it via the global hotkey, the Rust handler broadcasts
+	// `helmor://voice-panel-active`. Three things hang off that:
+	//
+	// 1. **Mutex**: panel and the main-window sidebar voice can't both
+	//    own the WebRTC peer + mic simultaneously, so when the panel
+	//    activates we force the main window's voice off. The panel
+	//    drives its own `voiceModeStore` (separate webview = separate
+	//    module state), so this only affects what the main window
+	//    does inside its own React tree.
+	// 2. **Navigate forwarding**: the panel has no workspace list, so
+	//    its `onNavigateToWorkspace` callback emits a Tauri event
+	//    back to us; we run the same selection handler the sidebar
+	//    would.
+	// 3. **Action forwarding**: same idea for the four agent-dispatched
+	//    commit-button modes — the panel emits, we dispatch.
+	useEffect(() => {
+		// Same race-safe pattern as the panel-side listener (see
+		// `voice-panel-main.tsx`): `listen()` resolves async, so cleanup
+		// has to flip `cancelled` AND call `stop()` for any listener
+		// that registered after we tore down. Without this StrictMode
+		// dev mounts orphan a duplicate listener per stream and every
+		// broadcast event fires our handler twice.
+		let cancelled = false;
+		const stops: Array<() => void> = [];
+		const attach = <T,>(name: string, handler: (payload: T) => void) => {
+			void listen<T>(name, (event) => handler(event.payload)).then((stop) => {
+				if (cancelled) {
+					stop();
+					return;
+				}
+				stops.push(stop);
+			});
+		};
+		attach<boolean>("helmor://voice-panel-active", (payload) => {
+			if (payload) {
+				voiceModeStore.setActive(false);
+			}
+		});
+		attach<string>("helmor://voice-panel-navigate-workspace", (payload) => {
+			if (typeof payload === "string" && payload) {
+				handleSelectWorkspace(payload);
+			}
+		});
+		attach<{
+			workspaceId: string;
+			actionKind: VoiceDispatchActionKind;
+		}>("helmor://voice-panel-dispatch-workspace-action", (payload) => {
+			const { workspaceId, actionKind } = payload ?? {};
+			if (workspaceId && actionKind) {
+				handleVoiceWorkspaceAction(workspaceId, actionKind);
+			}
+		});
+		return () => {
+			cancelled = true;
+			for (const stop of stops) stop();
+		};
+	}, [handleSelectWorkspace, handleVoiceWorkspaceAction]);
+
 	const handleSessionCompleted = readStateActions.onSessionCompleted;
 	const handleSessionAborted = readStateActions.onSessionAborted;
 	const handleInteractionSessionsChange =
@@ -1312,6 +1390,7 @@ function AppShell({
 						<VoiceSessionProvider
 							hasApiKey={appSettings.openAiRealtimeApiKey.trim().length > 0}
 							onNavigateToWorkspace={handleSelectWorkspace}
+							onDispatchWorkspaceAction={handleVoiceWorkspaceAction}
 						>
 							<main
 								aria-label="Application shell"
