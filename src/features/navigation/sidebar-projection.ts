@@ -167,19 +167,35 @@ export function applySidebarView(
 			)
 		: projected.archivedRows;
 
+	// Archived rows always sort by updatedAt DESC, independent of the
+	// active sidebarSort. Custom (drag) order is meaningless once a
+	// workspace is archived, and repoName / createdAt aren't the
+	// natural index for "find an old workspace" — last activity is.
+	const sortedArchivedRows = [...filteredArchivedRows].sort(
+		compareArchivedRowsByUpdatedAtDesc,
+	);
+
 	if (sort === "custom") {
 		return {
 			groups: filteredGroups,
-			archivedRows: filteredArchivedRows,
+			archivedRows: sortedArchivedRows,
 		};
 	}
 
 	return {
 		groups: sortGroupsForView(filteredGroups, sort),
-		archivedRows: [...filteredArchivedRows].sort((left, right) =>
-			compareRowsBySidebarSort(left, right, sort),
-		),
+		archivedRows: sortedArchivedRows,
 	};
+}
+
+function compareArchivedRowsByUpdatedAtDesc(
+	left: WorkspaceRow,
+	right: WorkspaceRow,
+): number {
+	const leftTime = Date.parse(left.updatedAt ?? "") || 0;
+	const rightTime = Date.parse(right.updatedAt ?? "") || 0;
+	if (leftTime !== rightTime) return rightTime - leftTime;
+	return compareStrings(left.title, right.title);
 }
 
 function effectiveRepoFilterIds(

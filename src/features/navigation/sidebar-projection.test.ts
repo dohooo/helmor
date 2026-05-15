@@ -835,6 +835,24 @@ describe("applySidebarView", () => {
 			"backlog",
 		]);
 	});
+
+	it("always sorts archived rows by updatedAt DESC regardless of sidebarSort", () => {
+		// Same archived input under each sort key should produce the same
+		// order — newest updatedAt first. Custom/repoName/createdAt all
+		// must not leak into the archived section.
+		const expectedArchivedOrder = ["ws-archived-alpha", "ws-archived-beta"];
+		for (const sort of [
+			"custom",
+			"repoName",
+			"updatedAt",
+			"createdAt",
+		] as const) {
+			const result = applySidebarView(projected, { sort });
+			expect(result.archivedRows.map((row) => row.id)).toEqual(
+				expectedArchivedOrder,
+			);
+		}
+	});
 });
 
 describe("repoIdFromGroupId", () => {
