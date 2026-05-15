@@ -94,6 +94,32 @@ where
     handle_git_output(output)
 }
 
+/// Like `run_git`, but returns stdout **verbatim** (no trimming). Use this
+/// when stdout *is* the payload — e.g. `git show <ref>:<path>` reading a
+/// file's bytes — where a trailing newline is part of the file, not shell
+/// noise. The standard `run_git` trims, which is right for status/rev-parse
+/// lines but wrong for file content (a trimmed file content makes every
+/// diff editor show a spurious "trailing newline" delta against the
+/// working-tree side).
+pub fn run_git_capture<I, S>(args: I, current_dir: Option<&Path>) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("git");
+
+    for arg in args {
+        command.arg(arg.as_ref());
+    }
+
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    let output = command.output().context("Failed to run git")?;
+    handle_git_output_raw(output)
+}
+
 /// Run `git` with a hard wall-clock timeout and an environment that locks
 /// down every interactive prompt path. Use this for any command that may
 /// contact a remote (`fetch`, `pull`, `push`, `ls-remote`, …) — without it,
@@ -204,7 +230,20 @@ fn handle_git_output(output: Output) -> Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
+    handle_git_failure(output)
+}
 
+/// Same failure handling as `handle_git_output`, but on success returns
+/// stdout **without** trimming. Pair with `run_git_capture` for callers
+/// that need byte-faithful output (e.g. file content from `git show`).
+fn handle_git_output_raw(output: Output) -> Result<String> {
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    handle_git_failure(output)
+}
+
+fn handle_git_failure(output: Output) -> Result<String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if !stderr.is_empty() {

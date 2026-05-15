@@ -1592,7 +1592,15 @@ function AppShell({
 												selectedWorkspaceDetailQuery.data ?? null
 											}
 											displayedSessionId={displayedSessionId}
-											editorSessionPath={editorSession?.path ?? null}
+											activeEditor={
+												editorSession
+													? {
+															path: editorSession.path,
+															originalRef: editorSession.originalRef,
+															modifiedRef: editorSession.modifiedRef,
+														}
+													: null
+											}
 											onOpenEditorFile={handleOpenEditorFile}
 											onCommitAction={handleCommitAction}
 											onReviewAction={() =>

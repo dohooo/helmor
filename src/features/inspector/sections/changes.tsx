@@ -42,7 +42,13 @@ import {
 	type ForgeDetection,
 	revealPathInFinder,
 } from "@/lib/api";
-import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
+import {
+	type ActiveEditorTarget,
+	type DiffOpenOptions,
+	INDEX_REF,
+	type InspectorFileItem,
+	isActiveEditorTarget,
+} from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
 	workspaceForgeActionStatusQueryOptions,
@@ -82,7 +88,7 @@ type ChangesSectionProps = {
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -107,7 +113,7 @@ export function ChangesSection({
 	workspaceTargetBranch,
 	changes,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
 	flashingPaths,
 	onCommitAction,
@@ -304,11 +310,13 @@ export function ChangesSection({
 								onStageAction={unstageFile}
 								onBatchAction={unstageAll}
 								editorMode={editorMode}
-								activeEditorPath={activeEditorPath}
+								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
+								originalRef="HEAD"
+								modifiedRef={INDEX_REF}
 							/>
 						)}
 						{unstagedChanges.length > 0 && (
@@ -331,11 +339,12 @@ export function ChangesSection({
 								onBatchAction={stageAll}
 								onDiscard={discardFile}
 								editorMode={editorMode}
-								activeEditorPath={activeEditorPath}
+								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
+								originalRef={INDEX_REF}
 							/>
 						)}
 					</>
@@ -352,7 +361,7 @@ export function ChangesSection({
 						treeView={branchDiffTreeView}
 						onToggleTreeView={() => toggleBranchDiffTreeView()}
 						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
+						activeEditor={activeEditor}
 						onOpenEditorFile={onOpenEditorFile}
 						flashingPaths={flashingPaths}
 						workspaceBranch={workspaceBranch}
@@ -386,11 +395,13 @@ function ChangesGroup({
 	onBatchAction,
 	onDiscard,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
 	flashingPaths,
 	workspaceBranch,
 	workspaceRemoteUrl,
+	originalRef,
+	modifiedRef,
 }: {
 	label: string;
 	icon?: React.ReactNode;
@@ -405,12 +416,37 @@ function ChangesGroup({
 	onBatchAction?: () => void;
 	onDiscard?: (path: string) => void;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
+	/** Git ref for the original (left) side. Staged → "HEAD"; Unstaged → INDEX_REF. */
+	originalRef?: string;
+	/** Git ref for the modified (right) side. Staged → INDEX_REF; Unstaged → undefined
+	 * (so the editor reads the working tree from disk). */
+	modifiedRef?: string;
 }) {
+	const handleOpenFile = useCallback(
+		(path: string, options?: DiffOpenOptions) => {
+			onOpenEditorFile(path, {
+				fileStatus: options?.fileStatus ?? "M",
+				originalRef,
+				modifiedRef,
+			});
+		},
+		[onOpenEditorFile, originalRef, modifiedRef],
+	);
+	// Same file can appear in Staged AND Unstaged. The selection highlight
+	// belongs to whichever area's bases match the open editor — comparing
+	// path alone lights up both rows simultaneously.
+	const activeEditorPath = isActiveEditorTarget(
+		activeEditor,
+		originalRef,
+		modifiedRef,
+	)
+		? activeEditor.path
+		: null;
 	return (
 		<div>
 			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
@@ -463,7 +499,7 @@ function ChangesGroup({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -476,7 +512,7 @@ function ChangesGroup({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -501,7 +537,7 @@ function BranchDiffSection({
 	treeView,
 	onToggleTreeView,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
 	flashingPaths,
 	workspaceBranch,
@@ -516,22 +552,31 @@ function BranchDiffSection({
 	treeView: boolean;
 	onToggleTreeView: () => void;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
+	const remoteOriginalRef = targetBranch ?? undefined;
+	const remoteModifiedRef = "HEAD";
 	const handleOpenFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
 			onOpenEditorFile(path, {
 				fileStatus: options?.fileStatus ?? "M",
-				originalRef: targetBranch ?? undefined,
-				modifiedRef: "HEAD",
+				originalRef: remoteOriginalRef,
+				modifiedRef: remoteModifiedRef,
 			});
 		},
-		[onOpenEditorFile, targetBranch],
+		[onOpenEditorFile, remoteOriginalRef, remoteModifiedRef],
 	);
+	const activeEditorPath = isActiveEditorTarget(
+		activeEditor,
+		remoteOriginalRef,
+		remoteModifiedRef,
+	)
+		? activeEditor.path
+		: null;
 
 	return (
 		<div>

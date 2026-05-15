@@ -8,7 +8,7 @@ import {
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
 import type { ChangeRequestInfo } from "@/lib/api";
-import type { DiffOpenOptions } from "@/lib/editor-session";
+import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
@@ -44,7 +44,7 @@ type WorkspaceInspectorSidebarProps = {
 	 * and the "default to Run tab" behaviour after restart. */
 	workspaceSetupCompletedAt?: string | null;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -79,7 +79,7 @@ export function WorkspaceInspectorSidebar({
 	workspaceSetupCompletedAt,
 	repoId,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -399,7 +399,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
-				activeEditorPath={activeEditorPath}
+				activeEditor={activeEditor}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}
