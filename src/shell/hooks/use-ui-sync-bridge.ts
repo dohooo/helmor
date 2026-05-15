@@ -35,6 +35,9 @@ function handleUiMutation(
 				predicate: (query) =>
 					query.queryKey[0] === "workspaceCandidateDirectories",
 			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.dashboardSnapshot,
+			});
 			return;
 		case "workspaceChanged":
 			requestSidebarReconcile(queryClient);
@@ -43,6 +46,9 @@ function handleUiMutation(
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceLinkedDirectories(event.workspaceId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.dashboardSnapshot,
 			});
 			return;
 		case "sessionListChanged":
@@ -185,6 +191,13 @@ function handleUiMutation(
 		case "activeStreamsChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.activeStreams,
+			});
+			// Dashboard cards carry an `isStreaming` overlay that's
+			// recomputed every time the active-streams set changes,
+			// so the dashboard projection needs the same invalidation
+			// the busy-badge fan-out gets.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.dashboardSnapshot,
 			});
 			return;
 	}

@@ -288,6 +288,7 @@ pub fn run() {
             commands::repository_commands::add_repository_from_local_path,
             commands::repository_commands::clone_repository_from_url,
             commands::workspace_commands::list_archived_workspaces,
+            commands::workspace_commands::load_dashboard_snapshot,
             commands::repository_commands::list_repositories,
             commands::repository_commands::update_repository_default_branch,
             commands::repository_commands::update_repository_branch_prefix,

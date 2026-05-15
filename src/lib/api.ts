@@ -203,6 +203,35 @@ export type WorkspaceSummary = {
 	lastUserMessageAt?: string | null;
 };
 
+/** Dashboard kanban lane discriminator. Mirrors `WorkspaceStatus` for
+ *  the five live lanes and adds an `archived` lane for workspaces in
+ *  `WorkspaceState.Archived`. */
+export type DashboardLaneId =
+	| "in-progress"
+	| "review"
+	| "done"
+	| "backlog"
+	| "canceled"
+	| "archived";
+
+/** One dashboard card. The flattened `WorkspaceSummary` carries every
+ *  field the sidebar hover-card already exposes; `isStreaming` is the
+ *  one live overlay (true when any session in the workspace has an
+ *  in-flight agent stream). */
+export type DashboardCard = WorkspaceSummary & {
+	isStreaming: boolean;
+};
+
+export type DashboardLane = {
+	id: DashboardLaneId;
+	label: string;
+	cards: DashboardCard[];
+};
+
+export type DashboardSnapshot = {
+	lanes: DashboardLane[];
+};
+
 export type BranchPrefixType = "username" | "custom" | "none";
 
 export type RepositoryCreateOption = {
@@ -856,6 +885,22 @@ export async function loadArchivedWorkspaces(): Promise<WorkspaceSummary[]> {
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load archived workspaces."),
+		);
+	}
+}
+
+/** Kanban projection for the dashboard view. Same workspace +
+ *  session aggregates as the sidebar, regrouped into status lanes,
+ *  with an `Archived` lane that pulls from `WorkspaceState.Archived`
+ *  rows. Each card carries an `isStreaming` overlay computed from
+ *  `ActiveStreams` so the frontend never has to cross-reference
+ *  `listActiveStreams` itself. */
+export async function loadDashboardSnapshot(): Promise<DashboardSnapshot> {
+	try {
+		return await invoke<DashboardSnapshot>("load_dashboard_snapshot");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load dashboard snapshot."),
 		);
 	}
 }

@@ -195,6 +195,19 @@ pub async fn list_archived_workspaces() -> CmdResult<Vec<workspaces::WorkspaceSu
     run_blocking(workspaces::list_archived_workspaces).await
 }
 
+/// Typed kanban projection for the dashboard view (#482). Reuses the
+/// same workspace + session aggregates as the sidebar, adds an
+/// `Archived` lane that pulls in archived rows, and overlays each
+/// card with an `isStreaming` bit so the dashboard can render busy
+/// indicators without a separate `list_active_streams` query.
+#[tauri::command]
+pub async fn load_dashboard_snapshot(
+    active_streams: tauri::State<'_, crate::agents::ActiveStreams>,
+) -> CmdResult<crate::workspace::dashboard::DashboardSnapshot> {
+    let streams = active_streams.snapshot_for_ui();
+    run_blocking(move || crate::workspace::dashboard::build_dashboard_snapshot(&streams)).await
+}
+
 #[tauri::command]
 pub async fn get_workspace(workspace_id: String) -> CmdResult<workspaces::WorkspaceDetail> {
     run_blocking(move || workspaces::get_workspace(&workspace_id)).await

@@ -35,6 +35,7 @@ import {
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
+	loadDashboardSnapshot,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceForgeActionStatus,
@@ -61,6 +62,7 @@ const PERSIST_GC_TIME = 24 * 60 * 60_000; // 24h — persisted entries live this
 export const helmorQueryKeys = {
 	workspaceGroups: ["workspaceGroups"] as const,
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
+	dashboardSnapshot: ["dashboardSnapshot"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
 	workspaceDetail: (workspaceId: string) =>
@@ -317,6 +319,22 @@ export function archivedWorkspacesQueryOptions() {
 		initialDataUpdatedAt: 0,
 		staleTime: 0,
 		meta: PERSIST_META,
+	});
+}
+
+/** Dashboard kanban projection. Event-driven via the existing
+ *  workspace / active-stream `UiMutationEvent`s — the bridge handler
+ *  invalidates this query alongside the sidebar queries so the
+ *  dashboard stays in lockstep with the rest of the app. */
+export function dashboardSnapshotQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.dashboardSnapshot,
+		queryFn: loadDashboardSnapshot,
+		// `staleTime: 0` mirrors the sidebar groups query — the
+		// dashboard view should always re-validate on mount because
+		// workspace state can flip while the user is elsewhere in
+		// the app.
+		staleTime: 0,
 	});
 }
 

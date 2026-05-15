@@ -1,5 +1,6 @@
 pub(crate) mod archive;
 pub(crate) mod branching;
+pub mod dashboard;
 pub mod files;
 pub mod helpers;
 pub(crate) mod lifecycle;
