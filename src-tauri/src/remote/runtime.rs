@@ -28,10 +28,13 @@
 //! work is always either a function call (local) or a JSON-RPC
 //! round-trip (remote), so the overhead is in the noise either way.
 
+use std::path::Path;
 use std::sync::OnceLock;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use super::methods::WorkspaceStatusResult;
 
 /// Snapshot returned by [`RemoteRuntime::runtime_health`]. Carries
 /// just enough for the UI to render a "connected to X" indicator
@@ -77,6 +80,17 @@ pub trait RemoteRuntime: Send + Sync {
     /// frontend can poll it on a focus tick without worrying about
     /// latency budget.
     fn runtime_health(&self) -> Result<RuntimeHealth>;
+
+    /// Project the workspace's `git status --porcelain` output into
+    /// a wire-friendly shape. First *real* method on the seam: the
+    /// local impl shells out to `git`; the future remote impl
+    /// translates it into a `workspace.status` JSON-RPC request.
+    ///
+    /// `workspace_dir` is interpreted on the runtime's *own*
+    /// filesystem. The local impl reads it directly; the remote
+    /// impl will pass it verbatim and expect the server to resolve
+    /// it under its own root.
+    fn workspace_status(&self, workspace_dir: &Path) -> Result<WorkspaceStatusResult>;
 }
 
 /// The default runtime — does the work in-process. Every existing
@@ -124,6 +138,57 @@ impl RemoteRuntime for LocalRuntime {
             hostname: self.hostname.clone(),
             version: self.version.to_string(),
         })
+    }
+
+    fn workspace_status(&self, workspace_dir: &Path) -> Result<WorkspaceStatusResult> {
+        let workspace_str = workspace_dir.display().to_string();
+        // `run_git_capture` returns stdout verbatim. We can't use the
+        // standard `run_git` here because it trims the result, and
+        // porcelain v1 *encodes the staging state in the leading
+        // space* — a stripped leading byte means `line[3..]` slices
+        // off the first byte of the path on unstaged modifications.
+        let output = crate::git_ops::run_git_capture(
+            [
+                "-C",
+                workspace_str.as_str(),
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+            ],
+            None,
+        )
+        .with_context(|| format!("Failed to read workspace status for {workspace_str}"))?;
+        Ok(parse_porcelain_status(&output))
+    }
+}
+
+/// Turn `git status --porcelain` output into the wire-shaped
+/// projection. Kept here (not in `git/ops.rs`) so the parsing
+/// rules live next to the trait method that emits the result —
+/// future schema changes touch one place.
+fn parse_porcelain_status(output: &str) -> WorkspaceStatusResult {
+    use std::collections::BTreeSet;
+    // Porcelain v1 format: `XY<space>path` where X is staged status,
+    // Y is unstaged status. Paths beyond column 3. Renames produce
+    // `R  old -> new` — we keep the trailing portion as the canonical
+    // path (matches what git/ops.rs's parse does today).
+    let paths: BTreeSet<String> = output
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let path = line[3..].trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(path.to_string())
+        })
+        .collect();
+    let is_clean = paths.is_empty();
+    WorkspaceStatusResult {
+        is_clean,
+        changed_paths: paths.into_iter().collect(),
     }
 }
 
@@ -180,6 +245,42 @@ mod tests {
                 version: self.version.clone(),
             })
         }
+
+        fn workspace_status(&self, _workspace_dir: &Path) -> Result<WorkspaceStatusResult> {
+            // The fake exists only to prove dispatch — return a stub
+            // that's distinguishable from a real local-runtime result.
+            Ok(WorkspaceStatusResult {
+                is_clean: true,
+                changed_paths: vec![],
+            })
+        }
+    }
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed to spawn: {e}"));
+        assert!(
+            output.status.success(),
+            "git {args:?} in {} failed: {}",
+            repo.display(),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        run_git(dir.path(), &["init"]);
+        run_git(dir.path(), &["checkout", "-b", "main"]);
+        run_git(dir.path(), &["config", "user.email", "helmor@example.com"]);
+        run_git(dir.path(), &["config", "user.name", "Helmor Test"]);
+        run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("file.txt"), "base\n").unwrap();
+        run_git(dir.path(), &["add", "file.txt"]);
+        run_git(dir.path(), &["commit", "-m", "initial"]);
+        dir
     }
 
     // ── LocalRuntime ─────────────────────────────────────────────
@@ -278,5 +379,62 @@ mod tests {
         let wire = serde_json::to_string(&original).unwrap();
         let restored: RuntimeHealth = serde_json::from_str(&wire).unwrap();
         assert_eq!(restored, original);
+    }
+
+    // ── LocalRuntime::workspace_status ───────────────────────────
+
+    #[test]
+    fn local_runtime_workspace_status_reports_clean_repo() {
+        let dir = init_repo();
+        let runtime = LocalRuntime::with_hostname("test-host".into());
+
+        let status = runtime.workspace_status(dir.path()).unwrap();
+
+        assert!(status.is_clean, "fresh init_repo should be clean");
+        assert!(status.changed_paths.is_empty());
+    }
+
+    #[test]
+    fn local_runtime_workspace_status_surfaces_modified_and_untracked_paths() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "changed\n").unwrap();
+        std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
+        let runtime = LocalRuntime::with_hostname("test-host".into());
+
+        let status = runtime.workspace_status(dir.path()).unwrap();
+
+        assert!(!status.is_clean);
+        // Sorted + deduped, both files surfaced regardless of staging
+        // state. `untracked-files=normal` means `new.txt` shows up.
+        assert_eq!(
+            status.changed_paths,
+            vec!["file.txt".to_string(), "new.txt".to_string()],
+        );
+    }
+
+    // ── porcelain parser ─────────────────────────────────────────
+
+    #[test]
+    fn parse_porcelain_status_handles_typical_status_codes() {
+        // Mix of modified, untracked, deleted. The parser strips the
+        // 3-char status prefix and sorts the result.
+        let raw = " M src/foo.rs\n?? new.txt\n D removed.rs\n";
+        let parsed = parse_porcelain_status(raw);
+        assert!(!parsed.is_clean);
+        assert_eq!(
+            parsed.changed_paths,
+            vec![
+                "new.txt".to_string(),
+                "removed.rs".to_string(),
+                "src/foo.rs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_treats_empty_output_as_clean() {
+        let parsed = parse_porcelain_status("");
+        assert!(parsed.is_clean);
+        assert!(parsed.changed_paths.is_empty());
     }
 }

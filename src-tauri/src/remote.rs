@@ -31,7 +31,9 @@ pub mod runtime;
 pub mod server;
 
 pub use codec::{read_frame, write_frame, FrameError};
-pub use methods::{Method, RpcMethod};
+pub use methods::{
+    Method, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
+};
 pub use protocol::{
     JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
 };

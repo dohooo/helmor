@@ -700,6 +700,19 @@ export async function getRuntimeHealth(): Promise<RuntimeHealth> {
 	return invoke<RuntimeHealth>("get_runtime_health");
 }
 
+export type WorkspaceStatusResult = {
+	isClean: boolean;
+	changedPaths: string[];
+};
+
+export async function getWorkspaceStatus(
+	workspaceDir: string,
+): Promise<WorkspaceStatusResult> {
+	return invoke<WorkspaceStatusResult>("get_workspace_status", {
+		workspaceDir,
+	});
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;

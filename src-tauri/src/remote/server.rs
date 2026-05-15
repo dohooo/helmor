@@ -10,7 +10,8 @@
 //! loopback test or an in-process integration probe without spinning
 //! up a real process.
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -18,17 +19,17 @@ use serde_json::Value;
 
 use super::methods::{
     InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
-    PingResult, RpcMethod,
+    PingResult, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
 };
+use super::runtime::{LocalRuntime, RemoteRuntime};
 
 /// Per-connection state. Created when the binary boots, threaded
 /// through every dispatch. Today it carries the post-`initialize`
 /// gate flag and the server's startup metadata; later phases will
 /// add the DB pool, the script-process manager, etc.
-#[derive(Debug)]
 pub struct ServerContext {
     /// Set to `true` after a successful `initialize`. Every other
     /// method rejects with `NOT_INITIALIZED` until then so a
@@ -42,14 +43,39 @@ pub struct ServerContext {
     /// Hostname surfaced in `initialize` responses. `uname -n` on
     /// Unix; later phases can override for friendlier labels.
     hostname: String,
+    /// Runtime the server delegates execution to. In the
+    /// `helmor-server` binary this is a [`LocalRuntime`] — the
+    /// server side of an SSH pair IS the local runtime on the
+    /// remote host. Tests can swap in a stub to drive the
+    /// dispatcher without shelling out to `git`.
+    runtime: Arc<dyn RemoteRuntime>,
 }
 
 impl ServerContext {
     pub fn new(server_version: impl Into<String>, hostname: impl Into<String>) -> Self {
+        let hostname = hostname.into();
+        let runtime: Arc<dyn RemoteRuntime> =
+            Arc::new(LocalRuntime::with_hostname(hostname.clone()));
+        Self {
+            initialized: Mutex::new(false),
+            server_version: server_version.into(),
+            hostname,
+            runtime,
+        }
+    }
+
+    /// Construct with a caller-supplied runtime. Used by tests to
+    /// inject a fake; production code goes through [`Self::new`].
+    pub fn with_runtime(
+        server_version: impl Into<String>,
+        hostname: impl Into<String>,
+        runtime: Arc<dyn RemoteRuntime>,
+    ) -> Self {
         Self {
             initialized: Mutex::new(false),
             server_version: server_version.into(),
             hostname: hostname.into(),
+            runtime,
         }
     }
 
@@ -93,6 +119,9 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
             handle::<InitializeMethod, _>(req.params, |params| handle_initialize(ctx, params))
         }
         Method::Ping => handle::<PingMethod, _>(req.params, handle_ping),
+        Method::WorkspaceStatus => handle::<WorkspaceStatusMethod, _>(req.params, |params| {
+            handle_workspace_status(ctx, params)
+        }),
     };
 
     let response = match outcome {
@@ -187,6 +216,22 @@ fn handle_ping(params: PingParams) -> Result<PingResult, JsonRpcError> {
     Ok(PingResult {
         counter: params.counter,
         server_time: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+fn handle_workspace_status(
+    ctx: &ServerContext,
+    params: WorkspaceStatusParams,
+) -> Result<WorkspaceStatusResult, JsonRpcError> {
+    let workspace_dir = PathBuf::from(&params.workspace_dir);
+    ctx.runtime.workspace_status(&workspace_dir).map_err(|err| {
+        // Funnel anyhow into HANDLER_FAILED so the client can
+        // distinguish "your params were wrong" (INVALID_PARAMS)
+        // from "git itself blew up" (HANDLER_FAILED).
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.status failed: {err:#}"),
+        )
     })
 }
 
@@ -324,6 +369,143 @@ mod tests {
         assert!(
             err.message.contains("`initialize`"),
             "error should name the method: {err:?}"
+        );
+    }
+
+    // ── workspace.status ──────────────────────────────────────────
+
+    /// Stub runtime so dispatch tests don't need a real git repo on
+    /// disk. Returns a fixed status keyed off the workspace path so
+    /// the test can assert the params flowed through correctly.
+    struct StubRuntime;
+
+    impl RemoteRuntime for StubRuntime {
+        fn runtime_health(&self) -> anyhow::Result<super::super::runtime::RuntimeHealth> {
+            unreachable!("workspace.status dispatch tests should not probe health")
+        }
+
+        fn workspace_status(
+            &self,
+            workspace_dir: &std::path::Path,
+        ) -> anyhow::Result<WorkspaceStatusResult> {
+            // Echo the path back in `changed_paths` so the test can
+            // prove the dispatcher decoded params + plumbed them to
+            // the runtime.
+            Ok(WorkspaceStatusResult {
+                is_clean: false,
+                changed_paths: vec![workspace_dir.display().to_string()],
+            })
+        }
+    }
+
+    fn initialized_ctx_with_stub() -> ServerContext {
+        let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+        // Drive a handshake so the gate opens, just like a real
+        // client would do.
+        dispatch_request(
+            &ctx,
+            request(
+                "initialize",
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientName": "helmor-client",
+                }),
+                1,
+            ),
+        )
+        .expect("initialize response");
+        ctx
+    }
+
+    #[test]
+    fn workspace_status_dispatches_to_runtime_and_returns_camel_case_result() {
+        let ctx = initialized_ctx_with_stub();
+        let resp = dispatch_request(
+            &ctx,
+            request(
+                "workspace.status",
+                json!({ "workspaceDir": "/tmp/example" }),
+                2,
+            ),
+        )
+        .unwrap();
+        let result = resp.result.expect("ok response");
+        assert_eq!(result["isClean"], false);
+        assert_eq!(
+            result["changedPaths"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
+            Some(vec!["/tmp/example"]),
+        );
+    }
+
+    #[test]
+    fn workspace_status_before_initialize_returns_not_initialized() {
+        // Fresh ctx — no handshake. Even with the stub runtime, the
+        // gate must reject.
+        let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+        let resp = dispatch_request(
+            &ctx,
+            request(
+                "workspace.status",
+                json!({ "workspaceDir": "/tmp/example" }),
+                1,
+            ),
+        )
+        .unwrap();
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::NOT_INITIALIZED);
+    }
+
+    #[test]
+    fn workspace_status_with_missing_workspace_dir_returns_invalid_params() {
+        let ctx = initialized_ctx_with_stub();
+        let resp = dispatch_request(&ctx, request("workspace.status", json!({}), 2)).unwrap();
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+        assert!(
+            err.message.contains("`workspace.status`"),
+            "error should name the method: {err:?}"
+        );
+    }
+
+    #[test]
+    fn workspace_status_runtime_failure_surfaces_as_handler_failed() {
+        struct FailingRuntime;
+        impl RemoteRuntime for FailingRuntime {
+            fn runtime_health(&self) -> anyhow::Result<super::super::runtime::RuntimeHealth> {
+                unreachable!()
+            }
+            fn workspace_status(
+                &self,
+                _: &std::path::Path,
+            ) -> anyhow::Result<WorkspaceStatusResult> {
+                Err(anyhow::anyhow!("git: not a repository"))
+            }
+        }
+        let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(FailingRuntime));
+        // Handshake first.
+        dispatch_request(
+            &ctx,
+            request(
+                "initialize",
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientName": "helmor-client",
+                }),
+                1,
+            ),
+        );
+        let resp = dispatch_request(
+            &ctx,
+            request("workspace.status", json!({ "workspaceDir": "/nope" }), 2),
+        )
+        .unwrap();
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::HANDLER_FAILED);
+        assert!(
+            err.message.contains("not a repository"),
+            "error should preserve git's message: {err:?}"
         );
     }
 

@@ -30,6 +30,11 @@ pub enum Method {
     /// counter so latency / liveness can be measured without
     /// touching the workspace state.
     Ping,
+    /// Read-only `git status` projection for a workspace. First
+    /// real method on the trait seam — proves the local impl
+    /// and the dispatch layer work end-to-end before the SSH
+    /// transport lands.
+    WorkspaceStatus,
 }
 
 impl Method {
@@ -37,6 +42,7 @@ impl Method {
         match self {
             Self::Initialize => "initialize",
             Self::Ping => "ping",
+            Self::WorkspaceStatus => "workspace.status",
         }
     }
 }
@@ -62,6 +68,7 @@ impl FromStr for Method {
         match value {
             "initialize" => Ok(Self::Initialize),
             "ping" => Ok(Self::Ping),
+            "workspace.status" => Ok(Self::WorkspaceStatus),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -146,16 +153,67 @@ impl RpcMethod for PingMethod {
     type Result = PingResult;
 }
 
+// ── workspace.status ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusParams {
+    /// Absolute filesystem path to the workspace directory. For the
+    /// SSH transport, this is interpreted on the *server's* filesystem
+    /// — clients can't pass local paths verbatim and expect them to
+    /// resolve. A later phase will likely replace this with a logical
+    /// workspace identifier resolved server-side.
+    pub workspace_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatusResult {
+    /// True iff `git status --porcelain --untracked-files=normal`
+    /// produced no output. Equivalent to "nothing staged, unstaged,
+    /// or untracked".
+    pub is_clean: bool,
+    /// Paths from porcelain output, sorted + deduped. Status code
+    /// prefixes are stripped — the UI just needs the set of changed
+    /// files for a count or list.
+    pub changed_paths: Vec<String>,
+}
+
+pub struct WorkspaceStatusMethod;
+impl RpcMethod for WorkspaceStatusMethod {
+    const NAME: &'static str = "workspace.status";
+    type Params = WorkspaceStatusParams;
+    type Result = WorkspaceStatusResult;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn method_enum_round_trips_through_strings() {
-        for method in [Method::Initialize, Method::Ping] {
+        for method in [Method::Initialize, Method::Ping, Method::WorkspaceStatus] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
         assert!("not-a-method".parse::<Method>().is_err());
+    }
+
+    #[test]
+    fn workspace_status_wire_shapes_are_camel_case() {
+        let params = WorkspaceStatusParams {
+            workspace_dir: "/tmp/example".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"workspaceDir\""));
+
+        let result = WorkspaceStatusResult {
+            is_clean: false,
+            changed_paths: vec!["src/foo.rs".into()],
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"isClean\""));
+        assert!(wire.contains("\"changedPaths\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
     }
 
     #[test]
