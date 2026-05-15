@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { VoiceDispatchActionKind } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	type RealtimeServerEvent,
@@ -76,9 +77,13 @@ export function useRealtimeSequence(
 	active: boolean,
 	onNavigateToWorkspace?: (workspaceId: string) => void,
 	onEndSession?: () => void,
+	onDispatchWorkspaceAction?: (
+		workspaceId: string,
+		actionKind: VoiceDispatchActionKind,
+	) => void,
 ): VoiceUiState {
-	// Hold the latest navigation / end-session callbacks in refs.
-	// Caller-side identity can change every render (App.tsx's
+	// Hold the latest navigation / end-session / dispatch callbacks in
+	// refs. Caller-side identity can change every render (App.tsx's
 	// `handleSelectWorkspace` closes over plenty of state), but we don't
 	// want a fresh closure to retrigger the WebRTC session lifecycle —
 	// that's exactly the bug this whole provider exists to fix. Reading
@@ -92,6 +97,10 @@ export function useRealtimeSequence(
 	useEffect(() => {
 		endSessionRef.current = onEndSession;
 	}, [onEndSession]);
+	const dispatchActionRef = useRef(onDispatchWorkspaceAction);
+	useEffect(() => {
+		dispatchActionRef.current = onDispatchWorkspaceAction;
+	}, [onDispatchWorkspaceAction]);
 
 	const [phase, setPhase] = useState<VoiceUiPhase>("listening");
 	const [label, setLabel] = useState<string | undefined>();
@@ -426,6 +435,9 @@ export function useRealtimeSequence(
 					onEndSession: () => {
 						endSessionRef.current?.();
 					},
+					onDispatchWorkspaceAction: (workspaceId, actionKind) => {
+						dispatchActionRef.current?.(workspaceId, actionKind);
+					},
 				});
 				next.onEvent((event) => dispatcher.handleEvent(event));
 				next.onEvent(handleEvent);
@@ -499,10 +511,24 @@ function humanToolStatus(name: string): string {
 			return "Looking up workspace";
 		case "create_workspace":
 			return "Creating workspace";
+		case "create_workspace_and_send":
+			return "Creating + sending";
+		case "create_workspace_variants":
+			return "Creating variants";
 		case "set_workspace_status":
 			return "Updating status";
+		case "archive_workspace":
+			return "Archiving workspace";
+		case "permanently_delete_workspace":
+			return "Deleting workspace";
+		case "run_workspace_action":
+			return "Running action";
+		case "run_workspace_script":
+			return "Running script";
 		case "list_sessions":
 			return "Listing sessions";
+		case "get_session_messages":
+			return "Reading session";
 		case "send_prompt":
 			return "Sending to agent";
 		case "list_repos":

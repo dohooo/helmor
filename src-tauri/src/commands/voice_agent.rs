@@ -33,7 +33,10 @@ use crate::forge::{
     InboxSource,
 };
 use crate::models;
+use crate::models::sessions::WindowedHistoricalRecords;
+use crate::pipeline::types::HistoricalRecord;
 use crate::service;
+use crate::workspace::scripts::ScriptProcessManager;
 use crate::workspace::status::WorkspaceStatus;
 use crate::workspace::workspaces;
 
@@ -65,8 +68,15 @@ pub enum ToolKind {
     ListWorkspaces,
     ShowWorkspace,
     CreateWorkspace,
+    CreateWorkspaceAndSend,
+    CreateWorkspaceVariants,
     SetWorkspaceStatus,
+    ArchiveWorkspace,
+    PermanentlyDeleteWorkspace,
+    RunWorkspaceAction,
+    RunWorkspaceScript,
     ListSessions,
+    GetSessionMessages,
     SendPrompt,
     ListRepos,
     ListContextItems,
@@ -89,13 +99,21 @@ pub struct ToolMetadata {
     pub use_when: &'static str,
 }
 
-/// Result of one handler invocation, before envelope wrapping.
+/// Result of one handler invocation, before envelope wrapping. Handlers
+/// usually only set `data`; the optional fields below pick up sensible
+/// `None` defaults via the `Default` impl so the struct literal stays
+/// compact (`VoiceToolResult { data: ..., ..Default::default() }`).
+#[derive(Default)]
 struct VoiceToolResult {
     /// JSON returned to the model as the `function_call_output` body.
     data: Value,
     /// When set, the frontend dispatcher fires `handleSelectWorkspace`
     /// with this UUID so the UI follows the agent's action.
     navigate_to_workspace_id: Option<String>,
+    /// When set, the frontend dispatcher routes through
+    /// `handleInspectorCommitAction` to run the action via the same code
+    /// path the GUI button uses.
+    dispatch_workspace_action: Option<DispatchWorkspaceAction>,
 }
 
 /// Stable wire shape returned to the frontend dispatcher.
@@ -107,6 +125,34 @@ pub struct VoiceToolEnvelope {
     pub error: Option<String>,
     pub invalidates: Vec<MutationKind>,
     pub navigate_to_workspace_id: Option<String>,
+    /// Set by `run_workspace_action` for the four agent-dispatched action
+    /// kinds (`commit_and_push` / `create_pr` / `fix_errors` /
+    /// `resolve_conflicts`) so the frontend dispatcher can route the
+    /// action through the same `handleInspectorCommitAction` path that
+    /// the GUI buttons use — keeping the canned prompts +
+    /// post-stream verifiers + auto-close behavior identical between
+    /// voice and click flows.
+    pub dispatch_workspace_action: Option<DispatchWorkspaceAction>,
+}
+
+/// Frontend-side dispatch hint emitted by `run_workspace_action`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DispatchWorkspaceAction {
+    pub workspace_id: String,
+    /// Storage-format action name (matches `ActionKind` storage strings,
+    /// e.g. `"commit-and-push"`). Frontend maps this to the corresponding
+    /// `handleInspectorCommitAction` call.
+    pub action_kind: String,
+}
+
+/// Per-invocation context injected by `run_voice_tool` so handlers that
+/// need Tauri state (notably `run_workspace_script`, which kicks off a
+/// PTY-backed shell run via the shared `ScriptProcessManager`) can reach
+/// it without every handler having to take parameters they don't use.
+pub struct VoiceToolContext {
+    pub app: tauri::AppHandle,
+    pub scripts_manager: ScriptProcessManager,
 }
 
 impl ToolKind {
@@ -117,8 +163,15 @@ impl ToolKind {
         Self::ListWorkspaces,
         Self::ShowWorkspace,
         Self::CreateWorkspace,
+        Self::CreateWorkspaceAndSend,
+        Self::CreateWorkspaceVariants,
         Self::SetWorkspaceStatus,
+        Self::ArchiveWorkspace,
+        Self::PermanentlyDeleteWorkspace,
+        Self::RunWorkspaceAction,
+        Self::RunWorkspaceScript,
         Self::ListSessions,
+        Self::GetSessionMessages,
         Self::SendPrompt,
         Self::ListRepos,
         Self::ListContextItems,
@@ -223,6 +276,86 @@ impl ToolKind {
                            EN 'one sec.' / 中 '稍等'. NEVER 'ok, on it.' / '好的,我来弄' \
                            (bureaucratic).",
             },
+            Self::CreateWorkspaceAndSend => ToolMetadata {
+                name: "create_workspace_and_send",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Single repo name or UUID. Must already be \
+                                            registered (call list_repos if unsure)."
+                        },
+                        "prompt": {
+                            "type": "string",
+                            "description": "Verbatim what the user wants the agent to do."
+                        },
+                        "plan_mode": {
+                            "type": "boolean",
+                            "description": "Toggle agent plan mode for the seeded turn. \
+                                            Default false."
+                        }
+                    },
+                    "required": ["repo", "prompt"]
+                }),
+                cli_path: None,
+                invalidates: &[MutationKind::Workspaces, MutationKind::Sessions],
+                use_when: "USE WHEN: user describes work in ONE repo + ONE prompt ('in \
+                           helmor, fix the login bug', 'in kale, add dark mode'). Prefer \
+                           this over `create_workspace` + `send_prompt` — single round-trip \
+                           instead of two. For 'same repo, multiple variants/versions/方案' \
+                           use `create_workspace_variants` instead. For cross-repo work, \
+                           call this tool serially (twice) — no array shape. After success, \
+                           the UI auto-navigates to the new workspace. Reply shape: \
+                           verb-first, name the repo, no opener. \
+                           EN samples: 'created in kale, sent.' / 'done.' \
+                           中文 samples: 'kale 建好发了。' / '建好了。' \
+                           Preamble (1-2s): EN 'one sec.' / 中 '稍等'.",
+            },
+            Self::CreateWorkspaceVariants => ToolMetadata {
+                name: "create_workspace_variants",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Repo name or UUID. Same repo is used for every \
+                                            variant — they differ only in the prompt."
+                        },
+                        "prompts": {
+                            "type": "array",
+                            "minItems": 2,
+                            "items": { "type": "string" },
+                            "description": "One prompt per workspace. **Each entry MUST \
+                                            explicitly describe how it differs from the \
+                                            others** ('move it 2 pixels down', 'move it 4 \
+                                            pixels down', 'move it 6 pixels down') — do NOT \
+                                            send meta-prompts like 'create three variants', \
+                                            the agents see each prompt in isolation and \
+                                            won't know about siblings."
+                        },
+                        "plan_mode": {
+                            "type": "boolean",
+                            "description": "Toggle agent plan mode for every variant. \
+                                            Default false."
+                        }
+                    },
+                    "required": ["repo", "prompts"]
+                }),
+                cli_path: None,
+                invalidates: &[MutationKind::Workspaces, MutationKind::Sessions],
+                use_when: "USE WHEN: user asks for N variants / versions / 方案 / 对比 / \
+                           A/B in the SAME repo ('create three workspaces, move it 2/4/6 \
+                           pixels', 'try three different fixes', '三个方案'). Each prompt \
+                           runs in its own worktree so the user can compare results. The \
+                           prompts array length is the number of workspaces. Best-effort: \
+                           one variant failing doesn't block the others. After success, UI \
+                           navigates to the LAST created workspace. \
+                           Reply shape: verb-first count, no opener. \
+                           EN sample: 'three variants kicked off.' \
+                           中文 sample: '三个方案都跑起来了。' \
+                           Preamble (~1s per variant): EN 'one sec.' / 中 '稍等'.",
+            },
             Self::SetWorkspaceStatus => ToolMetadata {
                 name: "set_workspace_status",
                 parameters: json!({
@@ -251,6 +384,145 @@ impl ToolKind {
                            中文 samples: '标记完成。' / '移到待评审。' / '改回进行中。' \
                            No preamble; this returns in milliseconds.",
             },
+            Self::ArchiveWorkspace => ToolMetadata {
+                name: "archive_workspace",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "workspace": {
+                            "type": "string",
+                            "description": "Workspace UUID or `repo/dir` shorthand."
+                        }
+                    },
+                    "required": ["workspace"]
+                }),
+                cli_path: None,
+                invalidates: &[MutationKind::Workspaces],
+                use_when: "USE WHEN: user wants to wrap up a workspace they're done with — \
+                           'archive the X workspace', 'put X away', 'clean up the done one'. \
+                           Reversible (the workspace can be restored from the archive view) \
+                           so DON'T ask for confirmation. Prefer this over \
+                           `permanently_delete_workspace` whenever the user just says \
+                           'remove' / 'get rid of' — only delete when they explicitly say \
+                           'delete' / 'permanently' / 'erase'. Reply shape: verb-first, \
+                           name the workspace, nothing else. \
+                           EN samples: 'archived kale/login-fix.' / 'archived.' \
+                           中文 samples: 'kale/login-fix 归档了。' / '归档了。' \
+                           No preamble; returns in milliseconds.",
+            },
+            Self::PermanentlyDeleteWorkspace => ToolMetadata {
+                name: "permanently_delete_workspace",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "workspace": {
+                            "type": "string",
+                            "description": "Workspace UUID or `repo/dir` shorthand."
+                        },
+                        "confirmed": {
+                            "type": "boolean",
+                            "description": "Must be true. The handler rejects the call \
+                                            otherwise — proof the user explicitly confirmed \
+                                            a destructive, irreversible delete."
+                        }
+                    },
+                    "required": ["workspace", "confirmed"]
+                }),
+                cli_path: None,
+                invalidates: &[MutationKind::Workspaces, MutationKind::Sessions],
+                use_when: "USE WHEN: user EXPLICITLY says 'delete' / 'permanently remove' / \
+                           '彻底删除' for a workspace. This is destructive and unrecoverable \
+                           — the worktree is removed from disk, sessions are dropped, branch \
+                           may be left dangling. ALWAYS confirm verbally first: ask 'delete \
+                           X for good?' / '彻底删掉 X 吗?' and only call this tool with \
+                           `confirmed: true` after the user explicitly agrees. If they just \
+                           said 'remove' / 'get rid of' without 'delete'/'permanent', \
+                           prefer `archive_workspace` and confirm that interpretation. \
+                           Reply shape after success: verb-first, terse. \
+                           EN: 'deleted.' / 中: '删了。'",
+            },
+            Self::RunWorkspaceAction => ToolMetadata {
+                name: "run_workspace_action",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "workspace": {
+                            "type": "string",
+                            "description": "Workspace UUID or `repo/dir` shorthand."
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "commit_and_push",
+                                "create_pr",
+                                "fix_errors",
+                                "resolve_conflicts",
+                                "merge_pr",
+                                "pull_latest"
+                            ],
+                            "description": "Which ship-flow action to run. `commit_and_push`, \
+                                            `create_pr`, `fix_errors`, `resolve_conflicts` \
+                                            spawn an agent session (you don't see results — \
+                                            the user does, in the inspector). `merge_pr` and \
+                                            `pull_latest` are direct git/forge calls."
+                        }
+                    },
+                    "required": ["workspace", "action"]
+                }),
+                cli_path: None,
+                invalidates: &[MutationKind::Workspaces, MutationKind::Sessions],
+                use_when: "USE WHEN: user asks for a ship-flow action on a workspace — \
+                           'commit and push X', 'open a PR', 'merge the PR', 'pull latest', \
+                           'fix the CI errors', 'resolve conflicts'. \
+                           Mapping cheat sheet (note: voice tool args use snake_case action \
+                           names; the GUI sometimes spells them with dashes — same things): \
+                           commit/push → commit_and_push;  open/create PR/MR → create_pr; \
+                           merge the PR/MR → merge_pr;  pull/sync/update from main → \
+                           pull_latest;  fix errors/CI/lint → fix_errors;  resolve conflicts \
+                           → resolve_conflicts.  Voice does NOT expose 'open PR in browser', \
+                           'push' (alone), or 'review' — those are GUI-only today. \
+                           Reply shape after dispatch: verb-first, terse. The four \
+                           agent-dispatched actions run async (you don't wait for them); \
+                           merge_pr / pull_latest return immediately with a result. \
+                           EN samples: 'committing and pushing.' / 'pulled.' / 'merged.' \
+                           中文 samples: 'commit 并推送中。' / '拉好了。' / 'merge 了。' \
+                           Preamble (instant for direct ones, ~1s for agent ones): rarely \
+                           needed.",
+            },
+            Self::RunWorkspaceScript => ToolMetadata {
+                name: "run_workspace_script",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "workspace": {
+                            "type": "string",
+                            "description": "Workspace UUID or `repo/dir` shorthand."
+                        },
+                        "script": {
+                            "type": "string",
+                            "enum": ["setup", "run"],
+                            "description": "Which repo-level script to run. `setup` is the \
+                                            one that bootstraps deps; `run` is the dev / \
+                                            serve script. Only fires if the repo has that \
+                                            script configured in its settings."
+                        }
+                    },
+                    "required": ["workspace", "script"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: user wants to (re)run a repo's setup or dev script on a \
+                           workspace — 'run setup in X', 'kick off the dev server', '跑一下 \
+                           setup'. Fire-and-forget: the script runs in the background in \
+                           Helmor's inspector — you don't see output and shouldn't try to \
+                           narrate it. If the repo has no script of that kind configured, \
+                           the tool returns an error you should relay verbatim ('no run \
+                           script configured for kale'). \
+                           Reply shape after dispatch: verb-first, terse. \
+                           EN samples: 'running setup.' / 'kicked off the dev server.' \
+                           中文 samples: 'setup 开跑了。' / 'run 跑起来了。' \
+                           Preamble: not needed; dispatch is sub-100ms.",
+            },
             Self::ListSessions => ToolMetadata {
                 name: "list_sessions",
                 parameters: json!({
@@ -271,6 +543,47 @@ impl ToolKind {
                            EN sample: 'three sessions, latest is fix-readme-typo.' \
                            中文 sample: '三个会话,最近的是 fix-readme-typo。' \
                            Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'.",
+            },
+            Self::GetSessionMessages => ToolMetadata {
+                name: "get_session_messages",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session UUID — must come from a prior \
+                                            list_sessions call. Never invent one or ask the \
+                                            user to recite it."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "How many trailing messages to return (1-20). \
+                                            Default 5 — voice users usually want the latest \
+                                            activity, not the whole transcript."
+                        },
+                        "body_limit": {
+                            "type": "integer",
+                            "description": "Per-message body cap in chars (1-4000). Default \
+                                            800 — enough to summarize one turn. Each message \
+                                            carries `bodyHasMore` so you know if it was \
+                                            truncated."
+                        }
+                    },
+                    "required": ["session"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: user asks 'what did the agent say in that session', \
+                           'show me the last turn', 'what's been going on in X'. Returns \
+                           the trailing N messages (latest at the end). Each message has \
+                           role / createdAt / a flattened text `body` + bodyOffset / \
+                           bodyLength / bodyTotal / bodyHasMore. Don't read raw markdown or \
+                           tool-call JSON aloud — summarize in the user's language. \
+                           `windowHasMore: true` means older messages exist beyond this \
+                           window; the agent cannot currently paginate further back via \
+                           this tool, so report 'there's more earlier history' rather than \
+                           promising a second fetch. Preamble (DB read ~50ms): usually \
+                           none needed.",
             },
             Self::SendPrompt => ToolMetadata {
                 name: "send_prompt",
@@ -478,14 +791,21 @@ impl ToolKind {
         }
     }
 
-    fn run(self, args: Value) -> Result<VoiceToolResult> {
+    fn run(self, args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         match self {
             Self::ListWorkspaces => list_workspaces(args),
             Self::ShowWorkspace => show_workspace(args),
             Self::CreateWorkspace => create_workspace(args),
+            Self::CreateWorkspaceAndSend => create_workspace_and_send(args, ctx),
+            Self::CreateWorkspaceVariants => create_workspace_variants(args, ctx),
             Self::SetWorkspaceStatus => set_workspace_status(args),
+            Self::ArchiveWorkspace => archive_workspace(args),
+            Self::PermanentlyDeleteWorkspace => permanently_delete_workspace(args),
+            Self::RunWorkspaceAction => run_workspace_action(args),
+            Self::RunWorkspaceScript => run_workspace_script(args, ctx),
             Self::ListSessions => list_sessions(args),
-            Self::SendPrompt => send_prompt(args),
+            Self::GetSessionMessages => get_session_messages(args),
+            Self::SendPrompt => send_prompt(args, ctx),
             Self::ListRepos => list_repos(args),
             Self::ListContextItems => list_context_items(args),
             Self::GetContextItemDetail => get_context_item_detail(args),
@@ -496,7 +816,7 @@ impl ToolKind {
             // a clean ack so the model's output channel doesn't stall.
             Self::WaitForUser | Self::EndSession => Ok(VoiceToolResult {
                 data: json!({ "ok": true }),
-                navigate_to_workspace_id: None,
+                ..Default::default()
             }),
         }
     }
@@ -521,7 +841,7 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
         let rows = workspaces::list_archived_workspaces()?;
         return Ok(VoiceToolResult {
             data: serde_json::to_value(rows)?,
-            navigate_to_workspace_id: None,
+            ..Default::default()
         });
     }
 
@@ -571,7 +891,7 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
     }
     Ok(VoiceToolResult {
         data: Value::Array(rows),
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -584,7 +904,7 @@ fn show_workspace(args: Value) -> Result<VoiceToolResult> {
     let detail = service::get_workspace(&id)?;
     Ok(VoiceToolResult {
         data: serde_json::to_value(detail)?,
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -604,6 +924,7 @@ fn create_workspace(args: Value) -> Result<VoiceToolResult> {
     Ok(VoiceToolResult {
         data: serde_json::to_value(response)?,
         navigate_to_workspace_id: Some(navigate),
+        ..Default::default()
     })
 }
 
@@ -635,7 +956,7 @@ fn set_workspace_status(args: Value) -> Result<VoiceToolResult> {
     .ok();
     Ok(VoiceToolResult {
         data: json!({ "ok": true, "id": id, "status": status_str }),
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -648,16 +969,165 @@ fn list_sessions(args: Value) -> Result<VoiceToolResult> {
     let sessions = models::sessions::list_workspace_sessions(&workspace_id)?;
     Ok(VoiceToolResult {
         data: serde_json::to_value(sessions)?,
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
-fn send_prompt(args: Value) -> Result<VoiceToolResult> {
+fn get_session_messages(args: Value) -> Result<VoiceToolResult> {
+    /// Window size — how many trailing messages we return per call.
+    const DEFAULT_LIMIT: usize = 5;
+    const MAX_LIMIT: usize = 20;
+    /// Per-message body cap. A single assistant turn (reasoning + tool
+    /// calls + result blocks) can be 10-50 KB raw; without this cap the
+    /// realtime context would fill up after one fetch.
+    const DEFAULT_BODY_LIMIT: usize = 800;
+    const MAX_BODY_LIMIT: usize = 4000;
+
+    let session_id = args.get("session").and_then(Value::as_str).context(
+        "get_session_messages: missing required `session` argument \
+             (UUID from list_sessions)",
+    )?;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| (n as usize).clamp(1, MAX_LIMIT))
+        .unwrap_or(DEFAULT_LIMIT);
+    let body_limit = args
+        .get("body_limit")
+        .and_then(Value::as_u64)
+        .map(|n| (n as usize).clamp(1, MAX_BODY_LIMIT))
+        .unwrap_or(DEFAULT_BODY_LIMIT);
+
+    // `*_windowed(Some(N))` is purpose-built for "tail N rows" — it
+    // does `ORDER BY DESC LIMIT N` under the hood so we don't scan the
+    // whole 5000-row session to grab the last 5.
+    let WindowedHistoricalRecords { records, has_more } =
+        models::sessions::list_session_historical_records_windowed(session_id, Some(limit))?;
+
+    let messages: Vec<Value> = records
+        .iter()
+        .map(|record| {
+            let summary = summarize_historical_record(record);
+            let total = summary.chars().count();
+            let take = body_limit.min(total);
+            let body: String = summary.chars().take(take).collect();
+            let returned = body.chars().count();
+            json!({
+                "id": record.id,
+                "role": record.role,
+                "createdAt": record.created_at,
+                "body": body,
+                "bodyOffset": 0,
+                "bodyLength": returned,
+                "bodyTotal": total,
+                "bodyHasMore": returned < total,
+            })
+        })
+        .collect();
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "messages": messages,
+            "windowSize": records.len(),
+            "windowHasMore": has_more,
+        }),
+        ..Default::default()
+    })
+}
+
+/// Flatten a stored `session_messages.content` JSON record into a
+/// human-readable string. The realtime agent should never see raw
+/// polymorphic message JSON — it tends to read tool-call arguments
+/// aloud or quote markdown verbatim. By collapsing each variant to a
+/// plain sentence (or a `[tag]` marker for synthetic events) the agent
+/// gets a sane summary surface to speak over.
+///
+/// Top-level `type` discriminator mirrors the storage contract:
+/// `user_prompt` / `user` / `assistant` / `system` / `error` / `result`
+/// / `item.completed` (Codex) / `turn.completed`. Unknown types fall
+/// back to a `[type-tag]` placeholder so the message still shows up in
+/// the timeline rather than vanishing.
+fn summarize_historical_record(record: &HistoricalRecord) -> String {
+    let Some(parsed) = &record.parsed_content else {
+        // Legacy / corrupted row. Fall back to the raw string so the
+        // agent at least sees *something* it can describe.
+        return record.content.clone();
+    };
+    let Some(msg_type) = parsed.get("type").and_then(Value::as_str) else {
+        return record.content.clone();
+    };
+
+    match msg_type {
+        "user_prompt" | "user" => parsed
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("(empty user message)")
+            .to_string(),
+        "assistant" => summarize_assistant_blocks(parsed),
+        "system" => parsed
+            .get("subtype")
+            .and_then(Value::as_str)
+            .map(|s| format!("[system: {s}]"))
+            .unwrap_or_else(|| "[system event]".to_owned()),
+        "error" => parsed
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| parsed.get("error").and_then(Value::as_str))
+            .unwrap_or("[error]")
+            .to_string(),
+        "result" => parsed
+            .get("result")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| "[result]".to_owned()),
+        "item.completed" | "turn.completed" => format!("[{msg_type}]"),
+        other => format!("[{other}]"),
+    }
+}
+
+/// Join the `message.content` block array of an assistant row into a
+/// single string. Text/thinking blocks contribute their text verbatim;
+/// tool_use blocks collapse to `[used tool: <name>]` (arguments stay
+/// out — the agent doesn't need to recite shell commands aloud).
+fn summarize_assistant_blocks(parsed: &Value) -> String {
+    let Some(blocks) = parsed.pointer("/message/content").and_then(Value::as_array) else {
+        return "[assistant: no content]".to_owned();
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    parts.push(text.to_owned());
+                }
+            }
+            Some("thinking") => {
+                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                    parts.push(format!("[thinking] {text}"));
+                }
+            }
+            Some("tool_use") => {
+                let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
+                parts.push(format!("[used tool: {name}]"));
+            }
+            Some(other) => parts.push(format!("[block: {other}]")),
+            None => {}
+        }
+    }
+
+    if parts.is_empty() {
+        "[assistant: empty content]".to_owned()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
+fn send_prompt(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
     let workspace_ref = args
         .get("workspace")
         .and_then(Value::as_str)
-        .context("send_prompt: missing required `workspace` argument")?
-        .to_string();
+        .context("send_prompt: missing required `workspace` argument")?;
     let prompt = args
         .get("prompt")
         .and_then(Value::as_str)
@@ -672,32 +1142,519 @@ fn send_prompt(args: Value) -> Result<VoiceToolResult> {
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let permission_mode = if plan_mode {
-        Some("plan".to_string())
-    } else {
-        None
-    };
 
-    // We resolve the workspace ref ahead of the send so we can attach
-    // the resolved UUID to the navigation hint. `service::send_message`
-    // resolves the ref again internally — that's fine, it's cheap.
-    let resolved_workspace_id = service::resolve_workspace_ref(&workspace_ref)?;
-
-    let params = service::SendMessageParams {
-        workspace_ref,
-        session_id,
-        prompt,
-        model: None,
-        permission_mode,
-        linked_directories: Vec::new(),
-    };
-    // The voice agent doesn't consume the stream — delegation writes
-    // the user message + pending CLI send row + notifies the running
-    // app, then returns. No-op `on_event` keeps the API satisfied.
-    let result = service::send_message(params, &mut |_event| {})?;
+    let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
+    let (workspace_id, session_id) =
+        voice_dispatch_to_agent(ctx, &workspace_id, session_id, prompt, plan_mode)?;
     Ok(VoiceToolResult {
-        data: serde_json::to_value(result)?,
-        navigate_to_workspace_id: Some(resolved_workspace_id),
+        data: json!({
+            "workspaceId": workspace_id,
+            "sessionId": session_id,
+            "persisted": true,
+        }),
+        navigate_to_workspace_id: Some(workspace_id),
+        ..Default::default()
+    })
+}
+
+/// Single-write dispatcher shared by every voice tool that sends a
+/// prompt to a workspace agent (`send_prompt`,
+/// `create_workspace_and_send`, `create_workspace_variants`).
+///
+/// Drops the legacy `service::send_message` app-running fan-out — which
+/// would double-write the `user_prompt` row by combining its own insert
+/// with the GUI composer's auto-submit — and instead routes through
+/// `agents::send_agent_message_internal`, the same code path the GUI
+/// composer uses. The `user_prompt` row lands exactly once.
+///
+/// Returns `(workspace_id, session_id)` so the caller can shape the
+/// envelope and surface the resolved session id back to the model.
+fn voice_dispatch_to_agent(
+    ctx: &VoiceToolContext,
+    workspace_id: &str,
+    session_id: Option<String>,
+    prompt: String,
+    plan_mode: bool,
+) -> Result<(String, String)> {
+    use tauri::ipc::{Channel, InvokeResponseBody};
+    use tauri::Manager;
+
+    let permission_mode = plan_mode.then(|| "plan".to_string());
+
+    // Resolve session — reuse the workspace's active session, or create
+    // one if it has none yet. Mirrors `service::send_message`'s
+    // session resolution (line 146-164) so the voice path picks the
+    // same session the GUI would for the same workspace.
+    let detail = service::get_workspace(workspace_id)?;
+    let session_id = match session_id {
+        Some(sid) => sid,
+        None => match detail.active_session_id.clone() {
+            Some(sid) => sid,
+            None => {
+                crate::models::sessions::create_session(
+                    workspace_id,
+                    None,
+                    permission_mode.as_deref(),
+                    crate::models::sessions::CreateSessionOverrides::default(),
+                )?
+                .session_id
+            }
+        },
+    };
+
+    // Resolve model — prefer the session's stored model so a previously
+    // pinned model isn't silently swapped to "default" by a voice send.
+    // Same fallback chain `service::send_message` uses (line 168-178).
+    let (session_model, session_provider) =
+        crate::models::sessions::get_session_model_and_provider(&session_id)
+            .unwrap_or((None, None));
+    let model_id = session_model.unwrap_or_else(|| "default".to_string());
+    let provider_hint = session_provider.as_deref();
+    let model = crate::agents::resolve_model(&model_id, provider_hint);
+
+    let cwd = detail
+        .root_path
+        .clone()
+        .context("voice_dispatch_to_agent: workspace has no root_path")?;
+
+    let request = crate::agents::AgentSendRequest {
+        provider: model.provider.to_string(),
+        model_id: model.id.to_string(),
+        prompt,
+        prompt_prefix: None,
+        // `session_id` here is the agent-provider-side id (claude /
+        // codex SDK session). Leave None — the backend will start a
+        // fresh provider session or resume one based on the row state.
+        session_id: None,
+        helmor_session_id: Some(session_id.clone()),
+        working_directory: Some(cwd),
+        effort_level: None,
+        permission_mode,
+        fast_mode: None,
+        user_message_id: None,
+        files: None,
+        images: None,
+    };
+
+    // Voice agent doesn't consume PTY events — same fire-and-forget
+    // pattern as `run_workspace_script`. The user sees output in the
+    // workspace inspector instead.
+    let on_event: Channel<crate::agents::AgentStreamEvent> =
+        Channel::new(|_: InvokeResponseBody| Ok(()));
+
+    let sidecar_state = ctx.app.state::<crate::sidecar::ManagedSidecar>();
+    let active_streams_state = ctx.app.state::<crate::agents::streaming::ActiveStreams>();
+    crate::agents::send_agent_message_internal(
+        ctx.app.clone(),
+        sidecar_state.inner(),
+        active_streams_state.inner(),
+        request,
+        on_event,
+    )
+    .map_err(|err| anyhow::anyhow!("{err:?}"))?;
+
+    Ok((workspace_id.to_string(), session_id))
+}
+
+/// Voice-shorthand for `create_workspace` immediately followed by
+/// sending the user's prompt to the new workspace's agent. 99% of "new
+/// task" voice intents take this shape ("in helmor, fix the login
+/// bug"), so collapsing the two calls into one halves the round-trip
+/// and one of the agent's reasoning steps.
+///
+/// **Single repo + single prompt only.** For "same repo, N variants
+/// each with its own prompt" use `create_workspace_variants`. For
+/// cross-repo batches (rare in practice) the model can serialize two
+/// calls to this tool.
+fn create_workspace_and_send(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
+    let repo_ref = args
+        .get("repo")
+        .and_then(Value::as_str)
+        .context("create_workspace_and_send: missing required `repo` argument")?;
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .context("create_workspace_and_send: missing required `prompt` argument")?
+        .to_string();
+    let plan_mode = args
+        .get("plan_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let repo_id = service::resolve_repo_ref(repo_ref)?;
+    let response = service::create_workspace_from_repo_impl(&repo_id)?;
+    let workspace_id = response.created_workspace_id.clone();
+    crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceListChanged).ok();
+    crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+        workspace_id: workspace_id.clone(),
+    })
+    .ok();
+
+    let (workspace_id, session_id) =
+        voice_dispatch_to_agent(ctx, &workspace_id, None, prompt, plan_mode)?;
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "workspaceId": workspace_id,
+            "sessionId": session_id,
+            "repo": repo_ref,
+        }),
+        navigate_to_workspace_id: Some(workspace_id),
+        ..Default::default()
+    })
+}
+
+/// Voice-side "create N variants of the same change" tool. Same repo,
+/// N workspaces, each with its own prompt. The motivating scenario is
+/// "create three workspaces for the traffic-light tweak: 2 / 4 / 6
+/// pixels" — three distinct prompts on the same code, each running in
+/// its own worktree so the user can compare results side by side.
+///
+/// Best-effort: one workspace failing (e.g. branch-name collision)
+/// doesn't abort the rest. The response carries `created` and
+/// `errors` arrays so the agent can speak the partial result.
+fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
+    let repo_ref = args
+        .get("repo")
+        .and_then(Value::as_str)
+        .context("create_workspace_variants: missing required `repo` argument")?;
+    let prompts_value = args
+        .get("prompts")
+        .context("create_workspace_variants: missing required `prompts` argument")?;
+    let prompts: Vec<String> = prompts_value
+        .as_array()
+        .context("create_workspace_variants: `prompts` must be an array of strings")?
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if prompts.len() < 2 {
+        anyhow::bail!(
+            "create_workspace_variants: `prompts` must contain at least 2 non-empty strings \
+             (got {}); use create_workspace_and_send for a single-variant case",
+            prompts.len(),
+        );
+    }
+    let plan_mode = args
+        .get("plan_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // Resolve the repo once up front — same repo for every variant, so
+    // a typo fails the whole call cleanly before we create any
+    // workspaces.
+    let repo_id = service::resolve_repo_ref(repo_ref)?;
+
+    let mut created: Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
+    let mut last_workspace_id: Option<String> = None;
+
+    for prompt in &prompts {
+        let result = (|| -> Result<(String, String)> {
+            let response = service::create_workspace_from_repo_impl(&repo_id)?;
+            let workspace_id = response.created_workspace_id.clone();
+            crate::ui_sync::notify_running_app(
+                crate::ui_sync::UiMutationEvent::WorkspaceListChanged,
+            )
+            .ok();
+            crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+                workspace_id: workspace_id.clone(),
+            })
+            .ok();
+            let (workspace_id, session_id) =
+                voice_dispatch_to_agent(ctx, &workspace_id, None, prompt.clone(), plan_mode)?;
+            Ok((workspace_id, session_id))
+        })();
+
+        match result {
+            Ok((workspace_id, session_id)) => {
+                last_workspace_id = Some(workspace_id.clone());
+                created.push(json!({
+                    "workspaceId": workspace_id,
+                    "sessionId": session_id,
+                    "prompt": prompt,
+                }));
+            }
+            Err(err) => {
+                errors.push(json!({
+                    "prompt": prompt,
+                    "error": format!("{err:#}"),
+                }));
+            }
+        }
+    }
+
+    if created.is_empty() {
+        anyhow::bail!(
+            "create_workspace_variants: all {} variants failed; see envelope detail for per-variant errors",
+            errors.len(),
+        );
+    }
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "repo": repo_ref,
+            "created": created,
+            "errors": errors,
+        }),
+        navigate_to_workspace_id: last_workspace_id,
+        ..Default::default()
+    })
+}
+
+fn archive_workspace(args: Value) -> Result<VoiceToolResult> {
+    let reference = args
+        .get("workspace")
+        .and_then(Value::as_str)
+        .context("archive_workspace: missing required `workspace` argument")?;
+    let workspace_id = service::resolve_workspace_ref(reference)?;
+    crate::workspace::lifecycle::archive_workspace_impl(&workspace_id)?;
+    crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceListChanged).ok();
+    crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+        workspace_id: workspace_id.clone(),
+    })
+    .ok();
+    Ok(VoiceToolResult {
+        data: json!({ "ok": true, "workspaceId": workspace_id }),
+        ..Default::default()
+    })
+}
+
+fn permanently_delete_workspace(args: Value) -> Result<VoiceToolResult> {
+    // Explicit boolean — missing or non-true blocks the delete. This is
+    // the agent-facing analog of the GUI's "Are you sure?" modal: a
+    // hard precondition the model has to satisfy by gathering verbal
+    // confirmation first.
+    let confirmed = args
+        .get("confirmed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !confirmed {
+        anyhow::bail!(
+            "permanently_delete_workspace: requires `confirmed: true` — confirm with the \
+             user verbally first, then call again with confirmed=true",
+        );
+    }
+    let reference = args
+        .get("workspace")
+        .and_then(Value::as_str)
+        .context("permanently_delete_workspace: missing required `workspace` argument")?;
+    let workspace_id = service::resolve_workspace_ref(reference)?;
+    crate::workspace::workspaces::permanently_delete_workspace(&workspace_id)?;
+    crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceListChanged).ok();
+    Ok(VoiceToolResult {
+        data: json!({ "ok": true, "workspaceId": workspace_id }),
+        ..Default::default()
+    })
+}
+
+/// Voice-side dispatcher for ship-flow actions. Two execution lanes:
+///
+/// * **Agent-dispatched** (`commit_and_push` / `create_pr` / `fix_errors`
+///   / `resolve_conflicts`): emits `dispatch_workspace_action` on the
+///   envelope so the frontend dispatcher reuses
+///   `handleInspectorCommitAction` — the same path GUI buttons use.
+///   This keeps the canned prompts in `buildCommitButtonPrompt` and
+///   the post-stream verifier / auto-close behavior identical between
+///   voice and click.
+/// * **Direct** (`merge_pr` / `pull_latest`): executes the existing
+///   internal function inline and returns its result. No agent
+///   session is created.
+fn run_workspace_action(args: Value) -> Result<VoiceToolResult> {
+    let reference = args
+        .get("workspace")
+        .and_then(Value::as_str)
+        .context("run_workspace_action: missing required `workspace` argument")?;
+    let action_str = args
+        .get("action")
+        .and_then(Value::as_str)
+        .context("run_workspace_action: missing required `action` argument")?;
+    let workspace_id = service::resolve_workspace_ref(reference)?;
+
+    match action_str {
+        // Agent-dispatched: hand off to the frontend so the canned
+        // prompt + verifier wiring stays in one place (the GUI button
+        // handlers). Voice handler just signals which action.
+        "commit_and_push" | "create_pr" | "fix_errors" | "resolve_conflicts" => {
+            let action_kind = match action_str {
+                "commit_and_push" => "commit-and-push",
+                "create_pr" => "create-pr",
+                "fix_errors" => "fix",
+                "resolve_conflicts" => "resolve-conflicts",
+                _ => unreachable!(),
+            };
+            Ok(VoiceToolResult {
+                data: json!({
+                    "ok": true,
+                    "action": action_str,
+                    "dispatched": true,
+                    "workspaceId": workspace_id,
+                }),
+                navigate_to_workspace_id: Some(workspace_id.clone()),
+                dispatch_workspace_action: Some(DispatchWorkspaceAction {
+                    workspace_id,
+                    action_kind: action_kind.to_string(),
+                }),
+            })
+        }
+        // Direct: run inline. Both return their underlying result JSON
+        // so the model can phrase outcomes naturally.
+        "merge_pr" => {
+            let info = crate::forge::merge_workspace_change_request(&workspace_id)?;
+            crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+                workspace_id: workspace_id.clone(),
+            })
+            .ok();
+            Ok(VoiceToolResult {
+                data: json!({
+                    "ok": true,
+                    "action": "merge_pr",
+                    "workspaceId": workspace_id,
+                    "result": info,
+                }),
+                ..Default::default()
+            })
+        }
+        "pull_latest" => {
+            let result =
+                crate::workspace::workspaces::sync_workspace_with_target_branch(&workspace_id)?;
+            crate::ui_sync::notify_running_app(crate::ui_sync::UiMutationEvent::WorkspaceChanged {
+                workspace_id: workspace_id.clone(),
+            })
+            .ok();
+            Ok(VoiceToolResult {
+                data: json!({
+                    "ok": true,
+                    "action": "pull_latest",
+                    "workspaceId": workspace_id,
+                    "result": result,
+                }),
+                ..Default::default()
+            })
+        }
+        other => anyhow::bail!(
+            "run_workspace_action: unknown action `{other}` — valid: commit_and_push, \
+             create_pr, fix_errors, resolve_conflicts, merge_pr, pull_latest"
+        ),
+    }
+}
+
+/// Fire-and-forget repo-level script runner. Mirrors
+/// `commands::script_commands::execute_repo_script` — the voice-side
+/// difference is that we drop the PTY event stream (the agent doesn't
+/// narrate output) and surface a fast "started/not configured" verdict
+/// to the model. The user sees the live PTY stream in the inspector.
+fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
+    use tauri::ipc::{Channel, InvokeResponseBody};
+
+    let reference = args
+        .get("workspace")
+        .and_then(Value::as_str)
+        .context("run_workspace_script: missing required `workspace` argument")?;
+    let script_type = args
+        .get("script")
+        .and_then(Value::as_str)
+        .context("run_workspace_script: missing required `script` argument")?;
+    if !matches!(script_type, "setup" | "run") {
+        anyhow::bail!("run_workspace_script: unknown script `{script_type}` — valid: setup, run",);
+    }
+
+    let workspace_id = service::resolve_workspace_ref(reference)?;
+    let workspace = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
+        .with_context(|| format!("run_workspace_script: workspace `{reference}` not found"))?;
+    let repo_id = workspace.repo_id.clone();
+
+    let repo = crate::repos::load_repository_by_id(&repo_id)?
+        .with_context(|| format!("run_workspace_script: repo `{repo_id}` not found"))?;
+    let scripts = crate::repos::load_repo_scripts(&repo_id, Some(&workspace_id))?;
+    let script = match script_type {
+        "setup" => scripts.setup_script.clone(),
+        "run" => scripts.run_script.clone(),
+        _ => unreachable!(),
+    };
+    let Some(script) = script.filter(|s| !s.trim().is_empty()) else {
+        anyhow::bail!(
+            "run_workspace_script: no {script_type} script configured for repo `{}`",
+            repo.name,
+        );
+    };
+
+    // Non-concurrent run mode: stop the previous run-script in this repo
+    // before kicking off a new one. Mirrors the GUI Tauri command.
+    if script_type == "run" && scripts.run_script_mode == "non-concurrent" {
+        ctx.scripts_manager
+            .kill_others_in_repo(&repo_id, "run", Some(&workspace_id));
+    }
+
+    let workspace_root = crate::workspace::helpers::workspace_path(&workspace).ok();
+    let working_dir = workspace_root
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| repo.root_path.clone());
+    let context = crate::workspace::scripts::ScriptContext {
+        root_path: repo.root_path.clone(),
+        workspace_path: Some(working_dir.clone()),
+        workspace_name: Some(workspace.directory_name.clone()),
+        default_branch: repo.default_branch.clone(),
+    };
+
+    // PTY events go nowhere — `Channel::new(|_| Ok(()))` is the
+    // documented no-op handler. The user watches output in the
+    // inspector via the GUI's own channel.
+    let channel: Channel<crate::workspace::scripts::ScriptEvent> =
+        Channel::new(|_: InvokeResponseBody| Ok(()));
+
+    let mgr = ctx.scripts_manager.clone();
+    let app = ctx.app.clone();
+    let script_type_owned = script_type.to_string();
+    let workspace_id_owned = workspace_id.clone();
+    let repo_id_owned = repo_id.clone();
+    let working_dir_owned = working_dir.clone();
+    let context_owned = context;
+    let script_owned = script;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        match crate::workspace::scripts::run_script(
+            &mgr,
+            &repo_id_owned,
+            &script_type_owned,
+            Some(&workspace_id_owned),
+            &script_owned,
+            &working_dir_owned,
+            &context_owned,
+            channel,
+        ) {
+            // Mirror execute_repo_script: a successful setup finalizes
+            // the workspace's `setup_completed_at` marker + nudges the
+            // git watcher so the inspector's Setup tab updates.
+            Ok(Some(0)) if script_type_owned == "setup" => {
+                if let Ok(ts) = crate::models::db::current_timestamp() {
+                    let _ =
+                        crate::models::workspaces::mark_setup_completed(&workspace_id_owned, &ts);
+                }
+                crate::git::watcher::notify_workspace_changed(&app);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    repo_id = %repo_id_owned,
+                    script_type = %script_type_owned,
+                    workspace_id = %workspace_id_owned,
+                    error = %format!("{err:#}"),
+                    "Voice-triggered script run failed"
+                );
+            }
+        }
+    });
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "ok": true,
+            "started": true,
+            "workspaceId": workspace_id,
+            "script": script_type,
+        }),
+        ..Default::default()
     })
 }
 
@@ -705,7 +1662,7 @@ fn list_repos(_args: Value) -> Result<VoiceToolResult> {
     let repos = models::repos::list_repositories()?;
     Ok(VoiceToolResult {
         data: serde_json::to_value(repos)?,
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -796,7 +1753,7 @@ fn list_context_items(args: Value) -> Result<VoiceToolResult> {
 
     Ok(VoiceToolResult {
         data: serde_json::to_value(page)?,
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -885,7 +1842,7 @@ fn get_context_item_detail(args: Value) -> Result<VoiceToolResult> {
 
     Ok(VoiceToolResult {
         data,
-        navigate_to_workspace_id: None,
+        ..Default::default()
     })
 }
 
@@ -957,6 +1914,7 @@ fn select_workspace(args: Value) -> Result<VoiceToolResult> {
         // Tiny envelope — the model shouldn't read details aloud.
         data: json!({ "ok": true, "navigated_to": id }),
         navigate_to_workspace_id: Some(id),
+        ..Default::default()
     })
 }
 
@@ -1024,7 +1982,12 @@ pub fn build_tools_array() -> Vec<Value> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn run_voice_tool(tool: String, args: Value) -> CmdResult<VoiceToolEnvelope> {
+pub async fn run_voice_tool(
+    app: tauri::AppHandle,
+    scripts_manager: tauri::State<'_, ScriptProcessManager>,
+    tool: String,
+    args: Value,
+) -> CmdResult<VoiceToolEnvelope> {
     // Log every invocation — voice tool calls are rare + high-signal,
     // so it's worth keeping the trail to correlate "the agent said X"
     // with "we ran this internal function with these args".
@@ -1038,10 +2001,20 @@ pub async fn run_voice_tool(tool: String, args: Value) -> CmdResult<VoiceToolEnv
             error: Some(format!("unknown tool '{tool}'")),
             invalidates: Vec::new(),
             navigate_to_workspace_id: None,
+            dispatch_workspace_action: None,
         });
     };
 
     let invalidates = kind.metadata().invalidates.to_vec();
+    // Snapshot `scripts_manager` out of the borrowed `State` so the
+    // blocking closure below owns its data and the `'_` lifetime
+    // doesn't leak across the `spawn_blocking` boundary.
+    // `ScriptProcessManager` is `Clone` over an inner `Arc<Mutex<…>>`
+    // so this is a cheap handle copy, not a deep clone of process state.
+    let ctx = VoiceToolContext {
+        app,
+        scripts_manager: scripts_manager.inner().clone(),
+    };
     // Wrap envelope construction inside the blocking closure so the
     // full `anyhow::Error` chain is available to format into
     // `envelope.error`. `run_blocking` returns `Result<T, CommandError>`
@@ -1053,11 +2026,12 @@ pub async fn run_voice_tool(tool: String, args: Value) -> CmdResult<VoiceToolEnv
     // and can phrase it for the user.
     run_blocking(move || {
         let name = kind.metadata().name;
-        match kind.run(args) {
+        match kind.run(args, &ctx) {
             Ok(result) => {
                 tracing::info!(
                     tool = name,
                     navigate = ?result.navigate_to_workspace_id,
+                    dispatch = ?result.dispatch_workspace_action,
                     "voice agent in-process tool completed"
                 );
                 Ok(VoiceToolEnvelope {
@@ -1066,6 +2040,7 @@ pub async fn run_voice_tool(tool: String, args: Value) -> CmdResult<VoiceToolEnv
                     error: None,
                     invalidates,
                     navigate_to_workspace_id: result.navigate_to_workspace_id,
+                    dispatch_workspace_action: result.dispatch_workspace_action,
                 })
             }
             Err(err) => {
@@ -1077,6 +2052,7 @@ pub async fn run_voice_tool(tool: String, args: Value) -> CmdResult<VoiceToolEnv
                     error: Some(message),
                     invalidates: Vec::new(),
                     navigate_to_workspace_id: None,
+                    dispatch_workspace_action: None,
                 })
             }
         }
@@ -1136,13 +2112,20 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "archive_workspace",
                 "create_workspace",
+                "create_workspace_and_send",
+                "create_workspace_variants",
                 "end_session",
                 "get_context_item_detail",
+                "get_session_messages",
                 "list_context_items",
                 "list_repos",
                 "list_sessions",
                 "list_workspaces",
+                "permanently_delete_workspace",
+                "run_workspace_action",
+                "run_workspace_script",
                 "select_workspace",
                 "send_prompt",
                 "set_workspace_status",

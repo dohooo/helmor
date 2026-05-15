@@ -2673,6 +2673,17 @@ export async function createOpenAiRealtimeClientSecret(): Promise<OpenAiRealtime
  *  the same camelCase strings on both sides. */
 export type VoiceToolMutationKind = "workspaces" | "sessions";
 
+export type VoiceDispatchActionKind =
+	| "commit-and-push"
+	| "create-pr"
+	| "fix"
+	| "resolve-conflicts";
+
+export type VoiceDispatchWorkspaceAction = {
+	workspaceId: string;
+	actionKind: VoiceDispatchActionKind;
+};
+
 /** Envelope returned by an in-process voice tool invocation. Mirrors
  *  `commands::voice_agent::VoiceToolEnvelope` on the Rust side.
  *
@@ -2686,6 +2697,7 @@ export type VoiceToolEnvelope = {
 	error: string | null;
 	invalidates: VoiceToolMutationKind[];
 	navigateToWorkspaceId: string | null;
+	dispatchWorkspaceAction: VoiceDispatchWorkspaceAction | null;
 };
 
 /** Run one voice-agent tool in-process inside the Tauri host. The Rust

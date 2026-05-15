@@ -221,6 +221,30 @@ pub async fn send_agent_message_stream(
     request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
+    let active_streams = app.state::<ActiveStreams>();
+    send_agent_message_internal(app.clone(), &sidecar, &active_streams, request, on_event)
+}
+
+/// Single-write streaming entrypoint shared between the GUI composer
+/// (`send_agent_message_stream` Tauri command) and the voice agent
+/// (`commands::voice_agent`). Both routes need the same validate +
+/// resolve-model + spawn-stream lifecycle, and — critically — both
+/// MUST land on `stream_via_sidecar` so the user_prompt row is written
+/// exactly once. Voice handlers used to go through
+/// `service::send_message`'s app-running fan-out, which double-wrote
+/// the row via `insert_pending_cli_send` + the composer's auto-submit;
+/// this entrypoint is what replaces that path.
+///
+/// Channel parameter is `Channel::new(|_| Ok(()))` for fire-and-forget
+/// callers (voice has nothing to display from the stream — the user
+/// sees output in the workspace inspector instead).
+pub fn send_agent_message_internal(
+    app: AppHandle,
+    sidecar: &crate::sidecar::ManagedSidecar,
+    active_streams: &ActiveStreams,
+    request: AgentSendRequest,
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
@@ -239,13 +263,12 @@ pub async fn send_agent_message_stream(
 
     let working_directory = resolve_stream_working_directory(&request)?;
     let stream_id = Uuid::new_v4().to_string();
-    let active_streams = app.state::<ActiveStreams>();
 
     stream_via_sidecar(
-        app.clone(),
+        app,
         on_event,
-        &sidecar,
-        &active_streams,
+        sidecar,
+        active_streams,
         &stream_id,
         &model,
         &prompt,

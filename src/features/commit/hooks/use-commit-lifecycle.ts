@@ -215,12 +215,19 @@ export function useWorkspaceCommitLifecycle({
 		async (
 			mode: WorkspaceCommitButtonMode,
 			overrides?: {
+				/** Explicit target workspace. Used by the voice agent so an
+				 *  action can fire against a workspace other than the one
+				 *  currently selected in the GUI — the agent's selection
+				 *  navigation is asynchronous, so relying on
+				 *  `getSelectedWorkspaceId()` racing with React state would
+				 *  flake. When omitted, falls back to the GUI selection. */
+				workspaceId?: string;
 				modelId?: string | null;
 				effort?: string | null;
 				fastMode?: boolean | null;
 			},
 		) => {
-			const workspaceId = getSelectedWorkspaceId();
+			const workspaceId = overrides?.workspaceId ?? getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
 				return;

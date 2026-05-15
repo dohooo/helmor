@@ -1,5 +1,7 @@
 import {
 	runVoiceTool,
+	type VoiceDispatchActionKind,
+	type VoiceDispatchWorkspaceAction,
 	type VoiceToolEnvelope,
 	type VoiceToolMutationKind,
 } from "@/lib/api";
@@ -17,8 +19,15 @@ type ToolName =
 	| "list_workspaces"
 	| "show_workspace"
 	| "create_workspace"
+	| "create_workspace_and_send"
+	| "create_workspace_variants"
 	| "set_workspace_status"
+	| "archive_workspace"
+	| "permanently_delete_workspace"
+	| "run_workspace_action"
+	| "run_workspace_script"
 	| "list_sessions"
+	| "get_session_messages"
 	| "send_prompt"
 	| "list_repos"
 	| "list_context_items"
@@ -63,6 +72,20 @@ type DispatcherOptions = {
 	 *  goodbye reply isn't cut off mid-word. Caller should flip
 	 *  `voiceModeStore.setActive(false)`. */
 	onEndSession?: () => void;
+	/** Route an agent-dispatched ship-flow action through the same
+	 *  frontend handler the GUI commit buttons use. Fires after a
+	 *  `run_workspace_action` call resolves with one of the four
+	 *  agent-dispatched action kinds (`commit-and-push` / `create-pr` /
+	 *  `fix` / `resolve-conflicts`). The host should call the matching
+	 *  `handleInspectorCommitAction` / equivalent so the canned prompts +
+	 *  post-stream verifier + auto-close behavior stay identical
+	 *  between voice and click flows. Direct actions (`merge_pr` /
+	 *  `pull_latest`) are executed inline by the Rust handler and do
+	 *  NOT fire this callback. */
+	onDispatchWorkspaceAction?: (
+		workspaceId: string,
+		actionKind: VoiceDispatchActionKind,
+	) => void;
 };
 
 export type ToolDispatcher = {
@@ -237,6 +260,24 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 		}
 	}
 
+	// Fire workspace-action dispatch for any agent-dispatched action
+	// (`commit-and-push` / `create-pr` / `fix` / `resolve-conflicts`).
+	// Order-preserving: if the model somehow batched multiple actions,
+	// run them in the order they arrived. Direct actions (merge / pull)
+	// don't surface this signal — they're already done by the time the
+	// envelope returns.
+	if (opts.onDispatchWorkspaceAction) {
+		for (const r of results) {
+			const dispatch = r.dispatchWorkspaceAction;
+			if (dispatch) {
+				opts.onDispatchWorkspaceAction(
+					dispatch.workspaceId,
+					dispatch.actionKind,
+				);
+			}
+		}
+	}
+
 	// `end_session`: the user verbally said goodbye and the model
 	// called the synthetic tool. `response.done` has already fired by
 	// the time we're here, which means the server is done streaming
@@ -260,6 +301,9 @@ type RunCallResult = {
 	/** Flag set by the `end_session` short-circuit so `executeCalls`
 	 *  knows to fire `onEndSession` after the audio buffer flushes. */
 	endSession?: boolean;
+	/** Set when the Rust handler asks the frontend to route a ship-flow
+	 *  action through the GUI commit-button path. */
+	dispatchWorkspaceAction?: VoiceDispatchWorkspaceAction;
 };
 
 /** Empty-success result for `wait_for_user` and front-end short-circuits. */
@@ -325,6 +369,7 @@ async function runCall(call: PendingCall): Promise<RunCallResult> {
 		output,
 		invalidates: envelope.invalidates,
 		navigateToWorkspaceId: envelope.navigateToWorkspaceId ?? undefined,
+		dispatchWorkspaceAction: envelope.dispatchWorkspaceAction ?? undefined,
 	};
 }
 
