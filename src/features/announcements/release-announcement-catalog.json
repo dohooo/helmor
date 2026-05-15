@@ -2,6 +2,24 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.22.1",
+			"items": [
+				{
+					"text": "You can now hold Ctrl+Tab to cycle through recently used workspaces — release to switch, just like Cmd+Tab.",
+					"action": {
+						"label": "Customize Shortcut",
+						"value": {
+							"type": "openSettings",
+							"section": "shortcuts"
+						}
+					}
+				},
+				{
+					"text": "The sidebar now has view controls for filtering by repository, changing grouping, and choosing sort order."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.22.0",
 			"items": [
 				{

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.22.1
+
+### Patch Changes
+
+- [#559](https://github.com/dohooo/helmor/pull/559) [`e97aee4`](https://github.com/dohooo/helmor/commit/e97aee47e13bdb8f0093fa8ab199460c6359dd61) Thanks [@natllian](https://github.com/natllian)! - Fix the inspector's Staged Changes / Changes diff when the same file appears in both areas:
+
+  - Each area now shows its own diff (HEAD ↔ index for Staged, index ↔ working tree for Unstaged) instead of a combined HEAD ↔ working-tree view that mixed both.
+  - Clicking the same file across the two areas now actually switches the diff, and the selection highlight only marks the row whose diff is open.
+  - Opening a file from a chat link no longer inherits stale bytes from a diff view, closing a path where saving could overwrite unstaged edits.
+
+- [#561](https://github.com/dohooo/helmor/pull/561) [`9a99586`](https://github.com/dohooo/helmor/commit/9a995861b7605036636991975c7218e8f6d87fe4) Thanks [@natllian](https://github.com/natllian)! - Add Ctrl+Tab quick switch for workspaces (Arc/Cmd+Tab style: hold to cycle, release to commit) and fix the workspace status dot rendering blank on rows with a legacy status spelling.
+
+- [#560](https://github.com/dohooo/helmor/pull/560) [`81f6ec9`](https://github.com/dohooo/helmor/commit/81f6ec975d97761f5d1cb2cd1a1c79c9459d6854) Thanks [@natllian](https://github.com/natllian)! - Fix GitLab pipeline jobs that are queued, preparing, or waiting for a runner showing as gray in the Checks section, so they now match GitLab's own "in progress" indicator.
+
+- [#530](https://github.com/dohooo/helmor/pull/530) [`2b10bc7`](https://github.com/dohooo/helmor/commit/2b10bc78d57ca5373f6741ed239ae723c272276c) Thanks [@taroj1205](https://github.com/taroj1205)! - Add sidebar view controls for filtering, grouping, and sorting workspaces.
+
+- [#556](https://github.com/dohooo/helmor/pull/556) [`cad87df`](https://github.com/dohooo/helmor/commit/cad87df8369a2f1fc4d39844c91b67add6d24f98) Thanks [@natllian](https://github.com/natllian)! - Fix the restored workspace briefly appearing in the wrong sidebar position before snapping into place once the refetch completes.
+
+- [#562](https://github.com/dohooo/helmor/pull/562) [`09ddcd3`](https://github.com/dohooo/helmor/commit/09ddcd36991c353f824b0c4146096852bcd45bfd) Thanks [@natllian](https://github.com/natllian)! - Slim down how Helmor remembers which release-announcement toasts have been dismissed; users upgrading from a much older build may see pending release notes one more time.
+
 ## 0.22.0
 
 ### Minor Changes
