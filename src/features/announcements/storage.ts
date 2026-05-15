@@ -1,12 +1,14 @@
-export const DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY =
-	"helmor:dismissed-release-announcements";
+import { compareSemver } from "./announcements";
+
+/**
+ * Watermark: the highest release version the user has dismissed
+ * announcements for. Anything ≤ this is treated as dismissed.
+ */
+export const LAST_DISMISSED_RELEASE_VERSION_STORAGE_KEY =
+	"helmor:last-dismissed-release-version";
 
 export const LAST_SEEN_INSTALL_VERSION_STORAGE_KEY =
 	"helmor:last-seen-install-version";
-
-const LEGACY_DISMISSED_RELEASE_ANNOUNCEMENT_IDS: Record<string, string> = {
-	"2026-05-11-2300": "0.21.0",
-};
 
 /**
  * Best-effort detection of "this device has never run Helmor before".
@@ -34,33 +36,24 @@ export function isFirstHelmorBoot(): boolean {
 	}
 }
 
-export function readDismissedReleaseAnnouncementVersions(): Set<string> {
+export function readLastDismissedReleaseVersion(): string | null {
 	try {
 		const raw = window.localStorage.getItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
+			LAST_DISMISSED_RELEASE_VERSION_STORAGE_KEY,
 		);
-		if (!raw) return new Set();
-
-		const parsed: unknown = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return new Set();
-
-		return new Set(
-			parsed
-				.filter((id): id is string => typeof id === "string")
-				.map((id) => LEGACY_DISMISSED_RELEASE_ANNOUNCEMENT_IDS[id] ?? id),
-		);
+		return typeof raw === "string" && raw.length > 0 ? raw : null;
 	} catch {
-		return new Set();
+		return null;
 	}
 }
 
 export function dismissReleaseAnnouncement(releaseVersion: string): void {
-	const dismissed = readDismissedReleaseAnnouncementVersions();
-	dismissed.add(releaseVersion);
+	const current = readLastDismissedReleaseVersion();
+	if (current !== null && compareSemver(releaseVersion, current) <= 0) return;
 	try {
 		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify([...dismissed]),
+			LAST_DISMISSED_RELEASE_VERSION_STORAGE_KEY,
+			releaseVersion,
 		);
 	} catch (error) {
 		console.error(

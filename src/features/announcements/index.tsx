@@ -22,7 +22,7 @@ import releaseAnnouncementCatalog from "@/features/announcements/release-announc
 import {
 	dismissReleaseAnnouncement,
 	isFirstHelmorBoot,
-	readDismissedReleaseAnnouncementVersions,
+	readLastDismissedReleaseVersion,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
 } from "@/features/announcements/storage";
@@ -62,7 +62,7 @@ export function ReleaseAnnouncementToastHost({
 			// classified as a fresh install — meaning the very toast that
 			// introduces the announcement system is never seen by anyone.
 			isFirstHelmorBoot: isFirstHelmorBoot(),
-			dismissedReleaseVersions: readDismissedReleaseAnnouncementVersions(),
+			lastDismissedReleaseVersion: readLastDismissedReleaseVersion(),
 		});
 		// Always advance: bootstraps first-install (so we never re-evaluate
 		// fresh installs as upgrades) and prevents re-showing the same
@@ -92,11 +92,11 @@ export function ReleaseAnnouncementToastHost({
 	};
 
 	const close = () => {
-		// Multi-version when the user skipped releases — dismiss every version so the
-		// next launch doesn't replay the same backlog.
-		for (const version of announcement.releaseVersions) {
-			dismissReleaseAnnouncement(version);
-		}
+		// releaseVersions is sorted newest-first; the watermark stored by
+		// dismissReleaseAnnouncement collapses older versions too, so one
+		// call covers a skipped-version backlog.
+		const newest = announcement.releaseVersions[0];
+		if (newest) dismissReleaseAnnouncement(newest);
 		setAnnouncement(null);
 	};
 

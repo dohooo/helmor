@@ -52,7 +52,7 @@ function parseSemver(version: string): [number, number, number] {
 	return [major, minor, patch];
 }
 
-function compareSemver(a: string, b: string): number {
+export function compareSemver(a: string, b: string): number {
 	const [aMaj, aMin, aPat] = parseSemver(a);
 	const [bMaj, bMin, bPat] = parseSemver(b);
 	if (aMaj !== bMaj) return aMaj - bMaj;
@@ -93,13 +93,19 @@ export function selectReleaseAnnouncement(args: {
 	 *             replay the full catalog backlog into one toast.
 	 */
 	isFirstHelmorBoot: boolean;
-	dismissedReleaseVersions: ReadonlySet<string>;
+	/**
+	 * Highest release version the user has already dismissed. Treated as
+	 * "dismissed everything ≤ this", so older catalog entries are skipped
+	 * too — versions are monotonic, so a single watermark replaces the
+	 * legacy "set of every dismissed version" without losing meaning.
+	 */
+	lastDismissedReleaseVersion: string | null;
 }): ReleaseAnnouncement | null {
 	const {
 		catalog,
 		currentVersion,
 		isFirstHelmorBoot,
-		dismissedReleaseVersions,
+		lastDismissedReleaseVersion,
 	} = args;
 	let { lastSeenVersion } = args;
 
@@ -122,7 +128,8 @@ export function selectReleaseAnnouncement(args: {
 			(entry) =>
 				compareSemver(entry.releaseVersion, lastSeenVersion) > 0 &&
 				compareSemver(entry.releaseVersion, currentVersion) <= 0 &&
-				!dismissedReleaseVersions.has(entry.releaseVersion),
+				(lastDismissedReleaseVersion === null ||
+					compareSemver(entry.releaseVersion, lastDismissedReleaseVersion) > 0),
 		)
 		.slice()
 		// Newest version first. Stable sort preserves the original
