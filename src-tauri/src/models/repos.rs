@@ -386,52 +386,6 @@ pub fn move_repository_in_sidebar(repo_id: &str, before_repo_id: Option<&str>) -
         .context("Failed to commit repo move transaction")
 }
 
-pub fn set_repository_sidebar_order(repo_ids: &[String]) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start repo order transaction")?;
-
-    let current_rows: Vec<String> = transaction
-        .prepare(
-            r#"
-            SELECT id
-            FROM repos
-            WHERE COALESCE(hidden, 0) = 0
-            ORDER BY COALESCE(display_order, 0) ASC, LOWER(name) ASC
-            "#,
-        )?
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    let current_ids: std::collections::HashSet<&str> =
-        current_rows.iter().map(String::as_str).collect();
-    let mut seen = std::collections::HashSet::new();
-    let mut ordered_ids: Vec<String> = repo_ids
-        .iter()
-        .filter(|id| current_ids.contains(id.as_str()) && seen.insert((*id).clone()))
-        .cloned()
-        .collect();
-    for id in current_rows {
-        if seen.insert(id.clone()) {
-            ordered_ids.push(id);
-        }
-    }
-
-    for (index, id) in ordered_ids.iter().enumerate() {
-        let order = sidebar_order::order_for_index(index)?;
-        transaction
-            .execute(
-                "UPDATE repos SET display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
-                rusqlite::params![id, order],
-            )
-            .with_context(|| format!("Failed to update display order for repo {id}"))?;
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit repo order transaction")
-}
-
 fn load_repo_orders(
     transaction: &rusqlite::Transaction<'_>,
     exclude_repo_id: &str,

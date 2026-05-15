@@ -290,20 +290,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
-										title="Group sidebar by repository"
-										releaseMarker={{ kind: "feature" }}
-										description="Group workspaces in the sidebar by repository instead of status."
-									>
-										<Switch
-											checked={settings.sidebarGrouping === "repo"}
-											onCheckedChange={(checked) =>
-												updateSettings({
-													sidebarGrouping: checked ? "repo" : "status",
-												})
-											}
-										/>
-									</SettingsRow>
-									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"
 									>

@@ -17,10 +17,7 @@ import {
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
-	type RepositoryCreateOption,
 	restoreWorkspace,
-	setRepositorySidebarOrder,
-	setWorkspaceSidebarOrder,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
@@ -49,9 +46,7 @@ import {
 	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import {
-	applyRepoOrder,
 	applyRepoReorder,
-	applyWorkspaceOrder,
 	createOptimisticCreatingWorkspaceDetail,
 	describeUnknownError,
 	findInitialWorkspaceId,
@@ -208,41 +203,7 @@ export function useWorkspacesSidebarController({
 			settings.sidebarSort,
 		],
 	);
-	const unfilteredSidebar = useMemo(
-		() =>
-			projectVisualSidebar(
-				{
-					baseGroups,
-					baseArchivedSummaries,
-					pendingArchives,
-					pendingCreations: new Map(
-						Array.from(pendingCreations.entries()).map(
-							([workspaceId, pendingCreation]) => [
-								workspaceId,
-								pendingCreation.entry,
-							],
-						),
-					),
-				},
-				settings.sidebarGrouping,
-				{
-					availableRepoIds,
-					repoFilterIds: [],
-					sort: settings.sidebarSort,
-				},
-			),
-		[
-			availableRepoIds,
-			baseArchivedSummaries,
-			baseGroups,
-			pendingArchives,
-			pendingCreations,
-			settings.sidebarGrouping,
-			settings.sidebarSort,
-		],
-	);
 	const groups = projectedSidebar.groups;
-	const unfilteredGroups = unfilteredSidebar.groups;
 	const archivedSummaries = useMemo(
 		() =>
 			projectedSidebar.archivedRows.map((row) => rowToWorkspaceSummary(row)),
@@ -790,11 +751,7 @@ export function useWorkspacesSidebarController({
 	);
 
 	const handleMoveRepositoryInSidebar = useCallback(
-		async (
-			repoId: string,
-			beforeRepoId: string | null,
-			repoOrder?: readonly string[],
-		) => {
+		async (repoId: string, beforeRepoId: string | null) => {
 			// Optimistic: rewrite `repoSidebarOrder` on every row whose repo
 			// participates in the reorder, so `regroupByRepo` re-buckets in
 			// the new order immediately.
@@ -808,33 +765,15 @@ export function useWorkspacesSidebarController({
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceGroups,
 				(current: WorkspaceGroup[] | undefined) =>
-					repoOrder
-						? applyRepoOrder(current, repoOrder)
-						: applyRepoReorder(current, repoId, beforeRepoId),
+					applyRepoReorder(current, repoId, beforeRepoId),
 			);
-			if (repoOrder) {
-				queryClient.setQueryData(
-					helmorQueryKeys.repositories,
-					(current: RepositoryCreateOption[] | undefined) =>
-						applyRepositoryOptionOrder(current, repoOrder),
-				);
-			}
 
 			try {
-				if (repoOrder) {
-					await setRepositorySidebarOrder([...repoOrder]);
-				} else {
-					await moveRepositoryInSidebar(repoId, beforeRepoId);
-				}
+				await moveRepositoryInSidebar(repoId, beforeRepoId);
 			} catch (error) {
 				void queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceGroups,
 				});
-				if (repoOrder) {
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.repositories,
-					});
-				}
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to reorder repository."),
 				);
@@ -848,35 +787,24 @@ export function useWorkspacesSidebarController({
 			workspaceId: string,
 			targetGroupId: string,
 			beforeWorkspaceId: string | null,
-			workspaceOrder?: readonly string[],
 		) => {
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceGroups,
-				(current: WorkspaceGroup[] | undefined) => {
-					const reordered = reorderWorkspaceInSidebar(
+				(current: WorkspaceGroup[] | undefined) =>
+					reorderWorkspaceInSidebar(
 						current,
 						workspaceId,
 						targetGroupId,
 						beforeWorkspaceId,
-					);
-					return workspaceOrder
-						? applyWorkspaceOrder(reordered, workspaceOrder)
-						: reordered;
-				},
+					),
 			);
 
 			try {
-				if (workspaceOrder) {
-					await setWorkspaceSidebarOrder(workspaceId, targetGroupId, [
-						...workspaceOrder,
-					]);
-				} else {
-					await moveWorkspaceInSidebar(
-						workspaceId,
-						targetGroupId,
-						beforeWorkspaceId,
-					);
-				}
+				await moveWorkspaceInSidebar(
+					workspaceId,
+					targetGroupId,
+					beforeWorkspaceId,
+				);
 				// Detail invalidate is fine — it only affects the inspector,
 				// not the sidebar list — but we skip the sidebar flush so the
 				// optimistic cache stays in place and the row doesn't visibly
@@ -1797,7 +1725,6 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
-		unfilteredGroups,
 		sidebarGrouping: settings.sidebarGrouping,
 		sidebarRepoFilterIds: settings.sidebarRepoFilterIds,
 		sidebarSort: settings.sidebarSort,
@@ -1819,20 +1746,4 @@ export function useWorkspacesSidebarController({
 		prefetchWorkspace,
 		setIsCloneDialogOpen,
 	};
-}
-
-function applyRepositoryOptionOrder(
-	repositories: RepositoryCreateOption[] | undefined,
-	repoOrder: readonly string[],
-): RepositoryCreateOption[] | undefined {
-	if (!repositories) return repositories;
-	const orderByRepo = new Map(repoOrder.map((id, index) => [id, index]));
-	return [...repositories].sort((left, right) => {
-		const leftIndex = orderByRepo.get(left.id) ?? Number.MAX_SAFE_INTEGER;
-		const rightIndex = orderByRepo.get(right.id) ?? Number.MAX_SAFE_INTEGER;
-		if (leftIndex !== rightIndex) return leftIndex - rightIndex;
-		return left.name.localeCompare(right.name, undefined, {
-			sensitivity: "base",
-		});
-	});
 }

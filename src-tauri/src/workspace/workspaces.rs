@@ -469,63 +469,6 @@ pub fn move_workspace_in_sidebar(
         .context("Failed to commit workspace move transaction")
 }
 
-pub fn set_workspace_sidebar_order(
-    workspace_id: &str,
-    target_group_id: &str,
-    workspace_ids: &[String],
-) -> Result<()> {
-    let mut connection = db::write_conn()?;
-    let transaction = connection
-        .transaction()
-        .context("Failed to start workspace order transaction")?;
-
-    let target = MoveTarget::parse(&transaction, target_group_id)?;
-
-    if let MoveTarget::Repo(repo_id) = &target {
-        let actual: String = transaction
-            .query_row(
-                "SELECT repository_id FROM workspaces WHERE id = ?1",
-                [workspace_id],
-                |row| row.get(0),
-            )
-            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-        if &actual != repo_id {
-            bail!("Repo group reorder must stay within the workspace's own repository");
-        }
-    }
-
-    apply_target_to_workspace(&transaction, workspace_id, &target, 0)?;
-
-    let current_rows = list_target_group_ids(&transaction, &target)?;
-    let current_ids: std::collections::HashSet<&str> =
-        current_rows.iter().map(String::as_str).collect();
-    let mut seen = std::collections::HashSet::new();
-    let mut ordered_ids: Vec<String> = workspace_ids
-        .iter()
-        .filter(|id| current_ids.contains(id.as_str()) && seen.insert((*id).clone()))
-        .cloned()
-        .collect();
-    for id in current_rows {
-        if seen.insert(id.clone()) {
-            ordered_ids.push(id);
-        }
-    }
-
-    for (index, id) in ordered_ids.iter().enumerate() {
-        let order = sidebar_order::order_for_index(index)?;
-        transaction
-            .execute(
-                "UPDATE workspaces SET display_order = ?2, updated_at = datetime('now') WHERE id = ?1",
-                rusqlite::params![id, order],
-            )
-            .with_context(|| format!("Failed to update display order for workspace {id}"))?;
-    }
-
-    transaction
-        .commit()
-        .context("Failed to commit workspace order transaction")
-}
-
 fn list_target_group_orders(
     transaction: &Transaction<'_>,
     target: &MoveTarget,
@@ -580,16 +523,6 @@ fn list_target_group_orders(
     Ok(rows
         .into_iter()
         .filter(|(id, _)| id != exclude_workspace_id)
-        .collect())
-}
-
-fn list_target_group_ids(
-    transaction: &Transaction<'_>,
-    target: &MoveTarget,
-) -> Result<Vec<String>> {
-    Ok(list_target_group_orders(transaction, target, "")?
-        .into_iter()
-        .map(|(id, _)| id)
         .collect())
 }
 

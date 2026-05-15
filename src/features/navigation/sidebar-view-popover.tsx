@@ -6,9 +6,9 @@ import {
 	Clock3,
 	Folder,
 	FolderGit2,
+	GripVertical,
 	ListFilter,
 	type LucideIcon,
-	RotateCcw,
 	Rows3,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
@@ -61,7 +61,7 @@ interface SidebarViewPopoverProps {
 }
 
 const SIDEBAR_SORT_OPTIONS: SidebarSortOption[] = [
-	{ value: "custom", label: "Custom order", icon: RotateCcw },
+	{ value: "custom", label: "Draggable order", icon: GripVertical },
 	{ value: "repoName", label: "Repository name", icon: ArrowDownAZ },
 	{ value: "updatedAt", label: "Last updated", icon: Clock3 },
 	{ value: "createdAt", label: "Created time", icon: Calendar },
@@ -126,7 +126,8 @@ function SidebarRepoFilterPicker({
 			</PopoverTrigger>
 			<CommandPopoverContent
 				align="start"
-				className="w-[300px]"
+				sideOffset={4}
+				className="w-(--radix-popover-trigger-width)"
 				commandClassName="max-h-[320px]"
 			>
 				<CommandInput placeholder="Search repositories" />
@@ -208,6 +209,17 @@ export function SidebarViewPopover({
 				</TooltipContent>
 			</Tooltip>
 			<PopoverContent align="start" className="w-[260px] gap-2 p-2">
+				<div className="grid gap-1 px-1">
+					<div className="text-[12px] font-medium text-muted-foreground">
+						Repository
+					</div>
+					<SidebarRepoFilterPicker
+						repositories={repositories}
+						selectedRepoIds={selectedRepoIds}
+						onRepoFilterChange={onRepoFilterChange}
+					/>
+				</div>
+				<div className="h-px bg-border/60" />
 				<div className="px-1 text-[12px] font-medium text-muted-foreground">
 					Group by
 				</div>
@@ -237,17 +249,6 @@ export function SidebarViewPopover({
 							</button>
 						);
 					})}
-				</div>
-				<div className="h-px bg-border/60" />
-				<div className="grid gap-1 px-1">
-					<div className="text-[12px] font-medium text-muted-foreground">
-						Repository
-					</div>
-					<SidebarRepoFilterPicker
-						repositories={repositories}
-						selectedRepoIds={selectedRepoIds}
-						onRepoFilterChange={onRepoFilterChange}
-					/>
 				</div>
 				<div className="h-px bg-border/60" />
 				<div className="px-1 text-[12px] font-medium text-muted-foreground">

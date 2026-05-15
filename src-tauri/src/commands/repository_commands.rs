@@ -146,11 +146,6 @@ pub async fn move_repository_in_sidebar(
         .await
 }
 
-#[tauri::command]
-pub async fn set_repository_sidebar_order(repo_ids: Vec<String>) -> CmdResult<()> {
-    run_blocking(move || repos::set_repository_sidebar_order(&repo_ids)).await
-}
-
 /// Re-run forge auto-bind for a repo. Frontend calls this after the user
 /// completes a `gh auth login` / `glab auth login` flow so the repo
 /// picks up the freshly-added account without an app restart. Returns

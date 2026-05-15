@@ -2384,18 +2384,6 @@ export async function moveWorkspaceInSidebar(
 	});
 }
 
-export async function setWorkspaceSidebarOrder(
-	workspaceId: string,
-	targetGroupId: string,
-	workspaceIds: string[],
-): Promise<void> {
-	return invoke<void>("set_workspace_sidebar_order", {
-		workspaceId,
-		targetGroupId,
-		workspaceIds,
-	});
-}
-
 /** Drag-reorder a repo bucket in the sidebar's repo grouping mode.
  *  `beforeRepoId === null` appends to the end. */
 export async function moveRepositoryInSidebar(
@@ -2406,12 +2394,6 @@ export async function moveRepositoryInSidebar(
 		repoId,
 		beforeRepoId,
 	});
-}
-
-export async function setRepositorySidebarOrder(
-	repoIds: string[],
-): Promise<void> {
-	return invoke<void>("set_repository_sidebar_order", { repoIds });
 }
 
 // ---------------------------------------------------------------------------

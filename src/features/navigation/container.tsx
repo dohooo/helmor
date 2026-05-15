@@ -52,7 +52,6 @@ export const WorkspacesSidebarContainer = memo(
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
-			unfilteredGroups,
 			sidebarGrouping,
 			sidebarRepoFilterIds,
 			sidebarSort,
@@ -84,7 +83,6 @@ export const WorkspacesSidebarContainer = memo(
 		return (
 			<WorkspacesSidebar
 				groups={groups}
-				unfilteredGroups={unfilteredGroups}
 				archivedRows={archivedRows}
 				availableRepositories={availableRepositories}
 				sidebarGrouping={sidebarGrouping}
@@ -145,8 +143,8 @@ export const WorkspacesSidebarContainer = memo(
 						beforeWorkspaceId,
 					);
 				}}
-				onMoveRepositoryInSidebar={(repoId, beforeRepoId, repoOrder) => {
-					void handleMoveRepositoryInSidebar(repoId, beforeRepoId, repoOrder);
+				onMoveRepositoryInSidebar={(repoId, beforeRepoId) => {
+					void handleMoveRepositoryInSidebar(repoId, beforeRepoId);
 				}}
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);

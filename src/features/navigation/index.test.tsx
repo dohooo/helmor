@@ -11,12 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
-import {
-	repoOrderFromGroups,
-	resolveWorkspaceDropBeforeId,
-	WorkspacesSidebar,
-	workspaceOrderAfterDrop,
-} from "./index";
+import { WorkspacesSidebar } from "./index";
 
 const workspaceRow: WorkspaceRow = {
 	id: "workspace-1",
@@ -290,9 +285,31 @@ describe("WorkspacesSidebar", () => {
 		expect(onSidebarRepoFilterChange).toHaveBeenCalledWith([]);
 	});
 
-	it("changes sidebar sort and switches to custom when repo reorder finishes", async () => {
-		const user = userEvent.setup();
-		const onSidebarSortChange = vi.fn();
+	it("hides the repo drag handle when sort is not custom", () => {
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							id: "repo:repo-beta",
+							label: "Beta",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[0]!],
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="repo"
+					sidebarSort="updatedAt"
+					onMoveRepositoryInSidebar={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(container.querySelector("[data-repo-dnd-handle='true']")).toBeNull();
+	});
+
+	it("forwards a repo drop directly under custom sort", () => {
 		const onMoveRepositoryInSidebar = vi.fn();
 
 		const { container } = render(
@@ -315,20 +332,12 @@ describe("WorkspacesSidebar", () => {
 					archivedRows={[]}
 					availableRepositories={repositoryOptions}
 					sidebarGrouping="repo"
-					sidebarSort="updatedAt"
-					onSidebarSortChange={onSidebarSortChange}
+					sidebarSort="custom"
 					onMoveRepositoryInSidebar={onMoveRepositoryInSidebar}
 				/>
 			</TooltipProvider>,
 		);
 
-		await user.click(
-			screen.getByRole("button", { name: "Filter and sort sidebar" }),
-		);
-		await user.click(screen.getByRole("radio", { name: "Repository name" }));
-
-		expect(onSidebarSortChange).toHaveBeenCalledWith("repoName");
-		onSidebarSortChange.mockClear();
 		const repoHandle = container.querySelector("[data-repo-dnd-handle='true']");
 		expect(repoHandle).toBeInTheDocument();
 
@@ -338,26 +347,10 @@ describe("WorkspacesSidebar", () => {
 			clientY: 10,
 			pointerId: 1,
 		});
+		fireEvent.pointerMove(window, { clientX: 10, clientY: 30, pointerId: 1 });
+		fireEvent.pointerUp(window, { clientX: 10, clientY: 30, pointerId: 1 });
 
-		expect(onSidebarSortChange).not.toHaveBeenCalledWith("custom");
-
-		fireEvent.pointerMove(window, {
-			clientX: 10,
-			clientY: 30,
-			pointerId: 1,
-		});
-		fireEvent.pointerUp(window, {
-			clientX: 10,
-			clientY: 30,
-			pointerId: 1,
-		});
-
-		expect(onSidebarSortChange).toHaveBeenCalledWith("custom");
-		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null, [
-			"repo-alpha",
-			"repo-gamma",
-			"repo-beta",
-		]);
+		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null);
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {
@@ -899,154 +892,5 @@ describe("WorkspacesSidebar", () => {
 			// Row hidden after toggle (collapsed).
 			expect(screen.queryByLabelText("Workspace 1")).toBeNull();
 		});
-	});
-});
-
-describe("repoOrderFromGroups", () => {
-	it("preserves filtered-out and empty repository positions", () => {
-		expect(
-			repoOrderFromGroups(
-				[
-					{ id: "repo:repo-c", label: "C", tone: "pinned", rows: [] },
-					{ id: "repo:repo-d", label: "D", tone: "pinned", rows: [] },
-				],
-				[
-					{ id: "repo-a", name: "A" },
-					{ id: "repo-b", name: "B" },
-					{ id: "repo-c", name: "C" },
-					{ id: "repo-d", name: "D" },
-					{ id: "repo-empty", name: "Empty" },
-				],
-			),
-		).toEqual(["repo-a", "repo-b", "repo-c", "repo-d", "repo-empty"]);
-	});
-
-	it("seeds a full repo order from the visible sorted order", () => {
-		expect(
-			repoOrderFromGroups(
-				[
-					{ id: "repo:repo-a", label: "A", tone: "pinned", rows: [] },
-					{ id: "repo:repo-b", label: "B", tone: "pinned", rows: [] },
-					{ id: "repo:repo-c", label: "C", tone: "pinned", rows: [] },
-				],
-				[
-					{ id: "repo-c", name: "C" },
-					{ id: "repo-a", name: "A" },
-					{ id: "repo-b", name: "B" },
-				],
-			),
-		).toEqual(["repo-a", "repo-b", "repo-c"]);
-	});
-});
-
-describe("resolveWorkspaceDropBeforeId", () => {
-	it("keeps a filtered drop after the last visible row before following hidden rows", () => {
-		const fullGroups: WorkspaceGroup[] = [
-			{
-				id: "progress",
-				label: "In progress",
-				tone: "progress",
-				rows: [
-					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
-					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
-					{ ...workspaceRow, id: "ws-b", title: "B", repoId: "repo-2" },
-				],
-			},
-		];
-		const filteredGroups: WorkspaceGroup[] = [
-			{
-				...fullGroups[0]!,
-				rows: fullGroups[0]!.rows.filter((row) => row.repoId === "repo-1"),
-			},
-		];
-
-		expect(
-			resolveWorkspaceDropBeforeId({
-				groups: filteredGroups,
-				unfilteredGroups: fullGroups,
-				workspaceId: "ws-a",
-				targetGroupId: "progress",
-				beforeWorkspaceId: null,
-			}),
-		).toBe("ws-b");
-	});
-
-	it("drops before the first hidden row when a filtered target has no visible rows", () => {
-		const fullGroups: WorkspaceGroup[] = [
-			{
-				id: "review",
-				label: "In review",
-				tone: "review",
-				rows: [{ ...workspaceRow, id: "ws-hidden", repoId: "repo-2" }],
-			},
-		];
-
-		expect(
-			resolveWorkspaceDropBeforeId({
-				groups: [{ ...fullGroups[0]!, rows: [] }],
-				unfilteredGroups: fullGroups,
-				workspaceId: "ws-a",
-				targetGroupId: "review",
-				beforeWorkspaceId: null,
-			}),
-		).toBe("ws-hidden");
-	});
-
-	it("resolves filtered drops against the supplied sorted full order", () => {
-		const filteredGroups: WorkspaceGroup[] = [
-			{
-				id: "progress",
-				label: "In progress",
-				tone: "progress",
-				rows: [
-					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
-					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
-				],
-			},
-		];
-		const sortedFullGroups: WorkspaceGroup[] = [
-			{
-				...filteredGroups[0]!,
-				rows: [
-					{ ...workspaceRow, id: "ws-a", title: "A", repoId: "repo-1" },
-					{ ...workspaceRow, id: "ws-b", title: "B", repoId: "repo-2" },
-					{ ...workspaceRow, id: "ws-c", title: "C", repoId: "repo-1" },
-				],
-			},
-		];
-
-		expect(
-			resolveWorkspaceDropBeforeId({
-				groups: filteredGroups,
-				unfilteredGroups: sortedFullGroups,
-				workspaceId: "ws-a",
-				targetGroupId: "progress",
-				beforeWorkspaceId: null,
-			}),
-		).toBeNull();
-	});
-});
-
-describe("workspaceOrderAfterDrop", () => {
-	it("builds the full sorted order for a visible before-row drop", () => {
-		expect(
-			workspaceOrderAfterDrop({
-				unfilteredGroups: [
-					{
-						id: "progress",
-						label: "In progress",
-						tone: "progress",
-						rows: [
-							{ ...workspaceRow, id: "ws-a", title: "A" },
-							{ ...workspaceRow, id: "ws-b", title: "B" },
-							{ ...workspaceRow, id: "ws-c", title: "C" },
-						],
-					},
-				],
-				workspaceId: "ws-a",
-				targetGroupId: "progress",
-				beforeWorkspaceId: "ws-c",
-			}),
-		).toEqual(["ws-b", "ws-a", "ws-c"]);
 	});
 });
