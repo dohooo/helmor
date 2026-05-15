@@ -250,6 +250,7 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::remote_commands::connect_local_runtime,
             commands::remote_commands::connect_remote_runtime,
             commands::remote_commands::disconnect_remote_runtime,
             commands::remote_commands::get_runtime_health,

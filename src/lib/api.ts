@@ -738,6 +738,21 @@ export async function connectRemoteRuntime(
 	});
 }
 
+/**
+ * Spawn the bundled `helmor-server` binary as a local child process —
+ * smoke-test affordance for dev builds. Skips SSH; reaches the same
+ * RPC dispatcher the production path uses.
+ *
+ * `binaryPath` is optional: omit to fall back to `$HELMOR_SERVER_PATH`
+ * or the binary next to the running app.
+ */
+export async function connectLocalRuntime(
+	name: string,
+	binaryPath?: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_local_runtime", { name, binaryPath });
+}
+
 export async function disconnectRemoteRuntime(name: string): Promise<void> {
 	return invoke<void>("disconnect_remote_runtime", { name });
 }
