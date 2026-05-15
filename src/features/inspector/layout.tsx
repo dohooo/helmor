@@ -167,8 +167,12 @@ export function getGitSectionHeaderHighlightClass(
 			return "bg-[var(--workspace-pr-closed-header-bg)]";
 		case "resolve-conflicts":
 			return "bg-[var(--workspace-pr-conflicts-header-bg)]";
+		case "merge-blocked":
+			return "bg-[var(--workspace-pr-closed-header-bg)]";
 		case "open-pr":
 			return null;
+		case "checks-running":
+			return "bg-[var(--workspace-pr-checks-running-header-bg)]";
 		case "merge":
 			return "bg-[var(--workspace-pr-open-header-bg)]";
 		case "merged":

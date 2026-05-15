@@ -196,6 +196,10 @@ export type WorkspaceSummary = {
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
 	pinnedAt?: string | null;
+	/** Sparse sidebar order. Mirrors `WorkspaceRow.displayOrder`; carried
+	 * through the archived list so restore can predict the live-group
+	 * position without waiting for refetch. */
+	displayOrder?: number;
 	sessionCount?: number;
 	messageCount?: number;
 	createdAt: string;
@@ -770,6 +774,8 @@ export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -2002,6 +2008,7 @@ export type ForgeActionStatus = {
 	changeRequest: ChangeRequestInfo | null;
 	reviewDecision?: string | null;
 	mergeable?: string | null;
+	mergeStateStatus?: string | null;
 	deployments: ForgeActionItem[];
 	checks: ForgeActionItem[];
 	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";

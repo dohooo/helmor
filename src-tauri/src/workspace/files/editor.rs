@@ -49,7 +49,10 @@ pub fn read_file_at_ref(
     let relative_str = relative.to_string_lossy().replace('\\', "/");
 
     let object = format!("{git_ref}:{relative_str}");
-    match crate::git_ops::run_git(["show", &object], Some(workspace_root)) {
+    // Use `run_git_capture` (NOT `run_git`) so the file's trailing newline is
+    // preserved — `run_git` trims, which would make every diff against the
+    // working-tree side show a phantom "trailing newline" delta.
+    match crate::git_ops::run_git_capture(["show", &object], Some(workspace_root)) {
         Ok(content) => Ok(Some(content)),
         Err(_) => Ok(None),
     }

@@ -315,6 +315,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Expand terminals on hover"
+										releaseMarker={{ kind: "feature" }}
+										description="Enlarge inspector terminals when the cursor rests over them."
+									>
+										<Switch
+											checked={settings.terminalHoverExpansion}
+											onCheckedChange={(checked) =>
+												updateSettings({ terminalHoverExpansion: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Always show context usage"
 										description="By default, context usage is only shown when more than 70% is used."
 									>
@@ -531,15 +543,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="PR / MR model"
-										description="Model for PRs and MRs"
+										title="Action model"
+										description="Model for PRs/MRs and commit-and-push"
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={settings.prModelId ?? settings.defaultModelId}
 										effort={settings.prEffort ?? settings.defaultEffort}
 										fastMode={settings.prFastMode ?? settings.defaultFastMode}
-										ariaPrefix="PR / MR"
+										ariaPrefix="Action"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined) patch.prModelId = p.modelId;

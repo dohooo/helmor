@@ -192,6 +192,7 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         change_request: Some(mr_info(&mr)),
         review_decision,
         mergeable: gitlab_mergeable(&mr),
+        merge_state_status: None,
         deployments: Vec::new(),
         checks,
         remote_state: RemoteState::Ok,

@@ -591,6 +591,21 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     seed_workspace_display_orders(connection)?;
 
+    // Per-workspace port range. `port_base`/`port_count` get assigned the
+    // first time a script env is built for the workspace (lazy allocation
+    // in `workspace::port_allocation`). NULL means "not yet allocated" —
+    // legacy rows stay NULL until they next run a script.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_base") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_base INTEGER")
+            .context("Failed to add workspaces.port_base column")?;
+    }
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_count") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_count INTEGER")
+            .context("Failed to add workspaces.port_count column")?;
+    }
+
     Ok(())
 }
 
@@ -711,6 +726,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
     display_order INTEGER NOT NULL DEFAULT 0,
+    port_base INTEGER,
+    port_count INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

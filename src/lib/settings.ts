@@ -193,12 +193,16 @@ export type AppSettings = {
 	uiFontFamily: string | null;
 	/** Override for the monospace code font stack. `null` = preset default. */
 	codeFontFamily: string | null;
+	/** Override for embedded terminal font stack. `null` = preset default. */
+	terminalFontFamily: string | null;
 	/** When true, all clickable elements show a pointer cursor on hover.
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
 	theme: ThemeMode;
 	darkTheme: DarkTheme;
 	notifications: boolean;
+	/** When true, hovering a terminal-like inspector tab body expands it. */
+	terminalHoverExpansion: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -214,14 +218,13 @@ export type AppSettings = {
 	/** Fast-mode flag for the Review helper. When null, falls back to
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
-	/** Model used when the inspector "Create PR/MR" action starts a session.
-	 *  Applies to both GitHub PRs and GitLab MRs. When null, falls back to
-	 *  `defaultModelId`. */
+	/** Model used by simple action sessions: create/reopen PR/MR and
+	 *  commit-and-push. When null, falls back to `defaultModelId`. */
 	prModelId: string | null;
-	/** Effort level for the Create PR/MR helper. When null, falls back to
+	/** Effort level for simple action sessions. When null, falls back to
 	 *  `defaultEffort`. */
 	prEffort: string | null;
-	/** Fast-mode flag for the Create PR/MR helper. When null, falls back to
+	/** Fast-mode flag for simple action sessions. When null, falls back to
 	 *  `defaultFastMode`. */
 	prFastMode: boolean | null;
 	defaultEffort: string | null;
@@ -275,10 +278,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
+	terminalFontFamily: null,
 	usePointerCursors: true,
 	theme: "system",
 	darkTheme: "default",
 	notifications: true,
+	terminalHoverExpansion: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -325,6 +330,7 @@ export const SIDEBAR_REPO_FILTER_STORAGE_KEY = "helmor-sidebar-repo-filter";
 export const SIDEBAR_SORT_STORAGE_KEY = "helmor-sidebar-sort";
 export const UI_FONT_FAMILY_STORAGE_KEY = "helmor-ui-font-family";
 export const CODE_FONT_FAMILY_STORAGE_KEY = "helmor-code-font-family";
+export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
 
 /** Keys mirrored to localStorage for flash-free synchronous boot reads.
  *  Anything visible in the first paint must live here so we don't wait
@@ -337,6 +343,7 @@ const LOCALSTORAGE_KEYS = {
 	sidebarSort: SIDEBAR_SORT_STORAGE_KEY,
 	uiFontFamily: UI_FONT_FAMILY_STORAGE_KEY,
 	codeFontFamily: CODE_FONT_FAMILY_STORAGE_KEY,
+	terminalFontFamily: TERMINAL_FONT_FAMILY_STORAGE_KEY,
 } as const;
 
 type LocalStorageKey = keyof typeof LOCALSTORAGE_KEYS;
@@ -405,6 +412,9 @@ export function getPreloadedSettings(): AppSettings {
 		sidebarSort,
 		uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 		codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+		terminalFontFamily: readLocalStorageString(
+			TERMINAL_FONT_FAMILY_STORAGE_KEY,
+		),
 	};
 }
 
@@ -417,6 +427,7 @@ const SETTINGS_KEY_MAP: Record<
 	chatFontSize: "app.chat_font_size",
 	usePointerCursors: "app.use_pointer_cursors",
 	notifications: "app.notifications",
+	terminalHoverExpansion: "app.terminal_hover_expansion",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -844,6 +855,10 @@ function readClampedInt(
 	return Math.min(max, Math.max(min, Math.round(n)));
 }
 
+function readModelId(value: string | undefined): string | null {
+	return value && value !== "" ? value : null;
+}
+
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
@@ -865,6 +880,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			),
 			uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 			codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+			terminalFontFamily: readLocalStorageString(
+				TERMINAL_FONT_FAMILY_STORAGE_KEY,
+			),
 			usePointerCursors:
 				raw[SETTINGS_KEY_MAP.usePointerCursors] !== undefined
 					? raw[SETTINGS_KEY_MAP.usePointerCursors] === "true"
@@ -897,6 +915,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			terminalHoverExpansion:
+				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
+					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
+					: DEFAULT_SETTINGS.terminalHoverExpansion,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -911,14 +933,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
 					? "context"
 					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
-			defaultModelId:
-				rawDefaultModelId && rawDefaultModelId !== "default"
-					? rawDefaultModelId
-					: DEFAULT_SETTINGS.defaultModelId,
-			reviewModelId:
-				rawReviewModelId && rawReviewModelId !== "default"
-					? rawReviewModelId
-					: DEFAULT_SETTINGS.reviewModelId,
+			defaultModelId: readModelId(rawDefaultModelId),
+			reviewModelId: readModelId(rawReviewModelId),
 			reviewEffort:
 				rawReviewEffort && rawReviewEffort !== ""
 					? rawReviewEffort
@@ -929,10 +945,7 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
-			prModelId:
-				rawPrModelId && rawPrModelId !== "default"
-					? rawPrModelId
-					: DEFAULT_SETTINGS.prModelId,
+			prModelId: readModelId(rawPrModelId),
 			prEffort:
 				rawPrEffort && rawPrEffort !== ""
 					? rawPrEffort

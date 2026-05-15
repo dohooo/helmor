@@ -356,14 +356,9 @@ fn start_watcher<R: Runtime>(
     let db_branch = ws.branch.clone();
     let app_handle = app.clone();
     let gitdir_for_callback = gitdir.clone();
-    // Local workspaces treat `branch` as a fixed label (set at creation
-    // and never auto-updated). Skip the head-change → DB-write side
-    // effect for them; we still emit refs-changed events for UI
-    // invalidation.
-    let track_branch_changes = ws.mode != WorkspaceMode::Local;
 
     // Shared state for the callback: last-known branch
-    let last_branch = std::sync::Arc::new(Mutex::new(db_branch));
+    let last_branch = std::sync::Arc::new(Mutex::new(db_branch.clone()));
     let last_branch_clone = last_branch.clone();
 
     let mut debouncer = new_debouncer(
@@ -408,7 +403,7 @@ fn start_watcher<R: Runtime>(
                 }
             }
 
-            if head_changed && track_branch_changes {
+            if head_changed {
                 handle_head_change(
                     &app_handle,
                     &workspace_id,
@@ -465,11 +460,12 @@ fn start_watcher<R: Runtime>(
         .watch(&common_dir, RecursiveMode::NonRecursive)
         .with_context(|| format!("Failed to watch {}", common_dir.display()))?;
 
-    // Seed last_branch with the actual current HEAD
+    // Seed last_branch with the actual current HEAD and reconcile stale DB.
     if let Some(current) = read_head_branch(&gitdir) {
         if let Ok(mut lb) = last_branch.lock() {
             *lb = Some(current);
         }
+        reconcile_initial_head_branch(app, &ws.id, db_branch.as_deref(), &gitdir, last_branch);
     }
 
     Ok(WorkspaceWatcher {
@@ -477,6 +473,48 @@ fn start_watcher<R: Runtime>(
         remote: ws.remote.clone(),
         target_branch: ws.target_branch.clone(),
     })
+}
+
+fn reconcile_initial_head_branch<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    db_branch: Option<&str>,
+    gitdir: &Path,
+    last_branch: Arc<Mutex<Option<String>>>,
+) {
+    let current = read_head_branch(gitdir);
+    if current.as_deref() == db_branch {
+        return;
+    }
+    let Some(ref branch) = current else {
+        return;
+    };
+    if let Err(e) = update_branch_in_db(workspace_id, db_branch, branch) {
+        tracing::error!(
+            workspace_id,
+            "Failed to reconcile initial branch in DB: {e:#}"
+        );
+        return;
+    }
+    if let Ok(mut lb) = last_branch.lock() {
+        *lb = current.clone();
+    }
+    ui_sync::publish(
+        app,
+        ui_sync::UiMutationEvent::WorkspaceGitStateChanged {
+            workspace_id: workspace_id.to_string(),
+        },
+    );
+    if let Err(e) = app.emit(
+        GIT_BRANCH_CHANGED_EVENT,
+        GitBranchChangedPayload {
+            workspace_id: workspace_id.to_string(),
+            old_branch: db_branch.map(ToOwned::to_owned),
+            new_branch: current,
+        },
+    ) {
+        tracing::warn!("Failed to emit git-branch-changed: {e}");
+    }
 }
 
 // -- Auto-fetch (one thread per unique target) --
@@ -973,6 +1011,37 @@ mod tests {
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json["oldBranch"].is_null());
         assert!(json["newBranch"].is_null());
+    }
+
+    #[test]
+    fn update_branch_in_db_syncs_checkout_branch() {
+        let env = crate::testkit::TestEnv::new("git-watcher-checkout-branch");
+        let conn = env.db_connection();
+        crate::testkit::insert_repo(&conn, "repo-1", "Repo", Some("origin"));
+        crate::testkit::insert_workspace(
+            &conn,
+            &crate::testkit::WorkspaceFixture {
+                id: "ws-1",
+                repo_id: "repo-1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/old"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        drop(conn);
+
+        update_branch_in_db("ws-1", Some("feature/old"), "feature/new").unwrap();
+
+        let branch: String = env
+            .db_connection()
+            .query_row(
+                "SELECT branch FROM workspaces WHERE id = 'ws-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(branch, "feature/new");
     }
 
     // -- FetchKey identity --

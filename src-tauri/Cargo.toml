@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.21.2"
+version = "0.22.0"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -43,6 +43,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 notify = "7"
 notify-debouncer-full = "0.4"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
 url = "2"

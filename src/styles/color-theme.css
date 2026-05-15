@@ -88,6 +88,12 @@
 		var(--workspace-pr-conflicts-accent) 35%,
 		transparent
 	);
+	--workspace-pr-checks-running-accent: #bf8700;
+	--workspace-pr-checks-running-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-checks-running-accent) 35%,
+		transparent
+	);
 	--workspace-pr-closed-accent: #da3633;
 	--workspace-pr-closed-header-bg: color-mix(
 		in srgb,
@@ -206,6 +212,12 @@
 	--workspace-pr-conflicts-header-bg: color-mix(
 		in srgb,
 		var(--workspace-pr-conflicts-accent) 35%,
+		transparent
+	);
+	--workspace-pr-checks-running-accent: #bf8700;
+	--workspace-pr-checks-running-header-bg: color-mix(
+		in srgb,
+		var(--workspace-pr-checks-running-accent) 35%,
 		transparent
 	);
 	--workspace-pr-closed-accent: #da3633;

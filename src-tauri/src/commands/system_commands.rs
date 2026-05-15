@@ -47,6 +47,10 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_auth_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,8 +392,10 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
     Ok(helmor_skills_status_for_agents(&ready_skill_agents(
         &AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            codex_provider: None,
+            codex_auth_method: None,
         },
     )))
 }
@@ -526,8 +532,10 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
     run_blocking(|| {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            codex_provider: None,
+            codex_auth_method: None,
         };
         let agents = ready_skill_agents(&login);
         let command = helmor_skills_install_command(&agents);
@@ -652,10 +660,13 @@ pub async fn open_agent_login_terminal(provider: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     run_blocking(|| {
+        let codex = codex_auth_status();
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex.ready,
             cursor: cursor_login_ready(),
+            codex_provider: codex.provider,
+            codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
@@ -705,6 +716,37 @@ fn claude_login_ready() -> bool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexAuthStatus {
+    ready: bool,
+    provider: Option<String>,
+    auth_method: Option<&'static str>,
+}
+
+fn codex_auth_status() -> CodexAuthStatus {
+    if codex_login_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: None,
+            auth_method: Some("login"),
+        };
+    }
+
+    if let Some(provider) = codex_api_key_provider_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: Some(provider),
+            auth_method: Some("apiKey"),
+        };
+    }
+
+    CodexAuthStatus {
+        ready: false,
+        provider: None,
+        auth_method: None,
+    }
+}
+
 fn codex_login_ready() -> bool {
     match std::process::Command::new("codex")
         .args(["login", "status"])
@@ -745,6 +787,18 @@ fn parse_claude_login_status(stdout: &[u8]) -> bool {
 fn parse_codex_login_status(output: &str) -> bool {
     let normalized = output.to_ascii_lowercase();
     normalized.contains("logged in") && !normalized.contains("not logged in")
+}
+
+fn codex_api_key_provider_ready() -> Option<String> {
+    let config = std::fs::read_to_string(crate::codex_config::config_path()).ok()?;
+    let provider = crate::codex_config::active_api_key_provider(&config)?;
+    env_var_is_present(&provider.env_key).then_some(provider.name)
+}
+
+fn env_var_is_present(key: &str) -> bool {
+    std::env::var_os(key)
+        .map(|value| !value.to_string_lossy().trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
@@ -802,6 +856,8 @@ pub async fn spawn_agent_login_terminal(
         workspace_path: None,
         workspace_name: None,
         default_branch: None,
+        port_base: None,
+        port_count: None,
     };
     let mgr = manager.inner().clone();
     let script_type = agent_login_script_type(&provider, &instance_id);
@@ -1158,7 +1214,22 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         );
     }
 
-    // 3. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
+    // 3. Signal every Run-tab script and embedded-terminal PTY so dev
+    //    servers, watch processes, and shell sessions don't outlive
+    //    Helmor as orphan process trees. Unconditional (not gated on
+    //    `force`) — even a normal quit needs to clean up the processes
+    //    Helmor itself spawned. Each handle's owning `run_script` thread
+    //    reaps its own `Child`, so we just need to deliver the signal.
+    let scripts = app.state::<ScriptProcessManager>();
+    let signaled = scripts.kill_all();
+    if signaled > 0 {
+        tracing::info!(
+            signaled,
+            "request_quit: signaled live script/terminal handles"
+        );
+    }
+
+    // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     let (cooperative, escalation) = if force {
         (
@@ -1173,7 +1244,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     };
     sidecar.shutdown(cooperative, escalation);
 
-    // 4. Done — terminate the process.
+    // 5. Done — terminate the process.
     app.exit(0);
 }
 
