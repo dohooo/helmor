@@ -28,6 +28,7 @@ pub mod client;
 pub mod codec;
 pub mod methods;
 pub mod protocol;
+pub mod registry;
 pub mod runtime;
 pub mod server;
 
@@ -39,6 +40,7 @@ pub use methods::{
 pub use protocol::{
     JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
 };
+pub use registry::{RuntimeRegistry, LOCAL_RUNTIME_NAME};
 pub use runtime::{local_runtime, LocalRuntime, RemoteRuntime, RuntimeHealth, RuntimeKind};
 pub use server::{dispatch_request, ServerContext};
 

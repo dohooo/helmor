@@ -75,6 +75,7 @@ pub fn run() {
         .manage(ui_sync::UiSyncManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
+        .manage(std::sync::Arc::new(remote::RuntimeRegistry::new()))
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -249,8 +250,11 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::remote_commands::connect_remote_runtime,
+            commands::remote_commands::disconnect_remote_runtime,
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_status,
+            commands::remote_commands::list_remote_runtimes,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

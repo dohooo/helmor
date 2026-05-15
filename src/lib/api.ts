@@ -696,8 +696,10 @@ export type RuntimeHealth = {
 	version: string;
 };
 
-export async function getRuntimeHealth(): Promise<RuntimeHealth> {
-	return invoke<RuntimeHealth>("get_runtime_health");
+export async function getRuntimeHealth(
+	runtimeName?: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("get_runtime_health", { runtimeName });
 }
 
 export type WorkspaceStatusResult = {
@@ -707,10 +709,37 @@ export type WorkspaceStatusResult = {
 
 export async function getWorkspaceStatus(
 	workspaceDir: string,
+	runtimeName?: string,
 ): Promise<WorkspaceStatusResult> {
 	return invoke<WorkspaceStatusResult>("get_workspace_status", {
 		workspaceDir,
+		runtimeName,
 	});
+}
+
+export type RuntimeEntry = {
+	name: string;
+	isLocal: boolean;
+};
+
+export async function listRemoteRuntimes(): Promise<RuntimeEntry[]> {
+	return invoke<RuntimeEntry[]>("list_remote_runtimes");
+}
+
+export async function connectRemoteRuntime(
+	name: string,
+	host: string,
+	remoteBinary: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_remote_runtime", {
+		name,
+		host,
+		remoteBinary,
+	});
+}
+
+export async function disconnectRemoteRuntime(name: string): Promise<void> {
+	return invoke<void>("disconnect_remote_runtime", { name });
 }
 
 export type CliStatus = {
