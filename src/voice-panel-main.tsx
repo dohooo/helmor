@@ -37,9 +37,9 @@ const OPENAI_REALTIME_API_KEY_SETTING = "app.openai_realtime_api_key";
 
 /** Window-level event names emitted by the Rust global-hotkey handler
  *  and by this panel back to the main window. Stay-in-sync targets:
- *  `src-tauri/src/global_hotkey.rs::VOICE_PANEL_ACTIVE_EVENT` and the
- *  `helmor://voice-panel-*` listeners in `App.tsx`. */
-const VOICE_PANEL_ACTIVE_EVENT = "helmor://voice-panel-active";
+ *  `src-tauri/src/global_hotkey.rs::VOICE_ACTIVE_WINDOW_EVENT` and the
+ *  matching listeners in `App.tsx`. */
+const VOICE_ACTIVE_WINDOW_EVENT = "helmor://voice-active-window";
 const VOICE_PANEL_NAVIGATE_EVENT = "helmor://voice-panel-navigate-workspace";
 const VOICE_PANEL_DISPATCH_ACTION_EVENT =
 	"helmor://voice-panel-dispatch-workspace-action";
@@ -86,13 +86,12 @@ function VoicePanelApp() {
 		};
 	}, []);
 
-	// The Rust toggle (`global_hotkey.rs::toggle_voice_panel`) broadcasts
-	// show/hide to ALL webviews. Inside the panel we map the boolean
-	// payload to the voice store: showing the panel turns the session
-	// on, hiding it tears the session down (the provider drops the
-	// WebRTC peer when `active` goes false). The main window listens to
-	// the same event and uses it to mute its own sidebar voice bar so
-	// only one session is alive at a time.
+	// Rust broadcasts `helmor://voice-active-window` with payload
+	// `"none" | "panel" | "main"` to indicate which webview should own
+	// the WebRTC peer right now. The panel only mounts its session
+	// while the payload is exactly `"panel"`; on `"main"` or `"none"`
+	// it tears the peer down (so the main-window sidebar bar — or
+	// nothing at all — takes over the mic).
 	useEffect(() => {
 		// React StrictMode (dev) intentionally mount → unmount → mount
 		// every effect. `listen(...)` is async, so the naive
@@ -104,9 +103,9 @@ function VoicePanelApp() {
 		// `then` can still invoke `stop()` and free its slot.
 		let cancelled = false;
 		let unlisten: (() => void) | undefined;
-		void listen<boolean>(VOICE_PANEL_ACTIVE_EVENT, (event) => {
-			diag("panel-active-event", { payload: event.payload });
-			voiceModeStore.setActive(Boolean(event.payload));
+		void listen<string>(VOICE_ACTIVE_WINDOW_EVENT, (event) => {
+			diag("voice-active-window", { payload: event.payload });
+			voiceModeStore.setActive(event.payload === "panel");
 		}).then((stop) => {
 			if (cancelled) {
 				stop();

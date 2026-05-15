@@ -1,6 +1,7 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleAlertIcon } from "lucide-react";
@@ -850,6 +851,17 @@ function AppShell({
 		[handleInspectorCommitAction],
 	);
 
+	/** Tell Rust that voice has ended so it can reset its target state
+	 *  (otherwise focus-follow would re-summon the panel the next time
+	 *  the user blurs the main window). Idempotent in Rust — safe to
+	 *  call when the panel is already hidden / target is already
+	 *  `None`. */
+	const handleVoicePanelHide = useCallback(() => {
+		void invoke("hide_voice_panel").catch((error: unknown) => {
+			console.warn("[app] hide_voice_panel failed", error);
+		});
+	}, []);
+
 	// Voice-panel ↔ main window bridge. The desktop voice panel is a
 	// separate webview (see `voice-panel-main.tsx`); when the user
 	// summons it via the global hotkey, the Rust handler broadcasts
@@ -885,10 +897,15 @@ function AppShell({
 				stops.push(stop);
 			});
 		};
-		attach<boolean>("helmor://voice-panel-active", (payload) => {
-			if (payload) {
-				voiceModeStore.setActive(false);
-			}
+		// Rust drives ownership of the voice session via this single
+		// event. Payload `"main"` means the main-window sidebar bar
+		// should mount its WebRTC peer; `"panel"` / `"none"` means tear
+		// down (the panel webview takes over or no one does). This is
+		// how focus-follow works — when the user alt-tabs into the
+		// main window mid-call, Rust flips the target to `"main"` and
+		// we automatically pick the call back up here.
+		attach<string>("helmor://voice-active-window", (payload) => {
+			voiceModeStore.setActive(payload === "main");
 		});
 		attach<string>("helmor://voice-panel-navigate-workspace", (payload) => {
 			if (typeof payload === "string" && payload) {
@@ -1391,6 +1408,7 @@ function AppShell({
 							hasApiKey={appSettings.openAiRealtimeApiKey.trim().length > 0}
 							onNavigateToWorkspace={handleSelectWorkspace}
 							onDispatchWorkspaceAction={handleVoiceWorkspaceAction}
+							onEndSession={handleVoicePanelHide}
 						>
 							<main
 								aria-label="Application shell"
