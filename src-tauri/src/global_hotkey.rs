@@ -2,7 +2,7 @@ use std::{str::FromStr, sync::Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::error::CommandError;
@@ -10,13 +10,20 @@ use crate::error::CommandError;
 const SHORTCUTS_SETTING_KEY: &str = "app.shortcuts";
 const GLOBAL_HOTKEY_ID: &str = "global.hotkey";
 const MAIN_WINDOW_LABEL: &str = "main";
+const VOICE_PANEL_WINDOW_LABEL: &str = "voice-panel";
+const VOICE_PANEL_WIDTH: f64 = 328.0;
+const VOICE_PANEL_HEIGHT: f64 = 80.0;
+const VOICE_PANEL_BOTTOM_MARGIN: f64 = 28.0;
+const VOICE_PANEL_ACTIVE_EVENT: &str = "helmor://voice-panel-active";
 
 // Rust owns plugin registration, so no frontend plugin capability is needed.
-// Startup reads only stored overrides; keep the TS default null unless this
-// module learns the registry default too.
+// Startup reads only stored overrides; the frontend syncs registry defaults
+// after settings load.
 #[derive(Default)]
 pub struct GlobalHotkeyState {
-    current: Mutex<Option<String>>,
+    desired: Mutex<Option<String>>,
+    registered: Mutex<Option<String>>,
+    main_focused: Mutex<bool>,
 }
 
 pub fn sync_from_settings(app: &AppHandle) -> Result<()> {
@@ -39,19 +46,49 @@ fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<(
         .transpose()?;
 
     let state = app.state::<GlobalHotkeyState>();
-    let mut current = state.current.lock().expect("global hotkey state poisoned");
-    if *current == normalized {
+    *state
+        .desired
+        .lock()
+        .expect("global hotkey desired state poisoned") = normalized.clone();
+    let main_focused = *state
+        .main_focused
+        .lock()
+        .expect("global hotkey focus state poisoned");
+    sync_registered_hotkey(app, if main_focused { None } else { normalized })
+}
+
+pub fn set_main_window_focused(app: &AppHandle, focused: bool) -> Result<()> {
+    let state = app.state::<GlobalHotkeyState>();
+    *state
+        .main_focused
+        .lock()
+        .expect("global hotkey focus state poisoned") = focused;
+    let desired = state
+        .desired
+        .lock()
+        .expect("global hotkey desired state poisoned")
+        .clone();
+    sync_registered_hotkey(app, if focused { None } else { desired })
+}
+
+fn sync_registered_hotkey(app: &AppHandle, target: Option<String>) -> Result<()> {
+    let state = app.state::<GlobalHotkeyState>();
+    let mut registered = state
+        .registered
+        .lock()
+        .expect("global hotkey registered state poisoned");
+    if *registered == target {
         return Ok(());
     }
 
-    let previous = current.clone();
+    let previous = registered.clone();
     if let Some(previous) = previous.as_deref() {
         app.global_shortcut()
             .unregister(previous)
             .with_context(|| format!("Failed to unregister global hotkey {previous}"))?;
     }
 
-    if let Some(next) = normalized.as_deref() {
+    if let Some(next) = target.as_deref() {
         if let Err(error) = app
             .global_shortcut()
             .on_shortcut(next, handle_global_hotkey)
@@ -66,14 +103,14 @@ fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<(
                         hotkey = %previous,
                         "Failed to restore previous global hotkey",
                     );
-                    *current = None;
+                    *registered = None;
                 }
             }
             return Err(error).with_context(|| format!("Failed to register global hotkey {next}"));
         }
     }
 
-    *current = normalized;
+    *registered = target;
     Ok(())
 }
 
@@ -85,24 +122,71 @@ fn handle_global_hotkey(
     if event.state != ShortcutState::Pressed {
         return;
     }
-    if let Err(error) = toggle_main_window(app) {
-        tracing::warn!(error = %format!("{error:#}"), "Failed to toggle main window from global hotkey");
+    if let Err(error) = toggle_voice_panel(app) {
+        tracing::warn!(error = %format!("{error:#}"), "Failed to toggle voice panel from global hotkey");
     }
 }
 
-fn toggle_main_window(app: &AppHandle) -> Result<()> {
+fn toggle_voice_panel(app: &AppHandle) -> Result<()> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("Main window is not available"))?;
 
     if window.is_visible()? && window.is_focused()? {
-        window.hide()?;
         return Ok(());
     }
 
-    window.show()?;
-    window.unminimize()?;
-    window.set_focus()?;
+    let panel = app
+        .get_webview_window(VOICE_PANEL_WINDOW_LABEL)
+        .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
+
+    if panel.is_visible()? && panel.is_focused()? {
+        panel
+            .emit(VOICE_PANEL_ACTIVE_EVENT, false)
+            .context("Failed to deactivate voice panel")?;
+        panel.hide()?;
+        return Ok(());
+    }
+
+    position_voice_panel(&panel)?;
+    panel.show()?;
+    panel.unminimize()?;
+    panel.set_focus()?;
+    panel
+        .emit(VOICE_PANEL_ACTIVE_EVENT, true)
+        .context("Failed to activate voice panel")?;
+    Ok(())
+}
+
+fn position_voice_panel(panel: &tauri::WebviewWindow) -> Result<()> {
+    panel
+        .set_size(LogicalSize::new(VOICE_PANEL_WIDTH, VOICE_PANEL_HEIGHT))
+        .context("Failed to size voice panel")?;
+
+    let monitor = panel
+        .current_monitor()?
+        .or(panel.primary_monitor()?)
+        .or_else(|| {
+            panel
+                .available_monitors()
+                .ok()
+                .and_then(|mut monitors| monitors.pop())
+        });
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+
+    let scale = monitor.scale_factor();
+    let work_area = monitor.work_area();
+    let panel_width = (VOICE_PANEL_WIDTH * scale).round() as i32;
+    let panel_height = (VOICE_PANEL_HEIGHT * scale).round() as i32;
+    let bottom_margin = (VOICE_PANEL_BOTTOM_MARGIN * scale).round() as i32;
+    let x = work_area.position.x + ((work_area.size.width as i32 - panel_width) / 2);
+    let y = work_area.position.y + work_area.size.height as i32 - panel_height - bottom_margin;
+
+    panel
+        .set_position(PhysicalPosition::new(x, y))
+        .context("Failed to position voice panel")?;
     Ok(())
 }
 

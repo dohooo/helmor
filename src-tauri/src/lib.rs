@@ -102,6 +102,7 @@ pub fn run() {
             );
 
             build_main_window(app)?;
+            build_voice_panel_window(app)?;
 
             // Sweep `.trash-*` dirs left over from a prior run (worker killed
             // mid-cleanup, OS crash). Hands them to the global serial queue so
@@ -425,7 +426,25 @@ pub fn run() {
             event: tauri::WindowEvent::Focused(true),
             ..
         } if label == "main" => {
+            if let Err(error) = global_hotkey::set_main_window_focused(app_handle, true) {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to disable global hotkey while main window is focused",
+                );
+            }
             updater::maybe_trigger_on_focus(app_handle.clone());
+        }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Focused(false),
+            ..
+        } if label == "main" => {
+            if let Err(error) = global_hotkey::set_main_window_focused(app_handle, false) {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to enable global hotkey while main window is blurred",
+                );
+            }
         }
         tauri::RunEvent::WindowEvent {
             label,
@@ -458,6 +477,32 @@ fn build_main_window(app: &mut tauri::App) -> tauri::Result<()> {
     };
 
     let builder = tauri::WebviewWindowBuilder::from_config(app, window_config)?;
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_webview_configuration(mac_webview_configuration());
+
+    builder.build()?;
+    Ok(())
+}
+
+fn build_voice_panel_window(app: &mut tauri::App) -> tauri::Result<()> {
+    let builder = tauri::WebviewWindowBuilder::new(
+        app,
+        "voice-panel",
+        tauri::WebviewUrl::App("voice-panel.html".into()),
+    )
+    .title("Helmor Voice")
+    .inner_size(328.0, 80.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .closable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .visible(false)
+    .skip_taskbar(true)
+    .shadow(false);
 
     #[cfg(target_os = "macos")]
     let builder = builder.with_webview_configuration(mac_webview_configuration());

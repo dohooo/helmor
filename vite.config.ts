@@ -80,6 +80,14 @@ export default defineConfig(async () => ({
 			ignored: WATCH_IGNORED,
 		},
 	},
+	build: {
+		rollupOptions: {
+			input: {
+				main: path.resolve(__dirname, "index.html"),
+				voicePanel: path.resolve(__dirname, "voice-panel.html"),
+			},
+		},
+	},
 	test: {
 		environment: "jsdom",
 		setupFiles: "./src/test/setup.ts",

@@ -16,6 +16,7 @@ type VoiceModeBarProps = {
 	 *  visual height is `height - gap` (default 40 - 8 = 32 px). */
 	gap?: number;
 	className?: string;
+	forceActive?: boolean;
 };
 
 const HELMOR_MARK_BLOCKS = [
@@ -175,8 +176,10 @@ export function VoiceModeBar({
 	height = 40,
 	gap = 8,
 	className,
+	forceActive,
 }: VoiceModeBarProps) {
-	const active = useVoiceModeActive();
+	const storeActive = useVoiceModeActive();
+	const active = forceActive ?? storeActive;
 	const state = useVoiceSession();
 	const style = deriveVoiceBarStyle(state);
 

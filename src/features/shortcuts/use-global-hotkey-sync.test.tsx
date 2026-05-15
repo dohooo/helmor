@@ -63,7 +63,7 @@ describe("useGlobalHotkeySync", () => {
 		);
 
 		await waitFor(() => {
-			expect(updateShortcuts).toHaveBeenCalledWith({});
+			expect(updateShortcuts).toHaveBeenCalledWith({ "global.hotkey": null });
 		});
 		expect(toastMocks.error).toHaveBeenCalledWith("Hotkey unavailable");
 	});

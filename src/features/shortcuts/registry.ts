@@ -161,9 +161,9 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	{
 		id: "global.hotkey",
 		title: "Global hotkey",
-		description: "Show/hide Helmor from anywhere.",
+		description: "Open the voice panel from anywhere.",
 		group: "System",
-		defaultHotkey: null,
+		defaultHotkey: "Mod+Shift+V",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -381,8 +381,16 @@ export function findShortcutConflict(
 			(definition) =>
 				definition.id !== id &&
 				getShortcut(overrides, definition.id) === hotkey &&
+				!canShareShortcut(id, definition.id) &&
 				scopesOverlap(subject.scopes, definition.scopes),
 		) ?? null
+	);
+}
+
+function canShareShortcut(a: ShortcutId, b: ShortcutId): boolean {
+	return (
+		(a === "global.hotkey" && b === "voice.toggle") ||
+		(a === "voice.toggle" && b === "global.hotkey")
 	);
 }
 
@@ -407,6 +415,7 @@ export function getShortcutConflicts(overrides: ShortcutMap): {
 			for (let j = i + 1; j < definitions.length; j++) {
 				const a = definitions[i];
 				const b = definitions[j];
+				if (canShareShortcut(a.id, b.id)) continue;
 				if (!scopesOverlap(a.scopes, b.scopes)) continue;
 				conflictById[a.id] = [...(conflictById[a.id] ?? []), b];
 				conflictById[b.id] = [...(conflictById[b.id] ?? []), a];
