@@ -2684,6 +2684,30 @@ export type VoiceDispatchWorkspaceAction = {
 	actionKind: VoiceDispatchActionKind;
 };
 
+/** Image payload returned by the `capture_screen` voice tool. The
+ *  dispatcher pushes this into the Realtime conversation as a separate
+ *  `input_image` user item (the Realtime `function_call_output.output`
+ *  field is string-only, so binary frames cannot ride the tool
+ *  output). Mirrors `commands::voice_agent::VoiceToolImage`.
+ *
+ *  Rust delivers a fully-formed `data:image/jpeg;base64,…` URL ready
+ *  to drop into `input_image.image_url`. We can't use Files API
+ *  `file_id` — `gpt-realtime-2` rejects `input_image` items that
+ *  omit `image_url` (verified against the live API). To stay under
+ *  the WebRTC dataChannel's SCTP message size ceiling (~16–256 KB),
+ *  the Rust encoder aggressively downsamples to ~1280 px long edge
+ *  and JPEG-q60s the frame; expect base64 sizes around 80–150 KB. */
+export type VoiceToolImage = {
+	/** `data:image/jpeg;base64,…` URL. Drop straight into the Realtime
+	 *  `input_image.image_url` field. */
+	dataUrl: string;
+	width: number;
+	height: number;
+	/** One-line caption sent alongside the image as an `input_text`
+	 *  content part to steer the model's reading. */
+	caption: string;
+};
+
 /** Envelope returned by an in-process voice tool invocation. Mirrors
  *  `commands::voice_agent::VoiceToolEnvelope` on the Rust side.
  *
@@ -2698,6 +2722,7 @@ export type VoiceToolEnvelope = {
 	invalidates: VoiceToolMutationKind[];
 	navigateToWorkspaceId: string | null;
 	dispatchWorkspaceAction: VoiceDispatchWorkspaceAction | null;
+	image: VoiceToolImage | null;
 };
 
 /** Run one voice-agent tool in-process inside the Tauri host. The Rust

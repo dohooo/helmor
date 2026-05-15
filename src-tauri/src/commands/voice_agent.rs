@@ -41,6 +41,7 @@ use crate::workspace::status::WorkspaceStatus;
 use crate::workspace::workspaces;
 
 use super::common::{run_blocking, CmdResult};
+use super::screen_capture::{self, CaptureMode};
 
 /// Coarse-grained kinds of state the voice agent can mutate. Mirrored
 /// on the frontend (`tool-dispatcher.ts::AgentMutationKind`). camelCase
@@ -82,6 +83,7 @@ pub enum ToolKind {
     ListContextItems,
     GetContextItemDetail,
     SelectWorkspace,
+    CaptureScreen,
     WaitForUser,
     EndSession,
 }
@@ -114,6 +116,39 @@ struct VoiceToolResult {
     /// `handleInspectorCommitAction` to run the action via the same code
     /// path the GUI button uses.
     dispatch_workspace_action: Option<DispatchWorkspaceAction>,
+    /// When set, the frontend dispatcher pushes the image as an
+    /// `input_image` user item into the Realtime conversation *between*
+    /// the `function_call_output` and the follow-up `response.create`.
+    /// This is how `capture_screen` returns its screenshot — the
+    /// `function_call_output` itself is a Realtime API string-only
+    /// channel, so the binary payload rides the envelope.
+    image: Option<VoiceToolImage>,
+}
+
+/// Image payload emitted by `capture_screen`. Mirrors the frontend
+/// `VoiceToolImage` in `src/lib/api.ts` exactly.
+///
+/// We pass a fully-formed `data:image/jpeg;base64,…` URL rather than
+/// a Files API `file_id` because `gpt-realtime-2` rejects
+/// `input_image` items without `image_url`, even when `file_id` is
+/// set — verified against the live API. The encoder in
+/// `screen_capture::capture` aggressively downsamples + JPEG-q60s the
+/// frame so the resulting base64 string stays under the WebRTC
+/// dataChannel's SCTP message size limit (~16–256 KB depending on
+/// platform; see github.com/openai/openai-agents-js/issues/501).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceToolImage {
+    /// `data:image/jpeg;base64,…` ready for the Realtime API
+    /// `input_image.image_url` field.
+    pub data_url: String,
+    pub width: u32,
+    pub height: u32,
+    /// Short caption to send alongside the image as an `input_text`
+    /// content part — gives the model a one-line steer ("here's the
+    /// focused window") instead of having to infer intent from the
+    /// image alone.
+    pub caption: String,
 }
 
 /// Stable wire shape returned to the frontend dispatcher.
@@ -133,6 +168,14 @@ pub struct VoiceToolEnvelope {
     /// post-stream verifiers + auto-close behavior identical between
     /// voice and click flows.
     pub dispatch_workspace_action: Option<DispatchWorkspaceAction>,
+    /// Set by `capture_screen` to deliver the captured PNG to the
+    /// frontend dispatcher, which then injects it as an `input_image`
+    /// user item into the Realtime conversation between the
+    /// `function_call_output` and the next `response.create`. The
+    /// `function_call_output.output` field is string-only on the
+    /// Realtime API side, so binary screenshots ride the envelope
+    /// rather than the tool output.
+    pub image: Option<VoiceToolImage>,
 }
 
 /// Frontend-side dispatch hint emitted by `run_workspace_action`.
@@ -177,6 +220,7 @@ impl ToolKind {
         Self::ListContextItems,
         Self::GetContextItemDetail,
         Self::SelectWorkspace,
+        Self::CaptureScreen,
         Self::WaitForUser,
         Self::EndSession,
     ];
@@ -288,12 +332,27 @@ impl ToolKind {
                         },
                         "prompt": {
                             "type": "string",
-                            "description": "Verbatim what the user wants the agent to do."
+                            "description": "Verbatim what the user wants the agent to do. \
+                                            When attaching screenshots, also include each \
+                                            path as `@<absolute-path>` in this text — that's \
+                                            Helmor's in-composer image marker and the \
+                                            workspace agent reads it as 'image goes here'."
                         },
                         "plan_mode": {
                             "type": "boolean",
                             "description": "Toggle agent plan mode for the seeded turn. \
                                             Default false."
+                        },
+                        "image_paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Absolute paths returned by prior `capture_screen` \
+                                            calls (their `imagePath` field). The workspace \
+                                            agent reads these as real image attachments. \
+                                            Mirror the same paths in `prompt` as \
+                                            `@<absolute-path>` markers — both are needed: \
+                                            the marker positions the image in the message, \
+                                            the array attaches the bytes."
                         }
                     },
                     "required": ["repo", "prompt"]
@@ -332,12 +391,23 @@ impl ToolKind {
                                             pixels down', 'move it 6 pixels down') — do NOT \
                                             send meta-prompts like 'create three variants', \
                                             the agents see each prompt in isolation and \
-                                            won't know about siblings."
+                                            won't know about siblings. When attaching \
+                                            screenshots, include `@<absolute-path>` markers \
+                                            in every prompt that should see the image."
                         },
                         "plan_mode": {
                             "type": "boolean",
                             "description": "Toggle agent plan mode for every variant. \
                                             Default false."
+                        },
+                        "image_paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Absolute paths from prior `capture_screen` \
+                                            calls. The SAME images attach to every variant — \
+                                            the typical scenario is 'try three things to \
+                                            this same screenshot'. Mirror as \
+                                            `@<absolute-path>` markers in each prompt."
                         }
                     },
                     "required": ["repo", "prompts"]
@@ -601,11 +671,24 @@ impl ToolKind {
                         },
                         "prompt": {
                             "type": "string",
-                            "description": "The instruction to send to the agent."
+                            "description": "The instruction to send to the agent. When \
+                                            attaching screenshots, include each path as \
+                                            `@<absolute-path>` in this text — that's \
+                                            Helmor's composer image marker."
                         },
                         "plan_mode": {
                             "type": "boolean",
                             "description": "Run agent in plan mode (no edits). Default false."
+                        },
+                        "image_paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Absolute paths returned by prior `capture_screen` \
+                                            calls (`imagePath` field). The workspace agent \
+                                            reads these as image attachments. Mirror the \
+                                            same paths in `prompt` as `@<absolute-path>` \
+                                            markers — both are needed: marker positions, \
+                                            array attaches bytes."
                         }
                     },
                     "required": ["workspace", "prompt"]
@@ -759,6 +842,61 @@ impl ToolKind {
                            中文 samples: '切过去了。' / '切到 kale 了。' \
                            Do not read the workspace id aloud. No preamble; this is fast.",
             },
+            Self::CaptureScreen => ToolMetadata {
+                name: "capture_screen",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["window", "screen"],
+                            "description": "`window` (default) captures only the user's \
+                                            currently focused window — best for reading \
+                                            a Slack/email/issue/PR the user is looking \
+                                            at. `screen` captures the entire primary \
+                                            monitor — use only when the user explicitly \
+                                            says 'the whole screen', '整个屏幕', \
+                                            'desktop', or when one window clearly \
+                                            isn't enough."
+                        }
+                    },
+                    "required": []
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: the user refers to something visible on their screen \
+                           that you cannot otherwise see — 'fix the bug Michael mentioned', \
+                           '帮我看一下屏幕上这条', 'read this error', 'what does this PR \
+                           say', 'just look at it', 'this one' with no prior context. The \
+                           captured image is delivered to you on your *next* turn as a \
+                           user message; reason about it then and decide whether to act \
+                           (create_workspace_and_send / send_prompt / list_repos) or to \
+                           voice-check first. \
+                           DO NOT use to satisfy curiosity (no 'let me take a look' \
+                           preamble) or to confirm something the user already verbally \
+                           described in full. Privacy matters: prefer `window` over \
+                           `screen` unless the user explicitly asks for the whole \
+                           desktop. \
+                           ONE CAPTURE PER REQUEST. Do not call `capture_screen` again \
+                           unless the user explicitly asks you to look again ('看一下新的', \
+                           'screenshot again') — the first capture's content is in your \
+                           context already, re-read it from there. \
+                           🚨 AFTER capture_screen returns, if you decide to act \
+                           (create workspace, send prompt, run action), you MUST invoke \
+                           the action tool — not just speak its success-shape reply. \
+                           Speaking 'dosu 建好发了。' / 'started in dosu.' WITHOUT first \
+                           emitting the matching function_call is a hallucination that \
+                           leaves the UI empty. Sequence: capture_screen → reason → \
+                           action function_call → wait for tool result → SPEAK. \
+                           On permission denial the tool returns ok:false with a human \
+                           cause — read it verbatim, do NOT retry. The user must grant \
+                           macOS Screen Recording permission and restart Helmor; you \
+                           cannot do either for them. \
+                           Reply shape: short preamble ('one sec.' / '稍等,我看下。'), \
+                           then on the NEXT turn after the image lands, action function_call \
+                           first, then announce. Never narrate what you see line-by-line; \
+                           act on it or ask one short clarifying question.",
+            },
             Self::WaitForUser => ToolMetadata {
                 name: "wait_for_user",
                 parameters: json!({ "type": "object", "properties": {}, "required": [] }),
@@ -810,6 +948,7 @@ impl ToolKind {
             Self::ListContextItems => list_context_items(args),
             Self::GetContextItemDetail => get_context_item_detail(args),
             Self::SelectWorkspace => select_workspace(args),
+            Self::CaptureScreen => capture_screen(args),
             // Both `wait_for_user` and `end_session` are dispatcher-side
             // signals — they're short-circuited in the frontend before
             // hitting IPC. If a code path ever lands here we still want
@@ -1142,10 +1281,17 @@ fn send_prompt(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let image_paths = parse_image_paths_arg(&args);
 
     let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
-    let (workspace_id, session_id) =
-        voice_dispatch_to_agent(ctx, &workspace_id, session_id, prompt, plan_mode)?;
+    let (workspace_id, session_id) = voice_dispatch_to_agent(
+        ctx,
+        &workspace_id,
+        session_id,
+        prompt,
+        plan_mode,
+        image_paths,
+    )?;
     Ok(VoiceToolResult {
         data: json!({
             "workspaceId": workspace_id,
@@ -1155,6 +1301,24 @@ fn send_prompt(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         navigate_to_workspace_id: Some(workspace_id),
         ..Default::default()
     })
+}
+
+/// Parse the `image_paths: string[]` arg used by `send_prompt`,
+/// `create_workspace_and_send`, and `create_workspace_variants`. The
+/// model gets these paths from a prior `capture_screen` call's
+/// `imagePath` field — they're absolute paths into the OS temp dir.
+/// Non-string entries and empty strings are filtered out (we'd rather
+/// silently ignore a malformed entry than fail the whole send over
+/// one bad item — voice flows are high-stakes, partial image attach
+/// is better than nothing).
+fn parse_image_paths_arg(args: &Value) -> Vec<String> {
+    let Some(arr) = args.get("image_paths").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Single-write dispatcher shared by every voice tool that sends a
@@ -1175,6 +1339,7 @@ fn voice_dispatch_to_agent(
     session_id: Option<String>,
     prompt: String,
     plan_mode: bool,
+    image_paths: Vec<String>,
 ) -> Result<(String, String)> {
     use tauri::ipc::{Channel, InvokeResponseBody};
     use tauri::Manager;
@@ -1217,6 +1382,21 @@ fn voice_dispatch_to_agent(
         .clone()
         .context("voice_dispatch_to_agent: workspace has no root_path")?;
 
+    // Filter out empty / blank paths the model might emit. We never
+    // want an empty string to reach `AgentSendRequest.images` — the
+    // SDK would happily try to read `""` and surface a confusing
+    // "file not found" later in the stream.
+    let images: Vec<String> = image_paths
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let images = if images.is_empty() {
+        None
+    } else {
+        Some(images)
+    };
+
     let request = crate::agents::AgentSendRequest {
         provider: model.provider.to_string(),
         model_id: model.id.to_string(),
@@ -1233,7 +1413,7 @@ fn voice_dispatch_to_agent(
         fast_mode: None,
         user_message_id: None,
         files: None,
-        images: None,
+        images,
     };
 
     // Voice agent doesn't consume PTY events — same fire-and-forget
@@ -1280,6 +1460,7 @@ fn create_workspace_and_send(args: Value, ctx: &VoiceToolContext) -> Result<Voic
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let image_paths = parse_image_paths_arg(&args);
 
     let repo_id = service::resolve_repo_ref(repo_ref)?;
     let response = service::create_workspace_from_repo_impl(&repo_id)?;
@@ -1291,7 +1472,7 @@ fn create_workspace_and_send(args: Value, ctx: &VoiceToolContext) -> Result<Voic
     .ok();
 
     let (workspace_id, session_id) =
-        voice_dispatch_to_agent(ctx, &workspace_id, None, prompt, plan_mode)?;
+        voice_dispatch_to_agent(ctx, &workspace_id, None, prompt, plan_mode, image_paths)?;
 
     Ok(VoiceToolResult {
         data: json!({
@@ -1339,6 +1520,12 @@ fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<Voic
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // The same image attaches to every variant — voice scenario is "try
+    // 3 different things to this same screen", so the picture is shared
+    // context across the workspaces. (If we ever need per-variant
+    // images we'd promote `image_paths` to an array of arrays parallel
+    // to `prompts`, but that's premature today.)
+    let image_paths = parse_image_paths_arg(&args);
 
     // Resolve the repo once up front — same repo for every variant, so
     // a typo fails the whole call cleanly before we create any
@@ -1361,8 +1548,14 @@ fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<Voic
                 workspace_id: workspace_id.clone(),
             })
             .ok();
-            let (workspace_id, session_id) =
-                voice_dispatch_to_agent(ctx, &workspace_id, None, prompt.clone(), plan_mode)?;
+            let (workspace_id, session_id) = voice_dispatch_to_agent(
+                ctx,
+                &workspace_id,
+                None,
+                prompt.clone(),
+                plan_mode,
+                image_paths.clone(),
+            )?;
             Ok((workspace_id, session_id))
         })();
 
@@ -1495,6 +1688,7 @@ fn run_workspace_action(args: Value) -> Result<VoiceToolResult> {
                     workspace_id,
                     action_kind: action_kind.to_string(),
                 }),
+                image: None,
             })
         }
         // Direct: run inline. Both return their underlying result JSON
@@ -1918,6 +2112,107 @@ fn select_workspace(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
+/// Capture the user's screen (focused window by default, full primary
+/// monitor on request), JPEG-encode + base64 the result, and hand the
+/// data URL to the frontend dispatcher, which injects it as an
+/// `input_image` user item into the live Realtime conversation. The
+/// captured frame is *not* embedded in the `function_call_output` body
+/// (Realtime API rejects non-string output); the model sees the image
+/// on its next turn instead.
+///
+/// **Why base64 inline and not Files API `file_id`**: we tried Files
+/// API first — `gpt-realtime-2` rejects `input_image` items that omit
+/// `image_url`, even when `file_id` is set, with
+/// `Missing required parameter: 'item.content[*].image_url'`. The
+/// only path that gets past validation is a `data:` (or HTTPS) URL
+/// inlined into `image_url`. So `screen_capture::capture` aggressively
+/// downsamples (1280px long edge) and JPEG-q60s the frame to keep the
+/// resulting base64 below the WebRTC dataChannel's ~16–256 KB SCTP
+/// message size ceiling.
+///
+/// On macOS this checks `CGPreflightScreenCaptureAccess` first. If
+/// permission is missing we kick off the system prompt + open the
+/// Settings deep-link as side effects, then return a structured error
+/// string that the model reads verbatim. The user must grant +
+/// restart Helmor before a retry will succeed — `preflight` caches
+/// its result for the process lifetime, so any in-process retry is
+/// guaranteed to keep returning denied.
+fn capture_screen(args: Value) -> Result<VoiceToolResult> {
+    let mode = CaptureMode::parse(args.get("mode").and_then(Value::as_str));
+    tracing::info!(
+        target: "helmor_lib::commands::screen_capture",
+        requested_mode = mode.as_str(),
+        "capture_screen handler entered"
+    );
+
+    if !screen_capture::is_granted() {
+        // Explicit warn so the JSONL log clearly shows "this is the
+        // permission path", separate from the generic
+        // `run_voice_tool` failure log that the anyhow bail below
+        // would otherwise be the only signal for. preflight caches
+        // its result for the process lifetime, so an in-process retry
+        // is guaranteed to keep hitting this branch — the user must
+        // grant + restart.
+        tracing::warn!(
+            requested_mode = mode.as_str(),
+            "capture_screen: macOS Screen Recording permission denied; \
+             firing system prompt + opening Settings deep-link",
+        );
+        // Fire the OS prompt (no-op if already shown) and bring the user
+        // straight to the right Settings pane. Both are best-effort —
+        // the error message we return is what the model actually reads.
+        screen_capture::request();
+        if let Err(e) = screen_capture::open_settings() {
+            tracing::warn!(error = %format!("{e:#}"), "open_settings failed");
+        }
+        anyhow::bail!(
+            "Screen recording permission missing. I just opened System Settings — \
+             enable Helmor under Privacy & Security → Screen Recording, then quit \
+             and reopen Helmor."
+        );
+    }
+
+    let result = screen_capture::capture(mode)?;
+    let caption = match result.mode_used.as_str() {
+        "window" => "Here is the user's currently focused window.".to_string(),
+        _ => "Here is the user's screen.".to_string(),
+    };
+    // `imagePath` lets the model forward the screenshot to a workspace
+    // agent (claude / codex) by passing it back via
+    // `send_prompt` / `create_workspace_and_send` /
+    // `create_workspace_variants`'s `image_paths` argument. When the
+    // disk write failed (rare — e.g. temp dir full) `path` is `None`
+    // and we omit the key so the model doesn't try to forward a bogus
+    // path; it still has the in-realtime `image` envelope and can
+    // describe what it saw.
+    let mut data = json!({
+        "ok": true,
+        "mode_used": result.mode_used,
+        "width": result.width,
+        "height": result.height,
+        "encoded_bytes": result.encoded_bytes,
+        "note": "screenshot attached on the next user turn",
+    });
+    if let Some(path) = result.path.as_ref() {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("imagePath".into(), json!(path));
+        }
+    }
+    Ok(VoiceToolResult {
+        // Tiny envelope for the function_call_output — the image rides
+        // on the side-channel `image` field, picked up by the frontend
+        // dispatcher and injected as a separate `input_image` user item.
+        data,
+        image: Some(VoiceToolImage {
+            data_url: result.data_url,
+            width: result.width,
+            height: result.height,
+            caption,
+        }),
+        ..Default::default()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Description rendering — pulls each tool's clap `--help` body into
 // the OpenAI tool description so the spoken-side documentation tracks
@@ -1988,6 +2283,7 @@ pub async fn run_voice_tool(
     tool: String,
     args: Value,
 ) -> CmdResult<VoiceToolEnvelope> {
+    let invocation_start = std::time::Instant::now();
     // Log every invocation — voice tool calls are rare + high-signal,
     // so it's worth keeping the trail to correlate "the agent said X"
     // with "we ran this internal function with these args".
@@ -2002,6 +2298,7 @@ pub async fn run_voice_tool(
             invalidates: Vec::new(),
             navigate_to_workspace_id: None,
             dispatch_workspace_action: None,
+            image: None,
         });
     };
 
@@ -2028,10 +2325,25 @@ pub async fn run_voice_tool(
         let name = kind.metadata().name;
         match kind.run(args, &ctx) {
             Ok(result) => {
+                // Image gets its own one-line summary. Logs the base64
+                // length so operators can grep for "did we just blow
+                // the dataChannel size ceiling?" — anything past ~200
+                // KB is the danger zone. Doesn't dump the data URL
+                // itself (kilobytes of opaque base64).
+                let image_meta = result.image.as_ref().map(|img| {
+                    format!(
+                        "{}x{} ({}B data_url)",
+                        img.width,
+                        img.height,
+                        img.data_url.len()
+                    )
+                });
                 tracing::info!(
                     tool = name,
+                    elapsed_ms = invocation_start.elapsed().as_millis() as u64,
                     navigate = ?result.navigate_to_workspace_id,
                     dispatch = ?result.dispatch_workspace_action,
+                    image = ?image_meta,
                     "voice agent in-process tool completed"
                 );
                 Ok(VoiceToolEnvelope {
@@ -2041,11 +2353,17 @@ pub async fn run_voice_tool(
                     invalidates,
                     navigate_to_workspace_id: result.navigate_to_workspace_id,
                     dispatch_workspace_action: result.dispatch_workspace_action,
+                    image: result.image,
                 })
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                tracing::warn!(tool = name, %message, "voice agent in-process tool failed");
+                tracing::warn!(
+                    tool = name,
+                    elapsed_ms = invocation_start.elapsed().as_millis() as u64,
+                    %message,
+                    "voice agent in-process tool failed"
+                );
                 Ok(VoiceToolEnvelope {
                     ok: false,
                     data: Value::Null,
@@ -2053,6 +2371,7 @@ pub async fn run_voice_tool(
                     invalidates: Vec::new(),
                     navigate_to_workspace_id: None,
                     dispatch_workspace_action: None,
+                    image: None,
                 })
             }
         }
@@ -2113,6 +2432,7 @@ mod tests {
             names,
             vec![
                 "archive_workspace",
+                "capture_screen",
                 "create_workspace",
                 "create_workspace_and_send",
                 "create_workspace_variants",

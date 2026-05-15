@@ -12,11 +12,17 @@ import {
 	createToolDispatcher,
 } from "./tool-dispatcher";
 import { useAudioLevel } from "./use-audio-level";
+import { voiceDiag } from "./voice-diag";
 import {
 	getMinHold,
 	type VoiceUiPhase,
 	type VoiceUiState,
 } from "./voice-mode-state";
+
+/** Tag UI state-machine events under the `sequence.` namespace. */
+function diag(event: string, data?: Record<string, unknown>) {
+	voiceDiag(`sequence.${event}`, data);
+}
 
 /** How long the just-finished transcript stays on screen as the bar's
  *  label after `response.done`. After this window expires we drop back
@@ -172,11 +178,24 @@ export function useRealtimeSequence(
 				tone?: "error";
 			} = {},
 		) => {
+			const prev = phaseRef.current;
 			phaseRef.current = next;
 			phaseStartRef.current = performance.now();
 			setPhase(next);
 			setLabel(opts.label);
 			setTone(opts.tone);
+			// Echo every phase application — this is the single chokepoint
+			// for state transitions, so logging here covers all paths
+			// (transitionWithHold, scheduleSpeakingTransition, the speech
+			// barge-in path, the response.done fallbacks, error events).
+			// Keep label truncated; transcripts can grow large and we have
+			// the full string in `voice-state` echoes anyway.
+			diag("phase", {
+				from: prev,
+				to: next,
+				labelPreview: opts.label?.slice(0, 80) ?? null,
+				tone: opts.tone ?? null,
+			});
 		},
 		[],
 	);
@@ -238,6 +257,7 @@ export function useRealtimeSequence(
 			// Reset to clean baseline when voice mode toggles off. Any
 			// pending transition timer is cleared by the effect cleanup
 			// below (this branch returns early before scheduling anything).
+			diag("sequence-inactive");
 			clearLingerTimer();
 			transcriptBufferRef.current = "";
 			applyPhase("listening");
@@ -248,6 +268,7 @@ export function useRealtimeSequence(
 		// the muted mono BorderBeam rather than the colourful "ready"
 		// state. We flip to `listening` once the server confirms the
 		// session is live (see `session.created` handler below).
+		diag("sequence-activate");
 		clearLingerTimer();
 		transcriptBufferRef.current = "";
 		applyPhase("connecting");
@@ -261,6 +282,7 @@ export function useRealtimeSequence(
 
 			// ── Handshake done: leave warmup ─────────────────────────────
 			if (eventType === "session.created" || eventType === "session.updated") {
+				diag("server-session-ready", { eventType });
 				if (phaseRef.current === "connecting") {
 					transitionWithHold("listening");
 				}
@@ -273,6 +295,10 @@ export function useRealtimeSequence(
 			// drop transcript, return to a clean listening visual. The
 			// server itself cancels the response (interrupt_response=true).
 			if (eventType === "input_audio_buffer.speech_started") {
+				diag("user-speech-started", {
+					phaseAtBarge: phaseRef.current,
+					hadPendingTransition: pendingTransitionRef.current !== null,
+				});
 				if (pendingTransitionRef.current) {
 					clearTimeout(pendingTransitionRef.current);
 					pendingTransitionRef.current = null;
@@ -286,6 +312,18 @@ export function useRealtimeSequence(
 				return;
 			}
 
+			// Less critical user-audio signals — but useful for
+			// correlating "user spoke X seconds, then server fired Y" in
+			// the trace. Kept on a separate diag event so transcript
+			// readers can filter them out.
+			if (eventType === "input_audio_buffer.speech_stopped") {
+				diag("user-speech-stopped");
+				// Falls through to no-op; speaking phase doesn't change.
+			}
+			if (eventType === "input_audio_buffer.committed") {
+				diag("user-audio-committed");
+			}
+
 			// `speech_stopped` is intentionally a no-op for the bar's
 			// phase — we stay in `listening` until the model emits its
 			// first signal (a tool call or the first audio delta).
@@ -297,6 +335,7 @@ export function useRealtimeSequence(
 				if (item?.type !== "function_call") return;
 				const name = item.name;
 				if (!name) return; // malformed; nothing we can show
+				diag("server-function-call-added", { tool: name });
 				if (name === "wait_for_user") {
 					// No-op tool — model decided not to respond. Preserve any
 					// lingering transcript from the previous reply so the
@@ -353,11 +392,21 @@ export function useRealtimeSequence(
 			}
 
 			// ── Response complete ────────────────────────────────────────
-			// Only leave speaking on response.done. While in acting we
-			// stay put — either the tool dispatcher is mid-flight and
-			// the next response will start streaming audio, or another
-			// function_call within the same response will update the
-			// label.
+			// Transition out of `speaking` (normal case) or `acting` (the
+			// fallback we added after observing a real-world stuck state).
+			//
+			// Acting-stuck case: the dispatcher submits a
+			// `function_call_output` and a follow-up `response.create` so
+			// the model can verbally acknowledge the tool result. *Usually*
+			// that follow-up response streams audio/transcript, taking us
+			// acting → speaking → listening. But if the follow-up response
+			// finishes with `status=failed` or `cancelled` (server
+			// rejection, user barge-in, empty completion), we never see a
+			// transcript delta, so phase stays parked at `acting` with the
+			// tool's "Creating + sending" label forever. Fall back to
+			// listening; surface a friendly error if the server actually
+			// failed so the user knows to retry instead of staring at a
+			// frozen bar.
 			//
 			// Transcript-lingering: the just-spoken transcript persists
 			// into the listening phase as the bar label for
@@ -366,6 +415,8 @@ export function useRealtimeSequence(
 			// idle Mic + "Listening" visual; user/agent activity inside
 			// the window cancels the timer (handled per event above).
 			if (eventType === "response.done") {
+				const status = (event as { response?: { status?: string } }).response
+					?.status;
 				if (phaseRef.current === "speaking") {
 					const transcript = transcriptBufferRef.current;
 					applyPhase("listening", { label: transcript || undefined });
@@ -386,15 +437,62 @@ export function useRealtimeSequence(
 							}
 						}, TRANSCRIPT_LINGER_MS);
 					}
+				} else if (phaseRef.current === "acting" && status !== "completed") {
+					// Only `failed` / `cancelled` here. `completed` is the
+					// normal tool-call flow — the response that just
+					// completed contained our function_call output_item,
+					// the dispatcher will now run the tool, send
+					// `function_call_output` + `response.create`, and
+					// the *follow-up* response will either stream audio
+					// (handled by the speaking transition) or fail
+					// (handled by this branch on its own response.done).
+					// Touching `acting` on the first completed response
+					// would erase the spinner before the tool even
+					// finished — visible flicker.
+					clearLingerTimer();
+					transcriptBufferRef.current = "";
+					if (status === "failed") {
+						// Pull whichever reason string the server gave us. The
+						// `response.status_details.error.message` path is the
+						// one OpenAI populates today; fall back through a few
+						// likely shapes so a payload-schema bump doesn't
+						// silently swallow the cause.
+						const responseAny = (event as { response?: unknown }).response as
+							| {
+									status_details?: {
+										error?: { message?: string };
+										reason?: string;
+									};
+							  }
+							| undefined;
+						const message =
+							responseAny?.status_details?.error?.message ??
+							responseAny?.status_details?.reason ??
+							"Response failed";
+						applyPhase("listening", { label: message, tone: "error" });
+					} else {
+						// `cancelled` — user barge-in or dispatcher abort.
+						// No error tone; the bar just needs unsticking so
+						// the user can talk again.
+						applyPhase("listening");
+					}
 				}
 				return;
 			}
 
 			// ── Hard error from server ───────────────────────────────────
 			if (eventType === "error") {
-				const message =
-					(event as { error?: { message?: string } }).error?.message ??
-					"Realtime session error";
+				const errorObj = (
+					event as {
+						error?: { message?: string; code?: string; type?: string };
+					}
+				).error;
+				const message = errorObj?.message ?? "Realtime session error";
+				diag("server-error-handled", {
+					code: errorObj?.code ?? null,
+					type: errorObj?.type ?? null,
+					message,
+				});
 				clearLingerTimer();
 				transcriptBufferRef.current = "";
 				applyPhase("listening", { label: message, tone: "error" });
@@ -405,9 +503,11 @@ export function useRealtimeSequence(
 		void startRealtimeVoiceSession()
 			.then((next) => {
 				if (cancelled) {
+					diag("session-discarded-after-cancel");
 					next.stop();
 					return;
 				}
+				diag("session-attached");
 				session = next;
 				setLocalStream(next.localStream);
 				next.remoteStream
@@ -457,11 +557,16 @@ export function useRealtimeSequence(
 				}
 			})
 			.catch((err) => {
-				if (cancelled) return;
+				if (cancelled) {
+					diag("session-error-after-cancel", { error: messageOf(err) });
+					return;
+				}
+				diag("session-start-failed", { error: messageOf(err) });
 				applyPhase("listening", { label: messageOf(err), tone: "error" });
 			});
 
 		return () => {
+			diag("sequence-cleanup");
 			cancelled = true;
 			if (pendingTransitionRef.current) {
 				clearTimeout(pendingTransitionRef.current);
@@ -537,6 +642,8 @@ function humanToolStatus(name: string): string {
 			return "Fetching contexts";
 		case "get_context_item_detail":
 			return "Reading context";
+		case "capture_screen":
+			return "Reading screen";
 		default:
 			return name
 				.replace(/_/g, " ")

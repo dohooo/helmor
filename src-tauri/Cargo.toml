@@ -26,7 +26,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 rand = "0.10.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
@@ -47,6 +47,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+# Screen capture for the voice agent's `capture_screen` tool. `xcap` is the
+# maintained cross-platform successor to the deprecated `screenshots` crate;
+# `image` is xcap's underlying RgbaImage / PNG encoder dependency. We re-export
+# the same `image` version xcap uses so encoder + buffer types match without a
+# manual transmute. The PNG-only feature shaves the JPEG/GIF/etc. codecs we
+# don't use.
+xcap = "0.8"
+# `png` for the lossless path (small windows where size isn't an issue).
+# `jpeg` for the lossy path the voice agent's `capture_screen` actually
+# uses — Realtime API's WebRTC dataChannel has an SCTP message size
+# limit (~16–256 KB) that PNG screenshots blow through, so we encode to
+# JPEG and downsample to ~1280px long edge before base64'ing.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # libc backs Unix process groups, signals, and PTY handling.
 # Windows support will need platform-specific replacements before this can be gated.
@@ -55,6 +68,11 @@ version = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+# `core_graphics::access::ScreenCaptureAccess` wraps
+# `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess` for the
+# voice-agent screenshot tool's permission gate. Sync `bool` API; no other
+# crate needs core-graphics today, so it sits in the macOS-only block.
+core-graphics = "0.25"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSKeyValueCoding", "NSString", "NSValue"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }

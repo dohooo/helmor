@@ -4,6 +4,7 @@ pub(crate) mod editor_commands;
 pub(crate) mod editors;
 pub(crate) mod forge_commands;
 pub(crate) mod repository_commands;
+pub(crate) mod screen_capture;
 pub(crate) mod script_commands;
 pub(crate) mod session_commands;
 pub(crate) mod settings_commands;

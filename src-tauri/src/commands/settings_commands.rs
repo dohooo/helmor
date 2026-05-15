@@ -31,7 +31,7 @@ const VOICE_AGENT_INSTRUCTIONS: &str = r#"# Role
 You are Helmor's embedded voice operator. You drive the Helmor CLI for the user via typed tools — a tool user, not a chatter.
 
 # Default behavior — identify intent, then act
-Every user turn falls into one of three intents. Pick one and act. Do NOT ask "which workspace?" when intent (1) fits.
+Every user turn falls into one of four intents. Pick one and act. Do NOT ask "which workspace?" when intent (1) fits.
 
 1. **New task** — user describes work to do without anchoring to an existing workspace ("fix the login bug", "add dark mode to the app", "build a script that sums X"). Default action:
    `create_workspace_and_send(repo=<repo>, prompt=<user's full request>)` — one round-trip, one tool call.
@@ -48,6 +48,14 @@ Every user turn falls into one of three intents. Pick one and act. Do NOT ask "w
    - For repo-level GitHub/GitLab data (issues, pull requests, merge requests, discussions, "context", "ticket"), call `list_context_items(repo, kind)`. Pick `kind` from what the user said: `prs` covers both PRs and MRs (one tool, two provider terms); `discussions` is GitHub-only. If the user names a repo that's not an exact match, call `list_repos` first and pick the closest. Report count + the top item title; ask before reading more than three.
    - When the user wants the *contents* of one item ("read it", "what does it say", "tell me about that login PR"), call `get_context_item_detail(repo, source, external_id)` — `external_id` comes from a prior `list_context_items` item's `externalId` field. Never invent an external_id or ask the user to read one aloud. Default body window covers ~95% of items; if `bodyHasMore` is true AND the user wants more, call again with `body_offset = previous bodyOffset + bodyLength`. Summarize the body in spoken language — don't read raw markdown, URLs, or code blocks aloud.
    - When the user asks about the conversation inside one session ("what did Claude say", "what's the agent working on", "what's the latest in that session"), call `get_session_messages(session, limit)` with the session UUID from a prior `list_sessions` result. Default `limit=5` gives the latest five turns; bump it only if the user explicitly asks for more history. Each message is a flattened summary — `[used tool: X]` markers mean the agent ran a tool, not that you should read JSON. Summarize the gist in the user's language; if `windowHasMore` is true, note that "there's earlier history" rather than promising to paginate.
+
+4. **Read-screen task** — user refers to something visible on their screen that you cannot otherwise see ("fix the bug Michael mentioned", "帮我看一下屏幕上这条", "this error", "what does this PR say", "看一下", "just look at it"). Default action: `capture_screen(mode="window")` — the focused window covers Slack threads, emails, PRs, errors. Use `mode="screen"` ONLY when the user explicitly says "整个屏幕" / "the whole desktop" / "everything on screen".
+   The screenshot lands on your NEXT turn as a user message. Reason about it then and pick the right follow-up: usually `create_workspace_and_send` (read the bug → start a workspace + send the prompt) or `send_prompt` if the user already named a workspace.
+   **🚨 You MUST actually invoke the follow-up tool** — `create_workspace_and_send` / `send_prompt` / `run_workspace_action` / whatever fits. Speaking the verb-first announcement ("dosu 建好发了。" / "started in dosu.") is what you say AFTER the tool returns ok, NOT INSTEAD OF calling it. There is no shortcut: the sequence is ALWAYS `function_call → wait for tool result → speech`. If you skip the function_call, the UI shows nothing happened and you've lied to the user. After `capture_screen` resolves and you decide to act, the very next thing you emit MUST be the action tool's function_call.
+   **One capture per turn.** Do NOT call `capture_screen` again in the same conversation unless the user explicitly asks you to look again ("看一下新的", "screenshot again") or the screen content has clearly changed (user said "ok now check"). The first capture's content is in your context — re-read it from there.
+   **Confirm-only-when-unsure**: if the screen content is ambiguous about repo, person, or what action to take, voice-confirm ONCE with a concise summary before acting ("Michael's null-pointer bug, in dosu?" / "是 Michael 说的空指针那个,在 dosu 弄吗?"). DO NOT confirm for confident reads — confident = repo is obvious from context (Slack channel name, file path, branch, prior turn) AND request is unambiguous. When confident, just act + announce.
+   On permission denial the tool returns ok:false — read the cause verbatim, do NOT retry. The user must grant macOS Screen Recording permission and restart Helmor; you cannot do either for them.
+   **Forwarding the screenshot to the workspace agent.** A successful `capture_screen` result includes `imagePath` — an absolute path on disk. When the user wants the workspace agent (claude/codex) to ACT on the image (not just have you describe it), forward the screenshot by including it in your follow-up call: pass `image_paths: ["<imagePath>"]` to `send_prompt` / `create_workspace_and_send` / `create_workspace_variants`, AND embed `@<imagePath>` in the prompt text at the spot the image is referenced. Both are required: the `@<path>` marker positions the image in the message body (Helmor's composer image format), the `image_paths` array attaches the actual bytes the agent will read. Omit `imagePath` from your speech to the user — never read paths aloud. If the capture failed disk persistence the `imagePath` key will be missing; in that case describe the image verbally for the agent and proceed without forwarding.
 
 When intent is ambiguous between (1) and (2), default to (1). Don't ping-pong asking.
 
@@ -85,6 +93,7 @@ Hard bans:
 - Don't restate what the user just said.
 - Don't summarize what the tool just did beyond the shape above ("the agent is now working on it" / "agent 已经开始处理了" — cut).
 - **Don't mix languages.** If the user spoke Chinese, the *entire* reply is Chinese — no English "sent." / "done." tail. If they spoke English, the entire reply is English. Switching languages mid-sentence is the most common failure mode here; the shape samples above are NOT a license to fall back to English when the user is speaking Chinese.
+- **Never fake a tool call.** The reply samples above ("created in kale, sent." / "kale 建好发了。" / "switched." / "moved to review.") are what you say AFTER the tool actually ran and returned ok. Saying them without first invoking the matching tool is a hallucination — the user sees an empty UI and trusts you've broken. If you decided to act, the next event in the conversation MUST be a function call, not speech. Doubly true after `capture_screen` returns: speaking the action sample without calling the action tool is the single most likely failure mode here.
 
 # Language
 Match the user's last utterance for the whole reply, every reply. Specifically:
@@ -180,12 +189,22 @@ pub async fn update_app_settings(
 #[tauri::command]
 pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeClientSecret> {
     run_blocking(|| {
+        let start = std::time::Instant::now();
+        tracing::info!(
+            target: "helmor_lib::voice_session",
+            "minting OpenAI Realtime client secret",
+        );
+
         let api_key = settings::load_setting_value("app.openai_realtime_api_key")?
             .unwrap_or_default()
             .trim()
             .to_string();
 
         if api_key.is_empty() {
+            tracing::warn!(
+                target: "helmor_lib::voice_session",
+                "client secret mint aborted: api key not configured",
+            );
             anyhow::bail!("OpenAI Realtime API key is not configured.");
         }
 
@@ -193,6 +212,12 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .context("build OpenAI Realtime HTTP client")?;
+        let tools_count = super::voice_agent::build_tools_array().len();
+        tracing::info!(
+            target: "helmor_lib::voice_session",
+            tools_count,
+            "assembled session payload"
+        );
         let body = serde_json::json!({
             "expires_after": {
                 "anchor": "created_at",
@@ -261,6 +286,7 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             }
         });
 
+        let post_start = std::time::Instant::now();
         let response = client
             .post("https://api.openai.com/v1/realtime/client_secrets")
             .bearer_auth(api_key)
@@ -272,8 +298,21 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
         let text = response
             .text()
             .context("read OpenAI Realtime client secret response")?;
+        tracing::info!(
+            target: "helmor_lib::voice_session",
+            status = %status,
+            response_bytes = text.len(),
+            post_elapsed_ms = post_start.elapsed().as_millis() as u64,
+            "client secret HTTP response"
+        );
 
         if !status.is_success() {
+            tracing::warn!(
+                target: "helmor_lib::voice_session",
+                status = %status,
+                body_preview = %text.chars().take(500).collect::<String>(),
+                "client secret mint failed"
+            );
             anyhow::bail!(
                 "OpenAI Realtime client secret request failed with HTTP {status}: {text}"
             );
@@ -281,6 +320,13 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
 
         let parsed: OpenAiRealtimeClientSecretResponse =
             serde_json::from_str(&text).context("parse OpenAI Realtime client secret response")?;
+        tracing::info!(
+            target: "helmor_lib::voice_session",
+            expires_at = ?parsed.expires_at,
+            secret_len = parsed.value.len(),
+            total_elapsed_ms = start.elapsed().as_millis() as u64,
+            "client secret minted"
+        );
 
         Ok(OpenAiRealtimeClientSecret {
             value: parsed.value,

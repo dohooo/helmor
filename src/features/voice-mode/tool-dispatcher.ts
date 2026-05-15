@@ -3,12 +3,20 @@ import {
 	type VoiceDispatchActionKind,
 	type VoiceDispatchWorkspaceAction,
 	type VoiceToolEnvelope,
+	type VoiceToolImage,
 	type VoiceToolMutationKind,
 } from "@/lib/api";
 import type {
 	RealtimeClientEvent,
 	RealtimeServerEvent,
 } from "./realtime-session";
+import { voiceDiag } from "./voice-diag";
+
+/** Tag every dispatcher event with the `dispatcher.` namespace. See
+ *  `voice-diag.ts` for the rationale on echoing to Rust tracing. */
+function diag(event: string, data?: Record<string, unknown>) {
+	voiceDiag(`dispatcher.${event}`, data);
+}
 
 /** Names of every typed tool we declare to `gpt-realtime-2`. Keep in
  *  sync with the `ToolKind` enum in
@@ -33,6 +41,7 @@ type ToolName =
 	| "list_context_items"
 	| "get_context_item_detail"
 	| "select_workspace"
+	| "capture_screen"
 	| "wait_for_user"
 	| "end_session";
 
@@ -113,6 +122,43 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 	function handleEvent(event: RealtimeServerEvent) {
 		const eventType = event.type;
 		if (!eventType) return;
+
+		// Targeted server-side echo. We *don't* echo every event type
+		// (transcript deltas alone fire ~30 times per second and would
+		// flood the log) — only the lifecycle signals that answer
+		// "what did the server actually do after we sent
+		// response.create?" The `error` echo carries the full payload
+		// because that's the only place the model + server gives us a
+		// human-readable reason for a silent rejection (e.g. image
+		// content rejected, model doesn't accept input_image, payload
+		// too large).
+		if (eventType === "error") {
+			diag("server-error", { event });
+		} else if (
+			eventType === "response.created" ||
+			eventType === "response.done" ||
+			eventType === "conversation.item.created" ||
+			eventType === "response.cancelled" ||
+			eventType === "rate_limits.updated"
+		) {
+			// Strip noisy nested fields — for `response.done` the
+			// `response.output` blob can be megabytes if it contains
+			// audio. Just record the type and a status/id-ish summary.
+			const responseStatus = (
+				event as { response?: { id?: string; status?: string } }
+			).response;
+			const item = (
+				event as { item?: { id?: string; type?: string; role?: string } }
+			).item;
+			diag("server-event", {
+				type: eventType,
+				responseId: responseStatus?.id ?? null,
+				responseStatus: responseStatus?.status ?? null,
+				itemId: item?.id ?? null,
+				itemType: item?.type ?? null,
+				itemRole: item?.role ?? null,
+			});
+		}
 
 		// Track new function_call items as they appear, by both call_id
 		// (for accumulating argument deltas) and response_id (so we
@@ -214,10 +260,35 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 			c.name,
 			c.argsBuffer || "(no args)",
 		);
+		// Echo to Rust tracing so voice-panel webview invocations
+		// (which can't surface a devtools console) still leave a
+		// trail. argsBuffer can be JSON — keep it as a string to
+		// avoid double-encoding gotchas.
+		diag("tool-call-start", {
+			name: c.name,
+			args: c.argsBuffer || null,
+			callId: c.callId,
+		});
 	}
 	const results = await Promise.all(calls.map((c) => runCall(c)));
 	for (const r of results) {
 		console.log("[helmor voice] tool call ←", r.callId, r.output.slice(0, 200));
+		// Slim summary — log the truncated output (matches the
+		// console line) plus the `image` envelope side-channel
+		// presence, which is the bit operators are usually grepping
+		// for when triaging `capture_screen`. Keep the data_url out
+		// of the log; the Rust side already records its byte count.
+		diag("tool-call-end", {
+			callId: r.callId,
+			outputPreview: r.output.slice(0, 200),
+			hasImage: r.image != null,
+			imageMeta: r.image
+				? { width: r.image.width, height: r.image.height }
+				: null,
+			navigateToWorkspaceId: r.navigateToWorkspaceId ?? null,
+			dispatchActionKind: r.dispatchWorkspaceAction?.actionKind ?? null,
+			endSession: r.endSession === true,
+		});
 	}
 	// Submit outputs sequentially — community reports race quirks if
 	// multiple `conversation.item.create` events race over the data
@@ -232,6 +303,56 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 			},
 		});
 	}
+	// `capture_screen` tools attach a JPEG via `image`. The Realtime
+	// API rejects non-string `function_call_output.output`, so the
+	// actual frame has to ride a separate `conversation.item.create`
+	// with role `user` and content `[input_text, input_image]`. We
+	// append these AFTER all `function_call_output`s and BEFORE the
+	// single `response.create` — the model only sees the image when
+	// the next response starts. Order across multiple captures in one
+	// turn is preserved so the model can correlate them with their
+	// announcements (rare but possible: model called `capture_screen`
+	// twice in one response). gpt-realtime-2 supports `input_image`
+	// via `image_url`; older 4o-realtime-preview snapshots do not —
+	// the tool is gated off by `build_tools_array` per model anyway.
+	//
+	// We use an inline `data:image/jpeg;base64,…` URL rather than a
+	// Files API `file_id` because the Realtime API server-side
+	// validator rejects `input_image` items that omit `image_url`,
+	// even when `file_id` is set (verified live: `Missing required
+	// parameter: 'item.content[*].image_url'`). The Rust capture path
+	// keeps the payload small enough to fit the WebRTC dataChannel's
+	// SCTP size ceiling — see screen_capture.rs for the downscale +
+	// JPEG quality knobs, and
+	// github.com/openai/openai-agents-js/issues/501 for the
+	// dataChannel ceiling itself.
+	for (const r of results) {
+		if (!r.image) continue;
+		console.log(
+			"[helmor voice] inject input_image",
+			r.callId,
+			`${r.image.width}x${r.image.height}`,
+			`${r.image.dataUrl.length}B`,
+		);
+		diag("inject-input-image", {
+			callId: r.callId,
+			width: r.image.width,
+			height: r.image.height,
+			dataUrlBytes: r.image.dataUrl.length,
+			caption: r.image.caption,
+		});
+		opts.send({
+			type: "conversation.item.create",
+			item: {
+				type: "message",
+				role: "user",
+				content: [
+					{ type: "input_text", text: r.image.caption },
+					{ type: "input_image", image_url: r.image.dataUrl },
+				],
+			},
+		});
+	}
 	// `end_session` is a synthetic UI-only signal — the model already
 	// spoke its goodbye before invoking it, and the session is about to
 	// be torn down. Sending `response.create` would prompt the model to
@@ -241,7 +362,13 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 	// nudge whenever any call in this batch ended the session.
 	const isEndSessionBatch = results.some((r) => r.endSession);
 	if (!isEndSessionBatch) {
+		diag("response-create", {
+			callCount: results.length,
+			imageCount: results.filter((r) => r.image != null).length,
+		});
 		opts.send({ type: "response.create" });
+	} else {
+		diag("response-create-skipped", { reason: "end_session" });
 	}
 
 	// Aggregate mutation kinds across this turn and notify the host
@@ -314,6 +441,13 @@ type RunCallResult = {
 	/** Set when the Rust handler asks the frontend to route a ship-flow
 	 *  action through the GUI commit-button path. */
 	dispatchWorkspaceAction?: VoiceDispatchWorkspaceAction;
+	/** Set by `capture_screen` to deliver a screenshot back into the
+	 *  Realtime conversation. The dispatcher injects this as an
+	 *  `input_image` user item between the `function_call_output` and
+	 *  the follow-up `response.create` — the Realtime API rejects
+	 *  non-string `function_call_output.output`, so binary frames have
+	 *  to ride a separate conversation item. */
+	image?: VoiceToolImage;
 };
 
 /** Empty-success result for `wait_for_user` and front-end short-circuits. */
@@ -380,6 +514,7 @@ async function runCall(call: PendingCall): Promise<RunCallResult> {
 		invalidates: envelope.invalidates,
 		navigateToWorkspaceId: envelope.navigateToWorkspaceId ?? undefined,
 		dispatchWorkspaceAction: envelope.dispatchWorkspaceAction ?? undefined,
+		image: envelope.image ?? undefined,
 	};
 }
 

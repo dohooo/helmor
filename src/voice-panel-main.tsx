@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { voiceDiag } from "@/features/voice-mode/voice-diag";
 import { VoiceModeBar } from "@/features/voice-mode/voice-mode-bar";
 import {
 	useVoiceModeActive,
@@ -43,16 +44,11 @@ const VOICE_PANEL_NAVIGATE_EVENT = "helmor://voice-panel-navigate-workspace";
 const VOICE_PANEL_DISPATCH_ACTION_EVENT =
 	"helmor://voice-panel-dispatch-workspace-action";
 
-/** Forward a lifecycle / state event into the Rust tracing log. The
- *  voice-panel webview can't open devtools (transparent, chrome-less),
- *  so this is how its internals stay visible. Fire-and-forget; an IPC
- *  failure here is never fatal. */
+/** Tag every voice-panel webview-level event with the `panel.`
+ *  namespace. Dispatcher events use the `dispatcher.` namespace via
+ *  the dispatcher's own helper. See `voice-diag.ts`. */
 function diag(event: string, data?: Record<string, unknown>) {
-	void invoke("record_voice_panel_event", { event, data: data ?? null }).catch(
-		(err) => {
-			console.warn("[voice-panel] diag failed", event, err);
-		},
-	);
+	voiceDiag(`panel.${event}`, data);
 }
 
 function VoicePanelApp() {
