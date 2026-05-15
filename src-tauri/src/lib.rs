@@ -249,6 +249,7 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::remote_commands::get_runtime_health,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

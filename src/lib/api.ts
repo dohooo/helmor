@@ -688,6 +688,18 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	}
 }
 
+export type RuntimeKind = { type: "local" } | { type: "remote"; host: string };
+
+export type RuntimeHealth = {
+	kind: RuntimeKind;
+	hostname: string;
+	version: string;
+};
+
+export async function getRuntimeHealth(): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("get_runtime_health");
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;
