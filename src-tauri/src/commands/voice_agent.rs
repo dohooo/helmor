@@ -379,6 +379,16 @@ impl ToolKind {
                             "description": "Toggle agent plan mode for the seeded turn. \
                                             Default false."
                         },
+                        "effort_level": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "xhigh", "max"],
+                            "description": "Optional reasoning effort for this new session. \
+                                            Pick by task difficulty: low=small/simple, \
+                                            medium=normal, high=multi-file/debugging/tests. \
+                                            Use xhigh/max only when the user explicitly asks \
+                                            for maximum effort or the task is unusually deep. \
+                                            Omit to use the user's default effort setting."
+                        },
                         "image_paths": {
                             "type": "array",
                             "items": { "type": "string" },
@@ -401,7 +411,9 @@ impl ToolKind {
                            instead of two. For 'same repo, multiple variants/versions/方案' \
                            use `create_workspace_variants` instead. For cross-repo work, \
                            call this tool serially (twice) — no array shape. After success, \
-                           the UI auto-navigates to the new workspace. Reply shape: \
+                           the UI auto-navigates to the new workspace. Model comes from the \
+                           user's default model setting; choose effort_level only by task \
+                           difficulty. Reply shape: \
                            verb-first, name the repo, no opener. \
                            EN samples: 'created in kale, sent.' / 'done.' \
                            中文 samples: 'kale 建好发了。' / '建好了。' \
@@ -436,6 +448,13 @@ impl ToolKind {
                             "description": "Toggle agent plan mode for every variant. \
                                             Default false."
                         },
+                        "effort_level": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "xhigh", "max"],
+                            "description": "Optional reasoning effort for every variant. \
+                                            Pick by task difficulty; omit to use the user's \
+                                            default effort setting."
+                        },
                         "image_paths": {
                             "type": "array",
                             "items": { "type": "string" },
@@ -456,7 +475,9 @@ impl ToolKind {
                            runs in its own worktree so the user can compare results. The \
                            prompts array length is the number of workspaces. Best-effort: \
                            one variant failing doesn't block the others. After success, UI \
-                           navigates to the LAST created workspace. \
+                           navigates to the LAST created workspace. Model comes from the \
+                           user's default model setting; choose effort_level only by task \
+                           difficulty. \
                            Reply shape: verb-first count, no opener. \
                            EN sample: 'three variants kicked off.' \
                            中文 sample: '三个方案都跑起来了。' \
@@ -799,6 +820,15 @@ impl ToolKind {
                             "type": "boolean",
                             "description": "Run agent in plan mode (no edits). Default false."
                         },
+                        "effort_level": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "xhigh", "max"],
+                            "description": "Optional reasoning effort for this turn. Pick by \
+                                            difficulty: low=small/simple, medium=normal, \
+                                            high=multi-file/debugging/tests; xhigh/max only \
+                                            for explicitly requested maximum effort. Omit to \
+                                            preserve the session/default effort."
+                        },
                         "image_paths": {
                             "type": "array",
                             "items": { "type": "string" },
@@ -1103,12 +1133,57 @@ impl ToolKind {
 
 const DEFAULT_LIST_LIMIT: usize = 20;
 const MAX_LIST_LIMIT: usize = 50;
+const VOICE_EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 fn bounded_limit(args: &Value, default: usize, max: usize) -> usize {
     args.get("limit")
         .and_then(Value::as_u64)
         .map(|n| (n as usize).clamp(1, max))
         .unwrap_or(default)
+}
+
+fn parse_effort_level_arg(args: &Value, tool: &str) -> Result<Option<String>> {
+    let Some(raw) = args.get("effort_level").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let effort = raw.trim().to_ascii_lowercase();
+    if effort.is_empty() {
+        return Ok(None);
+    }
+    if !VOICE_EFFORT_LEVELS.contains(&effort.as_str()) {
+        anyhow::bail!("{tool}: unknown effort_level `{raw}`");
+    }
+    Ok(Some(effort))
+}
+
+fn load_non_empty_setting(key: &str) -> Option<String> {
+    crate::models::settings::load_setting_value(key)
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn default_voice_effort_level() -> Option<String> {
+    load_non_empty_setting("app.default_effort").or_else(|| Some("high".to_string()))
+}
+
+fn default_voice_model_id() -> String {
+    load_non_empty_setting("app.default_model_id").unwrap_or_else(|| "default".to_string())
+}
+
+fn session_effort_level(session_id: &str) -> Result<Option<String>> {
+    let conn = models::db::read_conn()?;
+    let effort: Option<String> = conn
+        .query_row(
+            "SELECT effort_level FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Failed to read effort_level for session {session_id}"))?;
+    Ok(effort
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
 }
 
 fn truncate_chars(value: &str, max: usize) -> String {
@@ -2033,6 +2108,7 @@ fn send_prompt(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let effort_level = parse_effort_level_arg(&args, "send_prompt")?;
     let image_paths = parse_image_paths_arg(&args);
 
     let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
@@ -2042,6 +2118,7 @@ fn send_prompt(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         session_id,
         prompt,
         plan_mode,
+        effort_level,
         image_paths,
     )?;
     Ok(VoiceToolResult {
@@ -2091,6 +2168,7 @@ fn voice_dispatch_to_agent(
     session_id: Option<String>,
     prompt: String,
     plan_mode: bool,
+    effort_level: Option<String>,
     image_paths: Vec<String>,
 ) -> Result<(String, String)> {
     use tauri::ipc::{Channel, InvokeResponseBody};
@@ -2125,9 +2203,13 @@ fn voice_dispatch_to_agent(
     let (session_model, session_provider) =
         crate::models::sessions::get_session_model_and_provider(&session_id)
             .unwrap_or((None, None));
-    let model_id = session_model.unwrap_or_else(|| "default".to_string());
+    let model_id = session_model.unwrap_or_else(default_voice_model_id);
     let provider_hint = session_provider.as_deref();
     let model = crate::agents::resolve_model(&model_id, provider_hint);
+    let effort_level = match effort_level {
+        Some(value) => Some(value),
+        None => session_effort_level(&session_id)?.or_else(default_voice_effort_level),
+    };
 
     let cwd = detail
         .root_path
@@ -2160,7 +2242,7 @@ fn voice_dispatch_to_agent(
         session_id: None,
         helmor_session_id: Some(session_id.clone()),
         working_directory: Some(cwd),
-        effort_level: None,
+        effort_level,
         permission_mode,
         fast_mode: None,
         user_message_id: None,
@@ -2213,6 +2295,8 @@ fn create_workspace_and_send(args: Value, ctx: &VoiceToolContext) -> Result<Voic
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let effort_level = parse_effort_level_arg(&args, "create_workspace_and_send")?
+        .or_else(default_voice_effort_level);
     let image_paths = parse_image_paths_arg(&args);
 
     let repo_id = service::resolve_repo_ref(repo_ref)?;
@@ -2224,8 +2308,15 @@ fn create_workspace_and_send(args: Value, ctx: &VoiceToolContext) -> Result<Voic
     })
     .ok();
 
-    let (workspace_id, session_id) =
-        voice_dispatch_to_agent(ctx, &workspace_id, None, prompt, plan_mode, image_paths)?;
+    let (workspace_id, session_id) = voice_dispatch_to_agent(
+        ctx,
+        &workspace_id,
+        None,
+        prompt,
+        plan_mode,
+        effort_level,
+        image_paths,
+    )?;
 
     Ok(VoiceToolResult {
         data: json!({
@@ -2273,6 +2364,8 @@ fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<Voic
         .get("plan_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let effort_level = parse_effort_level_arg(&args, "create_workspace_variants")?
+        .or_else(default_voice_effort_level);
     // The same image attaches to every variant — voice scenario is "try
     // 3 different things to this same screen", so the picture is shared
     // context across the workspaces. (If we ever need per-variant
@@ -2307,6 +2400,7 @@ fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<Voic
                 None,
                 prompt.clone(),
                 plan_mode,
+                effort_level.clone(),
                 image_paths.clone(),
             )?;
             Ok((workspace_id, session_id))
