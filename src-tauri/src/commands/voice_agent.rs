@@ -1607,6 +1607,7 @@ fn voice_dispatch_to_agent(
         user_message_id: None,
         files: None,
         images,
+        broadcast_stream_events: true,
     };
 
     // Voice agent doesn't consume PTY events — same fire-and-forget

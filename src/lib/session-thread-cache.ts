@@ -143,6 +143,52 @@ export function replaceStreamingTail(
 }
 
 /**
+ * Apply a live snapshot from a stream that was started outside the
+ * composer hook (currently voice-created sends). The snapshot already
+ * contains the current turn, beginning with the persisted user message,
+ * so we replace from that boundary just like the dedicated Channel path.
+ */
+export function applyExternalStreamSnapshot(
+	queryClient: QueryClient,
+	sessionId: string,
+	messages: ThreadMessageLike[],
+): void {
+	const firstId = messages[0]?.id;
+	if (!firstId) {
+		writeSessionThread(queryClient, sessionId, messages);
+		return;
+	}
+	replaceStreamingTail(queryClient, sessionId, firstId, messages);
+}
+
+/**
+ * Apply a live partial from an externally-started stream. If the matching
+ * row already exists, replace it; otherwise append it after the current
+ * cache. A later full snapshot will reconcile the exact turn boundary.
+ */
+export function applyExternalStreamPartial(
+	queryClient: QueryClient,
+	sessionId: string,
+	message: ThreadMessageLike,
+): void {
+	const cacheKey = sessionThreadCacheKey(sessionId);
+	queryClient.setQueryData<ThreadMessageLike[]>(cacheKey, (prev) => {
+		const prior = prev ?? [];
+		const existingIndex =
+			message.id != null ? prior.findIndex((m) => m.id === message.id) : -1;
+		const next =
+			existingIndex >= 0
+				? [
+						...prior.slice(0, existingIndex),
+						message,
+						...prior.slice(existingIndex + 1),
+					]
+				: [...prior, message];
+		return shareMessages(prior, next);
+	});
+}
+
+/**
  * Restore a previously captured snapshot. Used for full rollback when
  * a stream errors out before any messages are persisted server-side.
  */

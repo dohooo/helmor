@@ -2,6 +2,10 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	applyExternalStreamPartial,
+	applyExternalStreamSnapshot,
+} from "@/lib/session-thread-cache";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
 type Options = {
@@ -73,6 +77,12 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),
 			});
+			return;
+		case "sessionStreamUpdated":
+			applyExternalStreamSnapshot(queryClient, event.sessionId, event.messages);
+			return;
+		case "sessionStreamPartial":
+			applyExternalStreamPartial(queryClient, event.sessionId, event.message);
 			return;
 		case "workspaceFilesChanged":
 			void queryClient.invalidateQueries({

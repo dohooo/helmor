@@ -187,6 +187,12 @@ pub struct AgentSendRequest {
     /// round-trip without regex re-extraction.
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    /// Mirror stream updates through the global UI sync bridge. The
+    /// normal composer path uses its point-to-point `Channel`, so this
+    /// stays false there. Voice dispatches are fire-and-forget and need
+    /// this bridge so the selected workspace panel can show progress.
+    #[serde(default)]
+    pub broadcast_stream_events: bool,
 }
 
 #[cfg(test)]

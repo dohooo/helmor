@@ -168,6 +168,10 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
+	/** Voice dispatches use this to mirror stream updates through the
+	 *  global UI-sync bridge. Composer sends leave it off because they
+	 *  already own a dedicated stream Channel. */
+	broadcastStreamEvents?: boolean;
 };
 
 export type WorkspaceSummary = {
@@ -1544,6 +1548,16 @@ export type UiMutationEvent =
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
+	| {
+			type: "sessionStreamUpdated";
+			sessionId: string;
+			messages: ThreadMessageLike[];
+	  }
+	| {
+			type: "sessionStreamPartial";
+			sessionId: string;
+			message: ThreadMessageLike;
+	  }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
