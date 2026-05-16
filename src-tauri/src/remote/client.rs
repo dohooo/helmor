@@ -23,11 +23,13 @@
 //! tests, a containerised peer over its stdio) plugs in via
 //! [`RpcClient::connect_command`].
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -37,7 +39,8 @@ use super::methods::{
     WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
-    error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
+    error_codes, JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse,
+    PROTOCOL_VERSION,
 };
 use super::runtime::{RemoteRuntime, RuntimeHealth, RuntimeKind};
 
@@ -63,47 +66,147 @@ const DEFAULT_SSH_ARGS: &[&str] = &["-o", "BatchMode=yes"];
 /// it to a tempdir.
 const SSH_MUX_ARGS: &[&str] = &["-o", "ControlMaster=auto", "-o", "ControlPersist=5m"];
 
-/// JSON-RPC client over a single framed pipe. The pipe handles are
-/// boxed as trait objects so the same struct fronts an SSH child,
-/// a loopback helmor-server, or an in-memory test pipe with no
-/// generics leaking out into the trait impl.
+/// JSON-RPC client over a single framed pipe.
+///
+/// Architecture: a background **reader thread** owns the read half of
+/// the pipe and demuxes incoming frames into one of two paths:
+///
+/// 1. **Responses** — matched against pending `call<M>` futures by
+///    JSON-RPC id and forwarded over a oneshot mpsc.
+/// 2. **Server-initiated notifications** — fanned out to any
+///    [`NotificationSubscription`] the caller is holding.
+///
+/// `call<M>` registers a oneshot, writes the request frame, and
+/// blocks on the receiver. Concurrent callers from different threads
+/// are fine; the only contention is the writer mutex.
+///
+/// On reader-side EOF / I/O error the state flips to "closed"; any
+/// pending oneshots get their senders dropped → recv returns Err →
+/// the caller surfaces a transport error. New calls placed after
+/// close fail fast.
 pub struct RpcClient {
-    inner: Mutex<RpcInner>,
+    writer: Mutex<RpcWriter>,
     next_id: AtomicU64,
     /// Cached server-side handshake reply. Read by `RemoteSshRuntime`
     /// when surfacing `runtime_health`; never modified after connect.
     server_info: InitializeResult,
+    state: Arc<ClientState>,
+    /// `Option` so `Drop` can `take()` and `join()` the handle. The
+    /// reader thread observes EOF when the writer half closes, so
+    /// dropping the client first reaps the writer + child, then waits
+    /// out the reader's clean exit.
+    reader_thread: Option<JoinHandle<()>>,
+    /// Human label used for log lines + the "couldn't reach peer"
+    /// error message. Mirrors what `connect_command` stashed at
+    /// construction time.
+    peer_label: String,
 }
 
 impl std::fmt::Debug for RpcClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The I/O handles are trait objects, so we surface what's
-        // actually useful for diagnostic logs: the cached handshake
-        // info and the next request id.
         f.debug_struct("RpcClient")
+            .field("peer_label", &self.peer_label)
             .field("server_info", &self.server_info)
             .field("next_id", &self.next_id.load(Ordering::Relaxed))
+            .field("closed", &self.state.closed_reason())
             .finish_non_exhaustive()
     }
 }
 
-struct RpcInner {
-    reader: Box<dyn BufRead + Send>,
+/// Writer + child handle. Held behind a mutex so concurrent callers
+/// can write requests without interleaving frames.
+struct RpcWriter {
     writer: Box<dyn Write + Send>,
     /// Held so `Drop` reaps the child when the client goes away.
     /// `None` for test pipes that don't spawn a process.
     child: Option<Child>,
 }
 
-impl Drop for RpcInner {
+impl Drop for RpcWriter {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            // Best-effort: kill + reap. We don't try a graceful close
-            // — the protocol has no "bye" message yet, and the server
-            // hits clean EOF on its read loop when our stdin drops.
+            // Best-effort: kill + reap. The reader thread is also
+            // tracking the same child via its stdout half; killing
+            // here unblocks any read it was stuck on.
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+/// Shared state between the reader thread and the client surface.
+/// Lives behind an `Arc` so the reader thread keeps it alive after
+/// the writer-side `Drop` runs.
+struct ClientState {
+    /// id → sender for pending `call<M>` invocations. The reader
+    /// thread drains a key when a matching response arrives; on
+    /// connection close the pending map is cleared, which drops the
+    /// senders and surfaces `Err` to every waiter.
+    pending: Mutex<HashMap<JsonRpcId, mpsc::Sender<JsonRpcResponse>>>,
+    /// Active notification subscribers. Each entry carries its own
+    /// id so [`NotificationSubscription::drop`] can remove just its
+    /// own slot without scanning callbacks.
+    subscribers: Mutex<Vec<Subscription>>,
+    /// Set once the reader thread observes EOF or a transport error.
+    /// New `call`s after this fail fast instead of registering a
+    /// pending oneshot that'll never resolve.
+    closed: Mutex<Option<String>>,
+    next_sub_id: AtomicU64,
+}
+
+impl ClientState {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            subscribers: Mutex::new(Vec::new()),
+            closed: Mutex::new(None),
+            next_sub_id: AtomicU64::new(1),
+        }
+    }
+
+    fn closed_reason(&self) -> Option<String> {
+        self.closed
+            .lock()
+            .expect("client closed mutex poisoned")
+            .clone()
+    }
+
+    fn mark_closed(&self, reason: impl Into<String>) {
+        let mut closed = self.closed.lock().expect("client closed mutex poisoned");
+        if closed.is_none() {
+            *closed = Some(reason.into());
+        }
+        // Drop every pending sender so waiters surface a transport
+        // error instead of hanging.
+        self.pending
+            .lock()
+            .expect("client pending mutex poisoned")
+            .clear();
+    }
+}
+
+/// Callback slot for one notification subscription.
+struct Subscription {
+    id: u64,
+    callback: Arc<dyn Fn(JsonRpcRequest) + Send + Sync>,
+}
+
+/// Handle returned by [`RpcClient::subscribe_notifications`]. Drop
+/// removes the subscription — RAII so callers can't leak handlers by
+/// forgetting an explicit `unsubscribe` call.
+pub struct NotificationSubscription {
+    state: Arc<ClientState>,
+    id: u64,
+}
+
+impl Drop for NotificationSubscription {
+    fn drop(&mut self) {
+        let mut subs = self
+            .state
+            .subscribers
+            .lock()
+            .expect("client subscribers mutex poisoned");
+        subs.retain(|s| s.id != self.id);
     }
 }
 
@@ -159,55 +262,61 @@ impl RpcClient {
         Self::connect_with_pipe(reader, writer, Some(child), peer_label)
     }
 
-    /// Wire a pre-built pipe pair into a client. The test-only entry
-    /// point: callers supply paired in-memory streams that loop back
-    /// to a dispatcher thread, so we exercise the framing + handshake
-    /// without touching the OS process table.
+    /// Wire a pre-built pipe pair into a client. Used by both the
+    /// real `connect_command` path and by tests that supply paired
+    /// in-memory streams.
+    ///
+    /// Spawns the reader thread as part of connect — the handshake
+    /// itself goes through the new `call<M>` pathway so the same
+    /// id-routing code is exercised on every connection (including
+    /// the first one).
     pub fn connect_with_pipe(
         reader: Box<dyn BufRead + Send>,
         writer: Box<dyn Write + Send>,
         child: Option<Child>,
         peer_label: String,
     ) -> Result<Self> {
-        let mut inner = RpcInner {
-            reader,
-            writer,
-            child,
+        let writer = RpcWriter { writer, child };
+        let state = Arc::new(ClientState::new());
+        // Reader thread starts before we issue the handshake — the
+        // handshake response itself is demuxed by the reader.
+        let reader_thread = spawn_reader_thread(reader, Arc::clone(&state), peer_label.clone());
+
+        let client_skeleton = ClientSkeleton {
+            writer: Mutex::new(writer),
+            next_id: AtomicU64::new(1),
+            state: Arc::clone(&state),
         };
-        // Handshake runs *before* the struct exists so we don't have
-        // to juggle a placeholder `server_info`. Uses id=1; the
-        // first user-issued call therefore starts at id=2.
-        let server_info = run_handshake(&mut inner, &peer_label)?;
+        let server_info = run_handshake(&client_skeleton, &peer_label)?;
+
         Ok(Self {
-            inner: Mutex::new(inner),
-            next_id: AtomicU64::new(2),
+            writer: client_skeleton.writer,
+            next_id: client_skeleton.next_id,
             server_info,
+            state,
+            reader_thread: Some(reader_thread),
+            peer_label,
         })
     }
 
     /// Issue a typed JSON-RPC request and decode the response into
     /// the method's `Result` type. Errors fall into three buckets:
     ///
-    /// - Transport (frame read/write, EOF) → `anyhow` with the
-    ///   transport-error message.
+    /// - Connection closed before/after send → `anyhow` with the
+    ///   reader's close reason if available.
     /// - JSON-RPC error response → `anyhow` containing the server's
     ///   message and a human-readable code label so the UI can
     ///   string-match if it has to.
     /// - Deserialise failure on the response body → `anyhow` naming
     ///   the method.
     pub fn call<M: RpcMethod>(&self, params: M::Params) -> Result<M::Result> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let req_id = JsonRpcId::Num(id);
-        let params_value = serde_json::to_value(&params)
-            .with_context(|| format!("failed to serialise params for `{}`", M::NAME))?;
-        let request = JsonRpcRequest::new(M::NAME, params_value, req_id.clone());
-
-        let response = {
-            let mut inner = self.inner.lock().expect("rpc client mutex poisoned");
-            send_then_recv(&mut inner, &request, M::NAME)?
-        };
-
-        decode_response::<M>(response, &req_id)
+        do_call::<M>(
+            &self.writer,
+            &self.next_id,
+            &self.state,
+            &self.peer_label,
+            params,
+        )
     }
 
     /// Server's initialize reply, cached at connect-time. Used by
@@ -215,39 +324,212 @@ impl RpcClient {
     pub fn server_info(&self) -> &InitializeResult {
         &self.server_info
     }
+
+    /// Register a callback that fires for every server-initiated
+    /// notification (a JSON-RPC request with no `id`). The returned
+    /// handle unregisters via Drop — keep it alive for as long as
+    /// you want events.
+    ///
+    /// The callback runs on the reader thread. Keep it cheap; offload
+    /// real work to a channel or spawned task.
+    pub fn subscribe_notifications<F>(&self, callback: F) -> NotificationSubscription
+    where
+        F: Fn(JsonRpcRequest) + Send + Sync + 'static,
+    {
+        let id = self.state.next_sub_id.fetch_add(1, Ordering::Relaxed);
+        let callback: Arc<dyn Fn(JsonRpcRequest) + Send + Sync> = Arc::new(callback);
+        self.state
+            .subscribers
+            .lock()
+            .expect("client subscribers mutex poisoned")
+            .push(Subscription { id, callback });
+        NotificationSubscription {
+            state: Arc::clone(&self.state),
+            id,
+        }
+    }
 }
 
-fn run_handshake(inner: &mut RpcInner, peer_label: &str) -> Result<InitializeResult> {
+impl Drop for RpcClient {
+    fn drop(&mut self) {
+        // Dropping the writer mutex's RpcWriter kills the child,
+        // which makes the reader thread see EOF and exit cleanly.
+        // Reach in and force the writer drop before we join.
+        //
+        // We *don't* hold the writer lock here — the reader thread
+        // doesn't touch the writer, so dropping it is safe even if
+        // some other thread is mid-call (their write will fail with
+        // BrokenPipe and they'll get a closed-connection error).
+        let _writer = std::mem::replace(
+            &mut *self
+                .writer
+                .lock()
+                .expect("rpc client writer mutex poisoned"),
+            RpcWriter {
+                writer: Box::new(std::io::sink()),
+                child: None,
+            },
+        );
+        drop(_writer);
+
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Minimal struct used during `connect_with_pipe`'s handshake — we
+/// need to call `do_call` before the full `RpcClient` exists.
+struct ClientSkeleton {
+    writer: Mutex<RpcWriter>,
+    next_id: AtomicU64,
+    state: Arc<ClientState>,
+}
+
+fn do_call<M: RpcMethod>(
+    writer: &Mutex<RpcWriter>,
+    next_id: &AtomicU64,
+    state: &Arc<ClientState>,
+    peer_label: &str,
+    params: M::Params,
+) -> Result<M::Result> {
+    if let Some(reason) = state.closed_reason() {
+        bail!("connection to `{peer_label}` closed: {reason}");
+    }
+    let id = next_id.fetch_add(1, Ordering::Relaxed);
+    let req_id = JsonRpcId::Num(id);
+    let params_value = serde_json::to_value(&params)
+        .with_context(|| format!("failed to serialise params for `{}`", M::NAME))?;
+    let request = JsonRpcRequest::new(M::NAME, params_value, req_id.clone());
+
+    // Register the oneshot *before* writing so we don't race the
+    // reader thread for a response that arrives instantly.
+    let (tx, rx) = mpsc::channel::<JsonRpcResponse>();
+    {
+        let mut pending = state.pending.lock().expect("client pending mutex poisoned");
+        pending.insert(req_id.clone(), tx);
+    }
+
+    // Write the request. On failure, roll back the pending entry so
+    // it doesn't leak.
+    {
+        let mut writer = writer.lock().expect("rpc client writer mutex poisoned");
+        if let Err(err) = write_frame(&mut writer.writer, &request) {
+            state
+                .pending
+                .lock()
+                .expect("client pending mutex poisoned")
+                .remove(&req_id);
+            return Err(match err {
+                FrameError::Io(io) => anyhow!("failed to send `{}` request: {io}", M::NAME),
+                other => anyhow!("failed to send `{}` request: {other}", M::NAME),
+            });
+        }
+    }
+
+    // Wait for the reader thread to demux the response, or for the
+    // connection to close (sender dropped → recv Err).
+    let response = rx.recv().map_err(|_| {
+        let reason = state
+            .closed_reason()
+            .unwrap_or_else(|| "peer closed without sending a response".into());
+        anyhow!(
+            "remote runner `{peer_label}` dropped before `{}` reply: {reason}",
+            M::NAME
+        )
+    })?;
+
+    decode_response::<M>(response, &req_id)
+}
+
+/// Reader thread loop. Reads framed JSON-RPC messages, routes
+/// responses to pending oneshots by id, and fans notifications out
+/// to subscribers. Exits cleanly on EOF / I/O error; on exit, the
+/// pending map is cleared so waiters surface a transport error.
+fn spawn_reader_thread(
+    mut reader: Box<dyn BufRead + Send>,
+    state: Arc<ClientState>,
+    peer_label: String,
+) -> JoinHandle<()> {
+    thread::Builder::new()
+        .name(format!("remote-rpc-reader[{peer_label}]"))
+        .spawn(move || {
+            loop {
+                let msg: JsonRpcMessage = match read_frame(&mut reader) {
+                    Ok(m) => m,
+                    Err(FrameError::Eof) => {
+                        state.mark_closed("peer closed connection cleanly (EOF)");
+                        return;
+                    }
+                    Err(err) => {
+                        state.mark_closed(format!("reader error: {err}"));
+                        return;
+                    }
+                };
+                match msg {
+                    JsonRpcMessage::Response(resp) => {
+                        let mut pending =
+                            state.pending.lock().expect("client pending mutex poisoned");
+                        if let Some(tx) = pending.remove(&resp.id) {
+                            // Drop the lock before sending; the
+                            // receiver may immediately re-enter to
+                            // place its next call.
+                            drop(pending);
+                            let _ = tx.send(resp);
+                        } else {
+                            tracing::warn!(
+                                peer = %peer_label,
+                                id = ?resp.id,
+                                "remote-runner: response for unknown id (call abandoned?)"
+                            );
+                        }
+                    }
+                    JsonRpcMessage::Request(req) => {
+                        // Notifications (no id) only. An id'd
+                        // server-initiated request would need a
+                        // response written back, which this spike
+                        // doesn't support yet — log + skip.
+                        if !req.id.is_notification() {
+                            tracing::warn!(
+                                peer = %peer_label,
+                                method = %req.method,
+                                "remote-runner: ignored server-initiated request with id"
+                            );
+                            continue;
+                        }
+                        // Take a cheap snapshot of subscriber Arcs to
+                        // avoid holding the mutex across user code.
+                        let subs: Vec<Arc<dyn Fn(JsonRpcRequest) + Send + Sync>> = state
+                            .subscribers
+                            .lock()
+                            .expect("client subscribers mutex poisoned")
+                            .iter()
+                            .map(|s| Arc::clone(&s.callback))
+                            .collect();
+                        for cb in subs {
+                            cb(req.clone());
+                        }
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn rpc reader thread")
+}
+
+fn run_handshake(skeleton: &ClientSkeleton, peer_label: &str) -> Result<InitializeResult> {
     let params = InitializeParams {
         protocol_version: PROTOCOL_VERSION.to_string(),
         client_name: "helmor-desktop".to_string(),
         client_version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
-    let params_value =
-        serde_json::to_value(&params).context("failed to serialise initialize params")?;
-    let req_id = JsonRpcId::Num(1);
-    let request = JsonRpcRequest::new(InitializeMethod::NAME, params_value, req_id.clone());
-    let response = send_then_recv(inner, &request, InitializeMethod::NAME)
-        .with_context(|| format!("initialize handshake with {peer_label} failed"))?;
-    decode_response::<InitializeMethod>(response, &req_id)
-        .with_context(|| format!("initialize handshake with {peer_label} failed"))
-}
-
-fn send_then_recv(
-    inner: &mut RpcInner,
-    request: &JsonRpcRequest,
-    method_name: &str,
-) -> Result<JsonRpcResponse> {
-    write_frame(&mut inner.writer, request).map_err(|err| match err {
-        FrameError::Io(io) => anyhow!("failed to send `{method_name}` request: {io}"),
-        other => anyhow!("failed to send `{method_name}` request: {other}"),
-    })?;
-    read_frame::<_, JsonRpcResponse>(&mut inner.reader).map_err(|err| match err {
-        FrameError::Eof => anyhow!(
-            "remote runner closed the connection while waiting for `{method_name}` response"
-        ),
-        other => anyhow!("failed to read `{method_name}` response: {other}"),
-    })
+    do_call::<InitializeMethod>(
+        &skeleton.writer,
+        &skeleton.next_id,
+        &skeleton.state,
+        peer_label,
+        params,
+    )
+    .with_context(|| format!("initialize handshake with {peer_label} failed"))
 }
 
 fn decode_response<M: RpcMethod>(
@@ -734,8 +1016,117 @@ mod tests {
             .expect_err("EOF mid-call should surface as Err");
         let msg = format!("{err}");
         assert!(
-            msg.contains("closed the connection") || msg.contains("eof"),
+            msg.contains("closed the connection")
+                || msg.contains("closed")
+                || msg.contains("dropped"),
             "should describe the EOF clearly: {msg}"
+        );
+    }
+
+    // ── server-initiated notifications ───────────────────────────
+
+    #[test]
+    fn notification_subscription_receives_server_pushed_messages() {
+        // Stand up a fake server that handshakes then pushes a
+        // server-initiated notification (no `id`) on its own
+        // schedule. The client's reader thread must demux it onto
+        // every active subscription callback.
+        let (c_to_s_tx, c_to_s_rx) = mpsc::channel::<Vec<u8>>();
+        let (s_to_c_tx, s_to_c_rx) = mpsc::channel::<Vec<u8>>();
+        let (notify_trigger_tx, notify_trigger_rx) = mpsc::channel::<()>();
+
+        thread::spawn(move || {
+            let mut io = ChannelStream {
+                tx: s_to_c_tx,
+                rx: c_to_s_rx,
+                unread: Vec::new(),
+            };
+            // 1. Handshake.
+            let _: JsonRpcRequest = read_frame(&mut io).unwrap();
+            let init_resp = JsonRpcResponse::success(
+                JsonRpcId::Num(1),
+                serde_json::json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "serverVersion": "0.0.0",
+                    "hostname": "fake",
+                }),
+            );
+            write_frame(&mut io, &init_resp).unwrap();
+
+            // 2. Wait for the test to ask us to push a notification.
+            //    This lets the test register its subscriber first so
+            //    the notification can't race past an empty list.
+            let _ = notify_trigger_rx.recv();
+
+            // 3. Send a server-initiated request with no id — the
+            //    client's reader thread should fan it out to every
+            //    active subscriber.
+            let notif = JsonRpcRequest::new(
+                "agent.event",
+                serde_json::json!({ "kind": "tick", "n": 7 }),
+                JsonRpcId::Null,
+            );
+            write_frame(&mut io, &notif).unwrap();
+            // Hold the connection open so the reader thread keeps
+            // running until the test asserts.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            drop(io);
+        });
+
+        let reader = ChannelStream {
+            tx: mpsc::channel().0,
+            rx: s_to_c_rx,
+            unread: Vec::new(),
+        };
+        let writer = ChannelStream {
+            tx: c_to_s_tx,
+            rx: mpsc::channel().1,
+            unread: Vec::new(),
+        };
+        let client = RpcClient::connect_with_pipe(
+            Box::new(reader),
+            Box::new(writer),
+            None,
+            "notif-peer".into(),
+        )
+        .expect("handshake should succeed");
+
+        // Register a subscriber that captures the inbound method +
+        // params for the assertion.
+        let (captured_tx, captured_rx) = mpsc::channel::<(String, serde_json::Value)>();
+        let _subscription = client.subscribe_notifications(move |req: JsonRpcRequest| {
+            let _ = captured_tx.send((req.method.clone(), req.params.clone()));
+        });
+
+        // Tell the fake server the subscriber is wired up.
+        notify_trigger_tx.send(()).unwrap();
+
+        let (method, params) = captured_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("subscription should receive the notification");
+        assert_eq!(method, "agent.event");
+        assert_eq!(params["kind"], "tick");
+        assert_eq!(params["n"], 7);
+    }
+
+    #[test]
+    fn dropping_a_subscription_handle_unregisters_the_callback() {
+        // Pure unit on the Drop impl — register a handler, drop the
+        // handle, prove the subscriber list shrunk. Doesn't require
+        // a live server.
+        let client = split_loopback(None).unwrap();
+        assert_eq!(
+            client.state.subscribers.lock().unwrap().len(),
+            0,
+            "no subscribers yet"
+        );
+        let handle = client.subscribe_notifications(|_req| {});
+        assert_eq!(client.state.subscribers.lock().unwrap().len(), 1);
+        drop(handle);
+        assert_eq!(
+            client.state.subscribers.lock().unwrap().len(),
+            0,
+            "drop should remove the entry"
         );
     }
 }

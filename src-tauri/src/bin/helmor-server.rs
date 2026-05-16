@@ -12,9 +12,10 @@
 
 use std::io::{self, BufReader, Write};
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 
 use helmor_lib::remote::{
-    self, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse, ServerContext,
+    self, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse, ServerContext, StdoutNotifier,
 };
 
 fn main() -> ExitCode {
@@ -33,7 +34,16 @@ fn main() -> ExitCode {
 
     let server_version = env!("CARGO_PKG_VERSION").to_string();
     let hostname = read_hostname();
-    let ctx = ServerContext::new(server_version, hostname);
+
+    // All writes to stdout — response frames AND notification frames
+    // — funnel through one Mutex<Box<dyn Write>> so frames can't
+    // interleave. The mutex is shared between the response writer
+    // here and the `StdoutNotifier` stashed in the ServerContext.
+    let stdout_writer: Arc<Mutex<Box<dyn Write + Send>>> =
+        Arc::new(Mutex::new(Box::new(io::stdout())));
+    let notifier = Arc::new(StdoutNotifier::new(Arc::clone(&stdout_writer)));
+    let mut ctx = ServerContext::new(server_version, hostname);
+    ctx.set_notifier(notifier);
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -43,7 +53,6 @@ fn main() -> ExitCode {
 
     let stdin = io::stdin().lock();
     let mut reader = BufReader::new(stdin);
-    let stdout = io::stdout();
 
     loop {
         let req = match remote::read_frame::<_, JsonRpcRequest>(&mut reader) {
@@ -62,7 +71,7 @@ fn main() -> ExitCode {
         };
 
         if let Some(response) = remote::dispatch_request(&ctx, req) {
-            if let Err(err) = write_response(&stdout, &response) {
+            if let Err(err) = write_response(&stdout_writer, &response) {
                 tracing::error!(error = %err, "helmor-server: write failed; exiting");
                 return ExitCode::FAILURE;
             }
@@ -70,9 +79,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn write_response(stdout: &io::Stdout, response: &JsonRpcResponse) -> Result<(), FrameError> {
-    let mut handle = stdout.lock();
-    write_frame(&mut handle, response)?;
+fn write_response(
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+    response: &JsonRpcResponse,
+) -> Result<(), FrameError> {
+    let mut handle = writer.lock().expect("stdout mutex poisoned");
+    write_frame(&mut *handle, response)?;
     handle.flush()?;
     Ok(())
 }
