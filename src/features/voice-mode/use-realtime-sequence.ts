@@ -648,6 +648,8 @@ function humanToolStatus(name: string): string {
 			return "Running script";
 		case "list_sessions":
 			return "Listing sessions";
+		case "search_sessions":
+			return "Searching sessions";
 		case "get_session_messages":
 			return "Reading session";
 		case "send_prompt":

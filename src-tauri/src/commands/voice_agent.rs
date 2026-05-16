@@ -34,7 +34,7 @@ use crate::forge::{
 };
 use crate::models;
 use crate::models::sessions::WindowedHistoricalRecords;
-use crate::pipeline::types::HistoricalRecord;
+use crate::pipeline::types::{HistoricalRecord, MessageRole};
 use crate::service;
 use crate::workspace::scripts::ScriptProcessManager;
 use crate::workspace::status::WorkspaceStatus;
@@ -78,6 +78,7 @@ pub enum ToolKind {
     RunWorkspaceAction,
     RunWorkspaceScript,
     ListSessions,
+    SearchSessions,
     GetSessionMessages,
     SendPrompt,
     ListRepos,
@@ -216,6 +217,7 @@ impl ToolKind {
         Self::RunWorkspaceAction,
         Self::RunWorkspaceScript,
         Self::ListSessions,
+        Self::SearchSessions,
         Self::GetSessionMessages,
         Self::SendPrompt,
         Self::ListRepos,
@@ -276,6 +278,12 @@ impl ToolKind {
                             "type": "boolean",
                             "description": "Include archived workspaces. Default false."
                         },
+                        "session_status": {
+                            "type": "string",
+                            "enum": ["working", "idle", "streaming", "aborted"],
+                            "description": "Optional filter by active session state. \
+                                            `working` matches streaming/pending/running sessions."
+                        },
                         "limit": {
                             "type": "integer",
                             "description": "Maximum rows to return. Default 20, max 50."
@@ -286,6 +294,7 @@ impl ToolKind {
                 cli_path: Some(&["workspace", "list"]),
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'show/list/what workspaces do I have'. \
+                           For 'what is working/running now', pass session_status='working'. \
                            Reply shape: comma-separated counts, no opener. Match the user's \
                            spoken language for the entire reply. \
                            EN sample: 'three in progress, two done, one in review.' \
@@ -643,6 +652,46 @@ impl ToolKind {
                            中文 sample: '三个会话,最近的是 fix-readme-typo。' \
                            Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'.",
             },
+            Self::SearchSessions => ToolMetadata {
+                name: "search_sessions",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Keyword or phrase to search in session titles and \
+                                            stored chat history."
+                        },
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional repo name or UUID filter."
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["working", "idle", "streaming", "aborted"],
+                            "description": "Optional session status filter. `working` matches \
+                                            streaming/pending/running sessions."
+                        },
+                        "include_archived": {
+                            "type": "boolean",
+                            "description": "Include archived workspaces. Default false."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum sessions to return. Default 8, max 20."
+                        }
+                    },
+                    "required": ["query"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: user asks to find a session/conversation/chat by keyword, \
+                           asks 'where did we discuss X', or gives a remembered phrase/title \
+                           without a workspace. Returns sessionId + workspace ref + status + \
+                           compact snippet. After locating a likely match, use \
+                           get_session_messages if the user wants details, or select_workspace \
+                           to open it. Reply with the best 1-3 matches in the user's language.",
+            },
             Self::GetSessionMessages => ToolMetadata {
                 name: "get_session_messages",
                 parameters: json!({
@@ -981,6 +1030,7 @@ impl ToolKind {
             Self::RunWorkspaceAction => run_workspace_action(args),
             Self::RunWorkspaceScript => run_workspace_script(args, ctx),
             Self::ListSessions => list_sessions(args),
+            Self::SearchSessions => search_sessions(args),
             Self::GetSessionMessages => get_session_messages(args),
             Self::SendPrompt => send_prompt(args, ctx),
             Self::ListRepos => list_repos(args),
@@ -1029,6 +1079,35 @@ fn truncate_chars(value: &str, max: usize) -> String {
     let mut out = value.chars().take(max - 3).collect::<String>();
     out.push_str("...");
     out
+}
+
+fn workspace_status_matches(status: &WorkspaceStatus, wanted: &str) -> bool {
+    status.group_id().eq_ignore_ascii_case(wanted) || status.as_str().eq_ignore_ascii_case(wanted)
+}
+
+fn is_session_working(status: Option<&str>) -> bool {
+    matches!(
+        status.map(|s| s.to_ascii_lowercase()).as_deref(),
+        Some("streaming" | "streaming_input" | "running" | "pending")
+    )
+}
+
+fn session_status_matches(status: Option<&str>, wanted: &str) -> bool {
+    if wanted.eq_ignore_ascii_case("working") {
+        return is_session_working(status);
+    }
+    status
+        .map(|status| status.eq_ignore_ascii_case(wanted))
+        .unwrap_or(false)
+}
+
+fn message_role_from_db(role: &str) -> MessageRole {
+    match role {
+        "assistant" => MessageRole::Assistant,
+        "system" => MessageRole::System,
+        "error" => MessageRole::Error,
+        _ => MessageRole::User,
+    }
 }
 
 fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
@@ -1119,6 +1198,7 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
 
     let status = args.get("status").and_then(Value::as_str);
     let repo = args.get("repo").and_then(Value::as_str);
+    let session_status = args.get("session_status").and_then(Value::as_str);
 
     // Resolve repo ref to a name we can filter on. We need a name (not
     // UUID) here because `WorkspaceSidebarRow.repo_name` is the field
@@ -1134,37 +1214,57 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
         None => None,
     };
 
-    let groups = workspaces::list_workspace_groups()?;
-    // Flatten to a single array — the model handles a flat list of
-    // workspaces more naturally than the kanban-grouped sidebar shape.
+    let records = models::workspaces::load_workspace_records()?;
     let mut rows: Vec<Value> = Vec::new();
     let mut total = 0usize;
-    for group in &groups {
+    for record in records {
+        if matches!(
+            record.state,
+            crate::workspace_state::WorkspaceState::Archived
+        ) {
+            continue;
+        }
         if let Some(wanted) = status {
-            if !group.id.eq_ignore_ascii_case(wanted) {
+            if !workspace_status_matches(&record.status, wanted) {
                 continue;
             }
         }
-        for r in &group.rows {
-            if let Some(name) = &repo_name_filter {
-                if r.repo_name.to_lowercase() != *name {
-                    continue;
-                }
-            }
-            total += 1;
-            if rows.len() >= limit {
+        if let Some(name) = &repo_name_filter {
+            if record.repo_name.to_lowercase() != *name {
                 continue;
             }
-            rows.push(json!({
-                "id": r.id,
-                "repo": r.repo_name,
-                "directory": r.directory_name,
-                "title": r.title,
-                "status": group.id,
-                "branch": r.branch,
-                "pinned": r.pinned_at.is_some(),
-            }));
         }
+        if let Some(wanted) = session_status {
+            if !session_status_matches(record.active_session_status.as_deref(), wanted) {
+                continue;
+            }
+        }
+
+        total += 1;
+        if rows.len() >= limit {
+            continue;
+        }
+        rows.push(json!({
+            "id": record.id,
+            "repo": record.repo_name,
+            "directory": record.directory_name,
+            "title": record.primary_session_title
+                .clone()
+                .or_else(|| record.active_session_title.clone())
+                .unwrap_or_else(|| record.directory_name.clone()),
+            "status": record.status.group_id(),
+            "state": record.state,
+            "branch": record.branch,
+            "pinned": record.pinned_at.is_some(),
+            "activeSessionId": record.active_session_id,
+            "activeSessionTitle": record.active_session_title,
+            "activeSessionStatus": record.active_session_status,
+            "primarySessionId": record.primary_session_id,
+            "primarySessionTitle": record.primary_session_title,
+            "isWorking": is_session_working(record.active_session_status.as_deref()),
+            "sessionCount": record.session_count,
+            "messageCount": record.message_count,
+        }));
     }
     Ok(VoiceToolResult {
         data: json!({
@@ -1300,6 +1400,183 @@ fn list_sessions(args: Value) -> Result<VoiceToolResult> {
             "total": total,
             "returned": rows.len(),
             "hasMore": total > rows.len(),
+        }),
+        ..Default::default()
+    })
+}
+
+fn search_sessions(args: Value) -> Result<VoiceToolResult> {
+    const DEFAULT_LIMIT: usize = 8;
+    const MAX_LIMIT: usize = 20;
+    const SNIPPET_LIMIT: usize = 280;
+
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .context("search_sessions: missing required `query` argument")?;
+    let limit = bounded_limit(&args, DEFAULT_LIMIT, MAX_LIMIT);
+    let include_archived = args
+        .get("include_archived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let repo_name_filter = match args.get("repo").and_then(Value::as_str) {
+        Some(reference) => {
+            let repo_id = service::resolve_repo_ref(reference)?;
+            models::repos::list_repositories()?
+                .into_iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.name.to_lowercase())
+        }
+        None => None,
+    };
+    let status_filter = args
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase());
+    let like = format!("%{}%", query.to_ascii_lowercase());
+    let conn = models::db::read_conn()?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT
+          s.id,
+          s.workspace_id,
+          s.title,
+          s.agent_type,
+          s.status,
+          s.model,
+          s.permission_mode,
+          s.updated_at,
+          s.last_user_message_at,
+          s.action_kind,
+          w.active_session_id,
+          w.directory_name,
+          w.state,
+          COALESCE(w.status, 'in-progress') AS workspace_status,
+          r.name AS repo_name,
+          (
+            SELECT sm.id
+            FROM session_messages sm
+            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            ORDER BY sm.sent_at DESC, sm.rowid DESC
+            LIMIT 1
+          ) AS match_message_id,
+          (
+            SELECT sm.role
+            FROM session_messages sm
+            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            ORDER BY sm.sent_at DESC, sm.rowid DESC
+            LIMIT 1
+          ) AS match_role,
+          (
+            SELECT sm.content
+            FROM session_messages sm
+            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            ORDER BY sm.sent_at DESC, sm.rowid DESC
+            LIMIT 1
+          ) AS match_content,
+          (
+            SELECT sm.created_at
+            FROM session_messages sm
+            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            ORDER BY sm.sent_at DESC, sm.rowid DESC
+            LIMIT 1
+          ) AS match_created_at
+        FROM sessions s
+        JOIN workspaces w ON w.id = s.workspace_id
+        JOIN repos r ON r.id = w.repository_id
+        WHERE COALESCE(s.is_hidden, 0) = 0
+          AND (?2 OR w.state != 'archived')
+          AND (?3 IS NULL OR lower(r.name) = ?3)
+          AND (
+            ?4 IS NULL
+            OR (
+              ?4 = 'working'
+              AND lower(s.status) IN ('streaming', 'streaming_input', 'running', 'pending')
+            )
+            OR lower(s.status) = ?4
+          )
+          AND (
+            lower(s.title) LIKE ?1
+            OR EXISTS (
+              SELECT 1
+              FROM session_messages sm
+              WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            )
+          )
+        ORDER BY
+          CASE WHEN lower(s.title) LIKE ?1 THEN 0 ELSE 1 END,
+          datetime(s.updated_at) DESC,
+          s.id DESC
+        LIMIT ?5
+        "#,
+    )?;
+
+    let rows = statement.query_map(
+        rusqlite::params![
+            like,
+            include_archived,
+            repo_name_filter,
+            status_filter,
+            limit as i64,
+        ],
+        |row| {
+            let session_id: String = row.get(0)?;
+            let workspace_id: String = row.get(1)?;
+            let title: String = row.get(2)?;
+            let session_status: String = row.get(4)?;
+            let active_session_id: Option<String> = row.get(10)?;
+            let directory: String = row.get(11)?;
+            let match_record = match (
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<String>>(17)?,
+                row.get::<_, Option<String>>(18)?,
+            ) {
+                (Some(id), Some(role), Some(content), Some(created_at)) => Some(HistoricalRecord {
+                    id,
+                    role: message_role_from_db(&role),
+                    parsed_content: serde_json::from_str::<Value>(&content).ok(),
+                    content,
+                    created_at,
+                }),
+                _ => None,
+            };
+            let snippet = match_record.as_ref().map(|record| {
+                let summary = summarize_historical_record(record);
+                truncate_chars(&summary, SNIPPET_LIMIT)
+            });
+            Ok(json!({
+                "sessionId": session_id,
+                "workspaceId": workspace_id,
+                "workspaceRef": format!("{}/{}", row.get::<_, String>(14)?, directory),
+                "workspaceDirectory": directory,
+                "workspaceState": row.get::<_, String>(12)?,
+                "workspaceStatus": row.get::<_, String>(13)?,
+                "repo": row.get::<_, String>(14)?,
+                "title": title,
+                "sessionStatus": session_status,
+                "isWorking": is_session_working(Some(&session_status)),
+                "active": active_session_id.as_deref() == Some(session_id.as_str()),
+                "agentType": row.get::<_, Option<String>>(3)?,
+                "model": row.get::<_, Option<String>>(5)?,
+                "permissionMode": row.get::<_, String>(6)?,
+                "updatedAt": row.get::<_, String>(7)?,
+                "lastUserMessageAt": row.get::<_, Option<String>>(8)?,
+                "actionKind": row.get::<_, Option<String>>(9)?,
+                "matchMessageId": match_record.as_ref().map(|record| record.id.clone()),
+                "snippet": snippet,
+            }))
+        },
+    )?;
+    let sessions = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    let returned = sessions.len();
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "sessions": sessions,
+            "returned": returned,
         }),
         ..Default::default()
     })
@@ -2528,7 +2805,9 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         ToolKind::DescribeVoiceTools => {
             "Get detailed help for tool names when the compact docs are not enough."
         }
-        ToolKind::ListWorkspaces => "List workspaces; optional status/repo/archive filters.",
+        ToolKind::ListWorkspaces => {
+            "List workspaces; optional status/repo/archive/session-status filters."
+        }
         ToolKind::ShowWorkspace => "Show one workspace's status and details.",
         ToolKind::CreateWorkspace => "Create an empty workspace in a repo.",
         ToolKind::CreateWorkspaceAndSend => {
@@ -2547,6 +2826,7 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         }
         ToolKind::RunWorkspaceScript => "Run a workspace setup or run script.",
         ToolKind::ListSessions => "List sessions for a workspace.",
+        ToolKind::SearchSessions => "Search session titles and chat history by keyword.",
         ToolKind::GetSessionMessages => "Fetch recent messages from a session for summary.",
         ToolKind::SendPrompt => "Send a prompt to a workspace agent; optionally attach screenshots.",
         ToolKind::ListRepos => "List registered repos; use before repo-dependent actions if unsure.",
@@ -2773,6 +3053,7 @@ mod tests {
                 "permanently_delete_workspace",
                 "run_workspace_action",
                 "run_workspace_script",
+                "search_sessions",
                 "select_workspace",
                 "send_prompt",
                 "set_workspace_status",

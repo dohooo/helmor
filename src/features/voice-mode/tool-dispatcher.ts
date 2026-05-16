@@ -36,6 +36,7 @@ type ToolName =
 	| "run_workspace_action"
 	| "run_workspace_script"
 	| "list_sessions"
+	| "search_sessions"
 	| "get_session_messages"
 	| "send_prompt"
 	| "list_repos"
