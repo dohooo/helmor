@@ -31,7 +31,23 @@ function VoicePanelApp() {
 
 	useEffect(() => {
 		diag("mount");
+		const report = (event: string) => {
+			diag("focus-event", {
+				event,
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
+			});
+		};
+		const handleFocus = () => report("focus");
+		const handleBlur = () => report("blur");
+		const handleVisibility = () => report("visibilitychange");
+		window.addEventListener("focus", handleFocus);
+		window.addEventListener("blur", handleBlur);
+		document.addEventListener("visibilitychange", handleVisibility);
 		return () => {
+			window.removeEventListener("focus", handleFocus);
+			window.removeEventListener("blur", handleBlur);
+			document.removeEventListener("visibilitychange", handleVisibility);
 			diag("unmount");
 		};
 	}, []);
@@ -45,6 +61,8 @@ function VoicePanelApp() {
 				phase: event.payload.phase,
 				label: event.payload.label ?? null,
 				tone: event.payload.tone ?? null,
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
 			});
 			setVoiceState(event.payload);
 		}).then((stop) => {

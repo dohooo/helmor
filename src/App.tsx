@@ -305,6 +305,12 @@ function VoiceStateBridge() {
 		let cancelled = false;
 		let unlisten: (() => void) | undefined;
 		void listen<boolean>(MAIN_WINDOW_FOCUSED_EVENT, (event) => {
+			diagVoice("focus-event", {
+				source: "tauri",
+				focused: event.payload,
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
+			});
 			setMainWindowFocused(event.payload);
 		}).then((stop) => {
 			if (cancelled) {
@@ -314,16 +320,40 @@ function VoiceStateBridge() {
 			unlisten = stop;
 		});
 
-		const handleFocus = () => setMainWindowFocused(true);
-		const handleBlur = () => setMainWindowFocused(false);
+		const handleFocus = () => {
+			diagVoice("focus-event", {
+				source: "browser-focus",
+				focused: true,
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
+			});
+			setMainWindowFocused(true);
+		};
+		const handleBlur = () => {
+			diagVoice("focus-event", {
+				source: "browser-blur",
+				focused: false,
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
+			});
+			setMainWindowFocused(false);
+		};
+		const handleVisibility = () => {
+			diagVoice("visibility-event", {
+				documentHasFocus: document.hasFocus(),
+				visibilityState: document.visibilityState,
+			});
+		};
 		window.addEventListener("focus", handleFocus);
 		window.addEventListener("blur", handleBlur);
+		document.addEventListener("visibilitychange", handleVisibility);
 
 		return () => {
 			cancelled = true;
 			unlisten?.();
 			window.removeEventListener("focus", handleFocus);
 			window.removeEventListener("blur", handleBlur);
+			document.removeEventListener("visibilitychange", handleVisibility);
 		};
 	}, []);
 
@@ -334,8 +364,17 @@ function VoiceStateBridge() {
 	}, [active]);
 
 	useEffect(() => {
-		voiceModeStore.setMainSurfaceVisible(active && mainWindowFocused);
-	}, [active, mainWindowFocused]);
+		const mainSurfaceVisible = active && mainWindowFocused;
+		diagVoice("surface", {
+			active,
+			mainWindowFocused,
+			mainSurfaceVisible,
+			phase: state.phase,
+			documentHasFocus: document.hasFocus(),
+			visibilityState: document.visibilityState,
+		});
+		voiceModeStore.setMainSurfaceVisible(mainSurfaceVisible);
+	}, [active, mainWindowFocused, state.phase]);
 
 	useEffect(() => {
 		const payload: VoiceUiState & { active: boolean } = {

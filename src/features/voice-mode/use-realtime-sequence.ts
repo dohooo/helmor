@@ -18,6 +18,7 @@ import {
 	type VoiceUiPhase,
 	type VoiceUiState,
 } from "./voice-mode-state";
+import { voiceModeStore } from "./voice-mode-store";
 
 /** Tag UI state-machine events under the `sequence.` namespace. */
 function diag(event: string, data?: Record<string, unknown>) {
@@ -298,6 +299,7 @@ export function useRealtimeSequence(
 				diag("user-speech-started", {
 					phaseAtBarge: phaseRef.current,
 					hadPendingTransition: pendingTransitionRef.current !== null,
+					...sequenceDiagState(),
 				});
 				if (pendingTransitionRef.current) {
 					clearTimeout(pendingTransitionRef.current);
@@ -317,11 +319,11 @@ export function useRealtimeSequence(
 			// the trace. Kept on a separate diag event so transcript
 			// readers can filter them out.
 			if (eventType === "input_audio_buffer.speech_stopped") {
-				diag("user-speech-stopped");
+				diag("user-speech-stopped", sequenceDiagState());
 				// Falls through to no-op; speaking phase doesn't change.
 			}
 			if (eventType === "input_audio_buffer.committed") {
-				diag("user-audio-committed");
+				diag("user-audio-committed", sequenceDiagState());
 			}
 
 			// `speech_stopped` is intentionally a no-op for the bar's
@@ -335,7 +337,10 @@ export function useRealtimeSequence(
 				if (item?.type !== "function_call") return;
 				const name = item.name;
 				if (!name) return; // malformed; nothing we can show
-				diag("server-function-call-added", { tool: name });
+				diag("server-function-call-added", {
+					tool: name,
+					...sequenceDiagState(),
+				});
 				if (name === "wait_for_user") {
 					// No-op tool — model decided not to respond. Preserve any
 					// lingering transcript from the previous reply so the
@@ -415,8 +420,27 @@ export function useRealtimeSequence(
 			// idle Mic + "Listening" visual; user/agent activity inside
 			// the window cancels the timer (handled per event above).
 			if (eventType === "response.done") {
-				const status = (event as { response?: { status?: string } }).response
-					?.status;
+				const responseAny = (event as { response?: unknown }).response as
+					| {
+							id?: string;
+							status?: string;
+							status_details?: {
+								error?: { message?: string; code?: string; type?: string };
+								reason?: string;
+							};
+					  }
+					| undefined;
+				const status = responseAny?.status;
+				diag("response-done", {
+					responseId: responseAny?.id ?? null,
+					status: status ?? null,
+					error:
+						responseAny?.status_details?.error?.message ??
+						responseAny?.status_details?.reason ??
+						null,
+					phaseAtDone: phaseRef.current,
+					...sequenceDiagState(),
+				});
 				if (phaseRef.current === "speaking") {
 					const transcript = transcriptBufferRef.current;
 					applyPhase("listening", { label: transcript || undefined });
@@ -457,14 +481,6 @@ export function useRealtimeSequence(
 						// one OpenAI populates today; fall back through a few
 						// likely shapes so a payload-schema bump doesn't
 						// silently swallow the cause.
-						const responseAny = (event as { response?: unknown }).response as
-							| {
-									status_details?: {
-										error?: { message?: string };
-										reason?: string;
-									};
-							  }
-							| undefined;
 						const message =
 							responseAny?.status_details?.error?.message ??
 							responseAny?.status_details?.reason ??
@@ -670,4 +686,12 @@ function messageOf(err: unknown): string {
 		}
 	}
 	return String(err);
+}
+
+function sequenceDiagState(): Record<string, unknown> {
+	return {
+		mainSurfaceVisible: voiceModeStore.getMainSurfaceVisible(),
+		documentHasFocus: document.hasFocus(),
+		visibilityState: document.visibilityState,
+	};
 }

@@ -145,7 +145,16 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// `response.output` blob can be megabytes if it contains
 			// audio. Just record the type and a status/id-ish summary.
 			const responseStatus = (
-				event as { response?: { id?: string; status?: string } }
+				event as {
+					response?: {
+						id?: string;
+						status?: string;
+						status_details?: {
+							error?: { message?: string; code?: string; type?: string };
+							reason?: string;
+						};
+					};
+				}
 			).response;
 			const item = (
 				event as { item?: { id?: string; type?: string; role?: string } }
@@ -154,6 +163,12 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 				type: eventType,
 				responseId: responseStatus?.id ?? null,
 				responseStatus: responseStatus?.status ?? null,
+				responseError:
+					responseStatus?.status_details?.error?.message ??
+					responseStatus?.status_details?.reason ??
+					null,
+				responseErrorCode: responseStatus?.status_details?.error?.code ?? null,
+				responseErrorType: responseStatus?.status_details?.error?.type ?? null,
 				itemId: item?.id ?? null,
 				itemType: item?.type ?? null,
 				itemRole: item?.role ?? null,

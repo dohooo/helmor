@@ -65,6 +65,7 @@ pub fn set_main_window_focused(app: &AppHandle, focused: bool) -> Result<()> {
         .main_focused
         .lock()
         .expect("global hotkey focus state poisoned") = focused;
+    tracing::info!(focused, "voice focus bridge: main focus changed");
     app.emit(MAIN_WINDOW_FOCUSED_EVENT, focused)
         .context("Failed to emit main window focus state")?;
     apply_voice_panel_visibility(app)?;
@@ -158,6 +159,7 @@ pub fn set_voice_mode_active(app: AppHandle, active: bool) -> Result<(), Command
             .lock()
             .expect("voice active state poisoned") = active;
     }
+    tracing::info!(active, "voice focus bridge: active changed");
     Ok(apply_voice_panel_visibility(&app)?)
 }
 
@@ -193,6 +195,13 @@ fn apply_voice_panel_visibility(app: &AppHandle) -> Result<()> {
     let panel = app
         .get_webview_window(VOICE_PANEL_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
+    tracing::info!(
+        voice_active,
+        recorded_main_focused,
+        main_focused,
+        visible,
+        "voice focus bridge: applying panel visibility",
+    );
 
     if visible {
         position_voice_panel(&panel)?;
