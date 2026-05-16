@@ -295,6 +295,7 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 				messageIndex: messageCount,
 				dataChannelState: dataChannel.readyState,
 				peerConnectionState: peer.connectionState,
+				rateLimits: summarizeRateLimits(payload),
 				localTracks: mediaTrackSummary(stream),
 				...browserDiagState(),
 			});
@@ -482,12 +483,30 @@ function isKeyServerEvent(type: string | undefined): boolean {
 		type === "response.created" ||
 		type === "response.done" ||
 		type === "response.cancelled" ||
-		type === "response.output_item.added"
+		type === "response.output_item.added" ||
+		type === "rate_limits.updated"
 	);
 }
 
 function isKeyClientEvent(type: string): boolean {
 	return type === "conversation.item.create" || type === "response.create";
+}
+
+function summarizeRateLimits(
+	event: RealtimeServerEvent,
+): Array<Record<string, unknown>> | null {
+	const rateLimits = event.rate_limits;
+	if (!Array.isArray(rateLimits)) return null;
+	return rateLimits.map((limit) => {
+		if (!limit || typeof limit !== "object") return { value: limit };
+		const record = limit as Record<string, unknown>;
+		return {
+			name: record.name ?? null,
+			limit: record.limit ?? null,
+			remaining: record.remaining ?? null,
+			resetSeconds: record.reset_seconds ?? null,
+		};
+	});
 }
 
 function stopMedia(

@@ -212,10 +212,19 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .context("build OpenAI Realtime HTTP client")?;
-        let tools_count = super::voice_agent::build_tools_array().len();
+        let tools = super::voice_agent::build_tools_array();
+        let tool_size_summaries = summarize_tool_payload_sizes(&tools);
+        let tool_size_summaries_json =
+            serde_json::to_string(&tool_size_summaries).unwrap_or_else(|_| "[]".to_string());
+        let tools_json_bytes = serde_json::to_vec(&tools)
+            .map(|bytes| bytes.len())
+            .unwrap_or_default();
         tracing::info!(
             target: "helmor_lib::voice_session",
-            tools_count,
+            tools_count = tools.len(),
+            instructions_chars = VOICE_AGENT_INSTRUCTIONS.chars().count(),
+            tools_json_bytes,
+            largest_tools = %tool_size_summaries_json,
             "assembled session payload"
         );
         let body = serde_json::json!({
@@ -282,9 +291,23 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
                 // `--help` output at session-mint time — one source of
                 // truth (the CLI args) for both the human typing
                 // `helmor send --help` and the model picking a tool.
-                "tools": super::voice_agent::build_tools_array()
+                "tools": tools
             }
         });
+        let body_json_bytes = serde_json::to_vec(&body)
+            .map(|bytes| bytes.len())
+            .unwrap_or_default();
+        let session_json_bytes = body
+            .get("session")
+            .and_then(|session| serde_json::to_vec(session).ok())
+            .map(|bytes| bytes.len())
+            .unwrap_or_default();
+        tracing::info!(
+            target: "helmor_lib::voice_session",
+            body_json_bytes,
+            session_json_bytes,
+            "assembled client secret request size"
+        );
 
         let post_start = std::time::Instant::now();
         let response = client
@@ -334,6 +357,46 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
         })
     })
     .await
+}
+
+fn summarize_tool_payload_sizes(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut summaries = tools
+        .iter()
+        .map(|tool| {
+            let name = tool
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>");
+            let description_chars = tool
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(|description| description.chars().count())
+                .unwrap_or_default();
+            let parameters_json_bytes = tool
+                .get("parameters")
+                .and_then(|parameters| serde_json::to_vec(parameters).ok())
+                .map(|bytes| bytes.len())
+                .unwrap_or_default();
+            let total_json_bytes = serde_json::to_vec(tool)
+                .map(|bytes| bytes.len())
+                .unwrap_or_default();
+            (
+                total_json_bytes,
+                serde_json::json!({
+                    "name": name,
+                    "descriptionChars": description_chars,
+                    "parametersJsonBytes": parameters_json_bytes,
+                    "totalJsonBytes": total_json_bytes,
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
+    summaries.sort_by_key(|(total_json_bytes, _)| std::cmp::Reverse(*total_json_bytes));
+    summaries
+        .into_iter()
+        .take(6)
+        .map(|(_, summary)| summary)
+        .collect()
 }
 
 /// Read the account-global Codex rate-limit snapshot. Each call attempts
