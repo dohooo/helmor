@@ -236,6 +236,31 @@ pub fn run() {
                 });
             }
 
+            // Hydrate the per-workspace runtime bindings store from
+            // its sidecar JSON file. Cheap synchronous read — small
+            // file, no network — so no spawn_blocking needed. Always
+            // registers *something* (even on data-dir resolution
+            // failure) so the command layer can always reach a state
+            // object.
+            let bindings_store = match data_dir::data_dir() {
+                Ok(dir) => remote::WorkspaceRuntimeBindings::load_from_disk(&dir),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %format!("{err:#}"),
+                        "remote-runner: cannot resolve data dir; using empty bindings store"
+                    );
+                    remote::WorkspaceRuntimeBindings::new()
+                }
+            };
+            let restored_count = bindings_store.list().len();
+            if restored_count > 0 {
+                tracing::info!(
+                    count = restored_count,
+                    "remote-runner: restored per-workspace runtime bindings"
+                );
+            }
+            app.manage(std::sync::Arc::new(bindings_store));
+
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
@@ -301,9 +326,12 @@ pub fn run() {
             commands::remote_commands::disconnect_remote_runtime,
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_status,
+            commands::remote_commands::clear_workspace_runtime_binding,
             commands::remote_commands::list_remote_runtimes,
             commands::remote_commands::list_ssh_hosts,
+            commands::remote_commands::list_workspace_runtime_bindings,
             commands::remote_commands::reconnect_remote_runtime,
+            commands::remote_commands::set_workspace_runtime_binding,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

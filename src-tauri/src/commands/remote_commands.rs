@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::remote::{
     persistence, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeConnectionConfig,
-    RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
+    RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding,
+    WorkspaceRuntimeBindings, WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -308,6 +309,65 @@ pub fn list_remote_runtimes(
             }
         })
         .collect())
+}
+
+// ── per-workspace runtime bindings ───────────────────────────────
+
+/// Pin a workspace to a runtime by name. Persisted across restarts.
+/// The runtime doesn't have to exist at pin time — `lookup` falls
+/// back to local when a bound runtime isn't currently registered.
+/// Empty inputs are rejected so the persisted file can't grow junk
+/// rows.
+#[tauri::command]
+pub fn set_workspace_runtime_binding(
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_id: String,
+    runtime_name: String,
+) -> CmdResult<()> {
+    if workspace_id.trim().is_empty() {
+        return Err(anyhow::anyhow!("workspace id must not be empty").into());
+    }
+    if runtime_name.trim().is_empty() {
+        return Err(anyhow::anyhow!("runtime name must not be empty").into());
+    }
+    bindings.set(workspace_id, runtime_name);
+    persist_bindings(&bindings);
+    Ok(())
+}
+
+/// Remove a binding. Idempotent — clearing an unbound workspace is
+/// a no-op.
+#[tauri::command]
+pub fn clear_workspace_runtime_binding(
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_id: String,
+) -> CmdResult<()> {
+    bindings.clear(&workspace_id);
+    persist_bindings(&bindings);
+    Ok(())
+}
+
+/// Snapshot of every active binding. Sorted alphabetically by
+/// workspace id for stable UI rendering.
+#[tauri::command]
+pub fn list_workspace_runtime_bindings(
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+) -> CmdResult<Vec<WorkspaceRuntimeBinding>> {
+    Ok(bindings.list())
+}
+
+fn persist_bindings(bindings: &Arc<WorkspaceRuntimeBindings>) {
+    let data_dir = match crate::data_dir::data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "remote-runner: cannot resolve data dir; skipping bindings persist"
+            );
+            return;
+        }
+    };
+    bindings.save_to_disk(&data_dir);
 }
 
 #[cfg(test)]

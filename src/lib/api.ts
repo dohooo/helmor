@@ -751,6 +751,47 @@ export async function listSshHosts(): Promise<string[]> {
 	return invoke<string[]>("list_ssh_hosts");
 }
 
+/**
+ * One persisted "this workspace routes through that runtime" pin.
+ * `runtimeName` is a string key into the runtime registry (not a
+ * validated reference) — a binding can outlive its target runtime
+ * and reattach when the same name reconnects.
+ */
+export type WorkspaceRuntimeBinding = {
+	workspaceId: string;
+	runtimeName: string;
+};
+
+export async function listWorkspaceRuntimeBindings(): Promise<
+	WorkspaceRuntimeBinding[]
+> {
+	return invoke<WorkspaceRuntimeBinding[]>("list_workspace_runtime_bindings");
+}
+
+/**
+ * Pin a workspace to a runtime by name. Overwrites any prior
+ * binding for the same workspace. Empty inputs are rejected.
+ */
+export async function setWorkspaceRuntimeBinding(
+	workspaceId: string,
+	runtimeName: string,
+): Promise<void> {
+	return invoke<void>("set_workspace_runtime_binding", {
+		workspaceId,
+		runtimeName,
+	});
+}
+
+/**
+ * Remove a workspace's binding. Idempotent — clearing an unbound
+ * workspace is a no-op.
+ */
+export async function clearWorkspaceRuntimeBinding(
+	workspaceId: string,
+): Promise<void> {
+	return invoke<void>("clear_workspace_runtime_binding", { workspaceId });
+}
+
 export async function connectRemoteRuntime(
 	name: string,
 	host: string,

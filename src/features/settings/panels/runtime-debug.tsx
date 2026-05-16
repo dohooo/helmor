@@ -1,11 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plug, Plug2, RefreshCw, Server, X } from "lucide-react";
+import {
+	Link2,
+	Loader2,
+	Plug,
+	Plug2,
+	RefreshCw,
+	Server,
+	X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
+	clearWorkspaceRuntimeBinding,
 	connectLocalRuntime,
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
@@ -13,9 +22,12 @@ import {
 	getWorkspaceStatus,
 	listRemoteRuntimes,
 	listSshHosts,
+	listWorkspaceRuntimeBindings,
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
+	setWorkspaceRuntimeBinding,
+	type WorkspaceRuntimeBinding,
 	type WorkspaceStatusResult,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -60,6 +72,7 @@ export function RuntimeDebugPanel() {
 			/>
 			<ConnectSection />
 			<WorkspaceStatusProbeSection entries={entries} />
+			<WorkspaceBindingsSection entries={entries} />
 		</div>
 	);
 }
@@ -586,6 +599,171 @@ function ProbeResult({
 				))}
 			</ul>
 		</SettingsNotice>
+	);
+}
+
+// ── 4. Per-workspace runtime bindings ────────────────────────────────
+
+function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
+	const queryClient = useQueryClient();
+	const bindingsQuery = useQuery({
+		queryKey: ["workspace-runtime-bindings"],
+		queryFn: listWorkspaceRuntimeBindings,
+		refetchOnWindowFocus: true,
+	});
+	const bindings: WorkspaceRuntimeBinding[] = bindingsQuery.data ?? [];
+
+	const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
+	const [draftRuntimeName, setDraftRuntimeName] = useState<string>("local");
+
+	// Keep the draft runtime selection valid as the registry list
+	// shifts under us (e.g. user disconnects the selected entry).
+	useEffect(() => {
+		if (!entries.some((e) => e.name === draftRuntimeName)) {
+			setDraftRuntimeName("local");
+		}
+	}, [entries, draftRuntimeName]);
+
+	const setBinding = useMutation({
+		mutationFn: ({ id, runtime }: { id: string; runtime: string }) =>
+			setWorkspaceRuntimeBinding(id, runtime),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({
+				queryKey: ["workspace-runtime-bindings"],
+			});
+			setDraftWorkspaceId("");
+		},
+	});
+	const clearBinding = useMutation({
+		mutationFn: (id: string) => clearWorkspaceRuntimeBinding(id),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({
+				queryKey: ["workspace-runtime-bindings"],
+			});
+		},
+	});
+
+	const runtimeOptions = useMemo(
+		() => entries.map((e) => ({ value: e.name, label: e.name })),
+		[entries],
+	);
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Link2 className="size-3.5" strokeWidth={1.8} />}
+				title="Workspace bindings"
+				description="Pin a workspace to a runtime so future operations route through it. Today no command consumes the binding — this surface stores the pins so a follow-up phase can lift git/scripts/sidecar onto the seam."
+			/>
+
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{bindings.length === 0 ? (
+					<SettingsNotice tone="info">
+						No bindings yet. Pin a workspace below.
+					</SettingsNotice>
+				) : (
+					<SettingsGroup>
+						{bindings.map((binding) => (
+							<SettingsRow
+								key={binding.workspaceId}
+								align="start"
+								title={
+									<span className="flex items-center gap-1.5 font-mono">
+										<span>{binding.workspaceId}</span>
+										<span className="text-muted-foreground">→</span>
+										<span>{binding.runtimeName}</span>
+									</span>
+								}
+								description={
+									entries.some((e) => e.name === binding.runtimeName) ? null : (
+										<SettingsNotice tone="warn">
+											Runtime <code>{binding.runtimeName}</code> isn't currently
+											registered. Future ops on this workspace will fall back to{" "}
+											<code>local</code> until you reconnect it.
+										</SettingsNotice>
+									)
+								}
+							>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={clearBinding.isPending}
+									onClick={() => clearBinding.mutate(binding.workspaceId)}
+								>
+									<X className="mr-1.5 size-3.5" />
+									Clear
+								</Button>
+							</SettingsRow>
+						))}
+					</SettingsGroup>
+				)}
+
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
+					<Label htmlFor="binding-workspace" className="text-xs">
+						Workspace ID
+					</Label>
+					<Input
+						id="binding-workspace"
+						value={draftWorkspaceId}
+						onChange={(e) => setDraftWorkspaceId(e.target.value)}
+						placeholder="ws-1234"
+					/>
+
+					<Label htmlFor="binding-runtime" className="text-xs">
+						Runtime
+					</Label>
+					<select
+						id="binding-runtime"
+						value={draftRuntimeName}
+						onChange={(e) => setDraftRuntimeName(e.target.value)}
+						className={cn(
+							"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1",
+							"text-sm shadow-sm transition-colors",
+							"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+						)}
+					>
+						{runtimeOptions.map((opt) => (
+							<option key={opt.value} value={opt.value}>
+								{opt.label}
+							</option>
+						))}
+					</select>
+				</div>
+
+				<div className="flex items-center justify-between gap-3">
+					<div className="min-w-0 flex-1">
+						{setBinding.isError ? (
+							<SettingsNotice tone="error">
+								{errorMessage(setBinding.error)}
+							</SettingsNotice>
+						) : null}
+					</div>
+					<Button
+						variant="default"
+						size="sm"
+						disabled={setBinding.isPending || !draftWorkspaceId.trim()}
+						onClick={() =>
+							setBinding.mutate({
+								id: draftWorkspaceId.trim(),
+								runtime: draftRuntimeName,
+							})
+						}
+					>
+						{setBinding.isPending ? (
+							<>
+								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+								Saving…
+							</>
+						) : (
+							<>
+								<Link2 className="mr-1.5 size-3.5" />
+								Pin
+							</>
+						)}
+					</Button>
+				</div>
+			</div>
+		</section>
 	);
 }
 

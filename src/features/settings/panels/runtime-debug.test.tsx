@@ -13,6 +13,9 @@ const apiMocks = vi.hoisted(() => ({
 	reconnectRemoteRuntime: vi.fn(),
 	getWorkspaceStatus: vi.fn(),
 	listSshHosts: vi.fn(),
+	listWorkspaceRuntimeBindings: vi.fn(),
+	setWorkspaceRuntimeBinding: vi.fn(),
+	clearWorkspaceRuntimeBinding: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -27,6 +30,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		reconnectRemoteRuntime: apiMocks.reconnectRemoteRuntime,
 		getWorkspaceStatus: apiMocks.getWorkspaceStatus,
 		listSshHosts: apiMocks.listSshHosts,
+		listWorkspaceRuntimeBindings: apiMocks.listWorkspaceRuntimeBindings,
+		setWorkspaceRuntimeBinding: apiMocks.setWorkspaceRuntimeBinding,
+		clearWorkspaceRuntimeBinding: apiMocks.clearWorkspaceRuntimeBinding,
 	};
 });
 
@@ -60,6 +66,7 @@ describe("RuntimeDebugPanel", () => {
 		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY]);
 		apiMocks.getRuntimeHealth.mockResolvedValue(LOCAL_HEALTH);
 		apiMocks.listSshHosts.mockResolvedValue([]);
+		apiMocks.listWorkspaceRuntimeBindings.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -334,5 +341,74 @@ describe("RuntimeDebugPanel", () => {
 		await screen.findByText(/^connected$/);
 		await screen.findByText(/^degraded$/);
 		await screen.findByText(/^disconnected$/);
+	});
+
+	// ── workspace bindings ───────────────────────────────────────
+
+	it("submits a new workspace binding when Pin is clicked", async () => {
+		const user = userEvent.setup();
+		apiMocks.setWorkspaceRuntimeBinding.mockResolvedValue(undefined);
+
+		renderPanel();
+		const workspaceInput = await screen.findByLabelText(/Workspace ID/);
+		await user.type(workspaceInput, "ws-1234");
+		await user.click(screen.getByRole("button", { name: /Pin/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.setWorkspaceRuntimeBinding).toHaveBeenCalledWith(
+				"ws-1234",
+				"local",
+			);
+		});
+		// Input clears on success so the user can pin another.
+		await waitFor(() => {
+			expect(screen.getByLabelText(/Workspace ID/)).toHaveValue("");
+		});
+	});
+
+	it("renders an existing binding and lets the user clear it", async () => {
+		const user = userEvent.setup();
+		apiMocks.listWorkspaceRuntimeBindings.mockResolvedValue([
+			{ workspaceId: "ws-pinned", runtimeName: "dev.box" },
+		]);
+		apiMocks.clearWorkspaceRuntimeBinding.mockResolvedValue(undefined);
+
+		renderPanel();
+		// Binding row shows `workspaceId → runtimeName` in a font-mono
+		// span; the workspace id is unique to the row so we anchor on
+		// that.
+		await screen.findByText("ws-pinned");
+		await user.click(screen.getByRole("button", { name: /Clear/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.clearWorkspaceRuntimeBinding).toHaveBeenCalledWith(
+				"ws-pinned",
+			);
+		});
+	});
+
+	it("warns when a binding points at a runtime that isn't currently registered", async () => {
+		// Only `local` is in the registry list, but the persisted
+		// bindings reference a `dev.box` that hasn't reconnected.
+		// The row should surface a warning so the user knows ops will
+		// fall back to local until they reconnect.
+		apiMocks.listWorkspaceRuntimeBindings.mockResolvedValue([
+			{ workspaceId: "ws-tomb", runtimeName: "dev.box" },
+		]);
+
+		renderPanel();
+		await screen.findByText("ws-tomb");
+		await waitFor(() => {
+			expect(
+				screen.getByText(/isn't currently registered/),
+			).toBeInTheDocument();
+		});
+	});
+
+	it("disables the Pin button while the workspace ID input is empty", async () => {
+		renderPanel();
+		await screen.findByLabelText(/Workspace ID/);
+		const pinButton = screen.getByRole("button", { name: /Pin/ });
+		expect(pinButton).toBeDisabled();
 	});
 });
