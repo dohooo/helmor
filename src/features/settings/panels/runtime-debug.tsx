@@ -101,9 +101,11 @@ function RuntimeListSection({
 }
 
 function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
-	// Lazy health probe per row. `runtime_health` is documented as cheap
-	// + side-effect-free so polling on focus is safe; we don't poll on
-	// an interval until phase 9 adds the liveness signal.
+	// Health snapshot is fetched lazily for the description line (it
+	// surfaces hostname + version). The chip color, though, is driven
+	// entirely by `entry.state` — that's the liveness loop's authority,
+	// and it survives a transient health-probe failure without flipping
+	// red.
 	const healthQuery = useQuery({
 		queryKey: ["remote-runtimes", entry.name, "health"],
 		queryFn: () => getRuntimeHealth(entry.name),
@@ -124,11 +126,7 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 			title={
 				<span className="flex items-center gap-1.5 font-mono">
 					<span>{entry.name}</span>
-					<HealthChip
-						health={healthQuery.data}
-						loading={healthQuery.isLoading}
-						error={healthQuery.error}
-					/>
+					<StateChip entry={entry} />
 				</span>
 			}
 			description={
@@ -163,28 +161,8 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 	);
 }
 
-function HealthChip({
-	health,
-	loading,
-	error,
-}: {
-	health: RuntimeHealth | undefined;
-	loading: boolean;
-	error: unknown;
-}) {
-	let tone: "ok" | "warn" | "error" = "ok";
-	let label = "…";
-	if (loading) {
-		tone = "warn";
-		label = "checking";
-	} else if (error) {
-		tone = "error";
-		label = "error";
-	} else if (health) {
-		tone = "ok";
-		label =
-			health.kind.type === "local" ? "local" : `remote @ ${health.kind.host}`;
-	}
+function StateChip({ entry }: { entry: RuntimeEntry }) {
+	const { tone, label, title } = stateChipPresentation(entry);
 	const toneClass = {
 		ok: "border-green-600/40 bg-green-600/10 text-green-300",
 		warn: "border-amber-500/40 bg-amber-500/10 text-amber-300",
@@ -192,6 +170,7 @@ function HealthChip({
 	}[tone];
 	return (
 		<span
+			title={title}
 			className={cn(
 				"inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase",
 				toneClass,
@@ -200,6 +179,32 @@ function HealthChip({
 			{label}
 		</span>
 	);
+}
+
+function stateChipPresentation(entry: RuntimeEntry): {
+	tone: "ok" | "warn" | "error";
+	label: string;
+	title: string | undefined;
+} {
+	if (entry.isLocal) {
+		return { tone: "ok", label: "local", title: undefined };
+	}
+	switch (entry.state.type) {
+		case "connected":
+			return { tone: "ok", label: "connected", title: undefined };
+		case "degraded":
+			return {
+				tone: "warn",
+				label: "degraded",
+				title: entry.state.reason,
+			};
+		case "disconnected":
+			return {
+				tone: "error",
+				label: "disconnected",
+				title: entry.state.reason,
+			};
+	}
 }
 
 function HealthDescription({

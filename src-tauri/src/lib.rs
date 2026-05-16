@@ -190,6 +190,19 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
+            // Background poller flips the per-remote-runtime state
+            // chip when a ping fails (or recovers). The local entry
+            // is always Connected by construction; the loop only
+            // iterates over registered remotes.
+            {
+                let app_handle = app.handle().clone();
+                let registry = app
+                    .state::<std::sync::Arc<remote::RuntimeRegistry>>()
+                    .inner()
+                    .clone();
+                remote::spawn_liveness_loop(app_handle, registry);
+            }
+
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(

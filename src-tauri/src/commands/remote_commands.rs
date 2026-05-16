@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::remote::{
-    RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeHealth, RuntimeRegistry,
+    RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeHealth, RuntimeRegistry, RuntimeState,
     WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
 };
 
@@ -106,6 +106,10 @@ pub struct RuntimeEntry {
     /// gate "disconnect" buttons — you can't disconnect the local
     /// runtime.
     pub is_local: bool,
+    /// Latest known connection state. The local entry is always
+    /// Connected; remote entries reflect the liveness loop's most
+    /// recent decision.
+    pub state: RuntimeState,
 }
 
 /// Spawn the `helmor-server` binary as a local child process (no SSH
@@ -189,7 +193,17 @@ pub fn list_remote_runtimes(
         .into_iter()
         .map(|name| {
             let is_local = name == LOCAL_RUNTIME_NAME;
-            RuntimeEntry { name, is_local }
+            // `state` returns None only for unknown names; the names
+            // came from the same registry snapshot above so a None
+            // here would mean the entry got unregistered between the
+            // two reads. Fall back to Connected — the UI invalidates
+            // again on the next mutation anyway.
+            let state = registry.state(&name).unwrap_or(RuntimeState::Connected);
+            RuntimeEntry {
+                name,
+                is_local,
+                state,
+            }
         })
         .collect())
 }
@@ -219,6 +233,9 @@ mod tests {
                 is_clean: true,
                 changed_paths: vec![],
             })
+        }
+        fn ping(&self) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -256,7 +273,12 @@ mod tests {
             .into_iter()
             .map(|name| {
                 let is_local = name == LOCAL_RUNTIME_NAME;
-                RuntimeEntry { name, is_local }
+                let state = registry.state(&name).unwrap_or(RuntimeState::Connected);
+                RuntimeEntry {
+                    name,
+                    is_local,
+                    state,
+                }
             })
             .collect())
     }

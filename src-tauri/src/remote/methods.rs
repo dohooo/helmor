@@ -124,7 +124,7 @@ impl RpcMethod for InitializeMethod {
 
 // ── ping ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PingParams {
     /// Opaque counter the client increments so its echo loop can

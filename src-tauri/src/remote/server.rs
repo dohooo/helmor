@@ -396,6 +396,10 @@ mod tests {
                 changed_paths: vec![workspace_dir.display().to_string()],
             })
         }
+
+        fn ping(&self) -> anyhow::Result<()> {
+            unreachable!("workspace.status dispatch tests don't ping")
+        }
     }
 
     fn initialized_ctx_with_stub() -> ServerContext {
@@ -481,6 +485,9 @@ mod tests {
                 _: &std::path::Path,
             ) -> anyhow::Result<WorkspaceStatusResult> {
                 Err(anyhow::anyhow!("git: not a repository"))
+            }
+            fn ping(&self) -> anyhow::Result<()> {
+                unreachable!()
             }
         }
         let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(FailingRuntime));

@@ -91,6 +91,17 @@ pub trait RemoteRuntime: Send + Sync {
     /// impl will pass it verbatim and expect the server to resolve
     /// it under its own root.
     fn workspace_status(&self, workspace_dir: &Path) -> Result<WorkspaceStatusResult>;
+
+    /// Liveness probe. Distinct from [`runtime_health`] — that method
+    /// returns a *cached* snapshot for cheap UI rendering, whereas
+    /// `ping` actually round-trips through the transport so a dead
+    /// pipe (SSH dropped, server crashed) surfaces as `Err`. Used by
+    /// the registry's background poller to drive the connection-state
+    /// chip.
+    ///
+    /// The local impl returns `Ok(())` unconditionally — the
+    /// in-process runtime can't be "disconnected".
+    fn ping(&self) -> Result<()>;
 }
 
 /// The default runtime — does the work in-process. Every existing
@@ -138,6 +149,14 @@ impl RemoteRuntime for LocalRuntime {
             hostname: self.hostname.clone(),
             version: self.version.to_string(),
         })
+    }
+
+    fn ping(&self) -> Result<()> {
+        // In-process runtime is always alive by construction. Liveness
+        // probes against `local` are effectively no-ops; the registry's
+        // poller skips them entirely, but the method still has to exist
+        // for trait-object dispatch.
+        Ok(())
     }
 
     fn workspace_status(&self, workspace_dir: &Path) -> Result<WorkspaceStatusResult> {
@@ -253,6 +272,9 @@ mod tests {
                 is_clean: true,
                 changed_paths: vec![],
             })
+        }
+        fn ping(&self) -> Result<()> {
+            Ok(())
         }
     }
 

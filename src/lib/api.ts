@@ -717,9 +717,15 @@ export async function getWorkspaceStatus(
 	});
 }
 
+export type RuntimeState =
+	| { type: "connected" }
+	| { type: "degraded"; reason: string }
+	| { type: "disconnected"; reason: string };
+
 export type RuntimeEntry = {
 	name: string;
 	isLocal: boolean;
+	state: RuntimeState;
 };
 
 export async function listRemoteRuntimes(): Promise<RuntimeEntry[]> {
@@ -1624,7 +1630,8 @@ export type UiMutationEvent =
 			modelId: string | null;
 			permissionMode: string | null;
 	  }
-	| { type: "activeStreamsChanged" };
+	| { type: "activeStreamsChanged" }
+	| { type: "runtimeStateChanged"; name: string; state: RuntimeState };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,

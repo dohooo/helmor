@@ -22,9 +22,10 @@
 //! (the inner `Arc` keeps the runtime alive).
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 
 use super::runtime::{LocalRuntime, RemoteRuntime};
 
@@ -32,12 +33,49 @@ use super::runtime::{LocalRuntime, RemoteRuntime};
 /// pass `"local"` explicitly or omit the name — both route here.
 pub const LOCAL_RUNTIME_NAME: &str = "local";
 
+/// Connection-health snapshot for a registered runtime. The liveness
+/// loop in [`super::liveness`] flips entries between these variants
+/// as ping responses (or failures) come in.
+///
+/// Wire-friendly so the frontend can render a state-keyed chip
+/// without re-deriving the colour from a deeper struct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum RuntimeState {
+    /// Last ping succeeded (or the entry just connected).
+    Connected,
+    /// At least one consecutive ping has failed but we haven't given
+    /// up — the chip shows amber and surface tools should warn.
+    Degraded { reason: String },
+    /// Repeated failures or a transport error that won't recover on
+    /// its own. The entry stays in the registry as a tombstone; the
+    /// user has to disconnect + reconnect to get a fresh transport.
+    Disconnected { reason: String },
+}
+
+impl RuntimeState {
+    /// Initial state when a runtime is registered. `register` always
+    /// runs the handshake first so by the time the entry lands here
+    /// the transport has proven itself once.
+    pub fn fresh() -> Self {
+        Self::Connected
+    }
+}
+
+/// Per-entry payload: the trait object plus its current state. The
+/// state lives in a `Mutex` so the liveness loop can update it from a
+/// background task while the command layer reads it via `snapshot`.
+struct RegisteredRuntime {
+    runtime: Arc<dyn RemoteRuntime>,
+    state: Mutex<RuntimeState>,
+}
+
 /// Process-wide registry. Held inside `Arc` and exposed via
 /// `tauri::State` so the command layer can clone a handle per
 /// dispatch without growing a global static.
 pub struct RuntimeRegistry {
     local: Arc<dyn RemoteRuntime>,
-    remotes: RwLock<HashMap<String, Arc<dyn RemoteRuntime>>>,
+    remotes: RwLock<HashMap<String, Arc<RegisteredRuntime>>>,
 }
 
 impl Default for RuntimeRegistry {
@@ -75,7 +113,7 @@ impl RuntimeRegistry {
                 let remotes = self.remotes.read().expect("registry rwlock poisoned");
                 remotes
                     .get(n)
-                    .cloned()
+                    .map(|entry| Arc::clone(&entry.runtime))
                     .ok_or_else(|| anyhow!("unknown runtime `{n}`"))
             }
         }
@@ -98,7 +136,13 @@ impl RuntimeRegistry {
         if remotes.contains_key(&name) {
             bail!("runtime `{name}` is already registered; disconnect first to replace it");
         }
-        remotes.insert(name, runtime);
+        remotes.insert(
+            name,
+            Arc::new(RegisteredRuntime {
+                runtime,
+                state: Mutex::new(RuntimeState::fresh()),
+            }),
+        );
         Ok(())
     }
 
@@ -111,9 +155,10 @@ impl RuntimeRegistry {
             bail!("cannot disconnect the built-in local runtime");
         }
         let mut remotes = self.remotes.write().expect("registry rwlock poisoned");
-        remotes
+        let entry = remotes
             .remove(name)
-            .ok_or_else(|| anyhow!("unknown runtime `{name}`"))
+            .ok_or_else(|| anyhow!("unknown runtime `{name}`"))?;
+        Ok(Arc::clone(&entry.runtime))
     }
 
     /// Snapshot of the registered names, sorted alphabetically.
@@ -127,6 +172,59 @@ impl RuntimeRegistry {
         let mut all = vec![LOCAL_RUNTIME_NAME.to_string()];
         all.extend(out);
         all
+    }
+
+    /// Read a single entry's current state. Returns `None` for the
+    /// local runtime (always Connected by construction; callers can
+    /// short-circuit) or for unknown names.
+    pub fn state(&self, name: &str) -> Option<RuntimeState> {
+        if name == LOCAL_RUNTIME_NAME {
+            return Some(RuntimeState::Connected);
+        }
+        let remotes = self.remotes.read().expect("registry rwlock poisoned");
+        let entry = remotes.get(name)?;
+        let snapshot = entry
+            .state
+            .lock()
+            .expect("entry state mutex poisoned")
+            .clone();
+        Some(snapshot)
+    }
+
+    /// Snapshot every registered remote's `(name, runtime, state)`
+    /// so the liveness loop can iterate without holding the registry
+    /// lock during ping calls. Excludes the local runtime — it's
+    /// always connected by construction and pinging it is wasted
+    /// work.
+    pub fn remote_snapshot(&self) -> Vec<(String, Arc<dyn RemoteRuntime>, RuntimeState)> {
+        let remotes = self.remotes.read().expect("registry rwlock poisoned");
+        remotes
+            .iter()
+            .map(|(name, entry)| {
+                let state = entry
+                    .state
+                    .lock()
+                    .expect("entry state mutex poisoned")
+                    .clone();
+                (name.clone(), Arc::clone(&entry.runtime), state)
+            })
+            .collect()
+    }
+
+    /// Replace a remote's state. Returns the *previous* state if the
+    /// name existed so the liveness loop can decide whether to emit
+    /// a change event. Silently no-ops for the local runtime (its
+    /// state is fixed) and unknown names (entry got unregistered
+    /// between snapshot + update — fine, ignore).
+    pub fn set_state(&self, name: &str, next: RuntimeState) -> Option<RuntimeState> {
+        if name == LOCAL_RUNTIME_NAME {
+            return None;
+        }
+        let remotes = self.remotes.read().expect("registry rwlock poisoned");
+        let entry = remotes.get(name)?;
+        let mut state = entry.state.lock().expect("entry state mutex poisoned");
+        let prior = std::mem::replace(&mut *state, next);
+        Some(prior)
     }
 }
 
@@ -154,6 +252,9 @@ mod tests {
             _: &Path,
         ) -> Result<crate::remote::methods::WorkspaceStatusResult> {
             unreachable!("registry tests don't exercise workspace_status")
+        }
+        fn ping(&self) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -300,5 +401,138 @@ mod tests {
         // The handle is still functional — the inner Arc kept it
         // alive past the unregister.
         assert_eq!(handle.runtime_health().unwrap().hostname, "dev-box-tag");
+    }
+
+    // ── state tracking ───────────────────────────────────────────
+
+    #[test]
+    fn fresh_registration_starts_in_connected_state() {
+        let registry = registry_with_local_tag();
+        registry
+            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .unwrap();
+        assert_eq!(
+            registry.state("dev.box"),
+            Some(RuntimeState::Connected),
+            "newly registered runtime should be Connected"
+        );
+    }
+
+    #[test]
+    fn state_reports_connected_for_local_without_lookup() {
+        let registry = registry_with_local_tag();
+        assert_eq!(registry.state("local"), Some(RuntimeState::Connected));
+    }
+
+    #[test]
+    fn state_returns_none_for_unknown_name() {
+        let registry = registry_with_local_tag();
+        assert_eq!(registry.state("not-registered"), None);
+    }
+
+    #[test]
+    fn set_state_returns_prior_state_for_change_detection() {
+        let registry = registry_with_local_tag();
+        registry
+            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .unwrap();
+
+        let prior = registry.set_state(
+            "dev.box",
+            RuntimeState::Degraded {
+                reason: "ping timeout".into(),
+            },
+        );
+        assert_eq!(prior, Some(RuntimeState::Connected));
+
+        // Subsequent change carries the most recent state as the prior.
+        let prior2 = registry.set_state(
+            "dev.box",
+            RuntimeState::Disconnected {
+                reason: "broken pipe".into(),
+            },
+        );
+        assert_eq!(
+            prior2,
+            Some(RuntimeState::Degraded {
+                reason: "ping timeout".into()
+            })
+        );
+    }
+
+    #[test]
+    fn set_state_is_noop_for_local_runtime() {
+        let registry = registry_with_local_tag();
+        let prior = registry.set_state(
+            "local",
+            RuntimeState::Disconnected {
+                reason: "ignored".into(),
+            },
+        );
+        assert!(
+            prior.is_none(),
+            "local entry's state is fixed; set_state must not surface it as a transition"
+        );
+        // And the state itself is still Connected.
+        assert_eq!(registry.state("local"), Some(RuntimeState::Connected));
+    }
+
+    #[test]
+    fn set_state_is_noop_for_unknown_name() {
+        let registry = registry_with_local_tag();
+        let prior = registry.set_state(
+            "never-registered",
+            RuntimeState::Disconnected {
+                reason: "irrelevant".into(),
+            },
+        );
+        assert!(prior.is_none());
+    }
+
+    #[test]
+    fn remote_snapshot_excludes_local_and_carries_current_state() {
+        let registry = registry_with_local_tag();
+        registry
+            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .unwrap();
+        registry.set_state(
+            "dev.box",
+            RuntimeState::Degraded {
+                reason: "slow".into(),
+            },
+        );
+
+        let snapshot = registry.remote_snapshot();
+        assert_eq!(snapshot.len(), 1, "local must be excluded from snapshot");
+        let (name, _runtime, state) = &snapshot[0];
+        assert_eq!(name, "dev.box");
+        assert_eq!(
+            state,
+            &RuntimeState::Degraded {
+                reason: "slow".into()
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_state_wire_shape_is_camel_case_tagged() {
+        // The frontend will branch on `state.type === "connected" |
+        // "degraded" | "disconnected"`, same pattern as RuntimeKind.
+        let value = serde_json::to_value(RuntimeState::Connected).unwrap();
+        assert_eq!(value["type"], "connected");
+
+        let value = serde_json::to_value(RuntimeState::Degraded {
+            reason: "ping timed out".into(),
+        })
+        .unwrap();
+        assert_eq!(value["type"], "degraded");
+        assert_eq!(value["reason"], "ping timed out");
+
+        let value = serde_json::to_value(RuntimeState::Disconnected {
+            reason: "broken pipe".into(),
+        })
+        .unwrap();
+        assert_eq!(value["type"], "disconnected");
+        assert_eq!(value["reason"], "broken pipe");
     }
 }

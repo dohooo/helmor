@@ -33,8 +33,8 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use super::codec::{read_frame, write_frame, FrameError};
 use super::methods::{
-    InitializeMethod, InitializeParams, InitializeResult, RpcMethod, WorkspaceStatusMethod,
-    WorkspaceStatusParams, WorkspaceStatusResult,
+    InitializeMethod, InitializeParams, InitializeResult, PingMethod, PingParams, RpcMethod,
+    WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -323,6 +323,15 @@ impl RemoteRuntime for RemoteSshRuntime {
                 workspace_dir: workspace_dir.display().to_string(),
             })
     }
+
+    fn ping(&self) -> Result<()> {
+        // Real round-trip so a dead pipe surfaces as Err. The server's
+        // `ping` handler is cheap (just echoes back the counter + a
+        // timestamp), so the registry poller can call this on a short
+        // cadence without worry.
+        self.client.call::<PingMethod>(PingParams::default())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +471,9 @@ mod tests {
                 changed_paths: vec![workspace_dir.display().to_string()],
             })
         }
+        fn ping(&self) -> Result<()> {
+            Ok(())
+        }
     }
 
     /// Always errors so we can prove server-side failures map back
@@ -473,6 +485,9 @@ mod tests {
         }
         fn workspace_status(&self, _: &Path) -> Result<WorkspaceStatusResult> {
             Err(anyhow!("git: not a repository"))
+        }
+        fn ping(&self) -> Result<()> {
+            Err(anyhow!("ping always fails for this stub"))
         }
     }
 

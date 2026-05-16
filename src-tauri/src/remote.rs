@@ -26,6 +26,7 @@
 
 pub mod client;
 pub mod codec;
+pub mod liveness;
 pub mod methods;
 pub mod protocol;
 pub mod registry;
@@ -34,13 +35,14 @@ pub mod server;
 
 pub use client::{RemoteSshRuntime, RpcClient};
 pub use codec::{read_frame, write_frame, FrameError};
+pub use liveness::spawn_liveness_loop;
 pub use methods::{
     Method, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 pub use protocol::{
     JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
 };
-pub use registry::{RuntimeRegistry, LOCAL_RUNTIME_NAME};
+pub use registry::{RuntimeRegistry, RuntimeState, LOCAL_RUNTIME_NAME};
 pub use runtime::{local_runtime, LocalRuntime, RemoteRuntime, RuntimeHealth, RuntimeKind};
 pub use server::{dispatch_request, ServerContext};
 

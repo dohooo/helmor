@@ -28,7 +28,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 import { RuntimeDebugPanel } from "./runtime-debug";
 
-const LOCAL_ENTRY: RuntimeEntry = { name: "local", isLocal: true };
+const LOCAL_ENTRY: RuntimeEntry = {
+	name: "local",
+	isLocal: true,
+	state: { type: "connected" },
+};
 const LOCAL_HEALTH: RuntimeHealth = {
 	kind: { type: "local" },
 	hostname: "test-machine",
@@ -143,7 +147,11 @@ describe("RuntimeDebugPanel", () => {
 
 	it("renders disconnect for non-local entries and invokes the command on click", async () => {
 		const user = userEvent.setup();
-		const remoteEntry: RuntimeEntry = { name: "dev.box", isLocal: false };
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
 		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
 		apiMocks.getRuntimeHealth.mockImplementation((name?: string) =>
 			Promise.resolve(name === "dev.box" ? REMOTE_HEALTH : LOCAL_HEALTH),
@@ -206,5 +214,36 @@ describe("RuntimeDebugPanel", () => {
 		await waitFor(() => {
 			expect(screen.getByText(/Clean — no changes\./)).toBeInTheDocument();
 		});
+	});
+
+	it("renders chip colors from the entry's connection state", async () => {
+		// Three remotes, one in each state. The chip text is sourced
+		// from `entry.state` directly, not from the health probe, so
+		// this exercise doesn't depend on getRuntimeHealth at all.
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			{
+				name: "alpha",
+				isLocal: false,
+				state: { type: "connected" },
+			} satisfies RuntimeEntry,
+			{
+				name: "beta",
+				isLocal: false,
+				state: { type: "degraded", reason: "ping timed out" },
+			} satisfies RuntimeEntry,
+			{
+				name: "gamma",
+				isLocal: false,
+				state: { type: "disconnected", reason: "broken pipe" },
+			} satisfies RuntimeEntry,
+		]);
+
+		renderPanel();
+		// "connected" / "degraded" / "disconnected" labels are unique
+		// to the chip text. Wait for each to confirm the row painted.
+		await screen.findByText(/^connected$/);
+		await screen.findByText(/^degraded$/);
+		await screen.findByText(/^disconnected$/);
 	});
 });
