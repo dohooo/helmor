@@ -76,6 +76,9 @@ pub fn run() {
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(std::sync::Arc::new(remote::RuntimeRegistry::new()))
+        .manage(std::sync::Arc::new(
+            commands::remote_commands::RemoteTerminalSubscriptions::new(),
+        ))
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -328,11 +331,15 @@ pub fn run() {
             commands::remote_commands::get_workspace_branch_info,
             commands::remote_commands::get_workspace_status,
             commands::remote_commands::clear_workspace_runtime_binding,
+            commands::remote_commands::close_remote_terminal,
             commands::remote_commands::list_remote_runtimes,
             commands::remote_commands::list_ssh_hosts,
             commands::remote_commands::list_workspace_runtime_bindings,
+            commands::remote_commands::open_remote_terminal,
             commands::remote_commands::reconnect_remote_runtime,
+            commands::remote_commands::resize_remote_terminal,
             commands::remote_commands::set_workspace_runtime_binding,
+            commands::remote_commands::write_remote_terminal,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

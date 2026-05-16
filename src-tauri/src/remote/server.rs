@@ -21,7 +21,10 @@ use super::codec::write_frame;
 
 use super::methods::{
     InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
-    PingResult, RpcMethod, WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams,
+    PingResult, RpcMethod, TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult,
+    TerminalOpenMethod, TerminalOpenParams, TerminalOpenResult, TerminalResizeMethod,
+    TerminalResizeParams, TerminalResizeResult, TerminalWriteMethod, TerminalWriteParams,
+    TerminalWriteResult, WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams,
     WorkspaceBranchInfoResult, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
@@ -135,6 +138,11 @@ pub struct ServerContext {
     /// [`NoopNotifier`] so contexts built without a real writer
     /// silently drop notifications.
     notifier: Arc<dyn Notifier>,
+    /// Live PTY-backed terminal sessions on this server. Keyed by
+    /// client-chosen `terminal_id`. Shared via `Arc` so the
+    /// per-session reader threads can keep emitting events even if
+    /// the dispatcher's lifetime overlaps with concurrent calls.
+    terminal_state: Arc<super::terminal::RemoteTerminalState>,
 }
 
 impl ServerContext {
@@ -148,6 +156,7 @@ impl ServerContext {
             hostname,
             runtime,
             notifier: Arc::new(NoopNotifier),
+            terminal_state: Arc::new(super::terminal::RemoteTerminalState::new()),
         }
     }
 
@@ -164,6 +173,7 @@ impl ServerContext {
             hostname: hostname.into(),
             runtime,
             notifier: Arc::new(NoopNotifier),
+            terminal_state: Arc::new(super::terminal::RemoteTerminalState::new()),
         }
     }
 
@@ -179,6 +189,13 @@ impl ServerContext {
     /// without crawling private fields.
     pub fn notifier(&self) -> &Arc<dyn Notifier> {
         &self.notifier
+    }
+
+    /// Per-context PTY state. Tests reach in to assert "session
+    /// closed" / "still running"; the dispatcher handlers use it to
+    /// open / write / resize / close.
+    pub fn terminal_state(&self) -> &Arc<super::terminal::RemoteTerminalState> {
+        &self.terminal_state
     }
 
     fn is_initialized(&self) -> bool {
@@ -229,6 +246,18 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
                 handle_workspace_branch_info(ctx, params)
             })
         }
+        Method::TerminalOpen => {
+            handle::<TerminalOpenMethod, _>(req.params, |params| handle_terminal_open(ctx, params))
+        }
+        Method::TerminalWrite => handle::<TerminalWriteMethod, _>(req.params, |params| {
+            handle_terminal_write(ctx, params)
+        }),
+        Method::TerminalResize => handle::<TerminalResizeMethod, _>(req.params, |params| {
+            handle_terminal_resize(ctx, params)
+        }),
+        Method::TerminalClose => handle::<TerminalCloseMethod, _>(req.params, |params| {
+            handle_terminal_close(ctx, params)
+        }),
     };
 
     let response = match outcome {
@@ -355,6 +384,56 @@ fn handle_workspace_branch_info(
                 format!("workspace.branchInfo failed: {err:#}"),
             )
         })
+}
+
+fn handle_terminal_open(
+    ctx: &ServerContext,
+    params: TerminalOpenParams,
+) -> Result<TerminalOpenResult, JsonRpcError> {
+    ctx.terminal_state()
+        .open(params, Arc::clone(ctx.notifier()))
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("terminal.open failed: {err:#}"),
+            )
+        })
+}
+
+fn handle_terminal_write(
+    ctx: &ServerContext,
+    params: TerminalWriteParams,
+) -> Result<TerminalWriteResult, JsonRpcError> {
+    ctx.terminal_state().write(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("terminal.write failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_terminal_resize(
+    ctx: &ServerContext,
+    params: TerminalResizeParams,
+) -> Result<TerminalResizeResult, JsonRpcError> {
+    ctx.terminal_state().resize(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("terminal.resize failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_terminal_close(
+    ctx: &ServerContext,
+    params: TerminalCloseParams,
+) -> Result<TerminalCloseResult, JsonRpcError> {
+    ctx.terminal_state().close(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("terminal.close failed: {err:#}"),
+        )
+    })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*

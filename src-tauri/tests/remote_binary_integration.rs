@@ -13,7 +13,14 @@
 use std::path::Path;
 use std::process::Command;
 
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use helmor_lib::remote::{
+    methods::{
+        TerminalCloseParams, TerminalEventKind, TerminalEventNotification, TerminalOpenParams,
+        TerminalWriteParams,
+    },
     RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
     WorkspaceStatusParams,
 };
@@ -144,4 +151,111 @@ fn helmor_server_version_flag_prints_version_and_exits_zero() {
         stdout.contains("protocol"),
         "version output should advertise the protocol version: {stdout:?}"
     );
+}
+
+#[test]
+fn spawned_helmor_server_opens_terminal_streams_stdout_and_closes_cleanly() {
+    // Full vertical: spawn the real binary, subscribe to terminal
+    // events, open a PTY, write a command, observe the marker bytes
+    // arriving as Stdout notifications, then close. Proves the
+    // phase-14 reader thread, phase-18 PTY plumbing, and the new
+    // terminal.* RPC methods all line up across a real OS pipe.
+    let cmd = Command::new(HELMOR_SERVER_BIN);
+    let client = RpcClient::connect_command(cmd, "remote-terminal-test".into())
+        .expect("handshake should succeed");
+
+    let collected: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&collected);
+    let _subscription = client.subscribe_terminal_events(move |event| {
+        sink.lock().unwrap().push(event);
+    });
+
+    // Subscription must outlive the call sequence below; the
+    // NotificationSubscription drop unregisters the callback, so
+    // hold the binding alive until we explicitly close.
+    let runtime = RemoteSshRuntime::new(client, "remote-terminal-test");
+
+    let open = runtime
+        .terminal_open(TerminalOpenParams {
+            terminal_id: "t-pty-1".into(),
+            workspace_dir: "/tmp".into(),
+            shell: Some("/bin/sh".into()),
+            cols: 80,
+            rows: 24,
+        })
+        .expect("terminal.open should succeed");
+    assert!(open.pid > 0);
+
+    // Wait briefly for the shell's initial prompt to land — proves
+    // the server's reader thread is delivering bytes before we feed
+    // it anything.
+    wait_for(
+        &collected,
+        |e| matches!(&e.event, TerminalEventKind::Stdout { .. }),
+        Duration::from_secs(2),
+    );
+
+    runtime
+        .terminal_write(TerminalWriteParams {
+            terminal_id: "t-pty-1".into(),
+            data: "echo helmor-remote-marker\n".into(),
+        })
+        .expect("terminal.write should succeed");
+
+    // The marker bytes arrive as stdout (the shell echoes the input
+    // + the program output). Either matches.
+    let marker = wait_for(
+        &collected,
+        |e| match &e.event {
+            TerminalEventKind::Stdout { data } => data.contains("helmor-remote-marker"),
+            _ => false,
+        },
+        Duration::from_secs(2),
+    );
+    assert_eq!(marker.terminal_id, "t-pty-1");
+
+    runtime
+        .terminal_close(TerminalCloseParams {
+            terminal_id: "t-pty-1".into(),
+        })
+        .expect("terminal.close should succeed");
+
+    // The Exited event lands once the shell reaps. SIGTERM-killed
+    // shells report `code: None` on Unix.
+    let exited = wait_for(
+        &collected,
+        |e| matches!(&e.event, TerminalEventKind::Exited { .. }),
+        Duration::from_secs(2),
+    );
+    assert_eq!(exited.terminal_id, "t-pty-1");
+}
+
+/// Poll the collected inbox until the predicate finds a match or
+/// the deadline passes. Same shape as the server-side test helper —
+/// duplicated here because integration tests can't see private
+/// helpers from the lib's test module.
+fn wait_for(
+    inbox: &Arc<Mutex<Vec<TerminalEventNotification>>>,
+    pred: impl Fn(&TerminalEventNotification) -> bool,
+    timeout: Duration,
+) -> TerminalEventNotification {
+    let start = Instant::now();
+    loop {
+        {
+            let guard = inbox.lock().unwrap();
+            for event in guard.iter() {
+                if pred(event) {
+                    return event.clone();
+                }
+            }
+        }
+        if start.elapsed() >= timeout {
+            let snapshot = inbox.lock().unwrap().clone();
+            panic!(
+                "timed out waiting for terminal event after {timeout:?}; \
+                 collected so far: {snapshot:#?}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

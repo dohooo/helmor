@@ -17,14 +17,54 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
+use tauri::ipc::Channel;
+
 use crate::remote::{
-    methods::{WorkspaceBranchInfoResult, WorkspaceStatusResult},
-    persistence, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeConnectionConfig,
-    RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding,
+    methods::{
+        TerminalCloseParams, TerminalEventNotification, TerminalOpenParams, TerminalOpenResult,
+        TerminalResizeParams, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoResult,
+        WorkspaceStatusResult,
+    },
+    persistence, NotificationSubscription, RemoteRuntime, RemoteSshRuntime, RpcClient,
+    RuntimeConnectionConfig, RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding,
     WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
 };
 
 use super::common::{run_blocking, CmdResult};
+
+/// Subscriptions held alive while a terminal is open. Keyed by
+/// `terminal_id` (client-chosen, unique per remote). `Drop` on each
+/// `NotificationSubscription` unregisters the per-terminal callback
+/// on the underlying [`RpcClient`].
+///
+/// Stored as a `tauri::State` so the open/close commands can land
+/// the subscription somewhere it survives the function scope.
+#[derive(Default)]
+pub struct RemoteTerminalSubscriptions {
+    inner: std::sync::Mutex<HashMap<String, NotificationSubscription>>,
+}
+
+impl RemoteTerminalSubscriptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&self, terminal_id: String, subscription: NotificationSubscription) {
+        self.inner
+            .lock()
+            .expect("remote terminal subscriptions mutex poisoned")
+            .insert(terminal_id, subscription);
+    }
+
+    fn remove(&self, terminal_id: &str) {
+        self.inner
+            .lock()
+            .expect("remote terminal subscriptions mutex poisoned")
+            .remove(terminal_id);
+    }
+}
 
 /// Probe a runtime's health. Cheap + side-effect-free — safe to poll
 /// from the frontend on a focus tick or to surface in a connection
@@ -450,6 +490,146 @@ fn persist_bindings(bindings: &Arc<WorkspaceRuntimeBindings>) {
         }
     };
     bindings.save_to_disk(&data_dir);
+}
+
+// ── remote terminals ────────────────────────────────────────────
+
+/// Open a PTY-backed terminal on a remote runtime. The server-side
+/// PTY is registered under `terminalId` (caller-chosen); subsequent
+/// `terminal.write` / `terminal.resize` / `terminal.close` calls
+/// reference the same id.
+///
+/// The `channel` argument is a Tauri IPC `Channel<TerminalEventNotification>`
+/// that fires for every server-pushed `terminal.event` matching
+/// `terminalId`. The forwarding subscription is held on a process-
+/// wide [`RemoteTerminalSubscriptions`] state and torn down by
+/// `close_remote_terminal`.
+///
+/// Local runtimes don't go through this path — the existing
+/// `spawn_terminal` / `write_terminal_stdin` commands handle local
+/// PTYs. Calling this with `runtimeName = "local"` errors out at
+/// the trait's default impl.
+#[tauri::command]
+// Tauri's command bindgen flattens this signature into the
+// frontend JS surface; a "params" struct would route through serde
+// and lose the per-arg invoke shape downstream code depends on.
+#[allow(clippy::too_many_arguments)]
+pub async fn open_remote_terminal(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    subscriptions: tauri::State<'_, Arc<RemoteTerminalSubscriptions>>,
+    runtime_name: String,
+    terminal_id: String,
+    workspace_dir: String,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+    channel: Channel<TerminalEventNotification>,
+) -> CmdResult<TerminalOpenResult> {
+    let registry = Arc::clone(&registry);
+    let subscriptions = Arc::clone(&subscriptions);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+
+        // Subscribe BEFORE opening so the first PTY output chunk
+        // (the shell's prompt) can't race ahead of the callback
+        // registration. Filter on terminal_id so a single transport
+        // can host multiple terminals without crossing wires.
+        let term_id_for_filter = terminal_id.clone();
+        let subscription = runtime
+            .subscribe_terminal_events(Box::new(move |event| {
+                if event.terminal_id == term_id_for_filter {
+                    let _ = channel.send(event);
+                }
+            }))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime `{runtime_name}` does not stream terminal events \
+                     (only connected remote runtimes do)"
+                )
+            })?;
+
+        let result = runtime.terminal_open(TerminalOpenParams {
+            terminal_id: terminal_id.clone(),
+            workspace_dir,
+            shell,
+            cols,
+            rows,
+        });
+        match result {
+            Ok(open) => {
+                subscriptions.insert(terminal_id, subscription);
+                Ok(open)
+            }
+            Err(err) => {
+                // Failed open → drop the subscription. The
+                // NotificationSubscription's Drop unregisters the
+                // callback automatically.
+                drop(subscription);
+                Err(err)
+            }
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn write_remote_terminal(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    runtime_name: String,
+    terminal_id: String,
+    data: String,
+) -> CmdResult<TerminalWriteResult> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+        runtime.terminal_write(TerminalWriteParams { terminal_id, data })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resize_remote_terminal(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    runtime_name: String,
+    terminal_id: String,
+    cols: u16,
+    rows: u16,
+) -> CmdResult<()> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+        runtime.terminal_resize(TerminalResizeParams {
+            terminal_id,
+            cols,
+            rows,
+        })?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn close_remote_terminal(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    subscriptions: tauri::State<'_, Arc<RemoteTerminalSubscriptions>>,
+    runtime_name: String,
+    terminal_id: String,
+) -> CmdResult<()> {
+    let registry = Arc::clone(&registry);
+    let subscriptions = Arc::clone(&subscriptions);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+        let close_result = runtime.terminal_close(TerminalCloseParams {
+            terminal_id: terminal_id.clone(),
+        });
+        // Always tear down the subscription, even if the server
+        // returned an error — leaving it registered would leak the
+        // callback. The Exited event will still fire if the PTY was
+        // alive; the subscription holds it until removed.
+        subscriptions.remove(&terminal_id);
+        close_result.map(|_| ())
+    })
+    .await
 }
 
 #[cfg(test)]

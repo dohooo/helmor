@@ -41,6 +41,17 @@ pub enum Method {
     /// can answer both "what's dirty?" and "where am I?" without
     /// shelling out to two separate transports.
     WorkspaceBranchInfo,
+    /// Open a PTY-backed shell on the server, keyed by a
+    /// client-chosen `terminal_id`. Output is pushed back as
+    /// `terminal.event` notifications.
+    TerminalOpen,
+    /// Write bytes to an open terminal's stdin (PTY master).
+    TerminalWrite,
+    /// Resize an open terminal's PTY (cols, rows).
+    TerminalResize,
+    /// Kill + reap an open terminal. Idempotent: closing an
+    /// already-gone terminal is a no-op.
+    TerminalClose,
 }
 
 impl Method {
@@ -50,6 +61,10 @@ impl Method {
             Self::Ping => "ping",
             Self::WorkspaceStatus => "workspace.status",
             Self::WorkspaceBranchInfo => "workspace.branchInfo",
+            Self::TerminalOpen => "terminal.open",
+            Self::TerminalWrite => "terminal.write",
+            Self::TerminalResize => "terminal.resize",
+            Self::TerminalClose => "terminal.close",
         }
     }
 }
@@ -77,6 +92,10 @@ impl FromStr for Method {
             "ping" => Ok(Self::Ping),
             "workspace.status" => Ok(Self::WorkspaceStatus),
             "workspace.branchInfo" => Ok(Self::WorkspaceBranchInfo),
+            "terminal.open" => Ok(Self::TerminalOpen),
+            "terminal.write" => Ok(Self::TerminalWrite),
+            "terminal.resize" => Ok(Self::TerminalResize),
+            "terminal.close" => Ok(Self::TerminalClose),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -236,6 +255,146 @@ impl RpcMethod for WorkspaceBranchInfoMethod {
     type Result = WorkspaceBranchInfoResult;
 }
 
+// ── terminal.* ────────────────────────────────────────────────────
+
+/// Method name for server→client terminal output. Not an RpcMethod
+/// (no Params/Result pair — it's a notification, not a call) but
+/// pinned as a `const` so client + server agree on the wire string.
+pub const TERMINAL_EVENT_METHOD: &str = "terminal.event";
+
+/// Wire shape for an `terminal.open` request. `terminalId` is
+/// caller-chosen so the client can route incoming
+/// `terminal.event` notifications to the right consumer without
+/// waiting for the open call's reply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOpenParams {
+    /// Stable identifier the client picks (any non-empty string;
+    /// typically a UUID). All subsequent terminal.write / .resize /
+    /// .close calls and the terminal.event notifications carry the
+    /// same id so multiple terminals per remote can interleave on
+    /// one pipe.
+    pub terminal_id: String,
+    /// Where to spawn the shell, on the server's filesystem.
+    pub workspace_dir: String,
+    /// Override the shell binary. `None` → `$SHELL` on the remote,
+    /// falling back to `/bin/sh` if it isn't set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Initial PTY size. xterm-256color defaults are 80×24 but the
+    /// frontend almost always knows its actual viewport — pass it
+    /// so the shell's first prompt renders at the right width.
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOpenResult {
+    /// PID of the spawned shell. Returned so the UI can show it in
+    /// diagnostics; nothing in the client *needs* it for routing
+    /// (terminal_id does that).
+    pub pid: u32,
+}
+
+pub struct TerminalOpenMethod;
+impl RpcMethod for TerminalOpenMethod {
+    const NAME: &'static str = "terminal.open";
+    type Params = TerminalOpenParams;
+    type Result = TerminalOpenResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalWriteParams {
+    pub terminal_id: String,
+    /// UTF-8 string sent to the PTY master verbatim. The frontend
+    /// is responsible for appending `\r` / `\n` (terminals expect
+    /// `\r` for "enter", not `\n`).
+    pub data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalWriteResult {
+    /// Bytes actually written. Should equal `data.len()` on success;
+    /// a partial write indicates buffer pressure the client can
+    /// retry on.
+    pub bytes_written: usize,
+}
+
+pub struct TerminalWriteMethod;
+impl RpcMethod for TerminalWriteMethod {
+    const NAME: &'static str = "terminal.write";
+    type Params = TerminalWriteParams;
+    type Result = TerminalWriteResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalResizeParams {
+    pub terminal_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalResizeResult {}
+
+pub struct TerminalResizeMethod;
+impl RpcMethod for TerminalResizeMethod {
+    const NAME: &'static str = "terminal.resize";
+    type Params = TerminalResizeParams;
+    type Result = TerminalResizeResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCloseParams {
+    pub terminal_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalCloseResult {}
+
+pub struct TerminalCloseMethod;
+impl RpcMethod for TerminalCloseMethod {
+    const NAME: &'static str = "terminal.close";
+    type Params = TerminalCloseParams;
+    type Result = TerminalCloseResult;
+}
+
+/// Notification payload pushed via `Notifier::notify(TERMINAL_EVENT_METHOD, ...)`.
+/// Internally tagged by `kind` so the frontend can discriminate
+/// stdout / exit / error without sniffing absent fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TerminalEventKind {
+    /// Chunk of bytes from the PTY master. Encoded as a UTF-8
+    /// string with `String::from_utf8_lossy` on the server — invalid
+    /// sequences become `\u{FFFD}` rather than dropping the chunk.
+    Stdout { data: String },
+    /// Process exited (or was killed). `code` is `Some(0..=255)` for
+    /// a normal exit, `None` if the process was killed by a signal
+    /// before we could read its status.
+    Exited { code: Option<i32> },
+    /// Server-side error during the lifetime of the session — e.g.
+    /// the reader thread couldn't poll the master fd. The terminal
+    /// is removed from the server's state by the time this fires.
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalEventNotification {
+    pub terminal_id: String,
+    pub event: TerminalEventKind,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +406,10 @@ mod tests {
             Method::Ping,
             Method::WorkspaceStatus,
             Method::WorkspaceBranchInfo,
+            Method::TerminalOpen,
+            Method::TerminalWrite,
+            Method::TerminalResize,
+            Method::TerminalClose,
         ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
@@ -325,5 +488,85 @@ mod tests {
         // that.
         let params: PingParams = serde_json::from_str("{}").unwrap();
         assert_eq!(params.counter, 0);
+    }
+
+    // ── terminal.* wire shapes ───────────────────────────────────
+
+    #[test]
+    fn terminal_open_params_round_trip_with_camel_case_keys() {
+        let params = TerminalOpenParams {
+            terminal_id: "term-1".into(),
+            workspace_dir: "/home/me/repo".into(),
+            shell: Some("/bin/zsh".into()),
+            cols: 120,
+            rows: 30,
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"terminalId\""));
+        assert!(wire.contains("\"workspaceDir\""));
+        assert!(wire.contains("\"shell\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+        let restored: TerminalOpenParams = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.terminal_id, "term-1");
+        assert_eq!(restored.cols, 120);
+    }
+
+    #[test]
+    fn terminal_open_params_omit_shell_when_none() {
+        let params = TerminalOpenParams {
+            terminal_id: "t".into(),
+            workspace_dir: "/tmp".into(),
+            shell: None,
+            cols: 80,
+            rows: 24,
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(
+            !wire.contains("shell"),
+            "absent shell should be skipped: {wire}"
+        );
+    }
+
+    #[test]
+    fn terminal_event_notification_is_camel_case_internally_tagged() {
+        // The frontend will branch on `event.kind === "stdout" |
+        // "exited" | "error"` — same pattern as RuntimeKind/State.
+        let stdout = TerminalEventNotification {
+            terminal_id: "t".into(),
+            event: TerminalEventKind::Stdout {
+                data: "hello\n".into(),
+            },
+        };
+        let wire = serde_json::to_value(&stdout).unwrap();
+        assert_eq!(wire["terminalId"], "t");
+        assert_eq!(wire["event"]["kind"], "stdout");
+        assert_eq!(wire["event"]["data"], "hello\n");
+
+        let exited = TerminalEventNotification {
+            terminal_id: "t".into(),
+            event: TerminalEventKind::Exited { code: Some(0) },
+        };
+        let wire = serde_json::to_value(&exited).unwrap();
+        assert_eq!(wire["event"]["kind"], "exited");
+        assert_eq!(wire["event"]["code"], 0);
+    }
+
+    #[test]
+    fn terminal_write_result_carries_bytes_written() {
+        let result = TerminalWriteResult { bytes_written: 7 };
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire["bytesWritten"], 7);
+    }
+
+    #[test]
+    fn terminal_resize_and_close_results_are_empty_objects() {
+        // Both are no-payload methods on the success path; the
+        // wire is a plain `{}`. Round-tripping `()` doesn't fit
+        // serde_json's expectations, so dedicated empty structs
+        // give us stable Display + a place to hang future fields.
+        let resize_wire = serde_json::to_string(&TerminalResizeResult::default()).unwrap();
+        assert_eq!(resize_wire, "{}");
+        let close_wire = serde_json::to_string(&TerminalCloseResult::default()).unwrap();
+        assert_eq!(close_wire, "{}");
     }
 }

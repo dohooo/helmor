@@ -17,6 +17,9 @@ const apiMocks = vi.hoisted(() => ({
 	setWorkspaceRuntimeBinding: vi.fn(),
 	clearWorkspaceRuntimeBinding: vi.fn(),
 	getWorkspaceBranchInfo: vi.fn(),
+	openRemoteTerminal: vi.fn(),
+	writeRemoteTerminal: vi.fn(),
+	closeRemoteTerminal: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -35,6 +38,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		setWorkspaceRuntimeBinding: apiMocks.setWorkspaceRuntimeBinding,
 		clearWorkspaceRuntimeBinding: apiMocks.clearWorkspaceRuntimeBinding,
 		getWorkspaceBranchInfo: apiMocks.getWorkspaceBranchInfo,
+		openRemoteTerminal: apiMocks.openRemoteTerminal,
+		writeRemoteTerminal: apiMocks.writeRemoteTerminal,
+		closeRemoteTerminal: apiMocks.closeRemoteTerminal,
 	};
 });
 
@@ -524,5 +530,166 @@ describe("RuntimeDebugPanel", () => {
 		await screen.findByLabelText(/Pin workspace/);
 		const pinButton = screen.getByRole("button", { name: /^Pin$/ });
 		expect(pinButton).toBeDisabled();
+	});
+
+	// ── Remote terminal section ────────────────────────────────
+
+	it("hides the terminal section when no remote runtimes are connected", async () => {
+		// Only local; remote terminals require a remote.
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY]);
+		renderPanel();
+		// Wait for the panel to render its other forms first.
+		await screen.findByLabelText(/Name/);
+		// The terminal section's empty-state notice carries this
+		// distinctive phrase.
+		await waitFor(() => {
+			expect(
+				screen.getByText(/Connect a remote runtime first/),
+			).toBeInTheDocument();
+		});
+		// And no "Open terminal" button while remotes are absent.
+		expect(
+			screen.queryByRole("button", { name: /Open terminal/ }),
+		).not.toBeInTheDocument();
+	});
+
+	it("opens a remote terminal and renders streamed stdout events", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		// openRemoteTerminal's `onEvent` is the third arg's `onEvent`
+		// callback — capture it so the test can feed events back into
+		// the panel synchronously after the resolve.
+		let capturedOnEvent:
+			| ((event: import("@/lib/api").TerminalEventNotification) => void)
+			| null = null;
+		apiMocks.openRemoteTerminal.mockImplementation(
+			(_runtime, _id, _dir, options) => {
+				capturedOnEvent = options.onEvent;
+				return Promise.resolve({ pid: 1234 });
+			},
+		);
+
+		renderPanel();
+
+		// Wait for the terminal section's runtime dropdown to render
+		// — it's only rendered when at least one remote is present.
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+
+		const dirInput = screen.getByLabelText(/Workspace dir/, {
+			selector: "#rt-dir",
+		});
+		await user.type(dirInput, "/home/me/repo");
+
+		await user.click(screen.getByRole("button", { name: /Open terminal/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.openRemoteTerminal).toHaveBeenCalled();
+		});
+		// pid appears in the diagnostic header.
+		await waitFor(() => {
+			expect(screen.getByText(/pid=1234/)).toBeInTheDocument();
+		});
+
+		// Feed a synthetic stdout event back through the captured
+		// onEvent. The panel's appendOutput should drop it into the
+		// scrollback <pre>.
+		expect(capturedOnEvent).not.toBeNull();
+		// TypeScript narrows `capturedOnEvent` to `null` after the
+		// closure assignment unless we re-bind via the assertion above.
+		(
+			capturedOnEvent as unknown as (
+				event: import("@/lib/api").TerminalEventNotification,
+			) => void
+		)({
+			terminalId: "ignored-by-panel-filter",
+			event: { kind: "stdout", data: "$ helmor-pty-marker\n" },
+		});
+
+		await waitFor(() => {
+			expect(screen.getByText(/helmor-pty-marker/)).toBeInTheDocument();
+		});
+	});
+
+	it("sends terminal input on Enter with a trailing carriage return", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.openRemoteTerminal.mockResolvedValue({ pid: 99 });
+		apiMocks.writeRemoteTerminal.mockResolvedValue({ bytesWritten: 5 });
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+		await user.type(
+			screen.getByLabelText(/Workspace dir/, { selector: "#rt-dir" }),
+			"/tmp",
+		);
+		await user.click(screen.getByRole("button", { name: /Open terminal/ }));
+		await waitFor(() => {
+			expect(apiMocks.openRemoteTerminal).toHaveBeenCalled();
+		});
+
+		const cmdInput = await screen.findByPlaceholderText(
+			/type a command and press Enter/,
+		);
+		await user.type(cmdInput, "ls");
+		await user.keyboard("{Enter}");
+
+		await waitFor(() => {
+			expect(apiMocks.writeRemoteTerminal).toHaveBeenCalled();
+		});
+		const lastCall =
+			apiMocks.writeRemoteTerminal.mock.calls[
+				apiMocks.writeRemoteTerminal.mock.calls.length - 1
+			];
+		expect(lastCall[2]).toBe("ls\r");
+	});
+
+	it("close button tears down the session and stops accepting input", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.openRemoteTerminal.mockResolvedValue({ pid: 1 });
+		apiMocks.closeRemoteTerminal.mockResolvedValue(undefined);
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+		await user.type(
+			screen.getByLabelText(/Workspace dir/, { selector: "#rt-dir" }),
+			"/tmp",
+		);
+		await user.click(screen.getByRole("button", { name: /Open terminal/ }));
+		await screen.findByRole("button", { name: /Close terminal/ });
+
+		await user.click(screen.getByRole("button", { name: /Close terminal/ }));
+		await waitFor(() => {
+			expect(apiMocks.closeRemoteTerminal).toHaveBeenCalledWith(
+				"stage",
+				expect.any(String),
+			);
+		});
+		// After close, the Open button reappears.
+		await screen.findByRole("button", { name: /Open terminal/ });
 	});
 });

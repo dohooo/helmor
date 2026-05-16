@@ -865,6 +865,96 @@ export async function reconnectRemoteRuntime(
 	return invoke<RuntimeHealth>("reconnect_remote_runtime", { name });
 }
 
+// ── remote terminals ────────────────────────────────────────────
+
+/**
+ * Streamed event from a server-side terminal. Discriminated by
+ * `event.kind`; the union matches the Rust `TerminalEventKind`
+ * enum (`stdout` / `exited` / `error`).
+ */
+export type TerminalEventNotification = {
+	terminalId: string;
+	event:
+		| { kind: "stdout"; data: string }
+		| { kind: "exited"; code: number | null }
+		| { kind: "error"; message: string };
+};
+
+export type RemoteTerminalOpenResult = {
+	pid: number;
+};
+
+export type RemoteTerminalWriteResult = {
+	bytesWritten: number;
+};
+
+/**
+ * Open a PTY-backed shell on the named remote runtime. `onEvent`
+ * fires for every `terminal.event` matching `terminalId` — stdout
+ * chunks, the exit code, or a fatal error. The returned promise
+ * resolves once the open handshake completes; output starts
+ * arriving on the next tick.
+ */
+export async function openRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	workspaceDir: string,
+	options: {
+		shell?: string;
+		cols: number;
+		rows: number;
+		onEvent: (event: TerminalEventNotification) => void;
+	},
+): Promise<RemoteTerminalOpenResult> {
+	const channel = new Channel<TerminalEventNotification>();
+	channel.onmessage = options.onEvent;
+	return invoke<RemoteTerminalOpenResult>("open_remote_terminal", {
+		runtimeName,
+		terminalId,
+		workspaceDir,
+		shell: options.shell,
+		cols: options.cols,
+		rows: options.rows,
+		channel,
+	});
+}
+
+export async function writeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	data: string,
+): Promise<RemoteTerminalWriteResult> {
+	return invoke<RemoteTerminalWriteResult>("write_remote_terminal", {
+		runtimeName,
+		terminalId,
+		data,
+	});
+}
+
+export async function resizeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	cols: number,
+	rows: number,
+): Promise<void> {
+	return invoke<void>("resize_remote_terminal", {
+		runtimeName,
+		terminalId,
+		cols,
+		rows,
+	});
+}
+
+export async function closeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+): Promise<void> {
+	return invoke<void>("close_remote_terminal", {
+		runtimeName,
+		terminalId,
+	});
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;

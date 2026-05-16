@@ -111,6 +111,56 @@ pub trait RemoteRuntime: Send + Sync {
     /// The local impl returns `Ok(())` unconditionally — the
     /// in-process runtime can't be "disconnected".
     fn ping(&self) -> Result<()>;
+
+    /// Open a remote PTY-backed terminal. The default `Err` is what
+    /// [`LocalRuntime`] (and tombstones) return — local terminals
+    /// route through `workspace::scripts`, not the remote-runner
+    /// seam, and a tombstoned remote has no live transport to host
+    /// the PTY on.
+    fn terminal_open(
+        &self,
+        _params: super::methods::TerminalOpenParams,
+    ) -> Result<super::methods::TerminalOpenResult> {
+        anyhow::bail!("terminal.open is only supported on a connected remote runtime")
+    }
+
+    /// Push bytes to an open remote terminal's PTY stdin.
+    fn terminal_write(
+        &self,
+        _params: super::methods::TerminalWriteParams,
+    ) -> Result<super::methods::TerminalWriteResult> {
+        anyhow::bail!("terminal.write is only supported on a connected remote runtime")
+    }
+
+    /// Resize an open remote terminal's PTY.
+    fn terminal_resize(
+        &self,
+        _params: super::methods::TerminalResizeParams,
+    ) -> Result<super::methods::TerminalResizeResult> {
+        anyhow::bail!("terminal.resize is only supported on a connected remote runtime")
+    }
+
+    /// Kill + reap an open remote terminal. Idempotent on the wire
+    /// — closing an unknown terminal returns Ok.
+    fn terminal_close(
+        &self,
+        _params: super::methods::TerminalCloseParams,
+    ) -> Result<super::methods::TerminalCloseResult> {
+        anyhow::bail!("terminal.close is only supported on a connected remote runtime")
+    }
+
+    /// Subscribe to `terminal.event` notifications coming back from
+    /// the runtime. The default `None` means "this runtime doesn't
+    /// stream — local terminals use the existing `workspace::scripts`
+    /// channel; tombstones have no live transport". Remote runtimes
+    /// override to plug into their [`super::client::RpcClient`]'s
+    /// notification stream.
+    fn subscribe_terminal_events(
+        &self,
+        _callback: Box<dyn Fn(super::methods::TerminalEventNotification) + Send + Sync>,
+    ) -> Option<super::client::NotificationSubscription> {
+        None
+    }
 }
 
 /// The default runtime — does the work in-process. Every existing

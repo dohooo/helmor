@@ -36,6 +36,7 @@ pub mod registry;
 pub mod runtime;
 pub mod server;
 pub mod ssh_config;
+pub mod terminal;
 pub mod workspace_bindings;
 
 pub use client::NotificationSubscription;
@@ -52,6 +53,7 @@ pub use protocol::{
 pub use registry::{RuntimeRegistry, RuntimeState, LOCAL_RUNTIME_NAME};
 pub use runtime::{local_runtime, LocalRuntime, RemoteRuntime, RuntimeHealth, RuntimeKind};
 pub use server::{dispatch_request, NoopNotifier, Notifier, ServerContext, StdoutNotifier};
+pub use terminal::RemoteTerminalState;
 pub use workspace_bindings::{WorkspaceRuntimeBinding, WorkspaceRuntimeBindings};
 
 #[cfg(test)]

@@ -349,6 +349,35 @@ impl RpcClient {
             id,
         }
     }
+
+    /// Convenience over [`subscribe_notifications`] filtered to
+    /// `terminal.event` notifications and decoded into the typed
+    /// payload. Garbage params (malformed wire shape) are silently
+    /// dropped — the reader thread shouldn't panic on a peer that
+    /// sends nonsense.
+    ///
+    /// The same drop-to-unsubscribe contract applies; hold the
+    /// returned handle for as long as you want events.
+    pub fn subscribe_terminal_events<F>(&self, callback: F) -> NotificationSubscription
+    where
+        F: Fn(super::methods::TerminalEventNotification) + Send + Sync + 'static,
+    {
+        let callback = Arc::new(callback);
+        self.subscribe_notifications(move |req: JsonRpcRequest| {
+            if req.method != super::methods::TERMINAL_EVENT_METHOD {
+                return;
+            }
+            match serde_json::from_value::<super::methods::TerminalEventNotification>(req.params) {
+                Ok(event) => callback(event),
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        "client: received malformed terminal.event payload; dropping"
+                    );
+                }
+            }
+        })
+    }
 }
 
 impl Drop for RpcClient {
@@ -661,6 +690,48 @@ impl RemoteRuntime for RemoteSshRuntime {
         // cadence without worry.
         self.client.call::<PingMethod>(PingParams::default())?;
         Ok(())
+    }
+
+    fn terminal_open(
+        &self,
+        params: super::methods::TerminalOpenParams,
+    ) -> Result<super::methods::TerminalOpenResult> {
+        self.client
+            .call::<super::methods::TerminalOpenMethod>(params)
+    }
+
+    fn terminal_write(
+        &self,
+        params: super::methods::TerminalWriteParams,
+    ) -> Result<super::methods::TerminalWriteResult> {
+        self.client
+            .call::<super::methods::TerminalWriteMethod>(params)
+    }
+
+    fn terminal_resize(
+        &self,
+        params: super::methods::TerminalResizeParams,
+    ) -> Result<super::methods::TerminalResizeResult> {
+        self.client
+            .call::<super::methods::TerminalResizeMethod>(params)
+    }
+
+    fn terminal_close(
+        &self,
+        params: super::methods::TerminalCloseParams,
+    ) -> Result<super::methods::TerminalCloseResult> {
+        self.client
+            .call::<super::methods::TerminalCloseMethod>(params)
+    }
+
+    fn subscribe_terminal_events(
+        &self,
+        callback: Box<dyn Fn(super::methods::TerminalEventNotification) + Send + Sync>,
+    ) -> Option<NotificationSubscription> {
+        // `Box<dyn Fn(...)>` already satisfies the `Fn(...)` bound on
+        // `subscribe_terminal_events`, so passing the box through
+        // directly avoids the clippy redundant-closure warning.
+        Some(self.client.subscribe_terminal_events(callback))
     }
 }
 

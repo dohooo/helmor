@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	clearWorkspaceRuntimeBinding,
+	closeRemoteTerminal,
 	connectLocalRuntime,
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
@@ -24,13 +25,16 @@ import {
 	listRemoteRuntimes,
 	listSshHosts,
 	listWorkspaceRuntimeBindings,
+	openRemoteTerminal,
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
 	setWorkspaceRuntimeBinding,
+	type TerminalEventNotification,
 	type WorkspaceBranchInfoResult,
 	type WorkspaceRuntimeBinding,
 	type WorkspaceStatusResult,
+	writeRemoteTerminal,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -75,6 +79,7 @@ export function RuntimeDebugPanel() {
 			<ConnectSection />
 			<WorkspaceStatusProbeSection entries={entries} />
 			<WorkspaceBindingsSection entries={entries} />
+			<RemoteTerminalSection entries={entries} />
 		</div>
 	);
 }
@@ -855,6 +860,282 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 					</Button>
 				</div>
 			</div>
+		</section>
+	);
+}
+
+// ── 5. Remote terminal ──────────────────────────────────────────────
+
+/// Buffered terminal output capped at a sensible scrollback budget.
+/// 200 KB is enough for most demo sessions without holding the
+/// inspector inspector hostage on a chatty shell. Older bytes are
+/// discarded from the start.
+const TERMINAL_OUTPUT_BUDGET = 200_000;
+
+function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	const [runtimeName, setRuntimeName] = useState<string>("");
+	const [workspaceDir, setWorkspaceDir] = useState<string>("");
+	const [shell, setShell] = useState<string>("");
+	const [output, setOutput] = useState<string>("");
+	const [openSession, setOpenSession] = useState<{
+		runtimeName: string;
+		terminalId: string;
+	} | null>(null);
+	const [pendingInput, setPendingInput] = useState<string>("");
+	const [pid, setPid] = useState<number | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [busy, setBusy] = useState<boolean>(false);
+
+	// Keep the runtime select valid: if the chosen remote disappears
+	// (disconnected from the list panel), fall back to the first
+	// remaining remote or clear the select.
+	useEffect(() => {
+		if (runtimeName && !remotes.some((r) => r.name === runtimeName)) {
+			setRuntimeName(remotes[0]?.name ?? "");
+		}
+	}, [remotes, runtimeName]);
+
+	const appendOutput = (chunk: string) => {
+		setOutput((prev) => {
+			const next = prev + chunk;
+			return next.length > TERMINAL_OUTPUT_BUDGET
+				? next.slice(next.length - TERMINAL_OUTPUT_BUDGET)
+				: next;
+		});
+	};
+
+	const handleOpen = async () => {
+		if (!runtimeName.trim()) {
+			setError("pick a runtime to host the terminal");
+			return;
+		}
+		if (!workspaceDir.trim()) {
+			setError("workspace dir must not be empty");
+			return;
+		}
+		setError(null);
+		setBusy(true);
+		const terminalId = crypto.randomUUID();
+		setOutput("");
+		setPid(null);
+		try {
+			const result = await openRemoteTerminal(
+				runtimeName,
+				terminalId,
+				workspaceDir,
+				{
+					shell: shell.trim() || undefined,
+					cols: 100,
+					rows: 30,
+					onEvent: (event: TerminalEventNotification) => {
+						switch (event.event.kind) {
+							case "stdout":
+								appendOutput(event.event.data);
+								break;
+							case "exited":
+								appendOutput(
+									`\n[exited code=${event.event.code ?? "killed-by-signal"}]\n`,
+								);
+								setOpenSession(null);
+								break;
+							case "error":
+								appendOutput(`\n[error: ${event.event.message}]\n`);
+								setOpenSession(null);
+								break;
+						}
+					},
+				},
+			);
+			setOpenSession({ runtimeName, terminalId });
+			setPid(result.pid);
+		} catch (err) {
+			setError(errorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const handleSend = async () => {
+		if (!openSession) return;
+		const data = pendingInput;
+		setPendingInput("");
+		try {
+			// Append a carriage return so the shell sees Enter; lets
+			// the input look like the user typed `<text><enter>`.
+			await writeRemoteTerminal(
+				openSession.runtimeName,
+				openSession.terminalId,
+				`${data}\r`,
+			);
+		} catch (err) {
+			setError(errorMessage(err));
+		}
+	};
+
+	const handleClose = async () => {
+		if (!openSession) return;
+		setBusy(true);
+		try {
+			await closeRemoteTerminal(
+				openSession.runtimeName,
+				openSession.terminalId,
+			);
+		} catch (err) {
+			setError(errorMessage(err));
+		} finally {
+			setOpenSession(null);
+			setBusy(false);
+		}
+	};
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Server className="size-3.5" strokeWidth={1.8} />}
+				title="Remote terminal"
+				description="Spawn an interactive shell on a connected remote runtime. PTY output streams over the same JSON-RPC pipe as everything else."
+			/>
+			{remotes.length === 0 ? (
+				<SettingsNotice tone="info">
+					Connect a remote runtime first (the "Connect a runtime" section above)
+					— terminals only run on remote runtimes; local terminals live in the
+					workspace's Terminal tab.
+				</SettingsNotice>
+			) : (
+				<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+					<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
+						<Label htmlFor="rt-runtime" className="text-xs">
+							Runtime
+						</Label>
+						<select
+							id="rt-runtime"
+							value={runtimeName}
+							onChange={(e) => setRuntimeName(e.target.value)}
+							disabled={!!openSession || busy}
+							className={cn(
+								"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1",
+								"text-sm shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+							)}
+						>
+							<option value="">(pick a remote)</option>
+							{remotes.map((r) => (
+								<option key={r.name} value={r.name}>
+									{r.name}
+								</option>
+							))}
+						</select>
+
+						<Label htmlFor="rt-dir" className="text-xs">
+							Workspace dir
+						</Label>
+						<Input
+							id="rt-dir"
+							value={workspaceDir}
+							onChange={(e) => setWorkspaceDir(e.target.value)}
+							placeholder="/home/me/code/repo"
+							disabled={!!openSession || busy}
+						/>
+
+						<Label htmlFor="rt-shell" className="text-xs">
+							Shell (optional)
+						</Label>
+						<Input
+							id="rt-shell"
+							value={shell}
+							onChange={(e) => setShell(e.target.value)}
+							placeholder="(server's $SHELL — typically /bin/bash)"
+							disabled={!!openSession || busy}
+						/>
+					</div>
+
+					<div className="flex items-center gap-2">
+						{openSession ? (
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={busy}
+								onClick={() => void handleClose()}
+							>
+								{busy ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Closing…
+									</>
+								) : (
+									<>
+										<X className="mr-1.5 size-3.5" />
+										Close terminal
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								variant="default"
+								size="sm"
+								disabled={busy}
+								onClick={() => void handleOpen()}
+							>
+								{busy ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Opening…
+									</>
+								) : (
+									<>
+										<Plug className="mr-1.5 size-3.5" />
+										Open terminal
+									</>
+								)}
+							</Button>
+						)}
+						{pid !== null ? (
+							<span className="font-mono text-[11px] text-muted-foreground">
+								pid={pid}
+							</span>
+						) : null}
+					</div>
+
+					{error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
+
+					<pre
+						className={cn(
+							"min-h-[200px] max-h-[400px] overflow-auto rounded-md border border-border/40",
+							"bg-background/50 p-2 font-mono text-[11px] leading-tight whitespace-pre-wrap",
+						)}
+					>
+						{output || "(no output yet — open a terminal to start)"}
+					</pre>
+
+					<div className="flex items-center gap-2">
+						<Input
+							value={pendingInput}
+							onChange={(e) => setPendingInput(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									void handleSend();
+								}
+							}}
+							placeholder={
+								openSession
+									? "type a command and press Enter…"
+									: "(open a terminal to send input)"
+							}
+							disabled={!openSession || busy}
+						/>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!openSession || busy}
+							onClick={() => void handleSend()}
+						>
+							Send
+						</Button>
+					</div>
+				</div>
+			)}
 		</section>
 	);
 }
