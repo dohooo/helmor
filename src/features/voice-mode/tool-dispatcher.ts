@@ -38,6 +38,7 @@ type ToolName =
 	| "list_sessions"
 	| "search_sessions"
 	| "get_session_messages"
+	| "stop_session"
 	| "send_prompt"
 	| "list_repos"
 	| "list_context_items"

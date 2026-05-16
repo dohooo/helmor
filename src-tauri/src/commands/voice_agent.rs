@@ -80,6 +80,7 @@ pub enum ToolKind {
     ListSessions,
     SearchSessions,
     GetSessionMessages,
+    StopSession,
     SendPrompt,
     ListRepos,
     ListContextItems,
@@ -219,6 +220,7 @@ impl ToolKind {
         Self::ListSessions,
         Self::SearchSessions,
         Self::GetSessionMessages,
+        Self::StopSession,
         Self::SendPrompt,
         Self::ListRepos,
         Self::ListContextItems,
@@ -746,6 +748,32 @@ impl ToolKind {
                            window. Preamble (DB read ~50ms): usually \
                            none needed.",
             },
+            Self::StopSession => ToolMetadata {
+                name: "stop_session",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Optional Helmor session UUID to stop. Use IDs from \
+                                            list_sessions/search_sessions."
+                        },
+                        "workspace": {
+                            "type": "string",
+                            "description": "Optional workspace UUID or `repo-name/dir-name`. \
+                                            Stops active streams in that workspace."
+                        }
+                    },
+                    "required": []
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: user says stop/cancel/interrupt/打断/停止 a running agent \
+                           session. Prefer passing session when known; pass workspace for \
+                           'stop that workspace'. If neither is provided and exactly one \
+                           agent is running, this stops it. If multiple are running, it returns \
+                           candidates so you can ask one short clarification.",
+            },
             Self::SendPrompt => ToolMetadata {
                 name: "send_prompt",
                 parameters: json!({
@@ -1045,6 +1073,7 @@ impl ToolKind {
             Self::ListSessions => list_sessions(args, ctx),
             Self::SearchSessions => search_sessions(args, ctx),
             Self::GetSessionMessages => get_session_messages(args),
+            Self::StopSession => stop_session(args, ctx),
             Self::SendPrompt => send_prompt(args, ctx),
             Self::ListRepos => list_repos(args),
             Self::ListContextItems => list_context_items(args),
@@ -1759,6 +1788,90 @@ fn get_session_messages(args: Value) -> Result<VoiceToolResult> {
             "windowPosition": position,
             "windowHasMore": has_more,
             "totalMessages": total_messages,
+        }),
+        ..Default::default()
+    })
+}
+
+fn stop_session(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
+    use tauri::Manager;
+
+    let session_ref = args.get("session").and_then(Value::as_str);
+    let workspace_ref = args.get("workspace").and_then(Value::as_str);
+    let active_streams = ctx
+        .app
+        .state::<crate::agents::streaming::ActiveStreams>()
+        .snapshot_for_ui();
+
+    let mut candidates = match (session_ref, workspace_ref) {
+        (Some(session_id), _) => active_streams
+            .into_iter()
+            .filter(|stream| stream.session_id == session_id)
+            .collect::<Vec<_>>(),
+        (None, Some(workspace_ref)) => {
+            let workspace_id = service::resolve_workspace_ref(workspace_ref)?;
+            active_streams
+                .into_iter()
+                .filter(|stream| stream.workspace_id.as_deref() == Some(workspace_id.as_str()))
+                .collect::<Vec<_>>()
+        }
+        (None, None) => active_streams,
+    };
+
+    if candidates.is_empty() {
+        return Ok(VoiceToolResult {
+            data: json!({
+                "stopped": false,
+                "reason": "no_active_stream",
+            }),
+            ..Default::default()
+        });
+    }
+
+    if session_ref.is_none() && workspace_ref.is_none() && candidates.len() > 1 {
+        return Ok(VoiceToolResult {
+            data: json!({
+                "stopped": false,
+                "reason": "multiple_active_streams",
+                "candidates": candidates
+                    .iter()
+                    .map(|stream| json!({
+                        "sessionId": stream.session_id,
+                        "workspaceId": stream.workspace_id,
+                        "provider": stream.provider,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+            ..Default::default()
+        });
+    }
+
+    candidates.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    let sidecar = ctx.app.state::<crate::sidecar::ManagedSidecar>();
+    let mut stopped = Vec::new();
+    for stream in candidates {
+        let stop_req = crate::sidecar::SidecarRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            method: "stopSession".to_string(),
+            params: json!({
+                "sessionId": stream.session_id,
+                "provider": stream.provider,
+            }),
+        };
+        sidecar
+            .send(&stop_req)
+            .map_err(|err| anyhow::anyhow!("Failed to stop session: {err}"))?;
+        stopped.push(json!({
+            "sessionId": stream.session_id,
+            "workspaceId": stream.workspace_id,
+            "provider": stream.provider,
+        }));
+    }
+
+    Ok(VoiceToolResult {
+        data: json!({
+            "stopped": true,
+            "sessions": stopped,
         }),
         ..Default::default()
     })
@@ -2997,6 +3110,7 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         ToolKind::ListSessions => "List sessions for a workspace.",
         ToolKind::SearchSessions => "Search session titles and chat history by keyword.",
         ToolKind::GetSessionMessages => "Fetch recent messages from a session for summary.",
+        ToolKind::StopSession => "Stop/cancel a running agent session.",
         ToolKind::SendPrompt => "Send a prompt to a workspace agent; optionally attach screenshots.",
         ToolKind::ListRepos => "List registered repos; use before repo-dependent actions if unsure.",
         ToolKind::ListContextItems => "List repo issues, PRs/MRs, or discussions.",
@@ -3227,6 +3341,7 @@ mod tests {
                 "send_prompt",
                 "set_workspace_status",
                 "show_workspace",
+                "stop_session",
                 "wait_for_user",
             ]
         );

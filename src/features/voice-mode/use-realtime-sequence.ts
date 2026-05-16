@@ -652,6 +652,8 @@ function humanToolStatus(name: string): string {
 			return "Searching sessions";
 		case "get_session_messages":
 			return "Reading session";
+		case "stop_session":
+			return "Stopping session";
 		case "send_prompt":
 			return "Sending to agent";
 		case "list_repos":
