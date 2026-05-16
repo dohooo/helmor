@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 	disconnectRemoteRuntime: vi.fn(),
 	reconnectRemoteRuntime: vi.fn(),
 	getWorkspaceStatus: vi.fn(),
+	listSshHosts: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -25,6 +26,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		disconnectRemoteRuntime: apiMocks.disconnectRemoteRuntime,
 		reconnectRemoteRuntime: apiMocks.reconnectRemoteRuntime,
 		getWorkspaceStatus: apiMocks.getWorkspaceStatus,
+		listSshHosts: apiMocks.listSshHosts,
 	};
 });
 
@@ -57,6 +59,7 @@ describe("RuntimeDebugPanel", () => {
 		}
 		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY]);
 		apiMocks.getRuntimeHealth.mockResolvedValue(LOCAL_HEALTH);
+		apiMocks.listSshHosts.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -127,6 +130,47 @@ describe("RuntimeDebugPanel", () => {
 				"helmor-server",
 			);
 		});
+	});
+
+	it("renders ssh-config host aliases as datalist suggestions when SSH mode is picked", async () => {
+		const user = userEvent.setup();
+		apiMocks.listSshHosts.mockResolvedValue(["dev.box", "my-laptop"]);
+
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+		await user.click(screen.getByRole("radio", { name: /^SSH$/i }));
+
+		// Host input is wired to the datalist via list= attribute.
+		const hostInput = await screen.findByLabelText(/^Host$/);
+		expect(hostInput).toHaveAttribute("list", "ssh-host-suggestions");
+
+		// The datalist itself carries one <option> per alias. JSDOM
+		// renders datalist + option as DOM nodes even though they
+		// don't show in screen.getByText.
+		const datalist = hostInput.ownerDocument.getElementById(
+			"ssh-host-suggestions",
+		) as HTMLDataListElement | null;
+		expect(datalist).not.toBeNull();
+		const optionValues = Array.from(datalist?.querySelectorAll("option") ?? [])
+			.map((o) => (o as HTMLOptionElement).value)
+			.sort();
+		expect(optionValues).toEqual(["dev.box", "my-laptop"]);
+
+		// The "N aliases from ~/.ssh/config" hint surfaces too so the
+		// user can tell the suggestions are scoped, not magic.
+		expect(screen.getByText(/2 aliases from/)).toBeInTheDocument();
+	});
+
+	it("omits the ssh-config hint when no aliases are present", async () => {
+		const user = userEvent.setup();
+		apiMocks.listSshHosts.mockResolvedValue([]);
+
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+		await user.click(screen.getByRole("radio", { name: /^SSH$/i }));
+
+		await screen.findByLabelText(/^Host$/);
+		expect(screen.queryByText(/aliases from/)).not.toBeInTheDocument();
 	});
 
 	it("shows an inline error when connect fails and leaves inputs intact", async () => {

@@ -12,6 +12,7 @@ import {
 	getRuntimeHealth,
 	getWorkspaceStatus,
 	listRemoteRuntimes,
+	listSshHosts,
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
@@ -308,6 +309,18 @@ function ConnectSection() {
 	const [host, setHost] = useState("");
 	const [remoteBinary, setRemoteBinary] = useState("helmor-server");
 
+	// SSH hostname suggestions sourced from `~/.ssh/config`. Loaded
+	// lazily on mount because the file rarely changes mid-session and
+	// the parse is cheap; cached by React Query so the dropdown stays
+	// responsive between mode toggles.
+	const sshHostsQuery = useQuery({
+		queryKey: ["ssh-hosts"],
+		queryFn: listSshHosts,
+		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+	const sshHosts: string[] = sshHostsQuery.data ?? [];
+
 	const queryClient = useQueryClient();
 	const connect = useMutation({
 		mutationFn: async () => {
@@ -382,12 +395,29 @@ function ConnectSection() {
 							<Label htmlFor="runtime-host" className="text-xs">
 								Host
 							</Label>
-							<Input
-								id="runtime-host"
-								value={host}
-								onChange={(e) => setHost(e.target.value)}
-								placeholder="dev.box"
-							/>
+							<div className="flex flex-col gap-1">
+								<Input
+									id="runtime-host"
+									value={host}
+									onChange={(e) => setHost(e.target.value)}
+									placeholder="dev.box"
+									list="ssh-host-suggestions"
+								/>
+								<datalist id="ssh-host-suggestions">
+									{sshHosts.map((h) => (
+										<option key={h} value={h} />
+									))}
+								</datalist>
+								{sshHosts.length > 0 ? (
+									<span className="text-[11px] text-muted-foreground">
+										{sshHosts.length} alias
+										{sshHosts.length === 1 ? "" : "es"} from{" "}
+										<code className="rounded bg-muted px-1 py-px text-[10px]">
+											~/.ssh/config
+										</code>
+									</span>
+								) : null}
+							</div>
 							<Label htmlFor="runtime-remote-binary" className="text-xs">
 								Remote binary
 							</Label>

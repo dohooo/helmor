@@ -302,6 +302,7 @@ pub fn run() {
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_status,
             commands::remote_commands::list_remote_runtimes,
+            commands::remote_commands::list_ssh_hosts,
             commands::remote_commands::reconnect_remote_runtime,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,

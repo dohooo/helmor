@@ -271,6 +271,15 @@ fn resolve_local_helmor_server_path() -> Result<PathBuf> {
     .context("connect_local_runtime: cannot resolve binary")
 }
 
+/// Surface the host aliases the user has named in `~/.ssh/config`.
+/// Used by the dev panel's SSH connect form to populate a `<datalist>`
+/// type-ahead. Empty list is fine — that's just "no suggestions",
+/// the operator can still type a host they haven't aliased.
+#[tauri::command]
+pub fn list_ssh_hosts() -> CmdResult<Vec<String>> {
+    Ok(crate::remote::ssh_config::list_user_ssh_hosts())
+}
+
 #[tauri::command]
 pub fn list_remote_runtimes(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,

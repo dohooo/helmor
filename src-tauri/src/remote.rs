@@ -35,6 +35,7 @@ pub mod protocol;
 pub mod registry;
 pub mod runtime;
 pub mod server;
+pub mod ssh_config;
 
 pub use client::{RemoteSshRuntime, RpcClient};
 pub use codec::{read_frame, write_frame, FrameError};

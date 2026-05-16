@@ -742,6 +742,15 @@ export async function listRemoteRuntimes(): Promise<RuntimeEntry[]> {
 	return invoke<RuntimeEntry[]>("list_remote_runtimes");
 }
 
+/**
+ * Surface host aliases the user named in `~/.ssh/config` so the SSH
+ * connect form can offer type-ahead suggestions. Missing or
+ * unreadable config → empty array (treated as "no suggestions").
+ */
+export async function listSshHosts(): Promise<string[]> {
+	return invoke<string[]>("list_ssh_hosts");
+}
+
 export async function connectRemoteRuntime(
 	name: string,
 	host: string,
