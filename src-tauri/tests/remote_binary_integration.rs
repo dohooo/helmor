@@ -117,3 +117,31 @@ fn spawned_helmor_server_surfaces_dirty_paths_via_remote_ssh_runtime_trait() {
         "porcelain output should round-trip through the binary verbatim",
     );
 }
+
+#[test]
+fn helmor_server_version_flag_prints_version_and_exits_zero() {
+    // The auto-install probe runs `ssh host '<binary> --version'`
+    // and treats a non-empty first stdout line as "binary present".
+    // Running it locally proves the binary itself supports the flag
+    // without booting the RPC loop — a missing `--version` would
+    // hang the probe waiting for JSON-RPC bytes that never come.
+    let output = Command::new(HELMOR_SERVER_BIN)
+        .arg("--version")
+        .output()
+        .expect("failed to spawn helmor-server --version");
+
+    assert!(
+        output.status.success(),
+        "helmor-server --version must exit 0 for the probe to read it: {:?}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("helmor-server"),
+        "version output should name the binary: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("protocol"),
+        "version output should advertise the protocol version: {stdout:?}"
+    );
+}

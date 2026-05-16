@@ -77,11 +77,28 @@ pub async fn connect_remote_runtime(
 ) -> CmdResult<RuntimeHealth> {
     let registry = Arc::clone(&registry);
     run_blocking(move || {
+        // Capture the operator's *requested* binary in the persisted
+        // config — that's what they should see in the dev panel — even
+        // when the actual connect ends up using an auto-installed
+        // path. Re-running install on the next boot is cheap and
+        // idempotent.
         let config = RuntimeConnectionConfig::Ssh {
             host: host.clone(),
             remote_binary: remote_binary.clone(),
         };
-        let runtime = RemoteSshRuntime::connect_ssh(&host, &remote_binary)?;
+        // Auto-install runs on the blocking pool because both ssh
+        // probe + scp upload are sync subprocesses. A locally-built
+        // helmor-server binary is required to install; if we can't
+        // find one we surface the same legible error
+        // `connect_local_runtime` does.
+        let local_binary = crate::remote::install::resolve_local_helmor_server_path()?;
+        let resolved_binary = crate::remote::install::ensure_remote_helmor_server(
+            &crate::remote::install::ProcessSshRunner,
+            &host,
+            &remote_binary,
+            &local_binary,
+        )?;
+        let runtime = RemoteSshRuntime::connect_ssh(&host, &resolved_binary)?;
         let health = runtime.runtime_health()?;
         registry.register(name, Arc::new(runtime), Some(config))?;
         persist_registry(&registry);

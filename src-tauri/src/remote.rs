@@ -27,6 +27,7 @@
 pub mod client;
 pub mod codec;
 pub mod connection;
+pub mod install;
 pub mod liveness;
 pub mod methods;
 pub mod persistence;

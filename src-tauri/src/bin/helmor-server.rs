@@ -18,6 +18,17 @@ use helmor_lib::remote::{
 };
 
 fn main() -> ExitCode {
+    // CLI-style introspection. The auto-install path on the desktop
+    // side runs `ssh host helmor-server --version` to detect whether
+    // a compatible binary is already deployed; this branch answers
+    // that probe without booting the RPC loop. Print to stdout (not
+    // stderr) so the probing client can capture it cleanly.
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("helmor-server {}", env!("CARGO_PKG_VERSION"));
+        println!("protocol {}", helmor_lib::remote::PROTOCOL_VERSION);
+        return ExitCode::SUCCESS;
+    }
+
     init_logging();
 
     let server_version = env!("CARGO_PKG_VERSION").to_string();

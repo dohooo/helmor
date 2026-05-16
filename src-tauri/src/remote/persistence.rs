@@ -176,7 +176,27 @@ pub fn connect_from_config(config: &RuntimeConnectionConfig) -> Result<Arc<dyn R
             host,
             remote_binary,
         } => {
-            let runtime = RemoteSshRuntime::connect_ssh(host, remote_binary)?;
+            // Mirror the auto-install path that
+            // `connect_remote_runtime` runs on first connect — the
+            // operator-supplied `remote_binary` might still resolve
+            // fine, but on a fresh remote (or after a Helmor server
+            // upgrade) the install step takes care of placing the
+            // binary at the managed location. Idempotent: a probe-
+            // only path on hosts that already have the binary.
+            let local_binary = resolve_local_helmor_server_path().ok();
+            let resolved_binary = match local_binary {
+                Some(local) => super::install::ensure_remote_helmor_server(
+                    &super::install::ProcessSshRunner,
+                    host,
+                    remote_binary,
+                    &local,
+                )?,
+                // No local binary available (release build with no
+                // ssh-cm sibling, weird sandbox). Skip auto-install
+                // and hope the operator-supplied path works.
+                None => remote_binary.clone(),
+            };
+            let runtime = RemoteSshRuntime::connect_ssh(host, &resolved_binary)?;
             Ok(Arc::new(runtime))
         }
     }
