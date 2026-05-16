@@ -41,7 +41,7 @@ import type { PendingUserInput } from "@/features/conversation/pending-user-inpu
 import { humanizeBranch } from "@/features/navigation/shared";
 import { normalizeShortcutEvent } from "@/features/shortcuts/format";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import { useVoiceModeActive } from "@/features/voice-mode/voice-mode-store";
+import { useVoiceModeBarVisible } from "@/features/voice-mode/voice-mode-store";
 import type {
 	AgentModelSection,
 	CandidateDirectory,
@@ -283,8 +283,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	// (and hence the whole composer) actually contracts -- no scaling, no
 	// clipping. Bar grows by the same amount in `VoiceModeBar` so total
 	// outer height stays constant.
-	const voiceModeActive = useVoiceModeActive();
-	const voiceShrinkBy = voiceModeActive ? VOICE_SHRINK_PX : 0;
+	const voiceModeBarVisible = useVoiceModeBarVisible();
+	const voiceShrinkBy = voiceModeBarVisible ? VOICE_SHRINK_PX : 0;
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
 	);

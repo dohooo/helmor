@@ -11,6 +11,7 @@ import { useSyncExternalStore } from "react";
  */
 
 let active = false;
+let mainSurfaceVisible = false;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -30,20 +31,40 @@ function getActive(): boolean {
 	return active;
 }
 
+function getMainSurfaceVisible(): boolean {
+	return mainSurfaceVisible;
+}
+
 export const voiceModeStore = {
 	subscribe,
 	getActive,
+	getMainSurfaceVisible,
 	setActive(next: boolean): void {
 		if (active === next) return;
 		active = next;
+		if (!next) {
+			mainSurfaceVisible = false;
+		}
+		emit();
+	},
+	setMainSurfaceVisible(next: boolean): void {
+		if (mainSurfaceVisible === next) return;
+		mainSurfaceVisible = next;
 		emit();
 	},
 	toggle(): void {
-		active = !active;
-		emit();
+		this.setActive(!active);
 	},
 };
 
 export function useVoiceModeActive(): boolean {
 	return useSyncExternalStore(subscribe, getActive, getActive);
+}
+
+export function useVoiceModeBarVisible(): boolean {
+	return useSyncExternalStore(
+		subscribe,
+		getMainSurfaceVisible,
+		getMainSurfaceVisible,
+	);
 }

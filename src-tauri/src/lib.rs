@@ -388,6 +388,7 @@ pub fn run() {
             commands::settings_commands::save_auto_close_opt_in_asked,
             commands::voice_agent::run_voice_tool,
             global_hotkey::sync_global_hotkey,
+            global_hotkey::set_voice_mode_active,
             global_hotkey::hide_voice_panel,
             record_voice_panel_event,
             ui_sync::subscribe_ui_mutations,

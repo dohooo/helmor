@@ -734,6 +734,16 @@ export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
 	}
 }
 
+export async function setVoiceModeActive(active: boolean): Promise<void> {
+	try {
+		await invoke<void>("set_voice_mode_active", { active });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to update voice mode state."),
+		);
+	}
+}
+
 export async function listenAppUpdateStatus(
 	callback: (payload: AppUpdateStatus) => void,
 ): Promise<UnlistenFn> {

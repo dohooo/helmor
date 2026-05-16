@@ -14,47 +14,8 @@ const VOICE_PANEL_WINDOW_LABEL: &str = "voice-panel";
 const VOICE_PANEL_WIDTH: f64 = 328.0;
 const VOICE_PANEL_HEIGHT: f64 = 80.0;
 const VOICE_PANEL_BOTTOM_MARGIN: f64 = 28.0;
-/// Broadcast on every voice-session ownership change.
-///
-/// Payload is one of the strings in [`VoiceTarget::as_str`]
-/// (`"main"` / `"panel"` / `"none"`); both webviews listen and decide
-/// whether to mount their WebRTC peer based on whether the payload
-/// names them. Replaces the old `helmor://voice-panel-active` boolean
-/// event — that one couldn't express "voice is still running, just
-/// follow the user into the main window" which is the whole point of
-/// the focus-follow flow added in this revision.
-const VOICE_ACTIVE_WINDOW_EVENT: &str = "helmor://voice-active-window";
-
-/// Which webview owns the active voice session right now. The session
-/// is OS-level singleton (one WebRTC peer + one mic permission grant)
-/// so this is necessarily one-of-three: nowhere, the global panel, or
-/// the main window's sidebar bar.
-///
-/// State transitions are driven by three inputs:
-///   1. Global hotkey (only fires when main is unfocused) — toggles
-///      between `None` ↔ `Panel`.
-///   2. Main window focus change — if voice is running, follow the
-///      user: `Panel` → `Main` on focus, `Main` → `Panel` on blur.
-///      `None` stays `None` (focus changes alone don't start voice).
-///   3. `notify_voice_ended` (agent-invoked `end_session` from either
-///      webview) — any → `None`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum VoiceTarget {
-    #[default]
-    None,
-    Panel,
-    Main,
-}
-
-impl VoiceTarget {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Panel => "panel",
-            Self::Main => "main",
-        }
-    }
-}
+const VOICE_TOGGLE_REQUEST_EVENT: &str = "helmor://voice-toggle-request";
+const MAIN_WINDOW_FOCUSED_EVENT: &str = "helmor://main-window-focused";
 
 // Rust owns plugin registration, so no frontend plugin capability is needed.
 // Startup reads only stored overrides; the frontend syncs registry defaults
@@ -64,7 +25,7 @@ pub struct GlobalHotkeyState {
     desired: Mutex<Option<String>>,
     registered: Mutex<Option<String>>,
     main_focused: Mutex<bool>,
-    voice_target: Mutex<VoiceTarget>,
+    voice_active: Mutex<bool>,
 }
 
 pub fn sync_from_settings(app: &AppHandle) -> Result<()> {
@@ -104,36 +65,9 @@ pub fn set_main_window_focused(app: &AppHandle, focused: bool) -> Result<()> {
         .main_focused
         .lock()
         .expect("global hotkey focus state poisoned") = focused;
-    // Voice follows focus. If the user is mid-call when they alt-tab
-    // into / out of the main window, the WebRTC peer hands off between
-    // panel and main-window sidebar so the conversation stays alive
-    // without them having to re-summon. `None` is unchanged — focus
-    // doesn't start voice by itself.
-    {
-        let mut target = state
-            .voice_target
-            .lock()
-            .expect("voice target state poisoned");
-        let next = match (*target, focused) {
-            (VoiceTarget::Panel, true) => Some(VoiceTarget::Main),
-            (VoiceTarget::Main, false) => Some(VoiceTarget::Panel),
-            _ => None,
-        };
-        if let Some(next) = next {
-            *target = next;
-            // Drop the mutex guard before mutating windows / emitting so
-            // a slow Tauri call can't deadlock a follow-up read of the
-            // same state.
-            drop(target);
-            if let Err(error) = apply_voice_target(app, next) {
-                tracing::warn!(
-                    target_after = next.as_str(),
-                    error = %format!("{error:#}"),
-                    "Failed to apply voice target on focus change",
-                );
-            }
-        }
-    }
+    app.emit(MAIN_WINDOW_FOCUSED_EVENT, focused)
+        .context("Failed to emit main window focus state")?;
+    apply_voice_panel_visibility(app)?;
     let desired = state
         .desired
         .lock()
@@ -193,94 +127,86 @@ fn handle_global_hotkey(
     if event.state != ShortcutState::Pressed {
         return;
     }
-    if let Err(error) = toggle_voice_panel(app) {
-        tracing::warn!(error = %format!("{error:#}"), "Failed to toggle voice panel from global hotkey");
+    if let Err(error) = request_voice_toggle(app) {
+        tracing::warn!(error = %format!("{error:#}"), "Failed to request voice toggle from global hotkey");
     }
 }
 
-fn toggle_voice_panel(app: &AppHandle) -> Result<()> {
-    let window = app
+fn request_voice_toggle(app: &AppHandle) -> Result<()> {
+    if app
         .get_webview_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| anyhow!("Main window is not available"))?;
-
-    // Global hotkey shouldn't run while the main window owns focus —
-    // the frontend has its own in-app voice toggle for that scenario.
-    if window.is_visible()? && window.is_focused()? {
+        .is_some_and(|window| {
+            window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false)
+        })
+    {
         return Ok(());
     }
 
-    let state = app.state::<GlobalHotkeyState>();
-    let next = {
-        let target = state
-            .voice_target
-            .lock()
-            .expect("voice target state poisoned");
-        match *target {
-            VoiceTarget::None => VoiceTarget::Panel,
-            // Either Panel (user dismissing) or the unusual case where
-            // Main is still recorded but the window blurred — collapse
-            // to None either way.
-            VoiceTarget::Panel | VoiceTarget::Main => VoiceTarget::None,
-        }
-    };
-    set_voice_target(app, next)
+    app.emit(VOICE_TOGGLE_REQUEST_EVENT, ())
+        .context("Failed to emit voice toggle request")
 }
 
-/// Tauri command for either webview to call when the agent invokes
-/// the synthetic `end_session` tool. Resets the voice target to
-/// `None`, hides the panel (idempotent), and broadcasts so both
-/// webviews drop their WebRTC peer. Keeps the name `hide_voice_panel`
-/// for wire-compatibility with the existing JS callers — the behavior
-/// is "voice session ended", panel hide is a side effect.
+/// Main-window voice state is the source of truth. Rust only mirrors
+/// whether the always-on-top global panel should be visible while the
+/// main window is unfocused.
 #[tauri::command]
-pub fn hide_voice_panel(app: AppHandle) -> Result<(), CommandError> {
-    Ok(set_voice_target(&app, VoiceTarget::None)?)
-}
-
-/// Update the recorded voice target, then apply the side effects
-/// (panel show/hide + broadcast). Single source of truth — every voice
-/// ownership change funnels through here so the state machine, the OS
-/// window, and the broadcast event can't disagree.
-fn set_voice_target(app: &AppHandle, next: VoiceTarget) -> Result<()> {
+pub fn set_voice_mode_active(app: AppHandle, active: bool) -> Result<(), CommandError> {
     {
         let state = app.state::<GlobalHotkeyState>();
-        let mut target = state
-            .voice_target
+        *state
+            .voice_active
             .lock()
-            .expect("voice target state poisoned");
-        if *target == next {
-            return Ok(());
-        }
-        *target = next;
+            .expect("voice active state poisoned") = active;
     }
-    apply_voice_target(app, next)
+    Ok(apply_voice_panel_visibility(&app)?)
 }
 
-/// Side effects for a given voice target: show/hide the panel and
-/// broadcast which webview should own the WebRTC peer. Idempotent on
-/// the OS window state — calling with the current target is fine
-/// (use `set_voice_target` if you want the de-dupe).
-fn apply_voice_target(app: &AppHandle, target: VoiceTarget) -> Result<()> {
+/// Compatibility command for existing JS callers. Ending the session
+/// means the main-window-owned voice mode is no longer active.
+#[tauri::command]
+pub fn hide_voice_panel(app: AppHandle) -> Result<(), CommandError> {
+    {
+        let state = app.state::<GlobalHotkeyState>();
+        *state
+            .voice_active
+            .lock()
+            .expect("voice active state poisoned") = false;
+    }
+    Ok(apply_voice_panel_visibility(&app)?)
+}
+
+fn apply_voice_panel_visibility(app: &AppHandle) -> Result<()> {
+    let state = app.state::<GlobalHotkeyState>();
+    let voice_active = *state
+        .voice_active
+        .lock()
+        .expect("voice active state poisoned");
+    let recorded_main_focused = *state
+        .main_focused
+        .lock()
+        .expect("global hotkey focus state poisoned");
+    let main_focused = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .map(|window| window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false))
+        .unwrap_or(recorded_main_focused);
+    let visible = should_show_voice_panel(voice_active, main_focused);
     let panel = app
         .get_webview_window(VOICE_PANEL_WINDOW_LABEL)
         .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
-    match target {
-        VoiceTarget::Panel => {
-            position_voice_panel(&panel)?;
-            panel.show()?;
-            panel.unminimize()?;
-            panel.set_focus()?;
-        }
-        VoiceTarget::Main | VoiceTarget::None => {
-            // Main owns the voice now; the panel must go away so the
-            // user doesn't see a stale always-on-top frame. `None`
-            // simply ends voice altogether.
-            panel.hide()?;
-        }
+
+    if visible {
+        position_voice_panel(&panel)?;
+        panel.show()?;
+        panel.unminimize()?;
+    } else {
+        panel.hide()?;
     }
-    app.emit(VOICE_ACTIVE_WINDOW_EVENT, target.as_str())
-        .context("Failed to broadcast voice target change")?;
+
     Ok(())
+}
+
+fn should_show_voice_panel(voice_active: bool, main_focused: bool) -> bool {
+    voice_active && !main_focused
 }
 
 fn position_voice_panel(panel: &tauri::WebviewWindow) -> Result<()> {
@@ -395,5 +321,13 @@ mod tests {
         assert!(to_tauri_accelerator("   ").is_err());
         assert!(to_tauri_accelerator("Mod+").is_err());
         assert!(to_tauri_accelerator("Mod+Shift").is_err());
+    }
+
+    #[test]
+    fn voice_panel_visible_only_when_voice_active_and_main_unfocused() {
+        assert!(!should_show_voice_panel(false, false));
+        assert!(!should_show_voice_panel(false, true));
+        assert!(!should_show_voice_panel(true, true));
+        assert!(should_show_voice_panel(true, false));
     }
 }

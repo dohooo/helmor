@@ -1,8 +1,7 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -39,8 +38,16 @@ import {
 } from "@/features/shortcuts/use-app-shortcuts";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
-import { voiceModeStore } from "@/features/voice-mode/voice-mode-store";
-import { VoiceSessionProvider } from "@/features/voice-mode/voice-session-provider";
+import { voiceDiag } from "@/features/voice-mode/voice-diag";
+import type { VoiceUiState } from "@/features/voice-mode/voice-mode-state";
+import {
+	useVoiceModeActive,
+	voiceModeStore,
+} from "@/features/voice-mode/voice-mode-store";
+import {
+	useVoiceSession,
+	VoiceSessionProvider,
+} from "@/features/voice-mode/voice-session-provider";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
@@ -57,6 +64,7 @@ import {
 	createSession,
 	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
+	setVoiceModeActive,
 	type VoiceDispatchActionKind,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
@@ -124,6 +132,14 @@ import { useReadStateController } from "./shell/controllers/use-read-state-contr
 import { useSelectionController } from "./shell/controllers/use-selection-controller";
 import { useStartSurfaceController } from "./shell/controllers/use-start-surface-controller";
 import { publishShellEvent, useShellEvent } from "./shell/event-bus";
+
+const VOICE_TOGGLE_REQUEST_EVENT = "helmor://voice-toggle-request";
+const VOICE_STATE_EVENT = "helmor://voice-state";
+const MAIN_WINDOW_FOCUSED_EVENT = "helmor://main-window-focused";
+
+function diagVoice(event: string, data?: Record<string, unknown>) {
+	voiceDiag(`main.${event}`, data);
+}
 
 function App() {
 	const e2eElement = resolveE2eScenarioElement();
@@ -278,6 +294,63 @@ function MainApp() {
 			</PersistQueryClientProvider>
 		</SettingsContext.Provider>
 	);
+}
+
+function VoiceStateBridge() {
+	const active = useVoiceModeActive();
+	const state = useVoiceSession();
+	const [mainWindowFocused, setMainWindowFocused] = useState(true);
+
+	useEffect(() => {
+		let cancelled = false;
+		let unlisten: (() => void) | undefined;
+		void listen<boolean>(MAIN_WINDOW_FOCUSED_EVENT, (event) => {
+			setMainWindowFocused(event.payload);
+		}).then((stop) => {
+			if (cancelled) {
+				stop();
+				return;
+			}
+			unlisten = stop;
+		});
+
+		const handleFocus = () => setMainWindowFocused(true);
+		const handleBlur = () => setMainWindowFocused(false);
+		window.addEventListener("focus", handleFocus);
+		window.addEventListener("blur", handleBlur);
+
+		return () => {
+			cancelled = true;
+			unlisten?.();
+			window.removeEventListener("focus", handleFocus);
+			window.removeEventListener("blur", handleBlur);
+		};
+	}, []);
+
+	useEffect(() => {
+		void setVoiceModeActive(active).catch((error) => {
+			console.warn("[app] set_voice_mode_active failed", error);
+		});
+	}, [active]);
+
+	useEffect(() => {
+		voiceModeStore.setMainSurfaceVisible(active && mainWindowFocused);
+	}, [active, mainWindowFocused]);
+
+	useEffect(() => {
+		const payload: VoiceUiState & { active: boolean } = {
+			active,
+			phase: state.phase,
+			level: state.level,
+			label: state.label,
+			tone: state.tone,
+		};
+		void emit(VOICE_STATE_EVENT, payload).catch((error) => {
+			console.warn("[app] voice state emit failed", error);
+		});
+	}, [active, state.phase, state.level, state.label, state.tone]);
+
+	return null;
 }
 
 function AppShell({
@@ -594,8 +667,11 @@ function AppShell({
 	// lifecycle lives in `useRealtimeSequence` inside
 	// `<VoiceSessionProvider>`, which subscribes to the store and
 	// starts / tears down a session whenever the active flag flips.
-	const handleToggleVoiceMode = useCallback(() => {
-		voiceModeStore.toggle();
+	const handleToggleVoiceMode = useCallback((source = "app-shortcut") => {
+		const current = voiceModeStore.getActive();
+		const next = !current;
+		diagVoice("toggle", { source, from: current, to: next });
+		voiceModeStore.setActive(next);
 	}, []);
 	const handleToggleZenMode = useCallback(() => {
 		const zenActive = sidebarCollapsed && inspectorCollapsed;
@@ -851,81 +927,36 @@ function AppShell({
 		[handleInspectorCommitAction],
 	);
 
-	/** Tell Rust that voice has ended so it can reset its target state
-	 *  (otherwise focus-follow would re-summon the panel the next time
-	 *  the user blurs the main window). Idempotent in Rust — safe to
-	 *  call when the panel is already hidden / target is already
-	 *  `None`. */
+	/** Tell Rust that voice has ended so it can hide the global mirror
+	 *  immediately. The `VoiceStateBridge` active effect also sends this,
+	 *  but this keeps the OS panel from lingering if the bridge is a
+	 *  render behind. */
 	const handleVoicePanelHide = useCallback(() => {
-		void invoke("hide_voice_panel").catch((error: unknown) => {
-			console.warn("[app] hide_voice_panel failed", error);
+		void setVoiceModeActive(false).catch((error) => {
+			console.warn("[app] set_voice_mode_active failed", error);
 		});
 	}, []);
 
-	// Voice-panel ↔ main window bridge. The desktop voice panel is a
-	// separate webview (see `voice-panel-main.tsx`); when the user
-	// summons it via the global hotkey, the Rust handler broadcasts
-	// `helmor://voice-panel-active`. Three things hang off that:
-	//
-	// 1. **Mutex**: panel and the main-window sidebar voice can't both
-	//    own the WebRTC peer + mic simultaneously, so when the panel
-	//    activates we force the main window's voice off. The panel
-	//    drives its own `voiceModeStore` (separate webview = separate
-	//    module state), so this only affects what the main window
-	//    does inside its own React tree.
-	// 2. **Navigate forwarding**: the panel has no workspace list, so
-	//    its `onNavigateToWorkspace` callback emits a Tauri event
-	//    back to us; we run the same selection handler the sidebar
-	//    would.
-	// 3. **Action forwarding**: same idea for the four agent-dispatched
-	//    commit-button modes — the panel emits, we dispatch.
+	// Global hotkey requests are routed to the main window because it is
+	// the only owner of the live WebRTC session. The desktop voice panel
+	// is now a read-only mirror of this state.
 	useEffect(() => {
-		// Same race-safe pattern as the panel-side listener (see
-		// `voice-panel-main.tsx`): `listen()` resolves async, so cleanup
-		// has to flip `cancelled` AND call `stop()` for any listener
-		// that registered after we tore down. Without this StrictMode
-		// dev mounts orphan a duplicate listener per stream and every
-		// broadcast event fires our handler twice.
 		let cancelled = false;
-		const stops: Array<() => void> = [];
-		const attach = <T,>(name: string, handler: (payload: T) => void) => {
-			void listen<T>(name, (event) => handler(event.payload)).then((stop) => {
-				if (cancelled) {
-					stop();
-					return;
-				}
-				stops.push(stop);
-			});
-		};
-		// Rust drives ownership of the voice session via this single
-		// event. Payload `"main"` means the main-window sidebar bar
-		// should mount its WebRTC peer; `"panel"` / `"none"` means tear
-		// down (the panel webview takes over or no one does). This is
-		// how focus-follow works — when the user alt-tabs into the
-		// main window mid-call, Rust flips the target to `"main"` and
-		// we automatically pick the call back up here.
-		attach<string>("helmor://voice-active-window", (payload) => {
-			voiceModeStore.setActive(payload === "main");
-		});
-		attach<string>("helmor://voice-panel-navigate-workspace", (payload) => {
-			if (typeof payload === "string" && payload) {
-				handleSelectWorkspace(payload);
+		let unlisten: (() => void) | undefined;
+		void listen(VOICE_TOGGLE_REQUEST_EVENT, () => {
+			handleToggleVoiceMode("global-hotkey");
+		}).then((stop) => {
+			if (cancelled) {
+				stop();
+				return;
 			}
-		});
-		attach<{
-			workspaceId: string;
-			actionKind: VoiceDispatchActionKind;
-		}>("helmor://voice-panel-dispatch-workspace-action", (payload) => {
-			const { workspaceId, actionKind } = payload ?? {};
-			if (workspaceId && actionKind) {
-				handleVoiceWorkspaceAction(workspaceId, actionKind);
-			}
+			unlisten = stop;
 		});
 		return () => {
 			cancelled = true;
-			for (const stop of stops) stop();
+			unlisten?.();
 		};
-	}, [handleSelectWorkspace, handleVoiceWorkspaceAction]);
+	}, [handleToggleVoiceMode]);
 
 	const handleSessionCompleted = readStateActions.onSessionCompleted;
 	const handleSessionAborted = readStateActions.onSessionAborted;
@@ -1410,6 +1441,7 @@ function AppShell({
 							onDispatchWorkspaceAction={handleVoiceWorkspaceAction}
 							onEndSession={handleVoicePanelHide}
 						>
+							<VoiceStateBridge />
 							<main
 								aria-label="Application shell"
 								className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"

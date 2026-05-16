@@ -3,7 +3,7 @@ import { BorderBeam } from "@/components/border-beam";
 import { cn } from "@/lib/utils";
 import type { VoiceUiState } from "./voice-mode-state";
 import { VoiceModeStatus } from "./voice-mode-status";
-import { useVoiceModeActive } from "./voice-mode-store";
+import { useVoiceModeBarVisible } from "./voice-mode-store";
 import { useVoiceSession } from "./voice-session-provider";
 
 type VoiceModeBarProps = {
@@ -17,6 +17,7 @@ type VoiceModeBarProps = {
 	gap?: number;
 	className?: string;
 	forceActive?: boolean;
+	stateOverride?: VoiceUiState;
 };
 
 const HELMOR_MARK_BLOCKS = [
@@ -177,10 +178,12 @@ export function VoiceModeBar({
 	gap = 8,
 	className,
 	forceActive,
+	stateOverride,
 }: VoiceModeBarProps) {
-	const storeActive = useVoiceModeActive();
-	const active = forceActive ?? storeActive;
-	const state = useVoiceSession();
+	const storeVisible = useVoiceModeBarVisible();
+	const active = forceActive ?? storeVisible;
+	const contextState = useVoiceSession();
+	const state = stateOverride ?? contextState;
 	const style = deriveVoiceBarStyle(state);
 
 	return (
