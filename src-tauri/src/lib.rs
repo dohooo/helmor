@@ -203,6 +203,39 @@ pub fn run() {
                 remote::spawn_liveness_loop(app_handle, registry);
             }
 
+            // Restore the persisted remote-runtime list. Each entry
+            // either reconnects (lands as Connected) or becomes a
+            // tombstone with state=Disconnected so the user can hit
+            // Reconnect from the dev panel. Runs on the blocking pool
+            // because SSH spawns can take seconds.
+            {
+                let registry = app
+                    .state::<std::sync::Arc<remote::RuntimeRegistry>>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let dir = match data_dir::data_dir() {
+                        Ok(d) => d,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %format!("{err:#}"),
+                                "remote-runner: cannot resolve data dir; skipping restore"
+                            );
+                            return;
+                        }
+                    };
+                    let persisted = remote::persistence::load(&dir);
+                    if persisted.entries.is_empty() {
+                        return;
+                    }
+                    tracing::info!(
+                        count = persisted.entries.len(),
+                        "remote-runner: restoring persisted runtimes"
+                    );
+                    remote::persistence::restore_on_startup(&registry, persisted);
+                });
+            }
+
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
@@ -269,6 +302,7 @@ pub fn run() {
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_status,
             commands::remote_commands::list_remote_runtimes,
+            commands::remote_commands::reconnect_remote_runtime,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

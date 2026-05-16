@@ -277,7 +277,7 @@ mod tests {
         let registry = Arc::new(RuntimeRegistry::new());
         let runtime: Arc<dyn RemoteRuntime> =
             Arc::new(ScriptedRuntime::new([err("first"), err("second")]));
-        registry.register("dev.box", runtime).unwrap();
+        registry.register("dev.box", runtime, None).unwrap();
 
         // Tick 1: Connected → Degraded
         tick_states_only(&registry, Duration::from_secs(1)).await;
@@ -299,7 +299,7 @@ mod tests {
         let registry = Arc::new(RuntimeRegistry::new());
         let runtime: Arc<dyn RemoteRuntime> =
             Arc::new(ScriptedRuntime::new([err("first"), err("second"), ok()]));
-        registry.register("dev.box", runtime).unwrap();
+        registry.register("dev.box", runtime, None).unwrap();
 
         // Drive to Disconnected
         tick_states_only(&registry, Duration::from_secs(1)).await;

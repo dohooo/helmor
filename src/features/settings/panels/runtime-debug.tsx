@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plug, Plug2, Server, X } from "lucide-react";
+import { Loader2, Plug, Plug2, RefreshCw, Server, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import {
 	listRemoteRuntimes,
 	type RuntimeEntry,
 	type RuntimeHealth,
+	reconnectRemoteRuntime,
 	type WorkspaceStatusResult,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -119,6 +120,14 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 			void queryClient.invalidateQueries({ queryKey: ["remote-runtimes"] });
 		},
 	});
+	const reconnect = useMutation({
+		mutationFn: () => reconnectRemoteRuntime(entry.name),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["remote-runtimes"] });
+		},
+	});
+
+	const isDisconnected = entry.state.type === "disconnected";
 
 	return (
 		<SettingsRow
@@ -138,24 +147,46 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 			}
 		>
 			{entry.isLocal ? null : (
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={disconnect.isPending}
-					onClick={() => disconnect.mutate()}
-				>
-					{disconnect.isPending ? (
-						<>
-							<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-							Disconnecting…
-						</>
-					) : (
-						<>
-							<X className="mr-1.5 size-3.5" />
-							Disconnect
-						</>
-					)}
-				</Button>
+				<div className="flex items-center gap-2">
+					{isDisconnected ? (
+						<Button
+							variant="default"
+							size="sm"
+							disabled={reconnect.isPending}
+							onClick={() => reconnect.mutate()}
+						>
+							{reconnect.isPending ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Reconnecting…
+								</>
+							) : (
+								<>
+									<RefreshCw className="mr-1.5 size-3.5" />
+									Reconnect
+								</>
+							)}
+						</Button>
+					) : null}
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={disconnect.isPending}
+						onClick={() => disconnect.mutate()}
+					>
+						{disconnect.isPending ? (
+							<>
+								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+								Disconnecting…
+							</>
+						) : (
+							<>
+								<X className="mr-1.5 size-3.5" />
+								Disconnect
+							</>
+						)}
+					</Button>
+				</div>
 			)}
 		</SettingsRow>
 	);

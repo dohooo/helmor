@@ -26,8 +26,10 @@
 
 pub mod client;
 pub mod codec;
+pub mod connection;
 pub mod liveness;
 pub mod methods;
+pub mod persistence;
 pub mod protocol;
 pub mod registry;
 pub mod runtime;
@@ -35,6 +37,7 @@ pub mod server;
 
 pub use client::{RemoteSshRuntime, RpcClient};
 pub use codec::{read_frame, write_frame, FrameError};
+pub use connection::RuntimeConnectionConfig;
 pub use liveness::spawn_liveness_loop;
 pub use methods::{
     Method, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,

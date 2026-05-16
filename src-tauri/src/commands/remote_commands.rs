@@ -18,8 +18,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::remote::{
-    RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeHealth, RuntimeRegistry, RuntimeState,
-    WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
+    persistence, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeConnectionConfig,
+    RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -77,9 +77,14 @@ pub async fn connect_remote_runtime(
 ) -> CmdResult<RuntimeHealth> {
     let registry = Arc::clone(&registry);
     run_blocking(move || {
+        let config = RuntimeConnectionConfig::Ssh {
+            host: host.clone(),
+            remote_binary: remote_binary.clone(),
+        };
         let runtime = RemoteSshRuntime::connect_ssh(&host, &remote_binary)?;
         let health = runtime.runtime_health()?;
-        registry.register(name, Arc::new(runtime))?;
+        registry.register(name, Arc::new(runtime), Some(config))?;
+        persist_registry(&registry);
         Ok(health)
     })
     .await
@@ -93,7 +98,60 @@ pub fn disconnect_remote_runtime(
     name: String,
 ) -> CmdResult<()> {
     registry.unregister(&name)?;
+    persist_registry(&registry);
     Ok(())
+}
+
+/// Re-establish a connection using the entry's previously-persisted
+/// config. Used by the Reconnect button on a tombstoned entry (one
+/// whose initial restore failed at boot) and by manual recovery from
+/// a Disconnected state in the dev panel.
+///
+/// Returns the fresh `RuntimeHealth` on success, same as the
+/// `connect_*` commands. Errors if the entry isn't known to the
+/// registry or doesn't carry a persisted config.
+#[tauri::command]
+pub async fn reconnect_remote_runtime(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<RuntimeHealth> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let config = registry.config_for(&name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime `{name}` has no persisted config; remove it and re-add via Connect"
+            )
+        })?;
+        // Drop the stale entry (tombstone or live) before reconnecting
+        // so `register` doesn't reject the duplicate name. The Arc held
+        // by other callers stays valid until they release — same
+        // contract as `disconnect_remote_runtime`.
+        let _ = registry.unregister(&name);
+        let runtime = persistence::connect_from_config(&config)?;
+        let health = runtime.runtime_health()?;
+        registry.register(name, runtime, Some(config))?;
+        persist_registry(&registry);
+        Ok(health)
+    })
+    .await
+}
+
+/// Snapshot the registry's current configs and write them to
+/// `<data_dir>/remote_runtimes.json`. Best-effort — failures log
+/// without rolling back the mutation that triggered the save.
+fn persist_registry(registry: &Arc<RuntimeRegistry>) {
+    let data_dir = match crate::data_dir::data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "remote-runner: cannot resolve data dir; skipping persist"
+            );
+            return;
+        }
+    };
+    let snapshot = persistence::snapshot_from_registry(registry);
+    persistence::save(&data_dir, &snapshot);
 }
 
 /// Lifecycle list shown to the UI. Always starts with `"local"`,
@@ -129,6 +187,9 @@ pub async fn connect_local_runtime(
 ) -> CmdResult<RuntimeHealth> {
     let registry = Arc::clone(&registry);
     run_blocking(move || {
+        let config = RuntimeConnectionConfig::Local {
+            binary_path: binary_path.clone(),
+        };
         let path = match binary_path {
             Some(p) => PathBuf::from(p),
             None => resolve_local_helmor_server_path()?,
@@ -138,7 +199,8 @@ pub async fn connect_local_runtime(
         let client = RpcClient::connect_command(cmd, label.clone())?;
         let runtime = RemoteSshRuntime::new(client, label);
         let health = runtime.runtime_health()?;
-        registry.register(name, Arc::new(runtime))?;
+        registry.register(name, Arc::new(runtime), Some(config))?;
+        persist_registry(&registry);
         Ok(health)
     })
     .await
@@ -247,6 +309,7 @@ mod tests {
                 Arc::new(StubRuntime {
                     hostname: "stub.box",
                 }),
+                None,
             )
             .unwrap();
         registry

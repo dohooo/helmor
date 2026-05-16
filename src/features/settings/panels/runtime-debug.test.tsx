@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
 	connectLocalRuntime: vi.fn(),
 	connectRemoteRuntime: vi.fn(),
 	disconnectRemoteRuntime: vi.fn(),
+	reconnectRemoteRuntime: vi.fn(),
 	getWorkspaceStatus: vi.fn(),
 }));
 
@@ -22,6 +23,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		connectLocalRuntime: apiMocks.connectLocalRuntime,
 		connectRemoteRuntime: apiMocks.connectRemoteRuntime,
 		disconnectRemoteRuntime: apiMocks.disconnectRemoteRuntime,
+		reconnectRemoteRuntime: apiMocks.reconnectRemoteRuntime,
 		getWorkspaceStatus: apiMocks.getWorkspaceStatus,
 	};
 });
@@ -214,6 +216,49 @@ describe("RuntimeDebugPanel", () => {
 		await waitFor(() => {
 			expect(screen.getByText(/Clean — no changes\./)).toBeInTheDocument();
 		});
+	});
+
+	it("renders a Reconnect button only when the entry is disconnected", async () => {
+		const user = userEvent.setup();
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			{
+				name: "tombstone",
+				isLocal: false,
+				state: { type: "disconnected", reason: "ssh exited" },
+			} satisfies RuntimeEntry,
+		]);
+		apiMocks.reconnectRemoteRuntime.mockResolvedValue({
+			kind: { type: "remote", host: "tombstone" },
+			hostname: "tombstone",
+			version: "0.0.0",
+		});
+
+		renderPanel();
+		const reconnect = await screen.findByRole("button", { name: /Reconnect/ });
+		await user.click(reconnect);
+
+		await waitFor(() => {
+			expect(apiMocks.reconnectRemoteRuntime).toHaveBeenCalledWith("tombstone");
+		});
+	});
+
+	it("hides the Reconnect button for connected entries", async () => {
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			{
+				name: "fine",
+				isLocal: false,
+				state: { type: "connected" },
+			} satisfies RuntimeEntry,
+		]);
+		renderPanel();
+		// Disconnect should be there for the remote entry, but no
+		// Reconnect.
+		await screen.findByRole("button", { name: /Disconnect/ });
+		expect(
+			screen.queryByRole("button", { name: /Reconnect/ }),
+		).not.toBeInTheDocument();
 	});
 
 	it("renders chip colors from the entry's connection state", async () => {

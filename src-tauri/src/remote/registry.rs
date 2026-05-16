@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
+use super::connection::RuntimeConnectionConfig;
 use super::runtime::{LocalRuntime, RemoteRuntime};
 
 /// Reserved name for the built-in local runtime. Frontend code can
@@ -62,12 +63,17 @@ impl RuntimeState {
     }
 }
 
-/// Per-entry payload: the trait object plus its current state. The
-/// state lives in a `Mutex` so the liveness loop can update it from a
-/// background task while the command layer reads it via `snapshot`.
+/// Per-entry payload: the trait object, current state, and the
+/// reconnection config (when known). The state lives in a `Mutex` so
+/// the liveness loop can update it from a background task while the
+/// command layer reads it via `snapshot`.
 struct RegisteredRuntime {
     runtime: Arc<dyn RemoteRuntime>,
     state: Mutex<RuntimeState>,
+    /// `None` for entries registered directly through the registry
+    /// API (mostly tests). `Some` for entries that came through a
+    /// command — the persistence layer uses this to write the file.
+    config: Option<RuntimeConnectionConfig>,
 }
 
 /// Process-wide registry. Held inside `Arc` and exposed via
@@ -124,7 +130,30 @@ impl RuntimeRegistry {
     /// rejects duplicates so callers have to explicitly disconnect
     /// before reconnecting — that surfaces stale-state bugs
     /// instead of silently shadowing them.
-    pub fn register(&self, name: impl Into<String>, runtime: Arc<dyn RemoteRuntime>) -> Result<()> {
+    ///
+    /// `config` is `None` for entries that aren't part of the
+    /// persisted set (tests, future ad-hoc tools). The command layer
+    /// always passes `Some` so the persistence file stays in sync.
+    pub fn register(
+        &self,
+        name: impl Into<String>,
+        runtime: Arc<dyn RemoteRuntime>,
+        config: Option<RuntimeConnectionConfig>,
+    ) -> Result<()> {
+        self.register_with_state(name, runtime, config, RuntimeState::fresh())
+    }
+
+    /// Register with an explicit initial state. Used by the
+    /// restore-on-startup path to land tombstones — entries whose
+    /// reconnect failed but whose persisted config we want to keep
+    /// around so the user can retry.
+    pub fn register_with_state(
+        &self,
+        name: impl Into<String>,
+        runtime: Arc<dyn RemoteRuntime>,
+        config: Option<RuntimeConnectionConfig>,
+        initial_state: RuntimeState,
+    ) -> Result<()> {
         let name = name.into();
         if name.is_empty() {
             bail!("runtime name must not be empty");
@@ -140,7 +169,8 @@ impl RuntimeRegistry {
             name,
             Arc::new(RegisteredRuntime {
                 runtime,
-                state: Mutex::new(RuntimeState::fresh()),
+                state: Mutex::new(initial_state),
+                config,
             }),
         );
         Ok(())
@@ -209,6 +239,34 @@ impl RuntimeRegistry {
                 (name.clone(), Arc::clone(&entry.runtime), state)
             })
             .collect()
+    }
+
+    /// Read the config of a single entry. Returns `None` for the
+    /// local runtime (it has no config to reconnect with) and for
+    /// unknown names. Used by the reconnect command to look up what
+    /// the user previously registered with.
+    pub fn config_for(&self, name: &str) -> Option<RuntimeConnectionConfig> {
+        if name == LOCAL_RUNTIME_NAME {
+            return None;
+        }
+        let remotes = self.remotes.read().expect("registry rwlock poisoned");
+        remotes.get(name).and_then(|entry| entry.config.clone())
+    }
+
+    /// Snapshot every registered remote's `(name, config)` so the
+    /// persistence layer can rewrite the file. Excludes entries with
+    /// no `config` set (tests, ad-hoc tools) so the file never grows
+    /// junk from non-command sources.
+    pub fn configs(&self) -> Vec<(String, RuntimeConnectionConfig)> {
+        let remotes = self.remotes.read().expect("registry rwlock poisoned");
+        let mut out: Vec<(String, RuntimeConnectionConfig)> = remotes
+            .iter()
+            .filter_map(|(name, entry)| entry.config.clone().map(|cfg| (name.clone(), cfg)))
+            .collect();
+        // Stable order so the persisted file diffs cleanly across
+        // restarts — alphabetical by name.
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Replace a remote's state. Returns the *previous* state if the
@@ -300,7 +358,7 @@ mod tests {
     fn register_and_lookup_round_trip() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")), None)
             .unwrap();
         let runtime = registry.lookup(Some("dev.box")).unwrap();
         assert_eq!(runtime.runtime_health().unwrap().hostname, "dev-box-tag");
@@ -310,7 +368,7 @@ mod tests {
     fn register_rejects_reserved_local_name() {
         let registry = registry_with_local_tag();
         let err = registry
-            .register("local", Arc::new(TaggedRuntime("hijack")))
+            .register("local", Arc::new(TaggedRuntime("hijack")), None)
             .unwrap_err();
         assert!(format!("{err}").contains("reserved"));
     }
@@ -319,7 +377,7 @@ mod tests {
     fn register_rejects_empty_name() {
         let registry = registry_with_local_tag();
         let err = registry
-            .register("", Arc::new(TaggedRuntime("x")))
+            .register("", Arc::new(TaggedRuntime("x")), None)
             .unwrap_err();
         assert!(format!("{err}").contains("must not be empty"));
     }
@@ -328,16 +386,16 @@ mod tests {
     fn register_rejects_duplicate_name_until_disconnected() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("first")))
+            .register("dev.box", Arc::new(TaggedRuntime("first")), None)
             .unwrap();
         let err = registry
-            .register("dev.box", Arc::new(TaggedRuntime("second")))
+            .register("dev.box", Arc::new(TaggedRuntime("second")), None)
             .unwrap_err();
         assert!(format!("{err}").contains("already registered"));
 
         registry.unregister("dev.box").unwrap();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("second")))
+            .register("dev.box", Arc::new(TaggedRuntime("second")), None)
             .expect("re-register after disconnect should succeed");
     }
 
@@ -345,7 +403,7 @@ mod tests {
     fn unregister_returns_the_runtime_so_drop_order_is_caller_controlled() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")), None)
             .unwrap();
         let removed = registry.unregister("dev.box").unwrap();
         // The removed Arc still works — tests rely on this to inspect
@@ -369,10 +427,10 @@ mod tests {
         assert_eq!(registry.names(), vec!["local".to_string()]);
 
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev")), None)
             .unwrap();
         registry
-            .register("alpha", Arc::new(TaggedRuntime("a")))
+            .register("alpha", Arc::new(TaggedRuntime("a")), None)
             .unwrap();
         assert_eq!(
             registry.names(),
@@ -393,7 +451,7 @@ mod tests {
         // last Arc is deferred until both holders release.
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev-box-tag")), None)
             .unwrap();
         let handle = registry.lookup(Some("dev.box")).unwrap();
         let _ = registry.unregister("dev.box").unwrap();
@@ -409,7 +467,7 @@ mod tests {
     fn fresh_registration_starts_in_connected_state() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev")), None)
             .unwrap();
         assert_eq!(
             registry.state("dev.box"),
@@ -434,7 +492,7 @@ mod tests {
     fn set_state_returns_prior_state_for_change_detection() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev")), None)
             .unwrap();
 
         let prior = registry.set_state(
@@ -493,7 +551,7 @@ mod tests {
     fn remote_snapshot_excludes_local_and_carries_current_state() {
         let registry = registry_with_local_tag();
         registry
-            .register("dev.box", Arc::new(TaggedRuntime("dev")))
+            .register("dev.box", Arc::new(TaggedRuntime("dev")), None)
             .unwrap();
         registry.set_state(
             "dev.box",
@@ -512,6 +570,48 @@ mod tests {
                 reason: "slow".into()
             }
         );
+    }
+
+    #[test]
+    fn config_for_returns_none_for_entries_registered_without_config() {
+        let registry = registry_with_local_tag();
+        registry
+            .register("ad-hoc", Arc::new(TaggedRuntime("ad-hoc")), None)
+            .unwrap();
+        assert_eq!(registry.config_for("ad-hoc"), None);
+        assert_eq!(registry.config_for("local"), None);
+        assert_eq!(registry.config_for("not-real"), None);
+    }
+
+    #[test]
+    fn config_for_returns_stored_config_for_persisted_entries() {
+        let registry = registry_with_local_tag();
+        let cfg = RuntimeConnectionConfig::Ssh {
+            host: "dev.box".into(),
+            remote_binary: "helmor-server".into(),
+        };
+        registry
+            .register("dev.box", Arc::new(TaggedRuntime("dev")), Some(cfg.clone()))
+            .unwrap();
+        assert_eq!(registry.config_for("dev.box"), Some(cfg));
+    }
+
+    #[test]
+    fn configs_only_includes_entries_with_a_stored_config() {
+        let registry = registry_with_local_tag();
+        registry
+            .register(
+                "persisted",
+                Arc::new(TaggedRuntime("p")),
+                Some(RuntimeConnectionConfig::Local { binary_path: None }),
+            )
+            .unwrap();
+        registry
+            .register("transient", Arc::new(TaggedRuntime("t")), None)
+            .unwrap();
+        let configs = registry.configs();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].0, "persisted");
     }
 
     #[test]

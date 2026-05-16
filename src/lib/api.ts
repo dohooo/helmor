@@ -763,6 +763,17 @@ export async function disconnectRemoteRuntime(name: string): Promise<void> {
 	return invoke<void>("disconnect_remote_runtime", { name });
 }
 
+/**
+ * Re-establish a connection using the entry's previously-persisted
+ * config. Used to recover from a Disconnected state (typically a
+ * tombstone from boot-time restore failure).
+ */
+export async function reconnectRemoteRuntime(
+	name: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("reconnect_remote_runtime", { name });
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;
