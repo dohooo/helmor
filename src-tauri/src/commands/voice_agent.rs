@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use crate::cli::Cli;
 use crate::forge::{
     accounts::forge_target_from, forge_backend_for, ForgeProvider, InboxItemDetail, InboxKind,
-    InboxSource,
+    InboxPage, InboxSource,
 };
 use crate::models;
 use crate::models::sessions::WindowedHistoricalRecords;
@@ -275,6 +275,10 @@ impl ToolKind {
                         "archived": {
                             "type": "boolean",
                             "description": "Include archived workspaces. Default false."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum rows to return. Default 20, max 50."
                         }
                     },
                     "required": []
@@ -622,6 +626,10 @@ impl ToolKind {
                         "workspace": {
                             "type": "string",
                             "description": "Workspace UUID or `repo/dir`."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum sessions to return. Default 10, max 20."
                         }
                     },
                     "required": ["workspace"]
@@ -732,7 +740,16 @@ impl ToolKind {
             },
             Self::ListRepos => ToolMetadata {
                 name: "list_repos",
-                parameters: json!({ "type": "object", "properties": {}, "required": [] }),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum repos to return. Default 20, max 50."
+                        }
+                    },
+                    "required": []
+                }),
                 cli_path: Some(&["repo", "list"]),
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'what repos do I have', or before \
@@ -763,7 +780,7 @@ impl ToolKind {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Max items 1-100. Default 10 — keep small so the \
+                            "description": "Max items 1-20. Default 5 — keep small so the \
                                             spoken reply stays manageable."
                         }
                     },
@@ -813,9 +830,9 @@ impl ToolKind {
                         },
                         "body_limit": {
                             "type": "integer",
-                            "description": "How many body chars to return (1-10000). \
-                                            Default 4000 — covers the full body for the \
-                                            vast majority of issues / PRs."
+                            "description": "How many body chars to return (1-4000). \
+                                            Default 1600 — enough to summarize most \
+                                            issues / PRs."
                         }
                     },
                     "required": ["repo", "source", "external_id"]
@@ -992,6 +1009,28 @@ impl ToolKind {
 // the fix.
 // ---------------------------------------------------------------------------
 
+const DEFAULT_LIST_LIMIT: usize = 20;
+const MAX_LIST_LIMIT: usize = 50;
+
+fn bounded_limit(args: &Value, default: usize, max: usize) -> usize {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| (n as usize).clamp(1, max))
+        .unwrap_or(default)
+}
+
+fn truncate_chars(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_owned();
+    }
+    if max <= 3 {
+        return ".".repeat(max);
+    }
+    let mut out = value.chars().take(max - 3).collect::<String>();
+    out.push_str("...");
+    out
+}
+
 fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
     const MAX_DETAILED_TOOLS: usize = 3;
 
@@ -1053,6 +1092,7 @@ fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
 }
 
 fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
+    let limit = bounded_limit(&args, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     let archived = args
         .get("archived")
         .and_then(Value::as_bool)
@@ -1060,8 +1100,19 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
 
     if archived {
         let rows = workspaces::list_archived_workspaces()?;
+        let total = rows.len();
+        let rows = rows
+            .into_iter()
+            .take(limit)
+            .map(|row| serde_json::to_value(row).map(compact_workspace_like_value))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         return Ok(VoiceToolResult {
-            data: serde_json::to_value(rows)?,
+            data: json!({
+                "workspaces": rows,
+                "total": total,
+                "returned": rows.len(),
+                "hasMore": total > rows.len(),
+            }),
             ..Default::default()
         });
     }
@@ -1087,6 +1138,7 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
     // Flatten to a single array — the model handles a flat list of
     // workspaces more naturally than the kanban-grouped sidebar shape.
     let mut rows: Vec<Value> = Vec::new();
+    let mut total = 0usize;
     for group in &groups {
         if let Some(wanted) = status {
             if !group.id.eq_ignore_ascii_case(wanted) {
@@ -1098,6 +1150,10 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
                 if r.repo_name.to_lowercase() != *name {
                     continue;
                 }
+            }
+            total += 1;
+            if rows.len() >= limit {
+                continue;
             }
             rows.push(json!({
                 "id": r.id,
@@ -1111,7 +1167,12 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
         }
     }
     Ok(VoiceToolResult {
-        data: Value::Array(rows),
+        data: json!({
+            "workspaces": rows,
+            "total": total,
+            "returned": rows.len(),
+            "hasMore": total > rows.len(),
+        }),
         ..Default::default()
     })
 }
@@ -1124,7 +1185,26 @@ fn show_workspace(args: Value) -> Result<VoiceToolResult> {
     let id = service::resolve_workspace_ref(reference)?;
     let detail = service::get_workspace(&id)?;
     Ok(VoiceToolResult {
-        data: serde_json::to_value(detail)?,
+        data: json!({
+            "id": detail.id,
+            "title": detail.title,
+            "repo": detail.repo_name,
+            "repoId": detail.repo_id,
+            "directory": detail.directory_name,
+            "status": detail.status,
+            "state": detail.state,
+            "mode": detail.mode,
+            "branch": detail.branch,
+            "targetBranch": detail.intended_target_branch,
+            "activeSessionId": detail.active_session_id,
+            "activeSessionTitle": detail.active_session_title,
+            "activeSessionStatus": detail.active_session_status,
+            "sessionCount": detail.session_count,
+            "messageCount": detail.message_count,
+            "prTitle": detail.pr_title,
+            "prUrl": detail.pr_url,
+            "forgeProvider": detail.forge_provider,
+        }),
         ..Default::default()
     })
 }
@@ -1182,14 +1262,45 @@ fn set_workspace_status(args: Value) -> Result<VoiceToolResult> {
 }
 
 fn list_sessions(args: Value) -> Result<VoiceToolResult> {
+    const DEFAULT_SESSION_LIMIT: usize = 10;
+    const MAX_SESSION_LIMIT: usize = 20;
+
     let reference = args
         .get("workspace")
         .and_then(Value::as_str)
         .context("list_sessions: missing required `workspace` argument")?;
+    let limit = bounded_limit(&args, DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT);
     let workspace_id = service::resolve_workspace_ref(reference)?;
     let sessions = models::sessions::list_workspace_sessions(&workspace_id)?;
+    let total = sessions.len();
+    let start = total.saturating_sub(limit);
+    let rows = sessions
+        .into_iter()
+        .skip(start)
+        .map(|session| {
+            json!({
+                "id": session.id,
+                "workspaceId": session.workspace_id,
+                "title": session.title,
+                "status": session.status,
+                "model": session.model,
+                "agentType": session.agent_type,
+                "permissionMode": session.permission_mode,
+                "unreadCount": session.unread_count,
+                "actionKind": session.action_kind,
+                "active": session.active,
+                "updatedAt": session.updated_at,
+                "lastUserMessageAt": session.last_user_message_at,
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(VoiceToolResult {
-        data: serde_json::to_value(sessions)?,
+        data: json!({
+            "sessions": rows,
+            "total": total,
+            "returned": rows.len(),
+            "hasMore": total > rows.len(),
+        }),
         ..Default::default()
     })
 }
@@ -1647,12 +1758,12 @@ fn create_workspace_variants(args: Value, ctx: &VoiceToolContext) -> Result<Voic
                 created.push(json!({
                     "workspaceId": workspace_id,
                     "sessionId": session_id,
-                    "prompt": prompt,
+                    "promptPreview": truncate_chars(prompt, 120),
                 }));
             }
             Err(err) => {
                 errors.push(json!({
-                    "prompt": prompt,
+                    "promptPreview": truncate_chars(prompt, 120),
                     "error": format!("{err:#}"),
                 }));
             }
@@ -1934,15 +2045,39 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
     })
 }
 
-fn list_repos(_args: Value) -> Result<VoiceToolResult> {
+fn list_repos(args: Value) -> Result<VoiceToolResult> {
+    let limit = bounded_limit(&args, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     let repos = models::repos::list_repositories()?;
+    let total = repos.len();
+    let rows = repos
+        .into_iter()
+        .take(limit)
+        .map(|repo| {
+            json!({
+                "id": repo.id,
+                "name": repo.name,
+                "defaultBranch": repo.default_branch,
+                "remote": repo.remote,
+                "forgeProvider": repo.forge_provider,
+                "forgeLogin": repo.forge_login,
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(VoiceToolResult {
-        data: serde_json::to_value(repos)?,
+        data: json!({
+            "repos": rows,
+            "total": total,
+            "returned": rows.len(),
+            "hasMore": total > rows.len(),
+        }),
         ..Default::default()
     })
 }
 
 fn list_context_items(args: Value) -> Result<VoiceToolResult> {
+    const DEFAULT_CONTEXT_LIMIT: usize = 5;
+    const MAX_CONTEXT_LIMIT: usize = 20;
+
     let repo_ref = args
         .get("repo")
         .and_then(Value::as_str)
@@ -1951,8 +2086,8 @@ fn list_context_items(args: Value) -> Result<VoiceToolResult> {
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
-        .map(|n| n.clamp(1, 100) as usize)
-        .unwrap_or(10);
+        .map(|n| (n as usize).clamp(1, MAX_CONTEXT_LIMIT))
+        .unwrap_or(DEFAULT_CONTEXT_LIMIT);
 
     let kind = match kind_str.to_ascii_lowercase().as_str() {
         "issues" | "issue" => InboxKind::Issues,
@@ -2028,7 +2163,7 @@ fn list_context_items(args: Value) -> Result<VoiceToolResult> {
     };
 
     Ok(VoiceToolResult {
-        data: serde_json::to_value(page)?,
+        data: compact_inbox_page(page),
         ..Default::default()
     })
 }
@@ -2036,11 +2171,11 @@ fn list_context_items(args: Value) -> Result<VoiceToolResult> {
 fn get_context_item_detail(args: Value) -> Result<VoiceToolResult> {
     /// Default body window — covers the full body for the vast majority
     /// of real-world issues / PRs (median is well under 500 chars).
-    const DEFAULT_BODY_LIMIT: usize = 4000;
+    const DEFAULT_BODY_LIMIT: usize = 1600;
     /// Hard upper bound. Past this, we'd be dumping a small book into
     /// the realtime context for no spoken-output benefit; the agent
     /// should paginate via `body_offset` instead.
-    const MAX_BODY_LIMIT: usize = 10_000;
+    const MAX_BODY_LIMIT: usize = 4000;
 
     let repo_ref = args
         .get("repo")
@@ -2138,6 +2273,67 @@ fn parse_inbox_source(s: &str, provider: ForgeProvider) -> Result<InboxSource> {
         }
         (other, _) => anyhow::bail!("get_context_item_detail: unknown source `{other}`"),
     }
+}
+
+fn compact_workspace_like_value(mut value: Value) -> Value {
+    let Some(obj) = value.as_object_mut() else {
+        return value;
+    };
+
+    let take = |obj: &mut serde_json::Map<String, Value>, keys: &[&str]| {
+        keys.iter()
+            .filter_map(|key| obj.remove(*key).map(|value| ((*key).to_string(), value)))
+            .collect::<serde_json::Map<String, Value>>()
+    };
+
+    Value::Object(take(
+        obj,
+        &[
+            "id",
+            "title",
+            "repo",
+            "repoName",
+            "repo_name",
+            "directory",
+            "directoryName",
+            "directory_name",
+            "status",
+            "state",
+            "branch",
+            "activeSessionId",
+            "active_session_id",
+            "sessionCount",
+            "session_count",
+            "messageCount",
+            "message_count",
+        ],
+    ))
+}
+
+fn compact_inbox_page(page: InboxPage) -> Value {
+    let returned = page.items.len();
+    let items = page
+        .items
+        .into_iter()
+        .map(|item| {
+            json!({
+                "id": item.id,
+                "source": item.source,
+                "externalId": item.external_id,
+                "externalUrl": item.external_url,
+                "title": item.title,
+                "state": item.state.map(|state| state.label),
+                "lastActivityAt": item.last_activity_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "items": items,
+        "returned": returned,
+        "nextCursor": page.next_cursor,
+        "hasMore": page.next_cursor.is_some(),
+    })
 }
 
 /// Serialize an `InboxItemDetail` and replace its `body` field with a
