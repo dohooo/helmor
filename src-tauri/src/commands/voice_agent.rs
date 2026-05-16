@@ -66,6 +66,7 @@ pub enum MutationKind {
 /// in-process execution).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
+    DescribeVoiceTools,
     ListWorkspaces,
     ShowWorkspace,
     CreateWorkspace,
@@ -203,6 +204,7 @@ impl ToolKind {
     /// `const` so iteration in `build_tools_array` and the unit tests
     /// is allocation-free.
     pub const ALL: &'static [ToolKind] = &[
+        Self::DescribeVoiceTools,
         Self::ListWorkspaces,
         Self::ShowWorkspace,
         Self::CreateWorkspace,
@@ -237,6 +239,25 @@ impl ToolKind {
 
     pub fn metadata(self) -> ToolMetadata {
         match self {
+            Self::DescribeVoiceTools => ToolMetadata {
+                name: "describe_voice_tools",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "tools": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    },
+                    "required": []
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "Get detailed argument and behavior help for voice tools. \
+                           Use when compact tool descriptions are not enough. Pass up to \
+                           three tool names for detailed help; omit tools for a compact \
+                           catalog.",
+            },
             Self::ListWorkspaces => ToolMetadata {
                 name: "list_workspaces",
                 parameters: json!({
@@ -931,6 +952,7 @@ impl ToolKind {
 
     fn run(self, args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         match self {
+            Self::DescribeVoiceTools => describe_voice_tools(args),
             Self::ListWorkspaces => list_workspaces(args),
             Self::ShowWorkspace => show_workspace(args),
             Self::CreateWorkspace => create_workspace(args),
@@ -969,6 +991,66 @@ impl ToolKind {
 // service / model function so both the CLI and the voice agent get
 // the fix.
 // ---------------------------------------------------------------------------
+
+fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
+    const MAX_DETAILED_TOOLS: usize = 3;
+
+    let requested = args
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .take(MAX_DETAILED_TOOLS)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if requested.is_empty() {
+        let catalog = ToolKind::ALL
+            .iter()
+            .map(|kind| {
+                let meta = kind.metadata();
+                json!({
+                    "name": meta.name,
+                    "summary": realtime_description(*kind),
+                })
+            })
+            .collect::<Vec<_>>();
+        return Ok(VoiceToolResult {
+            data: json!({
+                "tools": catalog,
+                "note": "Pass tools:[name] for detailed help on up to three tools."
+            }),
+            ..Default::default()
+        });
+    }
+
+    let mut tools = Vec::new();
+    let mut unknown = Vec::new();
+    for name in requested {
+        let Some(kind) = ToolKind::from_name(name) else {
+            unknown.push(name.to_string());
+            continue;
+        };
+        let meta = kind.metadata();
+        tools.push(json!({
+            "name": meta.name,
+            "summary": realtime_description(kind),
+            "details": format_description(&meta),
+            "parameters": meta.parameters,
+            "cliHelp": meta.cli_path.map(subcommand_help),
+        }));
+    }
+
+    Ok(VoiceToolResult {
+        data: json!({ "tools": tools, "unknown": unknown }),
+        ..Default::default()
+    })
+}
 
 fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
     let archived = args
@@ -2214,11 +2296,10 @@ fn capture_screen(args: Value) -> Result<VoiceToolResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Description rendering — pulls each tool's clap `--help` body into
-// the OpenAI tool description so the spoken-side documentation tracks
-// `helmor <cmd> --help` automatically. Same shape `voice_tools.rs`
-// used in the previous (subprocess) iteration; preserved here so the
-// session payload doesn't change shape on the wire.
+// Description rendering. The Realtime session gets compact tool
+// summaries; detailed help is available on demand via
+// `describe_voice_tools`. This keeps the static session prefix small
+// enough that one short utterance does not burn a large chunk of TPM.
 // ---------------------------------------------------------------------------
 
 fn subcommand_help(path: &[&str]) -> String {
@@ -2242,16 +2323,65 @@ fn subcommand_help(path: &[&str]) -> String {
 }
 
 fn format_description(meta: &ToolMetadata) -> String {
-    match meta.cli_path {
-        Some(path) => format!(
-            "{use_when}\n\n--- helmor {cmd} --help ---\n{help}",
-            use_when = meta.use_when,
-            cmd = path.join(" "),
-            help = subcommand_help(path).trim_end(),
-        ),
-        // Synthetic tools (no CLI equivalent) only carry the
-        // voice-context preamble — there's no help body to fold in.
-        None => meta.use_when.to_string(),
+    meta.use_when.to_string()
+}
+
+fn realtime_description(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::DescribeVoiceTools => {
+            "Get detailed help for tool names when the compact docs are not enough."
+        }
+        ToolKind::ListWorkspaces => "List workspaces; optional status/repo/archive filters.",
+        ToolKind::ShowWorkspace => "Show one workspace's status and details.",
+        ToolKind::CreateWorkspace => "Create an empty workspace in a repo.",
+        ToolKind::CreateWorkspaceAndSend => {
+            "Create a workspace in one repo and send the user's request to its agent."
+        }
+        ToolKind::CreateWorkspaceVariants => {
+            "Create multiple same-repo workspaces, one explicit prompt per variant."
+        }
+        ToolKind::SetWorkspaceStatus => "Set workspace status; confirm before canceled.",
+        ToolKind::ArchiveWorkspace => "Archive a workspace; reversible, no confirmation.",
+        ToolKind::PermanentlyDeleteWorkspace => {
+            "Permanently delete a workspace; requires prior user confirmation."
+        }
+        ToolKind::RunWorkspaceAction => {
+            "Run ship actions: commit_and_push, create_pr, merge_pr, pull_latest, fix_errors, resolve_conflicts."
+        }
+        ToolKind::RunWorkspaceScript => "Run a workspace setup or run script.",
+        ToolKind::ListSessions => "List sessions for a workspace.",
+        ToolKind::GetSessionMessages => "Fetch recent messages from a session for summary.",
+        ToolKind::SendPrompt => "Send a prompt to a workspace agent; optionally attach screenshots.",
+        ToolKind::ListRepos => "List registered repos; use before repo-dependent actions if unsure.",
+        ToolKind::ListContextItems => "List repo issues, PRs/MRs, or discussions.",
+        ToolKind::GetContextItemDetail => "Fetch one issue/PR/discussion body by id from list_context_items.",
+        ToolKind::SelectWorkspace => "Switch Helmor UI to a workspace without modifying data.",
+        ToolKind::CaptureScreen => "Capture focused window by default; use screen only when asked.",
+        ToolKind::WaitForUser => "Stay silent for background audio or non-addressed speech.",
+        ToolKind::EndSession => "End voice mode after speaking a short goodbye.",
+    }
+}
+
+fn compact_parameters(parameters: &Value) -> Value {
+    let mut compact = parameters.clone();
+    strip_schema_descriptions(&mut compact);
+    compact
+}
+
+fn strip_schema_descriptions(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("description");
+            for child in map.values_mut() {
+                strip_schema_descriptions(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                strip_schema_descriptions(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2265,8 +2395,8 @@ pub fn build_tools_array() -> Vec<Value> {
             json!({
                 "type": "function",
                 "name": meta.name,
-                "description": format_description(&meta),
-                "parameters": meta.parameters,
+                "description": realtime_description(*kind),
+                "parameters": compact_parameters(&meta.parameters),
             })
         })
         .collect()
@@ -2385,15 +2515,14 @@ mod tests {
 
     /// Every tool that claims a clap path must resolve to a real
     /// subcommand. A typo in `cli_path` would silently degrade the
-    /// tool's description to a `[voice-tools: ... not found]` stub
-    /// that the model would then read to the user — this test catches
+    /// on-demand `describe_voice_tools` help surface — this test catches
     /// that at build time.
     #[test]
     fn every_tool_with_cli_path_resolves() {
         for kind in ToolKind::ALL {
             let meta = kind.metadata();
             let Some(path) = meta.cli_path else { continue };
-            let rendered = format_description(&meta);
+            let rendered = subcommand_help(path);
             assert!(
                 !rendered.contains("[voice-tools:"),
                 "tool `{}` references a missing clap path `{}`",
@@ -2436,6 +2565,7 @@ mod tests {
                 "create_workspace",
                 "create_workspace_and_send",
                 "create_workspace_variants",
+                "describe_voice_tools",
                 "end_session",
                 "get_context_item_detail",
                 "get_session_messages",

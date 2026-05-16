@@ -24,6 +24,7 @@ function diag(event: string, data?: Record<string, unknown>) {
  *  `tool_name_set_matches_frontend_contract` Rust test will flag any
  *  drift between the two lists at build time. */
 type ToolName =
+	| "describe_voice_tools"
 	| "list_workspaces"
 	| "show_workspace"
 	| "create_workspace"

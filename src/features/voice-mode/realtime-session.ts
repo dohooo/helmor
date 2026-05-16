@@ -276,6 +276,7 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 					response?: {
 						id?: string;
 						status?: string;
+						usage?: unknown;
 						status_details?: {
 							error?: { message?: string; code?: string; type?: string };
 							reason?: string;
@@ -292,6 +293,7 @@ export async function startRealtimeVoiceSession(): Promise<RealtimeVoiceSession>
 					response?.status_details?.error?.message ??
 					response?.status_details?.reason ??
 					null,
+				usage: summarizeResponseUsage(response),
 				messageIndex: messageCount,
 				dataChannelState: dataChannel.readyState,
 				peerConnectionState: peer.connectionState,
@@ -507,6 +509,45 @@ function summarizeRateLimits(
 			resetSeconds: record.reset_seconds ?? null,
 		};
 	});
+}
+
+function summarizeResponseUsage(
+	response:
+		| {
+				usage?: unknown;
+		  }
+		| undefined,
+): Record<string, unknown> | null {
+	const usage = response?.usage;
+	if (!usage || typeof usage !== "object") return null;
+	const record = usage as Record<string, unknown>;
+	const inputDetails =
+		record.input_token_details && typeof record.input_token_details === "object"
+			? (record.input_token_details as Record<string, unknown>)
+			: {};
+	const outputDetails =
+		record.output_token_details &&
+		typeof record.output_token_details === "object"
+			? (record.output_token_details as Record<string, unknown>)
+			: {};
+	const cachedDetails =
+		inputDetails.cached_tokens_details &&
+		typeof inputDetails.cached_tokens_details === "object"
+			? (inputDetails.cached_tokens_details as Record<string, unknown>)
+			: {};
+	return {
+		totalTokens: record.total_tokens ?? null,
+		inputTokens: record.input_tokens ?? null,
+		outputTokens: record.output_tokens ?? null,
+		inputTextTokens: inputDetails.text_tokens ?? null,
+		inputAudioTokens: inputDetails.audio_tokens ?? null,
+		inputImageTokens: inputDetails.image_tokens ?? null,
+		cachedTokens: inputDetails.cached_tokens ?? null,
+		cachedTextTokens: cachedDetails.text_tokens ?? null,
+		cachedAudioTokens: cachedDetails.audio_tokens ?? null,
+		outputTextTokens: outputDetails.text_tokens ?? null,
+		outputAudioTokens: outputDetails.audio_tokens ?? null,
+	};
 }
 
 function stopMedia(
