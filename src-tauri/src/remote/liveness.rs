@@ -307,6 +307,12 @@ mod tests {
         fn workspace_status(&self, _: &Path) -> anyhow::Result<WorkspaceStatusResult> {
             unreachable!("liveness tests don't probe workspace_status")
         }
+        fn workspace_branch_info(
+            &self,
+            _: &Path,
+        ) -> anyhow::Result<crate::remote::methods::WorkspaceBranchInfoResult> {
+            unreachable!("liveness tests don't probe workspace_branch_info")
+        }
         fn ping(&self) -> anyhow::Result<()> {
             self.outcomes
                 .lock()

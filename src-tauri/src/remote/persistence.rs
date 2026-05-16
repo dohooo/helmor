@@ -328,6 +328,14 @@ impl RemoteRuntime for TombstoneRuntime {
         )
     }
 
+    fn workspace_branch_info(&self, _: &Path) -> Result<super::methods::WorkspaceBranchInfoResult> {
+        anyhow::bail!(
+            "runtime `{}` is disconnected: {}. Reconnect from Settings → Runtime Debug.",
+            self.name,
+            self.reason
+        )
+    }
+
     fn ping(&self) -> Result<()> {
         anyhow::bail!("runtime `{}` is disconnected", self.name)
     }

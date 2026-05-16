@@ -18,9 +18,10 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::remote::{
+    methods::{WorkspaceBranchInfoResult, WorkspaceStatusResult},
     persistence, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeConnectionConfig,
     RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding,
-    WorkspaceRuntimeBindings, WorkspaceStatusResult, LOCAL_RUNTIME_NAME,
+    WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -72,6 +73,33 @@ pub async fn get_workspace_status(
             runtime_name.as_deref(),
         )?;
         resolved.workspace_status(&path)
+    })
+    .await
+}
+
+/// Read-only "where am I?" probe for a workspace — current branch,
+/// head commit, and upstream tracking ref. Same resolver as
+/// [`get_workspace_status`] so the binding precedence rule is
+/// shared.
+#[tauri::command]
+pub async fn get_workspace_branch_info(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceBranchInfoResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        let path = PathBuf::from(workspace_dir);
+        let resolved = resolve_runtime_for_call(
+            &registry,
+            &bindings,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )?;
+        resolved.workspace_branch_info(&path)
     })
     .await
 }
@@ -448,6 +476,16 @@ mod tests {
             Ok(WorkspaceStatusResult {
                 is_clean: true,
                 changed_paths: vec![],
+            })
+        }
+        fn workspace_branch_info(
+            &self,
+            _: &Path,
+        ) -> Result<crate::remote::methods::WorkspaceBranchInfoResult> {
+            Ok(crate::remote::methods::WorkspaceBranchInfoResult {
+                current_branch: "main".into(),
+                head_commit: "stub-sha".into(),
+                upstream_ref: None,
             })
         }
         fn ping(&self) -> Result<()> {

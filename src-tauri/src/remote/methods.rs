@@ -35,6 +35,12 @@ pub enum Method {
     /// and the dispatch layer work end-to-end before the SSH
     /// transport lands.
     WorkspaceStatus,
+    /// Read-only "where am I?" probe: current branch, head
+    /// commit, and upstream tracking ref (when one exists).
+    /// Layered alongside `workspace.status` so the dev panel
+    /// can answer both "what's dirty?" and "where am I?" without
+    /// shelling out to two separate transports.
+    WorkspaceBranchInfo,
 }
 
 impl Method {
@@ -43,6 +49,7 @@ impl Method {
             Self::Initialize => "initialize",
             Self::Ping => "ping",
             Self::WorkspaceStatus => "workspace.status",
+            Self::WorkspaceBranchInfo => "workspace.branchInfo",
         }
     }
 }
@@ -69,6 +76,7 @@ impl FromStr for Method {
             "initialize" => Ok(Self::Initialize),
             "ping" => Ok(Self::Ping),
             "workspace.status" => Ok(Self::WorkspaceStatus),
+            "workspace.branchInfo" => Ok(Self::WorkspaceBranchInfo),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -186,16 +194,96 @@ impl RpcMethod for WorkspaceStatusMethod {
     type Result = WorkspaceStatusResult;
 }
 
+// ── workspace.branchInfo ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBranchInfoParams {
+    /// Absolute filesystem path to the workspace directory.
+    /// Interpreted on the runtime's *own* filesystem — the SSH
+    /// transport passes it verbatim and expects the server to
+    /// resolve it under its own root.
+    pub workspace_dir: String,
+}
+
+/// Read-only "where am I?" projection. All three fields come from
+/// well-defined `git rev-parse` / `git symbolic-ref` invocations on
+/// the local impl, so the shape is the same whether the runtime is
+/// local or routed over SSH.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBranchInfoResult {
+    /// Branch name (`git symbolic-ref --short HEAD`). The trimmed
+    /// branch name as the user would read it, e.g. `feature/foo`.
+    /// Empty string when HEAD is detached — preserved as-is rather
+    /// than turned into a synthetic name so callers can detect the
+    /// detached state.
+    pub current_branch: String,
+    /// HEAD commit SHA-1 (`git rev-parse HEAD`). Always populated
+    /// for a non-empty repository.
+    pub head_commit: String,
+    /// Upstream tracking ref (`branch.<name>.merge` + `branch.<name>.remote`),
+    /// rendered as `<remote>/<branch>`. `None` when the current
+    /// branch isn't tracking anything (e.g. fresh local branch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_ref: Option<String>,
+}
+
+pub struct WorkspaceBranchInfoMethod;
+impl RpcMethod for WorkspaceBranchInfoMethod {
+    const NAME: &'static str = "workspace.branchInfo";
+    type Params = WorkspaceBranchInfoParams;
+    type Result = WorkspaceBranchInfoResult;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn method_enum_round_trips_through_strings() {
-        for method in [Method::Initialize, Method::Ping, Method::WorkspaceStatus] {
+        for method in [
+            Method::Initialize,
+            Method::Ping,
+            Method::WorkspaceStatus,
+            Method::WorkspaceBranchInfo,
+        ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
         assert!("not-a-method".parse::<Method>().is_err());
+    }
+
+    #[test]
+    fn workspace_branch_info_wire_shapes_are_camel_case() {
+        let params = WorkspaceBranchInfoParams {
+            workspace_dir: "/tmp/example".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"workspaceDir\""));
+
+        let result = WorkspaceBranchInfoResult {
+            current_branch: "main".into(),
+            head_commit: "abc123".into(),
+            upstream_ref: Some("origin/main".into()),
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"currentBranch\""));
+        assert!(wire.contains("\"headCommit\""));
+        assert!(wire.contains("\"upstreamRef\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+    }
+
+    #[test]
+    fn workspace_branch_info_omits_upstream_ref_when_absent() {
+        // Tracking-less branches don't pretend to have an upstream
+        // on the wire — the option is dropped via skip_serializing_if.
+        let result = WorkspaceBranchInfoResult {
+            current_branch: "feature/foo".into(),
+            head_commit: "def456".into(),
+            upstream_ref: None,
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("upstreamRef"), "wire leaked None: {wire}");
     }
 
     #[test]

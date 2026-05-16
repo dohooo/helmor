@@ -311,6 +311,12 @@ mod tests {
         ) -> Result<crate::remote::methods::WorkspaceStatusResult> {
             unreachable!("registry tests don't exercise workspace_status")
         }
+        fn workspace_branch_info(
+            &self,
+            _: &Path,
+        ) -> Result<crate::remote::methods::WorkspaceBranchInfoResult> {
+            unreachable!("registry tests don't exercise workspace_branch_info")
+        }
         fn ping(&self) -> Result<()> {
             Ok(())
         }

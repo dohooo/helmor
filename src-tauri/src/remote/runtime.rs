@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::methods::WorkspaceStatusResult;
+use super::methods::{WorkspaceBranchInfoResult, WorkspaceStatusResult};
 
 /// Snapshot returned by [`RemoteRuntime::runtime_health`]. Carries
 /// just enough for the UI to render a "connected to X" indicator
@@ -91,6 +91,15 @@ pub trait RemoteRuntime: Send + Sync {
     /// impl will pass it verbatim and expect the server to resolve
     /// it under its own root.
     fn workspace_status(&self, workspace_dir: &Path) -> Result<WorkspaceStatusResult>;
+
+    /// Read-only "where am I?" projection — current branch, head
+    /// commit, and upstream tracking ref. The local impl shells out
+    /// to a couple of `git` invocations; the remote impl translates
+    /// it into a `workspace.branchInfo` JSON-RPC request.
+    ///
+    /// `workspace_dir` interpretation matches [`workspace_status`]:
+    /// the runtime's own filesystem.
+    fn workspace_branch_info(&self, workspace_dir: &Path) -> Result<WorkspaceBranchInfoResult>;
 
     /// Liveness probe. Distinct from [`runtime_health`] — that method
     /// returns a *cached* snapshot for cheap UI rendering, whereas
@@ -178,6 +187,25 @@ impl RemoteRuntime for LocalRuntime {
         )
         .with_context(|| format!("Failed to read workspace status for {workspace_str}"))?;
         Ok(parse_porcelain_status(&output))
+    }
+
+    fn workspace_branch_info(&self, workspace_dir: &Path) -> Result<WorkspaceBranchInfoResult> {
+        // `current_branch_name` errors on a fresh repo with no
+        // commits / detached HEAD in some cases — for branch-info
+        // we want a sensible empty-string fallback rather than
+        // a hard failure, so the UI can still render "(detached)"
+        // alongside a real HEAD commit.
+        let current_branch = crate::git_ops::current_branch_name(workspace_dir).unwrap_or_default();
+        let head_commit = crate::git_ops::current_workspace_head_commit(workspace_dir)
+            .with_context(|| {
+                format!("Failed to read HEAD commit for {}", workspace_dir.display())
+            })?;
+        let upstream_ref = crate::git_ops::current_upstream_ref_name(workspace_dir);
+        Ok(WorkspaceBranchInfoResult {
+            current_branch,
+            head_commit,
+            upstream_ref,
+        })
     }
 }
 
@@ -271,6 +299,13 @@ mod tests {
             Ok(WorkspaceStatusResult {
                 is_clean: true,
                 changed_paths: vec![],
+            })
+        }
+        fn workspace_branch_info(&self, _: &Path) -> Result<WorkspaceBranchInfoResult> {
+            Ok(WorkspaceBranchInfoResult {
+                current_branch: format!("fake-branch-on-{}", self.host),
+                head_commit: "fake-sha".into(),
+                upstream_ref: None,
             })
         }
         fn ping(&self) -> Result<()> {
@@ -431,6 +466,29 @@ mod tests {
         assert_eq!(
             status.changed_paths,
             vec!["file.txt".to_string(), "new.txt".to_string()],
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_branch_info_reports_current_branch_and_head() {
+        let dir = init_repo();
+        let runtime = LocalRuntime::with_hostname("test-host".into());
+
+        let info = runtime.workspace_branch_info(dir.path()).unwrap();
+
+        assert_eq!(info.current_branch, "main");
+        // Fresh init_repo has one commit; SHA-1 hash is 40 hex chars.
+        assert_eq!(
+            info.head_commit.len(),
+            40,
+            "expected a full 40-char SHA-1 hash, got `{}`",
+            info.head_commit
+        );
+        // No remote / upstream configured on the fresh repo.
+        assert!(
+            info.upstream_ref.is_none(),
+            "fresh repo has no upstream tracking ref: {:?}",
+            info.upstream_ref
         );
     }
 

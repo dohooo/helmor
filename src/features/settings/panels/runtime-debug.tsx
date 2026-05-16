@@ -19,6 +19,7 @@ import {
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
 	getRuntimeHealth,
+	getWorkspaceBranchInfo,
 	getWorkspaceStatus,
 	listRemoteRuntimes,
 	listSshHosts,
@@ -27,6 +28,7 @@ import {
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
 	setWorkspaceRuntimeBinding,
+	type WorkspaceBranchInfoResult,
 	type WorkspaceRuntimeBinding,
 	type WorkspaceStatusResult,
 } from "@/lib/api";
@@ -513,6 +515,15 @@ function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 			}),
 	});
 
+	const branchInfoProbe = useMutation({
+		mutationFn: () =>
+			getWorkspaceBranchInfo(workspaceDir, {
+				workspaceId: workspaceId.trim() || undefined,
+				runtimeName:
+					runtimeName === RUNTIME_AUTO_VALUE ? undefined : runtimeName,
+			}),
+	});
+
 	const runtimeOptions = useMemo(
 		() => entries.map((e) => ({ value: e.name, label: e.name })),
 		[entries],
@@ -571,32 +582,85 @@ function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 					/>
 				</div>
 
-				<div className="flex items-center justify-between gap-3">
+				<div className="flex flex-col gap-3">
 					<div className="min-w-0 flex-1">
 						<ProbeResult
 							loading={probe.isPending}
 							error={probe.error}
 							result={probe.data}
 						/>
+						<BranchInfoResultView
+							loading={branchInfoProbe.isPending}
+							error={branchInfoProbe.error}
+							result={branchInfoProbe.data}
+						/>
 					</div>
-					<Button
-						variant="default"
-						size="sm"
-						disabled={probe.isPending || !workspaceDir.trim()}
-						onClick={() => probe.mutate()}
-					>
-						{probe.isPending ? (
-							<>
-								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-								Probing…
-							</>
-						) : (
-							"Run probe"
-						)}
-					</Button>
+					<div className="flex items-center justify-end gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={branchInfoProbe.isPending || !workspaceDir.trim()}
+							onClick={() => branchInfoProbe.mutate()}
+						>
+							{branchInfoProbe.isPending ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Probing branch…
+								</>
+							) : (
+								"Run branch info"
+							)}
+						</Button>
+						<Button
+							variant="default"
+							size="sm"
+							disabled={probe.isPending || !workspaceDir.trim()}
+							onClick={() => probe.mutate()}
+						>
+							{probe.isPending ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Probing…
+								</>
+							) : (
+								"Run probe"
+							)}
+						</Button>
+					</div>
 				</div>
 			</div>
 		</section>
+	);
+}
+
+function BranchInfoResultView({
+	loading,
+	error,
+	result,
+}: {
+	loading: boolean;
+	error: unknown;
+	result: WorkspaceBranchInfoResult | undefined;
+}) {
+	if (loading) return null;
+	if (error) {
+		return <SettingsNotice tone="error">{errorMessage(error)}</SettingsNotice>;
+	}
+	if (!result) return null;
+	const branchLabel =
+		result.currentBranch.length > 0 ? result.currentBranch : "(detached HEAD)";
+	return (
+		<SettingsNotice tone="info">
+			<div className="font-mono text-[11px]">
+				<div>branch: {branchLabel}</div>
+				<div>head: {result.headCommit.slice(0, 12)}</div>
+				{result.upstreamRef ? (
+					<div>upstream: {result.upstreamRef}</div>
+				) : (
+					<div className="text-muted-foreground">upstream: (none)</div>
+				)}
+			</div>
+		</SettingsNotice>
 	);
 }
 

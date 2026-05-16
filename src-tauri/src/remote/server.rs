@@ -21,7 +21,8 @@ use super::codec::write_frame;
 
 use super::methods::{
     InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
-    PingResult, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
+    PingResult, RpcMethod, WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams,
+    WorkspaceBranchInfoResult, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -223,6 +224,11 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::WorkspaceStatus => handle::<WorkspaceStatusMethod, _>(req.params, |params| {
             handle_workspace_status(ctx, params)
         }),
+        Method::WorkspaceBranchInfo => {
+            handle::<WorkspaceBranchInfoMethod, _>(req.params, |params| {
+                handle_workspace_branch_info(ctx, params)
+            })
+        }
     };
 
     let response = match outcome {
@@ -334,6 +340,21 @@ fn handle_workspace_status(
             format!("workspace.status failed: {err:#}"),
         )
     })
+}
+
+fn handle_workspace_branch_info(
+    ctx: &ServerContext,
+    params: WorkspaceBranchInfoParams,
+) -> Result<WorkspaceBranchInfoResult, JsonRpcError> {
+    let workspace_dir = PathBuf::from(&params.workspace_dir);
+    ctx.runtime
+        .workspace_branch_info(&workspace_dir)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.branchInfo failed: {err:#}"),
+            )
+        })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*
@@ -498,6 +519,19 @@ mod tests {
             })
         }
 
+        fn workspace_branch_info(
+            &self,
+            workspace_dir: &std::path::Path,
+        ) -> anyhow::Result<WorkspaceBranchInfoResult> {
+            // Same echo trick — proves the dispatcher decoded the
+            // params and plumbed them through the trait.
+            Ok(WorkspaceBranchInfoResult {
+                current_branch: workspace_dir.display().to_string(),
+                head_commit: "stub-head".into(),
+                upstream_ref: Some("origin/stub".into()),
+            })
+        }
+
         fn ping(&self) -> anyhow::Result<()> {
             unreachable!("workspace.status dispatch tests don't ping")
         }
@@ -585,6 +619,12 @@ mod tests {
                 &self,
                 _: &std::path::Path,
             ) -> anyhow::Result<WorkspaceStatusResult> {
+                Err(anyhow::anyhow!("git: not a repository"))
+            }
+            fn workspace_branch_info(
+                &self,
+                _: &std::path::Path,
+            ) -> anyhow::Result<WorkspaceBranchInfoResult> {
                 Err(anyhow::anyhow!("git: not a repository"))
             }
             fn ping(&self) -> anyhow::Result<()> {

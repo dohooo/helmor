@@ -726,6 +726,28 @@ export async function getWorkspaceStatus(
 	});
 }
 
+/**
+ * "Where am I?" projection — current branch, head commit, upstream
+ * tracking ref. Same resolver as `getWorkspaceStatus` (binding /
+ * explicit override / local fallback).
+ */
+export type WorkspaceBranchInfoResult = {
+	currentBranch: string;
+	headCommit: string;
+	upstreamRef?: string;
+};
+
+export async function getWorkspaceBranchInfo(
+	workspaceDir: string,
+	options: { workspaceId?: string; runtimeName?: string } = {},
+): Promise<WorkspaceBranchInfoResult> {
+	return invoke<WorkspaceBranchInfoResult>("get_workspace_branch_info", {
+		workspaceDir,
+		workspaceId: options.workspaceId,
+		runtimeName: options.runtimeName,
+	});
+}
+
 export type RuntimeState =
 	| { type: "connected" }
 	| { type: "degraded"; reason: string }

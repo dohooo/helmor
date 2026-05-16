@@ -36,6 +36,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use super::codec::{read_frame, write_frame, FrameError};
 use super::methods::{
     InitializeMethod, InitializeParams, InitializeResult, PingMethod, PingParams, RpcMethod,
+    WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
     WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
@@ -646,6 +647,13 @@ impl RemoteRuntime for RemoteSshRuntime {
             })
     }
 
+    fn workspace_branch_info(&self, workspace_dir: &Path) -> Result<WorkspaceBranchInfoResult> {
+        self.client
+            .call::<WorkspaceBranchInfoMethod>(WorkspaceBranchInfoParams {
+                workspace_dir: workspace_dir.display().to_string(),
+            })
+    }
+
     fn ping(&self) -> Result<()> {
         // Real round-trip so a dead pipe surfaces as Err. The server's
         // `ping` handler is cheap (just echoes back the counter + a
@@ -793,6 +801,13 @@ mod tests {
                 changed_paths: vec![workspace_dir.display().to_string()],
             })
         }
+        fn workspace_branch_info(&self, workspace_dir: &Path) -> Result<WorkspaceBranchInfoResult> {
+            Ok(WorkspaceBranchInfoResult {
+                current_branch: workspace_dir.display().to_string(),
+                head_commit: "stub-sha".into(),
+                upstream_ref: None,
+            })
+        }
         fn ping(&self) -> Result<()> {
             Ok(())
         }
@@ -806,6 +821,9 @@ mod tests {
             unreachable!()
         }
         fn workspace_status(&self, _: &Path) -> Result<WorkspaceStatusResult> {
+            Err(anyhow!("git: not a repository"))
+        }
+        fn workspace_branch_info(&self, _: &Path) -> Result<WorkspaceBranchInfoResult> {
             Err(anyhow!("git: not a repository"))
         }
         fn ping(&self) -> Result<()> {

@@ -16,6 +16,7 @@ const apiMocks = vi.hoisted(() => ({
 	listWorkspaceRuntimeBindings: vi.fn(),
 	setWorkspaceRuntimeBinding: vi.fn(),
 	clearWorkspaceRuntimeBinding: vi.fn(),
+	getWorkspaceBranchInfo: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -33,6 +34,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listWorkspaceRuntimeBindings: apiMocks.listWorkspaceRuntimeBindings,
 		setWorkspaceRuntimeBinding: apiMocks.setWorkspaceRuntimeBinding,
 		clearWorkspaceRuntimeBinding: apiMocks.clearWorkspaceRuntimeBinding,
+		getWorkspaceBranchInfo: apiMocks.getWorkspaceBranchInfo,
 	};
 });
 
@@ -253,6 +255,59 @@ describe("RuntimeDebugPanel", () => {
 		});
 		expect(screen.getByText("src/foo.rs")).toBeInTheDocument();
 		expect(screen.getByText("src/bar.rs")).toBeInTheDocument();
+	});
+
+	it("runs the branch-info probe and renders branch + head", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceBranchInfo.mockResolvedValue({
+			currentBranch: "feature/foo",
+			headCommit: "abcdef1234567890abcdef1234567890abcdef12",
+			upstreamRef: "origin/feature/foo",
+		});
+
+		renderPanel();
+		await user.type(
+			await screen.findByLabelText(/Workspace dir/),
+			"/Users/me/code/repo",
+		);
+		await user.click(screen.getByRole("button", { name: /Run branch info/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspaceBranchInfo).toHaveBeenCalledWith(
+				"/Users/me/code/repo",
+				{ runtimeName: undefined, workspaceId: undefined },
+			);
+		});
+
+		// Result block surfaces the branch, a short head SHA, and the
+		// upstream tracking ref.
+		await waitFor(() => {
+			expect(screen.getByText(/branch: feature\/foo/)).toBeInTheDocument();
+		});
+		expect(screen.getByText(/head: abcdef123456/)).toBeInTheDocument();
+		expect(
+			screen.getByText(/upstream: origin\/feature\/foo/),
+		).toBeInTheDocument();
+	});
+
+	it("renders '(detached HEAD)' when the branch name is empty", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceBranchInfo.mockResolvedValue({
+			currentBranch: "",
+			headCommit: "1234567890abcdef1234567890abcdef12345678",
+		});
+
+		renderPanel();
+		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
+		await user.click(screen.getByRole("button", { name: /Run branch info/ }));
+
+		await waitFor(() => {
+			expect(screen.getByText(/branch: \(detached HEAD\)/)).toBeInTheDocument();
+		});
+		// Empty upstream shows the explicit "(none)" hint so the user
+		// can tell the data was *fetched* successfully but the branch
+		// isn't tracking anything.
+		expect(screen.getByText(/upstream: \(none\)/)).toBeInTheDocument();
 	});
 
 	it("renders 'clean' for an empty changedPaths result", async () => {
