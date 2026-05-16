@@ -24,7 +24,7 @@
 //! [`RpcClient::connect_command`].
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -48,6 +48,20 @@ use super::runtime::{RemoteRuntime, RuntimeHealth, RuntimeKind};
 /// `ssh-agent` or a key file; the spike intentionally doesn't grow
 /// an interactive-auth code path.
 const DEFAULT_SSH_ARGS: &[&str] = &["-o", "BatchMode=yes"];
+
+/// Extra args that enable ssh connection multiplexing. With these,
+/// the *first* connect to a host pays the full handshake cost; every
+/// subsequent connect (ping, reconnect, future per-method calls)
+/// reuses the same TCP + auth channel. `ControlPersist=5m` keeps the
+/// master alive across short app restarts so a relaunch doesn't burn
+/// a fresh handshake.
+///
+/// The `ControlPath` template `%C` hashes user/host/port into the
+/// socket name so concurrent helmor instances don't trip over each
+/// other when connecting to different hosts. The directory is
+/// resolved at call time via [`ssh_control_dir`] so tests can scope
+/// it to a tempdir.
+const SSH_MUX_ARGS: &[&str] = &["-o", "ControlMaster=auto", "-o", "ControlPersist=5m"];
 
 /// JSON-RPC client over a single framed pipe. The pipe handles are
 /// boxed as trait objects so the same struct fronts an SSH child,
@@ -102,6 +116,17 @@ impl RpcClient {
         let mut cmd = Command::new("ssh");
         for arg in DEFAULT_SSH_ARGS {
             cmd.arg(arg);
+        }
+        // Connection multiplexing — see comment on SSH_MUX_ARGS. The
+        // ControlPath is computed at call time so a missing data dir
+        // (test, container, weird sandbox) degrades to plain ssh
+        // instead of dropping mux on the floor.
+        if let Some(control_dir) = ssh_control_dir() {
+            for arg in SSH_MUX_ARGS {
+                cmd.arg(arg);
+            }
+            cmd.arg("-o")
+                .arg(format!("ControlPath={}/%C", control_dir.display()));
         }
         cmd.arg(host).arg(remote_binary);
         Self::connect_command(cmd, format!("ssh://{host}"))
@@ -252,6 +277,21 @@ fn decode_response<M: RpcMethod>(
 /// can string-match on the code if it wants to render specific
 /// states (e.g. red for `NOT_INITIALIZED`, amber for
 /// `HANDLER_FAILED`).
+/// Resolve the directory ssh writes ControlPath sockets into. Returns
+/// `None` if the data dir isn't reachable — we'd rather connect
+/// without multiplexing than refuse to connect at all. The directory
+/// is created lazily on first call; ssh tolerates a missing path until
+/// the master needs to bind.
+fn ssh_control_dir() -> Option<PathBuf> {
+    let data_dir = crate::data_dir::data_dir().ok()?;
+    let dir = data_dir.join("ssh-cm");
+    // Best-effort mkdir. If creation fails (read-only mount, weird
+    // permission setup), let ssh surface its own error when it tries
+    // to write the socket.
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
+}
+
 fn rpc_error_to_anyhow<M: RpcMethod>(err: JsonRpcError) -> anyhow::Error {
     let code_label = match err.code {
         error_codes::INCOMPATIBLE_PROTOCOL => "INCOMPATIBLE_PROTOCOL",

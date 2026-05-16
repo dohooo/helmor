@@ -168,6 +168,14 @@ pub struct RuntimeEntry {
     /// Connected; remote entries reflect the liveness loop's most
     /// recent decision.
     pub state: RuntimeState,
+    /// Connection config the entry was last registered with, if
+    /// any. `None` for the local runtime (no config) and for
+    /// entries registered through the registry API directly (tests,
+    /// ad-hoc tools). The UI surfaces this in the chip tooltip so
+    /// the user can tell "ssh: dev.box helmor-server" from
+    /// "local: /Users/me/target/debug/helmor-server" at a glance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<RuntimeConnectionConfig>,
 }
 
 /// Spawn the `helmor-server` binary as a local child process (no SSH
@@ -261,10 +269,16 @@ pub fn list_remote_runtimes(
             // two reads. Fall back to Connected — the UI invalidates
             // again on the next mutation anyway.
             let state = registry.state(&name).unwrap_or(RuntimeState::Connected);
+            let config = if is_local {
+                None
+            } else {
+                registry.config_for(&name)
+            };
             RuntimeEntry {
                 name,
                 is_local,
                 state,
+                config,
             }
         })
         .collect())
@@ -337,10 +351,16 @@ mod tests {
             .map(|name| {
                 let is_local = name == LOCAL_RUNTIME_NAME;
                 let state = registry.state(&name).unwrap_or(RuntimeState::Connected);
+                let config = if is_local {
+                    None
+                } else {
+                    registry.config_for(&name)
+                };
                 RuntimeEntry {
                     name,
                     is_local,
                     state,
+                    config,
                 }
             })
             .collect())

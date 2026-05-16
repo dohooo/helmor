@@ -722,10 +722,20 @@ export type RuntimeState =
 	| { type: "degraded"; reason: string }
 	| { type: "disconnected"; reason: string };
 
+export type RuntimeConnectionConfig =
+	| { type: "local"; binaryPath?: string }
+	| { type: "ssh"; host: string; remoteBinary: string };
+
 export type RuntimeEntry = {
 	name: string;
 	isLocal: boolean;
 	state: RuntimeState;
+	/**
+	 * Connection config the entry was last registered with, if any.
+	 * `undefined` for the built-in local runtime and for entries
+	 * registered without a persisted config (tests, ad-hoc tools).
+	 */
+	config?: RuntimeConnectionConfig;
 };
 
 export async function listRemoteRuntimes(): Promise<RuntimeEntry[]> {

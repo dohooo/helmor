@@ -40,16 +40,63 @@ use crate::ui_sync::{publish, UiMutationEvent};
 use super::registry::{RuntimeRegistry, RuntimeState};
 use super::runtime::RemoteRuntime;
 
-/// How often the loop ticks. 10s is the sweet spot: long enough that a
-/// healthy connection doesn't burn CPU on the SSH child, short enough
-/// that a dead pipe surfaces within a noticeable window.
-pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Knobs for the liveness loop. Built once at startup; tests
+/// override individual fields via [`LivenessConfig::instant_test`].
+#[derive(Debug, Clone)]
+pub struct LivenessConfig {
+    /// How often the loop ticks. 10s in production — long enough
+    /// that a healthy connection doesn't burn CPU on the SSH child,
+    /// short enough that a dead pipe surfaces within a noticeable
+    /// window.
+    pub poll_interval: Duration,
+    /// Per-ping timeout. SSH's own keepalive is ~5 min, so anything
+    /// past a few seconds is almost certainly a hang. 5s leaves
+    /// headroom for slow cold pipes without pretending the network
+    /// is healthy when it isn't.
+    pub ping_timeout: Duration,
+    /// Pause between the first failed ping and the inline retry on
+    /// a Connected→fail transition. Longer than typical TCP
+    /// retransmit, shorter than the next tick — "ignore single-
+    /// packet hiccups", not "wait out a real outage".
+    pub transient_retry_delay: Duration,
+    /// Number of escalation retries before flipping Degraded →
+    /// Disconnected. Tolerates a longer flake while the chip is
+    /// already amber so the user isn't bothered by slow-but-
+    /// recoverable network blips.
+    pub escalation_retries: u32,
+    /// First backoff between escalation retries; doubles each
+    /// attempt. Production default `500ms → 1s → 2s`.
+    pub escalation_backoff_base: Duration,
+}
 
-/// Per-ping timeout. SSH itself has a much longer keepalive default
-/// (~5 min), so anything past a few seconds is almost certainly a
-/// hang. We choose 5s to leave headroom for slow cold pipes without
-/// pretending the network is healthy when it isn't.
-pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
+impl Default for LivenessConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(10),
+            ping_timeout: Duration::from_secs(5),
+            transient_retry_delay: Duration::from_millis(750),
+            escalation_retries: 3,
+            escalation_backoff_base: Duration::from_millis(500),
+        }
+    }
+}
+
+impl LivenessConfig {
+    /// Tight-cadence variant — every sleep collapses to a near-zero
+    /// duration while retry counts stay at production values. Lets
+    /// tests exercise the retry pathway without burning seconds on
+    /// real clock waits.
+    #[cfg(test)]
+    pub fn instant_test() -> Self {
+        Self {
+            poll_interval: Duration::ZERO,
+            ping_timeout: Duration::from_secs(1),
+            transient_retry_delay: Duration::ZERO,
+            escalation_retries: 3,
+            escalation_backoff_base: Duration::from_micros(1),
+        }
+    }
+}
 
 /// Spawn the liveness loop. Returns immediately; the loop runs until
 /// the host process exits (no explicit shutdown — Tauri reaps tokio
@@ -57,7 +104,7 @@ pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
 /// setup hook is the natural caller.
 pub fn spawn_liveness_loop<R: Runtime>(app: AppHandle<R>, registry: Arc<RuntimeRegistry>) {
     tauri::async_runtime::spawn(async move {
-        run_liveness_loop(app, registry, POLL_INTERVAL, PING_TIMEOUT).await;
+        run_liveness_loop(app, registry, LivenessConfig::default()).await;
     });
 }
 
@@ -66,26 +113,31 @@ pub fn spawn_liveness_loop<R: Runtime>(app: AppHandle<R>, registry: Arc<RuntimeR
 pub async fn run_liveness_loop<R: Runtime>(
     app: AppHandle<R>,
     registry: Arc<RuntimeRegistry>,
-    interval: Duration,
-    ping_timeout: Duration,
+    config: LivenessConfig,
 ) {
     loop {
-        sleep(interval).await;
-        tick_once(&app, &registry, ping_timeout).await;
+        sleep(config.poll_interval).await;
+        tick_once(&app, &registry, &config).await;
     }
 }
 
 /// One tick: snapshot the registry, ping each remote, update state on
 /// change. Public so the test harness can call it directly without
 /// waiting for the interval.
+///
+/// State transitions follow the retry pathway documented on
+/// [`decide_next_state`] — single-shot retry on a Connected fail,
+/// exponential-backoff retry burst on a Degraded → Disconnected
+/// transition. Net effect: the chip ignores single-packet drops and
+/// tolerates slow-but-recoverable flakes while amber.
 pub async fn tick_once<R: Runtime>(
     app: &AppHandle<R>,
     registry: &Arc<RuntimeRegistry>,
-    ping_timeout: Duration,
+    config: &LivenessConfig,
 ) {
     let snapshot = registry.remote_snapshot();
     for (name, runtime, prior) in snapshot {
-        let next = probe_once(runtime, &prior, ping_timeout).await;
+        let next = decide_next_state(runtime, &prior, config).await;
         if next != prior {
             if let Some(_replaced) = registry.set_state(&name, next.clone()) {
                 publish(
@@ -100,6 +152,80 @@ pub async fn tick_once<R: Runtime>(
             // between snapshot + set — that's fine, skip the event.
         }
     }
+}
+
+/// Compute the next state for an entry given its `prior` state and
+/// a live runtime to probe. Implements both:
+///
+/// 1. **Transient-blip suppression** — a Connected entry that fails
+///    one ping but recovers on the inline retry stays Connected. No
+///    chip flicker for single-packet drops.
+/// 2. **Escalation retry burst** — a Degraded entry that would
+///    otherwise transition to Disconnected gets a few exponentially-
+///    spaced retries first. Saves the user a manual Reconnect for
+///    slow-but-recoverable network blips.
+///
+/// Factored out of `tick_once` so tests exercise the same retry
+/// pathway production uses, without dragging an `AppHandle` through.
+pub async fn decide_next_state(
+    runtime: Arc<dyn RemoteRuntime>,
+    prior: &RuntimeState,
+    config: &LivenessConfig,
+) -> RuntimeState {
+    let next = probe_once(Arc::clone(&runtime), prior, config.ping_timeout).await;
+
+    // Transient-blip suppression: see (1) above. Skip retries for
+    // entries already in Degraded / Disconnected — there's no
+    // transient hypothesis to test, and burning a second timeout per
+    // tick would mask a sustained outage.
+    if matches!(prior, RuntimeState::Connected) && !matches!(next, RuntimeState::Connected) {
+        sleep(config.transient_retry_delay).await;
+        return probe_once(runtime, prior, config.ping_timeout).await;
+    }
+
+    // Escalation retry burst: see (2) above.
+    if matches!(prior, RuntimeState::Degraded { .. })
+        && matches!(next, RuntimeState::Disconnected { .. })
+    {
+        return retry_before_escalating(
+            runtime,
+            prior,
+            next,
+            config.ping_timeout,
+            config.escalation_retries,
+            config.escalation_backoff_base,
+        )
+        .await;
+    }
+    next
+}
+
+/// Burst-retry a probe with exponential backoff. Returns the first
+/// `Connected` outcome that lands, or `candidate` (the
+/// would-be-applied Disconnected variant) if every retry also fails.
+/// Public so the tests can drive it with a tight backoff without
+/// waiting for the full production schedule.
+pub async fn retry_before_escalating(
+    runtime: Arc<dyn RemoteRuntime>,
+    prior: &RuntimeState,
+    candidate: RuntimeState,
+    ping_timeout: Duration,
+    attempts: u32,
+    backoff_base: Duration,
+) -> RuntimeState {
+    let mut delay = backoff_base;
+    for _ in 0..attempts {
+        sleep(delay).await;
+        let outcome = probe_once(Arc::clone(&runtime), prior, ping_timeout).await;
+        if matches!(outcome, RuntimeState::Connected) {
+            return outcome;
+        }
+        // Cap doubling so a misconfigured base doesn't compound into
+        // a minute-long stall. `saturating_mul` avoids overflow on
+        // extreme values.
+        delay = delay.saturating_mul(2);
+    }
+    candidate
 }
 
 /// Run one ping against `runtime` and project the result into the
@@ -256,16 +382,15 @@ mod tests {
     // ── tick_once: registry interaction ──────────────────────────
 
     /// Tick the loop once without an `AppHandle` (events would be
-    /// dropped). Tests that want to assert on events should use the
-    /// MockRuntime path described in tauri::test; for the spike we
-    /// just assert on registry state, which is the source of truth.
-    async fn tick_states_only(registry: &Arc<RuntimeRegistry>, ping_timeout: Duration) {
-        // Inline copy of tick_once minus the publish() — keeps tests
-        // free of the AppHandle plumbing while still exercising the
-        // state-transition pathway.
+    /// dropped). Mirrors `tick_once` with `LivenessConfig::instant_test`
+    /// so the retry pathway runs at microsecond cadence — the
+    /// behaviour under test is the *number* of probes + their landing
+    /// semantics, not the cadence.
+    async fn tick_states_only(registry: &Arc<RuntimeRegistry>) {
+        let config = LivenessConfig::instant_test();
         let snapshot = registry.remote_snapshot();
         for (name, runtime, prior) in snapshot {
-            let next = probe_once(runtime, &prior, ping_timeout).await;
+            let next = decide_next_state(runtime, &prior, &config).await;
             if next != prior {
                 let _ = registry.set_state(&name, next);
             }
@@ -273,21 +398,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_transitions_an_entry_from_connected_to_disconnected_over_two_failures() {
+    async fn tick_transitions_an_entry_from_connected_to_disconnected_over_sustained_failure() {
+        // Sustained outage. Tick 1 consumes the initial probe + the
+        // transient-blip retry (both fail) → Degraded. Tick 2 consumes
+        // one probe + ESCALATION_RETRIES escalation probes (all fail)
+        // → Disconnected. Scripted outcomes account for both bursts.
         let registry = Arc::new(RuntimeRegistry::new());
-        let runtime: Arc<dyn RemoteRuntime> =
-            Arc::new(ScriptedRuntime::new([err("first"), err("second")]));
+        let mut outcomes: Vec<anyhow::Result<()>> = Vec::new();
+        // Tick 1: initial + transient retry.
+        outcomes.push(err("first"));
+        outcomes.push(err("retry"));
+        // Tick 2: initial + ESCALATION_RETRIES escalation retries.
+        outcomes.push(err("escalate-0"));
+        for i in 0..LivenessConfig::default().escalation_retries {
+            outcomes.push(err(Box::leak(
+                format!("escalate-{}", i + 1).into_boxed_str(),
+            )));
+        }
+        let runtime: Arc<dyn RemoteRuntime> = Arc::new(ScriptedRuntime::new(outcomes));
         registry.register("dev.box", runtime, None).unwrap();
 
-        // Tick 1: Connected → Degraded
-        tick_states_only(&registry, Duration::from_secs(1)).await;
+        tick_states_only(&registry).await;
         assert!(matches!(
             registry.state("dev.box"),
             Some(RuntimeState::Degraded { .. })
         ));
 
-        // Tick 2: Degraded → Disconnected
-        tick_states_only(&registry, Duration::from_secs(1)).await;
+        tick_states_only(&registry).await;
         assert!(matches!(
             registry.state("dev.box"),
             Some(RuntimeState::Disconnected { .. })
@@ -295,22 +432,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_recovers_a_disconnected_entry_when_ping_succeeds() {
+    async fn tick_suppresses_a_single_transient_failure_via_inline_retry() {
+        // The new behaviour: a Connected entry that fails one ping but
+        // succeeds on the immediate retry stays Connected. No chip
+        // flicker for single-packet drops.
         let registry = Arc::new(RuntimeRegistry::new());
-        let runtime: Arc<dyn RemoteRuntime> =
-            Arc::new(ScriptedRuntime::new([err("first"), err("second"), ok()]));
+        let runtime: Arc<dyn RemoteRuntime> = Arc::new(ScriptedRuntime::new([err("blip"), ok()]));
         registry.register("dev.box", runtime, None).unwrap();
 
-        // Drive to Disconnected
-        tick_states_only(&registry, Duration::from_secs(1)).await;
-        tick_states_only(&registry, Duration::from_secs(1)).await;
+        tick_states_only(&registry).await;
+
+        assert_eq!(registry.state("dev.box"), Some(RuntimeState::Connected));
+    }
+
+    #[tokio::test]
+    async fn tick_recovers_during_escalation_burst_when_one_retry_succeeds() {
+        // Degraded → would-be-Disconnected, but one of the escalation
+        // retries succeeds. The entry comes back to Connected without
+        // ever entering Disconnected.
+        let registry = Arc::new(RuntimeRegistry::new());
+        // Tick 1 consumes 2 (initial + transient retry) → Degraded.
+        // Tick 2 consumes 1 (initial) then enters escalation burst;
+        // the second escalation retry succeeds.
+        let runtime: Arc<dyn RemoteRuntime> = Arc::new(ScriptedRuntime::new([
+            err("t1-initial"),
+            err("t1-retry"),
+            err("t2-initial"),
+            err("t2-esc-0"),
+            ok(),
+        ]));
+        registry.register("dev.box", runtime, None).unwrap();
+
+        tick_states_only(&registry).await;
+        assert!(matches!(
+            registry.state("dev.box"),
+            Some(RuntimeState::Degraded { .. })
+        ));
+        tick_states_only(&registry).await;
+        assert_eq!(registry.state("dev.box"), Some(RuntimeState::Connected));
+    }
+
+    #[tokio::test]
+    async fn tick_recovers_a_disconnected_entry_when_ping_succeeds() {
+        let registry = Arc::new(RuntimeRegistry::new());
+        // Drive to Disconnected: 2 fails (tick 1) + 1 + ESCALATION_RETRIES (tick 2).
+        let mut outcomes: Vec<anyhow::Result<()>> = Vec::new();
+        outcomes.push(err("t1-initial"));
+        outcomes.push(err("t1-retry"));
+        outcomes.push(err("t2-initial"));
+        for i in 0..LivenessConfig::default().escalation_retries {
+            outcomes.push(err(Box::leak(format!("t2-esc-{i}").into_boxed_str())));
+        }
+        // Tick 3: one Ok pulls us back to Connected. No escalation
+        // retry needed for Disconnected → Connected (probe_once is
+        // single-shot when prior isn't Degraded).
+        outcomes.push(ok());
+        let runtime: Arc<dyn RemoteRuntime> = Arc::new(ScriptedRuntime::new(outcomes));
+        registry.register("dev.box", runtime, None).unwrap();
+
+        tick_states_only(&registry).await;
+        tick_states_only(&registry).await;
         assert!(matches!(
             registry.state("dev.box"),
             Some(RuntimeState::Disconnected { .. })
         ));
 
-        // Successful ping should pull it back to Connected.
-        tick_states_only(&registry, Duration::from_secs(1)).await;
+        tick_states_only(&registry).await;
         assert_eq!(registry.state("dev.box"), Some(RuntimeState::Connected));
     }
 
@@ -323,6 +510,6 @@ mod tests {
         // No remotes registered — snapshot must be empty.
         assert_eq!(registry.remote_snapshot().len(), 0);
         // Tick with no remotes: no-op, no panic.
-        tick_states_only(&registry, Duration::from_secs(1)).await;
+        tick_states_only(&registry).await;
     }
 }

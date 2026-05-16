@@ -127,7 +127,14 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 		},
 	});
 
-	const isDisconnected = entry.state.type === "disconnected";
+	// Surface the Reconnect button for both Disconnected (a tombstone
+	// from boot-time restore failure, or a runtime that's given up
+	// after sustained outage) AND Degraded (the chip is amber and the
+	// user might want to force a fresh handshake instead of waiting
+	// for the next tick). For a healthy Connected entry the only
+	// affordance is Disconnect.
+	const canReconnect =
+		entry.state.type === "disconnected" || entry.state.type === "degraded";
 
 	return (
 		<SettingsRow
@@ -148,7 +155,7 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 		>
 			{entry.isLocal ? null : (
 				<div className="flex items-center gap-2">
-					{isDisconnected ? (
+					{canReconnect ? (
 						<Button
 							variant="default"
 							size="sm"
@@ -220,21 +227,49 @@ function stateChipPresentation(entry: RuntimeEntry): {
 	if (entry.isLocal) {
 		return { tone: "ok", label: "local", title: undefined };
 	}
+	const configLine = describeConfig(entry.config);
 	switch (entry.state.type) {
 		case "connected":
-			return { tone: "ok", label: "connected", title: undefined };
+			return { tone: "ok", label: "connected", title: configLine };
 		case "degraded":
 			return {
 				tone: "warn",
 				label: "degraded",
-				title: entry.state.reason,
+				title: joinTooltipLines(entry.state.reason, configLine),
 			};
 		case "disconnected":
 			return {
 				tone: "error",
 				label: "disconnected",
-				title: entry.state.reason,
+				title: joinTooltipLines(entry.state.reason, configLine),
 			};
+	}
+}
+
+/**
+ * Build a multi-line tooltip body from the failure reason (if any)
+ * and the connection-config description. Returns `undefined` when
+ * both are empty so the chip's `title` attribute is fully omitted.
+ */
+function joinTooltipLines(
+	primary: string | undefined,
+	secondary: string | undefined,
+): string | undefined {
+	const lines = [primary, secondary].filter((line): line is string =>
+		Boolean(line && line.length > 0),
+	);
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function describeConfig(config: RuntimeEntry["config"]): string | undefined {
+	if (!config) return undefined;
+	switch (config.type) {
+		case "local":
+			return config.binaryPath
+				? `local: ${config.binaryPath}`
+				: "local: auto-detect";
+		case "ssh":
+			return `ssh: ${config.host} ${config.remoteBinary}`;
 	}
 }
 
