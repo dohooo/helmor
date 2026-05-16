@@ -707,13 +707,22 @@ export type WorkspaceStatusResult = {
 	changedPaths: string[];
 };
 
+/**
+ * Resolution order on the backend:
+ *   1. `runtimeName` — explicit override; ignored if empty/undefined.
+ *   2. `workspaceId` — look up the persisted binding for that
+ *      workspace; falls back to local if no binding or if the
+ *      bound runtime isn't currently registered.
+ *   3. Neither → local.
+ */
 export async function getWorkspaceStatus(
 	workspaceDir: string,
-	runtimeName?: string,
+	options: { workspaceId?: string; runtimeName?: string } = {},
 ): Promise<WorkspaceStatusResult> {
 	return invoke<WorkspaceStatusResult>("get_workspace_status", {
 		workspaceDir,
-		runtimeName,
+		workspaceId: options.workspaceId,
+		runtimeName: options.runtimeName,
 	});
 }
 

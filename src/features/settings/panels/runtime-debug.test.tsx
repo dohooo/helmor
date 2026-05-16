@@ -225,7 +225,7 @@ describe("RuntimeDebugPanel", () => {
 		});
 	});
 
-	it("runs the workspace status probe through the selected runtime", async () => {
+	it("runs the workspace status probe with Auto resolution by default", async () => {
 		const user = userEvent.setup();
 		apiMocks.getWorkspaceStatus.mockResolvedValue({
 			isClean: false,
@@ -238,9 +238,12 @@ describe("RuntimeDebugPanel", () => {
 		await user.click(screen.getByRole("button", { name: /Run probe/ }));
 
 		await waitFor(() => {
+			// Default Runtime selection is "Auto (via binding)" which
+			// translates to undefined runtime + undefined workspace id
+			// on the wire. The backend resolver falls through to local.
 			expect(apiMocks.getWorkspaceStatus).toHaveBeenCalledWith(
 				"/Users/me/code/repo",
-				"local",
+				{ runtimeName: undefined, workspaceId: undefined },
 			);
 		});
 
@@ -266,6 +269,62 @@ describe("RuntimeDebugPanel", () => {
 
 		await waitFor(() => {
 			expect(screen.getByText(/Clean — no changes\./)).toBeInTheDocument();
+		});
+	});
+
+	it("passes workspaceId through to the probe so the resolver can use the binding", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceStatus.mockResolvedValue({
+			isClean: true,
+			changedPaths: [],
+		});
+
+		renderPanel();
+		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
+		await user.type(await screen.findByLabelText(/Workspace ID/), "ws-bound");
+		await user.click(screen.getByRole("button", { name: /Run probe/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspaceStatus).toHaveBeenCalledWith("/repo", {
+				runtimeName: undefined,
+				workspaceId: "ws-bound",
+			});
+		});
+	});
+
+	it("explicit runtime selection takes precedence over the workspace binding", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getWorkspaceStatus.mockResolvedValue({
+			isClean: true,
+			changedPaths: [],
+		});
+
+		renderPanel();
+		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
+		await user.type(await screen.findByLabelText(/Workspace ID/), "ws-bound");
+		// Switch the dropdown away from "Auto" — explicit pick. The
+		// bindings section also has a `Runtime` label, so anchor on
+		// the probe-section input id to disambiguate.
+		const probeRuntime = document.getElementById(
+			"probe-runtime",
+		) as HTMLSelectElement | null;
+		if (!probeRuntime) throw new Error("probe-runtime select missing");
+		await user.selectOptions(probeRuntime, "dev.box");
+		await user.click(screen.getByRole("button", { name: /Run probe/ }));
+
+		await waitFor(() => {
+			// Both workspaceId AND runtimeName get forwarded — the
+			// backend's resolver handles the precedence rule.
+			expect(apiMocks.getWorkspaceStatus).toHaveBeenCalledWith("/repo", {
+				runtimeName: "dev.box",
+				workspaceId: "ws-bound",
+			});
 		});
 	});
 
@@ -350,9 +409,9 @@ describe("RuntimeDebugPanel", () => {
 		apiMocks.setWorkspaceRuntimeBinding.mockResolvedValue(undefined);
 
 		renderPanel();
-		const workspaceInput = await screen.findByLabelText(/Workspace ID/);
+		const workspaceInput = await screen.findByLabelText(/Pin workspace/);
 		await user.type(workspaceInput, "ws-1234");
-		await user.click(screen.getByRole("button", { name: /Pin/ }));
+		await user.click(screen.getByRole("button", { name: /^Pin$/ }));
 
 		await waitFor(() => {
 			expect(apiMocks.setWorkspaceRuntimeBinding).toHaveBeenCalledWith(
@@ -362,7 +421,7 @@ describe("RuntimeDebugPanel", () => {
 		});
 		// Input clears on success so the user can pin another.
 		await waitFor(() => {
-			expect(screen.getByLabelText(/Workspace ID/)).toHaveValue("");
+			expect(screen.getByLabelText(/Pin workspace/)).toHaveValue("");
 		});
 	});
 
@@ -407,8 +466,8 @@ describe("RuntimeDebugPanel", () => {
 
 	it("disables the Pin button while the workspace ID input is empty", async () => {
 		renderPanel();
-		await screen.findByLabelText(/Workspace ID/);
-		const pinButton = screen.getByRole("button", { name: /Pin/ });
+		await screen.findByLabelText(/Pin workspace/);
+		const pinButton = screen.getByRole("button", { name: /^Pin$/ });
 		expect(pinButton).toBeDisabled();
 	});
 });

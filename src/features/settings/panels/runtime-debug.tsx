@@ -482,20 +482,35 @@ function ConnectSection() {
 
 // ── 3. Workspace status probe ────────────────────────────────────────
 
+/// Special sentinel used by the runtime dropdown when the user wants
+/// the backend to resolve the runtime via the workspace binding
+/// store instead of an explicit pick. Maps to `runtimeName=undefined`
+/// in the IPC call so the resolver consults the binding.
+const RUNTIME_AUTO_VALUE = "__auto__";
+
 function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 	const [workspaceDir, setWorkspaceDir] = useState("");
-	const [runtimeName, setRuntimeName] = useState<string>("local");
+	const [workspaceId, setWorkspaceId] = useState("");
+	const [runtimeName, setRuntimeName] = useState<string>(RUNTIME_AUTO_VALUE);
 
 	// Keep the selected runtime valid: if it disappears from the list
-	// (e.g. user disconnects), fall back to `local`.
+	// (e.g. user disconnects), fall back to the auto/binding option.
 	useEffect(() => {
-		if (!entries.some((e) => e.name === runtimeName)) {
-			setRuntimeName("local");
+		if (
+			runtimeName !== RUNTIME_AUTO_VALUE &&
+			!entries.some((e) => e.name === runtimeName)
+		) {
+			setRuntimeName(RUNTIME_AUTO_VALUE);
 		}
 	}, [entries, runtimeName]);
 
 	const probe = useMutation({
-		mutationFn: () => getWorkspaceStatus(workspaceDir, runtimeName),
+		mutationFn: () =>
+			getWorkspaceStatus(workspaceDir, {
+				workspaceId: workspaceId.trim() || undefined,
+				runtimeName:
+					runtimeName === RUNTIME_AUTO_VALUE ? undefined : runtimeName,
+			}),
 	});
 
 	const runtimeOptions = useMemo(
@@ -508,7 +523,7 @@ function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 			<SectionHeader
 				icon={<Server className="size-3.5" strokeWidth={1.8} />}
 				title="Workspace status probe"
-				description="Round-trips `workspace.status` through the selected runtime. Path is interpreted on the runtime's own filesystem."
+				description="Round-trips `workspace.status` through the resolved runtime. Path is interpreted on the runtime's own filesystem. Pick `Auto (via binding)` to exercise the workspace-id → runtime lookup."
 			/>
 			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
 				<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
@@ -525,12 +540,25 @@ function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 							"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 						)}
 					>
+						<option value={RUNTIME_AUTO_VALUE}>
+							Auto (via workspace binding)
+						</option>
 						{runtimeOptions.map((opt) => (
 							<option key={opt.value} value={opt.value}>
 								{opt.label}
 							</option>
 						))}
 					</select>
+
+					<Label htmlFor="probe-workspace-id" className="text-xs">
+						Workspace ID
+					</Label>
+					<Input
+						id="probe-workspace-id"
+						value={workspaceId}
+						onChange={(e) => setWorkspaceId(e.target.value)}
+						placeholder="ws-1234 (optional; only used by Auto)"
+					/>
 
 					<Label htmlFor="probe-workspace" className="text-xs">
 						Workspace dir
@@ -700,7 +728,7 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 
 				<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
 					<Label htmlFor="binding-workspace" className="text-xs">
-						Workspace ID
+						Pin workspace
 					</Label>
 					<Input
 						id="binding-workspace"

@@ -38,7 +38,14 @@ pub fn get_runtime_health(
 }
 
 /// Project the workspace's `git status --porcelain` output through
-/// the runtime seam. Routes to the named runtime (defaults to local).
+/// the runtime seam.
+///
+/// Runtime resolution order:
+///   1. `runtime_name` — explicit override; the caller's "use this
+///      runtime, ignore any binding" knob.
+///   2. `workspace_id` — look up the persisted binding for the
+///      workspace. Missing binding falls through to local.
+///   3. Neither → local.
 ///
 /// `workspace_dir` is interpreted on the *runtime's* filesystem —
 /// for a remote runtime that's the server's filesystem, not the
@@ -49,16 +56,63 @@ pub fn get_runtime_health(
 #[tauri::command]
 pub async fn get_workspace_status(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
     workspace_dir: String,
+    workspace_id: Option<String>,
     runtime_name: Option<String>,
 ) -> CmdResult<WorkspaceStatusResult> {
     let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
     run_blocking(move || {
         let path = PathBuf::from(workspace_dir);
-        let runtime = registry.lookup(runtime_name.as_deref())?;
-        runtime.workspace_status(&path)
+        let resolved = resolve_runtime_for_call(
+            &registry,
+            &bindings,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )?;
+        resolved.workspace_status(&path)
     })
     .await
+}
+
+/// Pick the runtime the dispatch should land on. Explicit
+/// `runtime_name` wins; otherwise consult the binding for
+/// `workspace_id`; otherwise the local runtime.
+///
+/// Factored out so tests can drive the resolution rule directly
+/// without spinning up a Tauri command harness, and so future
+/// commands (terminal, scripts, agents) can call the same logic
+/// before they dispatch.
+fn resolve_runtime_for_call(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> anyhow::Result<Arc<dyn RemoteRuntime>> {
+    if let Some(name) = runtime_name.filter(|n| !n.is_empty()) {
+        return registry.lookup(Some(name));
+    }
+    if let Some(id) = workspace_id.filter(|id| !id.is_empty()) {
+        if let Some(bound) = bindings.lookup(id) {
+            // The binding may point at a runtime that disconnected
+            // after the pin was created. Try the lookup; if the
+            // runtime's not currently registered, fall back to local
+            // with a log line — same contract as the dev panel's
+            // "isn't currently registered" warning.
+            match registry.lookup(Some(&bound)) {
+                Ok(rt) => return Ok(rt),
+                Err(_) => {
+                    tracing::warn!(
+                        workspace_id = %id,
+                        bound_runtime = %bound,
+                        "remote-runner: bound runtime not registered; falling back to local"
+                    );
+                }
+            }
+        }
+    }
+    registry.lookup(None)
 }
 
 /// Spawn `ssh <host> <remote_binary>`, run the JSON-RPC handshake,
@@ -527,5 +581,72 @@ mod tests {
             .unwrap();
         assert!(matches!(remote.kind, RuntimeKind::Remote { .. }));
         assert_eq!(remote.hostname, "stub.box");
+    }
+
+    // ── resolve_runtime_for_call ─────────────────────────────────
+
+    fn bindings_with(workspace_id: &str, runtime_name: &str) -> Arc<WorkspaceRuntimeBindings> {
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set(workspace_id, runtime_name);
+        bindings
+    }
+
+    #[test]
+    fn resolve_returns_local_when_neither_workspace_id_nor_runtime_name_is_set() {
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        let runtime = resolve_runtime_for_call(&registry, &bindings, None, None).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn explicit_runtime_name_wins_over_workspace_binding() {
+        // Workspace is bound to `stub.box`, but the caller passes
+        // `runtime_name = "local"`. The override should win.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "stub.box");
+        let runtime =
+            resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), Some("local")).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn workspace_id_alone_resolves_through_the_binding() {
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "stub.box");
+        let runtime = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
+        let health = runtime.runtime_health().unwrap();
+        assert!(matches!(health.kind, RuntimeKind::Remote { .. }));
+        assert_eq!(health.hostname, "stub.box");
+    }
+
+    #[test]
+    fn workspace_id_with_unbound_workspace_falls_back_to_local() {
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        let runtime =
+            resolve_runtime_for_call(&registry, &bindings, Some("ws-unbound"), None).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn workspace_binding_pointing_at_unregistered_runtime_falls_back_to_local() {
+        // The binding survives a disconnect; the resolver falls back
+        // to local so the caller still gets *something* until the
+        // bound runtime reconnects.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "never-registered");
+        let runtime = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn empty_strings_are_treated_as_absent() {
+        // Frontend may submit `""` for an uninitialised input; the
+        // resolver should not treat that as a valid lookup target.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "stub.box");
+        let runtime = resolve_runtime_for_call(&registry, &bindings, Some(""), Some("")).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
     }
 }
