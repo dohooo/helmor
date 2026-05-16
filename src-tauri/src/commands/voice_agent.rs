@@ -26,6 +26,7 @@ use anyhow::{Context, Result};
 use clap::CommandFactory;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 use crate::cli::Cli;
 use crate::forge::{
@@ -33,7 +34,6 @@ use crate::forge::{
     InboxPage, InboxSource,
 };
 use crate::models;
-use crate::models::sessions::WindowedHistoricalRecords;
 use crate::pipeline::types::{HistoricalRecord, MessageRole};
 use crate::service;
 use crate::workspace::scripts::ScriptProcessManager;
@@ -660,7 +660,8 @@ impl ToolKind {
                         "query": {
                             "type": "string",
                             "description": "Keyword or phrase to search in session titles and \
-                                            stored chat history."
+                                            stored chat history. Optional when filtering by \
+                                            status."
                         },
                         "repo": {
                             "type": "string",
@@ -681,13 +682,14 @@ impl ToolKind {
                             "description": "Maximum sessions to return. Default 8, max 20."
                         }
                     },
-                    "required": ["query"]
+                    "required": []
                 }),
                 cli_path: None,
                 invalidates: &[],
                 use_when: "USE WHEN: user asks to find a session/conversation/chat by keyword, \
                            asks 'where did we discuss X', or gives a remembered phrase/title \
-                           without a workspace. Returns sessionId + workspace ref + status + \
+                           without a workspace. Also supports status-only queries like \
+                           status='working'. Returns sessionId + workspace ref + status + \
                            compact snippet. After locating a likely match, use \
                            get_session_messages if the user wants details, or select_workspace \
                            to open it. Reply with the best 1-3 matches in the user's language.",
@@ -705,9 +707,13 @@ impl ToolKind {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "How many trailing messages to return (1-20). \
-                                            Default 5 — voice users usually want the latest \
-                                            activity, not the whole transcript."
+                            "description": "How many messages to return (1-20). Default 5."
+                        },
+                        "position": {
+                            "type": "string",
+                            "enum": ["tail", "head"],
+                            "description": "Which message window to read. `tail` is latest \
+                                            activity; `head` includes the first user prompt."
                         },
                         "body_limit": {
                             "type": "integer",
@@ -715,6 +721,13 @@ impl ToolKind {
                                             800 — enough to summarize one turn. Each message \
                                             carries `bodyHasMore` so you know if it was \
                                             truncated."
+                        },
+                        "body_position": {
+                            "type": "string",
+                            "enum": ["start", "end"],
+                            "description": "Which side of each long message body to return. \
+                                            Use `end` when the user asks for the last line or \
+                                            final sentence."
                         }
                     },
                     "required": ["session"]
@@ -722,15 +735,15 @@ impl ToolKind {
                 cli_path: None,
                 invalidates: &[],
                 use_when: "USE WHEN: user asks 'what did the agent say in that session', \
-                           'show me the last turn', 'what's been going on in X'. Returns \
-                           the trailing N messages (latest at the end). Each message has \
+                           'show me the last turn', 'what was the first prompt', or 'what was \
+                           the final sentence'. Use position='head' for first prompt and \
+                           body_position='end' for final sentence. Returns N messages in \
+                           chronological order. Each message has \
                            role / createdAt / a flattened text `body` + bodyOffset / \
                            bodyLength / bodyTotal / bodyHasMore. Don't read raw markdown or \
                            tool-call JSON aloud — summarize in the user's language. \
-                           `windowHasMore: true` means older messages exist beyond this \
-                           window; the agent cannot currently paginate further back via \
-                           this tool, so report 'there's more earlier history' rather than \
-                           promising a second fetch. Preamble (DB read ~50ms): usually \
+                           `windowHasMore: true` means more messages exist beyond this \
+                           window. Preamble (DB read ~50ms): usually \
                            none needed.",
             },
             Self::SendPrompt => ToolMetadata {
@@ -1019,8 +1032,8 @@ impl ToolKind {
     fn run(self, args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         match self {
             Self::DescribeVoiceTools => describe_voice_tools(args),
-            Self::ListWorkspaces => list_workspaces(args),
-            Self::ShowWorkspace => show_workspace(args),
+            Self::ListWorkspaces => list_workspaces(args, ctx),
+            Self::ShowWorkspace => show_workspace(args, ctx),
             Self::CreateWorkspace => create_workspace(args),
             Self::CreateWorkspaceAndSend => create_workspace_and_send(args, ctx),
             Self::CreateWorkspaceVariants => create_workspace_variants(args, ctx),
@@ -1029,8 +1042,8 @@ impl ToolKind {
             Self::PermanentlyDeleteWorkspace => permanently_delete_workspace(args),
             Self::RunWorkspaceAction => run_workspace_action(args),
             Self::RunWorkspaceScript => run_workspace_script(args, ctx),
-            Self::ListSessions => list_sessions(args),
-            Self::SearchSessions => search_sessions(args),
+            Self::ListSessions => list_sessions(args, ctx),
+            Self::SearchSessions => search_sessions(args, ctx),
             Self::GetSessionMessages => get_session_messages(args),
             Self::SendPrompt => send_prompt(args, ctx),
             Self::ListRepos => list_repos(args),
@@ -1110,6 +1123,39 @@ fn message_role_from_db(role: &str) -> MessageRole {
     }
 }
 
+fn active_stream_session_ids(ctx: &VoiceToolContext) -> HashSet<String> {
+    use tauri::Manager;
+
+    ctx.app
+        .state::<crate::agents::streaming::ActiveStreams>()
+        .snapshot_for_ui()
+        .into_iter()
+        .map(|stream| stream.session_id)
+        .collect()
+}
+
+fn effective_session_status(status: Option<&str>, is_active_stream: bool) -> &str {
+    if is_active_stream {
+        "streaming"
+    } else {
+        status.unwrap_or("idle")
+    }
+}
+
+fn effective_session_status_matches(
+    status: Option<&str>,
+    is_active_stream: bool,
+    wanted: &str,
+) -> bool {
+    if wanted.eq_ignore_ascii_case("working") {
+        return is_active_stream || is_session_working(status);
+    }
+    if is_active_stream && wanted.eq_ignore_ascii_case("streaming") {
+        return true;
+    }
+    session_status_matches(status, wanted)
+}
+
 fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
     const MAX_DETAILED_TOOLS: usize = 3;
 
@@ -1170,7 +1216,7 @@ fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
-fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
+fn list_workspaces(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
     let limit = bounded_limit(&args, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     let archived = args
         .get("archived")
@@ -1214,6 +1260,7 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
         None => None,
     };
 
+    let active_session_ids = active_stream_session_ids(ctx);
     let records = models::workspaces::load_workspace_records()?;
     let mut rows: Vec<Value> = Vec::new();
     let mut total = 0usize;
@@ -1235,7 +1282,16 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
             }
         }
         if let Some(wanted) = session_status {
-            if !session_status_matches(record.active_session_status.as_deref(), wanted) {
+            let active_session_streaming = record
+                .active_session_id
+                .as_ref()
+                .map(|id| active_session_ids.contains(id))
+                .unwrap_or(false);
+            if !effective_session_status_matches(
+                record.active_session_status.as_deref(),
+                active_session_streaming,
+                wanted,
+            ) {
                 continue;
             }
         }
@@ -1244,6 +1300,15 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
         if rows.len() >= limit {
             continue;
         }
+        let active_session_streaming = record
+            .active_session_id
+            .as_ref()
+            .map(|id| active_session_ids.contains(id))
+            .unwrap_or(false);
+        let active_session_status = effective_session_status(
+            record.active_session_status.as_deref(),
+            active_session_streaming,
+        );
         rows.push(json!({
             "id": record.id,
             "repo": record.repo_name,
@@ -1258,10 +1323,11 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
             "pinned": record.pinned_at.is_some(),
             "activeSessionId": record.active_session_id,
             "activeSessionTitle": record.active_session_title,
-            "activeSessionStatus": record.active_session_status,
+            "activeSessionStatus": active_session_status,
             "primarySessionId": record.primary_session_id,
             "primarySessionTitle": record.primary_session_title,
-            "isWorking": is_session_working(record.active_session_status.as_deref()),
+            "isWorking": active_session_streaming
+                || is_session_working(record.active_session_status.as_deref()),
             "sessionCount": record.session_count,
             "messageCount": record.message_count,
         }));
@@ -1277,13 +1343,23 @@ fn list_workspaces(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
-fn show_workspace(args: Value) -> Result<VoiceToolResult> {
+fn show_workspace(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
     let reference = args
         .get("ref")
         .and_then(Value::as_str)
         .context("show_workspace: missing required `ref` argument")?;
     let id = service::resolve_workspace_ref(reference)?;
     let detail = service::get_workspace(&id)?;
+    let active_session_ids = active_stream_session_ids(ctx);
+    let active_session_streaming = detail
+        .active_session_id
+        .as_ref()
+        .map(|id| active_session_ids.contains(id))
+        .unwrap_or(false);
+    let active_session_status = effective_session_status(
+        detail.active_session_status.as_deref(),
+        active_session_streaming,
+    );
     Ok(VoiceToolResult {
         data: json!({
             "id": detail.id,
@@ -1298,7 +1374,9 @@ fn show_workspace(args: Value) -> Result<VoiceToolResult> {
             "targetBranch": detail.intended_target_branch,
             "activeSessionId": detail.active_session_id,
             "activeSessionTitle": detail.active_session_title,
-            "activeSessionStatus": detail.active_session_status,
+            "activeSessionStatus": active_session_status,
+            "isWorking": active_session_streaming
+                || is_session_working(detail.active_session_status.as_deref()),
             "sessionCount": detail.session_count,
             "messageCount": detail.message_count,
             "prTitle": detail.pr_title,
@@ -1361,7 +1439,7 @@ fn set_workspace_status(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
-fn list_sessions(args: Value) -> Result<VoiceToolResult> {
+fn list_sessions(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
     const DEFAULT_SESSION_LIMIT: usize = 10;
     const MAX_SESSION_LIMIT: usize = 20;
 
@@ -1371,6 +1449,7 @@ fn list_sessions(args: Value) -> Result<VoiceToolResult> {
         .context("list_sessions: missing required `workspace` argument")?;
     let limit = bounded_limit(&args, DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT);
     let workspace_id = service::resolve_workspace_ref(reference)?;
+    let active_session_ids = active_stream_session_ids(ctx);
     let sessions = models::sessions::list_workspace_sessions(&workspace_id)?;
     let total = sessions.len();
     let start = total.saturating_sub(limit);
@@ -1378,11 +1457,15 @@ fn list_sessions(args: Value) -> Result<VoiceToolResult> {
         .into_iter()
         .skip(start)
         .map(|session| {
+            let is_active_stream = active_session_ids.contains(&session.id);
+            let status = effective_session_status(Some(session.status.as_str()), is_active_stream);
             json!({
                 "id": session.id,
                 "workspaceId": session.workspace_id,
                 "title": session.title,
-                "status": session.status,
+                "status": status,
+                "storedStatus": session.status,
+                "isWorking": is_active_stream || is_session_working(Some(status)),
                 "model": session.model,
                 "agentType": session.agent_type,
                 "permissionMode": session.permission_mode,
@@ -1405,7 +1488,7 @@ fn list_sessions(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
-fn search_sessions(args: Value) -> Result<VoiceToolResult> {
+fn search_sessions(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
     const DEFAULT_LIMIT: usize = 8;
     const MAX_LIMIT: usize = 20;
     const SNIPPET_LIMIT: usize = 280;
@@ -1414,8 +1497,7 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
         .get("query")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .context("search_sessions: missing required `query` argument")?;
+        .filter(|s| !s.is_empty());
     let limit = bounded_limit(&args, DEFAULT_LIMIT, MAX_LIMIT);
     let include_archived = args
         .get("include_archived")
@@ -1435,7 +1517,11 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
         .get("status")
         .and_then(Value::as_str)
         .map(|s| s.to_ascii_lowercase());
-    let like = format!("%{}%", query.to_ascii_lowercase());
+    if query.is_none() && status_filter.is_none() {
+        anyhow::bail!("search_sessions: provide `query` or `status`");
+    }
+    let like = query.map(|query| format!("%{}%", query.to_ascii_lowercase()));
+    let active_session_ids = active_stream_session_ids(ctx);
     let conn = models::db::read_conn()?;
     let mut statement = conn.prepare(
         r#"
@@ -1458,28 +1544,36 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
           (
             SELECT sm.id
             FROM session_messages sm
-            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            WHERE sm.session_id = s.id
+              AND ?1 IS NOT NULL
+              AND lower(sm.content) LIKE ?1
             ORDER BY sm.sent_at DESC, sm.rowid DESC
             LIMIT 1
           ) AS match_message_id,
           (
             SELECT sm.role
             FROM session_messages sm
-            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            WHERE sm.session_id = s.id
+              AND ?1 IS NOT NULL
+              AND lower(sm.content) LIKE ?1
             ORDER BY sm.sent_at DESC, sm.rowid DESC
             LIMIT 1
           ) AS match_role,
           (
             SELECT sm.content
             FROM session_messages sm
-            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            WHERE sm.session_id = s.id
+              AND ?1 IS NOT NULL
+              AND lower(sm.content) LIKE ?1
             ORDER BY sm.sent_at DESC, sm.rowid DESC
             LIMIT 1
           ) AS match_content,
           (
             SELECT sm.created_at
             FROM session_messages sm
-            WHERE sm.session_id = s.id AND lower(sm.content) LIKE ?1
+            WHERE sm.session_id = s.id
+              AND ?1 IS NOT NULL
+              AND lower(sm.content) LIKE ?1
             ORDER BY sm.sent_at DESC, sm.rowid DESC
             LIMIT 1
           ) AS match_created_at
@@ -1490,15 +1584,8 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
           AND (?2 OR w.state != 'archived')
           AND (?3 IS NULL OR lower(r.name) = ?3)
           AND (
-            ?4 IS NULL
-            OR (
-              ?4 = 'working'
-              AND lower(s.status) IN ('streaming', 'streaming_input', 'running', 'pending')
-            )
-            OR lower(s.status) = ?4
-          )
-          AND (
-            lower(s.title) LIKE ?1
+            ?1 IS NULL
+            OR lower(s.title) LIKE ?1
             OR EXISTS (
               SELECT 1
               FROM session_messages sm
@@ -1506,21 +1593,14 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
             )
           )
         ORDER BY
-          CASE WHEN lower(s.title) LIKE ?1 THEN 0 ELSE 1 END,
+          CASE WHEN ?1 IS NOT NULL AND lower(s.title) LIKE ?1 THEN 0 ELSE 1 END,
           datetime(s.updated_at) DESC,
           s.id DESC
-        LIMIT ?5
         "#,
     )?;
 
     let rows = statement.query_map(
-        rusqlite::params![
-            like,
-            include_archived,
-            repo_name_filter,
-            status_filter,
-            limit as i64,
-        ],
+        rusqlite::params![like, include_archived, repo_name_filter],
         |row| {
             let session_id: String = row.get(0)?;
             let workspace_id: String = row.get(1)?;
@@ -1547,6 +1627,9 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
                 let summary = summarize_historical_record(record);
                 truncate_chars(&summary, SNIPPET_LIMIT)
             });
+            let is_active_stream = active_session_ids.contains(&session_id);
+            let effective_status =
+                effective_session_status(Some(&session_status), is_active_stream).to_string();
             Ok(json!({
                 "sessionId": session_id,
                 "workspaceId": workspace_id,
@@ -1556,8 +1639,9 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
                 "workspaceStatus": row.get::<_, String>(13)?,
                 "repo": row.get::<_, String>(14)?,
                 "title": title,
-                "sessionStatus": session_status,
-                "isWorking": is_session_working(Some(&session_status)),
+                "sessionStatus": effective_status,
+                "storedSessionStatus": session_status,
+                "isWorking": is_active_stream || is_session_working(Some(&session_status)),
                 "active": active_session_id.as_deref() == Some(session_id.as_str()),
                 "agentType": row.get::<_, Option<String>>(3)?,
                 "model": row.get::<_, Option<String>>(5)?,
@@ -1570,13 +1654,37 @@ fn search_sessions(args: Value) -> Result<VoiceToolResult> {
             }))
         },
     )?;
-    let sessions = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut sessions: Vec<Value> = Vec::new();
+    let mut total = 0usize;
+    for row in rows {
+        let row = row?;
+        if let Some(wanted) = status_filter.as_deref() {
+            let is_active_stream = row
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .map(|id| active_session_ids.contains(id))
+                .unwrap_or(false);
+            if !effective_session_status_matches(
+                row.get("storedSessionStatus").and_then(Value::as_str),
+                is_active_stream,
+                wanted,
+            ) {
+                continue;
+            }
+        }
+        total += 1;
+        if sessions.len() < limit {
+            sessions.push(row);
+        }
+    }
     let returned = sessions.len();
 
     Ok(VoiceToolResult {
         data: json!({
             "sessions": sessions,
             "returned": returned,
+            "total": total,
+            "hasMore": total > returned,
         }),
         ..Default::default()
     })
@@ -1606,12 +1714,17 @@ fn get_session_messages(args: Value) -> Result<VoiceToolResult> {
         .and_then(Value::as_u64)
         .map(|n| (n as usize).clamp(1, MAX_BODY_LIMIT))
         .unwrap_or(DEFAULT_BODY_LIMIT);
+    let position = args
+        .get("position")
+        .and_then(Value::as_str)
+        .unwrap_or("tail");
+    let body_position = args
+        .get("body_position")
+        .and_then(Value::as_str)
+        .unwrap_or("start");
 
-    // `*_windowed(Some(N))` is purpose-built for "tail N rows" — it
-    // does `ORDER BY DESC LIMIT N` under the hood so we don't scan the
-    // whole 5000-row session to grab the last 5.
-    let WindowedHistoricalRecords { records, has_more } =
-        models::sessions::list_session_historical_records_windowed(session_id, Some(limit))?;
+    let (records, total_messages) = list_session_records_for_voice(session_id, limit, position)?;
+    let has_more = total_messages > records.len();
 
     let messages: Vec<Value> = records
         .iter()
@@ -1619,14 +1732,19 @@ fn get_session_messages(args: Value) -> Result<VoiceToolResult> {
             let summary = summarize_historical_record(record);
             let total = summary.chars().count();
             let take = body_limit.min(total);
-            let body: String = summary.chars().take(take).collect();
+            let offset = if body_position.eq_ignore_ascii_case("end") {
+                total.saturating_sub(take)
+            } else {
+                0
+            };
+            let body: String = summary.chars().skip(offset).take(take).collect();
             let returned = body.chars().count();
             json!({
                 "id": record.id,
                 "role": record.role,
                 "createdAt": record.created_at,
                 "body": body,
-                "bodyOffset": 0,
+                "bodyOffset": offset,
                 "bodyLength": returned,
                 "bodyTotal": total,
                 "bodyHasMore": returned < total,
@@ -1638,10 +1756,61 @@ fn get_session_messages(args: Value) -> Result<VoiceToolResult> {
         data: json!({
             "messages": messages,
             "windowSize": records.len(),
+            "windowPosition": position,
             "windowHasMore": has_more,
+            "totalMessages": total_messages,
         }),
         ..Default::default()
     })
+}
+
+fn list_session_records_for_voice(
+    session_id: &str,
+    limit: usize,
+    position: &str,
+) -> Result<(Vec<HistoricalRecord>, usize)> {
+    let connection = models::db::read_conn()?;
+    let total: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .context("Failed to count session messages")?;
+
+    let order = if position.eq_ignore_ascii_case("head") {
+        "ASC"
+    } else {
+        "DESC"
+    };
+    let mut statement = connection.prepare(&format!(
+        r#"
+        SELECT
+          sm.id,
+          sm.role,
+          sm.content,
+          sm.created_at
+        FROM session_messages sm
+        WHERE sm.session_id = ?1
+        ORDER BY sm.sent_at {order}, sm.rowid {order}
+        LIMIT ?2
+        "#
+    ))?;
+    let rows = statement.query_map(rusqlite::params![session_id, limit as i64], |row| {
+        let content: String = row.get(2)?;
+        Ok(HistoricalRecord {
+            id: row.get(0)?,
+            role: row.get(1)?,
+            parsed_content: serde_json::from_str::<Value>(&content).ok(),
+            content,
+            created_at: row.get(3)?,
+        })
+    })?;
+    let mut records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    if !position.eq_ignore_ascii_case("head") {
+        records.reverse();
+    }
+    Ok((records, total.max(0) as usize))
 }
 
 /// Flatten a stored `session_messages.content` JSON record into a
