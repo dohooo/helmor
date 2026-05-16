@@ -58,6 +58,7 @@ import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { RuntimeDebugPanel } from "./panels/runtime-debug";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -71,6 +72,7 @@ import type { SettingsSection } from "./types";
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
 	inbox: "Contexts",
+	"runtime-debug": "Runtime Debug",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
@@ -195,7 +197,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"model",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
-		...(isDev ? (["developer"] as const) : []),
+		...(isDev ? (["developer", "runtime-debug"] as const) : []),
 		"account",
 		"inbox",
 		"experimental",
@@ -561,6 +563,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "import" && <ConductorImportPanel />}
 
 							{activeSection === "developer" && <DevToolsPanel />}
+
+							{activeSection === "runtime-debug" && <RuntimeDebugPanel />}
 
 							{activeSection === "account" && (
 								<AccountPanel repositories={repositories} />
