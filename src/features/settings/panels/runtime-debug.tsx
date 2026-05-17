@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
+	attachRemoteTerminal,
 	clearWorkspaceRuntimeBinding,
 	closeRemoteTerminal,
 	connectLocalRuntime,
@@ -22,10 +23,13 @@ import {
 	getRuntimeHealth,
 	getWorkspaceBranchInfo,
 	getWorkspaceStatus,
+	listOwnedTerminals,
 	listRemoteRuntimes,
+	listRemoteTerminals,
 	listSshHosts,
 	listWorkspaceRuntimeBindings,
 	openRemoteTerminal,
+	type RemoteTerminalListEntry,
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
@@ -872,6 +876,141 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 /// discarded from the start.
 const TERMINAL_OUTPUT_BUDGET = 200_000;
 
+/// Subsection of the remote terminal flow that lists live sessions
+/// on the daemon — owned-by-this-desktop ones first, then "other"
+/// sessions (anything the daemon knows about that isn't in our
+/// sidecar JSON). Click Attach to bind the row's terminal id to
+/// the parent's output `<pre>`.
+///
+/// `runtimeName` is required and assumed non-empty; the parent
+/// gates rendering on that. The component refetches on mount and
+/// on every Refresh click — no React Query for simplicity, the
+/// data is dev-panel-only and a stale list is only ever a click
+/// away from accurate.
+function ReattachList({
+	runtimeName,
+	busy,
+	onAttach,
+}: {
+	runtimeName: string;
+	busy: boolean;
+	onAttach: (entry: RemoteTerminalListEntry) => void;
+}) {
+	const [terminals, setTerminals] = useState<RemoteTerminalListEntry[] | null>(
+		null,
+	);
+	const [owned, setOwned] = useState<Set<string>>(new Set());
+	const [loading, setLoading] = useState<boolean>(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const refresh = async () => {
+		setLoading(true);
+		setError(null);
+		try {
+			const [live, ownedIds] = await Promise.all([
+				listRemoteTerminals(runtimeName),
+				listOwnedTerminals(runtimeName),
+			]);
+			setTerminals(live);
+			setOwned(new Set(ownedIds));
+		} catch (err) {
+			setError(errorMessage(err));
+			setTerminals(null);
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	// Refresh whenever the runtime selection changes — including the
+	// initial render of this subsection.
+	useEffect(() => {
+		void refresh();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [runtimeName]);
+
+	const empty = terminals !== null && terminals.length === 0;
+
+	return (
+		<div className="flex flex-col gap-2 rounded-md border border-border/30 bg-background/40 p-3">
+			<div className="flex items-center justify-between">
+				<span className="text-[12px] font-medium text-foreground">
+					Reattach to existing session
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={loading || busy}
+					onClick={() => void refresh()}
+				>
+					{loading ? (
+						<>
+							<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+							Refreshing…
+						</>
+					) : (
+						<>
+							<RefreshCw className="mr-1.5 size-3.5" />
+							Refresh
+						</>
+					)}
+				</Button>
+			</div>
+			{error ? (
+				<SettingsNotice tone="error">{error}</SettingsNotice>
+			) : terminals === null ? (
+				<span className="text-[11px] text-muted-foreground">
+					Listing remote sessions…
+				</span>
+			) : empty ? (
+				<span className="text-[11px] text-muted-foreground">
+					No live sessions on this runtime.
+				</span>
+			) : (
+				<ul className="flex flex-col gap-1">
+					{terminals.map((entry) => {
+						const isOwned = owned.has(entry.terminalId);
+						return (
+							<li
+								key={entry.terminalId}
+								className="flex items-center justify-between gap-2 rounded border border-border/30 bg-card/40 px-2 py-1.5"
+							>
+								<div className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate font-mono text-[11px]">
+										{entry.terminalId}
+									</span>
+									<span className="truncate text-[10px] text-muted-foreground">
+										pid={entry.pid} · {entry.workspaceDir} · {entry.cols}×
+										{entry.rows}
+									</span>
+								</div>
+								<span
+									className={cn(
+										"inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium tracking-wide uppercase",
+										isOwned
+											? "border-green-600/40 bg-green-600/10 text-green-300"
+											: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+									)}
+								>
+									{isOwned ? "yours" : "other"}
+								</span>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={busy}
+									onClick={() => onAttach(entry)}
+								>
+									<Plug className="mr-1.5 size-3.5" />
+									Attach
+								</Button>
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</div>
+	);
+}
+
 function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
 	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
 	const [runtimeName, setRuntimeName] = useState<string>("");
@@ -905,6 +1044,29 @@ function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
 		});
 	};
 
+	// Shared event handler for both open + attach flows. Factored
+	// out so the two code paths can't drift on how they paint
+	// stdout / exit / error.
+	const makeEventHandler =
+		() =>
+		(event: TerminalEventNotification): void => {
+			switch (event.event.kind) {
+				case "stdout":
+					appendOutput(event.event.data);
+					break;
+				case "exited":
+					appendOutput(
+						`\n[exited code=${event.event.code ?? "killed-by-signal"}]\n`,
+					);
+					setOpenSession(null);
+					break;
+				case "error":
+					appendOutput(`\n[error: ${event.event.message}]\n`);
+					setOpenSession(null);
+					break;
+			}
+		};
+
 	const handleOpen = async () => {
 		if (!runtimeName.trim()) {
 			setError("pick a runtime to host the terminal");
@@ -928,29 +1090,36 @@ function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
 					shell: shell.trim() || undefined,
 					cols: 100,
 					rows: 30,
-					onEvent: (event: TerminalEventNotification) => {
-						switch (event.event.kind) {
-							case "stdout":
-								appendOutput(event.event.data);
-								break;
-							case "exited":
-								appendOutput(
-									`\n[exited code=${event.event.code ?? "killed-by-signal"}]\n`,
-								);
-								setOpenSession(null);
-								break;
-							case "error":
-								appendOutput(`\n[error: ${event.event.message}]\n`);
-								setOpenSession(null);
-								break;
-						}
-					},
+					onEvent: makeEventHandler(),
 				},
 			);
 			setOpenSession({ runtimeName, terminalId });
 			setPid(result.pid);
 		} catch (err) {
 			setError(errorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const handleAttach = async (entry: RemoteTerminalListEntry) => {
+		setError(null);
+		setBusy(true);
+		setOutput("");
+		setPid(entry.pid);
+		try {
+			const attach = await attachRemoteTerminal(runtimeName, entry.terminalId, {
+				onEvent: makeEventHandler(),
+			});
+			// Paint scrollback first so the user sees where the
+			// shell was when we left it; live events arrive on top.
+			if (attach.scrollback) {
+				appendOutput(attach.scrollback);
+			}
+			setOpenSession({ runtimeName, terminalId: entry.terminalId });
+		} catch (err) {
+			setError(errorMessage(err));
+			setPid(null);
 		} finally {
 			setBusy(false);
 		}
@@ -1049,6 +1218,14 @@ function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
 							disabled={!!openSession || busy}
 						/>
 					</div>
+
+					{runtimeName && !openSession ? (
+						<ReattachList
+							runtimeName={runtimeName}
+							busy={busy}
+							onAttach={(entry) => void handleAttach(entry)}
+						/>
+					) : null}
 
 					<div className="flex items-center gap-2">
 						{openSession ? (

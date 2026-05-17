@@ -20,6 +20,9 @@ const apiMocks = vi.hoisted(() => ({
 	openRemoteTerminal: vi.fn(),
 	writeRemoteTerminal: vi.fn(),
 	closeRemoteTerminal: vi.fn(),
+	listRemoteTerminals: vi.fn(),
+	listOwnedTerminals: vi.fn(),
+	attachRemoteTerminal: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -41,6 +44,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		openRemoteTerminal: apiMocks.openRemoteTerminal,
 		writeRemoteTerminal: apiMocks.writeRemoteTerminal,
 		closeRemoteTerminal: apiMocks.closeRemoteTerminal,
+		listRemoteTerminals: apiMocks.listRemoteTerminals,
+		listOwnedTerminals: apiMocks.listOwnedTerminals,
+		attachRemoteTerminal: apiMocks.attachRemoteTerminal,
 	};
 });
 
@@ -75,6 +81,10 @@ describe("RuntimeDebugPanel", () => {
 		apiMocks.getRuntimeHealth.mockResolvedValue(LOCAL_HEALTH);
 		apiMocks.listSshHosts.mockResolvedValue([]);
 		apiMocks.listWorkspaceRuntimeBindings.mockResolvedValue([]);
+		// Reattach list defaults to empty; individual tests
+		// override when they want to exercise the UI.
+		apiMocks.listRemoteTerminals.mockResolvedValue([]);
+		apiMocks.listOwnedTerminals.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -691,5 +701,171 @@ describe("RuntimeDebugPanel", () => {
 		});
 		// After close, the Open button reappears.
 		await screen.findByRole("button", { name: /Open terminal/ });
+	});
+
+	// ── Reattach UI (phase 19c) ────────────────────────────────
+
+	it("lists live remote terminals when a runtime is selected", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.listRemoteTerminals.mockResolvedValue([
+			{
+				terminalId: "t-owned",
+				pid: 100,
+				workspaceDir: "/work/a",
+				openedAtMs: 1,
+				cols: 80,
+				rows: 24,
+			},
+			{
+				terminalId: "t-other",
+				pid: 101,
+				workspaceDir: "/work/b",
+				openedAtMs: 2,
+				cols: 120,
+				rows: 30,
+			},
+		]);
+		apiMocks.listOwnedTerminals.mockResolvedValue(["t-owned"]);
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+
+		// Wait for both calls to complete.
+		await waitFor(() => {
+			expect(apiMocks.listRemoteTerminals).toHaveBeenCalledWith("stage");
+			expect(apiMocks.listOwnedTerminals).toHaveBeenCalledWith("stage");
+		});
+
+		// Each row renders its terminalId in font-mono.
+		await screen.findByText("t-owned");
+		await screen.findByText("t-other");
+		// Owned terminal is marked "yours", the unknown one "other".
+		expect(screen.getByText(/^yours$/)).toBeInTheDocument();
+		expect(screen.getByText(/^other$/)).toBeInTheDocument();
+	});
+
+	it("attaches to a live terminal and paints scrollback as initial output", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.listRemoteTerminals.mockResolvedValue([
+			{
+				terminalId: "t-survives",
+				pid: 200,
+				workspaceDir: "/tmp",
+				openedAtMs: 1,
+				cols: 80,
+				rows: 24,
+			},
+		]);
+		apiMocks.listOwnedTerminals.mockResolvedValue(["t-survives"]);
+
+		// The mock returns the captured scrollback string; subsequent
+		// live events would come through `onEvent` but the test only
+		// asserts on the initial paint.
+		apiMocks.attachRemoteTerminal.mockResolvedValue({
+			scrollback: "$ ls\nfile.txt\n",
+			cols: 80,
+			rows: 24,
+		});
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+
+		const attachButton = await screen.findByRole("button", { name: /Attach/ });
+		await user.click(attachButton);
+
+		await waitFor(() => {
+			expect(apiMocks.attachRemoteTerminal).toHaveBeenCalledWith(
+				"stage",
+				"t-survives",
+				expect.objectContaining({ onEvent: expect.any(Function) }),
+			);
+		});
+		// Scrollback is rendered in the <pre>.
+		await waitFor(() => {
+			expect(screen.getByText(/file\.txt/)).toBeInTheDocument();
+		});
+		// Once attached, the Close button takes over from Open.
+		await screen.findByRole("button", { name: /Close terminal/ });
+	});
+
+	it("refreshes the reattach list on demand", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.listRemoteTerminals.mockResolvedValue([]);
+		apiMocks.listOwnedTerminals.mockResolvedValue([]);
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+
+		// First call is the auto-fetch on runtime select.
+		await waitFor(() => {
+			expect(apiMocks.listRemoteTerminals).toHaveBeenCalledTimes(1);
+		});
+
+		await user.click(screen.getByRole("button", { name: /^Refresh$/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.listRemoteTerminals).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	it("reports a list error inline without breaking the open form", async () => {
+		const user = userEvent.setup();
+		const remote: RuntimeEntry = {
+			name: "stage",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remote]);
+		apiMocks.listRemoteTerminals.mockRejectedValue(
+			new Error("daemon: connection refused"),
+		);
+		apiMocks.listOwnedTerminals.mockResolvedValue([]);
+
+		renderPanel();
+		const runtimeSelect = await screen.findByLabelText(/Runtime/, {
+			selector: "#rt-runtime",
+		});
+		await user.selectOptions(runtimeSelect, "stage");
+
+		await waitFor(() => {
+			expect(
+				screen.getByText(/daemon: connection refused/),
+			).toBeInTheDocument();
+		});
+
+		// The Open form is still functional even though listing failed.
+		expect(
+			screen.getByLabelText(/Workspace dir/, { selector: "#rt-dir" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /Open terminal/ }),
+		).toBeInTheDocument();
 	});
 });

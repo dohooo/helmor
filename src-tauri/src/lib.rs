@@ -264,6 +264,21 @@ pub fn run() {
             }
             app.manage(std::sync::Arc::new(bindings_store));
 
+            // Hydrate the desktop's "terminals I opened" sidecar. Like
+            // the bindings store, missing/corrupt file degrades to
+            // empty so a fresh install boots cleanly.
+            let owned_terminals = match data_dir::data_dir() {
+                Ok(dir) => remote::OwnedTerminals::load_from_disk(&dir),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %format!("{err:#}"),
+                        "remote-runner: cannot resolve data dir; using empty owned-terminals store"
+                    );
+                    remote::OwnedTerminals::new()
+                }
+            };
+            app.manage(std::sync::Arc::new(owned_terminals));
+
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
@@ -330,9 +345,12 @@ pub fn run() {
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_branch_info,
             commands::remote_commands::get_workspace_status,
+            commands::remote_commands::attach_remote_terminal,
             commands::remote_commands::clear_workspace_runtime_binding,
             commands::remote_commands::close_remote_terminal,
+            commands::remote_commands::list_owned_terminals,
             commands::remote_commands::list_remote_runtimes,
+            commands::remote_commands::list_remote_terminals,
             commands::remote_commands::list_ssh_hosts,
             commands::remote_commands::list_workspace_runtime_bindings,
             commands::remote_commands::open_remote_terminal,

@@ -23,13 +23,14 @@ use tauri::ipc::Channel;
 
 use crate::remote::{
     methods::{
-        TerminalCloseParams, TerminalEventNotification, TerminalOpenParams, TerminalOpenResult,
+        TerminalAttachParams, TerminalAttachResult, TerminalCloseParams, TerminalEventNotification,
+        TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOpenResult,
         TerminalResizeParams, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoResult,
         WorkspaceStatusResult,
     },
-    persistence, NotificationSubscription, RemoteRuntime, RemoteSshRuntime, RpcClient,
-    RuntimeConnectionConfig, RuntimeHealth, RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding,
-    WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
+    persistence, NotificationSubscription, OwnedTerminals, RemoteRuntime, RemoteSshRuntime,
+    RpcClient, RuntimeConnectionConfig, RuntimeHealth, RuntimeRegistry, RuntimeState,
+    WorkspaceRuntimeBinding, WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -517,6 +518,7 @@ fn persist_bindings(bindings: &Arc<WorkspaceRuntimeBindings>) {
 pub async fn open_remote_terminal(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     subscriptions: tauri::State<'_, Arc<RemoteTerminalSubscriptions>>,
+    owned: tauri::State<'_, Arc<OwnedTerminals>>,
     runtime_name: String,
     terminal_id: String,
     workspace_dir: String,
@@ -527,6 +529,7 @@ pub async fn open_remote_terminal(
 ) -> CmdResult<TerminalOpenResult> {
     let registry = Arc::clone(&registry);
     let subscriptions = Arc::clone(&subscriptions);
+    let owned = Arc::clone(&owned);
     run_blocking(move || {
         let runtime = registry.lookup(Some(&runtime_name))?;
 
@@ -557,7 +560,14 @@ pub async fn open_remote_terminal(
         });
         match result {
             Ok(open) => {
-                subscriptions.insert(terminal_id, subscription);
+                subscriptions.insert(terminal_id.clone(), subscription);
+                // Mark the desktop as the owner so the Reattach UI
+                // can surface this session on a future reconnect.
+                // Persistence is best-effort; the in-memory state
+                // is still correct even if the disk write fails.
+                if owned.insert(&runtime_name, &terminal_id) {
+                    persist_owned_terminals(&owned);
+                }
                 Ok(open)
             }
             Err(err) => {
@@ -612,11 +622,13 @@ pub async fn resize_remote_terminal(
 pub async fn close_remote_terminal(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     subscriptions: tauri::State<'_, Arc<RemoteTerminalSubscriptions>>,
+    owned: tauri::State<'_, Arc<OwnedTerminals>>,
     runtime_name: String,
     terminal_id: String,
 ) -> CmdResult<()> {
     let registry = Arc::clone(&registry);
     let subscriptions = Arc::clone(&subscriptions);
+    let owned = Arc::clone(&owned);
     run_blocking(move || {
         let runtime = registry.lookup(Some(&runtime_name))?;
         let close_result = runtime.terminal_close(TerminalCloseParams {
@@ -627,7 +639,132 @@ pub async fn close_remote_terminal(
         // callback. The Exited event will still fire if the PTY was
         // alive; the subscription holds it until removed.
         subscriptions.remove(&terminal_id);
+        // Forget ownership regardless of server outcome. A failed
+        // close almost always means the daemon's gone (and the PTY
+        // with it) — keeping a stale entry would confuse the
+        // Reattach UI.
+        if owned.remove(&runtime_name, &terminal_id) {
+            persist_owned_terminals(&owned);
+        }
         close_result.map(|_| ())
+    })
+    .await
+}
+
+/// Persist the `OwnedTerminals` snapshot to its sidecar JSON.
+/// Best-effort: errors log but don't propagate (the in-memory
+/// state stays authoritative for the running session).
+fn persist_owned_terminals(owned: &Arc<OwnedTerminals>) {
+    let data_dir = match crate::data_dir::data_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "remote-runner: cannot resolve data dir; skipping owned-terminals persist"
+            );
+            return;
+        }
+    };
+    owned.save_to_disk(&data_dir);
+}
+
+/// Snapshot the surviving terminals on the named remote. The
+/// daemon returns *every* live PTY (not just those this desktop
+/// opened); the Reattach UI joins this with
+/// `list_owned_terminals` to mark our sessions vs. others.
+#[tauri::command]
+pub async fn list_remote_terminals(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    runtime_name: String,
+) -> CmdResult<TerminalListResult> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+        runtime.terminal_list(TerminalListParams {})
+    })
+    .await
+}
+
+/// Synchronous: read the desktop's owned-set for a runtime. No
+/// round-trip to the daemon — this is the cached "what did *we*
+/// open last time?" view.
+#[tauri::command]
+pub fn list_owned_terminals(
+    owned: tauri::State<'_, Arc<OwnedTerminals>>,
+    runtime_name: String,
+) -> CmdResult<Vec<String>> {
+    let mut ids: Vec<String> = owned.list_for_runtime(&runtime_name).into_iter().collect();
+    ids.sort();
+    Ok(ids)
+}
+
+/// Re-bind an existing remote terminal's live output to a fresh
+/// Tauri channel. Mirror of [`open_remote_terminal`] but talks to
+/// `terminal.attach` instead of `terminal.open`, so the desktop
+/// can resume a session opened by a previous instance.
+///
+/// The result includes the server-side scrollback captured since
+/// the previous attach (or since open). The UI paints that first,
+/// then live events arrive on `channel` going forward.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn attach_remote_terminal(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    subscriptions: tauri::State<'_, Arc<RemoteTerminalSubscriptions>>,
+    owned: tauri::State<'_, Arc<OwnedTerminals>>,
+    runtime_name: String,
+    terminal_id: String,
+    channel: Channel<TerminalEventNotification>,
+) -> CmdResult<TerminalAttachResult> {
+    let registry = Arc::clone(&registry);
+    let subscriptions = Arc::clone(&subscriptions);
+    let owned = Arc::clone(&owned);
+    run_blocking(move || {
+        let runtime = registry.lookup(Some(&runtime_name))?;
+
+        // Same shape as open: subscribe BEFORE the server-side
+        // notifier swap so live events can't be lost between
+        // attach returning and our subscription registering.
+        let term_id_for_filter = terminal_id.clone();
+        let subscription = runtime
+            .subscribe_terminal_events(Box::new(move |event| {
+                if event.terminal_id == term_id_for_filter {
+                    let _ = channel.send(event);
+                }
+            }))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime `{runtime_name}` does not stream terminal events \
+                     (only connected remote runtimes do)"
+                )
+            })?;
+
+        let result = runtime.terminal_attach(TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        });
+        match result {
+            Ok(attach) => {
+                // `insert` replaces any prior subscription for
+                // this terminal_id — that's fine, the old one was
+                // for a previous session of this same desktop or
+                // for the open call.
+                subscriptions.insert(terminal_id.clone(), subscription);
+                // Attach implies "this desktop now owns this
+                // terminal" — record it so future reattach flows
+                // surface it under "your sessions".
+                if owned.insert(&runtime_name, &terminal_id) {
+                    persist_owned_terminals(&owned);
+                }
+                Ok(attach)
+            }
+            Err(err) => {
+                // No `terminal_id` → no entry to remove from
+                // owned-state (we only insert on success). The
+                // subscription unregisters on drop.
+                drop(subscription);
+                Err(err)
+            }
+        }
     })
     .await
 }

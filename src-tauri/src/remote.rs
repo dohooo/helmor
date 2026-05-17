@@ -32,6 +32,7 @@ pub mod host;
 pub mod install;
 pub mod liveness;
 pub mod methods;
+pub mod owned_terminals;
 pub mod persistence;
 pub mod protocol;
 pub mod registry;
@@ -49,6 +50,7 @@ pub use liveness::spawn_liveness_loop;
 pub use methods::{
     Method, RpcMethod, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
+pub use owned_terminals::{OwnedTerminalEntry, OwnedTerminals};
 pub use protocol::{
     JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
 };

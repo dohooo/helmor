@@ -955,6 +955,83 @@ export async function closeRemoteTerminal(
 	});
 }
 
+/**
+ * Per-row metadata for a terminal still alive on the named remote.
+ * Mirrors the Rust `TerminalListEntry` wire shape — `pid` is the
+ * shell's PID on the remote, `openedAtMs` is the server-side open
+ * time so the UI can sort "most recent first" without per-client
+ * clocks.
+ */
+export type RemoteTerminalListEntry = {
+	terminalId: string;
+	pid: number;
+	workspaceDir: string;
+	openedAtMs: number;
+	cols: number;
+	rows: number;
+};
+
+/**
+ * Snapshot the server-side list of live terminals on the named
+ * remote. Returns every running PTY — both ones this desktop opened
+ * and any others (e.g. opened by a previous instance of the app, or
+ * by another machine connected to the same daemon).
+ */
+export async function listRemoteTerminals(
+	runtimeName: string,
+): Promise<RemoteTerminalListEntry[]> {
+	const result = await invoke<{ terminals: RemoteTerminalListEntry[] }>(
+		"list_remote_terminals",
+		{ runtimeName },
+	);
+	return result.terminals;
+}
+
+/**
+ * The desktop's view of "which terminal IDs did I open against this
+ * runtime?". Synchronous (no RPC round-trip) — pulled from the
+ * sidecar JSON hydrated at boot. Combine with
+ * [`listRemoteTerminals`] to mark "yours" vs "other sessions".
+ */
+export async function listOwnedTerminals(
+	runtimeName: string,
+): Promise<string[]> {
+	return invoke<string[]>("list_owned_terminals", { runtimeName });
+}
+
+/**
+ * Server-side initial state surfaced through `terminal.attach`.
+ * `scrollback` is the captured stdout since the previous attach (or
+ * since the open); paint it before the live stream resumes.
+ */
+export type RemoteTerminalAttachResult = {
+	scrollback: string;
+	cols: number;
+	rows: number;
+};
+
+/**
+ * Re-bind output for a live remote terminal to this desktop. Like
+ * [`openRemoteTerminal`] but talks to `terminal.attach` instead of
+ * `terminal.open`. The promise resolves with the captured scrollback;
+ * subsequent stdout flows on `onEvent` as it does for a fresh open.
+ */
+export async function attachRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	options: {
+		onEvent: (event: TerminalEventNotification) => void;
+	},
+): Promise<RemoteTerminalAttachResult> {
+	const channel = new Channel<TerminalEventNotification>();
+	channel.onmessage = options.onEvent;
+	return invoke<RemoteTerminalAttachResult>("attach_remote_terminal", {
+		runtimeName,
+		terminalId,
+		channel,
+	});
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;

@@ -21,7 +21,7 @@ use helmor_lib::remote::{
         TerminalAttachParams, TerminalCloseParams, TerminalEventKind, TerminalEventNotification,
         TerminalListParams, TerminalOpenParams, TerminalWriteParams,
     },
-    RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
+    OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
     WorkspaceStatusParams,
 };
 
@@ -526,4 +526,147 @@ fn daemon_mode_terminal_survives_client_disconnect_and_reattach() {
             terminal_id: "t-survive".into(),
         })
         .expect("terminal.close on c2");
+}
+
+#[test]
+fn owned_terminals_persistence_round_trips_with_daemon_list_and_attach() {
+    // The phase 19c integration: simulate the desktop side around
+    // a real daemon. Walks through the exact flow the Tauri
+    // commands wire up:
+    //
+    //   1. Boot daemon (isolated HOME), open a terminal via
+    //      client 1, write a marker.
+    //   2. *Persist* the terminal_id in a separate `OwnedTerminals`
+    //      data dir — this is the bit `open_remote_terminal` does
+    //      after a successful open.
+    //   3. Drop client 1. Reload `OwnedTerminals` from disk to
+    //      simulate desktop restart.
+    //   4. Connect client 2. `terminal.list` → still there. Cross-
+    //      reference with reloaded owned set → confirms we know
+    //      we opened it.
+    //   5. `terminal.attach` → scrollback includes the marker.
+    //   6. Close → daemon evicts; the reloaded owned set still has
+    //      the id locally, mirroring how the close command then
+    //      removes it.
+    let tmp_home = tempfile::tempdir().expect("daemon HOME");
+    let home = tmp_home.path().to_path_buf();
+    let socket: PathBuf = home.join(".helmor/server/sock");
+
+    let status = Command::new(HELMOR_SERVER_BIN)
+        .arg("--daemon")
+        .env("HOME", &home)
+        .status()
+        .expect("spawn daemon");
+    assert!(status.success());
+    wait_for_socket(&socket, Duration::from_secs(3));
+
+    let tmp_desktop_data = tempfile::tempdir().expect("desktop data dir");
+    let desktop_data_dir = tmp_desktop_data.path();
+
+    // Client 1: open + write + persist ownership.
+    {
+        let inbox: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+        let client_1 = connect_via_proxy(&home, "phase-19c-c1");
+        let sink = Arc::clone(&inbox);
+        let _sub = client_1.subscribe_terminal_events(move |event| {
+            sink.lock().unwrap().push(event);
+        });
+        let runtime_1 = RemoteSshRuntime::new(client_1, "phase-19c-c1");
+
+        runtime_1
+            .terminal_open(TerminalOpenParams {
+                terminal_id: "t-19c".into(),
+                workspace_dir: "/tmp".into(),
+                shell: Some("/bin/sh".into()),
+                cols: 80,
+                rows: 24,
+            })
+            .expect("open");
+        wait_for(
+            &inbox,
+            |e| matches!(&e.event, TerminalEventKind::Stdout { .. }),
+            Duration::from_secs(2),
+        );
+        runtime_1
+            .terminal_write(TerminalWriteParams {
+                terminal_id: "t-19c".into(),
+                data: "echo phase19c-marker\n".into(),
+            })
+            .expect("write");
+        wait_for(
+            &inbox,
+            |e| match &e.event {
+                TerminalEventKind::Stdout { data } => data.contains("phase19c-marker"),
+                _ => false,
+            },
+            Duration::from_secs(2),
+        );
+
+        // Desktop-side: record ownership + persist. Mirrors the
+        // `open_remote_terminal` command path post-success.
+        let owned = OwnedTerminals::new();
+        assert!(owned.insert("daemon-under-test", "t-19c"));
+        owned.save_to_disk(desktop_data_dir);
+    }
+
+    // Simulate desktop restart: client 1 + its OwnedTerminals are
+    // gone, only the sidecar JSON survives.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Reload ownership from disk. This is what the desktop's
+    // boot hook does (`OwnedTerminals::load_from_disk`).
+    let reloaded = OwnedTerminals::load_from_disk(desktop_data_dir);
+    let owned_set = reloaded.list_for_runtime("daemon-under-test");
+    assert_eq!(owned_set.len(), 1, "owned set should survive restart");
+    assert!(owned_set.contains("t-19c"));
+
+    // Client 2: list + cross-ref + attach + verify scrollback.
+    let client_2 = connect_via_proxy(&home, "phase-19c-c2");
+    let inbox_2: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&inbox_2);
+    let _sub_2 = client_2.subscribe_terminal_events(move |event| {
+        sink.lock().unwrap().push(event);
+    });
+    let runtime_2 = RemoteSshRuntime::new(client_2, "phase-19c-c2");
+
+    let live = runtime_2
+        .terminal_list(TerminalListParams {})
+        .expect("list");
+    assert_eq!(live.terminals.len(), 1);
+    let entry = &live.terminals[0];
+    assert_eq!(entry.terminal_id, "t-19c");
+    // Cross-reference: terminal_id is in both the daemon-side list
+    // and the desktop-side owned set. That's the predicate the
+    // Reattach UI uses to render the "yours" badge.
+    assert!(
+        owned_set.contains(&entry.terminal_id),
+        "live terminal should be recognised as owned"
+    );
+
+    let attach = runtime_2
+        .terminal_attach(TerminalAttachParams {
+            terminal_id: "t-19c".into(),
+        })
+        .expect("attach");
+    assert!(
+        attach.scrollback.contains("phase19c-marker"),
+        "scrollback should preserve the marker across restart: {:?}",
+        attach.scrollback
+    );
+
+    // Desktop-side close path: remove from owned set + delete the
+    // server-side PTY.
+    runtime_2
+        .terminal_close(TerminalCloseParams {
+            terminal_id: "t-19c".into(),
+        })
+        .expect("close");
+    assert!(reloaded.remove("daemon-under-test", "t-19c"));
+    reloaded.save_to_disk(desktop_data_dir);
+
+    let after_close = OwnedTerminals::load_from_disk(desktop_data_dir);
+    assert!(
+        after_close.list_for_runtime("daemon-under-test").is_empty(),
+        "close should drop ownership from disk"
+    );
 }
