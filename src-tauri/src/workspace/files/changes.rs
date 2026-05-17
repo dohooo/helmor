@@ -283,21 +283,31 @@ fn validate_workspace_relative_path(
 pub fn discard_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
     let (workspace_root, absolute) =
         validate_workspace_relative_path(workspace_root_path, relative_path)?;
+    discard_workspace_file_inner(&workspace_root, relative_path, &absolute)
+}
 
+/// Discard local changes for a single file under a pre-validated
+/// workspace root. Skips the DB-driven `allowed_workspace_roots` check;
+/// the remote-runner seam supplies its own workspace-bound sandbox.
+pub fn discard_workspace_file_inner(
+    workspace_root: &Path,
+    relative_path: &str,
+    absolute: &Path,
+) -> Result<()> {
     let is_tracked = git_ops::run_git(
         ["ls-files", "--error-unmatch", "--", relative_path],
-        Some(&workspace_root),
+        Some(workspace_root),
     )
     .is_ok();
 
     if is_tracked {
         git_ops::run_git(
             ["checkout", "HEAD", "--", relative_path],
-            Some(&workspace_root),
+            Some(workspace_root),
         )
         .with_context(|| format!("Failed to discard changes for {relative_path}"))?;
     } else if absolute.exists() {
-        fs::remove_file(&absolute)
+        fs::remove_file(absolute)
             .with_context(|| format!("Failed to remove untracked file: {}", absolute.display()))?;
     }
 
@@ -306,8 +316,13 @@ pub fn discard_workspace_file(workspace_root_path: &str, relative_path: &str) ->
 
 pub fn stage_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
     let (workspace_root, _) = validate_workspace_relative_path(workspace_root_path, relative_path)?;
+    stage_workspace_file_inner(&workspace_root, relative_path)
+}
 
-    git_ops::run_git(["add", "--", relative_path], Some(&workspace_root))
+/// Stage a single file under a pre-validated workspace root. Skips the
+/// DB sandbox.
+pub fn stage_workspace_file_inner(workspace_root: &Path, relative_path: &str) -> Result<()> {
+    git_ops::run_git(["add", "--", relative_path], Some(workspace_root))
         .with_context(|| format!("Failed to stage {relative_path}"))?;
 
     Ok(())
@@ -315,10 +330,15 @@ pub fn stage_workspace_file(workspace_root_path: &str, relative_path: &str) -> R
 
 pub fn unstage_workspace_file(workspace_root_path: &str, relative_path: &str) -> Result<()> {
     let (workspace_root, _) = validate_workspace_relative_path(workspace_root_path, relative_path)?;
+    unstage_workspace_file_inner(&workspace_root, relative_path)
+}
 
+/// Unstage a single file under a pre-validated workspace root. Skips
+/// the DB sandbox.
+pub fn unstage_workspace_file_inner(workspace_root: &Path, relative_path: &str) -> Result<()> {
     git_ops::run_git(
         ["restore", "--staged", "--", relative_path],
-        Some(&workspace_root),
+        Some(workspace_root),
     )
     .with_context(|| format!("Failed to unstage {relative_path}"))?;
 

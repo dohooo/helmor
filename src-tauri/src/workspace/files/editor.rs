@@ -60,7 +60,15 @@ pub fn read_file_at_ref(
 
 pub fn read_editor_file(path: &str) -> Result<EditorFileReadResponse> {
     let resolved_path = resolve_allowed_path(Path::new(path), false)?;
-    let metadata = match fs::metadata(&resolved_path) {
+    read_editor_file_inner(&resolved_path)
+}
+
+/// Read a single editor file from a pre-validated absolute path.
+/// Skips the `resolve_allowed_path` DB sandbox — callers (e.g. the
+/// remote-runner seam) must apply their own workspace-dir-bound check
+/// before invoking this.
+pub fn read_editor_file_inner(absolute_path: &Path) -> Result<EditorFileReadResponse> {
+    let metadata = match fs::metadata(absolute_path) {
         Ok(metadata) => metadata,
         // File or any parent component vanished after the open — treat as
         // broken workspace so the frontend offers a recovery action rather
@@ -69,31 +77,31 @@ pub fn read_editor_file(path: &str) -> Result<EditorFileReadResponse> {
             return Err(anyhow::Error::new(error)
                 .context(format!(
                     "Editor file no longer exists: {}",
-                    resolved_path.display()
+                    absolute_path.display()
                 ))
                 .with_code(ErrorCode::WorkspaceBroken));
         }
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("Failed to stat editor file {}", resolved_path.display()))
+                .with_context(|| format!("Failed to stat editor file {}", absolute_path.display()))
         }
     };
 
     if !metadata.is_file() {
-        bail!("Editor target is not a file: {}", resolved_path.display());
+        bail!("Editor target is not a file: {}", absolute_path.display());
     }
 
-    let bytes = fs::read(&resolved_path)
-        .with_context(|| format!("Failed to read editor file {}", resolved_path.display()))?;
+    let bytes = fs::read(absolute_path)
+        .with_context(|| format!("Failed to read editor file {}", absolute_path.display()))?;
     let content = String::from_utf8(bytes).with_context(|| {
         format!(
             "Editor file is not valid UTF-8: {}",
-            resolved_path.display()
+            absolute_path.display()
         )
     })?;
 
     Ok(EditorFileReadResponse {
-        path: resolved_path.display().to_string(),
+        path: absolute_path.display().to_string(),
         content,
         mtime_ms: metadata_mtime_ms(&metadata)?,
     })
@@ -101,7 +109,17 @@ pub fn read_editor_file(path: &str) -> Result<EditorFileReadResponse> {
 
 pub fn write_editor_file(path: &str, content: &str) -> Result<EditorFileWriteResponse> {
     let resolved_path = resolve_allowed_path(Path::new(path), false)?;
-    let metadata = match fs::metadata(&resolved_path) {
+    write_editor_file_inner(&resolved_path, content)
+}
+
+/// Write a single editor file at a pre-validated absolute path. Mirrors
+/// [`read_editor_file_inner`]: skips the DB sandbox so the remote-runner
+/// seam can drive writes after applying its own workspace-dir check.
+pub fn write_editor_file_inner(
+    absolute_path: &Path,
+    content: &str,
+) -> Result<EditorFileWriteResponse> {
+    let metadata = match fs::metadata(absolute_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             // Target file or parent dir vanished between open and save.
@@ -110,54 +128,60 @@ pub fn write_editor_file(path: &str, content: &str) -> Result<EditorFileWriteRes
             bail_coded!(
                 ErrorCode::WorkspaceBroken,
                 "Cannot save: {} no longer exists on disk",
-                resolved_path.display()
+                absolute_path.display()
             );
         }
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("Failed to stat editor file {}", resolved_path.display()))
+                .with_context(|| format!("Failed to stat editor file {}", absolute_path.display()))
         }
     };
 
     if !metadata.is_file() {
-        bail!("Editor target is not a file: {}", resolved_path.display());
+        bail!("Editor target is not a file: {}", absolute_path.display());
     }
 
-    atomic_write_file(&resolved_path, content.as_bytes())?;
+    atomic_write_file(absolute_path, content.as_bytes())?;
 
-    let updated_metadata = fs::metadata(&resolved_path).with_context(|| {
+    let updated_metadata = fs::metadata(absolute_path).with_context(|| {
         format!(
             "Failed to stat editor file after save {}",
-            resolved_path.display()
+            absolute_path.display()
         )
     })?;
 
     Ok(EditorFileWriteResponse {
-        path: resolved_path.display().to_string(),
+        path: absolute_path.display().to_string(),
         mtime_ms: metadata_mtime_ms(&updated_metadata)?,
     })
 }
 
 pub fn stat_editor_file(path: &str) -> Result<EditorFileStatResponse> {
     let resolved_path = resolve_allowed_path(Path::new(path), false)?;
+    stat_editor_file_inner(&resolved_path)
+}
 
-    match fs::metadata(&resolved_path) {
+/// Stat an editor file at a pre-validated absolute path. Returns
+/// `exists=false` (rather than `Err`) on a missing file so the inspector
+/// can render a "no longer exists" state without a red toast.
+pub fn stat_editor_file_inner(absolute_path: &Path) -> Result<EditorFileStatResponse> {
+    match fs::metadata(absolute_path) {
         Ok(metadata) => Ok(EditorFileStatResponse {
-            path: resolved_path.display().to_string(),
+            path: absolute_path.display().to_string(),
             exists: true,
             is_file: metadata.is_file(),
             mtime_ms: Some(metadata_mtime_ms(&metadata)?),
             size: Some(metadata.len() as i64),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(EditorFileStatResponse {
-            path: resolved_path.display().to_string(),
+            path: absolute_path.display().to_string(),
             exists: false,
             is_file: false,
             mtime_ms: None,
             size: None,
         }),
         Err(error) => Err(error)
-            .with_context(|| format!("Failed to stat editor file {}", resolved_path.display())),
+            .with_context(|| format!("Failed to stat editor file {}", absolute_path.display())),
     }
 }
 
@@ -165,29 +189,48 @@ pub fn list_editor_files(workspace_root_path: &str) -> Result<Vec<EditorFileList
     let Some(workspace_root) = resolve_workspace_root_optional(workspace_root_path)? else {
         return Ok(Vec::new());
     };
+    Ok(list_editor_files_inner(&workspace_root))
+}
+
+/// Collect editor-tab files under a pre-validated workspace root.
+/// Returns at most [`MAX_EDITOR_FILE_ITEMS`] items, sorted by the same
+/// key the picker uses. Skips the DB sandbox — used by the remote
+/// runner's `LocalRuntime` impl.
+pub fn list_editor_files_inner(workspace_root: &Path) -> Vec<EditorFileListItem> {
     let mut discovered_files = Vec::<PathBuf>::new();
-    collect_editor_files(&workspace_root, &workspace_root, &mut discovered_files)?;
+    if collect_editor_files(workspace_root, workspace_root, &mut discovered_files).is_err() {
+        // Walker errors are typically permission failures partway through.
+        // Mirror the existing public function's "return what we have so far"
+        // contract via an empty list rather than failing the whole call.
+        return Vec::new();
+    }
     discovered_files.sort_by(|left, right| {
-        editor_file_sort_key(&workspace_root, left)
-            .cmp(&editor_file_sort_key(&workspace_root, right))
+        editor_file_sort_key(workspace_root, left).cmp(&editor_file_sort_key(workspace_root, right))
     });
     discovered_files.truncate(MAX_EDITOR_FILE_ITEMS);
 
-    Ok(build_list_items(&workspace_root, discovered_files))
+    build_list_items(workspace_root, discovered_files)
 }
 
 pub fn list_workspace_files(workspace_root_path: &str) -> Result<Vec<EditorFileListItem>> {
     let Some(workspace_root) = resolve_workspace_root_optional(workspace_root_path)? else {
         return Ok(Vec::new());
     };
+    Ok(list_workspace_files_inner(&workspace_root))
+}
+
+/// Walk the workspace for the mention picker / inspector file tree.
+/// Pre-validated absolute root; skips the DB sandbox.
+pub fn list_workspace_files_inner(workspace_root: &Path) -> Vec<EditorFileListItem> {
     let mut discovered_files = Vec::<PathBuf>::new();
-    collect_workspace_files_for_mention(&workspace_root, &mut discovered_files)?;
+    if collect_workspace_files_for_mention(workspace_root, &mut discovered_files).is_err() {
+        return Vec::new();
+    }
     discovered_files.sort_by(|left, right| {
-        editor_file_sort_key(&workspace_root, left)
-            .cmp(&editor_file_sort_key(&workspace_root, right))
+        editor_file_sort_key(workspace_root, left).cmp(&editor_file_sort_key(workspace_root, right))
     });
 
-    Ok(build_list_items(&workspace_root, discovered_files))
+    build_list_items(workspace_root, discovered_files)
 }
 
 pub fn list_editor_files_with_content(

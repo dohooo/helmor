@@ -28,10 +28,10 @@
 //! work is always either a function call (local) or a JSON-RPC
 //! round-trip (remote), so the overhead is in the noise either way.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::methods::{WorkspaceBranchInfoResult, WorkspaceStatusResult};
@@ -328,6 +328,156 @@ impl RemoteRuntime for LocalRuntime {
             upstream_ref,
         })
     }
+
+    // ── workspace inspector ops (phase 20b — real impls) ─────────
+    //
+    // Each method does the seam-level sandbox (`workspace_dir` +
+    // optional `relative_path` → absolute path that stays inside the
+    // workspace), then delegates to the workspace::files `_inner`
+    // helpers that perform the actual git / fs work *without* the
+    // desktop's DB-driven `allowed_workspace_roots` check.
+    //
+    // The DB check is irrelevant here on two axes:
+    // - On the desktop, every callsite already routes through this
+    //   trait when the workspace is bound to a remote runtime —
+    //   their `runtime_name` resolves before the DB sandbox would
+    //   matter.
+    // - On the helmor-server binary, there is no helmor DB; the
+    //   binary would simply error out of every editor call. The
+    //   `_inner` variants exist precisely so this path can do its
+    //   own sandbox without touching SQLite.
+    //
+    // Failures from the underlying helpers (missing file, git
+    // error, broken workspace) surface verbatim — the dispatcher
+    // wraps them as `HANDLER_FAILED`, preserving the human message
+    // for the inspector to show.
+
+    fn workspace_file_tree(
+        &self,
+        params: super::methods::WorkspaceFileTreeParams,
+    ) -> Result<super::methods::WorkspaceFileTreeResult> {
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let entries = crate::workspace::files::list_workspace_files_inner(&workspace_dir);
+        Ok(super::methods::WorkspaceFileTreeResult { entries })
+    }
+
+    fn workspace_changes(
+        &self,
+        params: super::methods::WorkspaceChangesParams,
+    ) -> Result<super::methods::WorkspaceChangesResult> {
+        if params.include_content {
+            let response = crate::workspace::files::list_workspace_changes_with_content(
+                params.workspace_dir.as_str(),
+            )?;
+            Ok(super::methods::WorkspaceChangesResult {
+                items: response.items,
+                prefetched: response.prefetched,
+            })
+        } else {
+            let items =
+                crate::workspace::files::list_workspace_changes(params.workspace_dir.as_str())?;
+            Ok(super::methods::WorkspaceChangesResult {
+                items,
+                prefetched: Vec::new(),
+            })
+        }
+    }
+
+    fn workspace_read_file(
+        &self,
+        params: super::methods::WorkspaceReadFileParams,
+    ) -> Result<crate::workspace::files::EditorFileReadResponse> {
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let absolute = join_workspace_relative(&workspace_dir, &params.relative_path)?;
+        crate::workspace::files::read_editor_file_inner(&absolute)
+    }
+
+    fn workspace_read_file_at_ref(
+        &self,
+        params: super::methods::WorkspaceReadFileAtRefParams,
+    ) -> Result<super::methods::WorkspaceReadFileAtRefResult> {
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let absolute = join_workspace_relative(&workspace_dir, &params.relative_path)?;
+        let content = crate::workspace::files::read_file_at_ref(
+            params.workspace_dir.as_str(),
+            absolute.display().to_string().as_str(),
+            params.git_ref.as_str(),
+        )?;
+        Ok(super::methods::WorkspaceReadFileAtRefResult { content })
+    }
+
+    fn workspace_stat_file(
+        &self,
+        params: super::methods::WorkspaceStatFileParams,
+    ) -> Result<crate::workspace::files::EditorFileStatResponse> {
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let absolute = join_workspace_relative(&workspace_dir, &params.relative_path)?;
+        crate::workspace::files::stat_editor_file_inner(&absolute)
+    }
+
+    fn workspace_mutate_file(
+        &self,
+        params: super::methods::WorkspaceMutateFileParams,
+    ) -> Result<super::methods::WorkspaceMutateFileResult> {
+        use super::methods::WorkspaceMutateFileAction;
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let absolute = join_workspace_relative(&workspace_dir, &params.relative_path)?;
+        let relative = params.relative_path.as_str();
+        match params.action {
+            WorkspaceMutateFileAction::Write { content } => {
+                let response =
+                    crate::workspace::files::write_editor_file_inner(&absolute, &content)?;
+                Ok(super::methods::WorkspaceMutateFileResult {
+                    mtime_ms: Some(response.mtime_ms),
+                })
+            }
+            WorkspaceMutateFileAction::Discard => {
+                crate::workspace::files::discard_workspace_file_inner(
+                    &workspace_dir,
+                    relative,
+                    &absolute,
+                )?;
+                Ok(super::methods::WorkspaceMutateFileResult { mtime_ms: None })
+            }
+            WorkspaceMutateFileAction::Stage => {
+                crate::workspace::files::stage_workspace_file_inner(&workspace_dir, relative)?;
+                Ok(super::methods::WorkspaceMutateFileResult { mtime_ms: None })
+            }
+            WorkspaceMutateFileAction::Unstage => {
+                crate::workspace::files::unstage_workspace_file_inner(&workspace_dir, relative)?;
+                Ok(super::methods::WorkspaceMutateFileResult { mtime_ms: None })
+            }
+        }
+    }
+}
+
+/// Validate a workspace-relative path coming over the wire and join
+/// it onto the runtime's own filesystem root. Rejects empty paths,
+/// absolute paths, and any `..` traversal — the daemon must never
+/// read or write outside the workspace root the client named.
+///
+/// Returns the joined absolute path on success. Symlink-escape
+/// detection (canonicalise + `starts_with` workspace root) is
+/// deferred: it would need a partial canonicalise so missing-file
+/// calls like `statFile` and `writeFile` (on a brand-new file) keep
+/// working. The cheap textual check below covers the obvious
+/// hostile inputs; a stricter pass can land alongside symlink
+/// support if it ever matters.
+fn join_workspace_relative(workspace_dir: &Path, relative_path: &str) -> Result<PathBuf> {
+    if relative_path.is_empty() {
+        bail!("relative path must not be empty");
+    }
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() {
+        bail!("relative path must not be absolute: {relative_path}");
+    }
+    if rel
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("relative path must not contain `..`: {relative_path}");
+    }
+    Ok(workspace_dir.join(rel))
 }
 
 /// Turn `git status --porcelain` output into the wire-shaped
@@ -611,6 +761,395 @@ mod tests {
             "fresh repo has no upstream tracking ref: {:?}",
             info.upstream_ref
         );
+    }
+
+    // ── workspace inspector ops (phase 20b) ──────────────────────
+    //
+    // Each method gets a happy-path test against a real tempdir git
+    // repo plus the obvious failure modes (missing file, sandbox
+    // escape). The point is to exercise the `LocalRuntime` impl
+    // verbatim — same code path the helmor-server binary runs.
+
+    use crate::remote::methods::{
+        WorkspaceChangesParams, WorkspaceFileTreeParams, WorkspaceMutateFileAction,
+        WorkspaceMutateFileParams, WorkspaceReadFileAtRefParams, WorkspaceReadFileParams,
+        WorkspaceStatFileParams,
+    };
+
+    fn make_local_runtime() -> LocalRuntime {
+        LocalRuntime::with_hostname("test-host".into())
+    }
+
+    #[test]
+    fn local_runtime_workspace_file_tree_lists_files_inside_the_root() {
+        let dir = init_repo();
+        // Add a couple of files in subdirs to prove the walker
+        // recurses + reports paths relative to the workspace root.
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("nested.txt"), "n\n").unwrap();
+        let runtime = make_local_runtime();
+
+        let result = runtime
+            .workspace_file_tree(WorkspaceFileTreeParams {
+                workspace_dir: dir.path().display().to_string(),
+            })
+            .expect("file tree on a real repo should succeed");
+
+        let paths: Vec<_> = result.entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(
+            paths.contains(&"file.txt"),
+            "tracked file should surface: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"sub/nested.txt"),
+            "nested untracked file should surface: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_changes_returns_empty_items_on_clean_repo() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+        let result = runtime
+            .workspace_changes(WorkspaceChangesParams {
+                workspace_dir: dir.path().display().to_string(),
+                include_content: false,
+            })
+            .expect("clean repo should not error");
+        assert!(result.items.is_empty(), "clean repo: {result:?}");
+        assert!(result.prefetched.is_empty());
+    }
+
+    #[test]
+    fn local_runtime_workspace_changes_with_content_prefetches_modified_files() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "changed body\n").unwrap();
+        let runtime = make_local_runtime();
+
+        let result = runtime
+            .workspace_changes(WorkspaceChangesParams {
+                workspace_dir: dir.path().display().to_string(),
+                include_content: true,
+            })
+            .expect("changes call should succeed");
+
+        assert!(
+            result.items.iter().any(|i| i.path == "file.txt"),
+            "modified path should appear: {result:?}"
+        );
+        assert!(
+            !result.prefetched.is_empty(),
+            "include_content=true should fill prefetched: {result:?}"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_changes_omits_prefetched_when_include_content_false() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "changed body\n").unwrap();
+        let runtime = make_local_runtime();
+
+        let result = runtime
+            .workspace_changes(WorkspaceChangesParams {
+                workspace_dir: dir.path().display().to_string(),
+                include_content: false,
+            })
+            .unwrap();
+
+        assert!(!result.items.is_empty(), "items list should still populate");
+        assert!(
+            result.prefetched.is_empty(),
+            "include_content=false should skip prefetch: {result:?}"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_returns_content_and_mtime() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_read_file(WorkspaceReadFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+            })
+            .expect("read existing file");
+
+        assert_eq!(response.content, "base\n");
+        assert!(response.mtime_ms > 0, "mtime should be populated");
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_rejects_parent_traversal() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let err = runtime
+            .workspace_read_file(WorkspaceReadFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "../escape.txt".into(),
+            })
+            .expect_err("parent traversal must be rejected at the seam");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("`..`"),
+            "error should call out the traversal: {msg}"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_rejects_absolute_relative_path() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let err = runtime
+            .workspace_read_file(WorkspaceReadFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "/etc/passwd".into(),
+            })
+            .expect_err("absolute relative_path must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("must not be absolute"),
+            "error should call out the absolute path: {msg}"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_rejects_empty_relative_path() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let err = runtime
+            .workspace_read_file(WorkspaceReadFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: String::new(),
+            })
+            .expect_err("empty relative_path must be rejected");
+        let msg = format!("{err}");
+        assert!(msg.contains("must not be empty"), "{msg}");
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_at_ref_returns_committed_content() {
+        let dir = init_repo();
+        // Modify the working tree so HEAD's content differs from the
+        // working file. The function should return the HEAD version.
+        std::fs::write(dir.path().join("file.txt"), "changed body\n").unwrap();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+                git_ref: "HEAD".into(),
+            })
+            .expect("read at HEAD should succeed");
+
+        assert_eq!(
+            response.content,
+            Some("base\n".to_string()),
+            "HEAD should hold the pre-modification body",
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_read_file_at_ref_returns_none_for_missing_path() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "never-existed.rs".into(),
+                git_ref: "HEAD".into(),
+            })
+            .expect("ref-read on a missing path is `Ok(None)`, not an error");
+
+        assert!(response.content.is_none(), "{response:?}");
+    }
+
+    #[test]
+    fn local_runtime_workspace_stat_file_reports_existence_and_size() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_stat_file(WorkspaceStatFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+            })
+            .expect("stat existing file");
+
+        assert!(response.exists);
+        assert!(response.is_file);
+        // "base\n" → 5 bytes.
+        assert_eq!(response.size, Some(5));
+        assert!(response.mtime_ms.is_some());
+    }
+
+    #[test]
+    fn local_runtime_workspace_stat_file_reports_missing_file_as_exists_false() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_stat_file(WorkspaceStatFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "missing.rs".into(),
+            })
+            .expect("stat on missing file should still be Ok");
+
+        assert!(!response.exists);
+        assert!(!response.is_file);
+        assert!(response.size.is_none());
+        assert!(response.mtime_ms.is_none());
+    }
+
+    #[test]
+    fn local_runtime_workspace_mutate_file_write_updates_content_and_mtime() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        let response = runtime
+            .workspace_mutate_file(WorkspaceMutateFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+                action: WorkspaceMutateFileAction::Write {
+                    content: "new body\n".into(),
+                },
+            })
+            .expect("write existing file");
+        assert!(response.mtime_ms.is_some(), "write should report mtime");
+
+        let on_disk = std::fs::read_to_string(dir.path().join("file.txt")).unwrap();
+        assert_eq!(on_disk, "new body\n");
+    }
+
+    #[test]
+    fn local_runtime_workspace_mutate_file_stage_then_unstage_round_trips() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "edited\n").unwrap();
+        let runtime = make_local_runtime();
+
+        runtime
+            .workspace_mutate_file(WorkspaceMutateFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+                action: WorkspaceMutateFileAction::Stage,
+            })
+            .expect("stage should succeed");
+
+        // After staging, `git diff --cached` should list the file.
+        let cached =
+            crate::git_ops::run_git(["diff", "--cached", "--name-only"], Some(dir.path())).unwrap();
+        assert!(
+            cached.contains("file.txt"),
+            "stage should put file in index: {cached:?}"
+        );
+
+        runtime
+            .workspace_mutate_file(WorkspaceMutateFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+                action: WorkspaceMutateFileAction::Unstage,
+            })
+            .expect("unstage should succeed");
+
+        let cached_after =
+            crate::git_ops::run_git(["diff", "--cached", "--name-only"], Some(dir.path())).unwrap();
+        assert!(
+            cached_after.is_empty(),
+            "unstage should empty the index: {cached_after:?}",
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_mutate_file_discard_restores_tracked_file() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("file.txt"), "edited\n").unwrap();
+        let runtime = make_local_runtime();
+
+        runtime
+            .workspace_mutate_file(WorkspaceMutateFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "file.txt".into(),
+                action: WorkspaceMutateFileAction::Discard,
+            })
+            .expect("discard tracked file");
+
+        let on_disk = std::fs::read_to_string(dir.path().join("file.txt")).unwrap();
+        assert_eq!(on_disk, "base\n", "discard should restore HEAD content");
+    }
+
+    #[test]
+    fn local_runtime_workspace_mutate_file_discard_removes_untracked_file() {
+        let dir = init_repo();
+        std::fs::write(dir.path().join("scratch.txt"), "throwaway\n").unwrap();
+        let runtime = make_local_runtime();
+
+        runtime
+            .workspace_mutate_file(WorkspaceMutateFileParams {
+                workspace_dir: dir.path().display().to_string(),
+                relative_path: "scratch.txt".into(),
+                action: WorkspaceMutateFileAction::Discard,
+            })
+            .expect("discard untracked file");
+
+        assert!(
+            !dir.path().join("scratch.txt").exists(),
+            "discard of an untracked file should delete it"
+        );
+    }
+
+    #[test]
+    fn local_runtime_workspace_mutate_file_propagates_sandbox_violation() {
+        let dir = init_repo();
+        let runtime = make_local_runtime();
+
+        // Each non-write action runs the sandbox before the git call,
+        // so a `..` path can't even reach the git binary.
+        for (label, action) in [
+            ("stage", WorkspaceMutateFileAction::Stage),
+            ("unstage", WorkspaceMutateFileAction::Unstage),
+            ("discard", WorkspaceMutateFileAction::Discard),
+            (
+                "write",
+                WorkspaceMutateFileAction::Write {
+                    content: "x".into(),
+                },
+            ),
+        ] {
+            let err = runtime
+                .workspace_mutate_file(WorkspaceMutateFileParams {
+                    workspace_dir: dir.path().display().to_string(),
+                    relative_path: "../escape".into(),
+                    action,
+                })
+                .expect_err("`..` must be rejected before the underlying op");
+            assert!(
+                format!("{err}").contains("`..`"),
+                "{label}: error should call out the traversal: {err:#}",
+            );
+        }
+    }
+
+    // ── join_workspace_relative ──────────────────────────────────
+
+    #[test]
+    fn join_workspace_relative_accepts_nested_relative_paths() {
+        let joined =
+            join_workspace_relative(Path::new("/tmp/ws"), "src/lib/foo.rs").expect("happy path");
+        assert_eq!(joined, PathBuf::from("/tmp/ws/src/lib/foo.rs"));
+    }
+
+    #[test]
+    fn join_workspace_relative_rejects_dot_dot_anywhere_in_path() {
+        // Component-level check — `..` buried inside the path rejects
+        // the same as a leading `..`. Prevents `a/../../etc/passwd`.
+        let err = join_workspace_relative(Path::new("/tmp/ws"), "a/../../etc/passwd")
+            .expect_err("buried `..` must be rejected");
+        assert!(format!("{err}").contains("`..`"));
     }
 
     // ── porcelain parser ─────────────────────────────────────────

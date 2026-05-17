@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use helmor_lib::remote::{
     methods::{
         TerminalAttachParams, TerminalCloseParams, TerminalEventKind, TerminalEventNotification,
-        TerminalListParams, TerminalOpenParams, TerminalWriteParams,
+        TerminalListParams, TerminalOpenParams, TerminalWriteParams, WorkspaceChangesParams,
+        WorkspaceFileTreeParams, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
+        WorkspaceReadFileAtRefParams, WorkspaceReadFileParams, WorkspaceStatFileParams,
     },
     OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
     WorkspaceStatusParams,
@@ -123,6 +125,204 @@ fn spawned_helmor_server_surfaces_dirty_paths_via_remote_ssh_runtime_trait() {
         vec!["file.txt".to_string(), "new.txt".to_string()],
         "porcelain output should round-trip through the binary verbatim",
     );
+}
+
+#[test]
+fn spawned_helmor_server_exercises_every_workspace_inspector_method() {
+    // End-to-end vertical for phase 20b: spawn the real binary, drive
+    // every new inspector method against a real git repo, and assert
+    // the bytes round-trip correctly. If `LocalRuntime`'s impls or the
+    // _inner helpers in `workspace::files::*` regress, this test fails
+    // *before* the desktop's IPC layer notices.
+    let repo = init_repo();
+    let workspace_dir = repo.path().display().to_string();
+    // Add a nested file so file_tree has something to recurse into,
+    // and a second file we can mutate without conflicting with the
+    // baseline.
+    std::fs::create_dir(repo.path().join("sub")).unwrap();
+    std::fs::write(repo.path().join("sub").join("nested.txt"), "n\n").unwrap();
+    std::fs::write(repo.path().join("scratch.txt"), "throwaway\n").unwrap();
+
+    let cmd = Command::new(HELMOR_SERVER_BIN);
+    let client = RpcClient::connect_command(cmd, "helmor-server-inspector-test".into())
+        .expect("handshake should succeed");
+    let runtime = RemoteSshRuntime::new(client, "helmor-server-inspector-test");
+
+    // ── workspace.fileTree ────────────────────────────────────────
+    let tree = runtime
+        .workspace_file_tree(WorkspaceFileTreeParams {
+            workspace_dir: workspace_dir.clone(),
+        })
+        .expect("file tree call");
+    let paths: Vec<_> = tree.entries.iter().map(|e| e.path.as_str()).collect();
+    assert!(
+        paths.contains(&"file.txt"),
+        "tracked file should appear in the tree: {paths:?}",
+    );
+    assert!(
+        paths.contains(&"sub/nested.txt"),
+        "nested file should appear in the tree: {paths:?}",
+    );
+
+    // ── workspace.statFile ────────────────────────────────────────
+    let stat = runtime
+        .workspace_stat_file(WorkspaceStatFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+        })
+        .expect("stat call");
+    assert!(stat.exists);
+    assert!(stat.is_file);
+    assert_eq!(stat.size, Some(5)); // "base\n"
+
+    let missing_stat = runtime
+        .workspace_stat_file(WorkspaceStatFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "does-not-exist.rs".into(),
+        })
+        .expect("stat on missing path returns Ok(exists=false)");
+    assert!(!missing_stat.exists);
+
+    // ── workspace.readFile ───────────────────────────────────────
+    let read = runtime
+        .workspace_read_file(WorkspaceReadFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+        })
+        .expect("read call");
+    assert_eq!(read.content, "base\n");
+
+    // Sandbox escape — must surface as HANDLER_FAILED with the seam
+    // helper's message preserved.
+    let escape = runtime
+        .workspace_read_file(WorkspaceReadFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "../escape".into(),
+        })
+        .expect_err("`..` must be rejected on the seam");
+    let escape_msg = format!("{escape}");
+    assert!(
+        escape_msg.contains("HANDLER_FAILED") && escape_msg.contains("`..`"),
+        "sandbox-escape error should carry both the wire code and the seam message: {escape_msg}",
+    );
+
+    // ── workspace.readFileAtRef ──────────────────────────────────
+    // Modify the working tree so HEAD differs.
+    std::fs::write(repo.path().join("file.txt"), "edited\n").unwrap();
+    let at_ref = runtime
+        .workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+            git_ref: "HEAD".into(),
+        })
+        .expect("read-at-ref call");
+    assert_eq!(at_ref.content, Some("base\n".into()));
+
+    let missing_at_ref = runtime
+        .workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "never.rs".into(),
+            git_ref: "HEAD".into(),
+        })
+        .expect("missing path at ref is Ok(None), not error");
+    assert!(missing_at_ref.content.is_none());
+
+    // ── workspace.changes (no content) ───────────────────────────
+    let changes = runtime
+        .workspace_changes(WorkspaceChangesParams {
+            workspace_dir: workspace_dir.clone(),
+            include_content: false,
+        })
+        .expect("changes call");
+    assert!(
+        changes.items.iter().any(|i| i.path == "file.txt"),
+        "modified path should surface in changes: {changes:?}",
+    );
+    assert!(
+        changes.prefetched.is_empty(),
+        "include_content=false should omit prefetched bodies",
+    );
+
+    // ── workspace.changes (with content) ─────────────────────────
+    let changes_with = runtime
+        .workspace_changes(WorkspaceChangesParams {
+            workspace_dir: workspace_dir.clone(),
+            include_content: true,
+        })
+        .expect("changes with content");
+    assert!(!changes_with.prefetched.is_empty());
+
+    // ── workspace.mutateFile: Write ──────────────────────────────
+    let write = runtime
+        .workspace_mutate_file(WorkspaceMutateFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+            action: WorkspaceMutateFileAction::Write {
+                content: "via-wire\n".into(),
+            },
+        })
+        .expect("mutate write");
+    assert!(write.mtime_ms.is_some());
+    let on_disk = std::fs::read_to_string(repo.path().join("file.txt")).unwrap();
+    assert_eq!(on_disk, "via-wire\n");
+
+    // ── workspace.mutateFile: Stage + Unstage ────────────────────
+    runtime
+        .workspace_mutate_file(WorkspaceMutateFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+            action: WorkspaceMutateFileAction::Stage,
+        })
+        .expect("mutate stage");
+    let cached = run_git_capture(repo.path(), &["diff", "--cached", "--name-only"]);
+    assert!(
+        cached.contains("file.txt"),
+        "stage should put file in index: {cached:?}"
+    );
+
+    runtime
+        .workspace_mutate_file(WorkspaceMutateFileParams {
+            workspace_dir: workspace_dir.clone(),
+            relative_path: "file.txt".into(),
+            action: WorkspaceMutateFileAction::Unstage,
+        })
+        .expect("mutate unstage");
+    let cached_after = run_git_capture(repo.path(), &["diff", "--cached", "--name-only"]);
+    assert!(
+        cached_after.is_empty(),
+        "unstage should empty the index: {cached_after:?}"
+    );
+
+    // ── workspace.mutateFile: Discard untracked ──────────────────
+    runtime
+        .workspace_mutate_file(WorkspaceMutateFileParams {
+            workspace_dir,
+            relative_path: "scratch.txt".into(),
+            action: WorkspaceMutateFileAction::Discard,
+        })
+        .expect("mutate discard untracked");
+    assert!(
+        !repo.path().join("scratch.txt").exists(),
+        "discard should remove the untracked file"
+    );
+}
+
+/// Shell out to git, return captured stdout. Tiny helper used by the
+/// inspector-method integration test above to assert side effects on
+/// the underlying repo without re-implementing porcelain parsing.
+fn run_git_capture(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} in {} failed: {}",
+        repo.display(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8(output.stdout).expect("git output is utf-8")
 }
 
 #[test]
