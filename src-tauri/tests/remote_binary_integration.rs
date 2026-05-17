@@ -10,9 +10,9 @@
 //! automatically rebuilds the binary when the test runs, so a stale
 //! binary can't mask a regression in the source.
 
-use std::path::Path;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -369,4 +369,161 @@ fn spawned_helmor_server_lists_and_reattaches_to_running_terminal() {
             terminal_id: "t-reattach".into(),
         })
         .expect("terminal.close");
+}
+
+// ── phase 19b: daemon-mode reattach across client lifetime ──────────
+
+/// Connect to the running daemon via `helmor-server --proxy`, the
+/// same path the desktop's `connect_ssh` takes (modulo SSH). The
+/// proxy is a per-client child process that bridges its stdio to
+/// the daemon's Unix socket — its Drop tears down the bridge
+/// cleanly, which is how the daemon learns the client went away.
+///
+/// Direct `UnixStream::connect` would also work, but produces a
+/// classic half-close deadlock on `RpcClient::Drop`: the writer
+/// drops while the reader still holds a `try_clone()`'d socket
+/// fd, so the daemon's read end never sees EOF and the reader
+/// thread never returns. The `--proxy` child sidesteps all of
+/// that because the OS reaps the pipe pair when the child exits.
+fn connect_via_proxy(home: &Path, peer_label: &str) -> RpcClient {
+    let mut cmd = Command::new(HELMOR_SERVER_BIN);
+    cmd.arg("--proxy").env("HOME", home);
+    RpcClient::connect_command(cmd, peer_label.into())
+        .unwrap_or_else(|e| panic!("connect via --proxy: {e:#}"))
+}
+
+/// Wait for the daemon to bind. The `--ensure-daemon` shim already
+/// polls internally with a 3s budget, but the integration test
+/// spawns the daemon *directly* (no shim) so it has to do its own
+/// wait.
+fn wait_for_socket(socket: &Path, deadline: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if socket.exists() && UnixStream::connect(socket).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "daemon socket at {} never came up within {deadline:?}",
+        socket.display()
+    );
+}
+
+#[test]
+fn daemon_mode_terminal_survives_client_disconnect_and_reattach() {
+    // The phase-19 moat in test form. Steps:
+    //   1. Boot `helmor-server --daemon` with HOME isolated to a
+    //      tempdir so we don't fight other daemons.
+    //   2. Connect via the Unix socket, open a terminal, write a
+    //      marker.
+    //   3. Drop the client (the daemon's per-connection handler
+    //      sees EOF and exits its loop; the PTY keeps running).
+    //   4. New client connects to the same daemon, calls
+    //      `terminal.list`, finds the surviving session, attaches.
+    //   5. Scrollback contains the marker from the previous client.
+    //   6. New client closes the terminal; daemon stays running.
+    let tmp = tempfile::tempdir().expect("tempdir for HOME isolation");
+    let home = tmp.path().to_path_buf();
+    let socket: PathBuf = home.join(".helmor/server/sock");
+
+    // The double-fork in `daemonize()` means the spawned process
+    // *exits* after forking the real daemon. So we spawn + wait
+    // for the fork's exit, then probe the socket.
+    let status = Command::new(HELMOR_SERVER_BIN)
+        .arg("--daemon")
+        .env("HOME", &home)
+        .status()
+        .expect("spawn helmor-server --daemon");
+    assert!(
+        status.success(),
+        "daemon spawn returned {status:?} (the first fork should exit 0)"
+    );
+
+    wait_for_socket(&socket, Duration::from_secs(3));
+
+    // ── client 1: open + write ───────────────────────────────
+    let inbox_1: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    {
+        let client_1 = connect_via_proxy(&home, "daemon-test-c1");
+        let sink_1 = Arc::clone(&inbox_1);
+        let _sub_1 = client_1.subscribe_terminal_events(move |event| {
+            sink_1.lock().unwrap().push(event);
+        });
+        let runtime_1 = RemoteSshRuntime::new(client_1, "daemon-test-c1");
+        runtime_1
+            .terminal_open(TerminalOpenParams {
+                terminal_id: "t-survive".into(),
+                workspace_dir: "/tmp".into(),
+                shell: Some("/bin/sh".into()),
+                cols: 80,
+                rows: 24,
+            })
+            .expect("terminal.open on c1");
+        wait_for(
+            &inbox_1,
+            |e| matches!(&e.event, TerminalEventKind::Stdout { .. }),
+            Duration::from_secs(2),
+        );
+        runtime_1
+            .terminal_write(TerminalWriteParams {
+                terminal_id: "t-survive".into(),
+                data: "echo helmor-survives-c1\n".into(),
+            })
+            .expect("terminal.write on c1");
+        wait_for(
+            &inbox_1,
+            |e| match &e.event {
+                TerminalEventKind::Stdout { data } => data.contains("helmor-survives-c1"),
+                _ => false,
+            },
+            Duration::from_secs(2),
+        );
+        // Client 1 drops here — Arc/Drop closes the UnixStream,
+        // which the daemon's per-connection handler sees as EOF.
+    }
+
+    // Give the daemon a tick to notice the disconnect; not
+    // strictly necessary (`terminal.list` should still surface the
+    // PTY regardless) but rules out a "connection still half-open"
+    // false positive.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // ── client 2: list + attach + close ───────────────────────
+    let client_2 = connect_via_proxy(&home, "daemon-test-c2");
+    let inbox_2: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_2 = Arc::clone(&inbox_2);
+    let _sub_2 = client_2.subscribe_terminal_events(move |event| {
+        sink_2.lock().unwrap().push(event);
+    });
+    let runtime_2 = RemoteSshRuntime::new(client_2, "daemon-test-c2");
+
+    let list = runtime_2
+        .terminal_list(TerminalListParams {})
+        .expect("terminal.list on c2");
+    assert_eq!(
+        list.terminals.len(),
+        1,
+        "daemon should have one orphan terminal across the disconnect; got {:?}",
+        list.terminals
+    );
+    assert_eq!(list.terminals[0].terminal_id, "t-survive");
+    assert_eq!(list.terminals[0].workspace_dir, "/tmp");
+
+    let attach = runtime_2
+        .terminal_attach(TerminalAttachParams {
+            terminal_id: "t-survive".into(),
+        })
+        .expect("terminal.attach on c2");
+    assert!(
+        attach.scrollback.contains("helmor-survives-c1"),
+        "client-2 should see the marker client-1 wrote: scrollback={:?}",
+        attach.scrollback
+    );
+
+    runtime_2
+        .terminal_close(TerminalCloseParams {
+            terminal_id: "t-survive".into(),
+        })
+        .expect("terminal.close on c2");
 }

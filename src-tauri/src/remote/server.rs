@@ -186,6 +186,18 @@ impl ServerContext {
         self.notifier = notifier;
     }
 
+    /// Builder-style: swap in a shared `RemoteTerminalState`. The
+    /// daemon uses this so every accepted connection shares one
+    /// PTY registry — otherwise each new SSH session would see a
+    /// fresh empty `terminal.list`, defeating the whole reattach
+    /// story.
+    pub fn set_terminal_state(
+        &mut self,
+        terminal_state: Arc<super::terminal::RemoteTerminalState>,
+    ) {
+        self.terminal_state = terminal_state;
+    }
+
     /// Handler entry point for emitting notifications. Public so
     /// handlers in this module (and tests) can reach the notifier
     /// without crawling private fields.

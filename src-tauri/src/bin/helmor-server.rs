@@ -1,44 +1,124 @@
 //! `helmor-server` — the remote-workspace agent half of Helmor.
 //!
-//! Reads JSON-RPC requests from stdin (LSP-style framed), dispatches
-//! them through [`helmor_lib::remote::dispatch_request`], and writes
-//! responses back on stdout. Logs to stderr so the framed protocol
-//! on stdout stays clean.
+//! The binary has four entry points, picked by the first CLI flag:
 //!
-//! Today the binary only answers `initialize` + `ping` so the
-//! transport layer can be exercised end-to-end. Subsequent slices
-//! add workspace / script / sidecar handlers behind the same
-//! dispatcher.
+//! - `--serve-stdio` (default) — original behavior. Reads framed
+//!   JSON-RPC requests from stdin, writes responses to stdout. One
+//!   binary per SSH session, terminals die when the session ends.
+//!   Kept for backward compat + tests.
+//! - `--daemon` — double-forks, binds a Unix socket at
+//!   `$HOME/.helmor/server/sock`, accepts connections in a loop.
+//!   Terminals + agents live in *this* process; clients (proxy
+//!   shims) come and go without disturbing them.
+//! - `--ensure-daemon` — idempotent "is there a daemon? if not,
+//!   fork one" probe. Exits 0 once a daemon is reachable. Cheap
+//!   to call from a wrapper script on every connect.
+//! - `--proxy` — connects to the daemon socket and bridges its
+//!   stdin/stdout to that socket. Lets the desktop's `RpcClient`
+//!   keep its "I'm talking over stdio" mental model while the
+//!   actual work runs in the daemon.
+//! - `--version` / `-V` — prints version + protocol, exits 0.
+//!   Used by the auto-install probe.
 
 use std::io::{self, BufReader, Write};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use helmor_lib::remote::{
-    self, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse, ServerContext, StdoutNotifier,
+    self, daemon, host, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse, ServerContext,
+    StdoutNotifier,
 };
 
 fn main() -> ExitCode {
-    // CLI-style introspection. The auto-install path on the desktop
-    // side runs `ssh host helmor-server --version` to detect whether
-    // a compatible binary is already deployed; this branch answers
-    // that probe without booting the RPC loop. Print to stdout (not
-    // stderr) so the probing client can capture it cleanly.
-    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
-        println!("helmor-server {}", env!("CARGO_PKG_VERSION"));
-        println!("protocol {}", helmor_lib::remote::PROTOCOL_VERSION);
-        return ExitCode::SUCCESS;
+    let mode = parse_mode();
+    match mode {
+        Mode::Version => {
+            // CLI introspection. The auto-install probe runs
+            // `<bin> --version` to detect whether a compatible
+            // binary is already deployed; this branch answers
+            // that probe without booting the RPC loop. stdout
+            // (not stderr) so the probing client can capture it.
+            println!("helmor-server {}", env!("CARGO_PKG_VERSION"));
+            println!("protocol {}", helmor_lib::remote::PROTOCOL_VERSION);
+            ExitCode::SUCCESS
+        }
+        Mode::ServeStdio => run_serve_stdio(),
+        Mode::Daemon => match daemon::run_daemon() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("helmor-server --daemon failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Mode::EnsureDaemon => {
+            let binary = match std::env::current_exe() {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("helmor-server --ensure-daemon: can't resolve own path: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match daemon::ensure_daemon(&binary) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("helmor-server --ensure-daemon failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Mode::Proxy => match daemon::run_proxy() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("helmor-server --proxy failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
     }
+}
 
-    init_logging();
+/// CLI modes. We don't bring in clap for this — three trivial
+/// flags + a default is cheaper to hand-parse than wire up clap's
+/// derive macros on a per-binary basis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    ServeStdio,
+    Daemon,
+    EnsureDaemon,
+    Proxy,
+    Version,
+}
+
+fn parse_mode() -> Mode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        return Mode::Version;
+    }
+    if args.iter().any(|a| a == "--daemon") {
+        return Mode::Daemon;
+    }
+    if args.iter().any(|a| a == "--ensure-daemon") {
+        return Mode::EnsureDaemon;
+    }
+    if args.iter().any(|a| a == "--proxy") {
+        return Mode::Proxy;
+    }
+    // Default — both for backward compat and for tests that spawn
+    // the binary directly. The auto-install path in phase 12 runs
+    // it with no args expecting `--serve-stdio` behavior.
+    Mode::ServeStdio
+}
+
+fn run_serve_stdio() -> ExitCode {
+    init_stderr_logging();
 
     let server_version = env!("CARGO_PKG_VERSION").to_string();
-    let hostname = read_hostname();
+    let hostname = host::read_hostname();
 
-    // All writes to stdout — response frames AND notification frames
-    // — funnel through one Mutex<Box<dyn Write>> so frames can't
-    // interleave. The mutex is shared between the response writer
-    // here and the `StdoutNotifier` stashed in the ServerContext.
+    // All writes to stdout — response frames AND notification
+    // frames — funnel through one Mutex<Box<dyn Write>> so frames
+    // can't interleave. The mutex is shared between the response
+    // writer here and the `StdoutNotifier` stashed in the
+    // ServerContext.
     let stdout_writer: Arc<Mutex<Box<dyn Write + Send>>> =
         Arc::new(Mutex::new(Box::new(io::stdout())));
     let notifier = Arc::new(StdoutNotifier::new(Arc::clone(&stdout_writer)));
@@ -62,9 +142,6 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             Err(err) => {
-                // Framing-level error → can't reliably respond, so
-                // log and exit. The peer's next connection will
-                // start fresh.
                 tracing::error!(error = %err, "helmor-server: frame read failed; exiting");
                 return ExitCode::FAILURE;
             }
@@ -89,33 +166,15 @@ fn write_response(
     Ok(())
 }
 
-/// Best-effort hostname read. `uname -n` is the canonical Unix
-/// answer; the result is purely informational (carried in
-/// `initialize`'s response) so a fallback string is safer than
-/// crashing the server.
-fn read_hostname() -> String {
-    if let Ok(host) = std::env::var("HOSTNAME") {
-        if !host.is_empty() {
-            return host;
-        }
-    }
-    match std::process::Command::new("uname").arg("-n").output() {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
-        _ => "unknown".to_string(),
-    }
-}
-
-/// Logging goes to stderr so it doesn't interleave with the framed
-/// JSON on stdout. JSON-formatted so the local app's log viewer can
-/// pick it up via the SSH pipe later (the client side captures
-/// stderr separately and emits it as a `Notice` to the UI).
-fn init_logging() {
+/// Logging for `--serve-stdio` goes to stderr so it doesn't
+/// interleave with the framed JSON on stdout. JSON-formatted so
+/// the local app's log viewer can pick it up via the SSH pipe
+/// later (the client side captures stderr separately and emits
+/// it as a `Notice` to the UI). Daemon-mode logging is set up
+/// inside the daemon module after stdio's been redirected.
+fn init_stderr_logging() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("HELMOR_SERVER_LOG").unwrap_or_else(|_| "info".into());
-    // Best-effort init — if a subscriber is already installed by the
-    // host process (loopback tests run in-process), don't panic.
     let _ = tracing_subscriber::fmt()
         .with_writer(io::stderr)
         .with_env_filter(filter)

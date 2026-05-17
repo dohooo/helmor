@@ -212,10 +212,23 @@ impl Drop for NotificationSubscription {
 }
 
 impl RpcClient {
-    /// Connect to a `helmor-server` reachable over SSH. Spawns
-    /// `ssh -o BatchMode=yes <host> <remote_binary>` and runs the
-    /// initialize handshake before returning. `remote_binary` must
-    /// already exist on the remote (the spike doesn't auto-install).
+    /// Connect to a `helmor-server` reachable over SSH. Spawns the
+    /// daemon-backed command line:
+    ///
+    /// ```text
+    /// ssh <host> sh -c '<bin> --ensure-daemon && exec <bin> --proxy'
+    /// ```
+    ///
+    /// `--ensure-daemon` forks a daemon if one isn't already running
+    /// (idempotent); `--proxy` connects this SSH session's stdio to
+    /// the daemon's Unix socket. The desktop talks framed JSON-RPC
+    /// the whole way down; the daemon is what actually owns PTYs +
+    /// runtime state. That's what lets terminals survive the
+    /// desktop quitting (phase 19).
+    ///
+    /// `remote_binary` must already exist on the remote. The
+    /// auto-install path in phase 12 puts it there on first
+    /// connect.
     pub fn connect_ssh(host: &str, remote_binary: &str) -> Result<Self> {
         let mut cmd = Command::new("ssh");
         for arg in DEFAULT_SSH_ARGS {
@@ -232,7 +245,11 @@ impl RpcClient {
             cmd.arg("-o")
                 .arg(format!("ControlPath={}/%C", control_dir.display()));
         }
-        cmd.arg(host).arg(remote_binary);
+        let remote_cmd = format!(
+            "{quoted_bin} --ensure-daemon && exec {quoted_bin} --proxy",
+            quoted_bin = shell_quote(remote_binary)
+        );
+        cmd.arg(host).arg("sh").arg("-c").arg(remote_cmd);
         Self::connect_command(cmd, format!("ssh://{host}"))
     }
 
@@ -602,6 +619,17 @@ fn ssh_control_dir() -> Option<PathBuf> {
     // to write the socket.
     let _ = std::fs::create_dir_all(&dir);
     Some(dir)
+}
+
+/// Single-quote-escape a value for safe `sh -c` interpolation. The
+/// only metacharacter inside `'...'` is `'` itself, which we
+/// escape via the classic `'\''` close-quote-then-quoted-quote
+/// pattern. Used to embed the remote binary path into the daemon-
+/// invoking shell command without inviting injection from paths
+/// with spaces / quotes / `$`.
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
 }
 
 fn rpc_error_to_anyhow<M: RpcMethod>(err: JsonRpcError) -> anyhow::Error {
