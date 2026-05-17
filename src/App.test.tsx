@@ -417,6 +417,11 @@ describe("App", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});
