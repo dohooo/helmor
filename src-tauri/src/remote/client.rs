@@ -724,6 +724,22 @@ impl RemoteRuntime for RemoteSshRuntime {
             .call::<super::methods::TerminalCloseMethod>(params)
     }
 
+    fn terminal_list(
+        &self,
+        params: super::methods::TerminalListParams,
+    ) -> Result<super::methods::TerminalListResult> {
+        self.client
+            .call::<super::methods::TerminalListMethod>(params)
+    }
+
+    fn terminal_attach(
+        &self,
+        params: super::methods::TerminalAttachParams,
+    ) -> Result<super::methods::TerminalAttachResult> {
+        self.client
+            .call::<super::methods::TerminalAttachMethod>(params)
+    }
+
     fn subscribe_terminal_events(
         &self,
         callback: Box<dyn Fn(super::methods::TerminalEventNotification) + Send + Sync>,

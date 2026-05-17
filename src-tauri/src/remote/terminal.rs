@@ -47,7 +47,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::json;
 
 use super::methods::{
-    TerminalCloseParams, TerminalCloseResult, TerminalEventKind, TerminalEventNotification,
+    TerminalAttachParams, TerminalAttachResult, TerminalCloseParams, TerminalCloseResult,
+    TerminalEventKind, TerminalEventNotification, TerminalListEntry, TerminalListResult,
     TerminalOpenParams, TerminalOpenResult, TerminalResizeParams, TerminalResizeResult,
     TerminalWriteParams, TerminalWriteResult, TERMINAL_EVENT_METHOD,
 };
@@ -67,6 +68,12 @@ const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// surfacing the error to the client.
 const PTY_WRITE_RETRY: Duration = Duration::from_millis(5);
 const PTY_WRITE_DEADLINE: Duration = Duration::from_millis(500);
+
+/// Cap on the per-terminal scrollback buffer. 256 KiB is enough for
+/// most realistic "I quit Helmor for a minute, what happened?"
+/// reattach sessions without holding an arbitrary heap budget for
+/// long-running terminals. Older bytes drop off the front.
+const SCROLLBACK_BYTES: usize = 256 * 1024;
 
 /// Shared registry of live terminals on the server. Attached to
 /// [`super::server::ServerContext`] so the dispatcher handlers can
@@ -117,10 +124,61 @@ impl RemoteTerminalState {
     }
 
     pub fn resize(&self, params: TerminalResizeParams) -> Result<TerminalResizeResult> {
-        let stdin = self.stdin_for(&params.terminal_id)?;
-        let file = stdin.lock().expect("stdin mutex poisoned");
+        // Lock the master and write the new size to the kernel,
+        // then record the size on the session so `terminal.attach`
+        // hands the new client the up-to-date dimensions.
+        let sessions = self.sessions.lock().expect("terminals mutex poisoned");
+        let session = sessions
+            .get(&params.terminal_id)
+            .ok_or_else(|| anyhow::anyhow!("terminal `{}` is not open", params.terminal_id))?;
+        let file = session.stdin.lock().expect("stdin mutex poisoned");
         set_winsize(file.as_raw_fd(), params.cols, params.rows)?;
+        *session.size.lock().expect("size mutex poisoned") = (params.cols, params.rows);
         Ok(TerminalResizeResult {})
+    }
+
+    /// Enumerate live sessions for the `terminal.list` handler.
+    /// Stable order: most recently opened first.
+    pub fn list(&self) -> TerminalListResult {
+        let sessions = self.sessions.lock().expect("terminals mutex poisoned");
+        let mut terminals: Vec<TerminalListEntry> = sessions
+            .iter()
+            .map(|(id, session)| {
+                let (cols, rows) = *session.size.lock().expect("size mutex poisoned");
+                TerminalListEntry {
+                    terminal_id: id.clone(),
+                    pid: session.pid,
+                    workspace_dir: session.workspace_dir.clone(),
+                    opened_at_ms: session.opened_at_ms,
+                    cols,
+                    rows,
+                }
+            })
+            .collect();
+        terminals.sort_by(|a, b| b.opened_at_ms.cmp(&a.opened_at_ms));
+        TerminalListResult { terminals }
+    }
+
+    /// Swap in a new notifier for an existing terminal so subsequent
+    /// stdout chunks flow to the attaching client. Returns the current
+    /// scrollback as the initial chunk + the latest known PTY size.
+    pub fn attach(
+        &self,
+        params: TerminalAttachParams,
+        notifier: Arc<dyn Notifier>,
+    ) -> Result<TerminalAttachResult> {
+        let sessions = self.sessions.lock().expect("terminals mutex poisoned");
+        let session = sessions
+            .get(&params.terminal_id)
+            .ok_or_else(|| anyhow::anyhow!("terminal `{}` is not open", params.terminal_id))?;
+        let scrollback = session.sink.snapshot_scrollback();
+        let (cols, rows) = *session.size.lock().expect("size mutex poisoned");
+        session.sink.replace_notifier(notifier);
+        Ok(TerminalAttachResult {
+            scrollback,
+            cols,
+            rows,
+        })
     }
 
     pub fn close(&self, params: TerminalCloseParams) -> Result<TerminalCloseResult> {
@@ -151,16 +209,120 @@ impl RemoteTerminalState {
     }
 }
 
+/// Ring buffer over `Vec<u8>` capped at [`SCROLLBACK_BYTES`].
+/// Tracks recent PTY output so a re-attaching client can paint the
+/// recent history before live events resume. Append-only with a
+/// front-trim when the cap would be exceeded.
+struct ScrollbackBuffer {
+    bytes: Vec<u8>,
+}
+
+impl ScrollbackBuffer {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        if chunk.len() >= SCROLLBACK_BYTES {
+            // Pathological case: a single chunk bigger than the cap.
+            // Keep only the tail.
+            self.bytes.clear();
+            let start = chunk.len() - SCROLLBACK_BYTES;
+            self.bytes.extend_from_slice(&chunk[start..]);
+            return;
+        }
+        let new_len = self.bytes.len() + chunk.len();
+        if new_len > SCROLLBACK_BYTES {
+            // Drop enough from the front to fit. `drain(..n)` shifts
+            // the tail in place; the actual cost is once per overflow
+            // append (terminal chunks are 4 KiB so amortised fine).
+            let drop = new_len - SCROLLBACK_BYTES;
+            self.bytes.drain(..drop);
+        }
+        self.bytes.extend_from_slice(chunk);
+    }
+
+    /// Snapshot the buffered bytes as a UTF-8 string (lossy on
+    /// invalid sequences, matching the live stdout encoding).
+    fn snapshot(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+/// Output sink shared by the reader + waiter threads. Carries both
+/// the scrollback buffer (always written to) and the currently-active
+/// notifier (replaceable via [`SessionSink::replace_notifier`]).
+///
+/// "Last attach wins": when a new client calls `terminal.attach`, it
+/// swaps in its own notifier. Previous clients stop receiving live
+/// stdout but keep whatever they already had. This avoids fan-out
+/// machinery (multiple subscribers) at the cost of disallowing
+/// simultaneous shadow attaches — fine for the spike's UX.
+struct SessionSink {
+    notifier: Mutex<Arc<dyn Notifier>>,
+    scrollback: Mutex<ScrollbackBuffer>,
+}
+
+impl SessionSink {
+    fn new(notifier: Arc<dyn Notifier>) -> Arc<Self> {
+        Arc::new(Self {
+            notifier: Mutex::new(notifier),
+            scrollback: Mutex::new(ScrollbackBuffer::new()),
+        })
+    }
+
+    fn current_notifier(&self) -> Arc<dyn Notifier> {
+        self.notifier
+            .lock()
+            .expect("session notifier mutex poisoned")
+            .clone()
+    }
+
+    fn replace_notifier(&self, next: Arc<dyn Notifier>) {
+        *self
+            .notifier
+            .lock()
+            .expect("session notifier mutex poisoned") = next;
+    }
+
+    fn append_stdout(&self, raw: &[u8]) {
+        self.scrollback
+            .lock()
+            .expect("scrollback mutex poisoned")
+            .push(raw);
+    }
+
+    fn snapshot_scrollback(&self) -> String {
+        self.scrollback
+            .lock()
+            .expect("scrollback mutex poisoned")
+            .snapshot()
+    }
+}
+
 /// Per-session bookkeeping. The reader + waiter threads keep going
 /// until the PTY hits EOF (slave closes) or the `stop_reader` flag
 /// flips on `close()`. The reader thread owns the only
 /// `File`-from-master-fd to keep the fd alive while we're reading.
 struct ActiveTerminal {
     pid: u32,
+    /// Where this terminal was opened. Surfaced via
+    /// `terminal.list` so a reconnecting client can identify the
+    /// session it cares about. Not authoritative for the running
+    /// shell — `cd` inside the shell doesn't update this.
+    workspace_dir: String,
+    /// Unix epoch milliseconds at open time, for "most recent
+    /// first" sorting in `terminal.list`.
+    opened_at_ms: i64,
+    /// Last-known PTY size, kept in sync with `terminal.resize` so
+    /// `terminal.attach` can hint the new client.
+    size: Mutex<(u16, u16)>,
     /// Writable side of the PTY master, duped at spawn time so the
     /// reader's `File::drop` doesn't close the fd we still need for
     /// writes.
     stdin: Arc<Mutex<std::fs::File>>,
+    /// Shared sink: scrollback + the swappable live notifier.
+    sink: Arc<SessionSink>,
     /// Reader thread signal — read loop polls this and breaks when
     /// set. The waiter thread also flips it when the child exits so
     /// the reader doesn't keep spinning post-mortem.
@@ -257,23 +419,28 @@ impl ActiveTerminal {
         let pid = child.id();
         let pid_for_signal = pid as libc::pid_t;
 
+        let sink = SessionSink::new(notifier);
         let stop_reader = Arc::new(AtomicBool::new(false));
         let reader = spawn_reader(
             params.terminal_id.clone(),
             master_fd,
             stop_reader.clone(),
-            notifier.clone(),
+            Arc::clone(&sink),
         );
         let waiter = spawn_waiter(
             params.terminal_id.clone(),
             child,
             stop_reader.clone(),
-            notifier,
+            Arc::clone(&sink),
         );
 
         Ok(Self {
             pid,
+            workspace_dir: params.workspace_dir.clone(),
+            opened_at_ms: chrono::Utc::now().timestamp_millis(),
+            size: Mutex::new((params.cols, params.rows)),
             stdin,
+            sink,
             stop_reader,
             reader: Some(reader),
             waiter: Some(waiter),
@@ -331,7 +498,7 @@ fn spawn_reader(
     terminal_id: String,
     master_fd: RawFd,
     stop: Arc<AtomicBool>,
-    notifier: Arc<dyn Notifier>,
+    sink: Arc<SessionSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("remote-pty-{terminal_id}"))
@@ -345,12 +512,19 @@ fn spawn_reader(
                 match master.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        // Buffer the raw bytes first so reattaching
+                        // clients see scrollback even if no notifier
+                        // is currently subscribed. Then fire the live
+                        // event through whichever notifier is bound
+                        // right now.
+                        sink.append_stdout(&buf[..n]);
                         let data = String::from_utf8_lossy(&buf[..n]).into_owned();
                         let event = TerminalEventNotification {
                             terminal_id: terminal_id.clone(),
                             event: TerminalEventKind::Stdout { data },
                         };
-                        notifier.notify(TERMINAL_EVENT_METHOD, json!(event));
+                        sink.current_notifier()
+                            .notify(TERMINAL_EVENT_METHOD, json!(event));
                     }
                     Err(e) => {
                         if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -367,7 +541,8 @@ fn spawn_reader(
                                     message: format!("PTY read failed: {e}"),
                                 },
                             };
-                            notifier.notify(TERMINAL_EVENT_METHOD, json!(event));
+                            sink.current_notifier()
+                                .notify(TERMINAL_EVENT_METHOD, json!(event));
                         }
                         break;
                     }
@@ -381,7 +556,7 @@ fn spawn_waiter(
     terminal_id: String,
     mut child: std::process::Child,
     stop: Arc<AtomicBool>,
-    notifier: Arc<dyn Notifier>,
+    sink: Arc<SessionSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("remote-pty-waiter-{terminal_id}"))
@@ -407,7 +582,8 @@ fn spawn_waiter(
                     },
                 },
             };
-            notifier.notify(TERMINAL_EVENT_METHOD, json!(event));
+            sink.current_notifier()
+                .notify(TERMINAL_EVENT_METHOD, json!(event));
         })
         .expect("failed to spawn PTY waiter thread")
 }
@@ -771,5 +947,214 @@ mod tests {
             )
             .expect_err("empty terminal id should reject");
         assert!(format!("{err}").contains("must not be empty"));
+    }
+
+    // ── terminal.list ─────────────────────────────────────────────
+
+    #[test]
+    fn list_reports_open_sessions_with_metadata_most_recent_first() {
+        let (notifier, _inbox) = CapturingNotifier::new();
+        let notifier = Arc::new(notifier);
+        let state = RemoteTerminalState::new();
+
+        state
+            .open(
+                TerminalOpenParams {
+                    terminal_id: "older".into(),
+                    workspace_dir: "/tmp".into(),
+                    shell: Some("/bin/sh".into()),
+                    cols: 100,
+                    rows: 30,
+                },
+                notifier.clone(),
+            )
+            .unwrap();
+        // Sleep so the second open is reliably later — opened_at_ms
+        // is millisecond resolution, the back-to-back calls otherwise
+        // can land in the same millisecond on fast machines.
+        std::thread::sleep(Duration::from_millis(5));
+        state
+            .open(
+                TerminalOpenParams {
+                    terminal_id: "newer".into(),
+                    workspace_dir: "/tmp".into(),
+                    shell: Some("/bin/sh".into()),
+                    cols: 120,
+                    rows: 40,
+                },
+                notifier.clone(),
+            )
+            .unwrap();
+
+        let result = state.list();
+        assert_eq!(result.terminals.len(), 2);
+        assert_eq!(result.terminals[0].terminal_id, "newer");
+        assert_eq!(result.terminals[1].terminal_id, "older");
+        // Per-row metadata is the snapshot the UI displays.
+        assert_eq!(result.terminals[0].workspace_dir, "/tmp");
+        assert_eq!(result.terminals[0].cols, 120);
+        assert_eq!(result.terminals[0].rows, 40);
+        assert!(result.terminals[0].opened_at_ms >= result.terminals[1].opened_at_ms);
+
+        // Cleanup — the Drop impl detaches threads but doesn't kill;
+        // closing explicitly returns the PTYs.
+        state
+            .close(TerminalCloseParams {
+                terminal_id: "older".into(),
+            })
+            .unwrap();
+        state
+            .close(TerminalCloseParams {
+                terminal_id: "newer".into(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn list_on_an_empty_state_returns_empty_terminals_array() {
+        let state = RemoteTerminalState::new();
+        let result = state.list();
+        assert!(result.terminals.is_empty());
+    }
+
+    // ── terminal.attach ───────────────────────────────────────────
+
+    #[test]
+    fn attach_to_a_running_terminal_swaps_notifier_and_returns_scrollback() {
+        // Open with notifier A, write something so scrollback fills,
+        // attach with notifier B, verify:
+        //  1. attach result includes the captured scrollback
+        //  2. subsequent stdout fires through B, not A.
+        let (notifier_a, inbox_a) = CapturingNotifier::new();
+        let state = RemoteTerminalState::new();
+        state
+            .open(
+                TerminalOpenParams {
+                    terminal_id: "swap".into(),
+                    workspace_dir: "/tmp".into(),
+                    shell: Some("/bin/sh".into()),
+                    cols: 80,
+                    rows: 24,
+                },
+                Arc::new(notifier_a),
+            )
+            .unwrap();
+
+        // Wait for the initial prompt so we know at least one chunk
+        // landed in scrollback before we attach.
+        wait_for_event(
+            &inbox_a,
+            |e| matches!(&e.event, TerminalEventKind::Stdout { .. }),
+            Duration::from_secs(2),
+        );
+
+        let initial_a_count = inbox_a.lock().unwrap().len();
+        let (notifier_b, inbox_b) = CapturingNotifier::new();
+        let result = state
+            .attach(
+                TerminalAttachParams {
+                    terminal_id: "swap".into(),
+                },
+                Arc::new(notifier_b),
+            )
+            .expect("attach should succeed");
+        assert!(
+            !result.scrollback.is_empty(),
+            "attach should hand back the captured scrollback"
+        );
+        assert_eq!(result.cols, 80);
+        assert_eq!(result.rows, 24);
+
+        // Drive new output so the next stdout chunk lands on B.
+        state
+            .write(TerminalWriteParams {
+                terminal_id: "swap".into(),
+                data: "echo helmor-attach-marker\n".into(),
+            })
+            .unwrap();
+        wait_for_event(
+            &inbox_b,
+            |e| match &e.event {
+                TerminalEventKind::Stdout { data } => data.contains("helmor-attach-marker"),
+                _ => false,
+            },
+            Duration::from_secs(2),
+        );
+
+        // A should not have received the post-attach marker.
+        let a_after = inbox_a.lock().unwrap();
+        let a_saw_marker = a_after.iter().any(|(_, payload)| {
+            payload
+                .get("event")
+                .and_then(|e| e.get("data"))
+                .and_then(|d| d.as_str())
+                .is_some_and(|s| s.contains("helmor-attach-marker"))
+        });
+        assert!(
+            !a_saw_marker,
+            "notifier A should not see events after attach swapped to B; \
+             A's inbox grew from {initial_a_count} to {} entries",
+            a_after.len()
+        );
+
+        drop(a_after);
+        state
+            .close(TerminalCloseParams {
+                terminal_id: "swap".into(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn attach_to_unknown_terminal_returns_a_clear_error() {
+        let (notifier, _inbox) = CapturingNotifier::new();
+        let state = RemoteTerminalState::new();
+        let err = state
+            .attach(
+                TerminalAttachParams {
+                    terminal_id: "ghost".into(),
+                },
+                Arc::new(notifier),
+            )
+            .expect_err("attach to unknown id should error");
+        assert!(format!("{err}").contains("not open"));
+    }
+
+    // ── ScrollbackBuffer ──────────────────────────────────────────
+
+    #[test]
+    fn scrollback_buffer_trims_old_bytes_when_cap_exceeded() {
+        let mut buf = ScrollbackBuffer::new();
+        // Fill exactly to the cap.
+        buf.push(&vec![b'A'; SCROLLBACK_BYTES]);
+        assert_eq!(buf.bytes.len(), SCROLLBACK_BYTES);
+        // One more byte triggers a 1-byte drain from the front.
+        buf.push(b"Z");
+        assert_eq!(buf.bytes.len(), SCROLLBACK_BYTES);
+        // Last byte should be the newcomer.
+        assert_eq!(*buf.bytes.last().unwrap(), b'Z');
+    }
+
+    #[test]
+    fn scrollback_buffer_handles_a_single_chunk_larger_than_the_cap() {
+        let mut buf = ScrollbackBuffer::new();
+        let oversized = vec![b'X'; SCROLLBACK_BYTES + 1024];
+        buf.push(&oversized);
+        assert_eq!(buf.bytes.len(), SCROLLBACK_BYTES);
+        // The tail of the oversized chunk is what's preserved.
+        assert!(buf.bytes.iter().all(|&b| b == b'X'));
+    }
+
+    #[test]
+    fn scrollback_snapshot_renders_lossy_utf8() {
+        let mut buf = ScrollbackBuffer::new();
+        // Invalid UTF-8 byte sequence sandwiched in valid text.
+        buf.push(&[0x68, 0x69, 0xFF, 0x6F]); // "hi\xFFo"
+        let snap = buf.snapshot();
+        // Lossy conversion preserves length-shape but replaces the
+        // bad byte with U+FFFD.
+        assert!(snap.contains('\u{FFFD}'));
+        assert!(snap.starts_with("hi"));
+        assert!(snap.ends_with('o'));
     }
 }

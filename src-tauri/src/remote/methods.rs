@@ -52,6 +52,19 @@ pub enum Method {
     /// Kill + reap an open terminal. Idempotent: closing an
     /// already-gone terminal is a no-op.
     TerminalClose,
+    /// Enumerate every terminal currently alive on the server.
+    /// Used by clients reconnecting to a daemon that outlived
+    /// the previous SSH session — `terminal.attach` plugs back
+    /// into a session listed here.
+    TerminalList,
+    /// Re-bind output for an existing terminal to the *calling*
+    /// client. Returns the current scrollback buffer as a single
+    /// initial chunk; subsequent stdout flows as `terminal.event`
+    /// notifications addressed to this connection. "Last attach
+    /// wins" — only one client at a time receives live events;
+    /// previous subscribers stop seeing them (but the scrollback
+    /// they already buffered is theirs to keep).
+    TerminalAttach,
 }
 
 impl Method {
@@ -65,6 +78,8 @@ impl Method {
             Self::TerminalWrite => "terminal.write",
             Self::TerminalResize => "terminal.resize",
             Self::TerminalClose => "terminal.close",
+            Self::TerminalList => "terminal.list",
+            Self::TerminalAttach => "terminal.attach",
         }
     }
 }
@@ -96,6 +111,8 @@ impl FromStr for Method {
             "terminal.write" => Ok(Self::TerminalWrite),
             "terminal.resize" => Ok(Self::TerminalResize),
             "terminal.close" => Ok(Self::TerminalClose),
+            "terminal.list" => Ok(Self::TerminalList),
+            "terminal.attach" => Ok(Self::TerminalAttach),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -364,6 +381,69 @@ impl RpcMethod for TerminalCloseMethod {
     type Result = TerminalCloseResult;
 }
 
+// ── terminal.list / terminal.attach ───────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalListParams {}
+
+/// Per-terminal metadata in the `terminal.list` response. Carries
+/// the bits a reconnecting client needs to decide whether to
+/// reattach: the terminal id (to pass to `terminal.attach`), the
+/// shell's pid, the workspace dir it was opened against, and when
+/// it was opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalListEntry {
+    pub terminal_id: String,
+    pub pid: u32,
+    pub workspace_dir: String,
+    /// Unix epoch milliseconds when `terminal.open` ran. Lets the
+    /// UI sort by "most recent" without per-client clocks.
+    pub opened_at_ms: i64,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalListResult {
+    pub terminals: Vec<TerminalListEntry>,
+}
+
+pub struct TerminalListMethod;
+impl RpcMethod for TerminalListMethod {
+    const NAME: &'static str = "terminal.list";
+    type Params = TerminalListParams;
+    type Result = TerminalListResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalAttachParams {
+    pub terminal_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalAttachResult {
+    /// Scrollback bytes captured server-side since the last attach
+    /// (or since `terminal.open` if this is the first attach).
+    /// Encoded as a UTF-8 string with `from_utf8_lossy` to preserve
+    /// ANSI escape sequences verbatim while still being JSON-safe.
+    pub scrollback: String,
+    /// The terminal's current size, in case the new client wants
+    /// to resize its local view to match.
+    pub cols: u16,
+    pub rows: u16,
+}
+
+pub struct TerminalAttachMethod;
+impl RpcMethod for TerminalAttachMethod {
+    const NAME: &'static str = "terminal.attach";
+    type Params = TerminalAttachParams;
+    type Result = TerminalAttachResult;
+}
+
 /// Notification payload pushed via `Notifier::notify(TERMINAL_EVENT_METHOD, ...)`.
 /// Internally tagged by `kind` so the frontend can discriminate
 /// stdout / exit / error without sniffing absent fields.
@@ -410,6 +490,8 @@ mod tests {
             Method::TerminalWrite,
             Method::TerminalResize,
             Method::TerminalClose,
+            Method::TerminalList,
+            Method::TerminalAttach,
         ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
@@ -568,5 +650,57 @@ mod tests {
         assert_eq!(resize_wire, "{}");
         let close_wire = serde_json::to_string(&TerminalCloseResult::default()).unwrap();
         assert_eq!(close_wire, "{}");
+    }
+
+    #[test]
+    fn terminal_list_result_round_trips_with_camel_case_keys() {
+        let result = TerminalListResult {
+            terminals: vec![TerminalListEntry {
+                terminal_id: "t-1".into(),
+                pid: 42,
+                workspace_dir: "/home/me/repo".into(),
+                opened_at_ms: 1_700_000_000_000,
+                cols: 100,
+                rows: 30,
+            }],
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"terminalId\""));
+        assert!(wire.contains("\"workspaceDir\""));
+        assert!(wire.contains("\"openedAtMs\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+        let restored: TerminalListResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, result);
+    }
+
+    #[test]
+    fn terminal_list_result_serialises_empty_terminals_as_empty_array() {
+        // The "no sessions on this remote" case has to ship a real
+        // empty array — `null` would force the frontend to nil-check
+        // every list call.
+        let wire = serde_json::to_value(TerminalListResult::default()).unwrap();
+        assert!(wire["terminals"].is_array());
+        assert_eq!(wire["terminals"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn terminal_attach_wire_shapes_use_camel_case_and_carry_scrollback() {
+        let params = TerminalAttachParams {
+            terminal_id: "t-1".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"terminalId\""));
+
+        let result = TerminalAttachResult {
+            scrollback: "$ echo hi\nhi\n".into(),
+            cols: 100,
+            rows: 30,
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"scrollback\""));
+        assert!(wire.contains("\"cols\""));
+        assert!(wire.contains("\"rows\""));
+        let restored: TerminalAttachResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, result);
     }
 }

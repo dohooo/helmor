@@ -149,6 +149,27 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("terminal.close is only supported on a connected remote runtime")
     }
 
+    /// Enumerate every PTY session still alive on the runtime.
+    /// Used by reconnecting clients to discover orphan sessions
+    /// they can `attach` back to.
+    fn terminal_list(
+        &self,
+        _params: super::methods::TerminalListParams,
+    ) -> Result<super::methods::TerminalListResult> {
+        anyhow::bail!("terminal.list is only supported on a connected remote runtime")
+    }
+
+    /// Re-bind the stdout stream of an existing terminal to *this*
+    /// caller. Returns the current scrollback + the latest known
+    /// PTY size; subsequent stdout flows as `terminal.event`
+    /// notifications addressed to the calling connection.
+    fn terminal_attach(
+        &self,
+        _params: super::methods::TerminalAttachParams,
+    ) -> Result<super::methods::TerminalAttachResult> {
+        anyhow::bail!("terminal.attach is only supported on a connected remote runtime")
+    }
+
     /// Subscribe to `terminal.event` notifications coming back from
     /// the runtime. The default `None` means "this runtime doesn't
     /// stream — local terminals use the existing `workspace::scripts`

@@ -21,11 +21,13 @@ use super::codec::write_frame;
 
 use super::methods::{
     InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
-    PingResult, RpcMethod, TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult,
-    TerminalOpenMethod, TerminalOpenParams, TerminalOpenResult, TerminalResizeMethod,
-    TerminalResizeParams, TerminalResizeResult, TerminalWriteMethod, TerminalWriteParams,
-    TerminalWriteResult, WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams,
-    WorkspaceBranchInfoResult, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
+    PingResult, RpcMethod, TerminalAttachMethod, TerminalAttachParams, TerminalAttachResult,
+    TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult, TerminalListMethod,
+    TerminalListParams, TerminalListResult, TerminalOpenMethod, TerminalOpenParams,
+    TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams, TerminalResizeResult,
+    TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoMethod,
+    WorkspaceBranchInfoParams, WorkspaceBranchInfoResult, WorkspaceStatusMethod,
+    WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -258,6 +260,12 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::TerminalClose => handle::<TerminalCloseMethod, _>(req.params, |params| {
             handle_terminal_close(ctx, params)
         }),
+        Method::TerminalList => {
+            handle::<TerminalListMethod, _>(req.params, |params| handle_terminal_list(ctx, params))
+        }
+        Method::TerminalAttach => handle::<TerminalAttachMethod, _>(req.params, |params| {
+            handle_terminal_attach(ctx, params)
+        }),
     };
 
     let response = match outcome {
@@ -434,6 +442,28 @@ fn handle_terminal_close(
             format!("terminal.close failed: {err:#}"),
         )
     })
+}
+
+fn handle_terminal_list(
+    ctx: &ServerContext,
+    _params: TerminalListParams,
+) -> Result<TerminalListResult, JsonRpcError> {
+    // `list` is infallible — it just snapshots in-memory state.
+    Ok(ctx.terminal_state().list())
+}
+
+fn handle_terminal_attach(
+    ctx: &ServerContext,
+    params: TerminalAttachParams,
+) -> Result<TerminalAttachResult, JsonRpcError> {
+    ctx.terminal_state()
+        .attach(params, Arc::clone(ctx.notifier()))
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("terminal.attach failed: {err:#}"),
+            )
+        })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*

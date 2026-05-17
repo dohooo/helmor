@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use helmor_lib::remote::{
     methods::{
-        TerminalCloseParams, TerminalEventKind, TerminalEventNotification, TerminalOpenParams,
-        TerminalWriteParams,
+        TerminalAttachParams, TerminalCloseParams, TerminalEventKind, TerminalEventNotification,
+        TerminalListParams, TerminalOpenParams, TerminalWriteParams,
     },
     RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
     WorkspaceStatusParams,
@@ -258,4 +258,115 @@ fn wait_for(
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn spawned_helmor_server_lists_and_reattaches_to_running_terminal() {
+    // Foundation test for the phase-19 reattach story: spawn the
+    // binary, open a terminal, drive some output into it, run
+    // `terminal.list` and confirm the entry's metadata, then
+    // `terminal.attach` from a *second* subscription and confirm
+    // (a) the scrollback comes back and (b) subsequent output flows
+    // through the new subscription.
+    //
+    // This is still within a single binary process — phase 19b adds
+    // the daemon mode that lets the terminal survive across binary
+    // restarts. This test just validates the list/attach surface
+    // works end-to-end through the wire.
+    let cmd = Command::new(HELMOR_SERVER_BIN);
+    let client =
+        RpcClient::connect_command(cmd, "phase-19a-test".into()).expect("handshake should succeed");
+
+    let first: Arc<Mutex<Vec<TerminalEventNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_first = Arc::clone(&first);
+    let _sub_first = client.subscribe_terminal_events(move |event| {
+        sink_first.lock().unwrap().push(event);
+    });
+
+    let runtime = RemoteSshRuntime::new(client, "phase-19a-test");
+    runtime
+        .terminal_open(TerminalOpenParams {
+            terminal_id: "t-reattach".into(),
+            workspace_dir: "/tmp".into(),
+            shell: Some("/bin/sh".into()),
+            cols: 80,
+            rows: 24,
+        })
+        .expect("terminal.open");
+
+    // Wait for the initial prompt so the scrollback buffer has
+    // bytes before we attach.
+    wait_for(
+        &first,
+        |e| matches!(&e.event, TerminalEventKind::Stdout { .. }),
+        Duration::from_secs(2),
+    );
+
+    runtime
+        .terminal_write(TerminalWriteParams {
+            terminal_id: "t-reattach".into(),
+            data: "echo helmor-pre-attach\n".into(),
+        })
+        .unwrap();
+    wait_for(
+        &first,
+        |e| match &e.event {
+            TerminalEventKind::Stdout { data } => data.contains("helmor-pre-attach"),
+            _ => false,
+        },
+        Duration::from_secs(2),
+    );
+
+    // terminal.list — should surface the running session.
+    let list = runtime
+        .terminal_list(TerminalListParams {})
+        .expect("terminal.list");
+    assert_eq!(list.terminals.len(), 1);
+    let entry = &list.terminals[0];
+    assert_eq!(entry.terminal_id, "t-reattach");
+    assert_eq!(entry.workspace_dir, "/tmp");
+    assert_eq!(entry.cols, 80);
+    assert_eq!(entry.rows, 24);
+    assert!(entry.opened_at_ms > 0);
+    assert!(entry.pid > 0);
+
+    // terminal.attach — bring the existing terminal under this
+    // connection (no-op on the single-client path, but exercises
+    // the API + verifies scrollback).
+    let attach = runtime
+        .terminal_attach(TerminalAttachParams {
+            terminal_id: "t-reattach".into(),
+        })
+        .expect("terminal.attach");
+    assert!(
+        attach.scrollback.contains("helmor-pre-attach"),
+        "scrollback should include pre-attach output: {:?}",
+        attach.scrollback
+    );
+    assert_eq!(attach.cols, 80);
+    assert_eq!(attach.rows, 24);
+
+    // Drive new output post-attach; the existing subscription
+    // (which was the only one and is *still* the attached one)
+    // continues to see the events.
+    runtime
+        .terminal_write(TerminalWriteParams {
+            terminal_id: "t-reattach".into(),
+            data: "echo helmor-post-attach\n".into(),
+        })
+        .unwrap();
+    wait_for(
+        &first,
+        |e| match &e.event {
+            TerminalEventKind::Stdout { data } => data.contains("helmor-post-attach"),
+            _ => false,
+        },
+        Duration::from_secs(2),
+    );
+
+    runtime
+        .terminal_close(TerminalCloseParams {
+            terminal_id: "t-reattach".into(),
+        })
+        .expect("terminal.close");
 }
