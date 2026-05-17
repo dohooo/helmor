@@ -26,8 +26,13 @@ use super::methods::{
     TerminalListParams, TerminalListResult, TerminalOpenMethod, TerminalOpenParams,
     TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams, TerminalResizeResult,
     TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoMethod,
-    WorkspaceBranchInfoParams, WorkspaceBranchInfoResult, WorkspaceStatusMethod,
-    WorkspaceStatusParams, WorkspaceStatusResult,
+    WorkspaceBranchInfoParams, WorkspaceBranchInfoResult, WorkspaceChangesMethod,
+    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeMethod,
+    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileMethod,
+    WorkspaceMutateFileParams, WorkspaceMutateFileResult, WorkspaceReadFileAtRefMethod,
+    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileMethod,
+    WorkspaceReadFileParams, WorkspaceStatFileMethod, WorkspaceStatFileParams,
+    WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -278,6 +283,28 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::TerminalAttach => handle::<TerminalAttachMethod, _>(req.params, |params| {
             handle_terminal_attach(ctx, params)
         }),
+        Method::WorkspaceFileTree => handle::<WorkspaceFileTreeMethod, _>(req.params, |params| {
+            handle_workspace_file_tree(ctx, params)
+        }),
+        Method::WorkspaceChanges => handle::<WorkspaceChangesMethod, _>(req.params, |params| {
+            handle_workspace_changes(ctx, params)
+        }),
+        Method::WorkspaceReadFile => handle::<WorkspaceReadFileMethod, _>(req.params, |params| {
+            handle_workspace_read_file(ctx, params)
+        }),
+        Method::WorkspaceReadFileAtRef => {
+            handle::<WorkspaceReadFileAtRefMethod, _>(req.params, |params| {
+                handle_workspace_read_file_at_ref(ctx, params)
+            })
+        }
+        Method::WorkspaceStatFile => handle::<WorkspaceStatFileMethod, _>(req.params, |params| {
+            handle_workspace_stat_file(ctx, params)
+        }),
+        Method::WorkspaceMutateFile => {
+            handle::<WorkspaceMutateFileMethod, _>(req.params, |params| {
+                handle_workspace_mutate_file(ctx, params)
+            })
+        }
     };
 
     let response = match outcome {
@@ -476,6 +503,87 @@ fn handle_terminal_attach(
                 format!("terminal.attach failed: {err:#}"),
             )
         })
+}
+
+// ── workspace inspector ops (phase 20a — pure delegation) ───────────
+//
+// Each handler just forwards to `ctx.runtime.workspace_*`. The default
+// trait impl bails until phase 20b backs `LocalRuntime` with real
+// reads / writes — at which point the same handler keeps working
+// without changes here.
+
+fn handle_workspace_file_tree(
+    ctx: &ServerContext,
+    params: WorkspaceFileTreeParams,
+) -> Result<WorkspaceFileTreeResult, JsonRpcError> {
+    ctx.runtime.workspace_file_tree(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.fileTree failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_workspace_changes(
+    ctx: &ServerContext,
+    params: WorkspaceChangesParams,
+) -> Result<WorkspaceChangesResult, JsonRpcError> {
+    ctx.runtime.workspace_changes(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.changes failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_workspace_read_file(
+    ctx: &ServerContext,
+    params: WorkspaceReadFileParams,
+) -> Result<crate::workspace::files::EditorFileReadResponse, JsonRpcError> {
+    ctx.runtime.workspace_read_file(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.readFile failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_workspace_read_file_at_ref(
+    ctx: &ServerContext,
+    params: WorkspaceReadFileAtRefParams,
+) -> Result<WorkspaceReadFileAtRefResult, JsonRpcError> {
+    ctx.runtime
+        .workspace_read_file_at_ref(params)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.readFileAtRef failed: {err:#}"),
+            )
+        })
+}
+
+fn handle_workspace_stat_file(
+    ctx: &ServerContext,
+    params: WorkspaceStatFileParams,
+) -> Result<crate::workspace::files::EditorFileStatResponse, JsonRpcError> {
+    ctx.runtime.workspace_stat_file(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.statFile failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_workspace_mutate_file(
+    ctx: &ServerContext,
+    params: WorkspaceMutateFileParams,
+) -> Result<WorkspaceMutateFileResult, JsonRpcError> {
+    ctx.runtime.workspace_mutate_file(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.mutateFile failed: {err:#}"),
+        )
+    })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*
@@ -775,6 +883,207 @@ mod tests {
         assert!(
             err.message.contains("not a repository"),
             "error should preserve git's message: {err:?}"
+        );
+    }
+
+    // ── workspace inspector dispatch (phase 20a) ──────────────────
+    //
+    // The trait defaults bail with "not yet implemented" — we verify
+    // the dispatcher decodes params, hits the right trait method, and
+    // surfaces the bail as `HANDLER_FAILED`. When phase 20b backs
+    // `LocalRuntime` with real impls, the *dispatch* tests still hold;
+    // only the underlying behaviour changes.
+
+    fn run_after_initialize(ctx: &ServerContext, req: JsonRpcRequest) -> JsonRpcResponse {
+        dispatch_request(
+            ctx,
+            request(
+                "initialize",
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientName": "helmor-client",
+                }),
+                1,
+            ),
+        )
+        .expect("initialize response");
+        dispatch_request(ctx, req).expect("dispatcher should produce a response")
+    }
+
+    fn default_bail_ctx() -> ServerContext {
+        // `StubRuntime` overrides workspace_status / branch_info, but
+        // intentionally does NOT override the new inspector methods —
+        // so we exercise the default trait bail through real dispatch.
+        ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime))
+    }
+
+    fn assert_bail_with_method_prefix(resp: &JsonRpcResponse, method: &str) {
+        let err = resp
+            .error
+            .as_ref()
+            .unwrap_or_else(|| panic!("expected error response for `{method}`, got: {resp:?}"));
+        assert_eq!(err.code, error_codes::HANDLER_FAILED);
+        let expected_prefix = format!("{method} failed:");
+        assert!(
+            err.message.starts_with(&expected_prefix),
+            "error message should be prefixed with `{expected_prefix}`, got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("not yet implemented"),
+            "default bail should reach the wire verbatim, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn workspace_file_tree_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.fileTree",
+                json!({ "workspaceDir": "/tmp/example" }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.fileTree");
+    }
+
+    #[test]
+    fn workspace_changes_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.changes",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "includeContent": true,
+                }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.changes");
+    }
+
+    #[test]
+    fn workspace_read_file_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.readFile",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "src/main.rs",
+                }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.readFile");
+    }
+
+    #[test]
+    fn workspace_read_file_at_ref_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.readFileAtRef",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "src/main.rs",
+                    "gitRef": "HEAD",
+                }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.readFileAtRef");
+    }
+
+    #[test]
+    fn workspace_stat_file_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.statFile",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "Cargo.toml",
+                }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.statFile");
+    }
+
+    #[test]
+    fn workspace_mutate_file_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.mutateFile",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "Cargo.toml",
+                    "action": { "type": "write", "content": "[package]\nname = \"x\"\n" },
+                }),
+                2,
+            ),
+        );
+        assert_bail_with_method_prefix(&resp, "workspace.mutateFile");
+    }
+
+    #[test]
+    fn workspace_inspector_methods_reject_pre_initialize_requests() {
+        // Spot-check the gate works for the new methods too — pick
+        // one representative call. The branchInfo / status tests
+        // already cover the gate path generically; here we just make
+        // sure the new entry points didn't accidentally bypass it.
+        let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+        let resp = dispatch_request(
+            &ctx,
+            request(
+                "workspace.readFile",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "src/main.rs",
+                }),
+                1,
+            ),
+        )
+        .unwrap();
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::NOT_INITIALIZED);
+    }
+
+    #[test]
+    fn workspace_inspector_methods_reject_malformed_params() {
+        // `workspace.mutateFile` has the richest param shape — an
+        // internally-tagged enum buried inside the object. Pick a
+        // garbled action to prove the dispatcher's `INVALID_PARAMS`
+        // path covers it.
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "workspace.mutateFile",
+                json!({
+                    "workspaceDir": "/tmp/example",
+                    "relativePath": "Cargo.toml",
+                    "action": { "type": "explode" },
+                }),
+                2,
+            ),
+        );
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+        assert!(
+            err.message.contains("`workspace.mutateFile`"),
+            "error should name the method: {err:?}"
         );
     }
 

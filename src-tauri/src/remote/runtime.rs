@@ -182,6 +182,56 @@ pub trait RemoteRuntime: Send + Sync {
     ) -> Option<super::client::NotificationSubscription> {
         None
     }
+
+    // ── workspace inspector ops (phase 20a — surface only) ──────
+    //
+    // Default bails surface as `HANDLER_FAILED` on the wire until
+    // phase 20b implements them on `LocalRuntime`. `RemoteSshRuntime`
+    // forwards via `client.call::<...>` from day one — its handlers
+    // are pure delegation, so the methods work as soon as the server
+    // side is filled in (independent ship of 20b).
+
+    fn workspace_file_tree(
+        &self,
+        _params: super::methods::WorkspaceFileTreeParams,
+    ) -> Result<super::methods::WorkspaceFileTreeResult> {
+        anyhow::bail!("workspace.fileTree is not yet implemented on this runtime")
+    }
+
+    fn workspace_changes(
+        &self,
+        _params: super::methods::WorkspaceChangesParams,
+    ) -> Result<super::methods::WorkspaceChangesResult> {
+        anyhow::bail!("workspace.changes is not yet implemented on this runtime")
+    }
+
+    fn workspace_read_file(
+        &self,
+        _params: super::methods::WorkspaceReadFileParams,
+    ) -> Result<crate::workspace::files::EditorFileReadResponse> {
+        anyhow::bail!("workspace.readFile is not yet implemented on this runtime")
+    }
+
+    fn workspace_read_file_at_ref(
+        &self,
+        _params: super::methods::WorkspaceReadFileAtRefParams,
+    ) -> Result<super::methods::WorkspaceReadFileAtRefResult> {
+        anyhow::bail!("workspace.readFileAtRef is not yet implemented on this runtime")
+    }
+
+    fn workspace_stat_file(
+        &self,
+        _params: super::methods::WorkspaceStatFileParams,
+    ) -> Result<crate::workspace::files::EditorFileStatResponse> {
+        anyhow::bail!("workspace.statFile is not yet implemented on this runtime")
+    }
+
+    fn workspace_mutate_file(
+        &self,
+        _params: super::methods::WorkspaceMutateFileParams,
+    ) -> Result<super::methods::WorkspaceMutateFileResult> {
+        anyhow::bail!("workspace.mutateFile is not yet implemented on this runtime")
+    }
 }
 
 /// The default runtime — does the work in-process. Every existing

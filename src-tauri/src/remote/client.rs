@@ -777,6 +777,63 @@ impl RemoteRuntime for RemoteSshRuntime {
         // directly avoids the clippy redundant-closure warning.
         Some(self.client.subscribe_terminal_events(callback))
     }
+
+    // ── workspace inspector ops (phase 20a — pure delegation) ────
+    //
+    // The trait defaults bail; here we delegate every call straight
+    // to the wire so the remote handlers do the real work. Until
+    // phase 20b lands matching `LocalRuntime` impls, these still
+    // surface `HANDLER_FAILED` on the server side (the server reuses
+    // the same trait), but the *plumbing* is in place — a single
+    // `LocalRuntime` impl flips both local and remote behaviour on.
+
+    fn workspace_file_tree(
+        &self,
+        params: super::methods::WorkspaceFileTreeParams,
+    ) -> Result<super::methods::WorkspaceFileTreeResult> {
+        self.client
+            .call::<super::methods::WorkspaceFileTreeMethod>(params)
+    }
+
+    fn workspace_changes(
+        &self,
+        params: super::methods::WorkspaceChangesParams,
+    ) -> Result<super::methods::WorkspaceChangesResult> {
+        self.client
+            .call::<super::methods::WorkspaceChangesMethod>(params)
+    }
+
+    fn workspace_read_file(
+        &self,
+        params: super::methods::WorkspaceReadFileParams,
+    ) -> Result<crate::workspace::files::EditorFileReadResponse> {
+        self.client
+            .call::<super::methods::WorkspaceReadFileMethod>(params)
+    }
+
+    fn workspace_read_file_at_ref(
+        &self,
+        params: super::methods::WorkspaceReadFileAtRefParams,
+    ) -> Result<super::methods::WorkspaceReadFileAtRefResult> {
+        self.client
+            .call::<super::methods::WorkspaceReadFileAtRefMethod>(params)
+    }
+
+    fn workspace_stat_file(
+        &self,
+        params: super::methods::WorkspaceStatFileParams,
+    ) -> Result<crate::workspace::files::EditorFileStatResponse> {
+        self.client
+            .call::<super::methods::WorkspaceStatFileMethod>(params)
+    }
+
+    fn workspace_mutate_file(
+        &self,
+        params: super::methods::WorkspaceMutateFileParams,
+    ) -> Result<super::methods::WorkspaceMutateFileResult> {
+        self.client
+            .call::<super::methods::WorkspaceMutateFileMethod>(params)
+    }
 }
 
 #[cfg(test)]
@@ -994,6 +1051,36 @@ mod tests {
     }
 
     // ── error paths ──────────────────────────────────────────────
+
+    #[test]
+    fn inspector_op_default_bail_propagates_from_remote_to_caller() {
+        // End-to-end smoke: the trait-default bail on the server side
+        // must travel through the framer, get tagged as HANDLER_FAILED
+        // on the wire, and surface as an anyhow error mentioning both
+        // the method name and the bail message. `StubRuntime` doesn't
+        // override `workspace_file_tree`, so the default impl bails.
+        let client = split_loopback(Some(Arc::new(StubRuntime))).unwrap();
+        let runtime = RemoteSshRuntime::new(client, "dev.box");
+
+        let err = runtime
+            .workspace_file_tree(super::super::methods::WorkspaceFileTreeParams {
+                workspace_dir: "/tmp/example".into(),
+            })
+            .expect_err("default bail should surface as Err");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("workspace.fileTree"),
+            "error should name the method: {msg}"
+        );
+        assert!(
+            msg.contains("HANDLER_FAILED"),
+            "error should carry the wire code label: {msg}"
+        );
+        assert!(
+            msg.contains("not yet implemented"),
+            "error should preserve the trait default message: {msg}"
+        );
+    }
 
     #[test]
     fn server_handler_failure_surfaces_as_anyhow_error_with_code_label() {

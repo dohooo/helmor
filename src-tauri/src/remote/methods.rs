@@ -65,6 +65,32 @@ pub enum Method {
     /// previous subscribers stop seeing them (but the scrollback
     /// they already buffered is theirs to keep).
     TerminalAttach,
+    /// Recursive listing of every file in a workspace, including
+    /// untracked ones. Mirrors what the inspector's file-tree tab
+    /// calls today (`list_workspace_files`).
+    WorkspaceFileTree,
+    /// `git status`-aware projection of the workspace: file paths +
+    /// change classification + line counts. Optionally includes
+    /// per-file content snapshots for the diff viewer.
+    WorkspaceChanges,
+    /// Read a single file's bytes. The wire result mirrors
+    /// `EditorFileReadResponse`: path + content + mtime.
+    WorkspaceReadFile,
+    /// Project a single file's content at a git ref
+    /// (`git show <ref>:<path>`). `None` means "ref or path
+    /// didn't exist" — used by the diff viewer to detect
+    /// added-since-ref files.
+    WorkspaceReadFileAtRef,
+    /// Lightweight existence/mode probe. Cheap — used by the
+    /// editor when deciding whether to render a path as a file
+    /// or a directory.
+    WorkspaceStatFile,
+    /// File-level write operation. The `action` field
+    /// discriminates between Write (with content), Discard,
+    /// Stage, and Unstage; folding them into one method keeps
+    /// the catalogue narrow and adds further actions without
+    /// growing the surface area.
+    WorkspaceMutateFile,
 }
 
 impl Method {
@@ -80,6 +106,12 @@ impl Method {
             Self::TerminalClose => "terminal.close",
             Self::TerminalList => "terminal.list",
             Self::TerminalAttach => "terminal.attach",
+            Self::WorkspaceFileTree => "workspace.fileTree",
+            Self::WorkspaceChanges => "workspace.changes",
+            Self::WorkspaceReadFile => "workspace.readFile",
+            Self::WorkspaceReadFileAtRef => "workspace.readFileAtRef",
+            Self::WorkspaceStatFile => "workspace.statFile",
+            Self::WorkspaceMutateFile => "workspace.mutateFile",
         }
     }
 }
@@ -113,6 +145,12 @@ impl FromStr for Method {
             "terminal.close" => Ok(Self::TerminalClose),
             "terminal.list" => Ok(Self::TerminalList),
             "terminal.attach" => Ok(Self::TerminalAttach),
+            "workspace.fileTree" => Ok(Self::WorkspaceFileTree),
+            "workspace.changes" => Ok(Self::WorkspaceChanges),
+            "workspace.readFile" => Ok(Self::WorkspaceReadFile),
+            "workspace.readFileAtRef" => Ok(Self::WorkspaceReadFileAtRef),
+            "workspace.statFile" => Ok(Self::WorkspaceStatFile),
+            "workspace.mutateFile" => Ok(Self::WorkspaceMutateFile),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -475,6 +513,173 @@ pub struct TerminalEventNotification {
     pub event: TerminalEventKind,
 }
 
+// ── workspace.fileTree / .changes / .readFile / .readFileAtRef ────
+// ── workspace.statFile / .mutateFile ──────────────────────────────
+//
+// These six methods make up phase 20's inspector lift. The result
+// types re-use the existing `workspace::files::types` shapes —
+// adding `Deserialize` + `PartialEq` to those types in phase 20 was
+// enough; the wire IS that contract. Method-local Params + Result
+// wrappers sit here so adding a future field (paging, filter,
+// reflog-style metadata) doesn't churn the inspector's local types.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileTreeParams {
+    /// Absolute filesystem path to the workspace, interpreted on
+    /// the runtime's *own* filesystem (same shape as the existing
+    /// `workspace.status` / `workspace.branchInfo` ops).
+    pub workspace_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileTreeResult {
+    pub entries: Vec<crate::workspace::files::EditorFileListItem>,
+}
+
+pub struct WorkspaceFileTreeMethod;
+impl RpcMethod for WorkspaceFileTreeMethod {
+    const NAME: &'static str = "workspace.fileTree";
+    type Params = WorkspaceFileTreeParams;
+    type Result = WorkspaceFileTreeResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangesParams {
+    pub workspace_dir: String,
+    /// When `true`, the result includes per-file content snapshots
+    /// (HEAD / index / working copy) the diff viewer needs. When
+    /// `false`, only the file list + status — much cheaper for the
+    /// sidebar's hot path.
+    pub include_content: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangesResult {
+    pub items: Vec<crate::workspace::files::EditorFileListItem>,
+    /// Per-file content snapshots, populated only when
+    /// `include_content` was true on the request. Empty otherwise
+    /// — the wire stays small without growing two parallel methods.
+    #[serde(default)]
+    pub prefetched: Vec<crate::workspace::files::EditorFilePrefetchItem>,
+}
+
+pub struct WorkspaceChangesMethod;
+impl RpcMethod for WorkspaceChangesMethod {
+    const NAME: &'static str = "workspace.changes";
+    type Params = WorkspaceChangesParams;
+    type Result = WorkspaceChangesResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceReadFileParams {
+    pub workspace_dir: String,
+    /// Path relative to `workspace_dir`. Server resolves it
+    /// against the workspace root and rejects anything that would
+    /// escape (`..`, absolute paths, symlink redirects) — phase
+    /// 20b adds the sandbox check.
+    pub relative_path: String,
+}
+
+pub struct WorkspaceReadFileMethod;
+impl RpcMethod for WorkspaceReadFileMethod {
+    const NAME: &'static str = "workspace.readFile";
+    type Params = WorkspaceReadFileParams;
+    type Result = crate::workspace::files::EditorFileReadResponse;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceReadFileAtRefParams {
+    pub workspace_dir: String,
+    pub relative_path: String,
+    /// `HEAD`, `:0` (index), `origin/main`, … — passed verbatim
+    /// to `git show <ref>:<path>` on the server side.
+    pub git_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceReadFileAtRefResult {
+    /// `None` distinguishes "ref/path missing" (deleted file or
+    /// path didn't exist at that ref) from an empty file. The
+    /// inspector's diff viewer renders the missing-side as a
+    /// stub when this is None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+pub struct WorkspaceReadFileAtRefMethod;
+impl RpcMethod for WorkspaceReadFileAtRefMethod {
+    const NAME: &'static str = "workspace.readFileAtRef";
+    type Params = WorkspaceReadFileAtRefParams;
+    type Result = WorkspaceReadFileAtRefResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStatFileParams {
+    pub workspace_dir: String,
+    pub relative_path: String,
+}
+
+pub struct WorkspaceStatFileMethod;
+impl RpcMethod for WorkspaceStatFileMethod {
+    const NAME: &'static str = "workspace.statFile";
+    type Params = WorkspaceStatFileParams;
+    type Result = crate::workspace::files::EditorFileStatResponse;
+}
+
+/// Discriminator for `workspace.mutateFile`. `Write` carries the
+/// new content; the git index ops (`Stage` / `Unstage`) and
+/// `Discard` (revert to HEAD/index) are content-free.
+///
+/// Internally tagged so the wire looks like
+/// `{"type":"write","content":"..."}` instead of an outer Object
+/// with `action: "write"` and a separate `content` sibling — fewer
+/// implicit-coupling rules for the frontend to remember.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorkspaceMutateFileAction {
+    Write { content: String },
+    Discard,
+    Stage,
+    Unstage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMutateFileParams {
+    pub workspace_dir: String,
+    pub relative_path: String,
+    pub action: WorkspaceMutateFileAction,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMutateFileResult {
+    /// Populated for the `Write` action (the file's new mtime).
+    /// `None` for stage/unstage/discard, which don't return a
+    /// file-level timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ms: Option<i64>,
+}
+
+pub struct WorkspaceMutateFileMethod;
+impl RpcMethod for WorkspaceMutateFileMethod {
+    const NAME: &'static str = "workspace.mutateFile";
+    type Params = WorkspaceMutateFileParams;
+    type Result = WorkspaceMutateFileResult;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +697,12 @@ mod tests {
             Method::TerminalClose,
             Method::TerminalList,
             Method::TerminalAttach,
+            Method::WorkspaceFileTree,
+            Method::WorkspaceChanges,
+            Method::WorkspaceReadFile,
+            Method::WorkspaceReadFileAtRef,
+            Method::WorkspaceStatFile,
+            Method::WorkspaceMutateFile,
         ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
@@ -702,5 +913,207 @@ mod tests {
         assert!(wire.contains("\"rows\""));
         let restored: TerminalAttachResult = serde_json::from_str(&wire).unwrap();
         assert_eq!(restored, result);
+    }
+
+    // ── workspace.* (phase 20a) wire shapes ──────────────────────
+
+    use crate::workspace::files::{
+        EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
+    };
+
+    fn sample_file_entry(path: &str) -> EditorFileListItem {
+        EditorFileListItem {
+            path: path.into(),
+            absolute_path: format!("/repo/{path}"),
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            status: "modified".into(),
+            staged_insertions: 1,
+            staged_deletions: 0,
+            unstaged_insertions: 3,
+            unstaged_deletions: 2,
+            committed_insertions: 0,
+            committed_deletions: 0,
+            is_binary: false,
+            staged_status: Some("M".into()),
+            unstaged_status: Some("M".into()),
+            committed_status: None,
+        }
+    }
+
+    #[test]
+    fn workspace_file_tree_wire_shapes_are_camel_case_and_round_trip() {
+        let params = WorkspaceFileTreeParams {
+            workspace_dir: "/repo".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"workspaceDir\""));
+
+        let result = WorkspaceFileTreeResult {
+            entries: vec![sample_file_entry("src/foo.rs")],
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"absolutePath\""));
+        assert!(wire.contains("\"stagedInsertions\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+        let restored: WorkspaceFileTreeResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, result);
+    }
+
+    #[test]
+    fn workspace_changes_round_trips_with_and_without_content() {
+        // Without content: prefetched is empty. With content: it's
+        // populated. Both shapes round-trip lossless.
+        let bare = WorkspaceChangesResult {
+            items: vec![sample_file_entry("a.txt")],
+            prefetched: vec![],
+        };
+        let wire = serde_json::to_string(&bare).unwrap();
+        // `prefetched: []` serialises because the default attribute
+        // alone won't skip an empty vec; we accept the slight verbose
+        // round-trip in exchange for type stability on the client.
+        let restored: WorkspaceChangesResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, bare);
+
+        let with_content = WorkspaceChangesResult {
+            items: vec![sample_file_entry("a.txt")],
+            prefetched: vec![EditorFilePrefetchItem {
+                absolute_path: "/repo/a.txt".into(),
+                content: "hello\n".into(),
+            }],
+        };
+        let wire = serde_json::to_string(&with_content).unwrap();
+        assert!(wire.contains("\"prefetched\""));
+        let restored: WorkspaceChangesResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, with_content);
+    }
+
+    #[test]
+    fn workspace_changes_params_carry_include_content_flag() {
+        let params = WorkspaceChangesParams {
+            workspace_dir: "/repo".into(),
+            include_content: true,
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"includeContent\":true"));
+        // Default false → still emits the field explicitly, since
+        // the boolean isn't marked `#[serde(default)]`. The client
+        // must always specify it — we want loud failures on
+        // omission, not a silent default.
+        let cheap = WorkspaceChangesParams {
+            workspace_dir: "/repo".into(),
+            include_content: false,
+        };
+        let wire = serde_json::to_string(&cheap).unwrap();
+        assert!(wire.contains("\"includeContent\":false"));
+    }
+
+    #[test]
+    fn workspace_read_file_uses_existing_response_shape_verbatim() {
+        // The Result type *is* `EditorFileReadResponse` — the
+        // inspector's local contract IS the wire contract for this
+        // method. Confirm the round-trip works through the wire.
+        let result = EditorFileReadResponse {
+            path: "/repo/src/main.rs".into(),
+            content: "fn main() {}\n".into(),
+            mtime_ms: 1_700_000_000_000,
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"path\""));
+        assert!(wire.contains("\"content\""));
+        assert!(wire.contains("\"mtimeMs\""));
+        let restored: EditorFileReadResponse = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, result);
+    }
+
+    #[test]
+    fn workspace_read_file_at_ref_distinguishes_missing_from_empty() {
+        let missing = WorkspaceReadFileAtRefResult { content: None };
+        let wire = serde_json::to_string(&missing).unwrap();
+        // None is skipped on the wire — receivers default to None.
+        assert!(
+            !wire.contains("content"),
+            "None content should drop the field: {wire}"
+        );
+
+        let empty = WorkspaceReadFileAtRefResult {
+            content: Some(String::new()),
+        };
+        let wire = serde_json::to_string(&empty).unwrap();
+        assert!(wire.contains("\"content\":\"\""));
+
+        // Round trip: missing parses back into None.
+        let restored: WorkspaceReadFileAtRefResult = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.content, None);
+    }
+
+    #[test]
+    fn workspace_stat_file_round_trips_existing_stat_response_shape() {
+        let result = EditorFileStatResponse {
+            path: "/repo/src/main.rs".into(),
+            exists: true,
+            is_file: true,
+            mtime_ms: Some(1_700_000_000_000),
+            size: Some(42),
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"isFile\""));
+        assert!(wire.contains("\"mtimeMs\""));
+        let restored: EditorFileStatResponse = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, result);
+    }
+
+    #[test]
+    fn workspace_mutate_file_action_is_internally_tagged() {
+        // The frontend will discriminate on `action.type` — same
+        // pattern as RuntimeKind / TerminalEventKind.
+        let write = WorkspaceMutateFileAction::Write {
+            content: "new\n".into(),
+        };
+        let wire = serde_json::to_value(&write).unwrap();
+        assert_eq!(wire["type"], "write");
+        assert_eq!(wire["content"], "new\n");
+
+        let discard = WorkspaceMutateFileAction::Discard;
+        let wire = serde_json::to_value(&discard).unwrap();
+        assert_eq!(wire["type"], "discard");
+        // No extra fields — the unit variants stay clean on the wire.
+        assert!(wire.get("content").is_none());
+
+        let stage = WorkspaceMutateFileAction::Stage;
+        let wire = serde_json::to_value(&stage).unwrap();
+        assert_eq!(wire["type"], "stage");
+
+        let unstage = WorkspaceMutateFileAction::Unstage;
+        let wire = serde_json::to_value(&unstage).unwrap();
+        assert_eq!(wire["type"], "unstage");
+
+        // Round-trip every variant.
+        for variant in [
+            WorkspaceMutateFileAction::Write {
+                content: "x".into(),
+            },
+            WorkspaceMutateFileAction::Discard,
+            WorkspaceMutateFileAction::Stage,
+            WorkspaceMutateFileAction::Unstage,
+        ] {
+            let wire = serde_json::to_string(&variant).unwrap();
+            let restored: WorkspaceMutateFileAction = serde_json::from_str(&wire).unwrap();
+            assert_eq!(restored, variant);
+        }
+    }
+
+    #[test]
+    fn workspace_mutate_file_result_omits_mtime_when_absent() {
+        // Stage/Unstage/Discard return no timestamp; the response
+        // is essentially `{}`. Write fills it in.
+        let bare = WorkspaceMutateFileResult::default();
+        let wire = serde_json::to_string(&bare).unwrap();
+        assert_eq!(wire, "{}");
+
+        let after_write = WorkspaceMutateFileResult {
+            mtime_ms: Some(1_700_000_000_000),
+        };
+        let wire = serde_json::to_string(&after_write).unwrap();
+        assert!(wire.contains("\"mtimeMs\":1700000000000"));
     }
 }
