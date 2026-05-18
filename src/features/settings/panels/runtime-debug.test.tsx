@@ -17,6 +17,8 @@ const apiMocks = vi.hoisted(() => ({
 	setWorkspaceRuntimeBinding: vi.fn(),
 	clearWorkspaceRuntimeBinding: vi.fn(),
 	getWorkspaceBranchInfo: vi.fn(),
+	getWorkspaceFileTree: vi.fn(),
+	getWorkspaceChanges: vi.fn(),
 	openRemoteTerminal: vi.fn(),
 	writeRemoteTerminal: vi.fn(),
 	closeRemoteTerminal: vi.fn(),
@@ -41,6 +43,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		setWorkspaceRuntimeBinding: apiMocks.setWorkspaceRuntimeBinding,
 		clearWorkspaceRuntimeBinding: apiMocks.clearWorkspaceRuntimeBinding,
 		getWorkspaceBranchInfo: apiMocks.getWorkspaceBranchInfo,
+		getWorkspaceFileTree: apiMocks.getWorkspaceFileTree,
+		getWorkspaceChanges: apiMocks.getWorkspaceChanges,
 		openRemoteTerminal: apiMocks.openRemoteTerminal,
 		writeRemoteTerminal: apiMocks.writeRemoteTerminal,
 		closeRemoteTerminal: apiMocks.closeRemoteTerminal,
@@ -70,6 +74,20 @@ const REMOTE_HEALTH: RuntimeHealth = {
 
 function renderPanel() {
 	return renderWithProviders(<RuntimeDebugPanel />);
+}
+
+/**
+ * The status probe and the inspector probe (phase 20e) share label
+ * text by design — the two sections want to read identically. Tests
+ * scope by id (set on each input) to keep the two surfaces
+ * independently targetable.
+ */
+async function waitForInputById(id: string): Promise<HTMLInputElement> {
+	return (await waitFor(() => {
+		const el = document.getElementById(id);
+		if (!el) throw new Error(`${id} input not yet mounted`);
+		return el as HTMLInputElement;
+	})) as HTMLInputElement;
 }
 
 describe("RuntimeDebugPanel", () => {
@@ -251,8 +269,10 @@ describe("RuntimeDebugPanel", () => {
 		});
 
 		renderPanel();
-		const workspaceInput = await screen.findByLabelText(/Workspace dir/);
-		await user.type(workspaceInput, "/Users/me/code/repo");
+		await user.type(
+			await waitForInputById("probe-workspace"),
+			"/Users/me/code/repo",
+		);
 		await user.click(screen.getByRole("button", { name: /Run probe/ }));
 
 		await waitFor(() => {
@@ -283,7 +303,7 @@ describe("RuntimeDebugPanel", () => {
 
 		renderPanel();
 		await user.type(
-			await screen.findByLabelText(/Workspace dir/),
+			await waitForInputById("probe-workspace"),
 			"/Users/me/code/repo",
 		);
 		await user.click(screen.getByRole("button", { name: /Run branch info/ }));
@@ -314,7 +334,7 @@ describe("RuntimeDebugPanel", () => {
 		});
 
 		renderPanel();
-		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
+		await user.type(await waitForInputById("probe-workspace"), "/repo");
 		await user.click(screen.getByRole("button", { name: /Run branch info/ }));
 
 		await waitFor(() => {
@@ -334,12 +354,16 @@ describe("RuntimeDebugPanel", () => {
 		});
 
 		renderPanel();
-		const workspaceInput = await screen.findByLabelText(/Workspace dir/);
-		await user.type(workspaceInput, "/clean/repo");
+		await user.type(await waitForInputById("probe-workspace"), "/clean/repo");
 		await user.click(screen.getByRole("button", { name: /Run probe/ }));
 
 		await waitFor(() => {
-			expect(screen.getByText(/Clean — no changes\./)).toBeInTheDocument();
+			// The status + inspector probes both render "Clean — no changes."
+			// when their respective backends return empty results. Anchor on
+			// the FIRST occurrence which is the status probe (rendered above
+			// the inspector probe in the panel layout).
+			const matches = screen.getAllByText(/Clean — no changes\./);
+			expect(matches.length).toBeGreaterThan(0);
 		});
 	});
 
@@ -351,8 +375,8 @@ describe("RuntimeDebugPanel", () => {
 		});
 
 		renderPanel();
-		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
-		await user.type(await screen.findByLabelText(/Workspace ID/), "ws-bound");
+		await user.type(await waitForInputById("probe-workspace"), "/repo");
+		await user.type(await waitForInputById("probe-workspace-id"), "ws-bound");
 		await user.click(screen.getByRole("button", { name: /Run probe/ }));
 
 		await waitFor(() => {
@@ -377,8 +401,8 @@ describe("RuntimeDebugPanel", () => {
 		});
 
 		renderPanel();
-		await user.type(await screen.findByLabelText(/Workspace dir/), "/repo");
-		await user.type(await screen.findByLabelText(/Workspace ID/), "ws-bound");
+		await user.type(await waitForInputById("probe-workspace"), "/repo");
+		await user.type(await waitForInputById("probe-workspace-id"), "ws-bound");
 		// Switch the dropdown away from "Auto" — explicit pick. The
 		// bindings section also has a `Runtime` label, so anchor on
 		// the probe-section input id to disambiguate.
@@ -396,6 +420,216 @@ describe("RuntimeDebugPanel", () => {
 				runtimeName: "dev.box",
 				workspaceId: "ws-bound",
 			});
+		});
+	});
+
+	// ── workspace inspector probe (phase 20e) ────────────────────────
+
+	it("runs the file-tree probe and renders the first few entries", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceFileTree.mockResolvedValue({
+			entries: [
+				{
+					path: "src/main.rs",
+					absolutePath: "/repo/src/main.rs",
+					name: "main.rs",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 0,
+					unstagedDeletions: 0,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+				{
+					path: "Cargo.toml",
+					absolutePath: "/repo/Cargo.toml",
+					name: "Cargo.toml",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 0,
+					unstagedDeletions: 0,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+			],
+		});
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/repo",
+		);
+		await user.click(screen.getByRole("button", { name: /Run file tree/ }));
+
+		await waitFor(() => {
+			// `runtimeName` / `workspaceId` default to undefined →
+			// resolver falls through to local.
+			expect(apiMocks.getWorkspaceFileTree).toHaveBeenCalledWith(
+				"/repo",
+				undefined,
+				undefined,
+			);
+		});
+		expect(screen.getByText(/2 files \(showing first 2\)/)).toBeInTheDocument();
+		expect(screen.getByText("src/main.rs")).toBeInTheDocument();
+		expect(screen.getByText("Cargo.toml")).toBeInTheDocument();
+	});
+
+	it("renders the empty file-tree message when the walk returns nothing", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceFileTree.mockResolvedValue({ entries: [] });
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/empty",
+		);
+		await user.click(screen.getByRole("button", { name: /Run file tree/ }));
+
+		await waitFor(() => {
+			expect(
+				screen.getByText(/No files surfaced by the walk\./),
+			).toBeInTheDocument();
+		});
+	});
+
+	it("runs the changes probe without content (cheap path)", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceChanges.mockResolvedValue({
+			items: [
+				{
+					path: "src/foo.rs",
+					absolutePath: "/repo/src/foo.rs",
+					name: "foo.rs",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 2,
+					unstagedDeletions: 1,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+			],
+			prefetched: [],
+		});
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/repo",
+		);
+		await user.click(screen.getByRole("button", { name: /^Run changes$/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspaceChanges).toHaveBeenCalledWith(
+				"/repo",
+				false,
+				undefined,
+				undefined,
+			);
+		});
+		expect(
+			screen.getByText(/1 changed path · content omitted/),
+		).toBeInTheDocument();
+		expect(screen.getByText("src/foo.rs (M)")).toBeInTheDocument();
+	});
+
+	it("runs the changes probe with content + reports prefetched count", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceChanges.mockResolvedValue({
+			items: [
+				{
+					path: "src/foo.rs",
+					absolutePath: "/repo/src/foo.rs",
+					name: "foo.rs",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 2,
+					unstagedDeletions: 1,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+			],
+			prefetched: [{ absolutePath: "/repo/src/foo.rs", content: "new body" }],
+		});
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/repo",
+		);
+		await user.click(
+			screen.getByRole("button", { name: /Run changes \(with content\)/ }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspaceChanges).toHaveBeenCalledWith(
+				"/repo",
+				true,
+				undefined,
+				undefined,
+			);
+		});
+		expect(
+			screen.getByText(/1 changed path · prefetched 1/),
+		).toBeInTheDocument();
+	});
+
+	it("inspector probe forwards workspaceId + runtimeName to the resolver", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getWorkspaceFileTree.mockResolvedValue({ entries: [] });
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/repo",
+		);
+		await user.type(
+			await waitForInputById("inspector-probe-workspace-id"),
+			"ws-bound",
+		);
+		// Switch to the explicit remote runtime. The inspector probe
+		// has its own dropdown id distinct from the status probe.
+		const inspectorRuntime = document.getElementById(
+			"inspector-probe-runtime",
+		) as HTMLSelectElement | null;
+		if (!inspectorRuntime) throw new Error("inspector-probe-runtime missing");
+		await user.selectOptions(inspectorRuntime, "dev.box");
+		await user.click(screen.getByRole("button", { name: /Run file tree/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.getWorkspaceFileTree).toHaveBeenCalledWith(
+				"/repo",
+				"ws-bound",
+				"dev.box",
+			);
+		});
+	});
+
+	it("inspector probe surfaces backend errors as an error notice", async () => {
+		const user = userEvent.setup();
+		apiMocks.getWorkspaceChanges.mockRejectedValue(
+			new Error("workspace.changes failed: not a git repository"),
+		);
+
+		renderPanel();
+		await user.type(
+			await waitForInputById("inspector-probe-workspace"),
+			"/notrepo",
+		);
+		await user.click(screen.getByRole("button", { name: /^Run changes$/ }));
+
+		await waitFor(() => {
+			expect(screen.getByText(/not a git repository/)).toBeInTheDocument();
 		});
 	});
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	FileText,
 	Link2,
 	Loader2,
 	Plug,
@@ -22,6 +23,8 @@ import {
 	disconnectRemoteRuntime,
 	getRuntimeHealth,
 	getWorkspaceBranchInfo,
+	getWorkspaceChanges,
+	getWorkspaceFileTree,
 	getWorkspaceStatus,
 	listOwnedTerminals,
 	listRemoteRuntimes,
@@ -36,6 +39,8 @@ import {
 	setWorkspaceRuntimeBinding,
 	type TerminalEventNotification,
 	type WorkspaceBranchInfoResult,
+	type WorkspaceChangesResult,
+	type WorkspaceFileTreeResult,
 	type WorkspaceRuntimeBinding,
 	type WorkspaceStatusResult,
 	writeRemoteTerminal,
@@ -82,6 +87,7 @@ export function RuntimeDebugPanel() {
 			/>
 			<ConnectSection />
 			<WorkspaceStatusProbeSection entries={entries} />
+			<WorkspaceInspectorProbeSection entries={entries} />
 			<WorkspaceBindingsSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
@@ -697,6 +703,257 @@ function ProbeResult({
 			<ul className="mt-1 list-disc pl-5 font-mono text-[11px]">
 				{result.changedPaths.map((path) => (
 					<li key={path}>{path}</li>
+				))}
+			</ul>
+		</SettingsNotice>
+	);
+}
+
+// ── 3b. Workspace inspector probe (phase 20e) ────────────────────────
+//
+// Mirrors the `WorkspaceStatusProbeSection` shape but exercises the
+// phase 20a-d slice end-to-end: file tree + changes (with and without
+// content) routed through `resolve_runtime_for_call`. Lets the
+// operator verify the full vertical visually before / after pinning a
+// workspace to a remote runtime — the runtime label in the result
+// confirms which side actually answered.
+
+function WorkspaceInspectorProbeSection({
+	entries,
+}: {
+	entries: RuntimeEntry[];
+}) {
+	const [workspaceDir, setWorkspaceDir] = useState("");
+	const [workspaceId, setWorkspaceId] = useState("");
+	const [runtimeName, setRuntimeName] = useState<string>(RUNTIME_AUTO_VALUE);
+
+	useEffect(() => {
+		if (
+			runtimeName !== RUNTIME_AUTO_VALUE &&
+			!entries.some((e) => e.name === runtimeName)
+		) {
+			setRuntimeName(RUNTIME_AUTO_VALUE);
+		}
+	}, [entries, runtimeName]);
+
+	const resolvedRuntimeName =
+		runtimeName === RUNTIME_AUTO_VALUE ? undefined : runtimeName;
+	const resolvedWorkspaceId = workspaceId.trim() || undefined;
+
+	const fileTreeProbe = useMutation({
+		mutationFn: () =>
+			getWorkspaceFileTree(
+				workspaceDir,
+				resolvedWorkspaceId,
+				resolvedRuntimeName,
+			),
+	});
+	const changesProbe = useMutation({
+		mutationFn: (includeContent: boolean) =>
+			getWorkspaceChanges(
+				workspaceDir,
+				includeContent,
+				resolvedWorkspaceId,
+				resolvedRuntimeName,
+			),
+	});
+
+	const runtimeOptions = useMemo(
+		() => entries.map((e) => ({ value: e.name, label: e.name })),
+		[entries],
+	);
+
+	const submitDisabled = !workspaceDir.trim();
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<FileText className="size-3.5" strokeWidth={1.8} />}
+				title="Workspace inspector probe"
+				description="Round-trips `workspace.fileTree` and `workspace.changes` through the resolved runtime. Same binding precedence as the status probe — pick `Auto (via binding)` to exercise the workspace-id → runtime lookup. Toggle `Include content` to also fetch per-file diff bodies (large response on dirty repos)."
+			/>
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
+					<Label htmlFor="inspector-probe-runtime" className="text-xs">
+						Runtime
+					</Label>
+					<select
+						id="inspector-probe-runtime"
+						value={runtimeName}
+						onChange={(e) => setRuntimeName(e.target.value)}
+						className={cn(
+							"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1",
+							"text-sm shadow-sm transition-colors",
+							"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+						)}
+					>
+						<option value={RUNTIME_AUTO_VALUE}>
+							Auto (via workspace binding)
+						</option>
+						{runtimeOptions.map((opt) => (
+							<option key={opt.value} value={opt.value}>
+								{opt.label}
+							</option>
+						))}
+					</select>
+
+					<Label htmlFor="inspector-probe-workspace-id" className="text-xs">
+						Workspace ID
+					</Label>
+					<Input
+						id="inspector-probe-workspace-id"
+						value={workspaceId}
+						onChange={(e) => setWorkspaceId(e.target.value)}
+						placeholder="ws-1234 (optional; only used by Auto)"
+					/>
+
+					<Label htmlFor="inspector-probe-workspace" className="text-xs">
+						Workspace dir
+					</Label>
+					<Input
+						id="inspector-probe-workspace"
+						value={workspaceDir}
+						onChange={(e) => setWorkspaceDir(e.target.value)}
+						placeholder="/Users/you/code/some-repo"
+					/>
+				</div>
+
+				<div className="flex flex-col gap-3">
+					<div className="min-w-0 flex-1">
+						<FileTreeProbeResult
+							loading={fileTreeProbe.isPending}
+							error={fileTreeProbe.error}
+							result={fileTreeProbe.data}
+						/>
+						<ChangesProbeResult
+							loading={changesProbe.isPending}
+							error={changesProbe.error}
+							result={changesProbe.data}
+							variables={changesProbe.variables}
+						/>
+					</div>
+					<div className="flex items-center justify-end gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={changesProbe.isPending || submitDisabled}
+							onClick={() => changesProbe.mutate(false)}
+						>
+							{changesProbe.isPending && changesProbe.variables === false ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Probing changes…
+								</>
+							) : (
+								"Run changes"
+							)}
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={changesProbe.isPending || submitDisabled}
+							onClick={() => changesProbe.mutate(true)}
+						>
+							{changesProbe.isPending && changesProbe.variables === true ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Probing changes…
+								</>
+							) : (
+								"Run changes (with content)"
+							)}
+						</Button>
+						<Button
+							variant="default"
+							size="sm"
+							disabled={fileTreeProbe.isPending || submitDisabled}
+							onClick={() => fileTreeProbe.mutate()}
+						>
+							{fileTreeProbe.isPending ? (
+								<>
+									<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+									Probing file tree…
+								</>
+							) : (
+								"Run file tree"
+							)}
+						</Button>
+					</div>
+				</div>
+			</div>
+		</section>
+	);
+}
+
+function FileTreeProbeResult({
+	loading,
+	error,
+	result,
+}: {
+	loading: boolean;
+	error: unknown;
+	result: WorkspaceFileTreeResult | undefined;
+}) {
+	if (loading) return null;
+	if (error) {
+		return <SettingsNotice tone="error">{errorMessage(error)}</SettingsNotice>;
+	}
+	if (!result) return null;
+	const total = result.entries.length;
+	const preview = result.entries.slice(0, 12);
+	if (total === 0) {
+		return (
+			<SettingsNotice tone="ok">No files surfaced by the walk.</SettingsNotice>
+		);
+	}
+	return (
+		<SettingsNotice tone="info">
+			<div>
+				{total} file{total === 1 ? "" : "s"} (showing first {preview.length})
+			</div>
+			<ul className="mt-1 list-disc pl-5 font-mono text-[11px]">
+				{preview.map((entry) => (
+					<li key={entry.absolutePath}>{entry.path}</li>
+				))}
+			</ul>
+		</SettingsNotice>
+	);
+}
+
+function ChangesProbeResult({
+	loading,
+	error,
+	result,
+	variables,
+}: {
+	loading: boolean;
+	error: unknown;
+	result: WorkspaceChangesResult | undefined;
+	variables: boolean | undefined;
+}) {
+	if (loading) return null;
+	if (error) {
+		return <SettingsNotice tone="error">{errorMessage(error)}</SettingsNotice>;
+	}
+	if (!result) return null;
+	const itemCount = result.items.length;
+	if (itemCount === 0) {
+		return <SettingsNotice tone="ok">Clean — no changes.</SettingsNotice>;
+	}
+	const includedContent = variables === true;
+	return (
+		<SettingsNotice tone="warn">
+			<div>
+				{itemCount} changed path{itemCount === 1 ? "" : "s"}
+				{includedContent
+					? ` · prefetched ${result.prefetched.length}`
+					: " · content omitted"}
+			</div>
+			<ul className="mt-1 list-disc pl-5 font-mono text-[11px]">
+				{result.items.slice(0, 12).map((item) => (
+					<li key={item.absolutePath}>
+						{item.path} ({item.status})
+					</li>
 				))}
 			</ul>
 		</SettingsNotice>
