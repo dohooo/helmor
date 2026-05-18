@@ -568,6 +568,64 @@ pub(crate) fn update_restored_workspace_state(
         .context("Failed to commit restore transaction")
 }
 
+/// Read the persisted runtime binding for a single workspace. `Ok(None)`
+/// when the column is NULL (i.e. "use the local runtime") or when the
+/// workspace id doesn't match any row — the resolver treats both
+/// cases identically.
+///
+/// Phase 22b's resolver consults this *before* the JSON sidecar
+/// binding store, so a row that's been migrated (or written via 22b+
+/// write paths) wins over a stale sidecar entry.
+pub fn load_workspace_runtime_name(workspace_id: &str) -> Result<Option<String>> {
+    let connection = db::read_conn()?;
+    load_workspace_runtime_name_from(&connection, workspace_id)
+}
+
+/// Pool-agnostic body of [`load_workspace_runtime_name`]. Tests use
+/// this with an in-memory `Connection`; production keeps using the
+/// convenience wrapper.
+pub fn load_workspace_runtime_name_from(
+    connection: &rusqlite::Connection,
+    workspace_id: &str,
+) -> Result<Option<String>> {
+    let mut statement = connection
+        .prepare("SELECT runtime_name FROM workspaces WHERE id = ?1")
+        .context("Failed to prepare load_workspace_runtime_name statement")?;
+    let mut rows = statement.query_map([workspace_id], |row| row.get::<_, Option<String>>(0))?;
+    match rows.next() {
+        Some(result) => Ok(result?),
+        None => Ok(None),
+    }
+}
+
+/// Set (or clear) the runtime binding column on one workspace row.
+/// Pass `Some(name)` to bind; `None` to clear (sets the column back
+/// to NULL = "use the local runtime").
+///
+/// Returns the number of rows touched: `1` on a successful update,
+/// `0` if the workspace id doesn't match any row (treated as a
+/// silent no-op so the Tauri command layer doesn't have to special-
+/// case a binding-set during a workspace's archive teardown).
+pub fn update_workspace_runtime_name(workspace_id: &str, value: Option<&str>) -> Result<usize> {
+    let connection = db::write_conn()?;
+    update_workspace_runtime_name_in(&connection, workspace_id, value)
+}
+
+/// Pool-agnostic body of [`update_workspace_runtime_name`].
+pub fn update_workspace_runtime_name_in(
+    connection: &rusqlite::Connection,
+    workspace_id: &str,
+    value: Option<&str>,
+) -> Result<usize> {
+    let rows = connection
+        .execute(
+            "UPDATE workspaces SET runtime_name = ?2 WHERE id = ?1",
+            rusqlite::params![workspace_id, value],
+        )
+        .with_context(|| format!("Failed to update runtime_name for workspace {workspace_id}"))?;
+    Ok(rows)
+}
+
 /// Phase 22a one-time copy from the JSON binding sidecar
 /// (`<data_dir>/workspace_runtime_bindings.json`) into the new
 /// `workspaces.runtime_name` column. Idempotent: only fills rows
@@ -782,5 +840,82 @@ mod tests {
         let bindings = vec![("ws-1".to_string(), "dev.box".to_string())];
         assert_eq!(backfill_runtime_name_into(&mut conn, &bindings).unwrap(), 1);
         assert_eq!(backfill_runtime_name_into(&mut conn, &bindings).unwrap(), 0,);
+    }
+
+    // ── load_workspace_runtime_name (phase 22b) ───────────────────
+
+    #[test]
+    fn load_runtime_name_returns_some_for_a_set_row() {
+        let conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id, runtime_name) VALUES ('ws-1', 'dev.box');")
+            .unwrap();
+        let result = load_workspace_runtime_name_from(&conn, "ws-1").unwrap();
+        assert_eq!(result.as_deref(), Some("dev.box"));
+    }
+
+    #[test]
+    fn load_runtime_name_returns_none_for_null_column_and_missing_row() {
+        let conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id) VALUES ('ws-null');")
+            .unwrap();
+        // NULL column → None
+        assert!(load_workspace_runtime_name_from(&conn, "ws-null")
+            .unwrap()
+            .is_none());
+        // Missing row → None (not Err) — resolver treats both the
+        // same way (fall through to sidecar / local).
+        assert!(load_workspace_runtime_name_from(&conn, "never-existed")
+            .unwrap()
+            .is_none());
+    }
+
+    // ── update_workspace_runtime_name (phase 22b) ─────────────────
+
+    #[test]
+    fn update_runtime_name_sets_and_clears_value() {
+        let conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id) VALUES ('ws-1');")
+            .unwrap();
+
+        // Set
+        let written = update_workspace_runtime_name_in(&conn, "ws-1", Some("dev.box")).unwrap();
+        assert_eq!(written, 1);
+        assert_eq!(
+            load_workspace_runtime_name_from(&conn, "ws-1")
+                .unwrap()
+                .as_deref(),
+            Some("dev.box")
+        );
+
+        // Clear (Some → None)
+        let written = update_workspace_runtime_name_in(&conn, "ws-1", None).unwrap();
+        assert_eq!(written, 1);
+        assert!(load_workspace_runtime_name_from(&conn, "ws-1")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn update_runtime_name_returns_zero_for_missing_row() {
+        // Silent no-op — the Tauri command layer doesn't have to
+        // special-case a write against a workspace that's mid-archive.
+        let conn = open_db_with_workspaces();
+        let written =
+            update_workspace_runtime_name_in(&conn, "never-existed", Some("dev.box")).unwrap();
+        assert_eq!(written, 0);
+    }
+
+    #[test]
+    fn update_runtime_name_overwrites_existing_value() {
+        let conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id, runtime_name) VALUES ('ws-1', 'old');")
+            .unwrap();
+        update_workspace_runtime_name_in(&conn, "ws-1", Some("new")).unwrap();
+        assert_eq!(
+            load_workspace_runtime_name_from(&conn, "ws-1")
+                .unwrap()
+                .as_deref(),
+            Some("new")
+        );
     }
 }

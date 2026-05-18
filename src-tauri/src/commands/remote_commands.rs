@@ -417,9 +417,17 @@ fn mutate_workspace_file_inner(
     })
 }
 
-/// Pick the runtime the dispatch should land on. Explicit
-/// `runtime_name` wins; otherwise consult the binding for
-/// `workspace_id`; otherwise the local runtime.
+/// Pick the runtime the dispatch should land on. Phase 22b
+/// precedence: explicit `runtime_name` > `workspaces.runtime_name`
+/// column > JSON sidecar binding store > local runtime.
+///
+/// Workspace-id resolution consults the DB column first so a
+/// recently-bound workspace doesn't have to wait for the sidecar
+/// JSON to round-trip through `save_to_disk` before the resolver
+/// sees the new value. A read error on the column (DB unavailable,
+/// migration failed) silently falls through to the sidecar — the
+/// resolver should never refuse to dispatch because the column
+/// couldn't be read.
 ///
 /// Factored out so tests can drive the resolution rule directly
 /// without spinning up a Tauri command harness, and so future
@@ -431,11 +439,48 @@ fn resolve_runtime_for_call(
     workspace_id: Option<&str>,
     runtime_name: Option<&str>,
 ) -> anyhow::Result<Arc<dyn RemoteRuntime>> {
+    // Hot-cache the column lookup once per call so the rest of the
+    // resolver is DB-free and can be unit-tested via
+    // `resolve_runtime_for_call_with_column`.
+    let column_binding = workspace_id.filter(|id| !id.is_empty()).and_then(|id| {
+        crate::models::workspaces::load_workspace_runtime_name(id)
+            .ok()
+            .flatten()
+    });
+    resolve_runtime_for_call_with_column(
+        registry,
+        bindings,
+        workspace_id,
+        runtime_name,
+        column_binding.as_deref(),
+    )
+}
+
+/// Pure-logic variant of [`resolve_runtime_for_call`] that takes
+/// the column-resolved binding as an argument rather than reading
+/// the DB. Tests use this so they can drive every precedence branch
+/// (column hit, column miss + sidecar hit, both miss) without
+/// initializing a pool.
+fn resolve_runtime_for_call_with_column(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+    column_binding: Option<&str>,
+) -> anyhow::Result<Arc<dyn RemoteRuntime>> {
     if let Some(name) = runtime_name.filter(|n| !n.is_empty()) {
         return registry.lookup(Some(name));
     }
     if let Some(id) = workspace_id.filter(|id| !id.is_empty()) {
-        if let Some(bound) = bindings.lookup(id) {
+        // Phase 22b precedence: DB column wins over sidecar. Phase
+        // 22a's backfill ensured the column reflects every existing
+        // sidecar binding; subsequent writes go through both surfaces
+        // (see `set_workspace_runtime_binding`) so the two stay in
+        // sync until we can sunset the sidecar entirely.
+        let bound: Option<String> = column_binding
+            .map(|s| s.to_string())
+            .or_else(|| bindings.lookup(id));
+        if let Some(bound) = bound {
             // The binding may point at a runtime that disconnected
             // after the pin was created. Try the lookup; if the
             // runtime's not currently registered, fall back to local
@@ -760,8 +805,22 @@ pub fn set_workspace_runtime_binding(
     if runtime_name.trim().is_empty() {
         return Err(anyhow::anyhow!("runtime name must not be empty").into());
     }
-    bindings.set(workspace_id, runtime_name);
+    bindings.set(workspace_id.clone(), runtime_name.clone());
     persist_bindings(&bindings);
+    // Phase 22b dual-write: keep the column in sync with the sidecar
+    // so the resolver's column-first lookup sees the new binding
+    // immediately. A failure here logs + continues — the sidecar is
+    // still authoritative and the next boot's backfill will catch up.
+    if let Err(err) =
+        crate::models::workspaces::update_workspace_runtime_name(&workspace_id, Some(&runtime_name))
+    {
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            runtime_name = %runtime_name,
+            error = %format!("{err:#}"),
+            "remote-runner: failed to mirror runtime binding into workspaces.runtime_name; sidecar JSON is still authoritative"
+        );
+    }
     Ok(())
 }
 
@@ -774,6 +833,16 @@ pub fn clear_workspace_runtime_binding(
 ) -> CmdResult<()> {
     bindings.clear(&workspace_id);
     persist_bindings(&bindings);
+    // Phase 22b dual-write: clearing the binding means the column
+    // goes back to NULL (= "use the local runtime").
+    if let Err(err) = crate::models::workspaces::update_workspace_runtime_name(&workspace_id, None)
+    {
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            error = %format!("{err:#}"),
+            "remote-runner: failed to clear workspaces.runtime_name; sidecar JSON is still authoritative"
+        );
+    }
     Ok(())
 }
 
@@ -1309,6 +1378,110 @@ mod tests {
         let registry = registry_with_stub_remote();
         let bindings = bindings_with("ws-1", "stub.box");
         let runtime = resolve_runtime_for_call(&registry, &bindings, Some(""), Some("")).unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    // ── column-vs-sidecar precedence (phase 22b) ──────────────────
+    //
+    // These exercise `resolve_runtime_for_call_with_column` directly
+    // so the precedence rule can be verified without a real DB.
+    // Production callers go through `resolve_runtime_for_call`, which
+    // calls into `models::workspaces::load_workspace_runtime_name`
+    // and swallows the inevitable "no pool initialised in unit tests"
+    // error — falling through to the sidecar path the older tests
+    // already cover.
+
+    #[test]
+    fn column_binding_wins_over_sidecar_binding() {
+        // Both surfaces have a (different) binding for the same
+        // workspace. The column-resolved value must be the one the
+        // resolver picks — that's the 22b precedence flip's whole
+        // point.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "never-registered"); // sidecar points at a bad entry
+        let runtime = resolve_runtime_for_call_with_column(
+            &registry,
+            &bindings,
+            Some("ws-1"),
+            None,
+            Some("stub.box"), // column points at the real entry
+        )
+        .unwrap();
+        let health = runtime.runtime_health().unwrap();
+        assert!(matches!(health.kind, RuntimeKind::Remote { .. }));
+        assert_eq!(health.hostname, "stub.box");
+    }
+
+    #[test]
+    fn sidecar_binding_used_when_column_is_absent() {
+        // Legacy path: column hasn't been backfilled yet (e.g. the
+        // workspace row predates the migration) but the sidecar JSON
+        // carries a binding. Resolver still picks the sidecar.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "stub.box");
+        let runtime = resolve_runtime_for_call_with_column(
+            &registry,
+            &bindings,
+            Some("ws-1"),
+            None,
+            None, // column NULL
+        )
+        .unwrap();
+        let health = runtime.runtime_health().unwrap();
+        assert_eq!(health.hostname, "stub.box");
+    }
+
+    #[test]
+    fn explicit_runtime_name_still_wins_over_both_column_and_sidecar() {
+        // The explicit `runtime_name` override is the top of the
+        // precedence chain — neither column nor sidecar should
+        // matter when it's set.
+        let registry = registry_with_stub_remote();
+        let bindings = bindings_with("ws-1", "stub.box");
+        let runtime = resolve_runtime_for_call_with_column(
+            &registry,
+            &bindings,
+            Some("ws-1"),
+            Some("local"),
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn column_binding_pointing_at_unregistered_runtime_falls_back_to_local() {
+        // A column may carry a binding for a runtime that's been
+        // disconnected since the user set it. The resolver should
+        // fall back to local (with a warn log) rather than erroring.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new()); // sidecar empty
+        let runtime = resolve_runtime_for_call_with_column(
+            &registry,
+            &bindings,
+            Some("ws-1"),
+            None,
+            Some("never-registered"),
+        )
+        .unwrap();
+        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    #[test]
+    fn column_binding_ignored_when_workspace_id_is_empty_string() {
+        // Mirrors the sidecar behaviour: `""` workspace id is
+        // treated as "no binding" so a stale column value can't
+        // accidentally route the call.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        let runtime = resolve_runtime_for_call_with_column(
+            &registry,
+            &bindings,
+            Some(""),
+            None,
+            Some("stub.box"), // would route if workspace_id mattered
+        )
+        .unwrap();
         assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
     }
 
