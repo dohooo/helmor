@@ -197,6 +197,31 @@ describe("settings", () => {
 		);
 	});
 
+	it("hydrates and saves auto-archive-on-merge toggle", async () => {
+		invokeMock.mockResolvedValue({
+			"app.auto_archive_on_merge": "true",
+		});
+
+		const enabled = await loadSettings();
+		expect(enabled.autoArchiveOnMerge).toBe(true);
+
+		invokeMock.mockResolvedValue({});
+		const defaulted = await loadSettings();
+		expect(defaulted.autoArchiveOnMerge).toBe(false);
+
+		invokeMock.mockResolvedValue(undefined);
+		await saveSettings({ autoArchiveOnMerge: true });
+
+		expect(invokeMock).toHaveBeenLastCalledWith(
+			"update_app_settings",
+			expect.objectContaining({
+				settingsMap: expect.objectContaining({
+					"app.auto_archive_on_merge": "true",
+				}),
+			}),
+		);
+	});
+
 	it("keeps default as a valid model id", async () => {
 		invokeMock.mockResolvedValue({
 			"app.default_model_id": "gpt-5.5",
