@@ -1509,7 +1509,7 @@ function AppShell({
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 								>
-									{workspaceViewMode === "conversation" && (
+									{workspaceViewMode !== "editor" && (
 										<div
 											aria-label="Workspace panel drag region"
 											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
