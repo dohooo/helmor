@@ -67,6 +67,7 @@ export type WorkspaceRow = {
 	directoryName?: string;
 	repoId?: string;
 	repoName?: string;
+	repoRootPath?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state?: WorkspaceState;
@@ -112,6 +113,7 @@ export type WorkspaceRow = {
 export type WorkspaceGroup = {
 	id: string;
 	label: string;
+	repoRootPath?: string | null;
 	tone: GroupTone;
 	rows: WorkspaceRow[];
 };
@@ -212,6 +214,7 @@ export type BranchPrefixType = "username" | "custom" | "none";
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
+	rootPath?: string | null;
 	remote?: string | null;
 	remoteUrl?: string | null;
 	defaultBranch?: string | null;

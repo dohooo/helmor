@@ -728,9 +728,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				const repoSampleRow: WorkspaceRow | undefined = isRepoGroup
 					? item.group.rows[0]
 					: undefined;
+				const repoRootPath = isRepoGroup
+					? (item.group.repoRootPath?.trim() ?? null)
+					: null;
 
 				const headerLabel = (
-					<span className="flex items-center gap-2">
+					<span className="flex min-w-0 items-center gap-2">
 						{isArchived ? (
 							<Archive
 								className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
@@ -746,9 +749,25 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						) : (
 							<GroupIcon tone={item.group.tone} />
 						)}
-						<span>{item.group.label}</span>
+						<span className="min-w-0 truncate">{item.group.label}</span>
 					</span>
 				);
+				const visibleHeaderLabel =
+					repoRootPath && isRepoGroup ? (
+						<Tooltip>
+							<TooltipTrigger asChild>{headerLabel}</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								align="start"
+								sideOffset={8}
+								className="max-w-64 whitespace-normal break-all font-mono text-[11px] leading-snug"
+							>
+								{repoRootPath}
+							</TooltipContent>
+						</Tooltip>
+					) : (
+						headerLabel
+					);
 
 				const headerClassName = cn(
 					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
@@ -793,7 +812,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 								}
 							}}
 						>
-							{headerLabel}
+							{visibleHeaderLabel}
 							{onCreateWorkspaceForRepo ? (
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -836,7 +855,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						disabled={!item.canCollapse}
 						onClick={() => toggleSection(item.groupId)}
 					>
-						{headerLabel}
+						{visibleHeaderLabel}
 
 						{item.group.rows.length > 0 ? (
 							<span className="relative flex h-5 min-w-5 items-center justify-center">

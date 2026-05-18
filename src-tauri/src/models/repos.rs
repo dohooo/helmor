@@ -16,6 +16,7 @@ use super::db;
 pub struct RepositoryCreateOption {
     pub id: String,
     pub name: String,
+    pub root_path: Option<String>,
     pub remote: Option<String>,
     pub remote_url: Option<String>,
     pub default_branch: Option<String>,
@@ -134,6 +135,7 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
             Ok(RepositoryCreateOption {
                 id: row.get(0)?,
                 name,
+                root_path,
                 remote: row.get(4)?,
                 remote_url: row.get(5)?,
                 forge_provider: row.get(6)?,

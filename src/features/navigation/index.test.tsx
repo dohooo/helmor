@@ -822,6 +822,7 @@ describe("WorkspacesSidebar", () => {
 			{
 				id: "repo:repo-1",
 				label: "helmor",
+				repoRootPath: "/Users/aidan/dev/projects/helmor/.git/worktrees/isonoe",
 				tone: "pinned",
 				rows: [
 					{
@@ -833,6 +834,41 @@ describe("WorkspacesSidebar", () => {
 				],
 			},
 		];
+
+		it("shows the repository path in a capped-width wrapping tooltip on repo headers", async () => {
+			const user = userEvent.setup();
+
+			render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={repoGroups}
+						archivedRows={[]}
+						sidebarGrouping="repo"
+					/>
+				</TooltipProvider>,
+			);
+
+			const header = screen
+				.getAllByRole("button", { name: /helmor/i })
+				.find((el) => el.tagName === "DIV");
+			expect(header).toBeDefined();
+
+			await user.hover(within(header as HTMLElement).getByText("helmor"));
+
+			const tooltip = (
+				await screen.findAllByText(
+					"/Users/aidan/dev/projects/helmor/.git/worktrees/isonoe",
+				)
+			).find(
+				(element) => element.getAttribute("data-slot") === "tooltip-content",
+			);
+			expect(tooltip).toBeDefined();
+			expect(tooltip).toHaveAttribute("data-side", "top");
+			expect(tooltip).toHaveAttribute("data-align", "start");
+			expect(tooltip).toHaveClass("max-w-64");
+			expect(tooltip).toHaveClass("whitespace-normal");
+			expect(tooltip).toHaveClass("break-all");
+		});
 
 		it("renders a `+` button on a repo group header that fires onCreateWorkspaceForRepo with the repo id", async () => {
 			const user = userEvent.setup();

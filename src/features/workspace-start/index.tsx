@@ -1,5 +1,13 @@
-import { ChevronDown, GitBranch, Laptop, Plus, Split, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+	ChevronDown,
+	FolderOpen,
+	GitBranch,
+	Laptop,
+	Plus,
+	Split,
+	X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
@@ -41,6 +49,67 @@ function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
 		default:
 			return repo.forgeLogin ? `${repo.forgeLogin}/` : "";
 	}
+}
+
+function RepositoryMenuContent({
+	align,
+	repositories,
+	selectedRepository,
+	onSelectRepository,
+}: {
+	align: "center" | "start";
+	repositories: RepositoryCreateOption[];
+	selectedRepository: RepositoryCreateOption | null;
+	onSelectRepository: (repository: RepositoryCreateOption) => void;
+}) {
+	const [focusedRepoId, setFocusedRepoId] = useState<string | null>(null);
+	const locationRepo = useMemo(
+		() =>
+			repositories.find((repository) => repository.id === focusedRepoId) ??
+			selectedRepository ??
+			repositories[0] ??
+			null,
+		[focusedRepoId, repositories, selectedRepository],
+	);
+	const location = locationRepo?.rootPath?.trim() ?? null;
+
+	return (
+		<DropdownMenuContent
+			align={align}
+			className="w-[20rem] max-w-[calc(100vw-2rem)] overflow-hidden p-1"
+		>
+			{repositories.map((repository) => (
+				<DropdownMenuItem
+					key={repository.id}
+					onClick={() => onSelectRepository(repository)}
+					onFocus={() => setFocusedRepoId(repository.id)}
+					onPointerEnter={() => setFocusedRepoId(repository.id)}
+					className="gap-2"
+				>
+					<WorkspaceAvatar
+						repoIconSrc={repository.repoIconSrc}
+						repoInitials={repository.repoInitials}
+						repoName={repository.name}
+						title={repository.name}
+						className="size-5 rounded-md"
+						fallbackClassName="text-[8px]"
+					/>
+					<span className="min-w-0 flex-1 truncate">{repository.name}</span>
+				</DropdownMenuItem>
+			))}
+			{location ? (
+				<div className="mt-1 flex min-w-0 items-start gap-2 border-t border-border/50 px-2 py-1.5 text-[11px] text-muted-foreground">
+					<FolderOpen className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.8} />
+					<span
+						className="min-w-0 break-all font-mono leading-snug"
+						title={location}
+					>
+						{location}
+					</span>
+				</div>
+			) : null}
+		</DropdownMenuContent>
+	);
 }
 
 type WorkspaceStartPageProps = {
@@ -297,27 +366,12 @@ export function WorkspaceStartPage({
 										/>
 									</TooltipContent>
 								</Tooltip>
-								<DropdownMenuContent align="center" className="min-w-56">
-									{repositories.map((repository) => (
-										<DropdownMenuItem
-											key={repository.id}
-											onClick={() => onSelectRepository(repository)}
-											className="gap-2"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-[8px]"
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{repository.name}
-											</span>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
+								<RepositoryMenuContent
+									align="center"
+									repositories={repositories}
+									selectedRepository={selectedRepository}
+									onSelectRepository={onSelectRepository}
+								/>
 							</DropdownMenu>
 							<span
 								className={cn(
@@ -371,27 +425,12 @@ export function WorkspaceStartPage({
 										)}
 									</button>
 								</DropdownMenuTrigger>
-								<DropdownMenuContent align="start" className="min-w-56">
-									{repositories.map((repository) => (
-										<DropdownMenuItem
-											key={repository.id}
-											onClick={() => onSelectRepository(repository)}
-											className="gap-2"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-[8px]"
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{repository.name}
-											</span>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
+								<RepositoryMenuContent
+									align="start"
+									repositories={repositories}
+									selectedRepository={selectedRepository}
+									onSelectRepository={onSelectRepository}
+								/>
 							</DropdownMenu>
 						) : null}
 						<DropdownMenu>

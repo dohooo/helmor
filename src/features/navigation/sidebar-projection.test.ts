@@ -257,6 +257,7 @@ describe("regroupByRepo", () => {
 					status: "in-progress",
 					repoId: "repo-A",
 					repoName: "alpha",
+					repoRootPath: "/Users/me/repos/alpha",
 				},
 			],
 		},
@@ -331,6 +332,7 @@ describe("regroupByRepo", () => {
 		const result = regroupByRepo(fixture);
 		const repoGroups = result.filter((g) => g.id.startsWith(REPO_GROUP_PREFIX));
 		expect(repoGroups.map((g) => g.label)).toEqual(["alpha", "beta"]);
+		expect(repoGroups[0]?.repoRootPath).toBe("/Users/me/repos/alpha");
 		// progress (pendingCreation) + done + review rows for repo-A
 		// collapse into the alpha bucket. Pinned and backlog rows do NOT
 		// land here — they kept their own groups.

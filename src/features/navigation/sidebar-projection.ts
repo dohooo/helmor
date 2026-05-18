@@ -335,7 +335,7 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 	const bucketOrder = new Map<string, number>();
 	const repoBuckets = new Map<
 		string,
-		{ label: string; rows: WorkspaceRow[] }
+		{ label: string; repoRootPath: string | null; rows: WorkspaceRow[] }
 	>();
 
 	let seen = 0;
@@ -354,9 +354,16 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 				: UNKNOWN_REPO_GROUP_ID;
 			let bucket = repoBuckets.get(bucketId);
 			if (!bucket) {
-				bucket = { label: row.repoName ?? "Unknown", rows: [] };
+				bucket = {
+					label: row.repoName ?? "Unknown",
+					repoRootPath: row.repoRootPath?.trim() || null,
+					rows: [],
+				};
 				repoBuckets.set(bucketId, bucket);
 				firstSeen.set(bucketId, seen++);
+			}
+			if (!bucket.repoRootPath) {
+				bucket.repoRootPath = row.repoRootPath?.trim() || null;
 			}
 			bucket.rows.push(row);
 			// Lowest non-zero `repoSidebarOrder` across the bucket's rows is
@@ -392,6 +399,7 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 		return {
 			id: bucketId,
 			label: bucket.label,
+			repoRootPath: bucket.repoRootPath,
 			// Repo groups don't carry status semantics; reuse "pinned" as a
 			// neutral tone that won't render a status icon (the header will
 			// branch on group.id and render an avatar instead).

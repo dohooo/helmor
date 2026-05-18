@@ -27,6 +27,7 @@ export function createPreparedWorkspaceRow(
 		directoryName: prepared.directoryName,
 		repoId: repository.id,
 		repoName: repository.name,
+		repoRootPath: repository.rootPath ?? null,
 		repoIconSrc: repository.repoIconSrc ?? null,
 		repoInitials: repository.repoInitials ?? null,
 		state: prepared.state,
