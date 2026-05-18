@@ -620,8 +620,28 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.port_count column")?;
     }
 
+    // Per-session "active plan" projection. Provider plan/todo events
+    // (Codex `turn/plan/updated`, Claude `ExitPlanMode`) are normalised
+    // by `agents::session_plan` into a typed plan and upserted here so
+    // the frontend can render a pinned plan without scanning scrollback.
+    // Idempotent: re-running creates a no-op when the table exists.
+    connection
+        .execute_batch(SESSION_PLAN_STATE_DDL)
+        .context("Failed to create session_plan_state table")?;
+
     Ok(())
 }
+
+const SESSION_PLAN_STATE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS session_plan_state (
+    session_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_message_id TEXT,
+    plan_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"#;
 
 /// One-shot init for rows that still carry `display_order = 0` — the column
 /// is freshly added or imported. Lays them out on the sparse 1024-step grid
@@ -775,6 +795,15 @@ CREATE TABLE IF NOT EXISTS session_messages (
     content TEXT,
     sent_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS session_plan_state (
+    session_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_message_id TEXT,
+    plan_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Indexes
