@@ -118,6 +118,26 @@ body {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
 }
 
+.monaco-editor .find-widget .button,
+.monaco-editor .find-widget .monaco-custom-toggle {
+	cursor: var(--helmor-interactive-cursor) !important;
+}
+
+/* Restore Monaco's 22×22 action buttons that tailwind preflight (border-box)
+   collapses to 16×16. Toggles already size right under border-box — including
+   them here bloats `.codicon-find-selection` to 30×30 and breaks row alignment. */
+.monaco-editor .find-widget .button {
+	box-sizing: content-box;
+}
+
+/* Monaco 0.55 ships the close button inside `.find-actions`, but the stock CSS
+   still reserves a 25px right margin on `.find-part`/`.replace-part` for the
+   old absolute-positioned close — leaving ~29px of dead space after `×`. */
+.monaco-editor .find-widget > .find-part,
+.monaco-editor .find-widget > .replace-part {
+	margin-right: 0;
+}
+
 .inbox-coming-soon-pickaxe {
 	transform-origin: 70% 76%;
 	animation: inbox-coming-soon-pickaxe 1.55s cubic-bezier(0.4, 0, 0.2, 1)

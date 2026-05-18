@@ -151,6 +151,9 @@ export async function createFileEditor(options: {
 		theme: themeId(desiredTheme),
 		wordWrap: "on",
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	revealEditorPosition(editor, options.line, options.column);
 
@@ -159,6 +162,7 @@ export async function createFileEditor(options: {
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
 		},
 		getValue() {
@@ -281,10 +285,14 @@ export async function createDiffEditor(options: {
 		original: originalModel,
 		modified: modifiedModel,
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
 			originalModel.dispose();
 			modifiedModel.dispose();
@@ -312,6 +320,59 @@ export function preWarmFileContents(
 
 export function syncVirtualFile(path: string, content: string) {
 	fileContentCache.set(path, content);
+}
+
+function suppressFindWidgetCloseTooltip(
+	container: HTMLElement,
+): DisposableLike {
+	const abortController =
+		typeof AbortController === "undefined" ? null : new AbortController();
+	const patchedElements = new WeakSet<HTMLElement>();
+	const stopHover = (event: Event) => {
+		event.stopImmediatePropagation();
+	};
+
+	const patchHoverTargets = () => {
+		const targets = container.querySelectorAll<HTMLElement>(
+			[
+				".find-widget > .button.codicon-widget-close",
+				".find-widget .codicon-find-selection",
+			].join(","),
+		);
+		for (const target of targets) {
+			target.removeAttribute("title");
+			if (patchedElements.has(target) || !abortController) continue;
+			patchedElements.add(target);
+			target.addEventListener("mouseover", stopHover, {
+				capture: true,
+				signal: abortController.signal,
+			});
+		}
+	};
+
+	patchHoverTargets();
+	if (typeof MutationObserver === "undefined") {
+		return {
+			dispose() {
+				abortController?.abort();
+			},
+		};
+	}
+
+	const observer = new MutationObserver(patchHoverTargets);
+	observer.observe(container, {
+		attributes: true,
+		childList: true,
+		subtree: true,
+		attributeFilter: ["title", "class"],
+	});
+
+	return {
+		dispose() {
+			abortController?.abort();
+			observer.disconnect();
+		},
+	};
 }
 
 async function ensureRuntime(): Promise<MonacoRuntime> {

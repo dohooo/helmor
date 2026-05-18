@@ -35,6 +35,8 @@ export type ShortcutId =
 	| "composer.openModelPicker"
 	| "composer.toggleFollowUpBehavior"
 	| "editor.edit"
+	| "editor.new"
+	| "editor.close"
 	| "terminal.new"
 	| "terminal.close"
 	| "terminal.next"

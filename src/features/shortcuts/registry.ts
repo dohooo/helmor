@@ -301,6 +301,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "editor.new",
+		title: "Open file",
+		group: "Editor",
+		defaultHotkey: "Mod+T",
+		scopes: ["editor"],
+		editable: true,
+	},
+	{
+		id: "editor.close",
+		title: "Close current file",
+		group: "Editor",
+		defaultHotkey: "Mod+W",
+		scopes: ["editor"],
+		editable: true,
+	},
+	{
 		id: "terminal.new",
 		title: "New terminal",
 		group: "Terminal",

@@ -13,6 +13,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
 
 const apiMocks = vi.hoisted(() => ({
+	listWorkspaceChangesWithContent: vi.fn(),
+	listWorkspaceFiles: vi.fn(),
 	readEditorFile: vi.fn(),
 }));
 
@@ -31,6 +33,14 @@ const runtimeMocks = vi.hoisted(() => {
 		setValue: vi.fn((value: string) => {
 			fileValue = value;
 		}),
+		switchFile: vi.fn(
+			(_path: string, content?: string, _line?: number, _column?: number) => {
+				if (content !== undefined) {
+					fileValue = content;
+				}
+				return true;
+			},
+		),
 	};
 
 	const diffController = {
@@ -64,6 +74,7 @@ const runtimeMocks = vi.hoisted(() => {
 			this.fileController.onDidChangeModelContent.mockClear();
 			this.fileController.revealPosition.mockClear();
 			this.fileController.setValue.mockClear();
+			this.fileController.switchFile.mockClear();
 			this.syncVirtualFile.mockClear();
 		},
 		syncVirtualFile: vi.fn(async () => undefined),
@@ -75,6 +86,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
+		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
+		listWorkspaceFiles: apiMocks.listWorkspaceFiles,
 		readEditorFile: apiMocks.readEditorFile,
 	};
 });
@@ -135,6 +148,12 @@ function EditorSurfaceHarness({
 describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
 		runtimeMocks.reset();
+		apiMocks.listWorkspaceChangesWithContent.mockReset();
+		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+			items: [],
+			prefetched: [],
+		});
+		apiMocks.listWorkspaceFiles.mockReset();
 		apiMocks.readEditorFile.mockReset();
 	});
 
@@ -243,6 +262,190 @@ describe("WorkspaceEditorSurface", () => {
 				path: "/tmp/helmor-workspace/src/App.tsx",
 			}),
 		);
+	});
+
+	it("opens workspace files from the file tab search", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.listWorkspaceFiles.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 0,
+				unstagedDeletions: 0,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/utils.ts",
+			content: "export const value = 1;\n",
+			mtimeMs: 20,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "diff",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						fileStatus: "M",
+						originalText: "const value = 1;\n",
+						modifiedText: "const value = 2;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		await user.type(
+			screen.getByPlaceholderText("Search files"),
+			"utils{enter}",
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.readEditorFile).toHaveBeenCalledWith(
+				"/tmp/helmor-workspace/src/utils.ts",
+			);
+			expect(onChangeSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "file",
+					path: "/tmp/helmor-workspace/src/utils.ts",
+					modifiedText: "export const value = 1;\n",
+				}),
+			);
+		});
+	});
+
+	it("keeps opened files as selectable tabs", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.listWorkspaceFiles.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 0,
+				unstagedDeletions: 0,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/utils.ts",
+			content: "export const value = 1;\n",
+			mtimeMs: 20,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						originalText: "const app = 1;\n",
+						modifiedText: "const app = 1;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		await user.keyboard("{Enter}");
+
+		await waitFor(() => {
+			expect(screen.getByRole("tab", { name: /utils\.ts/ })).toHaveAttribute(
+				"data-state",
+				"active",
+			);
+		});
+
+		await user.click(screen.getByRole("tab", { name: /App\.tsx/ }));
+
+		expect(onChangeSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "file",
+				path: "/tmp/helmor-workspace/src/App.tsx",
+			}),
+		);
+	});
+
+	it("opens changed search results as a diff tab", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.listWorkspaceFiles.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 3,
+				unstagedDeletions: 1,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
+		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+			items: [
+				{
+					path: "src/utils.ts",
+					absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+					name: "utils.ts",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 3,
+					unstagedDeletions: 1,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+			],
+			prefetched: [],
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						originalText: "const app = 1;\n",
+						modifiedText: "const app = 1;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		await user.type(
+			screen.getByPlaceholderText("Search files"),
+			"utils{enter}",
+		);
+
+		await waitFor(() => {
+			expect(onChangeSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "diff",
+					path: "/tmp/helmor-workspace/src/utils.ts",
+					fileStatus: "M",
+				}),
+			);
+		});
 	});
 
 	it("shows source/preview toggle for .md files and starts in source mode by default", async () => {
