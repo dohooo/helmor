@@ -56,7 +56,12 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	};
 });
 
-import { parseArgvInput, RuntimeDebugPanel } from "./runtime-debug";
+import {
+	parseArgvInput,
+	parseSshUrl,
+	previewSpawnedCommand,
+	RuntimeDebugPanel,
+} from "./runtime-debug";
 
 const LOCAL_ENTRY: RuntimeEntry = {
 	name: "local",
@@ -175,6 +180,121 @@ describe("RuntimeDebugPanel", () => {
 				"helmor-server",
 			);
 		});
+	});
+
+	it("pasting an ssh:// URL pre-fills the Host field and surfaces a hint", async () => {
+		// Phase 21e: the paste-URL helper short-circuits the
+		// type-out-the-host flow. Verifies the parser actually wires
+		// to the Host input + emits the user-visible hint.
+		const user = userEvent.setup();
+		apiMocks.connectRemoteRuntime.mockResolvedValue(REMOTE_HEALTH);
+
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+		await user.click(screen.getByRole("radio", { name: /^SSH$/i }));
+
+		// Paste a URL with a port — the hint should call out that
+		// the port was dropped.
+		await user.type(
+			screen.getByLabelText(/Paste ssh:\/\/ URL/),
+			"ssh://david@dev.box:2222",
+		);
+
+		await waitFor(() => {
+			expect(screen.getByLabelText(/^Host$/)).toHaveValue("david@dev.box");
+		});
+		expect(screen.getByLabelText(/SSH URL parse hint/)).toHaveTextContent(
+			/port 2222 dropped/,
+		);
+
+		// Clicking Connect should submit with the parsed host.
+		await user.type(screen.getByLabelText(/Name/), "via-paste");
+		await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+		await waitFor(() => {
+			expect(apiMocks.connectRemoteRuntime).toHaveBeenCalledWith(
+				"via-paste",
+				"david@dev.box",
+				"helmor-server",
+			);
+		});
+	});
+
+	it("renders the spawn-preview block matching the active mode", async () => {
+		const user = userEvent.setup();
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+
+		// Local mode (default) shows the auto-detect shape.
+		expect(screen.getByLabelText(/Spawned command preview/)).toHaveTextContent(
+			/spawn helmor-server \(auto-detect\)/,
+		);
+
+		// Switching to SSH + typing a host updates the preview.
+		await user.click(screen.getByRole("radio", { name: /^SSH$/i }));
+		await user.type(screen.getByLabelText(/^Host$/), "dev.box");
+		await waitFor(() => {
+			expect(
+				screen.getByLabelText(/Spawned command preview/),
+			).toHaveTextContent(/ssh -o BatchMode=yes dev\.box/);
+		});
+
+		// Switching to Command shows the literal argv as the user types.
+		await user.click(screen.getByRole("radio", { name: /^Command$/i }));
+		await user.type(
+			screen.getByLabelText(/Command argv/),
+			"tsh ssh dev-box helmor-server --proxy",
+		);
+		await waitFor(() => {
+			expect(
+				screen.getByLabelText(/Spawned command preview/),
+			).toHaveTextContent("tsh ssh dev-box helmor-server --proxy");
+		});
+	});
+
+	it("renders a transport-kind chip next to each non-local runtime", async () => {
+		// Phase 21e: the transport chip exposes the flavor (`ssh` /
+		// `cmd`) so an operator can tell two degraded entries apart at
+		// a glance without opening the tooltip. We assert by looking
+		// for the lowercase chip text in the rendered DOM — each chip
+		// is its own <span> with exactly that text content.
+		const sshEntry: RuntimeEntry = {
+			name: "ssh-remote",
+			isLocal: false,
+			state: { type: "connected" },
+			config: { type: "ssh", host: "dev.box", remoteBinary: "helmor-server" },
+		};
+		const cmdEntry: RuntimeEntry = {
+			name: "cmd-remote",
+			isLocal: false,
+			state: { type: "connected" },
+			config: { type: "command", argv: ["tsh", "ssh", "dev-box", "bin"] },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			sshEntry,
+			cmdEntry,
+		]);
+
+		renderPanel();
+
+		// Wait for the list query to settle. Each runtime name is
+		// rendered in at least one place (multiple if the runtime
+		// appears in both the list row + a button label). We just
+		// need to confirm the rows rendered at all.
+		await waitFor(() => {
+			expect(screen.getAllByText("ssh-remote").length).toBeGreaterThan(0);
+			expect(screen.getAllByText("cmd-remote").length).toBeGreaterThan(0);
+		});
+
+		// The transport chips render `ssh` and `cmd` as their own
+		// text-only spans. The state chip text is `connected`, so
+		// these strings unambiguously identify the transport chip.
+		const chipTexts = Array.from(document.querySelectorAll("span"))
+			.map((el) => el.textContent ?? "")
+			.filter((t) => t === "ssh" || t === "cmd");
+		// One `ssh` chip (ssh-remote), one `cmd` chip (cmd-remote).
+		expect(chipTexts).toContain("ssh");
+		expect(chipTexts).toContain("cmd");
 	});
 
 	it("submits the Command form with the parsed argv when Command mode is picked", async () => {
@@ -1233,5 +1353,116 @@ describe("parseArgvInput", () => {
 			"ssh",
 			"dev-box",
 		]);
+	});
+});
+
+describe("parseSshUrl", () => {
+	it("extracts the hostname from a bare ssh:// URL", () => {
+		expect(parseSshUrl("ssh://dev.box")).toEqual({ host: "dev.box" });
+	});
+
+	it("preserves the user prefix when present", () => {
+		expect(parseSshUrl("ssh://david@dev.box")).toEqual({
+			host: "david@dev.box",
+		});
+	});
+
+	it("returns the port alongside the host when one is encoded", () => {
+		expect(parseSshUrl("ssh://david@dev.box:2222")).toEqual({
+			host: "david@dev.box",
+			port: 2222,
+		});
+	});
+
+	it("returns null for inputs that aren't ssh URLs", () => {
+		// Nothing in here should parse — `parseSshUrl` is the gate that
+		// keeps us from accidentally pre-filling the host field with
+		// unrelated text the user happened to paste.
+		expect(parseSshUrl("")).toBeNull();
+		expect(parseSshUrl("dev.box")).toBeNull();
+		expect(parseSshUrl("https://example.com")).toBeNull();
+		expect(parseSshUrl("not even close")).toBeNull();
+	});
+
+	it("rejects ssh:// URLs that have no hostname", () => {
+		expect(parseSshUrl("ssh://")).toBeNull();
+	});
+
+	it("trims surrounding whitespace before parsing", () => {
+		expect(parseSshUrl("   ssh://dev.box   ")).toEqual({ host: "dev.box" });
+	});
+});
+
+describe("previewSpawnedCommand", () => {
+	const defaults = {
+		binaryPath: "",
+		host: "",
+		remoteBinary: "helmor-server",
+		argv: [] as string[],
+	};
+
+	it("renders the local-binary auto-detect string when no path is set", () => {
+		expect(previewSpawnedCommand("local", defaults)).toBe(
+			"spawn helmor-server (auto-detect)",
+		);
+	});
+
+	it("renders the local-binary explicit path when one is supplied", () => {
+		expect(
+			previewSpawnedCommand("local", {
+				...defaults,
+				binaryPath: "/usr/local/bin/helmor-server",
+			}),
+		).toBe("spawn /usr/local/bin/helmor-server");
+	});
+
+	it("renders the SSH spawn shape matching OpenSshTransport.build_command", () => {
+		const preview = previewSpawnedCommand("ssh", {
+			...defaults,
+			host: "dev.box",
+			remoteBinary: "helmor-server",
+		});
+		expect(preview).toContain("ssh -o BatchMode=yes dev.box");
+		expect(preview).toContain("sh -c");
+		expect(preview).toContain("--ensure-daemon");
+		expect(preview).toContain("--proxy");
+	});
+
+	it("falls back to <host> placeholder when the SSH host field is empty", () => {
+		const preview = previewSpawnedCommand("ssh", defaults);
+		expect(preview).toContain("<host>");
+	});
+
+	it("renders an <empty argv> placeholder when Command mode has no tokens", () => {
+		expect(previewSpawnedCommand("command", defaults)).toBe("<empty argv>");
+	});
+
+	it("renders the literal Command argv with shell-friendly quoting", () => {
+		expect(
+			previewSpawnedCommand("command", {
+				...defaults,
+				argv: ["tsh", "ssh", "dev-box", "helmor-server", "--proxy"],
+			}),
+		).toBe("tsh ssh dev-box helmor-server --proxy");
+	});
+
+	it("quotes Command argv tokens containing whitespace", () => {
+		// Cosmetic only — the backend never shell-tokenises argv, so
+		// the quoting is just to make the preview visually unambiguous.
+		expect(
+			previewSpawnedCommand("command", {
+				...defaults,
+				argv: ["ssh", "user@host with space", "cmd"],
+			}),
+		).toBe("ssh 'user@host with space' cmd");
+	});
+
+	it("escapes single quotes inside a Command argv token", () => {
+		expect(
+			previewSpawnedCommand("command", {
+				...defaults,
+				argv: ["echo", "it's fine"],
+			}),
+		).toBe("echo 'it'\\''s fine'");
 	});
 });

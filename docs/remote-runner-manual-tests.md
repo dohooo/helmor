@@ -31,8 +31,9 @@ For non-SSH transports (Teleport, Tailscale SSH, kubectl exec):
    per-line form by hitting Enter inside the textarea.
 3. The "Parsed:" preview underneath confirms the argv the wrapper
    will send. Click **Connect**.
-4. ✅ The runtime should appear in the list with `cmd: <prog>` as
-   its connection label.
+4. ✅ The runtime should appear in the list with a `cmd` chip next
+   to its name (added in phase 21e) and `cmd: <prog>` as its
+   tooltip label.
 5. ❌ If the connect hangs > 10 s, the argv probably isn't invoking
    `helmor-server --proxy` correctly. Check `{data_dir}/logs/` for
    stderr from the spawned process.
@@ -40,6 +41,46 @@ For non-SSH transports (Teleport, Tailscale SSH, kubectl exec):
 Auto-install is **not** available for Command transports — the
 operator must have `helmor-server` already installed on the
 remote side.
+
+### SSH config `Include` and `Match` (phases 21c–d)
+
+If your `~/.ssh/config` uses modular layout — `Include conf.d/*` —
+the host-suggestions dropdown should now surface every alias the
+included files declare. Spot-check:
+
+1. Open **SSH** mode in the Connect form.
+2. Click into the **Host** field; the datalist should include
+   aliases pulled in via `Include`.
+3. If you have `Match user <yourname>` blocks, aliases inside them
+   appear when `$USER == yourname`, and disappear otherwise.
+
+Run from a shell with `USER=other-name bun run dev` to verify the
+`Match user` gating; the datalist should drop any host gated on a
+different user. `Match exec ...` blocks are dropped wholesale —
+that's by design (we don't shell out from a suggestion-list
+refresh).
+
+### Live spawned-command preview (phase 21e)
+
+The Connect form now renders a "Will run" preview underneath the
+mode-specific inputs. Use it as a sanity check before clicking
+Connect:
+
+- **Local binary** → `spawn <path>` or `spawn helmor-server
+  (auto-detect)`.
+- **SSH** → `ssh -o BatchMode=yes <host> sh -c '<bin>
+  --ensure-daemon && exec <bin> --proxy'`. ControlMaster /
+  ControlPath flags are appended at spawn time — they're not in
+  the preview because they depend on the data dir being writable.
+- **Command** → the literal argv as it'll reach `Command::new`,
+  with each token shell-quoted in the preview for visual clarity
+  (the actual spawn never shells out, so the quoting is cosmetic).
+
+The "Paste ssh:// URL" field on the SSH mode form is a one-shot
+import: it parses `ssh://user@host:port` strings (common in
+GitHub Codespaces / ops handoff messages) and fills the Host
+field. Port is dropped (use `~/.ssh/config` Port or Command mode
+for non-default ports).
 
 ## File tree — 5k-file repo over SSH
 

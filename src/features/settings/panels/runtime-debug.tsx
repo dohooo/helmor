@@ -175,6 +175,7 @@ function RuntimeRow({ entry }: { entry: RuntimeEntry }) {
 				<span className="flex items-center gap-1.5 font-mono">
 					<span>{entry.name}</span>
 					<StateChip entry={entry} />
+					<TransportChip entry={entry} />
 				</span>
 			}
 			description={
@@ -249,6 +250,51 @@ function StateChip({ entry }: { entry: RuntimeEntry }) {
 			{label}
 		</span>
 	);
+}
+
+/**
+ * Compact "flavour" chip next to the state chip — at-a-glance tells
+ * the operator whether the entry uses SSH, a custom command, or the
+ * bundled local-binary path. The state chip already encodes
+ * connected/degraded/disconnected; this one separates that axis from
+ * "which transport does it run through" so a degraded *command*
+ * transport doesn't visually blend in with a degraded SSH one.
+ */
+function TransportChip({ entry }: { entry: RuntimeEntry }) {
+	const { label, title } = transportChipPresentation(entry);
+	if (!label) return null;
+	return (
+		<span
+			title={title}
+			className="inline-flex items-center rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase text-muted-foreground"
+		>
+			{label}
+		</span>
+	);
+}
+
+function transportChipPresentation(entry: RuntimeEntry): {
+	label: string | null;
+	title: string | undefined;
+} {
+	if (entry.isLocal) {
+		// Built-in local runtime — no separate transport to label.
+		return { label: null, title: undefined };
+	}
+	const config = entry.config;
+	if (!config) {
+		// Registered via the registry API directly (tests / ad-hoc
+		// tools); no config = no transport to label.
+		return { label: null, title: undefined };
+	}
+	switch (config.type) {
+		case "local":
+			return { label: "local", title: describeConfig(config) };
+		case "ssh":
+			return { label: "ssh", title: describeConfig(config) };
+		case "command":
+			return { label: "cmd", title: describeConfig(config) };
+	}
 }
 
 function stateChipPresentation(entry: RuntimeEntry): {
@@ -331,6 +377,91 @@ export function parseArgvInput(raw: string): string[] {
 	return trimmed.split(/\s+/).filter((token) => token.length > 0);
 }
 
+/**
+ * Parse an `ssh://[user@]host[:port]` URL into the bits the connect
+ * form needs. Returns `null` for any input that isn't a valid
+ * `ssh:` URL. The port is dropped from the host field because the
+ * `ssh` CLI takes ports via the `-p` flag, not embedded in the
+ * argument — the caller can surface it as a hint if they want.
+ *
+ * Used by the "Paste ssh:// URL" field as a one-shot pre-fill helper.
+ * We intentionally do NOT register `ssh://` as an OS-level deep-link
+ * scheme: that would intercept clicks meant for other tools (system
+ * SSH agents, browser ssh-handler shims), and the paste path covers
+ * the common "I got a URL in chat, can I open it in Helmor?" use
+ * case without the global side effect.
+ */
+export function parseSshUrl(
+	raw: string,
+): { host: string; port?: number } | null {
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	if (!trimmed.startsWith("ssh:") && !trimmed.startsWith("ssh://")) {
+		return null;
+	}
+	let url: URL;
+	try {
+		url = new URL(trimmed);
+	} catch {
+		return null;
+	}
+	if (url.protocol !== "ssh:") return null;
+	if (!url.hostname) return null;
+	const host = url.username ? `${url.username}@${url.hostname}` : url.hostname;
+	const port = url.port ? Number.parseInt(url.port, 10) : undefined;
+	return port !== undefined && !Number.isNaN(port) ? { host, port } : { host };
+}
+
+/**
+ * Render the literal command shape Helmor will spawn for a given
+ * connect-form state. Used by the live preview chip so the operator
+ * can verify they typed the right thing *before* hitting Connect.
+ *
+ * The SSH preview intentionally omits the runtime-dependent
+ * ControlMaster / ControlPath flags — they're added at spawn time
+ * based on whether the data dir is writable. Showing them in the
+ * preview would either leak the data-dir path into the UI or
+ * misrepresent what runs in environments where the data dir is
+ * read-only. The preview's job is "did the user type the right
+ * host/binary/argv", not "render the literal final argv".
+ */
+export function previewSpawnedCommand(
+	mode: ConnectMode,
+	args: {
+		binaryPath: string;
+		host: string;
+		remoteBinary: string;
+		argv: string[];
+	},
+): string {
+	switch (mode) {
+		case "local": {
+			const path = args.binaryPath.trim();
+			return path ? `spawn ${path}` : "spawn helmor-server (auto-detect)";
+		}
+		case "ssh": {
+			const host = args.host.trim() || "<host>";
+			const bin = args.remoteBinary.trim() || "helmor-server";
+			// Mirror what `OpenSshTransport::build_command` produces,
+			// minus the mux flags (added at runtime).
+			return `ssh -o BatchMode=yes ${host} sh -c '${bin} --ensure-daemon && exec ${bin} --proxy'`;
+		}
+		case "command":
+			return args.argv.length === 0
+				? "<empty argv>"
+				: args.argv.map((token) => quoteForPreview(token)).join(" ");
+	}
+}
+
+function quoteForPreview(token: string): string {
+	// Shell-style quoting just for visual clarity in the preview —
+	// the backend never shell-tokenises argv (it goes straight to
+	// `Command`), so this is purely cosmetic.
+	if (token.length === 0) return "''";
+	if (/^[A-Za-z0-9._\-/:@+=,]+$/.test(token)) return token;
+	return `'${token.replace(/'/g, "'\\''")}'`;
+}
+
 function HealthDescription({
 	entry,
 	health,
@@ -370,6 +501,21 @@ function ConnectSection() {
 	// preview can render the parsed argv next to it.
 	const [argvInput, setArgvInput] = useState("");
 	const parsedArgv = useMemo(() => parseArgvInput(argvInput), [argvInput]);
+	// Hint surfaced briefly under the SSH host field after a successful
+	// `ssh://` paste; lets the operator know the URL parsed + which
+	// port was discarded (ssh CLI takes ports via -p, not embedded).
+	const [sshUrlHint, setSshUrlHint] = useState<string | null>(null);
+
+	const spawnPreview = useMemo(
+		() =>
+			previewSpawnedCommand(mode, {
+				binaryPath,
+				host,
+				remoteBinary,
+				argv: parsedArgv,
+			}),
+		[mode, binaryPath, host, remoteBinary, parsedArgv],
+	);
 
 	// SSH hostname suggestions sourced from `~/.ssh/config`. Loaded
 	// lazily on mount because the file rarely changes mid-session and
@@ -464,6 +610,47 @@ function ConnectSection() {
 						</>
 					) : mode === "ssh" ? (
 						<>
+							<Label htmlFor="runtime-ssh-url" className="text-xs">
+								Paste ssh:// URL
+							</Label>
+							<div className="flex flex-col gap-1">
+								<Input
+									id="runtime-ssh-url"
+									placeholder="ssh://david@dev.box"
+									onChange={(e) => {
+										const parsed = parseSshUrl(e.target.value);
+										if (!parsed) {
+											setSshUrlHint(null);
+											return;
+										}
+										setHost(parsed.host);
+										// Surface a hint when we silently
+										// dropped a port — the user might
+										// have copied a URL that encodes
+										// one and the ssh CLI doesn't take
+										// it in this form.
+										if (parsed.port !== undefined) {
+											setSshUrlHint(
+												`Imported ${parsed.host}; port ${parsed.port} dropped (set Port in ~/.ssh/config or use Command mode for non-default ports).`,
+											);
+										} else {
+											setSshUrlHint(`Imported ${parsed.host}.`);
+										}
+									}}
+								/>
+								{sshUrlHint ? (
+									<span
+										className="text-[11px] text-muted-foreground"
+										aria-label="SSH URL parse hint"
+									>
+										{sshUrlHint}
+									</span>
+								) : (
+									<span className="text-[11px] text-muted-foreground">
+										Optional shortcut — fills the Host field from a shared URL.
+									</span>
+								)}
+							</div>
 							<Label htmlFor="runtime-host" className="text-xs">
 								Host
 							</Label>
@@ -533,6 +720,24 @@ function ConnectSection() {
 							</div>
 						</>
 					)}
+				</div>
+
+				<div
+					className="flex flex-col gap-1 rounded-md border border-border/30 bg-muted/30 px-3 py-2"
+					aria-label="Spawned command preview"
+				>
+					<span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+						Will run
+					</span>
+					<code className="break-all font-mono text-[11px] text-app-foreground">
+						{spawnPreview}
+					</code>
+					{mode === "ssh" ? (
+						<span className="text-[10px] text-muted-foreground">
+							ControlMaster flags appended automatically when the data dir is
+							writable.
+						</span>
+					) : null}
 				</div>
 
 				<div className="flex items-center justify-between gap-3">
