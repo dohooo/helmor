@@ -24,6 +24,7 @@
 //! `std::thread` for blocking work and the binary will start the same
 //! way.
 
+pub mod agent;
 pub mod client;
 pub mod codec;
 pub mod connection;

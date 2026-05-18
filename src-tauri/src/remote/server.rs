@@ -152,6 +152,12 @@ pub struct ServerContext {
     /// per-session reader threads can keep emitting events even if
     /// the dispatcher's lifetime overlaps with concurrent calls.
     terminal_state: Arc<super::terminal::RemoteTerminalState>,
+    /// Live agent (sidecar) bridge. Shared across connections in
+    /// daemon mode so the sidecar process outlives any one client —
+    /// phase 23d builds the full reattach story on top of this
+    /// shared registry. In single-connection mode (used by tests
+    /// and the legacy proxy entry point) the state is per-context.
+    agent_state: Arc<super::agent::RemoteAgentState>,
 }
 
 impl ServerContext {
@@ -166,6 +172,9 @@ impl ServerContext {
             runtime,
             notifier: Arc::new(NoopNotifier),
             terminal_state: Arc::new(super::terminal::RemoteTerminalState::new()),
+            agent_state: Arc::new(super::agent::RemoteAgentState::disabled(
+                "agent runtime not configured for this context",
+            )),
         }
     }
 
@@ -183,6 +192,9 @@ impl ServerContext {
             runtime,
             notifier: Arc::new(NoopNotifier),
             terminal_state: Arc::new(super::terminal::RemoteTerminalState::new()),
+            agent_state: Arc::new(super::agent::RemoteAgentState::disabled(
+                "agent runtime not configured for this context",
+            )),
         }
     }
 
@@ -205,6 +217,14 @@ impl ServerContext {
         self.terminal_state = terminal_state;
     }
 
+    /// Builder-style: swap in a shared `RemoteAgentState`. The
+    /// daemon uses this so every accepted connection routes to the
+    /// same sidecar bridge — agent.list across reconnect sees the
+    /// same active sessions instead of starting fresh.
+    pub fn set_agent_state(&mut self, agent_state: Arc<super::agent::RemoteAgentState>) {
+        self.agent_state = agent_state;
+    }
+
     /// Handler entry point for emitting notifications. Public so
     /// handlers in this module (and tests) can reach the notifier
     /// without crawling private fields.
@@ -217,6 +237,15 @@ impl ServerContext {
     /// open / write / resize / close.
     pub fn terminal_state(&self) -> &Arc<super::terminal::RemoteTerminalState> {
         &self.terminal_state
+    }
+
+    /// Per-context agent bridge. Handlers reach this to forward
+    /// `agent.send` / `agent.abort` / `agent.list` / `agent.attach`
+    /// into the sidecar bridge. `Arc` shared across connections in
+    /// daemon mode so the sidecar process is not torn down on each
+    /// reconnect.
+    pub fn agent_state(&self) -> &Arc<super::agent::RemoteAgentState> {
+        &self.agent_state
     }
 
     fn is_initialized(&self) -> bool {
@@ -600,29 +629,32 @@ fn handle_workspace_mutate_file(
     })
 }
 
-// Phase 23a: dispatchers route to the trait's default bails, which
-// surface here as `HANDLER_FAILED`. Phase 23b lands a server-side
-// `RemoteAgentState` that overrides `agent_send` / `agent_list` /
-// `agent_attach` on the daemon's runtime, at which point these handlers
-// become the real bridge into the daemon-managed sidecar.
+// Phase 23b: agent handlers route directly to `ctx.agent_state()`
+// (the sidecar bridge), not through `ctx.runtime`. The runtime
+// trait's agent_* methods stay as the desktop-side delegation
+// surface — `RemoteSshRuntime` calls into them, and the wire lands
+// here. Mirrors the pattern terminal handlers use: state holding
+// owned subprocesses lives on the context, not the runtime.
 
 fn handle_agent_send(
     ctx: &ServerContext,
     params: AgentSendParams,
 ) -> Result<AgentSendResult, JsonRpcError> {
-    ctx.runtime.agent_send(params).map_err(|err| {
-        JsonRpcError::new(
-            error_codes::HANDLER_FAILED,
-            format!("agent.send failed: {err:#}"),
-        )
-    })
+    ctx.agent_state()
+        .send(params, Arc::clone(ctx.notifier()))
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("agent.send failed: {err:#}"),
+            )
+        })
 }
 
 fn handle_agent_abort(
     ctx: &ServerContext,
     params: AgentAbortParams,
 ) -> Result<AgentAbortResult, JsonRpcError> {
-    ctx.runtime.agent_abort(params).map_err(|err| {
+    ctx.agent_state().abort(params).map_err(|err| {
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("agent.abort failed: {err:#}"),
@@ -632,26 +664,24 @@ fn handle_agent_abort(
 
 fn handle_agent_list(
     ctx: &ServerContext,
-    params: AgentListParams,
+    _params: AgentListParams,
 ) -> Result<AgentListResult, JsonRpcError> {
-    ctx.runtime.agent_list(params).map_err(|err| {
-        JsonRpcError::new(
-            error_codes::HANDLER_FAILED,
-            format!("agent.list failed: {err:#}"),
-        )
-    })
+    // `list` is infallible — it just snapshots in-memory state.
+    Ok(ctx.agent_state().list())
 }
 
 fn handle_agent_attach(
     ctx: &ServerContext,
     params: AgentAttachParams,
 ) -> Result<AgentAttachResult, JsonRpcError> {
-    ctx.runtime.agent_attach(params).map_err(|err| {
-        JsonRpcError::new(
-            error_codes::HANDLER_FAILED,
-            format!("agent.attach failed: {err:#}"),
-        )
-    })
+    ctx.agent_state()
+        .attach(params, Arc::clone(ctx.notifier()))
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("agent.attach failed: {err:#}"),
+            )
+        })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*
@@ -1105,15 +1135,18 @@ mod tests {
         assert_bail_with_method_prefix(&resp, "workspace.mutateFile");
     }
 
-    // ── agent.* default-bail surfaces (phase 23a) ────────────────
+    // ── agent.* default surfaces (phase 23b) ─────────────────────
     //
-    // Wire shape locked in: server reports `HANDLER_FAILED` with the
-    // trait's "only supported on a connected remote runtime" message
-    // because phase 23a doesn't add a runtime impl. Phase 23b
-    // overrides on the daemon's `LocalRuntime`-equivalent and these
-    // tests retarget against the real handler.
+    // The ServerContext built by `with_runtime` carries a disabled
+    // `RemoteAgentState` so unit tests don't accidentally spawn a
+    // sidecar. Mutating methods surface the explicit
+    // "agent runtime not configured" reason; the infallible
+    // `agent.list` returns an empty list, and `agent.attach`
+    // reports `found=false` (the same shape as attaching to a
+    // missing live session). Tests that drive a real sidecar live
+    // in `remote::agent::tests`.
 
-    fn assert_agent_bail_with_method_prefix(resp: &JsonRpcResponse, method: &str) {
+    fn assert_agent_disabled(resp: &JsonRpcResponse, method: &str) {
         let err = resp
             .error
             .as_ref()
@@ -1126,15 +1159,14 @@ mod tests {
             err.message
         );
         assert!(
-            err.message
-                .contains("only supported on a connected remote runtime"),
-            "default bail should reach the wire verbatim, got: {}",
+            err.message.contains("agent runtime is not available"),
+            "disabled-state bail should surface the legible reason: {}",
             err.message
         );
     }
 
     #[test]
-    fn agent_send_default_bail_surfaces_as_handler_failed() {
+    fn agent_send_with_disabled_state_surfaces_legible_error() {
         let ctx = default_bail_ctx();
         let resp = run_after_initialize(
             &ctx,
@@ -1148,34 +1180,46 @@ mod tests {
                 2,
             ),
         );
-        assert_agent_bail_with_method_prefix(&resp, "agent.send");
+        assert_agent_disabled(&resp, "agent.send");
     }
 
     #[test]
-    fn agent_abort_default_bail_surfaces_as_handler_failed() {
+    fn agent_abort_with_disabled_state_surfaces_legible_error() {
         let ctx = default_bail_ctx();
         let resp = run_after_initialize(
             &ctx,
             request("agent.abort", json!({ "requestId": "req-1" }), 2),
         );
-        assert_agent_bail_with_method_prefix(&resp, "agent.abort");
+        assert_agent_disabled(&resp, "agent.abort");
     }
 
     #[test]
-    fn agent_list_default_bail_surfaces_as_handler_failed() {
+    fn agent_list_with_disabled_state_returns_empty_listing() {
+        // `list` is infallible — it snapshots the sessions map.
+        // A disabled state has no sessions; wire result is
+        // `{ sessions: [] }`.
         let ctx = default_bail_ctx();
         let resp = run_after_initialize(&ctx, request("agent.list", json!({}), 2));
-        assert_agent_bail_with_method_prefix(&resp, "agent.list");
+        let result = resp.result.expect("ok response");
+        let sessions = result["sessions"].as_array().expect("sessions array");
+        assert!(
+            sessions.is_empty(),
+            "disabled state must report no sessions"
+        );
     }
 
     #[test]
-    fn agent_attach_default_bail_surfaces_as_handler_failed() {
+    fn agent_attach_with_disabled_state_reports_not_found() {
+        // Attaching against a disabled state finds no matching
+        // session and returns `found=false` rather than erroring —
+        // same contract as attaching to a missing live session.
         let ctx = default_bail_ctx();
         let resp = run_after_initialize(
             &ctx,
             request("agent.attach", json!({ "requestId": "req-1" }), 2),
         );
-        assert_agent_bail_with_method_prefix(&resp, "agent.attach");
+        let result = resp.result.expect("ok response");
+        assert_eq!(result["found"], false);
     }
 
     #[test]

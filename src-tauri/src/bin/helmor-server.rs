@@ -25,9 +25,35 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use helmor_lib::remote::{
-    self, daemon, host, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse, ServerContext,
-    StdoutNotifier,
+    self, agent, daemon, host, write_frame, FrameError, JsonRpcRequest, JsonRpcResponse,
+    ServerContext, StdoutNotifier,
 };
+
+/// Phase 23b: construct the `RemoteAgentState` the daemon will use
+/// to bridge `agent.*` RPCs into a `helmor-sidecar` subprocess.
+/// Resolves the sidecar binary from `HELMOR_SIDECAR_PATH`; when the
+/// env var isn't set, returns a `disabled` state that surfaces a
+/// legible reason on every `agent.send` rather than letting the
+/// spawn fail with the cryptic `ENOENT`.
+fn build_agent_state() -> agent::RemoteAgentState {
+    match agent::BinaryAgentSpawner::resolve_from_env() {
+        Some(path) => {
+            tracing::info!(
+                sidecar = %path.display(),
+                "helmor-server: agent bridge configured"
+            );
+            agent::RemoteAgentState::new(Arc::new(agent::BinaryAgentSpawner::new(path)))
+        }
+        None => {
+            tracing::info!(
+                "helmor-server: HELMOR_SIDECAR_PATH not set; agent.* surfaces will report disabled"
+            );
+            agent::RemoteAgentState::disabled(
+                "HELMOR_SIDECAR_PATH must be set (and point to a readable file) on the remote",
+            )
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let mode = parse_mode();
@@ -124,6 +150,12 @@ fn run_serve_stdio() -> ExitCode {
     let notifier = Arc::new(StdoutNotifier::new(Arc::clone(&stdout_writer)));
     let mut ctx = ServerContext::new(server_version, hostname);
     ctx.set_notifier(notifier);
+    // Phase 23b: wire the agent bridge so `agent.send` is functional
+    // when the operator has placed `helmor-sidecar` and set
+    // `HELMOR_SIDECAR_PATH`. Absent that, the bridge stays in its
+    // disabled state and `agent.send` surfaces a legible "not
+    // configured" error rather than the cryptic spawn failure.
+    ctx.set_agent_state(Arc::new(build_agent_state()));
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),

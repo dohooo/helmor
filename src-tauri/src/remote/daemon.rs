@@ -214,16 +214,52 @@ pub fn run_daemon() -> Result<()> {
     // Cloning the Arc into each per-connection thread means the
     // PTYs outlive whichever connection happened to open them.
     let terminal_state: Arc<RemoteTerminalState> = Arc::new(RemoteTerminalState::new());
+    // Phase 23b: ditto for the agent bridge — daemon-global so the
+    // sidecar process + its active sessions outlive any single
+    // client reconnect (phase 19a's reattach story applies here
+    // too; 23d builds the agent-side equivalent).
+    let agent_state: Arc<super::agent::RemoteAgentState> = Arc::new(build_agent_state());
     let server_version = env!("CARGO_PKG_VERSION").to_string();
     let hostname = super::host::read_hostname();
 
-    accept_loop(listener, terminal_state, server_version, hostname);
+    accept_loop(
+        listener,
+        terminal_state,
+        agent_state,
+        server_version,
+        hostname,
+    );
     Ok(())
+}
+
+fn build_agent_state() -> super::agent::RemoteAgentState {
+    // Same resolution + disabled fallback the stdio binary uses.
+    // Kept inline so the daemon entry stays self-contained.
+    match super::agent::BinaryAgentSpawner::resolve_from_env() {
+        Some(path) => {
+            tracing::info!(
+                sidecar = %path.display(),
+                "daemon: agent bridge configured"
+            );
+            super::agent::RemoteAgentState::new(Arc::new(super::agent::BinaryAgentSpawner::new(
+                path,
+            )))
+        }
+        None => {
+            tracing::info!(
+                "daemon: HELMOR_SIDECAR_PATH not set; agent.* surfaces will report disabled"
+            );
+            super::agent::RemoteAgentState::disabled(
+                "HELMOR_SIDECAR_PATH must be set (and point to a readable file) on the remote",
+            )
+        }
+    }
 }
 
 fn accept_loop(
     listener: UnixListener,
     terminal_state: Arc<RemoteTerminalState>,
+    agent_state: Arc<super::agent::RemoteAgentState>,
     server_version: String,
     hostname: String,
 ) {
@@ -231,14 +267,19 @@ fn accept_loop(
         match incoming {
             Ok(stream) => {
                 let term_state = Arc::clone(&terminal_state);
+                let agent_state = Arc::clone(&agent_state);
                 let server_version = server_version.clone();
                 let hostname = hostname.clone();
                 std::thread::Builder::new()
                     .name("helmor-server-conn".into())
                     .spawn(move || {
-                        if let Err(err) =
-                            handle_connection(stream, term_state, server_version, hostname)
-                        {
+                        if let Err(err) = handle_connection(
+                            stream,
+                            term_state,
+                            agent_state,
+                            server_version,
+                            hostname,
+                        ) {
                             tracing::warn!(
                                 error = %format!("{err:#}"),
                                 "daemon: per-connection handler exited with error"
@@ -261,6 +302,7 @@ fn accept_loop(
 fn handle_connection(
     stream: UnixStream,
     terminal_state: Arc<RemoteTerminalState>,
+    agent_state: Arc<super::agent::RemoteAgentState>,
     server_version: String,
     hostname: String,
 ) -> Result<()> {
@@ -270,12 +312,13 @@ fn handle_connection(
     let notifier = Arc::new(StdoutNotifier::new(Arc::clone(&writer)));
 
     // Build the per-connection context. Crucially, we override the
-    // default `terminal_state` so this thread shares the daemon-
-    // global state — that's what makes terminals survive any one
-    // client.
+    // default `terminal_state` + `agent_state` so this thread shares
+    // the daemon-global state — that's what makes terminals + agent
+    // sessions survive any one client.
     let mut ctx = ServerContext::new(server_version, hostname);
     ctx.set_notifier(notifier);
     ctx.set_terminal_state(terminal_state);
+    ctx.set_agent_state(agent_state);
 
     let mut reader = std::io::BufReader::new(reader_stream);
     loop {
