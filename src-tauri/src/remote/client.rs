@@ -190,6 +190,22 @@ impl Drop for NotificationSubscription {
     }
 }
 
+impl NotificationSubscription {
+    /// Test-only constructor. Returns a subscription handle whose
+    /// `Drop` is a harmless no-op because no callback was ever
+    /// registered against the throw-away `ClientState`. Cross-module
+    /// tests (e.g. the `SidecarTransport` impls) need a real
+    /// `NotificationSubscription` to satisfy `subscribe_agent_events`'s
+    /// return type without standing up a full `RpcClient`.
+    #[cfg(test)]
+    pub fn dangling_for_tests() -> Self {
+        Self {
+            state: Arc::new(ClientState::new()),
+            id: 0,
+        }
+    }
+}
+
 impl RpcClient {
     /// Connect to a `helmor-server` reachable over SSH. Convenience
     /// over [`connect_with_transport`] that wires an

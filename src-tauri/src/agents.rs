@@ -207,7 +207,7 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 
 #[tauri::command]
 pub async fn list_cursor_models(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     api_key: Option<String>,
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
     // Inline blocking — same pattern as `list_slash_commands`.
@@ -217,7 +217,7 @@ pub async fn list_cursor_models(
 #[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
@@ -241,10 +241,21 @@ pub async fn send_agent_message_stream(
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
+    // Phase 23c: pick the right sidecar transport based on the
+    // workspace's runtime binding. Anonymous streams + workspaces
+    // bound to the local runtime keep going through the desktop's
+    // own `ManagedSidecar`; workspaces bound to a registered remote
+    // route through `agent.send` over the JSON-RPC pipe.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        request.helmor_session_id.as_deref(),
+    );
+
     stream_via_sidecar(
         app.clone(),
         on_event,
-        &sidecar,
+        transport,
         &active_streams,
         &stream_id,
         &model,
@@ -282,7 +293,7 @@ pub async fn list_active_streams(
 
 #[tauri::command]
 pub async fn stop_agent_stream(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentStopRequest,
 ) -> CmdResult<()> {
     let stop_req = crate::sidecar::SidecarRequest {
@@ -334,7 +345,7 @@ pub struct AgentSteerResponse {
 #[tauri::command]
 pub async fn steer_agent_stream(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentSteerRequest,
 ) -> CmdResult<AgentSteerResponse> {
     let prompt = request.prompt.trim().to_string();
@@ -436,7 +447,7 @@ pub struct PermissionResponseRequest {
 
 #[tauri::command]
 pub async fn respond_to_permission_request(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: PermissionResponseRequest,
 ) -> CmdResult<()> {
     tracing::info!(permission_id = %request.permission_id, behavior = %request.behavior, "Permission response");
@@ -475,7 +486,7 @@ pub struct UserInputResponseRequest {
 
 #[tauri::command]
 pub async fn respond_to_user_input(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: UserInputResponseRequest,
 ) -> CmdResult<()> {
     tracing::info!(
@@ -501,7 +512,7 @@ pub async fn respond_to_user_input(
 #[tauri::command]
 pub async fn generate_session_title(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: GenerateSessionTitleRequest,
 ) -> CmdResult<GenerateSessionTitleResponse> {
     queries::generate_session_title(app, sidecar, request).await
@@ -510,7 +521,7 @@ pub async fn generate_session_title(
 #[tauri::command]
 pub async fn list_slash_commands(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     cache: tauri::State<'_, SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {

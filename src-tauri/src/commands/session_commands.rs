@@ -126,7 +126,7 @@ pub async fn get_session_codex_goal(session_id: String) -> CmdResult<Option<Stri
 #[tauri::command]
 pub async fn mutate_codex_goal(
     app: tauri::AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     session_id: String,
     action: String,
 ) -> CmdResult<()> {
@@ -236,7 +236,7 @@ pub async fn set_session_draft(session_id: String, draft_state: Option<String>) 
 /// frontend caches the result for 30 s via React Query.
 #[tauri::command]
 pub async fn get_live_context_usage(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: agents::GetLiveContextUsageRequest,
 ) -> CmdResult<String> {
     agents::fetch_live_context_usage(&sidecar, request)

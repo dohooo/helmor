@@ -66,7 +66,11 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     let app = builder
-        .manage(sidecar::ManagedSidecar::new())
+        // Phase 23c: ManagedSidecar is managed behind an `Arc` so the
+        // local-vs-remote `SidecarTransport` resolver can hold the
+        // local-path sidecar in an `Arc<LocalSidecarTransport>` without
+        // taking it out of Tauri's state.
+        .manage(std::sync::Arc::new(sidecar::ManagedSidecar::new()))
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
