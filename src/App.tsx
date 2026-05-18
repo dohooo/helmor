@@ -467,6 +467,8 @@ function AppShell({
 		startSurfaceActions.setInboxStateFilterBySource;
 	const startSourceBranch = startSurface.startSourceBranch;
 	const startMode = startSurface.startMode;
+	const startBranchIntent = startSurface.startBranchIntent;
+	const handleStartBranchIntentChange = startSurfaceActions.selectBranchIntent;
 	const handleStartSourceBranchSelect = startSurfaceActions.selectSourceBranch;
 	const handleStartRepositorySelect = startSurfaceActions.selectRepository;
 	const handleAddRepositoryNeedsStart =
@@ -1493,6 +1495,8 @@ function AppShell({
 													onSelectBranch={handleStartSourceBranchSelect}
 													mode={startMode}
 													onModeChange={startSurfaceActions.selectMode}
+													branchIntent={startBranchIntent}
+													onBranchIntentChange={handleStartBranchIntentChange}
 													onCreateAndCheckoutBranch={async (branch) => {
 														if (!startRepository) return;
 														// Lazy: just remember the desired name. Actual
@@ -1749,6 +1753,9 @@ function AppShell({
 							onOpenChangelog={handleOpenReleaseChangelog}
 							onOpenSettings={handleOpenAnnouncementSettings}
 							onSetRightSidebarMode={contextPanelActions.setMode}
+							onOpenStartPage={() =>
+								handleOpenWorkspaceStart({ persist: false })
+							}
 						/>
 						<QuickSwitchOverlay
 							state={quickSwitch.state}

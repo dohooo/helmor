@@ -330,6 +330,7 @@ pub fn run() {
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::list_branches_for_workspace_picker,
             commands::workspace_commands::get_repo_current_branch,
             commands::workspace_commands::create_and_checkout_branch,
             commands::workspace_commands::move_local_workspace_to_worktree,

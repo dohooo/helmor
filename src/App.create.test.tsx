@@ -402,6 +402,7 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
 				null,
 			);
 		});
@@ -459,6 +460,7 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
 				null,
 			);
 		});

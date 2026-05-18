@@ -13,15 +13,17 @@ import type {
 } from "@/features/conversation";
 import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
 import {
+	type BranchPickerEntry,
 	createAndCheckoutBranch,
 	getRepoCurrentBranch,
-	listBranchesForLocalPicker,
-	listRemoteBranches,
+	listBranchesForWorkspacePicker,
 	moveLocalWorkspaceToWorktree,
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
+	type WorkspaceBranchIntent,
 	type WorkspaceMode,
 } from "@/lib/api";
+import { extractError } from "@/lib/errors";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { AppSettings } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
@@ -39,11 +41,13 @@ export type StartSurfaceState = {
 	startRepository: RepositoryCreateOption | null;
 	startSourceBranch: string;
 	startMode: WorkspaceMode;
+	/** Worktree mode only; backend ignores in local mode. */
+	startBranchIntent: WorkspaceBranchIntent;
 	startPendingNewBranch: string | null;
 	startInboxProviderTab: string;
 	startInboxProviderSourceTab: string;
 	startInboxStateFilterBySource: Record<string, string>;
-	startBranches: string[];
+	startBranches: BranchPickerEntry[];
 	startBranchesLoading: boolean;
 	startComposerContextKey: string;
 	startComposerInsertTarget: { contextKey: string };
@@ -57,6 +61,7 @@ export type StartSurfaceActions = {
 	selectRepository(repository: RepositoryCreateOption): void;
 	selectSourceBranch(branch: string): void;
 	selectMode(mode: WorkspaceMode): void;
+	selectBranchIntent(intent: WorkspaceBranchIntent): void;
 	stashPendingNewBranch(branch: string): void;
 	refetchBranches(): void;
 	setInboxProviderTab(tab: string): void;
@@ -120,15 +125,20 @@ export function useStartSurfaceController(
 		useState<string>("issues");
 	const [startInboxStateFilterBySource, setStartInboxStateFilterBySource] =
 		useState<Record<string, string>>({});
-	const [startSourceBranchOverride, setStartSourceBranchOverride] = useState<
-		string | null
-	>(null);
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
 	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
 		useState<readonly string[]>(EMPTY_STRING_LIST);
-	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
+
+	// Pickers read straight from settings; writes go through `updateSettings`.
+	// Branch is per-repo, mode/intent are global.
+	const startMode = appSettings.kanbanViewState.mode;
+	const startBranchIntent = appSettings.kanbanViewState.branchIntent;
+	const startSourceBranchOverride = startRepositoryId
+		? (appSettings.kanbanViewState.sourceBranchByRepoId[startRepositoryId] ??
+			null)
+		: null;
 
 	// Latest cross-controller callbacks, kept in refs so AppShell can pass
 	// inline arrows without thrashing every downstream useCallback.
@@ -177,12 +187,11 @@ export function useStartSurfaceController(
 		void prewarmSlashCommandsForRepo(startRepository.id);
 	}, [startRepository]);
 
-	// Reset start scratch state on repo switch.
+	// Repo switch only clears transient state; persisted picker selections
+	// are re-read from the new repo's slot automatically.
 	useEffect(() => {
-		setStartSourceBranchOverride(null);
 		setStartPendingNewBranch(null);
 		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
-		setStartMode("worktree");
 	}, [startRepositoryId]);
 
 	// In local mode default to repo HEAD; worktree mode keeps stored default.
@@ -194,7 +203,9 @@ export function useStartSurfaceController(
 		},
 		enabled: Boolean(startRepository?.id) && startMode === "local",
 	});
+	// pendingNewBranch (transient) > per-repo override > mode default.
 	const startSourceBranch =
+		startPendingNewBranch ??
 		startSourceBranchOverride ??
 		(startMode === "local"
 			? (startLocalCurrentBranchQuery.data ??
@@ -202,18 +213,14 @@ export function useStartSurfaceController(
 				"main")
 			: (startRepository?.defaultBranch ?? "main"));
 
-	// Local mode shows local + remote branches (deduped). Worktree mode only
-	// cares about remote refs (workspace branches off `origin/<x>`).
+	// Combined local + remote source — both modes use it. Each entry carries
+	// `hasLocal` / `hasRemote` so the picker can render a single icon by
+	// priority and the pill can decide whether to prefix with `origin/`.
 	const startBranchesQuery = useQuery({
-		queryKey:
-			startMode === "local"
-				? ["localPickerBranches", startRepository?.id]
-				: ["remoteBranches", "start", startRepository?.id],
+		queryKey: ["workspacePickerBranches", startRepository?.id],
 		queryFn: () => {
 			if (!startRepository) throw new Error("no repo");
-			return startMode === "local"
-				? listBranchesForLocalPicker(startRepository.id)
-				: listRemoteBranches({ repoId: startRepository.id });
+			return listBranchesForWorkspacePicker(startRepository.id);
 		},
 		enabled: Boolean(startRepository?.id),
 	});
@@ -234,27 +241,64 @@ export function useStartSurfaceController(
 	const selectSourceBranch = useCallback(
 		(branch: string) => {
 			if (!startRepository) return;
-			setStartSourceBranchOverride(branch);
-			// Picking an existing branch from the dropdown clears any pending
-			// "create new branch" selection so we don't try to create-and-
-			// checkout on submit.
+			// Picking an existing branch drops any in-flight create-new stash.
 			setStartPendingNewBranch(null);
+			void updateSettings({
+				kanbanViewState: {
+					...appSettings.kanbanViewState,
+					sourceBranchByRepoId: {
+						...appSettings.kanbanViewState.sourceBranchByRepoId,
+						[startRepository.id]: branch,
+					},
+				},
+			});
 		},
-		[startRepository],
+		[appSettings.kanbanViewState, startRepository, updateSettings],
 	);
 
-	const selectMode = useCallback((mode: WorkspaceMode) => {
-		setStartMode(mode);
-		setStartSourceBranchOverride(null);
-		setStartPendingNewBranch(null);
-	}, []);
+	const selectMode = useCallback(
+		(mode: WorkspaceMode) => {
+			// pendingNewBranch is local-mode-only; clear it on any mode flip.
+			setStartPendingNewBranch(null);
+			void updateSettings({
+				kanbanViewState: { ...appSettings.kanbanViewState, mode },
+			});
+		},
+		[appSettings.kanbanViewState, updateSettings],
+	);
 
-	const stashPendingNewBranch = useCallback((branch: string) => {
-		// Lazy: just remember the desired name. Actual `git checkout -b` runs
-		// at submit time inside `prepareComposer`.
-		setStartSourceBranchOverride(branch);
-		setStartPendingNewBranch(branch);
-	}, []);
+	const selectBranchIntent = useCallback(
+		(intent: WorkspaceBranchIntent) => {
+			// use_branch + pendingNewBranch is a logical conflict; drop the pending.
+			if (intent === "use_branch") {
+				setStartPendingNewBranch(null);
+			}
+			void updateSettings({
+				kanbanViewState: {
+					...appSettings.kanbanViewState,
+					branchIntent: intent,
+				},
+			});
+		},
+		[appSettings.kanbanViewState, updateSettings],
+	);
+
+	const stashPendingNewBranch = useCallback(
+		(branch: string) => {
+			// Transient only — actual `git checkout -b` runs at submit time.
+			// Don't persist to `sourceBranchByRepoId` (branch doesn't exist yet).
+			setStartPendingNewBranch(branch);
+			if (appSettings.kanbanViewState.branchIntent !== "from_branch") {
+				void updateSettings({
+					kanbanViewState: {
+						...appSettings.kanbanViewState,
+						branchIntent: "from_branch",
+					},
+				});
+			}
+		},
+		[appSettings.kanbanViewState, updateSettings],
+	);
 
 	const refetchBranches = useCallback(() => {
 		void startBranchesQuery.refetch();
@@ -327,6 +371,9 @@ export function useStartSurfaceController(
 					repoId: startRepository.id,
 					sourceBranch: startSourceBranch,
 					mode: startMode,
+					// Local mode ignores `branchIntent`; only forward in worktree.
+					branchIntent:
+						startMode === "worktree" ? startBranchIntent : undefined,
 					submitMode: options?.startSubmitMode ?? "startNow",
 					editorStateSnapshot: payload.editorStateSnapshot,
 					composerConfig: {
@@ -417,15 +464,23 @@ export function useStartSurfaceController(
 				setViewModeRef.current("conversation");
 				return outcome;
 			} catch (error) {
-				pushToastRef.current(
-					describeUnknownError(error, "Could not create workspace."),
-					"Can't create workspace",
+				const { code, message } = extractError(
+					error,
+					"Could not create workspace.",
 				);
+				const title =
+					code === "BranchInUse"
+						? "Branch already in use"
+						: code === "BranchNotFound"
+							? "Branch not found"
+							: "Can't create workspace";
+				pushToastRef.current(message, title);
 				return { shouldStream: false };
 			}
 		},
 		[
 			queryClient,
+			startBranchIntent,
 			startMode,
 			startPendingLinkedDirectories,
 			startPendingNewBranch,
@@ -454,7 +509,7 @@ export function useStartSurfaceController(
 	const startBranches = startBranchesQuery.data ?? EMPTY_BRANCH_LIST;
 
 	const resetScratchOnReentry = useCallback(() => {
-		setStartSourceBranchOverride(null);
+		// Transient only — persisted picker selections survive re-entry.
 		setStartPendingNewBranch(null);
 	}, []);
 
@@ -462,6 +517,7 @@ export function useStartSurfaceController(
 		selectRepository,
 		selectSourceBranch,
 		selectMode,
+		selectBranchIntent,
 		stashPendingNewBranch,
 		refetchBranches,
 		setInboxProviderTab: setStartInboxProviderTab,
@@ -479,6 +535,7 @@ export function useStartSurfaceController(
 			startRepository,
 			startSourceBranch,
 			startMode,
+			startBranchIntent,
 			startPendingNewBranch,
 			startInboxProviderTab,
 			startInboxProviderSourceTab,
@@ -490,6 +547,7 @@ export function useStartSurfaceController(
 			startLinkedDirectoriesController,
 		}),
 		[
+			startBranchIntent,
 			startBranches,
 			startBranchesQuery.isFetching,
 			startComposerContextKey,
@@ -509,4 +567,4 @@ export function useStartSurfaceController(
 	return { state, actions };
 }
 
-const EMPTY_BRANCH_LIST: string[] = [];
+const EMPTY_BRANCH_LIST: BranchPickerEntry[] = [];

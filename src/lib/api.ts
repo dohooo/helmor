@@ -409,6 +409,8 @@ export type PrepareWorkspaceResponse = {
 	 *  immediately. Worktree mode: null until finalize materialises the
 	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
 	workingDirectory: string | null;
+	/** Echo of the branch-intent the workspace was created with. */
+	branchIntent: WorkspaceBranchIntent;
 };
 
 export type FinalizeWorkspaceResponse = {
@@ -1390,6 +1392,32 @@ export async function listBranchesForLocalPicker(
 	}
 }
 
+/** One row of the start-page branch picker. */
+export type BranchPickerEntry = {
+	name: string;
+	hasLocal: boolean;
+	hasRemote: boolean;
+};
+
+/**
+ * Merged local + remote branches with source flags so the picker can
+ * show an icon and the pill can decide whether to prefix with `origin/`.
+ * Pure local fs reads — no network.
+ */
+export async function listBranchesForWorkspacePicker(
+	repoId: string,
+): Promise<BranchPickerEntry[]> {
+	try {
+		return await invoke<BranchPickerEntry[]>(
+			"list_branches_for_workspace_picker",
+			{ repoId },
+		);
+	} catch (error) {
+		console.warn("[helmor] listBranchesForWorkspacePicker failed:", error);
+		return [];
+	}
+}
+
 /**
  * `git checkout -b <branch>` against the repo's source path. Caller is
  * responsible for refreshing whatever query feeds the branch picker.
@@ -1426,6 +1454,9 @@ export async function moveLocalWorkspaceToWorktree(
 
 /** How a workspace's filesystem is provisioned. */
 export type WorkspaceMode = "worktree" | "local";
+
+/** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
+export type WorkspaceBranchIntent = "from_branch" | "use_branch";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -2271,20 +2302,21 @@ export async function createWorkspaceFromRepo(
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
  *
- * `sourceBranch` (optional): branch to branch the new workspace from. When
- * omitted, the repo's default branch is used. The kanban "create" flow
- * forwards the user's branch picker selection here.
+ * `sourceBranch` is the fork base for `from_branch` (default) or the
+ * branch to attach to for `use_branch` (required).
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
+	branchIntent?: WorkspaceBranchIntent | null,
 	initialStatus?: WorkspaceStatus | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
 	});
 }

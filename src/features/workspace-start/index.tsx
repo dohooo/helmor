@@ -1,6 +1,18 @@
-import { ChevronDown, GitBranch, Laptop, Plus, Split, X } from "lucide-react";
+import {
+	ChevronDown,
+	GitBranch,
+	GitBranchPlus,
+	GitMerge,
+	Laptop,
+	Plus,
+	Split,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { BranchPickerPopover } from "@/components/branch-picker";
+import {
+	BranchPickerPopover,
+	resolveBranchSource,
+} from "@/components/branch-picker";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +32,12 @@ import {
 	ShortcutDisplay,
 } from "@/features/shortcuts/shortcut-display";
 import { SourceDetailView } from "@/features/source-detail";
-import type { RepositoryCreateOption, WorkspaceMode } from "@/lib/api";
+import type {
+	BranchPickerEntry,
+	RepositoryCreateOption,
+	WorkspaceBranchIntent,
+	WorkspaceMode,
+} from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -48,12 +65,15 @@ type WorkspaceStartPageProps = {
 	selectedRepository: RepositoryCreateOption | null;
 	onSelectRepository: (repository: RepositoryCreateOption) => void;
 	selectedBranch: string;
-	branches: string[];
+	branches: BranchPickerEntry[];
 	branchesLoading: boolean;
 	onOpenBranchPicker: () => void;
 	onSelectBranch: (branch: string) => void;
 	mode: WorkspaceMode;
 	onModeChange: (mode: WorkspaceMode) => void;
+	/** Worktree mode only. */
+	branchIntent: WorkspaceBranchIntent;
+	onBranchIntentChange: (intent: WorkspaceBranchIntent) => void;
 	/** Called when the user creates a new branch via the picker footer.
 	 * Caller is responsible for the underlying `git checkout -b`. */
 	onCreateAndCheckoutBranch?: (branch: string) => Promise<void>;
@@ -75,6 +95,8 @@ export function WorkspaceStartPage({
 	onSelectBranch,
 	mode,
 	onModeChange,
+	branchIntent,
+	onBranchIntentChange,
 	onCreateAndCheckoutBranch,
 	previewCard = null,
 	previewAppendContextTarget,
@@ -83,6 +105,18 @@ export function WorkspaceStartPage({
 	children,
 }: WorkspaceStartPageProps) {
 	const [createBranchOpen, setCreateBranchOpen] = useState(false);
+
+	// Local mode mirrors git DWIM (local-first) for icon resolution; UseBranch
+	// has the same shape. Worktree mode follows the user-picked intent.
+	const effectivePickerIntent: WorkspaceBranchIntent =
+		mode === "worktree" ? branchIntent : "use_branch";
+	const selectedBranchEntry = branches.find((b) => b.name === selectedBranch);
+	const selectedBranchSource: "local" | "remote" = selectedBranchEntry
+		? resolveBranchSource(selectedBranchEntry, effectivePickerIntent)
+		: // Unknown branch (e.g. pending new from the "Create and checkout"
+			// footer) — treat as local: no `origin/` prefix in the pill.
+			"local";
+
 	const selectNextRepository = useCallback(() => {
 		if (repositories.length === 0) {
 			return;
@@ -451,10 +485,88 @@ export function WorkspaceStartPage({
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
+						{/* Branch intent picker. Worktree mode only. */}
+						{mode === "worktree" ? (
+							<DropdownMenu>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<DropdownMenuTrigger asChild>
+											<button
+												type="button"
+												disabled={!selectedRepository}
+												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											>
+												{branchIntent === "use_branch" ? (
+													<GitMerge
+														className="size-3.5 shrink-0"
+														strokeWidth={1.8}
+													/>
+												) : (
+													<GitBranchPlus
+														className="size-3.5 shrink-0"
+														strokeWidth={1.8}
+													/>
+												)}
+												<span>
+													{branchIntent === "use_branch"
+														? "Reuse"
+														: "Branch off"}
+												</span>
+												<ChevronDown
+													className="size-3 shrink-0 text-muted-foreground"
+													strokeWidth={2}
+												/>
+											</button>
+										</DropdownMenuTrigger>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										sideOffset={4}
+										className="rounded-md px-2 text-[12px] leading-none"
+									>
+										{branchIntent === "use_branch"
+											? "Check out the picked branch directly."
+											: "Fork a fresh branch off the picked base"}
+									</TooltipContent>
+								</Tooltip>
+								<DropdownMenuContent align="start" className="w-72">
+									<DropdownMenuItem
+										onClick={() => onBranchIntentChange("from_branch")}
+										className="flex-col items-start gap-1 pr-3"
+										data-checked={
+											branchIntent === "from_branch" ? "true" : undefined
+										}
+									>
+										<div className="flex items-center gap-2">
+											<GitBranchPlus className="size-3.5" strokeWidth={1.8} />
+											<span>Branch off</span>
+										</div>
+										<span className="pl-[1.375rem] text-[11px] text-muted-foreground">
+											Fork a fresh branch off the picked base.
+										</span>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={() => onBranchIntentChange("use_branch")}
+										className="flex-col items-start gap-1 pr-3"
+										data-checked={
+											branchIntent === "use_branch" ? "true" : undefined
+										}
+									>
+										<div className="flex items-center gap-2">
+											<GitMerge className="size-3.5" strokeWidth={1.8} />
+											<span>Reuse</span>
+										</div>
+										<span className="pl-[1.375rem] text-[11px] text-muted-foreground">
+											Check out the picked branch directly.
+										</span>
+									</DropdownMenuItem>
+								</DropdownMenuContent>
+							</DropdownMenu>
+						) : null}
 						<Tooltip>
 							<BranchPickerPopover
 								currentBranch={selectedBranch}
-								branches={branches}
+								entries={branches}
 								loading={branchesLoading}
 								onOpen={onOpenBranchPicker}
 								onSelect={onSelectBranch}
@@ -480,16 +592,19 @@ export function WorkspaceStartPage({
 									<button
 										type="button"
 										disabled={!selectedRepository}
-										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										<GitBranch
 											className="size-3.5 shrink-0"
 											strokeWidth={1.8}
 										/>
 										<span className="min-w-0 truncate">
-											{mode === "local"
-												? selectedBranch
-												: `${selectedRepository?.remote ?? "origin"}/${selectedBranch}`}
+											{/* Pill prefix follows the resolved source of the selected
+											 *  branch: `origin/<x>` when it'll come from remote,
+											 *  bare `<x>` when from local. */}
+											{selectedBranchSource === "remote"
+												? `${selectedRepository?.remote ?? "origin"}/${selectedBranch}`
+												: selectedBranch}
 										</span>
 										<ChevronDown
 											className="size-3 shrink-0 text-muted-foreground"
@@ -505,14 +620,16 @@ export function WorkspaceStartPage({
 							>
 								{mode === "local"
 									? "Switch branch"
-									: "What branch should this task start from?"}
+									: branchIntent === "use_branch"
+										? "Branch to reuse"
+										: "Base to fork off"}
 							</TooltipContent>
 						</Tooltip>
 						<CreateBranchDialog
 							open={createBranchOpen}
 							onOpenChange={setCreateBranchOpen}
 							defaultPrefix={defaultBranchPrefix(selectedRepository)}
-							existingBranches={branches}
+							existingBranches={branches.map((b) => b.name)}
 							onSubmit={async (branch) => {
 								if (!onCreateAndCheckoutBranch) return;
 								await onCreateAndCheckoutBranch(branch);

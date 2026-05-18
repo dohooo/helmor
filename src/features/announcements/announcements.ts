@@ -11,6 +11,9 @@ export type ReleaseAnnouncementAction =
 	| {
 			type: "openSettings";
 			section?: SettingsSection;
+	  }
+	| {
+			type: "openStartPage";
 	  };
 
 export type ReleaseAnnouncementItem = {

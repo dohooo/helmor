@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "You can now reuse an existing branch when creating a workspace.",
+			"action": {
+				"label": "Open Start",
+				"value": { "type": "openStartPage" }
+			}
+		}
+	]
+}

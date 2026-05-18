@@ -20,12 +20,13 @@ pub use super::archive::{
     ArchiveJobManager, PrepareArchiveWorkspaceResponse,
 };
 pub use super::branching::{
-    _reset_prefetch_rate_limit, continue_workspace_from_target_branch, list_remote_branches,
-    prefetch_remote_refs, push_workspace_to_remote, refresh_remote_and_realign,
-    rename_workspace_branch, sync_workspace_with_target_branch, update_intended_target_branch,
-    update_intended_target_branch_local, ContinueWorkspaceResponse, PrefetchRemoteRefsResponse,
-    PushWorkspaceToRemoteResponse, SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse,
-    UpdateIntendedTargetBranchInternal, UpdateIntendedTargetBranchResponse,
+    _reset_prefetch_rate_limit, continue_workspace_from_target_branch, list_branch_picker_entries,
+    list_remote_branches, prefetch_remote_refs, push_workspace_to_remote,
+    refresh_remote_and_realign, rename_workspace_branch, sync_workspace_with_target_branch,
+    update_intended_target_branch, update_intended_target_branch_local, BranchPickerEntry,
+    ContinueWorkspaceResponse, PrefetchRemoteRefsResponse, PushWorkspaceToRemoteResponse,
+    SyncWorkspaceTargetOutcome, SyncWorkspaceTargetResponse, UpdateIntendedTargetBranchInternal,
+    UpdateIntendedTargetBranchResponse,
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,

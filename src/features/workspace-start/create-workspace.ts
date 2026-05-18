@@ -8,6 +8,7 @@ import {
 	prepareWorkspaceFromRepo,
 	setWorkspaceLinkedDirectories,
 	updateSessionSettings,
+	type WorkspaceBranchIntent,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -28,6 +29,7 @@ export async function createWorkspaceFromStartComposer({
 	repoId,
 	sourceBranch,
 	mode,
+	branchIntent,
 	submitMode,
 	editorStateSnapshot,
 	composerConfig,
@@ -36,6 +38,8 @@ export async function createWorkspaceFromStartComposer({
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
+	/** Defaults to `from_branch` when omitted. */
+	branchIntent?: WorkspaceBranchIntent;
 	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 	/** StartPage composer picks. Only persisted to the session row on
@@ -60,6 +64,7 @@ export async function createWorkspaceFromStartComposer({
 		repoId,
 		sourceBranch,
 		mode,
+		branchIntent ?? null,
 		initialStatus,
 	);
 

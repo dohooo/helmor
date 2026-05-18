@@ -799,6 +799,7 @@ mod tests {
             initialization_parent_branch: Some("main".to_string()),
             intended_target_branch: Some("main".to_string()),
             mode,
+            branch_intent: crate::workspace_state::WorkspaceBranchIntent::FromBranch,
             pinned_at: None,
             active_session_id: None,
             active_session_title: None,

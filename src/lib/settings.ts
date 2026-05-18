@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
+import type { WorkspaceBranchIntent, WorkspaceMode } from "./api";
 import type { ContextCard } from "./sources/types";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -165,6 +166,10 @@ export type KanbanViewState = {
 	/** Whether new kanban workspaces land in "in progress" (immediate
 	 *  agent dispatch) or "backlog" (draft saved, no agent). */
 	createState: "in-progress" | "backlog";
+	/** Start-composer branch-intent picker default. Worktree mode only. */
+	branchIntent: WorkspaceBranchIntent;
+	/** Start-composer worktree-vs-local picker default. */
+	mode: WorkspaceMode;
 	/** Repository id last selected in the kanban header picker.
 	 *  Resolved against the current repo list on hydrate — falls back
 	 *  to the first repo when the saved id is no longer present. */
@@ -259,6 +264,8 @@ export type AppSettings = {
 
 export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
 	createState: "in-progress",
+	branchIntent: "from_branch",
+	mode: "worktree",
 	repoId: null,
 	inboxProviderTab: "github",
 	inboxProviderSourceTab: "github_issue",
@@ -697,6 +704,14 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 			o.createState === "backlog" || o.createState === "in-progress"
 				? o.createState
 				: DEFAULT_KANBAN_VIEW_STATE.createState;
+		const branchIntent =
+			o.branchIntent === "use_branch" || o.branchIntent === "from_branch"
+				? o.branchIntent
+				: DEFAULT_KANBAN_VIEW_STATE.branchIntent;
+		const mode =
+			o.mode === "worktree" || o.mode === "local"
+				? o.mode
+				: DEFAULT_KANBAN_VIEW_STATE.mode;
 		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
 		const inboxProviderTab =
 			typeof o.inboxProviderTab === "string" && o.inboxProviderTab
@@ -726,6 +741,8 @@ function parseKanbanViewState(raw: string | undefined): KanbanViewState {
 			.slice(0, KANBAN_OPEN_INBOX_CARDS_MAX);
 		return {
 			createState,
+			branchIntent,
+			mode,
 			repoId,
 			inboxProviderTab,
 			inboxProviderSourceTab,

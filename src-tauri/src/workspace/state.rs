@@ -154,6 +154,70 @@ impl ToSql for WorkspaceMode {
     }
 }
 
+/// `FromBranch`: fork a new branch off the picker selection.
+/// `UseBranch`: attach the worktree to the picker selection as-is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceBranchIntent {
+    #[default]
+    FromBranch,
+    UseBranch,
+}
+
+impl WorkspaceBranchIntent {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::FromBranch => "from_branch",
+            Self::UseBranch => "use_branch",
+        }
+    }
+}
+
+impl fmt::Display for WorkspaceBranchIntent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug)]
+pub struct UnknownWorkspaceBranchIntent(pub String);
+
+impl fmt::Display for UnknownWorkspaceBranchIntent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown workspace branch intent: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownWorkspaceBranchIntent {}
+
+impl FromStr for WorkspaceBranchIntent {
+    type Err = UnknownWorkspaceBranchIntent;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "from_branch" => Ok(Self::FromBranch),
+            "use_branch" => Ok(Self::UseBranch),
+            other => Err(UnknownWorkspaceBranchIntent(other.to_string())),
+        }
+    }
+}
+
+impl FromSql for WorkspaceBranchIntent {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let s = value.as_str()?;
+        s.parse()
+            .map_err(|e: UnknownWorkspaceBranchIntent| FromSqlError::Other(Box::new(e)))
+    }
+}
+
+impl ToSql for WorkspaceBranchIntent {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Borrowed(ValueRef::Text(
+            self.as_str().as_bytes(),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +296,69 @@ mod tests {
             .unwrap();
         rows.sort_by_key(|m| m.as_str());
         assert_eq!(rows, vec![WorkspaceMode::Local, WorkspaceMode::Worktree]);
+    }
+
+    #[test]
+    fn workspace_branch_intent_default_is_from_branch() {
+        assert_eq!(
+            WorkspaceBranchIntent::default(),
+            WorkspaceBranchIntent::FromBranch
+        );
+    }
+
+    #[test]
+    fn workspace_branch_intent_round_trips_through_string() {
+        for intent in [
+            WorkspaceBranchIntent::FromBranch,
+            WorkspaceBranchIntent::UseBranch,
+        ] {
+            assert_eq!(
+                WorkspaceBranchIntent::from_str(intent.as_str()).unwrap(),
+                intent
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_branch_intent_serializes_as_snake_case() {
+        for intent in [
+            WorkspaceBranchIntent::FromBranch,
+            WorkspaceBranchIntent::UseBranch,
+        ] {
+            let json = serde_json::to_string(&intent).unwrap();
+            assert_eq!(json, format!("\"{}\"", intent.as_str()));
+            let round: WorkspaceBranchIntent = serde_json::from_str(&json).unwrap();
+            assert_eq!(round, intent);
+        }
+    }
+
+    #[test]
+    fn workspace_branch_intent_round_trips_through_sqlite() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE t (intent TEXT NOT NULL)", [])
+            .unwrap();
+        for intent in [
+            WorkspaceBranchIntent::FromBranch,
+            WorkspaceBranchIntent::UseBranch,
+        ] {
+            conn.execute("INSERT INTO t (intent) VALUES (?1)", [intent])
+                .unwrap();
+        }
+        let mut rows: Vec<WorkspaceBranchIntent> = conn
+            .prepare("SELECT intent FROM t ORDER BY intent")
+            .unwrap()
+            .query_map([], |r| r.get::<_, WorkspaceBranchIntent>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows.sort_by_key(|m| m.as_str());
+        assert_eq!(
+            rows,
+            vec![
+                WorkspaceBranchIntent::FromBranch,
+                WorkspaceBranchIntent::UseBranch,
+            ]
+        );
     }
 
     #[test]
