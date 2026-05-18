@@ -166,6 +166,7 @@ export function ShellInspectorPane({
 						workspaceRemote={selectedWorkspaceDetail?.remote ?? null}
 						workspaceRemoteUrl={selectedWorkspaceDetail?.remoteUrl ?? null}
 						workspaceTargetBranch={targetBranch}
+						workspaceRuntimeName={selectedWorkspaceDetail?.runtimeName ?? null}
 						editorMode={editorMode}
 						activeEditor={activeEditor}
 						onOpenEditorFile={onOpenEditorFile}

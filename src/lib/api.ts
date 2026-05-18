@@ -107,6 +107,13 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime" — the sidebar renders no chip in
+	 * those cases. Anything else surfaces a small `cmd:<name>` chip
+	 * inline with the workspace title.
+	 */
+	runtimeName?: string | null;
 };
 
 export type WorkspaceGroup = {
@@ -205,6 +212,12 @@ export type WorkspaceSummary = {
 	createdAt: string;
 	updatedAt?: string;
 	lastUserMessageAt?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime" (the backend treats them identically).
+	 * Anything else names a remote and the sidebar renders a host chip.
+	 */
+	runtimeName?: string | null;
 };
 
 export type BranchPrefixType = "username" | "custom" | "none";
@@ -325,6 +338,13 @@ export type WorkspaceDetail = {
 	/** gh/glab account login bound to the parent repo. NULL means no
 	 * account is bound — UI shows the "Connect" prompt. */
 	forgeLogin?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime"; anything else names a remote and the
+	 * workspace header surfaces a chip with that name. Drives the same
+	 * resolution rule the dispatcher uses in `resolve_runtime_for_call`.
+	 */
+	runtimeName?: string | null;
 	/** Set when this workspace's setup script last finished with exit
 	 * code 0. NULL means never run (or skipped because the repo had no
 	 * setup script). Drives the inspector's Setup tab "ran in another

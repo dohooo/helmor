@@ -21,6 +21,7 @@ import {
 	useState,
 } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
+import { RuntimeHostChip } from "@/components/runtime-host-chip";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -361,12 +362,20 @@ export const WorkspaceRowItem = memo(
 							<HyperText text={displayTitle} className="inline" />
 						</span>
 					);
+					// Phase 22d: surface the bound remote runtime inline so an
+					// operator can tell at a glance "this row runs on dev.box"
+					// without opening the hover card. `shrink-0` on the chip
+					// keeps it visible even when the title truncates.
+					const runtimeChipSlot = (
+						<RuntimeHostChip runtimeName={row.runtimeName} />
+					);
 					if (hideRepoAvatar) {
 						return (
 							<div className="flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}
 								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 									{titleSlot}
+									{runtimeChipSlot}
 								</div>
 							</div>
 						);
@@ -386,6 +395,7 @@ export const WorkspaceRowItem = memo(
 							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}
 								{titleSlot}
+								{runtimeChipSlot}
 							</div>
 						</div>
 					);

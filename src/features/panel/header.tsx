@@ -25,6 +25,7 @@ import { BranchPickerPopover } from "@/components/branch-picker";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
+import { RuntimeHostChip } from "@/components/runtime-host-chip";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -222,6 +223,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
 				>
 					{headerLeading}
+					{/*
+					 * Phase 22d: surface the bound remote runtime in the workspace
+					 * header so an operator never loses track of where a workspace
+					 * runs. Rendered before the branch label so it occupies a fixed
+					 * slot — long branch names truncate but the chip stays put.
+					 */}
+					<RuntimeHostChip runtimeName={workspace?.runtimeName} />
 					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						{(() => {
 							// Avatar always wins when we have a URL AND the

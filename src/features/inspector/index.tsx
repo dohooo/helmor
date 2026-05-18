@@ -39,6 +39,13 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceRemote?: string | null;
 	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
+	/**
+	 * Phase 22d: name of the bound remote runtime (NULL / `"local"`
+	 * means use the local runtime). Surfaced in the
+	 * "permanently delete" toast so the operator knows which host's
+	 * workspace they're nuking.
+	 */
+	workspaceRuntimeName?: string | null;
 	/** Timestamp from `WorkspaceDetail.setupCompletedAt`. Null when setup
 	 * was never run (or skipped); drives the Setup tab placeholder copy
 	 * and the "default to Run tab" behaviour after restart. */
@@ -76,6 +83,7 @@ export function WorkspaceInspectorSidebar({
 	workspaceRemote,
 	workspaceRemoteUrl,
 	workspaceState,
+	workspaceRuntimeName,
 	workspaceSetupCompletedAt,
 	repoId,
 	editorMode,
@@ -397,6 +405,7 @@ export function WorkspaceInspectorSidebar({
 				workspaceBranch={workspaceBranch ?? null}
 				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
+				workspaceRuntimeName={workspaceRuntimeName ?? null}
 				changes={changes}
 				editorMode={editorMode}
 				activeEditor={activeEditor}
