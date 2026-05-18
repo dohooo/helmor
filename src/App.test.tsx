@@ -21,6 +21,12 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
+const SIDEBAR_WIDTH_VAR = "--shell-sidebar-width";
+const INSPECTOR_WIDTH_VAR = "--shell-inspector-width";
+
+function getShellWidthVar(name: string): string {
+	return document.documentElement.style.getPropertyValue(name);
+}
 
 describe("App", () => {
 	beforeEach(() => {
@@ -75,10 +81,11 @@ describe("App", () => {
 		expect(shell).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
-		expect(sidebar).toHaveStyle({ width: "336px" });
 		expect(inspector).toHaveClass("bg-sidebar");
 		expect(inspector).toHaveClass("overflow-hidden");
-		expect(inspector).toHaveStyle({ width: "336px" });
+		// 宽度由 CSS variable 驱动,验证 documentElement 上的 variable 值。
+		expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("336px");
+		expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("336px");
 		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
 		expect(
 			screen.getByLabelText("Inspector section Actions"),
@@ -104,10 +111,11 @@ describe("App", () => {
 		).toBeInTheDocument();
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
-		expect(inspectorResizeHandle).toHaveStyle({
-			right: "316px",
-			width: "20px",
-		});
+		// 位置由 CSS variable 驱动,inline style 表达成 calc(var(...) - X)。
+		expect(inspectorResizeHandle).toHaveStyle({ width: "20px" });
+		expect(inspectorResizeHandle.style.right).toBe(
+			`calc(var(--shell-inspector-width, 336px) - 20px)`,
+		);
 		expect(safeAreas).toHaveLength(1);
 		expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
@@ -204,7 +212,6 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const sidebar = screen.getByLabelText("Workspace sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize sidebar",
 		});
@@ -217,15 +224,18 @@ describe("App", () => {
 
 		fireEvent.mouseMove(window, { clientX: 360 });
 
+		// 拖动期间宽度通过 CSS variable 实时驱动(避免 React 重渲染),
+		// 所以验证 documentElement 上的 variable 值,而不是元素 inline width。
+		// 注意:拖动期间 aria-valuenow 不会更新(separator 没重渲染),mouseup 才会同步。
 		await waitFor(() => {
-			expect(sidebar).toHaveStyle({ width: "360px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("360px");
 		});
 
 		fireEvent.mouseUp(window);
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
 		});
 
 		expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("360");
@@ -235,7 +245,6 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const inspector = screen.getByLabelText("Inspector sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize inspector sidebar",
 		});
@@ -249,14 +258,14 @@ describe("App", () => {
 		fireEvent.mouseMove(window, { clientX: 1172 });
 
 		await waitFor(() => {
-			expect(inspector).toHaveStyle({ width: "364px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
+			expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("364px");
 		});
 
 		fireEvent.mouseUp(window);
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
 		});
 
 		expect(window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY)).toBe(
@@ -271,11 +280,10 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		expect(screen.getByLabelText("Workspace sidebar")).toHaveStyle({
-			width: "404px",
-		});
-		expect(screen.getByLabelText("Inspector sidebar")).toHaveStyle({
-			width: "388px",
+		// 宽度通过 CSS variable 暴露;React state 同步在 mount 后立即把它写入。
+		await waitFor(() => {
+			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("404px");
+			expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("388px");
 		});
 		expect(
 			screen.getByRole("separator", { name: "Resize sidebar" }),
@@ -417,6 +425,11 @@ describe("App", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});
