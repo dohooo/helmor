@@ -91,6 +91,26 @@ pub enum Method {
     /// the catalogue narrow and adds further actions without
     /// growing the surface area.
     WorkspaceMutateFile,
+    /// Forward an opaque `SidecarRequest` (sendMessage / abort /
+    /// resolveUserInput / generateTitle / …) to the daemon's
+    /// managed sidecar process. Events flow back as
+    /// `agent.event` notifications keyed by the same
+    /// `request_id` the client picked. Phase 23a: surface-only;
+    /// the server-side bridge lands in 23b.
+    AgentSend,
+    /// Abort an active agent stream by `request_id`. Translates
+    /// to the sidecar's own `abort` RPC on the daemon side.
+    AgentAbort,
+    /// Enumerate every agent session the daemon's sidecar is
+    /// currently running. Used by reconnecting clients to
+    /// discover orphan sessions they can `attach` to (mirrors
+    /// `terminal.list`).
+    AgentList,
+    /// Re-bind the `agent.event` stream for an existing session
+    /// to the calling client. Idempotent and "last attach wins"
+    /// — the previous subscriber stops seeing live events. Used
+    /// by reconnect flows and by tests.
+    AgentAttach,
 }
 
 impl Method {
@@ -112,6 +132,10 @@ impl Method {
             Self::WorkspaceReadFileAtRef => "workspace.readFileAtRef",
             Self::WorkspaceStatFile => "workspace.statFile",
             Self::WorkspaceMutateFile => "workspace.mutateFile",
+            Self::AgentSend => "agent.send",
+            Self::AgentAbort => "agent.abort",
+            Self::AgentList => "agent.list",
+            Self::AgentAttach => "agent.attach",
         }
     }
 }
@@ -151,6 +175,10 @@ impl FromStr for Method {
             "workspace.readFileAtRef" => Ok(Self::WorkspaceReadFileAtRef),
             "workspace.statFile" => Ok(Self::WorkspaceStatFile),
             "workspace.mutateFile" => Ok(Self::WorkspaceMutateFile),
+            "agent.send" => Ok(Self::AgentSend),
+            "agent.abort" => Ok(Self::AgentAbort),
+            "agent.list" => Ok(Self::AgentList),
+            "agent.attach" => Ok(Self::AgentAttach),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -680,6 +708,168 @@ impl RpcMethod for WorkspaceMutateFileMethod {
     type Result = WorkspaceMutateFileResult;
 }
 
+// ── agent.send / agent.abort / agent.list / agent.attach (phase 23a) ──
+//
+// `SidecarRequest` is the existing local-sidecar envelope (id + method
+// + params). For the remote case the desktop forwards that envelope
+// verbatim through `agent.send` and the daemon on the remote shovels
+// it into its own sidecar's stdin. Events flow back as
+// `agent.event` notifications carrying the raw `SidecarEvent` JSON
+// keyed by the same `request_id` the client chose.
+//
+// Phase 23a is surface-only: the trait grows default-bailing methods,
+// `RemoteSshRuntime` delegates via `client.call`, and the dispatcher
+// returns `HANDLER_FAILED` until 23b wires `RemoteAgentState` on the
+// daemon side. The wire shapes are locked in here so 23b can flip
+// the implementation without re-touching the catalogue.
+
+/// Method name for server→client agent events. Not an `RpcMethod`
+/// (no Params/Result pair — it's a notification, not a call) but
+/// pinned as a `const` so client + server agree on the wire string.
+pub const AGENT_EVENT_METHOD: &str = "agent.event";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSendParams {
+    /// Client-chosen identifier. Mirrored on every `agent.event`
+    /// notification the daemon emits in response, so multi-session
+    /// clients can demux without a side-band map. Typically a UUID.
+    pub request_id: String,
+    /// Sidecar method name: `"sendMessage"`, `"abort"`, `"steer"`,
+    /// `"resolveUserInput"`, `"getContextUsage"`,
+    /// `"listSlashCommands"`, `"generateTitle"`. Forwarded verbatim
+    /// into the daemon's `SidecarRequest.method` field.
+    pub method: String,
+    /// Sidecar method params. The daemon does not interpret the
+    /// shape — it shovels the JSON straight to the sidecar's stdin.
+    /// Keeping it `serde_json::Value` lets the catalogue stay stable
+    /// across `claude-agent-sdk` upgrades that change param shapes.
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSendResult {
+    /// `true` when the daemon accepted the request and forwarded it
+    /// to the sidecar. Events flow asynchronously as `agent.event`
+    /// notifications carrying the same `request_id`. `false` only
+    /// arises if a future server-side gate (e.g. concurrent-session
+    /// limit) rejects the request before it reaches the sidecar.
+    pub accepted: bool,
+}
+
+pub struct AgentSendMethod;
+impl RpcMethod for AgentSendMethod {
+    const NAME: &'static str = "agent.send";
+    type Params = AgentSendParams;
+    type Result = AgentSendResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAbortParams {
+    /// Identifier of the request to abort. Matches the
+    /// `request_id` originally passed to `agent.send`.
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAbortResult {}
+
+pub struct AgentAbortMethod;
+impl RpcMethod for AgentAbortMethod {
+    const NAME: &'static str = "agent.abort";
+    type Params = AgentAbortParams;
+    type Result = AgentAbortResult;
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentListParams {}
+
+/// Per-session metadata in the `agent.list` response. Carries the
+/// bits a reconnecting client needs to decide whether to reattach.
+/// Empty `helmor_session_id` / `provider` / `workspace_dir` fields
+/// reflect requests the daemon accepted before the sidecar's
+/// `system.init` event landed — the values are populated once the
+/// sidecar reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionEntry {
+    pub request_id: String,
+    /// Helmor session id supplied by the desktop on the original
+    /// `agent.send`. Daemon stashes it so a reconnecting client can
+    /// surface "the dev.box session for workspace X is still alive."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helmor_session_id: Option<String>,
+    /// Provider name (`"claude"` / `"codex"` / `"cursor"`), parsed
+    /// from the sidecar's `system.init` event. `None` until that
+    /// event arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Working directory the agent is running against on the
+    /// remote side. `None` until the sidecar's first event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    /// Unix epoch milliseconds when the daemon accepted the request.
+    pub started_at_ms: i64,
+    /// Unix epoch milliseconds of the most recent event the daemon
+    /// forwarded for this session. Lets a reconnecting client tell a
+    /// dormant session from one mid-stream.
+    pub last_event_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentListResult {
+    pub sessions: Vec<AgentSessionEntry>,
+}
+
+pub struct AgentListMethod;
+impl RpcMethod for AgentListMethod {
+    const NAME: &'static str = "agent.list";
+    type Params = AgentListParams;
+    type Result = AgentListResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachParams {
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachResult {
+    /// `true` when the daemon swapped the per-request notifier to
+    /// the calling client. `false` means the session expired or
+    /// never existed on this daemon — the client should drop its
+    /// local subscription rather than wait indefinitely.
+    pub found: bool,
+}
+
+pub struct AgentAttachMethod;
+impl RpcMethod for AgentAttachMethod {
+    const NAME: &'static str = "agent.attach";
+    type Params = AgentAttachParams;
+    type Result = AgentAttachResult;
+}
+
+/// Notification payload pushed via
+/// `Notifier::notify(AGENT_EVENT_METHOD, ...)`. The `event` field is
+/// the *raw* `SidecarEvent` JSON — the daemon doesn't interpret it
+/// so the desktop's existing accumulator + pipeline see byte-identical
+/// shapes whether the workspace is local or remote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEventNotification {
+    /// Identifier of the request that produced this event. Matches
+    /// the `request_id` from `agent.send`.
+    pub request_id: String,
+    /// Raw sidecar event JSON. The desktop reconstructs a
+    /// `SidecarEvent { raw: ... }` from this value and feeds it into
+    /// the local pipeline unchanged.
+    pub event: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,6 +893,10 @@ mod tests {
             Method::WorkspaceReadFileAtRef,
             Method::WorkspaceStatFile,
             Method::WorkspaceMutateFile,
+            Method::AgentSend,
+            Method::AgentAbort,
+            Method::AgentList,
+            Method::AgentAttach,
         ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
@@ -1115,5 +1309,122 @@ mod tests {
         };
         let wire = serde_json::to_string(&after_write).unwrap();
         assert!(wire.contains("\"mtimeMs\":1700000000000"));
+    }
+
+    // ── agent.* wire shapes (phase 23a) ───────────────────────────
+
+    #[test]
+    fn agent_send_params_forward_raw_sidecar_payload_with_camel_case() {
+        // The params struct uses camelCase on the wire so the
+        // JSON-RPC envelope is consistent with every other method.
+        // The inner `params` JSON is opaque — the daemon shovels it
+        // into `SidecarRequest.params` verbatim.
+        let params = AgentSendParams {
+            request_id: "req-1".into(),
+            method: "sendMessage".into(),
+            params: serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "prompt": "hi",
+            }),
+        };
+        let wire = serde_json::to_value(&params).unwrap();
+        assert_eq!(wire["requestId"], "req-1");
+        assert_eq!(wire["method"], "sendMessage");
+        assert_eq!(wire["params"]["model"], "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn agent_send_result_serialises_accepted_flag() {
+        let wire = serde_json::to_value(AgentSendResult { accepted: true }).unwrap();
+        assert_eq!(wire["accepted"], true);
+        // Default is `false` — used in tests that want to verify the
+        // daemon's gate fired without populating any session state.
+        let default = serde_json::to_value(AgentSendResult::default()).unwrap();
+        assert_eq!(default["accepted"], false);
+    }
+
+    #[test]
+    fn agent_abort_params_round_trip() {
+        let params = AgentAbortParams {
+            request_id: "req-2".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        let restored: AgentAbortParams = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.request_id, "req-2");
+        assert!(wire.contains("\"requestId\""));
+    }
+
+    #[test]
+    fn agent_list_entry_omits_optional_fields_when_absent() {
+        // Before the sidecar's `system.init` event lands, `provider` /
+        // `helmor_session_id` / `workspace_dir` are all `None`. The
+        // wire shape should drop them rather than emit `null`s —
+        // mirrors the rest of the catalogue.
+        let entry = AgentSessionEntry {
+            request_id: "req-3".into(),
+            helmor_session_id: None,
+            provider: None,
+            workspace_dir: None,
+            started_at_ms: 1_700_000_000_000,
+            last_event_ms: 1_700_000_000_500,
+        };
+        let wire = serde_json::to_value(&entry).unwrap();
+        assert_eq!(wire["requestId"], "req-3");
+        assert_eq!(wire["startedAtMs"], 1_700_000_000_000_i64);
+        assert_eq!(wire["lastEventMs"], 1_700_000_000_500_i64);
+        assert!(wire.get("helmorSessionId").is_none(), "wire: {wire}");
+        assert!(wire.get("provider").is_none(), "wire: {wire}");
+        assert!(wire.get("workspaceDir").is_none(), "wire: {wire}");
+    }
+
+    #[test]
+    fn agent_list_entry_round_trips_through_serde_with_full_payload() {
+        let entry = AgentSessionEntry {
+            request_id: "r1".into(),
+            helmor_session_id: Some("ws-session-1".into()),
+            provider: Some("claude".into()),
+            workspace_dir: Some("/srv/repos/demo".into()),
+            started_at_ms: 1,
+            last_event_ms: 2,
+        };
+        let wire = serde_json::to_string(&entry).unwrap();
+        let restored: AgentSessionEntry = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, entry);
+    }
+
+    #[test]
+    fn agent_attach_result_carries_found_flag() {
+        let wire = serde_json::to_value(AgentAttachResult { found: true }).unwrap();
+        assert_eq!(wire["found"], true);
+    }
+
+    #[test]
+    fn agent_event_notification_wraps_raw_sidecar_payload() {
+        // The whole point of phase 23 is that the desktop's existing
+        // accumulator sees byte-identical SidecarEvent JSON whether
+        // the workspace is local or remote. This test wedges that
+        // contract: the `event` field is the raw JSON, untouched by
+        // the wrapping.
+        let inner = serde_json::json!({
+            "id": "req-4",
+            "type": "assistant",
+            "session_id": "sdk-session-7",
+            "delta": { "text": "hello" }
+        });
+        let notif = AgentEventNotification {
+            request_id: "req-4".into(),
+            event: inner.clone(),
+        };
+        let wire = serde_json::to_value(&notif).unwrap();
+        assert_eq!(wire["requestId"], "req-4");
+        // The wrapped payload survives as-is — sub-fields don't get
+        // shuffled into camelCase, sidecar-side underscores
+        // (`session_id`) survive.
+        assert_eq!(wire["event"], inner);
+    }
+
+    #[test]
+    fn agent_event_method_constant_matches_the_catalogue() {
+        assert_eq!(AGENT_EVENT_METHOD, "agent.event");
     }
 }

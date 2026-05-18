@@ -359,6 +359,32 @@ impl RpcClient {
             }
         })
     }
+
+    /// Subscribe to `agent.event` notifications. Same RAII contract
+    /// as [`Self::subscribe_terminal_events`]: hold the returned
+    /// handle for as long as you want events. Phase 23a wires the
+    /// subscription primitive; phase 23b's `RemoteAgentState` on the
+    /// daemon side is what actually emits the events.
+    pub fn subscribe_agent_events<F>(&self, callback: F) -> NotificationSubscription
+    where
+        F: Fn(super::methods::AgentEventNotification) + Send + Sync + 'static,
+    {
+        let callback = Arc::new(callback);
+        self.subscribe_notifications(move |req: JsonRpcRequest| {
+            if req.method != super::methods::AGENT_EVENT_METHOD {
+                return;
+            }
+            match serde_json::from_value::<super::methods::AgentEventNotification>(req.params) {
+                Ok(event) => callback(event),
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        "client: received malformed agent.event payload; dropping"
+                    );
+                }
+            }
+        })
+    }
 }
 
 impl Drop for RpcClient {
@@ -771,6 +797,49 @@ impl RemoteRuntime for RemoteSshRuntime {
     ) -> Result<super::methods::WorkspaceMutateFileResult> {
         self.client
             .call::<super::methods::WorkspaceMutateFileMethod>(params)
+    }
+
+    // ── agent.* delegation (phase 23a — wire-only) ───────────────
+    //
+    // Until phase 23b lands `RemoteAgentState` on the daemon, the
+    // server side responds `HANDLER_FAILED` to every agent call —
+    // but the client-side plumbing is already in place so the flip
+    // is a one-line change in the server's dispatch table.
+
+    fn agent_send(
+        &self,
+        params: super::methods::AgentSendParams,
+    ) -> Result<super::methods::AgentSendResult> {
+        self.client.call::<super::methods::AgentSendMethod>(params)
+    }
+
+    fn agent_abort(
+        &self,
+        params: super::methods::AgentAbortParams,
+    ) -> Result<super::methods::AgentAbortResult> {
+        self.client.call::<super::methods::AgentAbortMethod>(params)
+    }
+
+    fn agent_list(
+        &self,
+        params: super::methods::AgentListParams,
+    ) -> Result<super::methods::AgentListResult> {
+        self.client.call::<super::methods::AgentListMethod>(params)
+    }
+
+    fn agent_attach(
+        &self,
+        params: super::methods::AgentAttachParams,
+    ) -> Result<super::methods::AgentAttachResult> {
+        self.client
+            .call::<super::methods::AgentAttachMethod>(params)
+    }
+
+    fn subscribe_agent_events(
+        &self,
+        callback: Box<dyn Fn(super::methods::AgentEventNotification) + Send + Sync>,
+    ) -> Option<NotificationSubscription> {
+        Some(self.client.subscribe_agent_events(callback))
     }
 }
 
@@ -1390,6 +1459,72 @@ mod tests {
             client.state.subscribers.lock().unwrap().len(),
             0,
             "drop should remove the entry"
+        );
+    }
+
+    #[test]
+    fn subscribe_agent_events_decodes_only_agent_event_notifications() {
+        // Wedges the subscription primitive's contract: a `Fn(AgentEventNotification)`
+        // callback fires for `agent.event` notifications carrying a
+        // valid payload; unrelated methods + malformed payloads get
+        // silently dropped (logged at debug, callback not invoked).
+        let client = split_loopback(None).unwrap();
+        let (captured_tx, captured_rx) =
+            mpsc::channel::<super::super::methods::AgentEventNotification>();
+        let _subscription = client.subscribe_agent_events(move |notif| {
+            let _ = captured_tx.send(notif);
+        });
+
+        // Manually inject a notification by reaching into the
+        // subscribers list — the inner closure is what subscribe_agent_events
+        // registered, so we drive it directly with synthetic requests.
+        let subscribers: Vec<Arc<dyn Fn(JsonRpcRequest) + Send + Sync>> = {
+            let guard = client.state.subscribers.lock().unwrap();
+            guard.iter().map(|s| s.callback.clone()).collect()
+        };
+        assert_eq!(subscribers.len(), 1);
+        let cb = &subscribers[0];
+
+        // 1. Correct method + payload → callback fires.
+        cb(JsonRpcRequest::new(
+            "agent.event",
+            serde_json::json!({
+                "requestId": "req-7",
+                "event": { "type": "assistant", "delta": "hi" },
+            }),
+            JsonRpcId::Null,
+        ));
+        let notif = captured_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .expect("callback should fire on valid agent.event");
+        assert_eq!(notif.request_id, "req-7");
+        assert_eq!(notif.event["type"], "assistant");
+        assert_eq!(notif.event["delta"], "hi");
+
+        // 2. Unrelated method → callback does NOT fire.
+        cb(JsonRpcRequest::new(
+            "terminal.event",
+            serde_json::json!({ "terminalId": "t1", "event": { "kind": "stdout", "data": "x" } }),
+            JsonRpcId::Null,
+        ));
+        assert!(
+            captured_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "non-agent notifications must not fire the agent.event callback"
+        );
+
+        // 3. Malformed agent.event (missing requestId) → silent drop.
+        cb(JsonRpcRequest::new(
+            "agent.event",
+            serde_json::json!({ "event": { "type": "assistant" } }),
+            JsonRpcId::Null,
+        ));
+        assert!(
+            captured_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "malformed agent.event payloads must be dropped, not panicked",
         );
     }
 }

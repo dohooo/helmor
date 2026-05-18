@@ -20,19 +20,21 @@ use serde_json::Value;
 use super::codec::write_frame;
 
 use super::methods::{
-    InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
-    PingResult, RpcMethod, TerminalAttachMethod, TerminalAttachParams, TerminalAttachResult,
-    TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult, TerminalListMethod,
-    TerminalListParams, TerminalListResult, TerminalOpenMethod, TerminalOpenParams,
-    TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams, TerminalResizeResult,
-    TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoMethod,
-    WorkspaceBranchInfoParams, WorkspaceBranchInfoResult, WorkspaceChangesMethod,
-    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeMethod,
-    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileMethod,
-    WorkspaceMutateFileParams, WorkspaceMutateFileResult, WorkspaceReadFileAtRefMethod,
-    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileMethod,
-    WorkspaceReadFileParams, WorkspaceStatFileMethod, WorkspaceStatFileParams,
-    WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
+    AgentAbortMethod, AgentAbortParams, AgentAbortResult, AgentAttachMethod, AgentAttachParams,
+    AgentAttachResult, AgentListMethod, AgentListParams, AgentListResult, AgentSendMethod,
+    AgentSendParams, AgentSendResult, InitializeMethod, InitializeParams, InitializeResult, Method,
+    PingMethod, PingParams, PingResult, RpcMethod, TerminalAttachMethod, TerminalAttachParams,
+    TerminalAttachResult, TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult,
+    TerminalListMethod, TerminalListParams, TerminalListResult, TerminalOpenMethod,
+    TerminalOpenParams, TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams,
+    TerminalResizeResult, TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult,
+    WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
+    WorkspaceChangesMethod, WorkspaceChangesParams, WorkspaceChangesResult,
+    WorkspaceFileTreeMethod, WorkspaceFileTreeParams, WorkspaceFileTreeResult,
+    WorkspaceMutateFileMethod, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
+    WorkspaceReadFileAtRefMethod, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
+    WorkspaceReadFileMethod, WorkspaceReadFileParams, WorkspaceStatFileMethod,
+    WorkspaceStatFileParams, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -304,6 +306,18 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
             handle::<WorkspaceMutateFileMethod, _>(req.params, |params| {
                 handle_workspace_mutate_file(ctx, params)
             })
+        }
+        Method::AgentSend => {
+            handle::<AgentSendMethod, _>(req.params, |params| handle_agent_send(ctx, params))
+        }
+        Method::AgentAbort => {
+            handle::<AgentAbortMethod, _>(req.params, |params| handle_agent_abort(ctx, params))
+        }
+        Method::AgentList => {
+            handle::<AgentListMethod, _>(req.params, |params| handle_agent_list(ctx, params))
+        }
+        Method::AgentAttach => {
+            handle::<AgentAttachMethod, _>(req.params, |params| handle_agent_attach(ctx, params))
         }
     };
 
@@ -582,6 +596,60 @@ fn handle_workspace_mutate_file(
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("workspace.mutateFile failed: {err:#}"),
+        )
+    })
+}
+
+// Phase 23a: dispatchers route to the trait's default bails, which
+// surface here as `HANDLER_FAILED`. Phase 23b lands a server-side
+// `RemoteAgentState` that overrides `agent_send` / `agent_list` /
+// `agent_attach` on the daemon's runtime, at which point these handlers
+// become the real bridge into the daemon-managed sidecar.
+
+fn handle_agent_send(
+    ctx: &ServerContext,
+    params: AgentSendParams,
+) -> Result<AgentSendResult, JsonRpcError> {
+    ctx.runtime.agent_send(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.send failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_agent_abort(
+    ctx: &ServerContext,
+    params: AgentAbortParams,
+) -> Result<AgentAbortResult, JsonRpcError> {
+    ctx.runtime.agent_abort(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.abort failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_agent_list(
+    ctx: &ServerContext,
+    params: AgentListParams,
+) -> Result<AgentListResult, JsonRpcError> {
+    ctx.runtime.agent_list(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.list failed: {err:#}"),
+        )
+    })
+}
+
+fn handle_agent_attach(
+    ctx: &ServerContext,
+    params: AgentAttachParams,
+) -> Result<AgentAttachResult, JsonRpcError> {
+    ctx.runtime.agent_attach(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.attach failed: {err:#}"),
         )
     })
 }
@@ -1035,6 +1103,124 @@ mod tests {
             ),
         );
         assert_bail_with_method_prefix(&resp, "workspace.mutateFile");
+    }
+
+    // ── agent.* default-bail surfaces (phase 23a) ────────────────
+    //
+    // Wire shape locked in: server reports `HANDLER_FAILED` with the
+    // trait's "only supported on a connected remote runtime" message
+    // because phase 23a doesn't add a runtime impl. Phase 23b
+    // overrides on the daemon's `LocalRuntime`-equivalent and these
+    // tests retarget against the real handler.
+
+    fn assert_agent_bail_with_method_prefix(resp: &JsonRpcResponse, method: &str) {
+        let err = resp
+            .error
+            .as_ref()
+            .unwrap_or_else(|| panic!("expected error response for `{method}`, got: {resp:?}"));
+        assert_eq!(err.code, error_codes::HANDLER_FAILED);
+        let expected_prefix = format!("{method} failed:");
+        assert!(
+            err.message.starts_with(&expected_prefix),
+            "error message should be prefixed with `{expected_prefix}`, got: {}",
+            err.message
+        );
+        assert!(
+            err.message
+                .contains("only supported on a connected remote runtime"),
+            "default bail should reach the wire verbatim, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn agent_send_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "agent.send",
+                json!({
+                    "requestId": "req-1",
+                    "method": "sendMessage",
+                    "params": { "model": "claude-sonnet-4-6", "prompt": "hi" },
+                }),
+                2,
+            ),
+        );
+        assert_agent_bail_with_method_prefix(&resp, "agent.send");
+    }
+
+    #[test]
+    fn agent_abort_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request("agent.abort", json!({ "requestId": "req-1" }), 2),
+        );
+        assert_agent_bail_with_method_prefix(&resp, "agent.abort");
+    }
+
+    #[test]
+    fn agent_list_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(&ctx, request("agent.list", json!({}), 2));
+        assert_agent_bail_with_method_prefix(&resp, "agent.list");
+    }
+
+    #[test]
+    fn agent_attach_default_bail_surfaces_as_handler_failed() {
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request("agent.attach", json!({ "requestId": "req-1" }), 2),
+        );
+        assert_agent_bail_with_method_prefix(&resp, "agent.attach");
+    }
+
+    #[test]
+    fn agent_methods_reject_pre_initialize_requests() {
+        // The initialization gate must cover the new entry points
+        // too — agent.send before initialize should fail at the gate,
+        // not at the runtime bail.
+        let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+        let resp = dispatch_request(
+            &ctx,
+            request(
+                "agent.send",
+                json!({
+                    "requestId": "req-1",
+                    "method": "sendMessage",
+                    "params": {},
+                }),
+                1,
+            ),
+        )
+        .unwrap();
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::NOT_INITIALIZED);
+    }
+
+    #[test]
+    fn agent_send_rejects_malformed_params() {
+        // `params` is `serde_json::Value` (opaque) but `request_id` +
+        // `method` are required strings. Missing them is INVALID_PARAMS,
+        // not HANDLER_FAILED.
+        let ctx = default_bail_ctx();
+        let resp = run_after_initialize(
+            &ctx,
+            request(
+                "agent.send",
+                json!({ "params": { "model": "x" } }), // missing requestId + method
+                2,
+            ),
+        );
+        let err = resp.error.expect("error response");
+        assert_eq!(err.code, error_codes::INVALID_PARAMS);
+        assert!(
+            err.message.contains("`agent.send`"),
+            "error should name the method: {err:?}"
+        );
     }
 
     #[test]

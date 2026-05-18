@@ -232,6 +232,57 @@ pub trait RemoteRuntime: Send + Sync {
     ) -> Result<super::methods::WorkspaceMutateFileResult> {
         anyhow::bail!("workspace.mutateFile is not yet implemented on this runtime")
     }
+
+    // ── agent.* ops (phase 23a — surface only) ──────────────────
+    //
+    // Phase 23a defines the wire shapes; the trait defaults bail.
+    // `RemoteSshRuntime` overrides delegate via `client.call`, so
+    // once phase 23b lands a `RemoteAgentState` on the daemon side,
+    // every remote runtime gets agent dispatch for free. `LocalRuntime`
+    // intentionally keeps the bail — local workspaces continue using
+    // `ManagedSidecar` directly through `agents::streaming::send`,
+    // not through the seam.
+
+    fn agent_send(
+        &self,
+        _params: super::methods::AgentSendParams,
+    ) -> Result<super::methods::AgentSendResult> {
+        anyhow::bail!("agent.send is only supported on a connected remote runtime")
+    }
+
+    fn agent_abort(
+        &self,
+        _params: super::methods::AgentAbortParams,
+    ) -> Result<super::methods::AgentAbortResult> {
+        anyhow::bail!("agent.abort is only supported on a connected remote runtime")
+    }
+
+    fn agent_list(
+        &self,
+        _params: super::methods::AgentListParams,
+    ) -> Result<super::methods::AgentListResult> {
+        anyhow::bail!("agent.list is only supported on a connected remote runtime")
+    }
+
+    fn agent_attach(
+        &self,
+        _params: super::methods::AgentAttachParams,
+    ) -> Result<super::methods::AgentAttachResult> {
+        anyhow::bail!("agent.attach is only supported on a connected remote runtime")
+    }
+
+    /// Subscribe to `agent.event` notifications coming back from the
+    /// runtime. Default `None` mirrors [`subscribe_terminal_events`]:
+    /// local + tombstoned runtimes don't stream, so the desktop's
+    /// agent pipeline either talks to its own `ManagedSidecar` (local)
+    /// or to the remote's notification stream (`RemoteSshRuntime`
+    /// override).
+    fn subscribe_agent_events(
+        &self,
+        _callback: Box<dyn Fn(super::methods::AgentEventNotification) + Send + Sync>,
+    ) -> Option<super::client::NotificationSubscription> {
+        None
+    }
 }
 
 /// The default runtime — does the work in-process. Every existing
