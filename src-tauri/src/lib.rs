@@ -3,6 +3,7 @@ pub mod cli;
 pub(crate) mod commands;
 pub mod data_dir;
 pub mod error;
+pub mod feedback;
 pub mod git;
 pub mod github;
 mod import;
@@ -244,6 +245,9 @@ pub fn run() {
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
+            commands::feedback_commands::fork_helmor_upstream,
+            commands::feedback_commands::create_helmor_issue,
+            commands::feedback_commands::find_existing_helmor_workspace,
             commands::system_commands::save_pasted_image,
             commands::system_commands::request_quit,
             commands::system_commands::dev_reset_all_data,

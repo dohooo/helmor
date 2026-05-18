@@ -790,7 +790,7 @@ fn workspace_branch_has_remote_tracking(record: &workspace_models::WorkspaceReco
 
 /// Parse `https://github.com/owner/repo(.git)` and `git@github.com:owner/repo(.git)`
 /// remotes into `(owner, repo)`. Returns `None` for non-GitHub remotes.
-fn parse_github_remote(remote: &str) -> Option<(String, String)> {
+pub(crate) fn parse_github_remote(remote: &str) -> Option<(String, String)> {
     let remote = remote.trim();
     // SSH form: git@github.com:owner/repo(.git)
     if let Some(rest) = remote.strip_prefix("git@github.com:") {

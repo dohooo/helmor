@@ -2188,6 +2188,46 @@ export async function resizeRepoScript(
 
 export { DEFAULT_WORKSPACE_GROUPS };
 
+// ---------------------------------------------------------------------------
+// Feedback / "Quick fix" contribution flow
+// ---------------------------------------------------------------------------
+
+export type ForkResult = {
+	owner: string;
+	repo: string;
+	cloneUrl: string;
+	htmlUrl: string;
+};
+
+export type IssueResult = {
+	url: string;
+	number: number;
+};
+
+export type ExistingHelmorWorkspace = {
+	workspaceId: string;
+	repoId: string;
+	repoName: string;
+	branch: string | null;
+};
+
+export async function forkHelmorUpstream(): Promise<ForkResult> {
+	return invoke<ForkResult>("fork_helmor_upstream");
+}
+
+export async function createHelmorIssue(
+	title: string,
+	body: string,
+): Promise<IssueResult> {
+	return invoke<IssueResult>("create_helmor_issue", { title, body });
+}
+
+export async function findExistingHelmorWorkspace(): Promise<ExistingHelmorWorkspace | null> {
+	return invoke<ExistingHelmorWorkspace | null>(
+		"find_existing_helmor_workspace",
+	);
+}
+
 function describeInvokeError(error: unknown, fallback: string): string {
 	return extractError(error, fallback).message;
 }

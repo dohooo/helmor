@@ -2,6 +2,7 @@ mod common;
 pub(crate) mod conductor_commands;
 pub(crate) mod editor_commands;
 pub(crate) mod editors;
+pub(crate) mod feedback_commands;
 pub(crate) mod github_commands;
 pub(crate) mod repository_commands;
 pub(crate) mod script_commands;

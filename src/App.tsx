@@ -33,6 +33,7 @@ import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-
 import { WorkspaceConversationContainer } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
+import { FeedbackButton, FeedbackDialog } from "@/features/feedback";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
@@ -396,6 +397,7 @@ function AppShell({
 	>([]);
 	const [isLoadingConductorWorkspaces, setIsLoadingConductorWorkspaces] =
 		useState(false);
+	const [feedbackOpen, setFeedbackOpen] = useState(false);
 	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
 		null,
 	);
@@ -1944,6 +1946,12 @@ function AppShell({
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<ComposerInsertProvider value={handleInsertIntoComposer}>
+					<FeedbackDialog
+						open={feedbackOpen}
+						onOpenChange={setFeedbackOpen}
+						onOpenSettings={handleOpenSettings}
+						onSelectWorkspace={handleSelectWorkspace}
+					/>
 					{!isIdentityConnected ? (
 						<GithubIdentityGate
 							identityState={githubIdentityState}
@@ -2016,7 +2024,12 @@ function AppShell({
 													/>
 												</Button>
 												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-													<SettingsButton onClick={handleOpenSettings} />
+													<div className="flex items-center gap-1">
+														<FeedbackButton
+															onClick={() => setFeedbackOpen(true)}
+														/>
+														<SettingsButton onClick={handleOpenSettings} />
+													</div>
 													{githubIdentityState.status === "connected" ? (
 														<GithubStatusMenu
 															identityState={githubIdentityState}
