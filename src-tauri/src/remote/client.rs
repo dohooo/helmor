@@ -24,9 +24,9 @@
 //! [`RpcClient::connect_command`].
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, Write};
+use std::path::Path;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -44,28 +44,7 @@ use super::protocol::{
     PROTOCOL_VERSION,
 };
 use super::runtime::{RemoteRuntime, RuntimeHealth, RuntimeKind};
-
-/// Default arguments passed to `ssh` before the host. `BatchMode=yes`
-/// makes the spawn fail fast instead of prompting for a password —
-/// the desktop has no terminal attached to the child, so any prompt
-/// would hang the call. Operators who want password auth can use
-/// `ssh-agent` or a key file; the spike intentionally doesn't grow
-/// an interactive-auth code path.
-const DEFAULT_SSH_ARGS: &[&str] = &["-o", "BatchMode=yes"];
-
-/// Extra args that enable ssh connection multiplexing. With these,
-/// the *first* connect to a host pays the full handshake cost; every
-/// subsequent connect (ping, reconnect, future per-method calls)
-/// reuses the same TCP + auth channel. `ControlPersist=5m` keeps the
-/// master alive across short app restarts so a relaunch doesn't burn
-/// a fresh handshake.
-///
-/// The `ControlPath` template `%C` hashes user/host/port into the
-/// socket name so concurrent helmor instances don't trip over each
-/// other when connecting to different hosts. The directory is
-/// resolved at call time via [`ssh_control_dir`] so tests can scope
-/// it to a tempdir.
-const SSH_MUX_ARGS: &[&str] = &["-o", "ControlMaster=auto", "-o", "ControlPersist=5m"];
+use super::transport::{OpenSshTransport, RemoteTransport};
 
 /// JSON-RPC client over a single framed pipe.
 ///
@@ -212,72 +191,57 @@ impl Drop for NotificationSubscription {
 }
 
 impl RpcClient {
-    /// Connect to a `helmor-server` reachable over SSH. Spawns the
-    /// daemon-backed command line:
-    ///
-    /// ```text
-    /// ssh <host> sh -c '<bin> --ensure-daemon && exec <bin> --proxy'
-    /// ```
-    ///
-    /// `--ensure-daemon` forks a daemon if one isn't already running
-    /// (idempotent); `--proxy` connects this SSH session's stdio to
-    /// the daemon's Unix socket. The desktop talks framed JSON-RPC
-    /// the whole way down; the daemon is what actually owns PTYs +
-    /// runtime state. That's what lets terminals survive the
-    /// desktop quitting (phase 19).
+    /// Connect to a `helmor-server` reachable over SSH. Convenience
+    /// over [`connect_with_transport`] that wires an
+    /// [`OpenSshTransport`] for the caller — every detail of the
+    /// `ssh <host> sh -c '<bin> --ensure-daemon && exec <bin> --proxy'`
+    /// arg-building lives on the transport now.
     ///
     /// `remote_binary` must already exist on the remote. The
     /// auto-install path in phase 12 puts it there on first
     /// connect.
     pub fn connect_ssh(host: &str, remote_binary: &str) -> Result<Self> {
-        let mut cmd = Command::new("ssh");
-        for arg in DEFAULT_SSH_ARGS {
-            cmd.arg(arg);
-        }
-        // Connection multiplexing — see comment on SSH_MUX_ARGS. The
-        // ControlPath is computed at call time so a missing data dir
-        // (test, container, weird sandbox) degrades to plain ssh
-        // instead of dropping mux on the floor.
-        if let Some(control_dir) = ssh_control_dir() {
-            for arg in SSH_MUX_ARGS {
-                cmd.arg(arg);
-            }
-            cmd.arg("-o")
-                .arg(format!("ControlPath={}/%C", control_dir.display()));
-        }
-        let remote_cmd = format!(
-            "{quoted_bin} --ensure-daemon && exec {quoted_bin} --proxy",
-            quoted_bin = shell_quote(remote_binary)
-        );
-        cmd.arg(host).arg("sh").arg("-c").arg(remote_cmd);
-        Self::connect_command(cmd, format!("ssh://{host}"))
+        let transport: Arc<dyn RemoteTransport> =
+            Arc::new(OpenSshTransport::new(host, remote_binary));
+        Self::connect_with_transport(transport)
+    }
+
+    /// Open a framed JSON-RPC connection through any transport. The
+    /// trait owns the spawn details; this function owns the framer +
+    /// handshake.
+    ///
+    /// Phase 21a only exposes [`OpenSshTransport`] (the SSH path); the
+    /// command-based transport lands in phase 21b. New transports plug
+    /// in by implementing [`RemoteTransport`] — no changes here are
+    /// needed for them to work.
+    pub fn connect_with_transport(transport: Arc<dyn RemoteTransport>) -> Result<Self> {
+        let pipe = transport.spawn_pipe()?;
+        let super::transport::TransportPipe {
+            reader,
+            writer,
+            child,
+            peer_label,
+        } = pipe;
+        Self::connect_with_pipe(reader, writer, child, peer_label)
     }
 
     /// Spawn `cmd` with piped stdio, wrap it as the RPC pipe, and run
-    /// the initialize handshake. Used by `connect_ssh` and by tests
-    /// that want to spawn `helmor-server` directly without going
-    /// through SSH.
-    pub fn connect_command(mut cmd: Command, peer_label: String) -> Result<Self> {
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // Surface the server's stderr to ours so operator-facing
-            // tracing isn't silently swallowed. A future slice can
-            // capture this into a tracing channel keyed by peer.
-            .stderr(Stdio::inherit());
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("failed to spawn remote runner for {peer_label}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("child {peer_label} provided no stdin pipe"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("child {peer_label} provided no stdout pipe"))?;
-        let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(stdout));
-        let writer: Box<dyn Write + Send> = Box::new(stdin);
-        Self::connect_with_pipe(reader, writer, Some(child), peer_label)
+    /// the initialize handshake. Used by the local-binary connect path
+    /// in `commands::remote_commands` and by integration tests that
+    /// want to spawn `helmor-server` directly without going through
+    /// a [`RemoteTransport`].
+    ///
+    /// Thin convenience over [`super::transport::spawn_command_as_pipe`]
+    /// — every other entry point should go through a transport.
+    pub fn connect_command(cmd: Command, peer_label: String) -> Result<Self> {
+        let pipe = super::transport::spawn_command_as_pipe(cmd, peer_label)?;
+        let super::transport::TransportPipe {
+            reader,
+            writer,
+            child,
+            peer_label,
+        } = pipe;
+        Self::connect_with_pipe(reader, writer, child, peer_label)
     }
 
     /// Wire a pre-built pipe pair into a client. Used by both the
@@ -606,32 +570,6 @@ fn decode_response<M: RpcMethod>(
 /// can string-match on the code if it wants to render specific
 /// states (e.g. red for `NOT_INITIALIZED`, amber for
 /// `HANDLER_FAILED`).
-/// Resolve the directory ssh writes ControlPath sockets into. Returns
-/// `None` if the data dir isn't reachable — we'd rather connect
-/// without multiplexing than refuse to connect at all. The directory
-/// is created lazily on first call; ssh tolerates a missing path until
-/// the master needs to bind.
-fn ssh_control_dir() -> Option<PathBuf> {
-    let data_dir = crate::data_dir::data_dir().ok()?;
-    let dir = data_dir.join("ssh-cm");
-    // Best-effort mkdir. If creation fails (read-only mount, weird
-    // permission setup), let ssh surface its own error when it tries
-    // to write the socket.
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir)
-}
-
-/// Single-quote-escape a value for safe `sh -c` interpolation. The
-/// only metacharacter inside `'...'` is `'` itself, which we
-/// escape via the classic `'\''` close-quote-then-quoted-quote
-/// pattern. Used to embed the remote binary path into the daemon-
-/// invoking shell command without inviting injection from paths
-/// with spaces / quotes / `$`.
-fn shell_quote(value: &str) -> String {
-    let escaped = value.replace('\'', "'\\''");
-    format!("'{escaped}'")
-}
-
 fn rpc_error_to_anyhow<M: RpcMethod>(err: JsonRpcError) -> anyhow::Error {
     let code_label = match err.code {
         error_codes::INCOMPATIBLE_PROTOCOL => "INCOMPATIBLE_PROTOCOL",
@@ -1012,6 +950,111 @@ mod tests {
         assert_eq!(info.protocol_version, PROTOCOL_VERSION);
         assert_eq!(info.server_version, "0.22.1-test");
         assert_eq!(info.hostname, "test-host");
+    }
+
+    // ── transport trait round-trip ───────────────────────────────
+
+    /// `RemoteTransport` impl whose `spawn_pipe` hands back an
+    /// in-memory pipe wired to a loopback dispatcher. Lets the test
+    /// exercise `RpcClient::connect_with_transport` end-to-end
+    /// without spawning a subprocess.
+    struct LoopbackTransport {
+        runtime: Arc<dyn RemoteRuntime>,
+    }
+
+    impl super::super::transport::RemoteTransport for LoopbackTransport {
+        fn spawn_pipe(&self) -> Result<super::super::transport::TransportPipe> {
+            // Mirror split_loopback's two-channel wiring, but expose
+            // the client side as a TransportPipe instead of building
+            // an RpcClient directly.
+            let (c_to_s_tx, c_to_s_rx) = mpsc::channel::<Vec<u8>>();
+            let (s_to_c_tx, s_to_c_rx) = mpsc::channel::<Vec<u8>>();
+
+            let server_io = ChannelStream {
+                tx: s_to_c_tx,
+                rx: c_to_s_rx,
+                unread: Vec::new(),
+            };
+            let runtime = Arc::clone(&self.runtime);
+            thread::spawn(move || {
+                let mut io = server_io;
+                let ctx = ServerContext::with_runtime("0.22.1-test", "test-host", runtime);
+                while let Ok(req) = read_frame::<_, JsonRpcRequest>(&mut io) {
+                    if let Some(resp) = dispatch_request(&ctx, req) {
+                        if write_frame(&mut io, &resp).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+
+            let client_reader = ChannelStream {
+                tx: mpsc::channel().0,
+                rx: s_to_c_rx,
+                unread: Vec::new(),
+            };
+            let client_writer = ChannelStream {
+                tx: c_to_s_tx,
+                rx: mpsc::channel().1,
+                unread: Vec::new(),
+            };
+            Ok(super::super::transport::TransportPipe {
+                reader: Box::new(client_reader),
+                writer: Box::new(client_writer),
+                child: None,
+                peer_label: "loopback-transport".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn connect_with_transport_drives_a_handshake_via_the_trait() {
+        // Proves the new dispatch path works end-to-end: the trait's
+        // `spawn_pipe` is the only spawn entry point, the rest of
+        // `RpcClient` (framer, reader thread, handshake) sits on top
+        // of whatever `TransportPipe` it returns.
+        let transport: Arc<dyn super::super::transport::RemoteTransport> =
+            Arc::new(LoopbackTransport {
+                runtime: Arc::new(StubRuntime),
+            });
+        let client = RpcClient::connect_with_transport(transport)
+            .expect("transport handshake should succeed");
+
+        let info = client.server_info();
+        assert_eq!(info.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(info.server_version, "0.22.1-test");
+
+        // And a real method call round-trips through the same pipe —
+        // proving the trait isn't just a connect-time hook.
+        let status = client
+            .call::<WorkspaceStatusMethod>(WorkspaceStatusParams {
+                workspace_dir: "/sample".into(),
+            })
+            .expect("workspace.status round-trip through the transport");
+        assert!(!status.is_clean);
+        assert_eq!(status.changed_paths, vec!["/sample".to_string()]);
+    }
+
+    #[test]
+    fn connect_with_transport_surfaces_spawn_pipe_failure() {
+        // The trait's `spawn_pipe` can fail (network down, binary
+        // missing, etc.). The error must reach the caller unchanged so
+        // the UI can render the operator-facing reason verbatim.
+        struct FailingTransport;
+        impl super::super::transport::RemoteTransport for FailingTransport {
+            fn spawn_pipe(&self) -> Result<super::super::transport::TransportPipe> {
+                anyhow::bail!("simulated transport failure: ssh exit 255")
+            }
+        }
+        let transport: Arc<dyn super::super::transport::RemoteTransport> =
+            Arc::new(FailingTransport);
+        let err = RpcClient::connect_with_transport(transport)
+            .expect_err("spawn_pipe failure must surface");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("ssh exit 255"),
+            "transport error should be preserved verbatim: {msg}",
+        );
     }
 
     // ── trait round-trip ─────────────────────────────────────────
