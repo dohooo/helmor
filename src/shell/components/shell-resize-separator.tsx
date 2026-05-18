@@ -26,18 +26,19 @@ export function ShellResizeSeparator({
 	onMouseDown,
 	onKeyDown,
 }: Props) {
+	// 位置同样由 CSS variable 驱动,拖动时跟着面板宽度实时移动,无 React 重渲染。
 	const containerStyle: CSSProperties =
 		side === "sidebar"
 			? {
 					left: collapsed
 						? `${-SIDEBAR_RESIZE_HIT_AREA / 2}px`
-						: `${width - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+						: `calc(var(--shell-sidebar-width, ${width}px) - ${SIDEBAR_RESIZE_HIT_AREA / 2}px)`,
 					width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
 				}
 			: {
 					right: collapsed
 						? `${-SIDEBAR_RESIZE_HIT_AREA}px`
-						: `${Math.max(0, width - SIDEBAR_RESIZE_HIT_AREA)}px`,
+						: `calc(var(--shell-inspector-width, ${width}px) - ${SIDEBAR_RESIZE_HIT_AREA}px)`,
 					width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
 				};
 

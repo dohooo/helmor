@@ -24,6 +24,7 @@ import { expandSessionThread } from "@/lib/query-client";
 import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
 import { EmptyState, MemoConversationMessage } from "./message-components";
 import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
 import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
@@ -43,7 +44,6 @@ type ThreadViewportSlot = ComponentType<Record<string, never>>;
 // (e.g. when switching sessions/workspaces and back).
 const streamingStartTimes = new Map<string, number>();
 
-const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
 const PROGRESSIVE_VIEWPORT_HEADER_HEIGHT = 24;
@@ -73,7 +73,9 @@ export function ActiveThreadViewport({
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
-	const [paneWidth, setPaneWidth] = useState(0);
+	const pendingBucketRef = useRef<number | null>(null);
+	// 估算用 32px 粒度的宽度,拖动时只在跨越 bucket 边界才让 estimator/measureHeights 缓存失效。
+	const paneWidth = widthBucket * 32;
 
 	useLayoutEffect(() => {
 		if (
@@ -88,10 +90,21 @@ export function ActiveThreadViewport({
 			return;
 		}
 
+		const computeBucket = (width: number) =>
+			width > 0 ? Math.max(1, Math.round(width / 32)) : 0;
+
+		// 拖动期间 stack 的 clientWidth 通过 CSS variable 实时变化,RO 会按 60Hz fire,
+		// 但我们不希望每帧都进 React 渲染——视觉上文字换行已由浏览器 reflow 处理。
+		// 只记 pending,等 onShellResize(false) 触发再 flush。
 		const updateWidthBucket = () => {
 			const width = stack.clientWidth;
-			setPaneWidth(width);
-			setWidthBucket(width > 0 ? Math.max(1, Math.round(width / 32)) : 0);
+			const next = computeBucket(width);
+			if (isShellResizing()) {
+				pendingBucketRef.current = next;
+				return;
+			}
+			pendingBucketRef.current = null;
+			setWidthBucket((current) => (current === next ? current : next));
 		};
 
 		updateWidthBucket();
@@ -100,8 +113,17 @@ export function ActiveThreadViewport({
 		});
 		observer.observe(stack);
 
+		const unsubscribe = onShellResize((active) => {
+			if (active) return;
+			const pending = pendingBucketRef.current;
+			pendingBucketRef.current = null;
+			if (pending === null) return;
+			setWidthBucket((current) => (current === pending ? current : pending));
+		});
+
 		return () => {
 			observer.disconnect();
+			unsubscribe();
 		};
 	}, []);
 
@@ -113,7 +135,6 @@ export function ActiveThreadViewport({
 			<div className="relative z-10 flex min-h-0 min-w-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
-					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
 					messages={pane.messages}
 					missingScriptTypes={missingScriptTypes}
 					onInitializeScript={onInitializeScript}
@@ -127,7 +148,6 @@ export function ActiveThreadViewport({
 }
 
 function ChatThread({
-	layoutCacheKey,
 	messages,
 	hasSession,
 	missingScriptTypes,
@@ -136,7 +156,6 @@ function ChatThread({
 	sessionId,
 	sending,
 }: {
-	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
 	missingScriptTypes: WorkspaceScriptType[];
@@ -297,7 +316,6 @@ function ChatThread({
 				fontSize={settings.chatFontSize}
 				hasSession={hasSession}
 				itemContent={itemContent}
-				layoutCacheKey={layoutCacheKey}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 				paneWidth={paneWidth}
@@ -334,7 +352,6 @@ function ConversationViewport({
 	fontSize,
 	hasSession,
 	itemContent,
-	layoutCacheKey,
 	missingScriptTypes,
 	onInitializeScript,
 	paneWidth,
@@ -353,7 +370,6 @@ function ConversationViewport({
 	fontSize: number;
 	hasSession: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	layoutCacheKey: string;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
@@ -426,7 +442,6 @@ function ConversationViewport({
 						fontSize={fontSize}
 						header={Header}
 						itemContent={itemContent}
-						layoutCacheKey={layoutCacheKey}
 						paneWidth={paneWidth}
 						pinTailRows={pinTailRows}
 						scrollParent={scrollParent}
@@ -479,7 +494,6 @@ function ProgressiveConversationViewport({
 	fontSize,
 	header: Header,
 	itemContent,
-	layoutCacheKey,
 	paneWidth,
 	pinTailRows,
 	scrollParent,
@@ -493,7 +507,6 @@ function ProgressiveConversationViewport({
 	fontSize: number;
 	header?: ThreadViewportSlot;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	layoutCacheKey: string;
 	paneWidth: number;
 	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
@@ -526,9 +539,13 @@ function ProgressiveConversationViewport({
 		setStreamingRowEl(node);
 	}, []);
 
-	const [lastLayoutCacheKey, setLastLayoutCacheKey] = useState(layoutCacheKey);
-	if (lastLayoutCacheKey !== layoutCacheKey) {
-		setLastLayoutCacheKey(layoutCacheKey);
+	// Reset 只跟 sessionId 走。原来用 layoutCacheKey(含 widthBucket)做触发器会让
+	// 拖动结束跨越 32px 边界时清空 measuredHeights,造成可见行高度跳变 + 全量
+	// 重测量。同一 session 的 message 引用不变,DOM reflow 后 ResizeObserver 会
+	// 自然反馈新高度,无需手动 reset。
+	const [lastSessionId, setLastSessionId] = useState(sessionId);
+	if (lastSessionId !== sessionId) {
+		setLastSessionId(sessionId);
 		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
 		setMeasuredHeights({});
 		initialScrollAppliedRef.current = false;
@@ -1057,10 +1074,6 @@ function ConversationRowShell({ children }: { children: ReactNode }) {
 			{children}
 		</div>
 	);
-}
-
-function getSessionLayoutCacheKey(sessionId: string, widthBucket: number) {
-	return [CHAT_LAYOUT_CACHE_VERSION, sessionId, String(widthBucket)].join(":");
 }
 
 export function ConversationColdPlaceholder() {
