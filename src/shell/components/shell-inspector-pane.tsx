@@ -115,7 +115,11 @@ export function ShellInspectorPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			style={{ width: collapsed ? 0 : `${width}px` }}
+			// 宽度由 CSS variable 驱动(use-panels.ts 拖动时直接 setProperty),
+			// 这样拖动期间 React 不需要重渲染就能更新视觉宽度。
+			style={{
+				width: collapsed ? 0 : `var(--shell-inspector-width, ${width}px)`,
+			}}
 		>
 			<div
 				className={cn(
@@ -124,7 +128,7 @@ export function ShellInspectorPane({
 						? "translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${width}px` }}
+				style={{ width: `var(--shell-inspector-width, ${width}px)` }}
 			>
 				{rightSidebarMode === "context" ? (
 					<WorkspaceStartContextSidebar

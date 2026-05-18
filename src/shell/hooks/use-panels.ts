@@ -3,6 +3,7 @@ import {
 	type MouseEvent,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useState,
 } from "react";
 import {
@@ -21,6 +22,51 @@ type ResizeState = {
 	target: ResizeTarget;
 };
 
+export const SIDEBAR_WIDTH_VAR = "--shell-sidebar-width";
+export const INSPECTOR_WIDTH_VAR = "--shell-inspector-width";
+
+// Module-level resize state store. 故意不放进 React state——订阅它的组件不应该
+// 因为拖动开始/结束而重渲染,只在拖动结束时通过 listener 主动 flush 一次。
+type ResizeListener = (active: boolean) => void;
+const resizeListeners = new Set<ResizeListener>();
+let resizingActive = false;
+
+export function isShellResizing(): boolean {
+	return resizingActive;
+}
+
+export function onShellResize(listener: ResizeListener): () => void {
+	resizeListeners.add(listener);
+	return () => {
+		resizeListeners.delete(listener);
+	};
+}
+
+function setResizingActive(active: boolean) {
+	if (resizingActive === active) return;
+	resizingActive = active;
+	for (const listener of resizeListeners) {
+		listener(active);
+	}
+}
+
+function writeWidthVar(target: ResizeTarget, width: number) {
+	if (typeof document === "undefined") return;
+	const varName =
+		target === "sidebar" ? SIDEBAR_WIDTH_VAR : INSPECTOR_WIDTH_VAR;
+	document.documentElement.style.setProperty(varName, `${width}px`);
+}
+
+// 模块加载时立刻把初始宽度写到 CSS variable,这样 React 首次 render 前 DOM 就有值,
+// 不会出现一帧的 0 宽度闪烁。
+if (typeof document !== "undefined") {
+	writeWidthVar("sidebar", getInitialSidebarWidth());
+	writeWidthVar(
+		"inspector",
+		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
+	);
+}
+
 export function useShellPanels() {
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -28,6 +74,17 @@ export function useShellPanels() {
 		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+
+	// React state -> CSS variable 同步。仅在非拖动场景下生效(键盘步进、初始
+	// 载入、mouseup 后的 commit)。拖动期间 CSS variable 由 mousemove 直接写,
+	// React state 此时是 stale 的,但 setProperty(同值)是 no-op。
+	useLayoutEffect(() => {
+		writeWidthVar("sidebar", sidebarWidth);
+	}, [sidebarWidth]);
+
+	useLayoutEffect(() => {
+		writeWidthVar("inspector", inspectorWidth);
+	}, [inspectorWidth]);
 
 	useEffect(() => {
 		try {
@@ -62,18 +119,16 @@ export function useShellPanels() {
 			return;
 		}
 
+		setResizingActive(true);
+
 		let pendingWidth: number | null = null;
 		let rafId: number | null = null;
-		const flush = () => {
+
+		// 拖动期间只写 CSS variable, 完全不进 React 渲染路径。
+		const flushVar = () => {
 			rafId = null;
 			if (pendingWidth === null) return;
-			const nextWidth = pendingWidth;
-			pendingWidth = null;
-			if (resizeState.target === "sidebar") {
-				setSidebarWidth(nextWidth);
-			} else {
-				setInspectorWidth(nextWidth);
-			}
+			writeWidthVar(resizeState.target, pendingWidth);
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
@@ -84,15 +139,27 @@ export function useShellPanels() {
 					: resizeState.sidebarWidth - deltaX;
 			pendingWidth = clampSidebarWidth(rawWidth);
 			if (rafId === null) {
-				rafId = window.requestAnimationFrame(flush);
+				rafId = window.requestAnimationFrame(flushVar);
 			}
 		};
+
 		const handleMouseUp = () => {
 			if (rafId !== null) {
 				window.cancelAnimationFrame(rafId);
 				rafId = null;
 			}
-			flush();
+			flushVar();
+			// 把 CSS variable 最终值 commit 回 React state,
+			// 用于持久化 + 触发依赖宽度的非拖动场景(比如设置面板里显示当前宽度)。
+			const finalWidth = pendingWidth;
+			if (finalWidth !== null) {
+				if (resizeState.target === "sidebar") {
+					setSidebarWidth(finalWidth);
+				} else {
+					setInspectorWidth(finalWidth);
+				}
+			}
+			setResizingActive(false);
 			setResizeState(null);
 		};
 		const previousCursor = document.body.style.cursor;
@@ -108,6 +175,7 @@ export function useShellPanels() {
 			if (rafId !== null) {
 				window.cancelAnimationFrame(rafId);
 			}
+			setResizingActive(false);
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);
