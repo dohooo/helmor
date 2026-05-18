@@ -443,8 +443,8 @@ describe("App create workspace flow", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 		expect(
-			screen.queryByLabelText("Workspace panel drag region"),
-		).not.toBeInTheDocument();
+			screen.getByLabelText("Workspace panel drag region"),
+		).toBeInTheDocument();
 
 		commitComposerText(
 			screen.getByLabelText("Workspace input"),
