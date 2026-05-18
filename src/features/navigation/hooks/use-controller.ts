@@ -326,6 +326,17 @@ export function useWorkspacesSidebarController({
 			if (disposed) {
 				return;
 			}
+			// Auto-archive has no pendingArchives / gate to roll back, and the
+			// destructive "Permanently Delete" recovery toast is wrong for a
+			// failure the user didn't initiate. Surface a calm notice instead.
+			if (payload.origin === "autoAfterMerge") {
+				const { message } = extractError(
+					payload,
+					"Unable to auto-archive workspace.",
+				);
+				pushWorkspaceToast(message, "Auto-archive failed", "default");
+				return;
+			}
 			rollbackArchivedWorkspace(
 				payload.workspaceId,
 				payload,
@@ -341,6 +352,17 @@ export function useWorkspacesSidebarController({
 
 		void listenArchiveExecutionSucceeded((payload) => {
 			if (disposed) {
+				return;
+			}
+			// Auto-archive bypasses the optimistic pendingArchives flow, so the
+			// regular gate.end -> reconcile path is a no-op for it. Trigger the
+			// sidebar reconcile ourselves; otherwise the row stays in its
+			// pre-archive group until something else refetches.
+			if (payload.origin === "autoAfterMerge") {
+				requestSidebarReconcile(queryClient);
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.archivedWorkspaces,
+				});
 				return;
 			}
 			setPendingArchives((current) => {
@@ -373,7 +395,7 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [archiveGate, queryClient, rollbackArchivedWorkspace]);
+	}, [archiveGate, pushWorkspaceToast, queryClient, rollbackArchivedWorkspace]);
 
 	useEffect(() => {
 		if (pendingArchives.size === 0) {

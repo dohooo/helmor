@@ -16,6 +16,18 @@ use super::lifecycle::{execute_archive_plan, prepare_archive_plan, ArchivePrepar
 pub const ARCHIVE_EXECUTION_FAILED_EVENT: &str = "archive-execution-failed";
 pub const ARCHIVE_EXECUTION_SUCCEEDED_EVENT: &str = "archive-execution-succeeded";
 
+/// What kicked off this archive run. Plumbed through to the success /
+/// failure events so the frontend can branch on it — manual flow drives
+/// the sidebar via the existing `archiveGate` + `pendingArchives`
+/// machinery; auto flow has no such state and needs its own sidebar
+/// reconcile + a calmer failure toast.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArchiveOrigin {
+    Manual,
+    AutoAfterMerge,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareArchiveWorkspaceResponse {
@@ -28,12 +40,14 @@ pub struct ArchiveExecutionFailedPayload {
     pub workspace_id: String,
     pub code: ErrorCode,
     pub message: String,
+    pub origin: ArchiveOrigin,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveExecutionSucceededPayload {
     pub workspace_id: String,
+    pub origin: ArchiveOrigin,
 }
 
 #[derive(Default)]
@@ -155,7 +169,7 @@ pub fn try_auto_archive_after_merge<R: Runtime>(app: &AppHandle<R>, workspace_id
 
     // Hand off to the existing async path so success / failure events,
     // git unwatch, and the toast pipeline are all reused.
-    if let Err(error) = start_archive_workspace(app, workspace_id) {
+    if let Err(error) = start_archive_workspace(app, workspace_id, ArchiveOrigin::AutoAfterMerge) {
         tracing::warn!(
             workspace_id,
             error = %error,
@@ -166,7 +180,11 @@ pub fn try_auto_archive_after_merge<R: Runtime>(app: &AppHandle<R>, workspace_id
     }
 }
 
-pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &str) -> Result<()> {
+pub fn start_archive_workspace<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    origin: ArchiveOrigin,
+) -> Result<()> {
     let manager = app.state::<ArchiveJobManager>();
     let plan = manager.start_prepared(workspace_id)?;
     let app_handle = app.clone();
@@ -206,6 +224,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                     ARCHIVE_EXECUTION_SUCCEEDED_EVENT,
                     ArchiveExecutionSucceededPayload {
                         workspace_id: workspace_id.clone(),
+                        origin,
                     },
                 );
             }
@@ -223,6 +242,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                         workspace_id: workspace_id.clone(),
                         code: extract_code(&error),
                         message: outermost_message(&error),
+                        origin,
                     },
                 );
             }
@@ -235,6 +255,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                         workspace_id: workspace_id.clone(),
                         code: ErrorCode::Unknown,
                         message: format!("Archive task failed: {error}"),
+                        origin,
                     },
                 );
             }

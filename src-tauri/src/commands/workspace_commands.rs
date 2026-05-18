@@ -407,7 +407,7 @@ pub async fn prepare_archive_workspace(
 
 #[tauri::command]
 pub async fn start_archive_workspace(app: AppHandle, workspace_id: String) -> CmdResult<()> {
-    workspaces::start_archive_workspace(&app, &workspace_id)?;
+    workspaces::start_archive_workspace(&app, &workspace_id, workspaces::ArchiveOrigin::Manual)?;
     Ok(())
 }
 

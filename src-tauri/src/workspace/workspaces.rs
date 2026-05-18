@@ -17,7 +17,7 @@ use crate::{
 
 pub use super::archive::{
     start_archive_workspace, ArchiveExecutionFailedPayload, ArchiveExecutionSucceededPayload,
-    ArchiveJobManager, PrepareArchiveWorkspaceResponse,
+    ArchiveJobManager, ArchiveOrigin, PrepareArchiveWorkspaceResponse,
 };
 pub use super::branching::{
     _reset_prefetch_rate_limit, continue_workspace_from_target_branch, list_remote_branches,
