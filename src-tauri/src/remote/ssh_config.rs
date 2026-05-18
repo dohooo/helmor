@@ -29,6 +29,31 @@
 //! - Recursion is capped at [`MAX_INCLUDE_DEPTH`] (matches OpenSSH's
 //!   own MAX_INCLUDES) so a pathological chain can't OOM.
 //!
+//! ## `Match` blocks (phase 21d)
+//!
+//! A subset of `Match` predicates is honoured so aliases gated by
+//! conditions actually surface (or get correctly excluded) in the
+//! suggestion list:
+//!
+//! - `Match all` → always active.
+//! - `Match user <pattern>` → active iff `$USER` matches the pattern.
+//!   Supports glob wildcards (`*`, `?`), comma-separated alternatives,
+//!   and `!`-prefixed negation entries (matches ssh's pattern-list
+//!   semantics).
+//! - `Match host <pattern>` → always treated as active for alias
+//!   collection. We don't know which host the user will eventually
+//!   connect to, so any potentially-applicable alias belongs in the
+//!   suggestion list.
+//! - Anything else (`Match exec`, `Match originalhost`, `Match
+//!   canonical`, etc.) — treated as inactive (block dropped) with a
+//!   debug log. Operators relying on exec-based gating should reach
+//!   for the literal Host form anyway; the spike intentionally doesn't
+//!   shell out from a suggestion-list refresh.
+//!
+//! A `Match` directive ends the previous Host or Match block. Host
+//! directives inside an inactive Match block are dropped wholesale —
+//! their aliases never enter the suggestion set.
+//!
 //! ## Lookup order
 //!
 //! Production callers should go through [`list_user_ssh_hosts`] which
@@ -71,10 +96,21 @@ pub fn parse_hosts(content: &str) -> Vec<String> {
 /// configs). Missing / unreadable files silently contribute zero
 /// aliases.
 pub fn parse_hosts_from_path(path: &Path) -> Vec<String> {
+    let user = current_user();
+    parse_hosts_from_path_with_user(path, user.as_deref())
+}
+
+/// Variant of [`parse_hosts_from_path`] that takes the user name
+/// explicitly. Lets tests drive `Match user` evaluation without
+/// poking at the process-wide `$USER` env var (which would race with
+/// other test threads). `None` mirrors a missing `$USER`: `Match
+/// user` blocks always fail to match, so any alias gated only by
+/// the user predicate stays excluded.
+pub fn parse_hosts_from_path_with_user(path: &Path, user: Option<&str>) -> Vec<String> {
     let mut hosts: BTreeSet<String> = BTreeSet::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let base_dir = ssh_base_dir_from_config_path(path);
-    walk_config_file(path, &base_dir, &mut hosts, &mut visited, 0);
+    walk_config_file(path, &base_dir, user, &mut hosts, &mut visited, 0);
     hosts.into_iter().collect()
 }
 
@@ -95,9 +131,14 @@ fn collect_hosts_from_body(content: &str, hosts: &mut BTreeSet<String>) {
 /// Walk one config file, recursing into `Include` directives in
 /// lexical order. Logs + skips on any error so a broken file in the
 /// chain doesn't take the whole alias list down.
+///
+/// `user` is the effective `$USER` for `Match user` evaluation;
+/// `None` means "no user available" (`Match user` blocks always
+/// fail).
 fn walk_config_file(
     path: &Path,
     base_dir: &Path,
+    user: Option<&str>,
     hosts: &mut BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
     depth: u8,
@@ -128,20 +169,42 @@ fn walk_config_file(
         Ok(s) => s,
         Err(_) => return,
     };
+    // Match-block gate: starts true (top of file = no block yet, so
+    // every `Host` directive contributes by default). A `Match`
+    // directive resets the flag based on its guards; the flag stays
+    // in effect until the next `Match` (or until a recursive Include
+    // returns — Match blocks don't cross file boundaries).
+    let mut block_active = true;
     for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
+        if let Some(rest) = strip_keyword(trimmed, "Match") {
+            block_active = match evaluate_match(rest, user) {
+                MatchOutcome::Active => true,
+                MatchOutcome::Inactive | MatchOutcome::Unsupported => false,
+            };
+            continue;
+        }
         if let Some(rest) = strip_host_directive(trimmed) {
-            push_aliases(rest, hosts);
+            // `Host` also closes any prior Match block — the next
+            // line resets the gate to active so out-of-block Host
+            // directives keep working.
+            if block_active {
+                push_aliases(rest, hosts);
+            }
+            block_active = true;
             continue;
         }
         if let Some(rest) = strip_keyword(trimmed, "Include") {
             // ssh permits multiple whitespace-separated paths per
-            // `Include` line.
+            // `Include` line. Includes processed inside an inactive
+            // block are still walked (ssh's semantics are that the
+            // included file is parsed fresh with its own gate state);
+            // we mirror that.
             for token in rest.split_whitespace() {
-                expand_include(token, base_dir, hosts, visited, depth + 1);
+                expand_include(token, base_dir, user, hosts, visited, depth + 1);
             }
         }
     }
@@ -152,6 +215,7 @@ fn walk_config_file(
 fn expand_include(
     token: &str,
     base_dir: &Path,
+    user: Option<&str>,
     hosts: &mut BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
     depth: u8,
@@ -181,7 +245,7 @@ fn expand_include(
         if entry.is_dir() {
             continue;
         }
-        walk_config_file(&entry, base_dir, hosts, visited, depth);
+        walk_config_file(&entry, base_dir, user, hosts, visited, depth);
     }
 }
 
@@ -207,6 +271,172 @@ fn push_aliases(rest: &str, hosts: &mut BTreeSet<String>) {
         }
         hosts.insert(alias.to_string());
     }
+}
+
+// ── Match block evaluation (phase 21d) ──────────────────────────────
+
+/// Result of evaluating a `Match` directive's guards against the
+/// current process context. Conflates "predicate fired falsy" and
+/// "predicate isn't supported by us" into a single inactive bucket
+/// because both cases drop the block — the distinction only matters
+/// for the debug log inside [`evaluate_match`].
+enum MatchOutcome {
+    /// Every supported guard passed (or `Match all`). Host directives
+    /// in the block contribute to the suggestion list.
+    Active,
+    /// One or more guards explicitly failed (e.g. `Match user me`
+    /// when `$USER != me`). The block is dropped.
+    Inactive,
+    /// At least one guard used a predicate we don't implement
+    /// (`exec`, `originalhost`, `canonical`, `tagged`, …). Treated
+    /// as inactive so the block doesn't accidentally contribute
+    /// aliases that ssh itself wouldn't activate.
+    Unsupported,
+}
+
+/// Walk the argument list after `Match` and decide whether the block
+/// should be active. Supported predicates: `all`, `user <pattern>`,
+/// `host <pattern>`. Anything else flips the result to `Unsupported`
+/// and the block is dropped with a debug log.
+///
+/// `user host` is collected for completeness but always treated as
+/// satisfied — the suggestion list runs before any host is picked,
+/// so we want every potentially-applicable alias visible. ssh proper
+/// would re-evaluate at connect time anyway.
+fn evaluate_match(rest: &str, user: Option<&str>) -> MatchOutcome {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return MatchOutcome::Unsupported;
+    }
+
+    // `Match all` short-circuits everything — and it's the only
+    // single-token form ssh accepts.
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("all") {
+        return MatchOutcome::Active;
+    }
+
+    let mut all_passed = true;
+    let mut i = 0;
+    while i < tokens.len() {
+        let key = tokens[i];
+        let Some(value) = tokens.get(i + 1) else {
+            tracing::debug!(
+                directive = %rest,
+                "ssh_config: Match predicate `{key}` missing a value; skipping block"
+            );
+            return MatchOutcome::Unsupported;
+        };
+        match key.to_ascii_lowercase().as_str() {
+            "user" => {
+                if !match_user(value, user) {
+                    all_passed = false;
+                }
+            }
+            "host" => {
+                // Always satisfied. We don't know the destination
+                // host yet at suggestion-list time, so any alias
+                // gated on `Match host` should remain visible.
+            }
+            other => {
+                tracing::debug!(
+                    directive = %rest,
+                    predicate = other,
+                    "ssh_config: Match predicate not supported; treating block as inactive"
+                );
+                return MatchOutcome::Unsupported;
+            }
+        }
+        i += 2;
+    }
+    if all_passed {
+        MatchOutcome::Active
+    } else {
+        MatchOutcome::Inactive
+    }
+}
+
+/// True iff `current` matches any non-negated entry in `pattern_list`
+/// and no negated entry matches first. Mirrors ssh's pattern-list
+/// semantics: comma-separated alternatives, `!`-prefixed entries are
+/// exclusions, glob wildcards (`*`, `?`) supported.
+///
+/// `None` for `current` (no `$USER`) → never matches.
+fn match_user(pattern_list: &str, current: Option<&str>) -> bool {
+    let Some(user) = current else {
+        return false;
+    };
+    let mut matched = false;
+    for raw in pattern_list.split(',') {
+        let pat = raw.trim();
+        if pat.is_empty() {
+            continue;
+        }
+        if let Some(neg) = pat.strip_prefix('!') {
+            // ssh's rule: a matching negation immediately rejects the
+            // whole list. Short-circuit accordingly.
+            if matches_pattern(neg, user) {
+                return false;
+            }
+        } else if matches_pattern(pat, user) {
+            matched = true;
+        }
+    }
+    matched
+}
+
+/// Minimal glob-style matcher for `*` and `?`. ssh supports more
+/// (character classes, etc.) but `Match user`'s common usage is
+/// literal names + the occasional `*` wildcard, so we keep the
+/// matcher tiny rather than dragging in a full glob engine for
+/// per-line patterns.
+fn matches_pattern(pattern: &str, value: &str) -> bool {
+    // Recursive walk; short patterns make this fast in practice.
+    let p = pattern.as_bytes();
+    let v = value.as_bytes();
+    matches_pattern_impl(p, v)
+}
+
+fn matches_pattern_impl(p: &[u8], v: &[u8]) -> bool {
+    let mut pi = 0;
+    let mut vi = 0;
+    // Backtrack points so `*` can grow as needed.
+    let mut star_pi: Option<usize> = None;
+    let mut star_vi: usize = 0;
+    while vi < v.len() {
+        if pi < p.len() && (p[pi] == v[vi] || p[pi] == b'?') {
+            pi += 1;
+            vi += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_pi = Some(pi);
+            star_vi = vi;
+            pi += 1;
+        } else if let Some(spi) = star_pi {
+            pi = spi + 1;
+            star_vi += 1;
+            vi = star_vi;
+        } else {
+            return false;
+        }
+    }
+    // Consume trailing `*`s in the pattern.
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Best-effort current-user lookup. Falls back through `$USER` →
+/// `$LOGNAME` so it works in environments where one is set but not
+/// the other (containers often only have `LOGNAME`). Returns `None`
+/// rather than guessing when neither is available — `Match user`
+/// blocks evaluate as inactive in that case, which is the
+/// conservative choice (don't surface aliases gated on a user we
+/// can't confirm).
+fn current_user() -> Option<String> {
+    std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("LOGNAME").ok().filter(|s| !s.is_empty()))
 }
 
 /// Pick the base directory ssh uses for relative `Include` paths.
@@ -618,5 +848,279 @@ Host base
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("never.conf");
         assert!(parse_hosts_from_path(&missing).is_empty());
+    }
+
+    // ── Match blocks (phase 21d) ──────────────────────────────────
+
+    #[test]
+    fn match_user_block_active_when_user_matches_literal() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user me
+Host gated
+    HostName 10.0.0.1
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("me"));
+        assert_eq!(hosts, vec!["gated"]);
+    }
+
+    #[test]
+    fn match_user_block_inactive_when_user_does_not_match() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user me
+Host gated
+    HostName 10.0.0.1
+
+Host always
+    HostName 10.0.0.2
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("someone-else"));
+        // `gated` is dropped because the Match block excluded it.
+        // `always` is OUTSIDE the Match block — `Host` resets the
+        // gate to active, so this one still surfaces.
+        assert_eq!(hosts, vec!["always"]);
+    }
+
+    #[test]
+    fn match_all_is_always_active() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match all
+Host gated-by-all
+",
+        )]);
+        // `Match all` should activate regardless of user.
+        let with_user = parse_hosts_from_path_with_user(&root, Some("a"));
+        let without_user = parse_hosts_from_path_with_user(&root, None);
+        assert_eq!(with_user, vec!["gated-by-all"]);
+        assert_eq!(without_user, vec!["gated-by-all"]);
+    }
+
+    #[test]
+    fn match_user_supports_glob_wildcard() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user dev-*
+Host gated
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("dev-david"));
+        assert_eq!(hosts, vec!["gated"]);
+        let miss = parse_hosts_from_path_with_user(&root, Some("prod-someone"));
+        assert!(miss.is_empty(), "non-matching user must drop the block");
+    }
+
+    #[test]
+    fn match_user_supports_comma_separated_alternatives() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user alice,bob,carol
+Host shared
+",
+        )]);
+        for who in ["alice", "bob", "carol"] {
+            let hosts = parse_hosts_from_path_with_user(&root, Some(who));
+            assert_eq!(hosts, vec!["shared".to_string()], "user={who}");
+        }
+        let miss = parse_hosts_from_path_with_user(&root, Some("dave"));
+        assert!(miss.is_empty(), "user not in list must drop block");
+    }
+
+    #[test]
+    fn match_user_supports_negated_entry_short_circuiting() {
+        // ssh's pattern-list rule: a matching negation rejects the
+        // whole list regardless of other matches that follow.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user *,!banned
+Host gated
+",
+        )]);
+        let allowed = parse_hosts_from_path_with_user(&root, Some("alice"));
+        assert_eq!(allowed, vec!["gated"]);
+        let banned = parse_hosts_from_path_with_user(&root, Some("banned"));
+        assert!(banned.is_empty(), "negated entry must reject the block");
+    }
+
+    #[test]
+    fn match_host_is_treated_as_always_active_for_alias_collection() {
+        // We don't know the destination host at suggestion-list time,
+        // so any alias gated only on `Match host` should surface.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match host *.example.com
+Host bastion
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("any-user"));
+        assert_eq!(hosts, vec!["bastion"]);
+    }
+
+    #[test]
+    fn match_exec_block_is_dropped_with_a_debug_log() {
+        // `exec`-based gating runs an external command — way out of
+        // scope for a suggestion-list refresh. We drop the block.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match exec true
+Host gated-by-exec
+
+Host always
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("any"));
+        // `gated-by-exec` dropped; `always` is outside the block and
+        // surfaces.
+        assert_eq!(hosts, vec!["always"]);
+    }
+
+    #[test]
+    fn match_originalhost_block_is_dropped_as_unsupported() {
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match originalhost foo
+Host gated
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("any"));
+        assert!(
+            hosts.is_empty(),
+            "unsupported predicates must drop the block: {hosts:?}"
+        );
+    }
+
+    #[test]
+    fn match_compound_user_and_host_both_evaluated() {
+        // `Match user X host Y` — host is always active, user gates.
+        // With matching user → block active; with non-matching user →
+        // inactive (the host arm can't rescue it).
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user me host *.example.com
+Host gated
+",
+        )]);
+        let active = parse_hosts_from_path_with_user(&root, Some("me"));
+        assert_eq!(active, vec!["gated"]);
+        let inactive = parse_hosts_from_path_with_user(&root, Some("not-me"));
+        assert!(inactive.is_empty());
+    }
+
+    #[test]
+    fn match_block_terminated_by_subsequent_host_directive() {
+        // `Host` outside any Match should always activate — even when
+        // the preceding Match block was inactive.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user inaccessible
+Host gated
+Host afterwards
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("real-user"));
+        // The Host after the Match block resets the gate to active —
+        // `afterwards` surfaces.
+        assert_eq!(hosts, vec!["afterwards"]);
+    }
+
+    #[test]
+    fn match_block_terminated_by_subsequent_match_directive() {
+        // Two Match blocks back-to-back — each evaluates independently.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user inaccessible
+Host hidden
+Match all
+Host shown
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("any"));
+        assert_eq!(hosts, vec!["shown"]);
+    }
+
+    #[test]
+    fn match_user_with_no_current_user_drops_the_block() {
+        // `None` means we couldn't resolve `$USER`. Conservative: any
+        // user-gated alias stays excluded (we'd rather show fewer
+        // suggestions than show ones ssh itself would reject).
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user anyone
+Host gated
+
+Host always
+",
+        )]);
+        let hosts = parse_hosts_from_path_with_user(&root, None);
+        assert_eq!(hosts, vec!["always"]);
+    }
+
+    #[test]
+    fn match_blocks_inside_an_included_file_evaluate_independently() {
+        // Each file maintains its own Match state — a Match in
+        // conf.d/a.conf doesn't leak into conf.d/b.conf, and the
+        // including file's state doesn't carry into the included one.
+        let (_dir, root) = fixture(&[
+            (
+                "config",
+                "\
+Match user inaccessible
+Include conf.d/inner.conf
+Host outer-shadowed
+",
+            ),
+            (
+                "conf.d/inner.conf",
+                "\
+Match all
+Host inner-active
+",
+            ),
+        ]);
+        let hosts = parse_hosts_from_path_with_user(&root, Some("any"));
+        // - `outer-shadowed` is gated by the outer Match (inactive).
+        // - `inner-active` comes from the included file's own
+        //   `Match all` block.
+        assert_eq!(hosts, vec!["inner-active"]);
+    }
+
+    // ── matches_pattern unit tests ────────────────────────────────
+
+    #[test]
+    fn pattern_matcher_handles_basic_wildcards() {
+        assert!(matches_pattern("foo", "foo"));
+        assert!(!matches_pattern("foo", "bar"));
+        assert!(matches_pattern("f*", "foobar"));
+        assert!(matches_pattern("*bar", "foobar"));
+        assert!(matches_pattern("f*r", "foobar"));
+        assert!(matches_pattern("?oo", "foo"));
+        assert!(!matches_pattern("?oo", "fooo"));
+        // Trailing `*` matches the empty suffix.
+        assert!(matches_pattern("foo*", "foo"));
+        // Backtracking through multiple `*`.
+        assert!(matches_pattern("*foo*bar*", "xfooybarz"));
+    }
+
+    #[test]
+    fn pattern_matcher_rejects_unmatched_remainder() {
+        // Pattern is shorter than value with no `*` to absorb.
+        assert!(!matches_pattern("foo", "foobar"));
+        assert!(!matches_pattern("foobar", "foo"));
     }
 }
