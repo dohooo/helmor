@@ -13,6 +13,7 @@ import type { EditorSessionState } from "@/lib/editor-session";
 
 const apiMocks = vi.hoisted(() => ({
 	readEditorFile: vi.fn(),
+	readWorkspaceFile: vi.fn(),
 }));
 
 const runtimeMocks = vi.hoisted(() => {
@@ -75,6 +76,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		readEditorFile: apiMocks.readEditorFile,
+		readWorkspaceFile: apiMocks.readWorkspaceFile,
 	};
 });
 
@@ -124,6 +126,18 @@ describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
 		runtimeMocks.reset();
 		apiMocks.readEditorFile.mockReset();
+		apiMocks.readWorkspaceFile.mockReset();
+		// Default the new wrapper to delegate to the legacy mock so the
+		// existing assertions keep firing against `readEditorFile`. Tests
+		// that want to verify routing through the new wrapper can override
+		// `readWorkspaceFile` directly.
+		apiMocks.readWorkspaceFile.mockImplementation(
+			async (
+				workspaceDir: string,
+				relativePath: string,
+				_workspaceId: string | undefined,
+			) => apiMocks.readEditorFile(`${workspaceDir}/${relativePath}`),
+		);
 	});
 
 	afterEach(() => {

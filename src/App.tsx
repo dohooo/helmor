@@ -1466,6 +1466,7 @@ function AppShell({
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
 												workspaceRootPath={workspaceRootPath}
+												workspaceId={selectedWorkspaceId}
 												onChangeSession={handleEditorSessionChange}
 												onExit={handleExitEditorMode}
 												onError={handleEditorSurfaceError}

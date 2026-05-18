@@ -340,7 +340,10 @@ export function useWorkspaceInspectorSidebar({
 		workspaceState !== "initializing" &&
 		workspaceState !== "archived";
 	const changesQuery = useQuery({
-		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
+		...workspaceChangesQueryOptions(
+			workspaceRootPath ?? "",
+			workspaceId ?? undefined,
+		),
 		enabled: changesQueryEnabled,
 	});
 	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];

@@ -2141,16 +2141,53 @@ export function triggerWorkspaceFetch(workspaceId: string): void {
 	void invoke("trigger_workspace_fetch", { workspaceId });
 }
 
+/**
+ * Read a file's content at a git ref. Routes through the binding-aware
+ * resolver — if `workspaceId` is bound to a remote runtime, the read
+ * happens on the remote.
+ *
+ * `filePath` may be absolute (legacy contract) or workspace-relative.
+ * Absolute paths inside the workspace root are normalised to relative
+ * by stripping the workspace prefix; anything else is passed through
+ * verbatim and the backend's seam-level sandbox rejects it.
+ */
 export async function readFileAtRef(
 	workspaceRootPath: string,
 	filePath: string,
 	gitRef: string,
+	workspaceId?: string,
 ): Promise<string | null> {
-	return await invoke<string | null>("read_file_at_ref", {
+	const relativePath = toWorkspaceRelativePath(workspaceRootPath, filePath);
+	return await readWorkspaceFileAtRef(
 		workspaceRootPath,
-		filePath,
+		relativePath,
 		gitRef,
-	});
+		workspaceId,
+	);
+}
+
+/**
+ * Normalise an absolute-or-relative `filePath` against `workspaceRootPath`.
+ * Strips the root prefix when the path starts with it; otherwise returns
+ * the input unchanged. Used by the wire-level wrappers that took absolute
+ * paths in their pre-phase-20 contract and now have to forward relative
+ * paths to the new commands.
+ */
+export function toWorkspaceRelativePath(
+	workspaceRootPath: string,
+	filePath: string,
+): string {
+	if (!filePath.startsWith("/") && !filePath.match(/^[A-Za-z]:[\\/]/)) {
+		// Already relative — nothing to strip.
+		return filePath;
+	}
+	const root = workspaceRootPath.endsWith("/")
+		? workspaceRootPath
+		: `${workspaceRootPath}/`;
+	if (filePath === workspaceRootPath || filePath.startsWith(root)) {
+		return filePath.slice(root.length);
+	}
+	return filePath;
 }
 
 export async function writeEditorFile(
@@ -2201,16 +2238,10 @@ export async function listEditorFiles(
  */
 export async function listWorkspaceFiles(
 	workspaceRootPath: string,
+	workspaceId?: string,
 ): Promise<InspectorFileItem[]> {
-	try {
-		return await invoke<InspectorFileItem[]>("list_workspace_files", {
-			workspaceRootPath,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list workspace files."),
-		);
-	}
+	const result = await getWorkspaceFileTree(workspaceRootPath, workspaceId);
+	return result.entries;
 }
 
 export async function listEditorFilesWithContent(
@@ -2228,28 +2259,28 @@ export async function listEditorFilesWithContent(
 
 export async function listWorkspaceChangesWithContent(
 	workspaceRootPath: string,
+	workspaceId?: string,
 ): Promise<EditorFilesWithContentResponse> {
-	try {
-		return await invoke<EditorFilesWithContentResponse>(
-			"list_workspace_changes_with_content",
-			{ workspaceRootPath },
-		);
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list workspace changes."),
-		);
-	}
+	const result = await getWorkspaceChanges(
+		workspaceRootPath,
+		true,
+		workspaceId,
+	);
+	return { items: result.items, prefetched: result.prefetched };
 }
 
 export async function discardWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("discard_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "discard" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to discard workspace file."),
@@ -2260,12 +2291,15 @@ export async function discardWorkspaceFile(
 export async function stageWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("stage_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "stage" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to stage workspace file."),
@@ -2276,15 +2310,195 @@ export async function stageWorkspaceFile(
 export async function unstageWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("unstage_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "unstage" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to unstage workspace file."),
+		);
+	}
+}
+
+// ── workspace inspector ops on the remote-runner seam (phase 20d) ────
+//
+// Every wrapper below routes through the binding-aware Tauri commands
+// added in phase 20c. A `workspaceId` lets the backend resolve the
+// pinned runtime for that workspace (if any) so a workspace bound to
+// a remote pair flows over the wire transparently. Pass `undefined`
+// (or omit) for call sites that have no workspace context — the
+// backend falls back to the local runtime.
+
+export type WorkspaceMutateFileAction =
+	| { type: "write"; content: string }
+	| { type: "discard" }
+	| { type: "stage" }
+	| { type: "unstage" };
+
+export type WorkspaceFileTreeResult = {
+	entries: InspectorFileItem[];
+};
+
+export type WorkspaceChangesResult = {
+	items: InspectorFileItem[];
+	prefetched: EditorFilePrefetchItem[];
+};
+
+export type WorkspaceReadFileAtRefResult = {
+	content: string | null;
+};
+
+export type WorkspaceMutateFileResult = {
+	mtimeMs: number | null;
+};
+
+export async function getWorkspaceFileTree(
+	workspaceDir: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceFileTreeResult> {
+	try {
+		return await invoke<WorkspaceFileTreeResult>("get_workspace_file_tree", {
+			workspaceDir,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace files."),
+		);
+	}
+}
+
+export async function getWorkspaceChanges(
+	workspaceDir: string,
+	includeContent: boolean,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceChangesResult> {
+	try {
+		return await invoke<WorkspaceChangesResult>("get_workspace_changes", {
+			workspaceDir,
+			includeContent,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
+}
+
+export async function readWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<EditorFileReadResponse> {
+	try {
+		return await invoke<EditorFileReadResponse>("read_workspace_file", {
+			workspaceDir,
+			relativePath,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to open the selected file."),
+		);
+	}
+}
+
+export async function readWorkspaceFileAtRef(
+	workspaceDir: string,
+	relativePath: string,
+	gitRef: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<string | null> {
+	try {
+		const result = await invoke<WorkspaceReadFileAtRefResult>(
+			"read_workspace_file_at_ref",
+			{
+				workspaceDir,
+				relativePath,
+				gitRef,
+				workspaceId,
+				runtimeName,
+			},
+		);
+		return result.content;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read file at the given ref."),
+		);
+	}
+}
+
+export async function statWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<EditorFileStatResponse> {
+	try {
+		return await invoke<EditorFileStatResponse>("stat_workspace_file", {
+			workspaceDir,
+			relativePath,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to inspect the selected file."),
+		);
+	}
+}
+
+export async function mutateWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	action: WorkspaceMutateFileAction,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceMutateFileResult> {
+	return await invoke<WorkspaceMutateFileResult>("mutate_workspace_file", {
+		workspaceDir,
+		relativePath,
+		action,
+		workspaceId,
+		runtimeName,
+	});
+}
+
+/**
+ * Convenience wrapper: write a file via `mutateWorkspaceFile`. Mirrors
+ * `writeEditorFile`'s shape but routes through the binding-aware
+ * resolver so a workspace bound to a remote flows over the wire.
+ */
+export async function writeWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+	content: string,
+	workspaceId?: string,
+): Promise<WorkspaceMutateFileResult> {
+	try {
+		return await mutateWorkspaceFile(
+			workspaceRootPath,
+			relativePath,
+			{ type: "write", content },
+			workspaceId,
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save the selected file."),
 		);
 	}
 }
