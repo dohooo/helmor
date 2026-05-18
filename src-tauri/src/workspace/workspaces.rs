@@ -683,15 +683,37 @@ fn next_order_for_target(transaction: &Transaction<'_>, target: &MoveTarget) -> 
     Ok(max.unwrap_or(0) + sidebar_order::ORDER_STEP)
 }
 
+/// Outcome of a `sync_workspace_pr_state` call. `changed` drives the
+/// `WorkspaceChangeRequestChanged` UI-sync publish; `transitioned_to_merged`
+/// drives one-shot side effects like auto-archive-after-merge. The latter
+/// is true iff `pr_sync_state` flipped from a non-Merged value to
+/// `Merged` in this call — combined with the absorbing-state guarantee
+/// in `stabilize_pr_sync_state`, this means it fires at most once per
+/// workspace per merge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PrSyncOutcome {
+    pub changed: bool,
+    pub transitioned_to_merged: bool,
+}
+
+impl PrSyncOutcome {
+    fn unchanged() -> Self {
+        Self {
+            changed: false,
+            transitioned_to_merged: false,
+        }
+    }
+}
+
 pub fn sync_workspace_pr_state(
     workspace_id: &str,
     change_request: Option<&ChangeRequestInfo>,
-) -> Result<bool> {
+) -> Result<PrSyncOutcome> {
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
     if !record.state.is_operational() {
-        return Ok(false);
+        return Ok(PrSyncOutcome::unchanged());
     }
 
     let next_state = stabilize_pr_sync_state(
@@ -711,8 +733,12 @@ pub fn sync_workspace_pr_state(
     let title_changed = record.pr_title != next_title;
     let url_changed = record.pr_url != next_url;
     if !state_changed && !title_changed && !url_changed {
-        return Ok(false);
+        return Ok(PrSyncOutcome::unchanged());
     }
+
+    let transitioned_to_merged = state_changed
+        && next_state == PrSyncState::Merged
+        && record.pr_sync_state != PrSyncState::Merged;
 
     let target_status = if state_changed {
         match next_state {
@@ -790,7 +816,10 @@ pub fn sync_workspace_pr_state(
             )
             .context("Failed to record workspace PR sync state")?;
     }
-    Ok(true)
+    Ok(PrSyncOutcome {
+        changed: true,
+        transitioned_to_merged,
+    })
 }
 
 fn pr_sync_state_from_change_request(change_request: Option<&ChangeRequestInfo>) -> PrSyncState {
@@ -1617,7 +1646,9 @@ mod tests {
             title: "PR".to_string(),
             is_merged: false,
         };
-        assert!(sync_workspace_pr_state("w-pr", Some(&open)).unwrap());
+        let outcome = sync_workspace_pr_state("w-pr", Some(&open)).unwrap();
+        assert!(outcome.changed);
+        assert!(!outcome.transitioned_to_merged);
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("review".to_string(), "open".to_string())
@@ -1628,7 +1659,11 @@ mod tests {
             [],
         )
         .unwrap();
-        assert!(!sync_workspace_pr_state("w-pr", Some(&open)).unwrap());
+        assert!(
+            !sync_workspace_pr_state("w-pr", Some(&open))
+                .unwrap()
+                .changed
+        );
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("in-progress".to_string(), "open".to_string())
@@ -1639,11 +1674,19 @@ mod tests {
             is_merged: true,
             ..open
         };
-        assert!(sync_workspace_pr_state("w-pr", Some(&merged)).unwrap());
+        let outcome = sync_workspace_pr_state("w-pr", Some(&merged)).unwrap();
+        assert!(outcome.changed);
+        assert!(outcome.transitioned_to_merged);
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("done".to_string(), "merged".to_string())
         );
+
+        // Re-running with the same merged state must NOT re-fire the
+        // transition edge — auto-archive depends on this for try-once.
+        let outcome = sync_workspace_pr_state("w-pr", Some(&merged)).unwrap();
+        assert!(!outcome.changed);
+        assert!(!outcome.transitioned_to_merged);
     }
 
     #[test]
@@ -1678,7 +1721,11 @@ mod tests {
             is_merged: false,
         };
 
-        assert!(!sync_workspace_pr_state("w-pr", Some(&stale_open)).unwrap());
+        assert!(
+            !sync_workspace_pr_state("w-pr", Some(&stale_open))
+                .unwrap()
+                .changed
+        );
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("done".to_string(), "merged".to_string())
@@ -1707,7 +1754,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(sync_workspace_pr_state("w-pr", None).unwrap());
+        assert!(sync_workspace_pr_state("w-pr", None).unwrap().changed);
         assert_eq!(
             workspace_statuses(&env, "w-pr"),
             ("done".to_string(), "none".to_string())
@@ -1738,7 +1785,11 @@ mod tests {
             title: "Add cool feature".to_string(),
             is_merged: false,
         };
-        assert!(sync_workspace_pr_state("w-pr", Some(&open)).unwrap());
+        assert!(
+            sync_workspace_pr_state("w-pr", Some(&open))
+                .unwrap()
+                .changed
+        );
         assert_eq!(
             workspace_pr_metadata(&env, "w-pr"),
             (
@@ -1753,14 +1804,22 @@ mod tests {
             title: "Renamed PR".to_string(),
             ..open
         };
-        assert!(sync_workspace_pr_state("w-pr", Some(&renamed)).unwrap());
+        assert!(
+            sync_workspace_pr_state("w-pr", Some(&renamed))
+                .unwrap()
+                .changed
+        );
         assert_eq!(
             workspace_pr_metadata(&env, "w-pr").0,
             Some("Renamed PR".to_string())
         );
 
         // Calling again with identical data is a no-op.
-        assert!(!sync_workspace_pr_state("w-pr", Some(&renamed)).unwrap());
+        assert!(
+            !sync_workspace_pr_state("w-pr", Some(&renamed))
+                .unwrap()
+                .changed
+        );
     }
 
     #[test]
@@ -1785,7 +1844,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(sync_workspace_pr_state("w-pr", None).unwrap());
+        assert!(sync_workspace_pr_state("w-pr", None).unwrap().changed);
         assert_eq!(workspace_pr_metadata(&env, "w-pr"), (None, None));
     }
 
@@ -1882,7 +1941,11 @@ mod tests {
             title: "PR".to_string(),
             is_merged: true,
         };
-        assert!(sync_workspace_pr_state("w-pin", Some(&merged)).unwrap());
+        assert!(
+            sync_workspace_pr_state("w-pin", Some(&merged))
+                .unwrap()
+                .changed
+        );
 
         let (status, pinned_at, display_order) = pinned_status_and_order(&env, "w-pin");
         assert_eq!(status, "done");

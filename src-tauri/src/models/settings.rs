@@ -133,6 +133,19 @@ const AUTO_CLOSE_OPT_IN_ASKED_KEY: &str = "auto_close_opt_in_asked";
 pub const CODEX_RATE_LIMITS_KEY: &str = "app.codex_rate_limits";
 pub const CLAUDE_RATE_LIMITS_KEY: &str = "app.claude_rate_limits";
 
+/// Opt-in: when the workspace's linked PR/MR transitions to merged,
+/// attempt to archive the workspace automatically. Stored as the string
+/// `"true"` / `"false"` via the generic app-settings KV.
+pub const AUTO_ARCHIVE_ON_MERGE_KEY: &str = "app.auto_archive_on_merge";
+
+/// Read the opt-in toggle for archive-on-merge. Missing rows / parse
+/// failures default to `false` (off).
+pub fn load_auto_archive_on_merge_enabled() -> Result<bool> {
+    Ok(load_setting_value(AUTO_ARCHIVE_ON_MERGE_KEY)?
+        .map(|v| v == "true")
+        .unwrap_or(false))
+}
+
 /// Action kinds the user has opted-in to auto-close. Action sessions whose
 /// `action_kind` appears in this list are hidden automatically after their
 /// verifier reports `Success`.

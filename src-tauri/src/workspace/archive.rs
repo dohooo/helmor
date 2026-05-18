@@ -6,8 +6,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
+    agents::ActiveStreams,
     error::{extract_code, outermost_message, ErrorCode},
-    git_watcher,
+    git_watcher, settings,
 };
 
 use super::lifecycle::{execute_archive_plan, prepare_archive_plan, ArchivePreparedPlan};
@@ -98,6 +99,70 @@ impl ArchiveJobManager {
         if let Ok(mut state) = self.state.lock() {
             state.running.remove(workspace_id);
         }
+    }
+}
+
+/// Opt-in auto-archive triggered when a workspace's PR transitions to
+/// merged. Fires once at the edge — callers gate on
+/// `state_changed && next_state == Merged` (see `forge_commands`), and
+/// `PrSyncState::Merged` is an absorbing state in
+/// `stabilize_pr_sync_state`, so this can't re-fire on subsequent polls.
+///
+/// Best-effort: every skip path logs and returns. Failures are routed
+/// through the existing `ARCHIVE_EXECUTION_FAILED_EVENT` so the UI toast
+/// still surfaces them.
+pub fn try_auto_archive_after_merge<R: Runtime>(app: &AppHandle<R>, workspace_id: &str) {
+    let enabled = match settings::load_auto_archive_on_merge_enabled() {
+        Ok(v) => v,
+        Err(error) => {
+            tracing::warn!(
+                workspace_id,
+                error = %error,
+                "Auto-archive: failed to read setting, skipping"
+            );
+            return;
+        }
+    };
+    if !enabled {
+        return;
+    }
+
+    // Active agent turn → skip. Yanking the worktree out from under a
+    // running session would crash it.
+    if app
+        .state::<ActiveStreams>()
+        .has_active_for_workspace(workspace_id)
+    {
+        tracing::info!(
+            workspace_id,
+            "Auto-archive skipped: workspace has an active session"
+        );
+        return;
+    }
+
+    // `prepare` covers eligibility + missing repo/worktree + already-
+    // running archive in one shot. A failure here is the right outcome
+    // for "conditions not met" — log and bail without retry.
+    let manager = app.state::<ArchiveJobManager>();
+    if let Err(error) = manager.prepare(workspace_id) {
+        tracing::info!(
+            workspace_id,
+            error = %error,
+            "Auto-archive skipped: prepare failed"
+        );
+        return;
+    }
+
+    // Hand off to the existing async path so success / failure events,
+    // git unwatch, and the toast pipeline are all reused.
+    if let Err(error) = start_archive_workspace(app, workspace_id) {
+        tracing::warn!(
+            workspace_id,
+            error = %error,
+            "Auto-archive: failed to start archive task"
+        );
+    } else {
+        tracing::info!(workspace_id, "Auto-archive started after merge");
     }
 }
 

@@ -335,6 +335,17 @@ export const SettingsDialog = memo(function SettingsDialog({
 										/>
 									</SettingsRow>
 									<SettingsRow
+										title="Auto-archive on merge"
+										description="When a workspace's linked PR/MR is merged, archive the workspace automatically. Skipped if the workspace has an active session or fails archive validation."
+									>
+										<Switch
+											checked={settings.autoArchiveOnMerge}
+											onCheckedChange={(checked) =>
+												updateSettings({ autoArchiveOnMerge: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
 										title="Follow-up behavior"
 										description={
 											<>
