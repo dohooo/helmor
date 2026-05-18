@@ -1,8 +1,7 @@
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    db, git_watcher, workspace_derived_status::DerivedStatus, workspace_state::WorkspaceState,
-    workspaces,
+    db, git_watcher, workspace_state::WorkspaceState, workspace_status::WorkspaceStatus, workspaces,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -26,17 +25,38 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
+    source_branch: Option<String>,
+    mode: Option<crate::workspace_state::WorkspaceMode>,
+    initial_status: Option<WorkspaceStatus>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let mode = mode.unwrap_or_default();
+    let initial_status = initial_status.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_workspace_from_repo_impl(&repo_id)).await?
+        run_blocking(move || match mode {
+            crate::workspace_state::WorkspaceMode::Worktree => {
+                workspaces::prepare_workspace_from_repo_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    initial_status,
+                )
+            }
+            crate::workspace_state::WorkspaceMode::Local => {
+                workspaces::prepare_local_workspace_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    initial_status,
+                )
+            }
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
 }
 
 /// Phase 2: slow (~200ms-2s) materialization. Creates the git worktree,
-/// scaffolds `.context`, probes `helmor.json` for a setup script, and flips
+/// probes `helmor.json` for a setup script, and flips
 /// the workspace row from `initializing` to `ready` / `setup_pending`. On
 /// failure, the workspace + session rows are deleted and the worktree is
 /// cleaned up so the user can retry.
@@ -53,6 +73,87 @@ pub async fn finalize_workspace_from_repo(
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+/// Move a local-mode workspace into a fresh worktree (relocation, not a
+/// clone — the workspace's mode flips Local → Worktree). Snapshots the
+/// local repo's current state (HEAD commit + tracked + untracked
+/// changes) into the new worktree dir on a fresh auto-named branch.
+/// The local repo itself is not modified.
+#[tauri::command]
+pub async fn move_local_workspace_to_worktree(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::MoveLocalToWorktreeResponse> {
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::move_local_workspace_to_worktree_impl(&workspace_id))
+            .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+/// Create a new local branch at the repo's current HEAD and switch to
+/// it. Used by the start page's "Create and checkout new branch..."
+/// picker action. `git checkout -b` doesn't require a clean working
+/// tree — files carry over to the new branch unchanged.
+#[tauri::command]
+pub async fn create_and_checkout_branch(repo_id: String, branch: String) -> CmdResult<()> {
+    run_blocking(move || -> anyhow::Result<()> {
+        use anyhow::Context;
+        let repo = crate::repos::load_repository_by_id(&repo_id)?
+            .with_context(|| format!("Repository not found: {repo_id}"))?;
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        crate::git_ops::ensure_git_repository(&repo_root)?;
+        crate::git_ops::create_and_checkout_branch(&repo_root, &branch)
+    })
+    .await
+}
+
+/// Current local repo HEAD branch name. Used by the start page as
+/// the local-mode picker's default selection (worktree mode uses the
+/// repo's stored default branch instead). Returns `None` if the repo
+/// is missing on disk or HEAD is detached — frontend then falls back
+/// to the stored default.
+#[tauri::command]
+pub async fn get_repo_current_branch(repo_id: String) -> CmdResult<Option<String>> {
+    run_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(None);
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(None);
+        }
+        Ok(crate::git_ops::current_branch_name(&repo_root).ok())
+    })
+    .await
+}
+
+/// Merged local + remote branches, deduped (by name), sorted. Used by
+/// the local-mode start picker so users can pick from anything they
+/// already have on disk OR any branch published on `origin`. Returns
+/// an empty list if the repo path is missing — keeps the picker usable
+/// even after the repo was moved.
+#[tauri::command]
+pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<String>> {
+    run_blocking(move || -> anyhow::Result<Vec<String>> {
+        let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+            return Ok(Vec::new());
+        };
+        let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+        if !repo_root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+
+        let mut seen = std::collections::BTreeSet::new();
+        seen.extend(crate::git_ops::list_local_branches(&repo_root).unwrap_or_default());
+        seen.extend(crate::git_ops::list_remote_branches(&repo_root, &remote).unwrap_or_default());
+        Ok(seen.into_iter().collect())
+    })
+    .await
 }
 
 /// Legacy combined flow (prepare + finalize in a single call). Retained
@@ -115,11 +216,30 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn set_workspace_manual_status(
+pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
+    run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
+}
+
+/// Sidebar drag-and-drop entry point. `target_group_id` is a sidebar group
+/// id from the frontend — `"pinned"`, a status lane (`"done"` / `"review"`
+/// / `"progress"` / `"backlog"` / `"canceled"`), or a repo bucket
+/// (`"repo:<repo_id>"`). The backend writes the corresponding `pinned_at`
+/// / `status` mutation plus a single `display_order` cell, only falling
+/// back to a full-group rebalance when the sparse gap runs out.
+#[tauri::command]
+pub async fn move_workspace_in_sidebar(
     workspace_id: String,
-    status: Option<DerivedStatus>,
+    target_group_id: String,
+    before_workspace_id: Option<String>,
 ) -> CmdResult<()> {
-    run_blocking(move || workspaces::set_workspace_manual_status(&workspace_id, status)).await
+    run_blocking(move || {
+        workspaces::move_workspace_in_sidebar(
+            &workspace_id,
+            &target_group_id,
+            before_workspace_id.as_deref(),
+        )
+    })
+    .await
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to
@@ -233,6 +353,20 @@ pub async fn push_workspace_to_remote(
     let ws_lock = db::workspace_fs_mutation_lock(&workspace_id);
     let _lock = ws_lock.lock().await;
     run_blocking(move || workspaces::push_workspace_to_remote(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn continue_workspace_from_target_branch(
+    app: AppHandle,
+    workspace_id: String,
+) -> CmdResult<workspaces::ContinueWorkspaceResponse> {
+    let ws_lock = db::workspace_fs_mutation_lock(&workspace_id);
+    let _lock = ws_lock.lock().await;
+    let result =
+        run_blocking(move || workspaces::continue_workspace_from_target_branch(&workspace_id))
+            .await?;
+    git_watcher::notify_workspace_changed(&app);
+    Ok(result)
 }
 
 #[tauri::command]

@@ -1,8 +1,6 @@
 use anyhow::Context;
 
-use crate::{
-    editor_files, git_ops, models::workspaces as workspace_models, workspace_state::WorkspaceState,
-};
+use crate::{editor_files, git_ops, models::workspaces as workspace_models};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -91,29 +89,44 @@ pub async fn get_workspace_git_action_status(
     run_blocking(move || {
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-        // A workspace that hasn't finished Phase 2 has no worktree on disk —
-        // running `git status` against it would error. A freshly-created
-        // workspace always starts clean (0 uncommitted, 0 conflicts, in sync
-        // with its base branch, not yet pushed), so short-circuit to the
-        // canonical "fresh" status. The frontend paints the same values
-        // post-ready, so the state transition causes zero visual change.
-        if record.state == WorkspaceState::Initializing {
-            return Ok(git_ops::WorkspaceGitActionStatus {
-                uncommitted_count: 0,
-                conflict_count: 0,
-                sync_target_branch: record
-                    .intended_target_branch
-                    .clone()
-                    .or_else(|| record.default_branch.clone()),
-                sync_status: git_ops::WorkspaceSyncStatus::UpToDate,
-                behind_target_count: 0,
-                remote_tracking_ref: None,
-                ahead_of_remote_count: 0,
-                push_status: git_ops::WorkspacePushStatus::Unpublished,
-            });
+        let quiet_status = || git_ops::WorkspaceGitActionStatus {
+            uncommitted_count: 0,
+            conflict_count: 0,
+            sync_target_branch: record
+                .intended_target_branch
+                .clone()
+                .or_else(|| record.default_branch.clone()),
+            sync_status: git_ops::WorkspaceSyncStatus::UpToDate,
+            behind_target_count: 0,
+            remote_tracking_ref: None,
+            ahead_of_remote_count: 0,
+            ahead_of_target_count: 0,
+            push_status: git_ops::WorkspacePushStatus::Unpublished,
+        };
+        // Non-operational workspaces (Initializing / Archived) have no live
+        // worktree to inspect — Initializing because Phase 2 hasn't run yet,
+        // Archived because the worktree has been removed. Running `git status`
+        // against them would either error or return stale data. Short-circuit
+        // to the canonical "fresh/quiet" status; the frontend can't take any
+        // action on them anyway.
+        if !record.state.is_operational() {
+            return Ok(quiet_status());
         }
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
+        // Defensive: if the worktree directory was removed externally (e.g.
+        // user `rm -rf`ed it while the row is still `ready`), return quiet
+        // status rather than erroring on every poll. User-triggered paths
+        // (stage/unstage/send message) are where we surface WorkspaceBroken;
+        // this poll is invisible and stays silent. Logged as warn (not debug)
+        // so release builds still show the anomaly.
+        if !workspace_dir.is_dir() {
+            tracing::warn!(
+                workspace_id = %workspace_id,
+                path = %workspace_dir.display(),
+                "worktree missing during git-status poll; returning quiet status",
+            );
+            return Ok(quiet_status());
+        }
         let remote = record.remote.as_deref();
         let target_branch = record
             .intended_target_branch

@@ -5,10 +5,10 @@ import {
 } from "@primer/octicons-react";
 import { Pin } from "lucide-react";
 import type {
-	DerivedStatus,
 	GroupTone,
 	WorkspaceGroup,
 	WorkspaceRow,
+	WorkspaceStatus,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { WorkspaceBranchTone } from "@/lib/workspace-helpers";
@@ -32,7 +32,7 @@ export const branchToneClasses: Record<WorkspaceBranchTone, string> = {
 
 export const ARCHIVED_SECTION_ID = "__archived__";
 export const STATUS_OPTIONS: ReadonlyArray<{
-	value: DerivedStatus;
+	value: WorkspaceStatus;
 	label: string;
 	tone: GroupTone;
 }> = [

@@ -4,7 +4,11 @@
  * normalize anything else into that shape.
  */
 
-export type ErrorCode = "Unknown" | "WorkspaceBroken" | "WorkspaceNotFound";
+export type ErrorCode =
+	| "Unknown"
+	| "WorkspaceBroken"
+	| "WorkspaceNotFound"
+	| "ForgeOnboarding";
 
 export type CodedError = {
 	code: ErrorCode;
@@ -15,7 +19,8 @@ function isErrorCode(value: unknown): value is ErrorCode {
 	return (
 		value === "Unknown" ||
 		value === "WorkspaceBroken" ||
-		value === "WorkspaceNotFound"
+		value === "WorkspaceNotFound" ||
+		value === "ForgeOnboarding"
 	);
 }
 

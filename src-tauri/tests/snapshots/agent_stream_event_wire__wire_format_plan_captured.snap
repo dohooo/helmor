@@ -1,0 +1,5 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::PlanCaptured {})"
+---
+kind: planCaptured

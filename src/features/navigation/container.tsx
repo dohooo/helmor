@@ -1,4 +1,6 @@
 import { memo } from "react";
+import { openWorkspaceInFinder } from "@/lib/api";
+import { extractError } from "@/lib/errors";
 import { useWorkspacesSidebarController } from "./hooks/use-controller";
 import { WorkspacesSidebar } from "./index";
 
@@ -6,9 +8,16 @@ type WorkspaceToastVariant = "default" | "destructive";
 
 type WorkspacesSidebarContainerProps = {
 	selectedWorkspaceId: string | null;
-	sendingWorkspaceIds?: Set<string>;
+	autoSelectEnabled?: boolean;
+	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
+	newWorkspaceShortcut?: string | null;
+	addRepositoryShortcut?: string | null;
+	sidebarFilterShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
+	onOpenNewWorkspace?: () => void;
+	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
+	onMoveLocalToWorktree?: (workspaceId: string) => void;
 	pushWorkspaceToast: (
 		description: string,
 		title?: string,
@@ -23,9 +32,16 @@ type WorkspacesSidebarContainerProps = {
 export const WorkspacesSidebarContainer = memo(
 	function WorkspacesSidebarContainer({
 		selectedWorkspaceId,
-		sendingWorkspaceIds,
+		autoSelectEnabled = true,
+		busyWorkspaceIds,
 		interactionRequiredWorkspaceIds,
+		newWorkspaceShortcut,
+		addRepositoryShortcut,
+		sidebarFilterShortcut,
 		onSelectWorkspace,
+		onOpenNewWorkspace,
+		onAddRepositoryNeedsStart,
+		onMoveLocalToWorktree,
 		pushWorkspaceToast,
 	}: WorkspacesSidebarContainerProps) {
 		const {
@@ -36,23 +52,31 @@ export const WorkspacesSidebarContainer = memo(
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
+			sidebarGrouping,
+			sidebarRepoFilterIds,
+			sidebarSort,
+			updateSettings,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
-			handleCreateWorkspaceFromRepo,
 			handleDeleteWorkspace,
 			handleMarkWorkspaceUnread,
+			handleMoveRepositoryInSidebar,
+			handleMoveWorkspaceInSidebar,
 			handleOpenCloneDialog,
 			handleRestoreWorkspace,
 			handleSelectWorkspace,
-			handleSetManualStatus,
+			handleSetWorkspaceStatus,
 			handleTogglePin,
 			isCloneDialogOpen,
 			prefetchWorkspace,
 			setIsCloneDialogOpen,
 		} = useWorkspacesSidebarController({
 			selectedWorkspaceId,
+			autoSelectEnabled,
 			onSelectWorkspace,
+			onOpenNewWorkspace,
+			onAddRepositoryNeedsStart,
 			pushWorkspaceToast,
 		});
 
@@ -61,11 +85,26 @@ export const WorkspacesSidebarContainer = memo(
 				groups={groups}
 				archivedRows={archivedRows}
 				availableRepositories={availableRepositories}
+				sidebarGrouping={sidebarGrouping}
+				sidebarRepoFilterIds={sidebarRepoFilterIds}
+				sidebarSort={sidebarSort}
+				onSidebarGroupingChange={(sidebarGrouping) => {
+					void updateSettings({ sidebarGrouping });
+				}}
+				onSidebarRepoFilterChange={(sidebarRepoFilterIds) => {
+					void updateSettings({ sidebarRepoFilterIds });
+				}}
+				onSidebarSortChange={(sidebarSort) => {
+					void updateSettings({ sidebarSort });
+				}}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
-				sendingWorkspaceIds={sendingWorkspaceIds}
+				busyWorkspaceIds={busyWorkspaceIds}
 				interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
+				newWorkspaceShortcut={newWorkspaceShortcut}
+				addRepositoryShortcut={addRepositoryShortcut}
+				sidebarFilterShortcut={sidebarFilterShortcut}
 				creatingWorkspaceRepoId={creatingWorkspaceRepoId}
 				onAddRepository={() => {
 					void handleAddRepository();
@@ -77,18 +116,38 @@ export const WorkspacesSidebarContainer = memo(
 				onSubmitClone={handleCloneFromUrl}
 				onSelectWorkspace={handleSelectWorkspace}
 				onPrefetchWorkspace={prefetchWorkspace}
-				onCreateWorkspace={(repoId) => {
-					void handleCreateWorkspaceFromRepo(repoId);
-				}}
+				onOpenNewWorkspace={onOpenNewWorkspace}
+				onCreateWorkspaceForRepo={onAddRepositoryNeedsStart}
 				onArchiveWorkspace={handleArchiveWorkspace}
+				onMoveLocalToWorktree={onMoveLocalToWorktree}
 				onMarkWorkspaceUnread={handleMarkWorkspaceUnread}
 				onRestoreWorkspace={handleRestoreWorkspace}
 				onDeleteWorkspace={handleDeleteWorkspace}
+				onOpenInFinder={(workspaceId) => {
+					void openWorkspaceInFinder(workspaceId).catch((error) => {
+						const { message } = extractError(error, "Failed to open Finder");
+						pushWorkspaceToast(message, "Failed to open Finder", "destructive");
+					});
+				}}
 				onTogglePin={(workspaceId, pinned) => {
 					void handleTogglePin(workspaceId, pinned);
 				}}
-				onSetManualStatus={(workspaceId, status) => {
-					void handleSetManualStatus(workspaceId, status);
+				onMoveWorkspaceInSidebar={(
+					workspaceId,
+					targetGroupId,
+					beforeWorkspaceId,
+				) => {
+					void handleMoveWorkspaceInSidebar(
+						workspaceId,
+						targetGroupId,
+						beforeWorkspaceId,
+					);
+				}}
+				onMoveRepositoryInSidebar={(repoId, beforeRepoId) => {
+					void handleMoveRepositoryInSidebar(repoId, beforeRepoId);
+				}}
+				onSetWorkspaceStatus={(workspaceId, status) => {
+					void handleSetWorkspaceStatus(workspaceId, status);
 				}}
 			/>
 		);

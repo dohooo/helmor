@@ -7,7 +7,7 @@
 
 import type { SidecarEmitter } from "./emitter.js";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "cursor";
 
 export interface SendMessageParams {
 	readonly sessionId: string;
@@ -18,6 +18,10 @@ export interface SendMessageParams {
 	readonly permissionMode: string | undefined;
 	readonly effortLevel: string | undefined;
 	readonly fastMode: boolean | undefined;
+	/** Mirrors the Claude Agent SDK's `thinking.display` field. When
+	 *  absent, the manager falls back to its hardcoded default. */
+	readonly claudeThinkingDisplay?: "summarized" | "omitted";
+	readonly claudeEnvironment?: Readonly<Record<string, string>>;
 	/**
 	 * Extra directories the user linked via `/add-dir`. Passed to Claude as
 	 * `additionalDirectories`; merged into Codex's per-turn `sandboxPolicy`
@@ -26,11 +30,50 @@ export interface SendMessageParams {
 	 * arrays everywhere.
 	 */
 	readonly additionalDirectories?: readonly string[];
+	/**
+	 * Source repo `root_path` for the workspace this session belongs to.
+	 * Claude uses it to load project-scope MCP servers from
+	 * `~/.claude.json` — `cwd` is the worktree (never matches the user's
+	 * registered project key), so without this hint only user-scope MCPs
+	 * surface to the agent.
+	 */
+	readonly sourceRepoPath?: string;
+	/**
+	 * Structured image attachment paths from the composer. The single
+	 * source of truth for which `@<path>` substrings inside `prompt`
+	 * should be lifted out as image attachments. Paths may contain
+	 * whitespace (macOS Finder drops); never re-derive this list from
+	 * the prompt text. Always present — empty array means "no
+	 * attachments".
+	 */
+	readonly images: readonly string[];
 }
 
 export interface ListSlashCommandsParams {
 	readonly cwd: string | undefined;
 	readonly additionalDirectories?: readonly string[];
+}
+
+/**
+ * Ad-hoc context-usage query for the hover popover. `providerSessionId`
+ * is the SDK's own session id (what `resume:` takes) — used when no live
+ * `Query` is held for this helmor session. `model` is the composer's
+ * current model id; `cwd` lets the transient query load project settings.
+ */
+export interface GetContextUsageParams {
+	readonly helmorSessionId: string;
+	readonly providerSessionId: string | null;
+	readonly model: string;
+	readonly cwd: string | undefined;
+}
+
+export interface GenerateTitleOptions {
+	readonly model?: string;
+	readonly claudeEnvironment?: Readonly<Record<string, string>>;
+	/** When false, only the title is requested — branch generation is omitted
+	 * from the prompt entirely (saves tokens for local-mode workspaces and
+	 * any other case where the caller has no intent to rename a branch). */
+	readonly generateBranch?: boolean;
 }
 
 /**
@@ -45,6 +88,29 @@ export interface SlashCommandInfo {
 	readonly source: "builtin" | "skill";
 }
 
+/**
+ * Generic resolution for a unified `userInputRequest` round-trip. Every
+ * source (Claude AskUserQuestion, Claude MCP elicitation, Codex
+ * `requestUserInput`) emits the same wire event and accepts the same
+ * response shape; per-provider conversion to the SDK-specific form
+ * happens inside each manager's resolver closure.
+ */
+export type UserInputResolution =
+	| { action: "submit"; content: Record<string, unknown> }
+	| { action: "decline"; content?: Record<string, unknown> }
+	| { action: "cancel" };
+
+/** Mirrors `ModelParameterDefinition` from @cursor/sdk. Single source of
+ *  truth for derived `effortLevels`/`supportsFastMode` + send-time params. */
+export interface CursorModelParameter {
+	readonly id: string;
+	readonly displayName?: string;
+	readonly values: ReadonlyArray<{
+		readonly value: string;
+		readonly displayName?: string;
+	}>;
+}
+
 /** A model entry returned by listModels. Provider is implicit. */
 export interface ProviderModelInfo {
 	readonly id: string;
@@ -52,39 +118,27 @@ export interface ProviderModelInfo {
 	readonly cliModel: string;
 	readonly effortLevels?: readonly string[];
 	readonly supportsFastMode?: boolean;
-}
-
-/**
- * Normalize a model display label for the UI.
- * - "default" → "Opus 4.7 1M"
- * - "Sonnet (1M context)" → "Sonnet 1M"
- * - "gpt-5.4" → "GPT-5.4"
- * - "gpt-5.1-codex-mini" → "GPT-5.1-Codex-Mini"
- */
-export function formatModelLabel(id: string, rawLabel: string): string {
-	if (id === "default") return "Opus 4.7 1M";
-
-	let label = rawLabel;
-
-	// "Sonnet (1M context)" → "Sonnet 1M"
-	label = label.replace(/\s*\((\d+[A-Za-z]*)\s+context\)/g, " $1");
-
-	// GPT model IDs used as labels: uppercase "gpt" and capitalize after hyphens
-	if (label.toLowerCase().startsWith("gpt-")) {
-		label = label
-			.split("-")
-			.map((part, i) =>
-				i === 0
-					? part.toUpperCase()
-					: part.charAt(0).toUpperCase() + part.slice(1),
-			)
-			.join("-");
-	}
-
-	return label;
+	/** Cursor-only — raw `parameters[]` from `ModelListItem`. */
+	readonly cursorParameters?: readonly CursorModelParameter[];
 }
 
 export interface SessionManager {
+	/**
+	 * Resolve a parked unified `userInputRequest`. Each manager translates
+	 * the generic `UserInputResolution` into the SDK-specific shape that
+	 * its own pending-resolver closure expects (e.g. AskUserQuestion's
+	 * `updatedInput`, MCP `ElicitationResult`, or Codex `answers`).
+	 *
+	 * Returns `true` when the manager owned this id and resolved its
+	 * waiter, `false` when not in its pending map. `index.ts` fans the
+	 * call out to every provider and at least one is expected to claim
+	 * it; if none does, the dispatcher reports an error to the caller.
+	 */
+	resolveUserInput(
+		userInputId: string,
+		resolution: UserInputResolution,
+	): boolean;
+
 	/**
 	 * Stream a single user turn to the underlying provider SDK and forward
 	 * every event back through `emitter`. Resolves when the stream
@@ -107,6 +161,7 @@ export interface SessionManager {
 		branchRenamePrompt: string | null,
 		emitter: SidecarEmitter,
 		timeoutMs?: number,
+		options?: GenerateTitleOptions,
 	): Promise<void>;
 
 	/**
@@ -119,8 +174,10 @@ export interface SessionManager {
 		params: ListSlashCommandsParams,
 	): Promise<readonly SlashCommandInfo[]>;
 
-	/** List available models from the provider. */
-	listModels(): Promise<readonly ProviderModelInfo[]>;
+	/** List available models. `apiKey` overrides the manager's stored key
+	 *  for one-off probes (e.g. onboarding validation); when omitted the
+	 *  manager uses whatever it has configured. */
+	listModels(opts?: { apiKey?: string }): Promise<readonly ProviderModelInfo[]>;
 
 	/**
 	 * Abort an in-flight session by id. No-op if the session is not active.
@@ -139,6 +196,7 @@ export interface SessionManager {
 		sessionId: string,
 		prompt: string,
 		files: readonly string[],
+		images: readonly string[],
 	): Promise<boolean>;
 
 	/**

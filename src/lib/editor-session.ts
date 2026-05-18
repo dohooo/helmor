@@ -1,10 +1,48 @@
 export type DiffFileStatus = "M" | "A" | "D";
 
+/** Git stage-0 (clean index) syntax. `read_file_at_ref` concatenates
+ * `<ref>:<path>`, so passing `":0"` yields `:0:<path>` — the canonical
+ * way to read a file's staged content. Used by the unstaged area as its
+ * diff base, and by the staged area as its modified side. */
+export const INDEX_REF = ":0";
+
 export type DiffOpenOptions = {
 	fileStatus: DiffFileStatus;
 	originalRef?: string;
 	modifiedRef?: string;
 };
+
+/** What the inspector knows about the open editor target. We carry the
+ * diff bases (not just the path) so that "same file opened from Staged"
+ * vs "same file opened from Unstaged" can render as distinct selections —
+ * comparing path alone highlights both rows at once. Null when no file is
+ * open. */
+export type ActiveEditorTarget = {
+	path: string;
+	originalRef?: string;
+	modifiedRef?: string;
+};
+
+/** Returns true when the open editor's diff bases match the supplied
+ * area refs. Used by inspector groups to decide whether *their* row for
+ * a given path should render selected — comparing path alone breaks down
+ * when the same file lives in multiple areas (Staged + Unstaged) with
+ * different bases. Refs are compared strictly so `undefined`
+ * ("read modified side from disk") matches itself. */
+export function isActiveEditorTarget(
+	target: ActiveEditorTarget | null | undefined,
+	originalRef: string | undefined,
+	modifiedRef: string | undefined,
+): target is ActiveEditorTarget {
+	return (
+		!!target &&
+		target.originalRef === originalRef &&
+		target.modifiedRef === modifiedRef
+	);
+}
+
+/** "source" = Monaco editor; "preview" = rendered streamdown view. Only meaningful for markdown paths. */
+export type EditorViewMode = "source" | "preview";
 
 export type EditorSessionState = {
 	kind: "file" | "diff";
@@ -22,15 +60,34 @@ export type EditorSessionState = {
 	originalRef?: string;
 	/** Git ref for the modified (right) side. Omit to read from working tree. */
 	modifiedRef?: string;
+	/** Markdown view mode. Ignored for non-markdown paths. */
+	viewMode?: EditorViewMode;
 };
+
+const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdx"];
+
+export function isMarkdownPath(path: string): boolean {
+	const lower = path.toLowerCase();
+	return MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
 
 export type InspectorFileItem = {
 	path: string;
 	absolutePath: string;
 	name: string;
 	status: "M" | "A" | "D";
-	insertions: number;
-	deletions: number;
+	/** Lines added/removed in the staged area (HEAD vs index). */
+	stagedInsertions: number;
+	stagedDeletions: number;
+	/** Lines added/removed in the unstaged area (index vs working tree).
+	 * Includes line counts for untracked files. */
+	unstagedInsertions: number;
+	unstagedDeletions: number;
+	/** Lines added/removed in the committed area (target_ref vs HEAD). */
+	committedInsertions: number;
+	committedDeletions: number;
+	/** True when the file is binary (no meaningful line diff). */
+	isBinary?: boolean;
 	/** Set when the file has staged changes (HEAD vs index). */
 	stagedStatus?: "M" | "A" | "D" | null;
 	/** Set when the file has unstaged changes (index vs working tree, or
@@ -73,8 +130,12 @@ export function buildFallbackInspectorFileItems(
 		absolutePath: joinPath(normalizedRoot, file.path),
 		name: getBaseName(file.path),
 		status: file.status,
-		insertions: 0,
-		deletions: 0,
+		stagedInsertions: 0,
+		stagedDeletions: 0,
+		unstagedInsertions: 0,
+		unstagedDeletions: 0,
+		committedInsertions: 0,
+		committedDeletions: 0,
 	}));
 }
 

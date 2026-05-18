@@ -51,7 +51,7 @@ export function InteractionOptionRow({
 				disabled={disabled}
 				aria-pressed={selected}
 				onClick={onClick}
-				className="flex w-full items-start gap-1.5 text-left"
+				className="flex w-full cursor-interactive items-start gap-1.5 text-left disabled:cursor-not-allowed"
 			>
 				<span className="mt-0.5 shrink-0 text-muted-foreground">
 					{indicator === "radio" ? (

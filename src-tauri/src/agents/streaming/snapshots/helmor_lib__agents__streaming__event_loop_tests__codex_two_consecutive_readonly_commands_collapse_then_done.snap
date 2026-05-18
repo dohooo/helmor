@@ -1,0 +1,71 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: turn/started
+  emitted: []
+  side_effects: []
+- event_type: item/started
+  emitted:
+    - kind: StreamingPartial
+      message:
+        role: assistant
+        part_types:
+          - tool-call(Bash)
+        streaming: true
+  side_effects: []
+- event_type: item/completed
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - tool-call(Bash)
+          streaming: ~
+  side_effects: []
+- event_type: item/started
+  emitted:
+    - kind: StreamingPartial
+      message:
+        role: assistant
+        part_types:
+          - tool-call(Bash)
+        streaming: true
+  side_effects: []
+- event_type: item/completed
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - "collapsed-group(Shell,tools=2)"
+          streaming: ~
+  side_effects: []
+- event_type: turn/completed
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - "collapsed-group(Shell,tools=2)"
+          streaming: ~
+        - role: system
+          part_types:
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: end
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - "collapsed-group(Shell,tools=2)"
+          streaming: ~
+        - role: system
+          part_types:
+            - text
+          streaming: ~
+    - kind: Done
+      persisted: true
+  side_effects: []

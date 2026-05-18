@@ -241,6 +241,7 @@ impl MessagePart {
 pub enum ImageSource {
     Base64 { data: String },
     Url { url: String },
+    File { path: String },
 }
 
 /// Severity tier for `MessagePart::SystemNotice`. The frontend picks the

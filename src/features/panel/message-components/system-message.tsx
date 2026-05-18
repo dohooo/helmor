@@ -2,6 +2,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,
 	AlertTriangle,
+	Goal,
 	Info,
 	MessageSquareText,
 } from "lucide-react";
@@ -41,7 +42,7 @@ function SystemNotice({ part }: { part: SystemNoticePart }) {
 				? "text-chart-5"
 				: "text-chart-3";
 	return (
-		<span className="inline-flex items-center gap-1 whitespace-nowrap">
+		<span className="inline-flex min-h-4 items-center gap-1 whitespace-nowrap leading-none">
 			<Icon className={cn("size-3 shrink-0", iconClass)} strokeWidth={1.8} />
 			<span>{part.label}</span>
 			{part.body ? (
@@ -82,7 +83,7 @@ function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent
-				sideOffset={8}
+				sideOffset={4}
 				className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
 			>
 				<span>Use this prompt</span>
@@ -100,6 +101,18 @@ function SystemText({ text }: { text: string }) {
 			</span>
 		);
 	}
+	// Codex `/goal` lifecycle markers — narrated by
+	// `agents::streaming::codex_goal::goal_transition_label` on the
+	// backend ("Goal set" / "Goal paused" / etc.). Prefix-detect them
+	// here so they share an icon, same shape as the Error case above.
+	if (text.startsWith("Goal ")) {
+		return (
+			<span className="inline-flex items-center gap-1">
+				<Goal className="size-3 shrink-0" strokeWidth={1.8} />
+				{text}
+			</span>
+		);
+	}
 	return <span>{text}</span>;
 }
 
@@ -111,11 +124,21 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 	if (Number.isNaN(date.getTime())) return null;
 	return (
 		<>
-			<span className="mx-0.5 text-[11px] text-muted-foreground/60">•</span>
-			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+			<span className="inline-flex h-4 items-center text-[11px] leading-none text-muted-foreground/60">
+				•
+			</span>
+			<span className="inline-flex h-4 shrink-0 items-center text-[11px] leading-none tabular-nums text-muted-foreground">
 				{formatDistanceToNow(date, { addSuffix: true })}
 			</span>
 		</>
+	);
+}
+
+// Only the turn-end row (Claude `result` / Codex `turn.completed`) gets a
+// timestamp — the adapter tags its text part id with `:turn-result`.
+function shouldShowTimestamp(parts: MessagePart[]) {
+	return parts.some(
+		(part) => isTextPart(part) && part.id.endsWith(":turn-result"),
 	);
 }
 
@@ -138,7 +161,7 @@ export function ChatSystemMessage({
 			data-message-role="system"
 			className="group/sys flex min-w-0 items-center gap-1.5"
 		>
-			<div className="py-1 text-[11px] text-muted-foreground">
+			<div className="flex min-w-0 items-center gap-1.5 py-1 text-[11px] leading-none text-muted-foreground">
 				{parts.map((part, index) => {
 					if (isSystemNoticePart(part)) {
 						return <SystemNotice key={index} part={part} />;
@@ -151,11 +174,13 @@ export function ChatSystemMessage({
 					}
 					return null;
 				})}
+				{shouldShowTimestamp(parts) ? (
+					<MessageTimestamp createdAt={message.createdAt} />
+				) : null}
 			</div>
-			<MessageTimestamp createdAt={message.createdAt} />
 			<CopyMessageButton
 				message={copyTarget}
-				className="size-5 shrink-0 text-muted-foreground/30 opacity-0 transition-all hover:text-muted-foreground group-hover/sys:opacity-100"
+				className="size-5 shrink-0 text-muted-foreground/30 opacity-0 hover:text-muted-foreground group-hover/sys:opacity-100"
 			/>
 		</div>
 	);

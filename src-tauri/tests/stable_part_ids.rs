@@ -15,6 +15,7 @@ mod common;
 
 use common::*;
 use helmor_lib::pipeline::types::{ExtendedMessagePart, MessagePart};
+use helmor_lib::pipeline::PipelineEmit;
 use serde_json::{json, Value};
 
 /// Feed an event and return the fully rendered thread snapshot.
@@ -46,6 +47,15 @@ fn last_text_id(messages: &[ThreadMessageLike]) -> Option<String> {
     for part in &last.content {
         if let ExtendedMessagePart::Basic(MessagePart::Text { id, .. }) = part {
             return Some(id.clone());
+        }
+    }
+    None
+}
+
+fn first_system_notice(message: &ThreadMessageLike) -> Option<(String, String)> {
+    for part in &message.content {
+        if let ExtendedMessagePart::Basic(MessagePart::SystemNotice { id, label, .. }) = part {
+            return Some((id.clone(), label.clone()));
         }
     }
     None
@@ -429,4 +439,44 @@ fn codex_reasoning_id_roundtrips_through_historical_reload() {
         live_id, hist_id,
         "Codex reasoning part id must survive the live → DB → historical round-trip",
     );
+}
+
+#[test]
+fn codex_context_compaction_renders_started_and_completed_notices() {
+    let mut pipeline = MessagePipeline::new("codex", "codex-mini", "ctx", "sess");
+
+    let started = json!({
+        "type": "item/started",
+        "item": {
+            "id": "compact_1",
+            "type": "contextCompaction"
+        }
+    });
+    let started_line = serde_json::to_string(&started).unwrap();
+    let partial = match pipeline.push_event(&started, &started_line) {
+        PipelineEmit::Partial(message) => message,
+        _ => panic!("context compaction start should emit a streaming notice"),
+    };
+    let (started_part_id, started_label) =
+        first_system_notice(&partial).expect("started notice should render");
+    assert_eq!(started_label, "Compacting context");
+
+    let completed = json!({
+        "type": "item/completed",
+        "item": {
+            "id": "compact_1",
+            "type": "contextCompaction"
+        }
+    });
+    let completed_line = serde_json::to_string(&completed).unwrap();
+    let messages = match pipeline.push_event(&completed, &completed_line) {
+        PipelineEmit::Full(messages) => messages,
+        _ => panic!("context compaction completion should emit a full render"),
+    };
+    let notices: Vec<(String, String)> = messages.iter().filter_map(first_system_notice).collect();
+
+    assert_eq!(notices.len(), 2);
+    assert_eq!(notices[0].1, "Compacting context");
+    assert_eq!(notices[1].1, "Context compacted");
+    assert_ne!(started_part_id, notices[1].0);
 }

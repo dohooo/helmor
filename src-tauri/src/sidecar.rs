@@ -78,9 +78,8 @@ struct SidecarProcess {
 
 #[derive(Debug, Default)]
 struct BundledAgentPaths {
-    claude_cli: Option<PathBuf>,
+    claude_bin: Option<PathBuf>,
     codex_bin: Option<PathBuf>,
-    bun_bin: Option<PathBuf>,
 }
 
 fn resolve_bundled_agent_paths() -> BundledAgentPaths {
@@ -90,21 +89,33 @@ fn resolve_bundled_agent_paths() -> BundledAgentPaths {
         .unwrap_or_default()
 }
 
+/// Read Cursor API key from `app.cursor_provider`. None on missing/empty.
+pub fn load_cursor_api_key() -> Option<String> {
+    let raw = crate::models::settings::load_setting_value("app.cursor_provider")
+        .ok()
+        .flatten()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let key = parsed.get("apiKey")?.as_str()?.trim();
+    (!key.is_empty()).then(|| key.to_string())
+}
+
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {
     let exe_dir = exe.parent()?;
     let contents_dir = exe_dir.parent()?;
     let resources_dir = contents_dir.join("Resources");
+    let claude_bin_name = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
     let codex_bin_name = if cfg!(windows) { "codex.exe" } else { "codex" };
-    let bun_bin_name = if cfg!(windows) { "bun.exe" } else { "bun" };
 
-    let claude_cli = resources_dir.join("vendor/claude-code/cli.js");
+    let claude_bin = resources_dir.join(format!("vendor/claude-code/{claude_bin_name}"));
     let codex_bin = resources_dir.join(format!("vendor/codex/{codex_bin_name}"));
-    let bun_bin = resources_dir.join(format!("vendor/bun/{bun_bin_name}"));
 
     Some(BundledAgentPaths {
-        claude_cli: claude_cli.is_file().then_some(claude_cli),
+        claude_bin: claude_bin.is_file().then_some(claude_bin),
         codex_bin: codex_bin.is_file().then_some(codex_bin),
-        bun_bin: bun_bin.is_file().then_some(bun_bin),
     })
 }
 
@@ -122,6 +133,14 @@ impl SidecarProcess {
         let mut cmd = if is_dev {
             let mut c = Command::new("bun");
             c.arg("run").arg(&sidecar_path);
+            // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
+            // applies the preload that registers our build-time plugins
+            // (sqlite3 shim + cursor SDK chunk) at runtime. Without this
+            // the sidecar inherits Tauri's cwd and the preload never runs,
+            // so loading @cursor/sdk crashes on the native sqlite3 addon.
+            if let Some(sidecar_root) = sidecar_path.parent().and_then(|p| p.parent()) {
+                c.current_dir(sidecar_root);
+            }
             c
         } else {
             Command::new(&sidecar_path)
@@ -152,21 +171,20 @@ impl SidecarProcess {
             let exe = std::env::current_exe().ok();
             tracing::info!(
                 exe = ?exe,
-                claude_cli = ?bundled_paths.claude_cli,
+                claude_bin = ?bundled_paths.claude_bin,
                 codex_bin = ?bundled_paths.codex_bin,
-                bun_bin = ?bundled_paths.bun_bin,
                 "Resolved bundled agent paths"
             );
-            if let Some(path) = bundled_paths.claude_cli {
-                cmd.env("HELMOR_CLAUDE_CODE_CLI_PATH", &path);
+            if let Some(path) = bundled_paths.claude_bin {
+                cmd.env("HELMOR_CLAUDE_CODE_BIN_PATH", &path);
             }
             if let Some(path) = bundled_paths.codex_bin {
                 cmd.env("HELMOR_CODEX_BIN_PATH", &path);
             }
-            if let Some(path) = bundled_paths.bun_bin {
-                cmd.env("HELMOR_BUN_PATH", &path);
-            }
         }
+        // Cursor key is NOT env-passed — pushed via `updateConfig` RPC
+        // (see `push_cursor_api_key`) so key changes don't restart the
+        // shared sidecar and interrupt other providers' turns.
 
         tracing::debug!(
             cmd = if is_dev {
@@ -372,9 +390,50 @@ impl ManagedSidecar {
                 }
                 return Err(error);
             }
+
+            // Push saved key so the first cursor request finds it set.
+            // Best-effort: failures fall through to the "not configured" error.
+            if let Some(key) = load_cursor_api_key() {
+                let init = SidecarRequest {
+                    id: Uuid::new_v4().to_string(),
+                    method: "updateConfig".to_string(),
+                    params: serde_json::json!({ "cursorApiKey": key }),
+                };
+                if let Err(error) = guard.as_ref().unwrap().send(&init) {
+                    tracing::warn!("Initial Cursor key push failed: {error}");
+                }
+            }
         }
 
         guard.as_ref().unwrap().send(request)
+    }
+
+    /// Hot-push Cursor API key (or null) via `updateConfig`. Best-effort;
+    /// no-op when sidecar isn't running — next spawn will pick it up.
+    pub fn push_cursor_api_key(&self, key: Option<String>) {
+        let mut guard = match self.process.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::error!("Sidecar lock poisoned during config push: {e}");
+                e.into_inner()
+            }
+        };
+        let Some(process) = guard.as_mut() else {
+            return;
+        };
+        if !process.is_alive() {
+            return;
+        }
+        let request = SidecarRequest {
+            id: Uuid::new_v4().to_string(),
+            method: "updateConfig".to_string(),
+            params: serde_json::json!({
+                "cursorApiKey": key,
+            }),
+        };
+        if let Err(error) = process.send(&request) {
+            tracing::warn!("Failed to push Cursor API key to sidecar: {error}");
+        }
     }
 
     /// Cooperative shutdown of the sidecar process. Three-step ladder:
@@ -449,6 +508,11 @@ impl ManagedSidecar {
     /// events to the correct per-request channel. On exit (EOF / error), the
     /// thread clears `reader_running` and drops all listener senders so that
     /// blocked `rx.iter()` calls in `stream_via_sidecar` unblock immediately.
+    #[cfg(test)]
+    pub(crate) fn dispatch_for_test(&self, event: SidecarEvent, raw: &str) -> bool {
+        dispatch_event(&self.listeners, event, raw)
+    }
+
     fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
@@ -489,33 +553,8 @@ impl ManagedSidecar {
                                 continue;
                             };
                             let event = SidecarEvent { raw };
-
-                            if let Some(request_id) = event.id() {
-                                let event_type = event.event_type().to_string();
-                                let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
-                                if let Some(tx) = map.get(request_id) {
-                                    tracing::debug!(request_id, event_type = %event_type, "← stdout");
-                                    let _ = tx.send(event);
-                                    event_count += 1;
-                                } else {
-                                    tracing::debug!(request_id, event_type = %event_type, "← stdout (no listener, dropped)");
-                                }
-                            } else {
-                                // No-id event — broadcast to all active listeners
-                                // (e.g. fatal uncaughtException / unhandledRejection).
-                                tracing::debug!(raw = trimmed, "← stdout [no-id]");
-                                if event.event_type() == "error" {
-                                    let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
-                                    for (rid, tx) in map.iter() {
-                                        let mut evt = event.clone();
-                                        evt.raw.as_object_mut().unwrap().insert(
-                                            "id".to_string(),
-                                            Value::String(rid.clone()),
-                                        );
-                                        let _ = tx.send(evt);
-                                    }
-                                    event_count += 1;
-                                }
+                            if dispatch_event(&listeners, event, trimmed) {
+                                event_count += 1;
                             }
                         }
                         Err(e) => {
@@ -547,7 +586,10 @@ impl ManagedSidecar {
                         };
                         for (rid, tx) in map.iter() {
                             let mut evt = crash_event.clone();
-                            evt.raw.as_object_mut().unwrap().insert("id".to_string(), Value::String(rid.clone()));
+                            evt.raw
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("id".to_string(), Value::String(rid.clone()));
                             let _ = tx.send(evt);
                         }
                     }
@@ -563,6 +605,36 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+/// Dispatch one event. `true` when delivered to a listener; no-id
+/// branches log only (broadcasting tore down in-flight turns).
+fn dispatch_event(listeners: &Listeners, event: SidecarEvent, raw: &str) -> bool {
+    if let Some(request_id) = event.id() {
+        let event_type = event.event_type().to_string();
+        let map = listeners.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = map.get(request_id) {
+            tracing::debug!(request_id, event_type = %event_type, "← stdout");
+            let _ = tx.send(event);
+            return true;
+        }
+        tracing::debug!(request_id, event_type = %event_type, "← stdout (no listener, dropped)");
+        return false;
+    }
+    if event.event_type() == "error" {
+        let message = event
+            .raw
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("(no message)");
+        tracing::warn!(
+            message,
+            "sidecar emitted no-id error — logged, not broadcast"
+        );
+    } else {
+        tracing::debug!(raw, "← stdout [no-id]");
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -753,42 +825,39 @@ mod tests {
         assert!(!*flag, "Flag should be cleared, allowing restart");
     }
 
+    /// Regression: no-id error events must not fan out to listeners.
     #[test]
-    fn no_id_error_event_broadcasts_to_all_listeners() {
+    fn no_id_error_event_does_not_reach_active_listeners() {
         let sidecar = ManagedSidecar::new();
         let rx1 = sidecar.subscribe("req-1");
         let rx2 = sidecar.subscribe("req-2");
 
-        // Simulate a no-id error event being dispatched (same logic as
-        // the reader thread's broadcast path).
-        {
-            let event = SidecarEvent {
-                raw: serde_json::json!({
-                    "type": "error",
-                    "message": "Internal sidecar error",
-                    "internal": true,
-                }),
-            };
-            let map = sidecar.listeners.lock().unwrap();
-            for (rid, tx) in map.iter() {
-                let mut evt = event.clone();
-                evt.raw
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("id".to_string(), Value::String(rid.clone()));
-                let _ = tx.send(evt);
-            }
-        }
+        // Feed the dispatch entrypoint directly. Old broadcast would
+        // have leaked the event below to both rx channels.
+        let raw = serde_json::json!({ "type": "error", "message": "boom" });
+        let consumed =
+            sidecar.dispatch_for_test(SidecarEvent { raw }, r#"{"type":"error","message":"boom"}"#);
+        assert!(!consumed, "no-id event should not count as delivered");
+        assert!(rx1
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
+        assert!(rx2
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
 
-        // Both listeners should receive the error with their own id injected
-        let e1 = rx1.recv().unwrap();
-        assert_eq!(e1.id(), Some("req-1"));
-        assert_eq!(e1.event_type(), "error");
-        assert_eq!(e1.raw.get("internal").and_then(Value::as_bool), Some(true));
-
-        let e2 = rx2.recv().unwrap();
-        assert_eq!(e2.id(), Some("req-2"));
-        assert_eq!(e2.event_type(), "error");
+        // Sanity: an event WITH a matching id still reaches its listener.
+        let raw_with_id = serde_json::json!({ "id": "req-1", "type": "end" });
+        let consumed_id = sidecar.dispatch_for_test(
+            SidecarEvent { raw: raw_with_id },
+            r#"{"id":"req-1","type":"end"}"#,
+        );
+        assert!(consumed_id);
+        assert!(rx1
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_ok());
+        assert!(rx2
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
     }
 
     #[test]
@@ -798,27 +867,20 @@ mod tests {
         let resources = root.path().join("Helmor.app/Contents/Resources/vendor");
         std::fs::create_dir_all(resources.join("claude-code")).unwrap();
         std::fs::create_dir_all(resources.join("codex")).unwrap();
-        std::fs::create_dir_all(resources.join("bun")).unwrap();
-        std::fs::write(resources.join("claude-code/cli.js"), "").unwrap();
+        std::fs::write(resources.join("claude-code/claude"), "").unwrap();
         std::fs::write(resources.join("codex/codex"), "").unwrap();
-        std::fs::write(resources.join("bun/bun"), "").unwrap();
 
         let paths = resolve_bundled_agent_paths_for_exe(&exe).unwrap();
 
         assert_eq!(
-            paths.claude_cli.unwrap(),
+            paths.claude_bin.unwrap(),
             root.path()
-                .join("Helmor.app/Contents/Resources/vendor/claude-code/cli.js")
+                .join("Helmor.app/Contents/Resources/vendor/claude-code/claude")
         );
         assert_eq!(
             paths.codex_bin.unwrap(),
             root.path()
                 .join("Helmor.app/Contents/Resources/vendor/codex/codex")
-        );
-        assert_eq!(
-            paths.bun_bin.unwrap(),
-            root.path()
-                .join("Helmor.app/Contents/Resources/vendor/bun/bun")
         );
     }
 }

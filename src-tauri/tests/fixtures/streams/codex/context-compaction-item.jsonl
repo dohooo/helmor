@@ -1,0 +1,4 @@
+{"type":"thread/started","thread":{"id":"codex-compact-thread"},"session_id":"codex-compact-thread"}
+{"type":"item/started","item":{"id":"compact-item-1","type":"contextCompaction"},"threadId":"codex-compact-thread","turnId":"compact-turn-1"}
+{"type":"item/completed","item":{"id":"compact-item-1","type":"contextCompaction"},"threadId":"codex-compact-thread","turnId":"compact-turn-1"}
+{"type":"turn/completed","turn":{"id":"compact-turn-1","status":"completed"},"usage":{"input_tokens":100,"output_tokens":8},"threadId":"codex-compact-thread"}

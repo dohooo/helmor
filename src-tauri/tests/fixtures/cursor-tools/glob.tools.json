@@ -1,0 +1,29 @@
+[
+	{
+		"call_id": "tool_cdbff0d7-28e7-4a6f-b0de-9da6245aba6",
+		"name": "glob",
+		"status": "running",
+		"args": {
+			"globPattern": "**/*.ts",
+			"targetDirectory": "/tmp/cursor-tools-probe/probe-workspace/src"
+		}
+	},
+	{
+		"call_id": "tool_cdbff0d7-28e7-4a6f-b0de-9da6245aba6",
+		"name": "glob",
+		"status": "completed",
+		"args": {
+			"globPattern": "**/*.ts",
+			"targetDirectory": "/tmp/cursor-tools-probe/probe-workspace/src"
+		},
+		"result": {
+			"status": "success",
+			"value": {
+				"files": ["foo.ts"],
+				"totalFiles": 1,
+				"clientTruncated": false,
+				"ripgrepTruncated": false
+			}
+		}
+	}
+]

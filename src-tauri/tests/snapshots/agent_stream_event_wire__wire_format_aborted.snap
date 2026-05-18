@@ -1,0 +1,12 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::Aborted\n{\n    provider: \"claude\".into(), model_id: \"opus-1m\".into(), resolved_model:\n    \"claude-opus-4-20250514\".into(), session_id:\n    Some(\"provider-session-1\".into()), working_directory:\n    \"/tmp/helmor\".into(), persisted: true, reason: \"user_requested\".into(),\n})"
+---
+kind: aborted
+model_id: opus-1m
+persisted: true
+provider: claude
+reason: user_requested
+resolved_model: claude-opus-4-20250514
+session_id: provider-session-1
+working_directory: /tmp/helmor

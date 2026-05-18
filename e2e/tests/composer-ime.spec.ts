@@ -5,12 +5,9 @@ test.describe("composer IME regressions", () => {
 		page,
 	}) => {
 		await page.addInitScript(() => {
-			try {
-				window.localStorage.setItem("helmor_onboarding_completed", "1");
-			} catch {}
-
 			window.__HELMOR_E2E__ = {
 				invokeOverrides: {
+					get_app_settings: () => ({ "app.onboarding_completed": "true" }),
 					list_agent_model_sections: () => [
 						{
 							id: "claude",
@@ -244,12 +241,9 @@ test.describe("composer IME regressions", () => {
 		page,
 	}) => {
 		await page.addInitScript(() => {
-			try {
-				window.localStorage.setItem("helmor_onboarding_completed", "1");
-			} catch {}
-
 			window.__HELMOR_E2E__ = {
 				invokeOverrides: {
+					get_app_settings: () => ({ "app.onboarding_completed": "true" }),
 					list_agent_model_sections: () => [
 						{
 							id: "claude",

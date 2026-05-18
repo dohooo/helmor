@@ -118,5 +118,157 @@ impl SlashCommandCache {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str) -> SlashCommandEntry {
+        SlashCommandEntry {
+            name: name.to_string(),
+            description: format!("desc for {name}"),
+            argument_hint: None,
+            source: "skill".to_string(),
+        }
+    }
+
+    #[test]
+    fn workspace_key_distinguishes_provider() {
+        let claude = workspace_key("claude", Some("/repo"), &["/linked".to_string()]);
+        let codex = workspace_key("codex", Some("/repo"), &["/linked".to_string()]);
+        assert_ne!(claude, codex);
+    }
+
+    #[test]
+    fn workspace_key_distinguishes_linked_dir_signature() {
+        let none = workspace_key("claude", Some("/repo"), &[]);
+        let one = workspace_key("claude", Some("/repo"), &["/linked".to_string()]);
+        let two = workspace_key(
+            "claude",
+            Some("/repo"),
+            &["/linked".to_string(), "/other".to_string()],
+        );
+        assert_ne!(none, one);
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn workspace_key_treats_none_cwd_as_empty_string() {
+        let none = workspace_key("claude", None, &[]);
+        let empty = workspace_key("claude", Some(""), &[]);
+        assert_eq!(none, empty);
+    }
+
+    #[test]
+    fn cache_starts_empty_and_returns_none() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        assert!(cache.get_workspace(&key).is_none());
+        assert!(cache
+            .get_repo(&("claude".into(), "repo-1".into()))
+            .is_none());
+    }
+
+    #[test]
+    fn set_writes_workspace_and_mirrors_repo_when_repo_id_present() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        cache.set(key.clone(), Some("repo-1"), vec![entry("a"), entry("b")]);
+
+        assert_eq!(cache.get_workspace(&key).unwrap().len(), 2);
+        let repo_hit = cache.get_repo(&repo_key("claude", "repo-1")).unwrap();
+        assert_eq!(repo_hit.len(), 2);
+        assert_eq!(repo_hit[0].name, "a");
+    }
+
+    #[test]
+    fn set_skips_repo_mirror_when_repo_id_is_empty_or_missing() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        cache.set(key.clone(), None, vec![entry("a")]);
+        cache.set(key.clone(), Some(""), vec![entry("a")]);
+
+        // Workspace tier was written.
+        assert!(cache.get_workspace(&key).is_some());
+        // Repo tier was not — the empty repo_id falls in the same bucket as None.
+        assert!(cache.get_repo(&repo_key("claude", "")).is_none());
+    }
+
+    #[test]
+    fn try_start_refresh_is_exclusive_until_finish() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+
+        assert!(cache.try_start_refresh(&key), "first call wins the lock");
+        assert!(!cache.try_start_refresh(&key), "second call loses");
+
+        cache.finish_refresh(&key);
+        assert!(
+            cache.try_start_refresh(&key),
+            "after finish, the lock can be reclaimed"
+        );
+    }
+
+    #[test]
+    fn try_start_refresh_independent_keys_dont_block_each_other() {
+        let cache = SlashCommandCache::new();
+        let a = workspace_key("claude", Some("/a"), &[]);
+        let b = workspace_key("claude", Some("/b"), &[]);
+        assert!(cache.try_start_refresh(&a));
+        assert!(cache.try_start_refresh(&b));
+    }
+
+    #[test]
+    fn finish_refresh_on_unheld_key_is_a_noop() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        cache.finish_refresh(&key);
+        // Subsequent claim still works.
+        assert!(cache.try_start_refresh(&key));
+    }
+
+    #[test]
+    fn cache_set_overwrites_previous_value_for_same_key() {
+        let cache = SlashCommandCache::new();
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        cache.set(key.clone(), Some("repo-1"), vec![entry("old")]);
+        cache.set(
+            key.clone(),
+            Some("repo-1"),
+            vec![entry("new"), entry("two")],
+        );
+
+        let entries = cache.get_workspace(&key).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "new");
+    }
+
+    #[test]
+    fn cache_concurrent_get_and_set_does_not_panic() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let cache = Arc::new(SlashCommandCache::new());
+        let key = workspace_key("claude", Some("/repo"), &[]);
+        cache.set(key.clone(), Some("repo-1"), vec![entry("init")]);
+
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let cache = cache.clone();
+            let key = key.clone();
+            handles.push(thread::spawn(move || {
+                if i % 2 == 0 {
+                    let _ = cache.get_workspace(&key);
+                } else {
+                    cache.set(key.clone(), Some("repo-1"), vec![entry(&format!("e{i}"))]);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(cache.get_workspace(&key).is_some());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Local skill/command scanner

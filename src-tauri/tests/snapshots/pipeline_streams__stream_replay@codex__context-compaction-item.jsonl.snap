@@ -1,0 +1,40 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/codex/context-compaction-item.jsonl
+---
+line_count: 4
+checkpoint_count: 2
+checkpoints:
+  - line_index: 2
+    event_type: item/completed
+    roles:
+      - system
+      - system
+    last_part_types:
+      - system-notice
+  - line_index: 3
+    event_type: turn/completed
+    roles:
+      - system
+      - system
+    last_part_types:
+      - system-notice
+final_state:
+  message_count: 2
+  roles:
+    - system
+    - system
+  total_parts: 2
+persisted_turns:
+  turn_count: 1
+  total_blocks: 0
+  turns:
+    - role: system
+      block_types: []
+historical_render:
+  message_count: 1
+  messages:
+    - role: system
+      part_types:
+        - system-notice

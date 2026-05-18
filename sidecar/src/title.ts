@@ -30,7 +30,19 @@ function buildBranchRenameInstructions(
 export function buildTitlePrompt(
 	userMessage: string,
 	branchRenamePrompt?: string | null,
+	generateBranch = true,
 ): string {
+	if (!generateBranch) {
+		return [
+			"Based on the following user message, generate a concise session title (use the same language as the user message, max 8 words).",
+			"",
+			"Output EXACTLY in this format (one line, nothing else):",
+			"title: <the title>",
+			"",
+			"User message:",
+			userMessage,
+		].join("\n");
+	}
 	return [
 		"Based on the following user message, generate TWO things:",
 		"1. A concise session title (use the same language as the user message, max 8 words)",
@@ -59,6 +71,18 @@ export interface ParsedTitle {
 	readonly branchName: string | undefined;
 }
 
+export type TitleGenerationErrorLogger = (
+	message: string,
+	meta: Record<string, unknown>,
+) => void;
+
+export interface TitleGenerationDiagnosticsOptions {
+	readonly generateBranch: boolean;
+	readonly model?: string;
+	readonly previewLimit?: number;
+	readonly logError: TitleGenerationErrorLogger;
+}
+
 export function parseTitleAndBranch(raw: string): ParsedTitle {
 	let title = "";
 	let branch = "";
@@ -84,4 +108,37 @@ export function parseTitleAndBranch(raw: string): ParsedTitle {
 	}
 
 	return { title, branchName: branch || undefined };
+}
+
+export function parseTitleAndBranchWithDiagnostics(
+	requestId: string,
+	raw: string,
+	options: TitleGenerationDiagnosticsOptions,
+): ParsedTitle {
+	const parsed = parseTitleAndBranch(raw);
+	const previewLimit = options.previewLimit ?? 200;
+	const rawPreview = raw.slice(0, previewLimit);
+	const model = options.model;
+	const generateBranch = options.generateBranch;
+
+	if (!parsed.title) {
+		options.logError(`[${requestId}] title generation returned empty title`, {
+			...(model ? { model } : {}),
+			generateBranch,
+			rawPreview,
+		});
+	}
+
+	if (generateBranch && !parsed.branchName) {
+		options.logError(
+			`[${requestId}] title generation returned empty branch name`,
+			{
+				...(model ? { model } : {}),
+				generateBranch,
+				rawPreview,
+			},
+		);
+	}
+
+	return parsed;
 }

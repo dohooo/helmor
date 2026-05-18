@@ -3,7 +3,6 @@ import type {
 	WorkspaceRow,
 	WorkspaceSessionSummary,
 } from "@/lib/api";
-import type { GithubIdentityState } from "./types";
 
 export const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 export const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
@@ -13,14 +12,6 @@ export const MIN_SIDEBAR_WIDTH = 220;
 export const MAX_SIDEBAR_WIDTH = 520;
 export const SIDEBAR_RESIZE_STEP = 16;
 export const SIDEBAR_RESIZE_HIT_AREA = 20;
-
-const WORKSPACE_NAVIGATION_ORDER = [
-	"done",
-	"review",
-	"progress",
-	"backlog",
-	"canceled",
-] as const;
 
 export function clampSidebarWidth(width: number) {
 	return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
@@ -46,10 +37,6 @@ export function getInitialSidebarWidth(storageKey = SIDEBAR_WIDTH_STORAGE_KEY) {
 	} catch {
 		return DEFAULT_SIDEBAR_WIDTH;
 	}
-}
-
-export function getInitialGithubIdentityState(): GithubIdentityState {
-	return { status: "checking" };
 }
 
 export function findAdjacentSessionId(
@@ -78,17 +65,24 @@ export function findAdjacentSessionId(
 	return workspaceSessions[nextIndex]?.id ?? null;
 }
 
+/**
+ * Flatten sidebar groups + archived rows into the same visual order the
+ * sidebar actually renders them in. Powers keyboard up/down navigation
+ * and the workspace prefetch warmup, so both have to mirror what the
+ * user sees on screen.
+ *
+ * Trust the caller-supplied `groups` order verbatim — don't re-sort by
+ * `tone` or any other status-derived field. The grouping pipeline owns
+ * the order, and the order is mode-dependent: status grouping sorts by
+ * status, repo grouping sorts by repo bucket, and inserting a hardcoded
+ * tone ranking here silently breaks repo mode (every repo bucket has
+ * `tone: "pinned"`, so the old implementation dropped most of them).
+ */
 export function flattenWorkspaceRows(
 	groups: WorkspaceGroup[],
 	archivedRows: WorkspaceRow[],
 ) {
-	const orderedRows = WORKSPACE_NAVIGATION_ORDER.flatMap((tone) =>
-		groups
-			.filter((group) => group.tone === tone)
-			.flatMap((group) => group.rows),
-	);
-
-	return [...orderedRows, ...archivedRows];
+	return [...groups.flatMap((group) => group.rows), ...archivedRows];
 }
 
 export function findAdjacentWorkspaceId(

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Helmor CLI"
+  short_description: "Use Helmor from the terminal."
+  default_prompt: "Use the Helmor CLI to inspect data, manage workspaces, send prompts, or run Helmor as an MCP server."

@@ -1,0 +1,31 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: system
+  emitted:
+    - kind: Update
+      messages: []
+  side_effects: []
+- event_type: assistant
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: deferredToolUse
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+          streaming: ~
+    - kind: DeferredToolUse
+      tool_use_id: tool-1
+      tool_name: AskUserQuestion
+      permission_mode: ~
+  side_effects: []

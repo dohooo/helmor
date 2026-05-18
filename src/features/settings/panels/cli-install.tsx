@@ -1,7 +1,12 @@
-import { Check, Download, Loader2, Terminal } from "lucide-react";
+import { Download, Loader2, Terminal } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { type CliStatus, getCliStatus, installCli } from "@/lib/api";
+import {
+	SettingsGroup,
+	SettingsNotice,
+	SettingsRow,
+} from "../components/settings-row";
 
 export function CliInstallPanel() {
 	const [status, setStatus] = useState<CliStatus | null>(null);
@@ -9,9 +14,14 @@ export function CliInstallPanel() {
 	const [error, setError] = useState<string | null>(null);
 	const commandName =
 		status?.buildMode === "development" ? "helmor-dev" : "helmor";
+	const buildLabel = status?.buildMode === "development" ? "Debug" : "Release";
+	const isManaged = status?.installState === "managed";
+	const isStale = status?.installState === "stale";
+	const buttonLabel =
+		isManaged || isStale ? "Reinstall" : "Install to /usr/local/bin";
 
 	useEffect(() => {
-		void getCliStatus().then(setStatus);
+		void getCliStatus().then(setStatus).catch(setError);
 	}, []);
 
 	const handleInstall = useCallback(async () => {
@@ -28,95 +38,64 @@ export function CliInstallPanel() {
 	}, []);
 
 	return (
-		<div className="rounded-xl border border-border/30 bg-muted/30 px-5 py-4">
-			<div className="flex items-center gap-2">
-				<Terminal className="size-4 text-muted-foreground" strokeWidth={1.8} />
-				<div className="text-[13px] font-medium leading-snug text-foreground">
-					Command Line Tool
-				</div>
-			</div>
-			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-				Install the{" "}
-				<code className="rounded bg-muted px-1 py-0.5 text-[11px]">
-					{commandName}
-				</code>{" "}
-				command as a symlink to this app&apos;s bundled CLI so terminal usage
-				tracks desktop updates automatically.{" "}
-				{status?.buildMode === "development" ? "Debug" : "Release"} build.
-			</div>
-
-			<div className="mt-4">
-				{status?.installState === "managed" ? (
-					<div className="space-y-3">
-						<div className="flex items-center gap-2 text-[12px] text-green-400/90">
-							<Check className="size-3.5" strokeWidth={2} />
-							<span>
+		<SettingsGroup>
+			<SettingsRow
+				align="start"
+				title={
+					<span className="flex items-center gap-1.5">
+						<Terminal
+							className="size-3.5 text-muted-foreground"
+							strokeWidth={1.8}
+						/>
+						<span>Command Line Tool</span>
+					</span>
+				}
+				description={
+					<>
+						Install the{" "}
+						<code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+							{commandName}
+						</code>{" "}
+						command as a symlink to this app&apos;s bundled CLI so terminal
+						usage tracks desktop updates automatically. {buildLabel} build.
+						{isManaged ? (
+							<SettingsNotice tone="ok">
 								Installed at{" "}
 								<code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-									{status.installPath}
+									{status?.installPath}
 								</code>
-							</span>
-						</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={handleInstall}
-							disabled={installing}
-						>
-							{installing ? (
-								<Loader2 className="size-3.5 animate-spin" />
-							) : (
-								<Download className="size-3.5" strokeWidth={1.8} />
-							)}
-							Reinstall
-						</Button>
-					</div>
-				) : status?.installState === "stale" ? (
-					<div className="space-y-3">
-						<p className="text-[12px] leading-snug text-amber-400/90">
-							Existing CLI install at{" "}
-							<code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-								{status.installPath}
-							</code>{" "}
-							is not managed by this app. Reinstall to point it at the bundled
-							CLI.
-						</p>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={handleInstall}
-							disabled={installing}
-						>
-							{installing ? (
-								<Loader2 className="size-3.5 animate-spin" />
-							) : (
-								<Download className="size-3.5" strokeWidth={1.8} />
-							)}
-							Reinstall
-						</Button>
-					</div>
-				) : (
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={handleInstall}
-						disabled={installing}
-					>
-						{installing ? (
-							<Loader2 className="size-3.5 animate-spin" />
-						) : (
-							<Download className="size-3.5" strokeWidth={1.8} />
-						)}
-						Install to /usr/local/bin
-					</Button>
-				)}
-
-				{error && (
-					<p className="mt-2 text-[11px] leading-relaxed text-destructive">
-						{error}
-					</p>
-				)}
-			</div>
-		</div>
+							</SettingsNotice>
+						) : null}
+						{isStale ? (
+							<SettingsNotice tone="warn">
+								Existing CLI at{" "}
+								<code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+									{status?.installPath}
+								</code>{" "}
+								is not managed by this app. Reinstall to point it at the bundled
+								CLI.
+							</SettingsNotice>
+						) : null}
+						{error ? (
+							<SettingsNotice tone="error">{error}</SettingsNotice>
+						) : null}
+					</>
+				}
+			>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={handleInstall}
+					disabled={installing}
+				>
+					{installing ? (
+						<Loader2 className="size-3.5 animate-spin" />
+					) : (
+						<Download className="size-3.5" strokeWidth={1.8} />
+					)}
+					{buttonLabel}
+				</Button>
+			</SettingsRow>
+		</SettingsGroup>
 	);
 }

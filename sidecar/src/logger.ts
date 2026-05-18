@@ -98,8 +98,14 @@ class Logger {
 		this.minLevel = LEVELS[level];
 		this.devStderr = level === "debug";
 
+		// Skip file writes under `bun test`. This singleton is created on first
+		// import, before any test-level env override can fire, so agent-spawned
+		// shells inheriting HELMOR_LOG_DIR from a release helmor would otherwise
+		// pollute ~/helmor/logs. Bun auto-sets NODE_ENV=test.
+		const isTest =
+			process.env.NODE_ENV === "test" || process.env.BUN_TEST === "1";
 		const logDir = process.env.HELMOR_LOG_DIR;
-		if (logDir) {
+		if (logDir && !isTest) {
 			mkdirSync(logDir, { recursive: true });
 			this.primaryPath = `${logDir}/sidecar.jsonl`;
 			this.backupPath = `${logDir}/sidecar.jsonl.1`;

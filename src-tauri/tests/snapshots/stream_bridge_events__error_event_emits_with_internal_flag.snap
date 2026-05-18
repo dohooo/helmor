@@ -1,0 +1,12 @@
+---
+source: tests/stream_bridge_events.rs
+expression: snapshot
+---
+line_count: 1
+control_events:
+  - internal: true
+    kind: error
+    message: Sidecar lost connection
+    persisted: true
+final_messages: []
+dropped_event_types: []

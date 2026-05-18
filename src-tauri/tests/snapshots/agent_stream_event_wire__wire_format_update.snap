@@ -1,0 +1,9 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::Update { messages: vec![empty_message()], })"
+---
+kind: update
+messages:
+  - content: []
+    id: msg-1
+    role: assistant

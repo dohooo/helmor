@@ -25,7 +25,7 @@ vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof api>("@/lib/api");
 	return {
 		...actual,
-		loadGithubIdentitySession: vi.fn(),
+		listForgeAccounts: vi.fn(),
 		findExistingHelmorWorkspace: vi.fn(),
 		createHelmorIssue: vi.fn(),
 		forkHelmorUpstream: vi.fn(),
@@ -72,19 +72,17 @@ beforeEach(() => {
 	// resetAllMocks clears both call state AND stale implementations — some of
 	// these mocks are configured inside individual tests and must not leak.
 	vi.resetAllMocks();
-	mockedApi.loadGithubIdentitySession.mockResolvedValue({
-		status: "connected",
-		session: {
+	mockedApi.listForgeAccounts.mockResolvedValue([
+		{
 			provider: "github",
-			githubUserId: 1,
+			host: "github.com",
 			login: "tester",
 			name: null,
 			avatarUrl: null,
-			primaryEmail: null,
-			tokenExpiresAt: null,
-			refreshTokenExpiresAt: null,
+			email: null,
+			active: true,
 		},
-	});
+	]);
 	mockedApi.findExistingHelmorWorkspace.mockResolvedValue(null);
 });
 
@@ -112,9 +110,7 @@ describe("FeedbackDialog — input step", () => {
 	});
 
 	it("gates both actions when the user is not connected to GitHub", async () => {
-		mockedApi.loadGithubIdentitySession.mockResolvedValue({
-			status: "disconnected",
-		});
+		mockedApi.listForgeAccounts.mockResolvedValue([]);
 
 		const { user } = renderDialog();
 

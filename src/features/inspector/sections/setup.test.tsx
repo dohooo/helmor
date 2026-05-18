@@ -40,6 +40,7 @@ const defaults = {
 	repoId: "repo-1",
 	workspaceId: "ws-1" as string | null,
 	setupScript: "echo hello" as string | null,
+	setupCompletedAt: null as string | null,
 	isActive: true,
 	onOpenSettings: vi.fn(),
 };

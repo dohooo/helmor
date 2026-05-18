@@ -10,7 +10,7 @@ function row(
 		id,
 		title: id,
 		state: "ready",
-		derivedStatus: "in-progress",
+		status: "in-progress",
 		...values,
 	};
 }

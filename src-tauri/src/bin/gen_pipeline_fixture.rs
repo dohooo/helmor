@@ -145,7 +145,7 @@ fn load_session_records(session_id: &str) -> Result<Vec<HistoricalRecord>> {
         "SELECT id, role, content, created_at \
          FROM session_messages \
          WHERE session_id = ?1 \
-         ORDER BY COALESCE(julianday(sent_at), julianday(created_at)) ASC, rowid ASC",
+         ORDER BY sent_at ASC, rowid ASC",
     )?;
 
     let rows = stmt.query_map([session_id], |row| {

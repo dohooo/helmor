@@ -1,0 +1,32 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: system
+  emitted:
+    - kind: Update
+      messages: []
+  side_effects: []
+- event_type: assistant
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: userInputRequest
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+          streaming: ~
+    - kind: UserInputRequest
+      user_input_id: tool-1
+      source: Claude
+      permission_mode: ~
+      payload_kind: ask-user-question
+  side_effects: []

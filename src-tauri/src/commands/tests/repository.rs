@@ -20,7 +20,11 @@ fn list_repositories_filters_hidden_and_sorts_by_display_order() {
 }
 
 #[test]
-fn add_repository_from_local_path_adds_repo_and_first_workspace() {
+fn add_repository_from_local_path_persists_repo_without_creating_workspace() {
+    // Adding a repo no longer auto-creates a workspace — the start page
+    // owns that handoff. We assert: repo row inserted, branch/remote
+    // captured, response carries `selected_workspace_id: None` so the
+    // UI knows to land on start.
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -36,12 +40,8 @@ fn add_repository_from_local_path_adds_repo_and_first_workspace() {
     let connection = Connection::open(harness.db_path()).unwrap();
     let (repo_count, workspace_count, session_count): (i64, i64, i64) = connection
         .query_row(
-            r#"SELECT (SELECT COUNT(*) FROM repos WHERE root_path = ?1), (SELECT COUNT(*) FROM workspaces WHERE repository_id = ?2), (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?3)"#,
-            (
-                normalized_repo_root.as_str(),
-                &response.repository_id,
-                response.created_workspace_id.as_deref().unwrap(),
-            ),
+            r#"SELECT (SELECT COUNT(*) FROM repos WHERE root_path = ?1), (SELECT COUNT(*) FROM workspaces WHERE repository_id = ?2), (SELECT COUNT(*) FROM sessions s JOIN workspaces w ON w.id = s.workspace_id WHERE w.repository_id = ?2)"#,
+            (normalized_repo_root.as_str(), &response.repository_id),
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
@@ -52,20 +52,12 @@ fn add_repository_from_local_path_adds_repo_and_first_workspace() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    let created_workspace_state: String = connection
-        .query_row(
-            "SELECT state FROM workspaces WHERE id = ?1",
-            [response.selected_workspace_id.as_str()],
-            |row| row.get(0),
-        )
-        .unwrap();
 
     assert!(response.created_repository);
+    assert_eq!(response.selected_workspace_id, None);
     assert_eq!(repo_count, 1);
-    assert_eq!(workspace_count, 1);
-    assert_eq!(session_count, 1);
-    assert_eq!(response.created_workspace_state, WorkspaceState::Ready);
-    assert_eq!(created_workspace_state, "ready");
+    assert_eq!(workspace_count, 0);
+    assert_eq!(session_count, 0);
     assert_eq!(default_branch, "main");
     assert_eq!(remote, Some("origin".to_string()));
 }
@@ -90,11 +82,30 @@ fn add_repository_from_local_path_focuses_existing_workspace_for_duplicate_repo(
         .unwrap();
 
     assert!(!response.created_repository);
-    assert_eq!(response.created_workspace_id, None);
-    assert_eq!(response.selected_workspace_id, created.created_workspace_id);
-    assert_eq!(response.created_workspace_state, WorkspaceState::Ready);
+    assert_eq!(
+        response.selected_workspace_id.as_deref(),
+        Some(created.created_workspace_id.as_str())
+    );
     assert_eq!(repo_count, 1);
     assert_eq!(workspace_count, 1);
+}
+
+#[test]
+fn add_repository_from_local_path_re_add_with_only_archived_workspaces_lands_on_start() {
+    // Re-adding a repo whose only workspace is archived should NOT
+    // auto-create a fresh one — the user picks via the start page.
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    let created = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    workspaces::archive_workspace_impl(&created.created_workspace_id).unwrap();
+
+    let response =
+        repos::add_repository_from_local_path(harness.source_repo_root.to_str().unwrap()).unwrap();
+
+    assert!(!response.created_repository);
+    assert_eq!(response.selected_workspace_id, None);
 }
 
 #[test]

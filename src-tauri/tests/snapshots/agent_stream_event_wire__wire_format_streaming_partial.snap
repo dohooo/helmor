@@ -1,0 +1,9 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::StreamingPartial { message: empty_message(), })"
+---
+kind: streamingPartial
+message:
+  content: []
+  id: msg-1
+  role: assistant

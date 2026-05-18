@@ -1,0 +1,85 @@
+[
+	{
+		"key": "minimax",
+		"label": "MiniMax",
+		"baseUrl": "https://api.minimax.io/anthropic",
+		"apiKeyUrl": "https://platform.minimax.io/user-center/basic-information/interface-key",
+		"models": [{ "id": "MiniMax-M2.7", "label": "MiniMax M2.7" }],
+		"icon": "minimax"
+	},
+	{
+		"key": "minimax-cn",
+		"label": "MiniMax CN",
+		"baseUrl": "https://api.minimaxi.com/anthropic",
+		"apiKeyUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+		"models": [{ "id": "MiniMax-M2.7", "label": "MiniMax M2.7" }],
+		"icon": "minimax"
+	},
+	{
+		"key": "moonshot",
+		"label": "Moonshot / Kimi",
+		"baseUrl": "https://api.moonshot.ai/anthropic",
+		"apiKeyUrl": "https://platform.kimi.ai/console/api-keys",
+		"models": [{ "id": "kimi-k2.5", "label": "Kimi K2.5" }],
+		"icon": "moonshot"
+	},
+	{
+		"key": "moonshot-cn",
+		"label": "Moonshot / Kimi CN",
+		"baseUrl": "https://api.moonshot.cn/anthropic",
+		"apiKeyUrl": "https://platform.moonshot.cn/console/api-keys",
+		"models": [{ "id": "kimi-k2.5", "label": "Kimi K2.5" }],
+		"icon": "moonshot"
+	},
+	{
+		"key": "zai",
+		"label": "Z.AI / GLM",
+		"baseUrl": "https://api.z.ai/api/anthropic",
+		"apiKeyUrl": "https://z.ai/manage-apikey/apikey-list",
+		"models": [{ "id": "glm-4.7", "label": "GLM 4.7" }],
+		"icon": "zhipu"
+	},
+	{
+		"key": "zai-cn",
+		"label": "Z.AI / GLM CN",
+		"baseUrl": "https://open.bigmodel.cn/api/anthropic",
+		"apiKeyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
+		"models": [{ "id": "glm-5.1", "label": "GLM 5.1" }],
+		"icon": "zhipu"
+	},
+	{
+		"key": "qwen",
+		"label": "Qwen / DashScope",
+		"baseUrl": "https://dashscope.aliyuncs.com/apps/anthropic",
+		"apiKeyUrl": "https://bailian.console.aliyun.com/?tab=model#/api-key",
+		"models": [{ "id": "qwen3.6-plus", "label": "Qwen 3.6 Plus" }],
+		"icon": "qwen"
+	},
+	{
+		"key": "qwen-intl",
+		"label": "Qwen / DashScope Intl",
+		"baseUrl": "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+		"apiKeyUrl": "https://bailian.console.alibabacloud.com/?tab=model#/api-key",
+		"models": [{ "id": "qwen3.5-plus", "label": "Qwen 3.5 Plus" }],
+		"icon": "qwen"
+	},
+	{
+		"key": "xiaomi",
+		"label": "Xiaomi MiMo",
+		"baseUrl": "https://api.xiaomimimo.com/anthropic",
+		"apiKeyUrl": "https://platform.xiaomimimo.com/#/console/api-keys",
+		"models": [{ "id": "mimo-v2.5-pro", "label": "MiMo V2.5 Pro" }],
+		"icon": "xiaomi"
+	},
+	{
+		"key": "deepseek",
+		"label": "DeepSeek",
+		"baseUrl": "https://api.deepseek.com/anthropic",
+		"apiKeyUrl": "https://platform.deepseek.com/api_keys",
+		"models": [
+			{ "id": "deepseek-v4-pro[1m]", "label": "DeepSeek V4 Pro 1M" },
+			{ "id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash" }
+		],
+		"icon": "deepseek"
+	}
+]

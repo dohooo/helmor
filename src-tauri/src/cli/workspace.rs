@@ -6,13 +6,13 @@ use crate::git_ops;
 use crate::models::workspaces as workspace_models;
 use crate::service;
 use crate::ui_sync::UiMutationEvent;
-use crate::workspace_derived_status::DerivedStatus;
 use crate::workspace_state::WorkspaceState;
+use crate::workspace_status::WorkspaceStatus;
 use crate::workspaces;
 
 use super::args::{
-    BranchAction, Cli, LinkedDirsAction, ManualStatus, ManualStatusAction, ReadState,
-    TargetBranchAction, WorkspaceAction,
+    BranchAction, Cli, LinkedDirsAction, ReadState, TargetBranchAction, WorkspaceAction,
+    WorkspaceStatusAction, WorkspaceStatusValue,
 };
 use super::{notify_ui_event, notify_ui_events, output};
 
@@ -45,7 +45,7 @@ pub fn dispatch(action: &WorkspaceAction, cli: &Cli) -> Result<()> {
             state,
             workspace_ref,
         } => mark(*state, workspace_ref, cli),
-        WorkspaceAction::ManualStatus { action } => manual_status(action, cli),
+        WorkspaceAction::SetStatus { action } => workspace_status(action, cli),
         WorkspaceAction::Branch { action } => branch(action, cli),
         WorkspaceAction::TargetBranch { action } => target_branch(action, cli),
         WorkspaceAction::Sync { workspace_ref } => sync(workspace_ref, cli),
@@ -129,7 +129,7 @@ fn list(
                 repo: &r.repo_name,
                 directory: &r.directory_name,
                 title: &r.title,
-                status: format!("{:?}", r.derived_status),
+                status: format!("{:?}", r.status),
                 branch: r.branch.as_deref(),
                 pinned: r.pinned_at.is_some(),
             });
@@ -183,7 +183,7 @@ fn show(workspace_ref: &str, cli: &Cli) -> Result<()> {
             d.state,
             d.branch.as_deref().unwrap_or("-"),
             d.intended_target_branch.as_deref().unwrap_or("-"),
-            d.derived_status,
+            d.status,
             d.remote.as_deref().unwrap_or("-"),
             d.session_count,
             d.message_count,
@@ -266,11 +266,12 @@ fn status(workspace_ref: &str, cli: &Cli) -> Result<()> {
             behind_target_count: 0,
             remote_tracking_ref: None,
             ahead_of_remote_count: 0,
+            ahead_of_target_count: 0,
             push_status: git_ops::WorkspacePushStatus::Unpublished,
         };
         return output::print(cli, &status, format_status);
     }
-    let workspace_dir = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
     let status = git_ops::workspace_action_status(
         &workspace_dir,
         record.remote.as_deref(),
@@ -334,31 +335,31 @@ fn mark(state: ReadState, workspace_ref: &str, cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn manual_status(action: &ManualStatusAction, cli: &Cli) -> Result<()> {
+fn workspace_status(action: &WorkspaceStatusAction, cli: &Cli) -> Result<()> {
     match action {
-        ManualStatusAction::Set {
+        WorkspaceStatusAction::Set {
             status,
             workspace_ref,
         } => {
             let id = service::resolve_workspace_ref(workspace_ref)?;
-            let derived = match status {
-                ManualStatus::Done => DerivedStatus::Done,
-                ManualStatus::Review => DerivedStatus::Review,
-                ManualStatus::Progress => DerivedStatus::InProgress,
-                ManualStatus::Backlog => DerivedStatus::Backlog,
-                ManualStatus::Canceled => DerivedStatus::Canceled,
+            let workspace_status = match status {
+                WorkspaceStatusValue::Done => WorkspaceStatus::Done,
+                WorkspaceStatusValue::Review => WorkspaceStatus::Review,
+                WorkspaceStatusValue::Progress => WorkspaceStatus::InProgress,
+                WorkspaceStatusValue::Backlog => WorkspaceStatus::Backlog,
+                WorkspaceStatusValue::Canceled => WorkspaceStatus::Canceled,
             };
-            workspaces::set_workspace_manual_status(&id, Some(derived))?;
+            workspaces::set_workspace_status(&id, workspace_status)?;
             notify_ui_event(UiMutationEvent::WorkspaceChanged {
                 workspace_id: id.clone(),
             });
-            output::print_ok(cli, &format!("Manual status set to {status:?}"));
+            output::print_ok(cli, &format!("Workspace status set to {status:?}"));
         }
-        ManualStatusAction::Clear { workspace_ref } => {
+        WorkspaceStatusAction::Clear { workspace_ref } => {
             let id = service::resolve_workspace_ref(workspace_ref)?;
-            workspaces::set_workspace_manual_status(&id, None)?;
+            workspaces::set_workspace_status(&id, WorkspaceStatus::InProgress)?;
             notify_ui_event(UiMutationEvent::WorkspaceChanged { workspace_id: id });
-            output::print_ok(cli, "Manual status cleared");
+            output::print_ok(cli, "Workspace status reset to Progress");
         }
     }
     Ok(())
@@ -426,7 +427,7 @@ fn push(workspace_ref: &str, cli: &Cli) -> Result<()> {
     notify_ui_event(UiMutationEvent::WorkspaceGitStateChanged {
         workspace_id: id.clone(),
     });
-    notify_ui_event(UiMutationEvent::WorkspacePrChanged {
+    notify_ui_event(UiMutationEvent::WorkspaceChangeRequestChanged {
         workspace_id: id.clone(),
     });
     output::print(cli, &response, |_| format!("Pushed {id}"))

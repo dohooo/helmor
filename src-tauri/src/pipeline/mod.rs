@@ -16,6 +16,7 @@
 pub mod accumulator;
 pub mod adapter;
 pub mod classify;
+pub mod codex_collab;
 pub mod collapse;
 pub mod event_filter;
 pub mod types;

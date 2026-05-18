@@ -1,0 +1,11 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::PermissionRequest\n{\n    permission_id: \"permission-1\".into(), tool_name: \"Bash\".into(),\n    tool_input: json!({ \"command\": \"ls\" }), title:\n    Some(\"Run shell command\".into()), description:\n    Some(\"Lists the directory\".into()),\n})"
+---
+description: Lists the directory
+kind: permissionRequest
+permissionId: permission-1
+title: Run shell command
+toolInput:
+  command: ls
+toolName: Bash

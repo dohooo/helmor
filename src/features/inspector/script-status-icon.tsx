@@ -27,9 +27,6 @@ type ScriptStatusIconProps = {
 export function ScriptStatusIcon({ state, className }: ScriptStatusIconProps) {
 	switch (state) {
 		case "running":
-			// HelmorLogoAnimated is a div with lottie-rendered SVG inside;
-			// no text or label, so it's already silent to screen readers —
-			// no aria-hidden needed (and the component doesn't forward it).
 			return (
 				<HelmorLogoAnimated
 					size={11}

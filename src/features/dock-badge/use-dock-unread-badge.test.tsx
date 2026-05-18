@@ -47,7 +47,7 @@ function makeGroups(
 				id: `ws-${i}`,
 				title: `Workspace ${i}`,
 				state: "ready",
-				derivedStatus: "in-progress",
+				status: "in-progress",
 				...row,
 			})),
 		},

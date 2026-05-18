@@ -32,7 +32,7 @@ function TooltipTrigger({
 
 function TooltipContent({
 	className,
-	sideOffset = 0,
+	sideOffset = 4,
 	children,
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
@@ -48,7 +48,6 @@ function TooltipContent({
 				{...props}
 			>
 				{children}
-				<TooltipPrimitive.Arrow className="fill-foreground" />
 			</TooltipPrimitive.Content>
 		</TooltipPrimitive.Portal>
 	);

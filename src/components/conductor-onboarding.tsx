@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import conductorLogoSrc from "@/assets/conductor.webp";
 import helmorLogoSrc from "@/assets/helmor-logo.png";
 import { type ConductorWorkspace, importConductorWorkspaces } from "@/lib/api";
+import { Button } from "./ui/button";
 import { NumberTicker } from "./ui/number-ticker";
 import {
 	Tooltip,
@@ -422,7 +423,6 @@ const SKELETON_IDS = Array.from(
 	(_, i) => `skeleton-${i}`,
 );
 const LOGO_SIZE = 56;
-
 export function ConductorOnboarding({
 	onComplete,
 	workspaces = [],
@@ -798,17 +798,13 @@ export function ConductorOnboarding({
 												{importedCount === 1 ? "workspace" : "workspaces"} ready
 											</p>
 										</div>
-										<button
+										<Button
 											type="button"
 											onClick={onComplete}
-											className="rounded-lg px-7 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90 active:opacity-75"
-											style={{
-												background: "var(--color-foreground)",
-												color: "var(--color-background)",
-											}}
+											className="h-10 px-7 text-sm font-semibold"
 										>
 											Get started
-										</button>
+										</Button>
 									</motion.div>
 								</motion.div>
 							)}
@@ -842,15 +838,11 @@ export function ConductorOnboarding({
 								transition={{ duration: 0 }}
 								className="flex flex-col items-center gap-2"
 							>
-								<button
+								<Button
 									type="button"
 									onClick={() => void handleImport()}
 									disabled={isLoadingWorkspaces}
-									className="group relative flex items-center gap-2 overflow-hidden rounded-lg px-7 py-3 text-sm font-semibold tracking-[0.01em] transition-opacity hover:opacity-90 active:opacity-75 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-									style={{
-										background: "var(--color-foreground)",
-										color: "var(--color-background)",
-									}}
+									className="group relative h-11 gap-2 overflow-hidden px-7 text-sm font-semibold tracking-[0.01em] disabled:opacity-40"
 								>
 									<div
 										className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/15 to-transparent transition-transform duration-700 group-hover:translate-x-full"
@@ -864,12 +856,12 @@ export function ConductorOnboarding({
 										className="size-3.5 transition-transform group-hover:translate-x-0.5"
 										strokeWidth={2.5}
 									/>
-								</button>
+								</Button>
 								<div className="relative flex items-center justify-center">
 									<button
 										type="button"
 										onClick={onComplete}
-										className="text-[11px] text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+										className="text-[11px] text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 									>
 										Skip for now
 									</button>
@@ -879,7 +871,7 @@ export function ConductorOnboarding({
 												<button
 													type="button"
 													aria-label="About importing"
-													className="absolute left-full ml-2 flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+													className="absolute left-full ml-2 flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 												>
 													<Info className="size-3.5" strokeWidth={2} />
 												</button>

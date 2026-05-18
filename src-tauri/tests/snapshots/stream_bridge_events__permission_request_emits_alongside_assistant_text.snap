@@ -1,0 +1,25 @@
+---
+source: tests/stream_bridge_events.rs
+expression: snapshot
+---
+line_count: 4
+control_events:
+  - description: Lists the current directory
+    kind: permissionRequest
+    permissionId: permission-1
+    title: Run shell command
+    toolInput:
+      command: ls
+    toolName: Bash
+final_messages:
+  - role: assistant
+    id: msg-1
+    content_length: 1
+    content:
+      - type: text
+        text: "I'll need to run a command."
+    status:
+      type: complete
+      reason: stop
+    streaming: ~
+dropped_event_types: []

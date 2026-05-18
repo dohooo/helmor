@@ -1,0 +1,15 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: run_normalized(msgs)
+---
+- role: assistant
+  id: msg-1
+  content_length: 1
+  content:
+    - type: image
+      kind: file
+      media_type: ~
+  status:
+    type: complete
+    reason: stop
+  streaming: ~

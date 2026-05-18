@@ -35,7 +35,9 @@ env:
 jobs:
   preflight:
     name: Release Preflight
-    runs-on: macos-latest
+    # macos-26 ensures the bundled binary links against macOS 26 SDK; pre-26
+    # SDK targets get Tahoe's legacy compat scrollbar rendering (always-on bg).
+    runs-on: macos-26
     outputs:
       version: ${{ steps.version.outputs.version }}
       release_body: ${{ steps.notes.outputs.release_body }}
@@ -104,7 +106,7 @@ jobs:
             tauri-args: "--target aarch64-apple-darwin"
           - target-triple: x86_64-apple-darwin
             tauri-args: "--target x86_64-apple-darwin"
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -179,3 +181,24 @@ jobs:
           if [ -n "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}" ]; then
             scripts/cleanup-macos-signing.sh "${{ steps.signing.outputs.APPLE_KEYCHAIN_PATH }}"
           fi
+
+  notify-marketing:
+    name: Notify marketing site
+    needs: [preflight, build-and-publish]
+    if: needs.preflight.outputs.draft == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Revalidate helmor.ai
+        env:
+          SECRET: ${{ secrets.HELMOR_MARKETING_REVALIDATE_SECRET }}
+        run: |
+          if [ -z "${SECRET}" ]; then
+            echo "HELMOR_MARKETING_REVALIDATE_SECRET not set; skipping"
+            exit 0
+          fi
+          curl --fail --silent --show-error \
+            --retry 3 --retry-delay 10 --retry-connrefused \
+            -X POST "https://helmor.ai/api/revalidate" \
+            -H "x-revalidate-secret: ${SECRET}" \
+            -H "content-type: application/json"

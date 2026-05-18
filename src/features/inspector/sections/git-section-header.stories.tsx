@@ -3,12 +3,12 @@ import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
-import type { PullRequestInfo } from "@/lib/api";
+import type { ChangeRequestInfo } from "@/lib/api";
 import { GitSectionHeader } from "./git-section-header";
 
 // ── Mock data ─────────────────────────────────────────────────────────
 
-const PR_OPEN: PullRequestInfo = {
+const CHANGE_REQUEST_OPEN: ChangeRequestInfo = {
 	url: "https://github.com/helmor/helmor/pull/42",
 	number: 42,
 	state: "OPEN",
@@ -16,7 +16,7 @@ const PR_OPEN: PullRequestInfo = {
 	isMerged: false,
 };
 
-const PR_MERGED: PullRequestInfo = {
+const CHANGE_REQUEST_MERGED: ChangeRequestInfo = {
 	url: "https://github.com/helmor/helmor/pull/42",
 	number: 42,
 	state: "MERGED",
@@ -24,7 +24,7 @@ const PR_MERGED: PullRequestInfo = {
 	isMerged: true,
 };
 
-const PR_CLOSED: PullRequestInfo = {
+const CHANGE_REQUEST_CLOSED: ChangeRequestInfo = {
 	url: "https://github.com/helmor/helmor/pull/42",
 	number: 42,
 	state: "CLOSED",
@@ -34,21 +34,25 @@ const PR_CLOSED: PullRequestInfo = {
 
 // ── Lookup helpers ────────────────────────────────────────────────────
 
-function prForMode(mode: WorkspaceCommitButtonMode): PullRequestInfo | null {
+function changeRequestForMode(
+	mode: WorkspaceCommitButtonMode,
+): ChangeRequestInfo | null {
 	switch (mode) {
 		case "create-pr":
 			return null;
 		case "commit-and-push":
 		case "push":
 		case "resolve-conflicts":
+		case "checks-running":
+		case "merge-blocked":
 		case "merge":
 		case "fix":
-			return PR_OPEN;
+			return CHANGE_REQUEST_OPEN;
 		case "merged":
-			return PR_MERGED;
+			return CHANGE_REQUEST_MERGED;
 		case "closed":
 		case "open-pr":
-			return PR_CLOSED;
+			return CHANGE_REQUEST_CLOSED;
 	}
 }
 
@@ -64,6 +68,8 @@ const ALL_MODES: WorkspaceCommitButtonMode[] = [
 	"push",
 	"resolve-conflicts",
 	"fix",
+	"checks-running",
+	"merge-blocked",
 	"merge",
 	"merged",
 	"closed",
@@ -84,6 +90,8 @@ const MODE_LABELS: Record<WorkspaceCommitButtonMode, string> = {
 	push: "Push",
 	"resolve-conflicts": "Resolve Conflicts",
 	fix: "Fix CI",
+	"checks-running": "Checks Running",
+	"merge-blocked": "Merge Blocked",
 	merge: "Merge",
 	merged: "Merged",
 	closed: "Closed",
@@ -117,7 +125,7 @@ function HeaderCell({
 			<GitSectionHeader
 				commitButtonMode={mode}
 				commitButtonState={state}
-				prInfo={prForMode(mode)}
+				changeRequest={changeRequestForMode(mode)}
 				hasChanges={hasChangesForMode(mode)}
 				className="border-b-0"
 			/>
@@ -159,7 +167,7 @@ export const StateMatrix: Story = {
 	args: {
 		commitButtonMode: "create-pr",
 		commitButtonState: "idle",
-		prInfo: null,
+		changeRequest: null,
 	},
 	render: () => (
 		<div style={{ padding: 32, overflow: "auto" }}>
@@ -240,7 +248,7 @@ export const CreatePR: Story = {
 	args: {
 		commitButtonMode: "create-pr",
 		commitButtonState: "idle",
-		prInfo: null,
+		changeRequest: null,
 		hasChanges: true,
 	},
 };
@@ -250,7 +258,7 @@ export const CommitAndPush: Story = {
 	args: {
 		commitButtonMode: "commit-and-push",
 		commitButtonState: "idle",
-		prInfo: PR_OPEN,
+		changeRequest: CHANGE_REQUEST_OPEN,
 		hasChanges: true,
 	},
 };
@@ -260,7 +268,7 @@ export const ResolveConflicts: Story = {
 	args: {
 		commitButtonMode: "resolve-conflicts",
 		commitButtonState: "idle",
-		prInfo: PR_OPEN,
+		changeRequest: CHANGE_REQUEST_OPEN,
 		hasChanges: false,
 	},
 };
@@ -270,7 +278,21 @@ export const Merge: Story = {
 	args: {
 		commitButtonMode: "merge",
 		commitButtonState: "idle",
-		prInfo: PR_OPEN,
+		changeRequest: CHANGE_REQUEST_OPEN,
+		hasChanges: false,
+	},
+};
+
+// Captures the case the user complained about: a merge button that's
+// visibly disabled because GitHub is still computing mergeability. The
+// bottom shimmer signals to the user that this is a transient sync state,
+// not a permanent block.
+export const MergeComputing: Story = {
+	decorators: [singleDecorator],
+	args: {
+		commitButtonMode: "merge",
+		commitButtonState: "disabled",
+		changeRequest: CHANGE_REQUEST_OPEN,
 		hasChanges: false,
 	},
 };
@@ -280,7 +302,7 @@ export const Merged: Story = {
 	args: {
 		commitButtonMode: "merged",
 		commitButtonState: "idle",
-		prInfo: PR_MERGED,
+		changeRequest: CHANGE_REQUEST_MERGED,
 		hasChanges: false,
 	},
 };
@@ -290,7 +312,7 @@ export const Closed: Story = {
 	args: {
 		commitButtonMode: "closed",
 		commitButtonState: "idle",
-		prInfo: PR_CLOSED,
+		changeRequest: CHANGE_REQUEST_CLOSED,
 		hasChanges: false,
 	},
 };
@@ -300,7 +322,7 @@ export const OpenPR: Story = {
 	args: {
 		commitButtonMode: "open-pr",
 		commitButtonState: "idle",
-		prInfo: PR_CLOSED,
+		changeRequest: CHANGE_REQUEST_CLOSED,
 		hasChanges: false,
 	},
 };
@@ -310,7 +332,7 @@ export const FixCI: Story = {
 	args: {
 		commitButtonMode: "fix",
 		commitButtonState: "idle",
-		prInfo: PR_OPEN,
+		changeRequest: CHANGE_REQUEST_OPEN,
 		hasChanges: false,
 	},
 };

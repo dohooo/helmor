@@ -1,0 +1,35 @@
+---
+source: tests/stream_bridge_events.rs
+expression: snapshot
+---
+line_count: 1
+control_events:
+  - elicitationId: user-input-1
+    kind: elicitationRequest
+    message: Codex needs your input
+    mode: form
+    model_id: model-id
+    provider: codex
+    requestedSchema:
+      properties:
+        approval:
+          description: Approve plan?
+          oneOf:
+            - const: "Yes"
+              description: Proceed
+              title: "Yes"
+            - const: "No"
+              description: Stop
+              title: "No"
+          title: Approval
+          type: string
+      required:
+        - approval
+      type: object
+    resolved_model: test-model
+    serverName: Codex
+    session_id: provider-session-1
+    url: ~
+    working_directory: /tmp/helmor
+final_messages: []
+dropped_event_types: []

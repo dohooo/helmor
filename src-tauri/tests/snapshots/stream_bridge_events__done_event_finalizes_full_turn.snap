@@ -1,0 +1,25 @@
+---
+source: tests/stream_bridge_events.rs
+expression: snapshot
+---
+line_count: 4
+control_events:
+  - kind: done
+    model_id: model-id
+    persisted: true
+    provider: claude
+    resolved_model: test-model
+    session_id: provider-session-1
+    working_directory: /tmp/helmor
+final_messages:
+  - role: assistant
+    id: msg-1
+    content_length: 1
+    content:
+      - type: text
+        text: "Here's the answer."
+    status:
+      type: complete
+      reason: stop
+    streaming: ~
+dropped_event_types: []

@@ -8,23 +8,20 @@
 //!   2. `create_helmor_issue(title, body)` — POST /repos/{owner}/{repo}/issues
 //!      Used when the user picks "Create issue".
 //!
-//! Both calls reuse the OAuth token stored by the device-flow identity in
-//! `auth.rs` and follow the same header conventions as
-//! `github/graphql.rs`. Errors are surfaced verbatim so the UI can show the
-//! GitHub-provided reason.
+//! Both calls reuse the first logged-in `gh` account for github.com through
+//! the shared forge account backend. Errors are surfaced verbatim so the UI
+//! can show the GitHub-provided reason.
 
 use anyhow::{anyhow, bail, Context, Result};
-use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
-use crate::auth;
+use crate::forge::{accounts, ForgeProvider};
 
 use super::{HELMOR_UPSTREAM_OWNER, HELMOR_UPSTREAM_REPO};
 
-const GITHUB_API_VERSION: &str = "2022-11-28";
-const GITHUB_ACCEPT_JSON: &str = "application/vnd.github+json";
+const GITHUB_ACCEPT_JSON_HEADER: &str = "Accept: application/vnd.github+json";
+const GITHUB_API_VERSION_HEADER: &str = "X-GitHub-Api-Version: 2022-11-28";
+const GITHUB_HOST: &str = "github.com";
 
 /// Metadata returned after successfully forking (or re-fetching an existing
 /// fork of) the helmor upstream repository.
@@ -64,52 +61,54 @@ struct IssueResponse {
     number: i64,
 }
 
-fn require_access_token() -> Result<String> {
-    let Some(token) = auth::load_valid_github_access_token()? else {
-        bail!(
-            "GitHub account is not connected. Connect your GitHub account in Settings to continue."
-        );
+fn require_github_login() -> Result<String> {
+    let Some(backend) = accounts::backend_for(ForgeProvider::Github) else {
+        bail!("GitHub support is not available.");
     };
-    Ok(token)
+    let logins = backend.list_logins(GITHUB_HOST)?;
+    logins.into_iter().next().ok_or_else(|| {
+        anyhow!("GitHub account is not connected. Connect GitHub in Settings to continue.")
+    })
 }
 
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .build()
-        .context("Failed to build GitHub HTTP client")
+fn run_github_api(login: &str, args: &[&str]) -> Result<String> {
+    let Some(backend) = accounts::backend_for(ForgeProvider::Github) else {
+        bail!("GitHub support is not available.");
+    };
+    let output = backend.run_cli(GITHUB_HOST, login, args)?;
+    if !output.success {
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout.trim()
+        } else {
+            output.stderr.trim()
+        };
+        bail!("`gh api` failed: {detail}");
+    }
+    Ok(output.stdout)
 }
 
 /// Fork the helmor upstream repo to the current user's account. Idempotent on
 /// GitHub's side — re-forking returns the same fork metadata.
 pub fn fork_helmor_upstream() -> Result<ForkResult> {
-    let access_token = require_access_token()?;
-    let client = build_client()?;
-
-    let url = format!(
-        "https://api.github.com/repos/{HELMOR_UPSTREAM_OWNER}/{HELMOR_UPSTREAM_REPO}/forks"
-    );
-
-    let response = client
-        .post(&url)
-        .header(USER_AGENT, "Helmor")
-        .header(ACCEPT, GITHUB_ACCEPT_JSON)
-        .header(CONTENT_TYPE, "application/json")
-        .header(AUTHORIZATION, format!("Bearer {access_token}"))
-        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        // Empty JSON body: we accept all default fork settings.
-        .json(&json!({}))
-        .send()
-        .context("Failed to reach GitHub API")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        bail!("GitHub returned {status}: {body}");
-    }
-
-    let parsed: ForkResponse = response
-        .json()
-        .context("Failed to parse GitHub fork response")?;
+    let login = require_github_login()?;
+    let path = format!("repos/{HELMOR_UPSTREAM_OWNER}/{HELMOR_UPSTREAM_REPO}/forks");
+    let stdout = run_github_api(
+        &login,
+        &[
+            "api",
+            "--method",
+            "POST",
+            "--hostname",
+            GITHUB_HOST,
+            "-H",
+            GITHUB_ACCEPT_JSON_HEADER,
+            "-H",
+            GITHUB_API_VERSION_HEADER,
+            &path,
+        ],
+    )?;
+    let parsed: ForkResponse =
+        serde_json::from_str(&stdout).context("Failed to parse GitHub fork response")?;
 
     Ok(ForkResult {
         owner: parsed.owner.login,
@@ -126,36 +125,31 @@ pub fn create_helmor_issue(title: &str, body: &str) -> Result<IssueResult> {
         return Err(anyhow!("Issue title must not be empty"));
     }
 
-    let access_token = require_access_token()?;
-    let client = build_client()?;
-
-    let url = format!(
-        "https://api.github.com/repos/{HELMOR_UPSTREAM_OWNER}/{HELMOR_UPSTREAM_REPO}/issues"
-    );
-
-    let response = client
-        .post(&url)
-        .header(USER_AGENT, "Helmor")
-        .header(ACCEPT, GITHUB_ACCEPT_JSON)
-        .header(CONTENT_TYPE, "application/json")
-        .header(AUTHORIZATION, format!("Bearer {access_token}"))
-        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        .json(&json!({
-            "title": title,
-            "body": body,
-        }))
-        .send()
-        .context("Failed to reach GitHub API")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        bail!("GitHub returned {status}: {body}");
-    }
-
-    let parsed: IssueResponse = response
-        .json()
-        .context("Failed to parse GitHub issue response")?;
+    let login = require_github_login()?;
+    let path = format!("repos/{HELMOR_UPSTREAM_OWNER}/{HELMOR_UPSTREAM_REPO}/issues");
+    let title_field = format!("title={title}");
+    let body_field = format!("body={body}");
+    let stdout = run_github_api(
+        &login,
+        &[
+            "api",
+            "--method",
+            "POST",
+            "--hostname",
+            GITHUB_HOST,
+            "-H",
+            GITHUB_ACCEPT_JSON_HEADER,
+            "-H",
+            GITHUB_API_VERSION_HEADER,
+            "-f",
+            &title_field,
+            "-f",
+            &body_field,
+            &path,
+        ],
+    )?;
+    let parsed: IssueResponse =
+        serde_json::from_str(&stdout).context("Failed to parse GitHub issue response")?;
 
     Ok(IssueResult {
         url: parsed.html_url,

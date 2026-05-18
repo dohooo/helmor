@@ -8,7 +8,7 @@ import {
 	Search,
 	Terminal,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
 	Reasoning,
 	ReasoningContent,
@@ -120,16 +120,8 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	const hasOutput = resultText != null && resultText.length > 5;
 	const canExpand = hasOutput || hasFiles;
 	const isLiveTool = isLiveStreamingStatus(streamingStatus);
-	const [isOpen, setIsOpen] = useState(isLiveTool || hasFiles);
-	useEffect(() => {
-		if (isLiveTool) {
-			setIsOpen(true);
-			return;
-		}
-		if (!canExpand) {
-			setIsOpen(false);
-		}
-	}, [canExpand, isLiveTool]);
+	// All tool calls default to collapsed; user must click to expand.
+	const [isOpen, setIsOpen] = useState(false);
 
 	const statusIndicator = isLiveTool ? (
 		<LoaderCircle
@@ -231,17 +223,17 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				onToggle={(event) => {
 					setIsOpen(event.currentTarget.open);
 				}}
-				open={isLiveTool || isOpen}
+				open={isOpen}
 			>
 				<summary
 					className={cn(
 						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden",
-						canExpand ? "cursor-pointer" : "cursor-default",
+						canExpand ? "cursor-interactive" : "cursor-default",
 					)}
 				>
 					{toolLine}
 					{canExpand ? (
-						<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
+						<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
 							<svg
 								className="size-2.5 group-open/out:rotate-90"
 								viewBox="0 0 12 12"
@@ -258,7 +250,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 						</span>
 					) : null}
 				</summary>
-				{canExpand && (isLiveTool || isOpen) ? (
+				{canExpand && isOpen ? (
 					<div className="flex flex-col gap-1">
 						{hasOutput ? (
 							<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-[11px] leading-5">
@@ -414,7 +406,7 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 			<summary
 				className={cn(
 					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-destructive [&::-webkit-details-marker]:hidden",
-					expandable ? "cursor-pointer" : "cursor-default",
+					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
@@ -430,7 +422,7 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 					</span>
 				) : null}
 				{expandable ? (
-					<span className="shrink-0 cursor-pointer text-destructive/40 hover:text-destructive">
+					<span className="shrink-0 cursor-interactive text-destructive/40 hover:text-destructive">
 						<svg
 							className="size-2.5 group-open/err:rotate-90"
 							viewBox="0 0 12 12"
@@ -631,7 +623,7 @@ export function CollapsedToolGroup({
 			}}
 			open={open}
 		>
-			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
+			<summary className="flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
@@ -642,7 +634,7 @@ export function CollapsedToolGroup({
 				) : (
 					<Check className="size-3 text-chart-2" strokeWidth={2} />
 				)}
-				<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
+				<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
 					<svg
 						className="size-2.5 group-open/collapse:rotate-90"
 						viewBox="0 0 12 12"

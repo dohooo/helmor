@@ -1,12 +1,15 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type {
-	RepositoryCreateOption,
-	WorkspaceGroup,
-	WorkspaceRow,
-} from "@/lib/api";
+import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
 
 import { WorkspacesSidebar } from "./index";
 
@@ -26,18 +29,46 @@ const workspaceGroups: WorkspaceGroup[] = [
 	},
 ];
 
-const repositories: RepositoryCreateOption[] = [
+const repositoryOptions = [
+	{ id: "repo-alpha", name: "Alpha" },
+	{ id: "repo-beta", name: "Beta" },
+	{ id: "repo-gamma", name: "Gamma" },
+];
+
+const repoWorkspaceGroups: WorkspaceGroup[] = [
 	{
-		id: "repo-1",
-		name: "helmor",
-		defaultBranch: "main",
-		repoInitials: "HE",
-	},
-	{
-		id: "repo-2",
-		name: "dosu-cli",
-		defaultBranch: "develop",
-		repoInitials: "DO",
+		id: "progress",
+		label: "In Progress",
+		tone: "progress",
+		rows: [
+			{
+				...workspaceRow,
+				id: "ws-beta",
+				title: "Beta workspace",
+				repoId: "repo-beta",
+				repoName: "Beta",
+				createdAt: "2024-01-01T00:00:00Z",
+				updatedAt: "2024-01-03T00:00:00Z",
+			},
+			{
+				...workspaceRow,
+				id: "ws-alpha",
+				title: "Alpha workspace",
+				repoId: "repo-alpha",
+				repoName: "Alpha",
+				createdAt: "2024-01-02T00:00:00Z",
+				updatedAt: "2024-01-02T00:00:00Z",
+			},
+			{
+				...workspaceRow,
+				id: "ws-gamma",
+				title: "Gamma workspace",
+				repoId: "repo-gamma",
+				repoName: "Gamma",
+				createdAt: "2024-01-03T00:00:00Z",
+				updatedAt: "2024-01-01T00:00:00Z",
+			},
+		],
 	},
 ];
 
@@ -54,7 +85,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					sendingWorkspaceIds={new Set()}
+					busyWorkspaceIds={new Set()}
 				/>
 			</TooltipProvider>,
 		);
@@ -70,7 +101,7 @@ describe("WorkspacesSidebar", () => {
 					groups={workspaceGroups}
 					archivedRows={[]}
 					selectedWorkspaceId="workspace-1"
-					sendingWorkspaceIds={new Set(["workspace-1"])}
+					busyWorkspaceIds={new Set(["workspace-1"])}
 				/>
 			</TooltipProvider>,
 		);
@@ -102,17 +133,16 @@ describe("WorkspacesSidebar", () => {
 		expect(screen.getByLabelText("Unread")).toBeInTheDocument();
 	});
 
-	it("opens the repository picker and creates a workspace from the selected repository", async () => {
+	it("opens the workspace start page from the new workspace button", async () => {
 		const user = userEvent.setup();
-		const onCreateWorkspace = vi.fn();
+		const onOpenNewWorkspace = vi.fn();
 
 		const { container } = render(
 			<TooltipProvider delayDuration={0}>
 				<WorkspacesSidebar
 					groups={workspaceGroups}
 					archivedRows={[]}
-					availableRepositories={repositories}
-					onCreateWorkspace={onCreateWorkspace}
+					onOpenNewWorkspace={onOpenNewWorkspace}
 				/>
 			</TooltipProvider>,
 		);
@@ -124,13 +154,223 @@ describe("WorkspacesSidebar", () => {
 
 		expect(screen.queryByPlaceholderText("Search repositories")).toBeNull();
 		expect(screen.queryByText("Repositories")).toBeNull();
-		expect(screen.getByRole("option", { name: /helmor/i })).toBeInTheDocument();
-
-		const [firstRepositoryOption] = screen.getAllByRole("option");
-		await user.click(firstRepositoryOption);
-
-		expect(onCreateWorkspace).toHaveBeenCalledWith("repo-1");
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
+		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens sidebar filter controls and selects multiple repositories", async () => {
+		const user = userEvent.setup();
+		function ControlledSidebar() {
+			const [repoFilterIds, setRepoFilterIds] = useState<string[]>([]);
+			const groups =
+				repoFilterIds.length === 0
+					? repoWorkspaceGroups
+					: [
+							{
+								...repoWorkspaceGroups[0]!,
+								rows: repoWorkspaceGroups[0]!.rows.filter((row) =>
+									repoFilterIds.includes(row.repoId ?? ""),
+								),
+							},
+						];
+			return (
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarRepoFilterIds={repoFilterIds}
+					onSidebarRepoFilterChange={setRepoFilterIds}
+				/>
+			);
+		}
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<ControlledSidebar />
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("button", { name: "All repositories" }));
+		await user.click(screen.getByText("Alpha"));
+		await user.click(screen.getByText("Gamma"));
+
+		expect(
+			screen.getByRole("button", { name: "Alpha workspace" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Gamma workspace" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Beta workspace" })).toBeNull();
+	});
+
+	it("opens sidebar filter controls from the app shortcut event", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={repoWorkspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarFilterShortcut="Mod+Shift+F"
+				/>
+			</TooltipProvider>,
+		);
+
+		fireEvent(window, new CustomEvent("helmor:open-sidebar-filter"));
+
+		expect(screen.getByText("Group by")).toBeInTheDocument();
+		expect(screen.getByText("Sort by")).toBeInTheDocument();
+	});
+
+	it("changes sidebar grouping from the filter popover", async () => {
+		const user = userEvent.setup();
+		const onSidebarGroupingChange = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={repoWorkspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="status"
+					onSidebarGroupingChange={onSidebarGroupingChange}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("radio", { name: "Repository" }));
+
+		expect(onSidebarGroupingChange).toHaveBeenCalledWith("repo");
+	});
+
+	it("renders an active sidebar filter and clears it", async () => {
+		const user = userEvent.setup();
+		const onSidebarRepoFilterChange = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							...repoWorkspaceGroups[0],
+							rows: repoWorkspaceGroups[0]!.rows.filter(
+								(row) => row.repoId === "repo-alpha",
+							),
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarRepoFilterIds={["repo-alpha"]}
+					onSidebarRepoFilterChange={onSidebarRepoFilterChange}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Alpha workspace" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Beta workspace" })).toBeNull();
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Alpha" }));
+		await user.click(screen.getByText("All repositories"));
+
+		expect(onSidebarRepoFilterChange).toHaveBeenCalledWith([]);
+	});
+
+	it("hides the repo drag handle when sort is not custom", () => {
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							id: "repo:repo-beta",
+							label: "Beta",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[0]!],
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="repo"
+					sidebarSort="updatedAt"
+					onMoveRepositoryInSidebar={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(container.querySelector("[data-repo-dnd-handle='true']")).toBeNull();
+	});
+
+	it("forwards a repo drop directly under custom sort", () => {
+		const onMoveRepositoryInSidebar = vi.fn();
+
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							id: "repo:repo-beta",
+							label: "Beta",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[0]!],
+						},
+						{
+							id: "repo:repo-alpha",
+							label: "Alpha",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[1]!],
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="repo"
+					sidebarSort="custom"
+					onMoveRepositoryInSidebar={onMoveRepositoryInSidebar}
+				/>
+			</TooltipProvider>,
+		);
+
+		const repoHandle = container.querySelector("[data-repo-dnd-handle='true']");
+		expect(repoHandle).toBeInTheDocument();
+
+		fireEvent.pointerDown(repoHandle!, {
+			button: 0,
+			clientX: 10,
+			clientY: 10,
+			pointerId: 1,
+		});
+		fireEvent.pointerMove(window, { clientX: 10, clientY: 30, pointerId: 1 });
+		fireEvent.pointerUp(window, { clientX: 10, clientY: 30, pointerId: 1 });
+
+		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null);
+	});
+
+	it("shows an Open in Finder action for active workspaces", async () => {
+		const user = userEvent.setup();
+		const onOpenInFinder = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					onOpenInFinder={onOpenInFinder}
+				/>
+			</TooltipProvider>,
+		);
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Workspace 1" }));
+		await user.click(screen.getByRole("menuitem", { name: "Open in Finder" }));
+
+		expect(onOpenInFinder).toHaveBeenCalledWith("workspace-1");
 	});
 
 	it("keeps non-archived sections open by default while archived stays collapsed", () => {
@@ -228,7 +468,46 @@ describe("WorkspacesSidebar", () => {
 		expect(archiveButtons[1]).toBeEnabled();
 
 		await user.click(archiveButtons[1]);
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		const confirmButton = screen.getByRole("button", {
+			name: "Confirm archive workspace",
+		});
+		expect(confirmButton).toBeEnabled();
+		expect(confirmButton).toHaveTextContent("Confirm");
+
+		await user.click(confirmButton);
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-2");
+	});
+
+	it("resets the archive confirm button when the pointer leaves the workspace row", async () => {
+		const user = userEvent.setup();
+		const onArchiveWorkspace = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					onArchiveWorkspace={onArchiveWorkspace}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		).toHaveTextContent("Confirm");
+
+		fireEvent.pointerLeave(screen.getByRole("button", { name: "Workspace 1" }));
+
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("button", { name: "Confirm archive workspace" }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Archive workspace" }),
+		).toBeInTheDocument();
 	});
 
 	it("keeps workspace actions enabled while a new workspace is being created", async () => {
@@ -252,6 +531,10 @@ describe("WorkspacesSidebar", () => {
 		expect(archiveButton).toBeEnabled();
 
 		await user.click(archiveButton);
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-1");
 	});
 
@@ -532,5 +815,125 @@ describe("WorkspacesSidebar", () => {
 
 		expect(actionOverlay).not.toBeNull();
 		expect(actionOverlay).not.toHaveClass("transition-opacity");
+	});
+
+	describe("repo grouping mode", () => {
+		const repoGroups: WorkspaceGroup[] = [
+			{
+				id: "repo:repo-1",
+				label: "helmor",
+				tone: "pinned",
+				rows: [
+					{
+						...workspaceRow,
+						id: "ws-1",
+						repoId: "repo-1",
+						repoName: "helmor",
+					},
+				],
+			},
+		];
+
+		it("renders a `+` button on a repo group header that fires onCreateWorkspaceForRepo with the repo id", async () => {
+			const user = userEvent.setup();
+			const onCreateWorkspaceForRepo = vi.fn();
+
+			render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={repoGroups}
+						archivedRows={[]}
+						sidebarGrouping="repo"
+						onCreateWorkspaceForRepo={onCreateWorkspaceForRepo}
+					/>
+				</TooltipProvider>,
+			);
+
+			const addButton = screen.getByRole("button", {
+				name: "New workspace in helmor",
+			});
+			await user.click(addButton);
+
+			expect(onCreateWorkspaceForRepo).toHaveBeenCalledTimes(1);
+			expect(onCreateWorkspaceForRepo).toHaveBeenCalledWith("repo-1");
+		});
+
+		it("doesn't expose row count badge / chevron for repo groups", () => {
+			render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={repoGroups}
+						archivedRows={[]}
+						sidebarGrouping="repo"
+						onCreateWorkspaceForRepo={vi.fn()}
+					/>
+				</TooltipProvider>,
+			);
+
+			// Repo header is a div role="button" (not a <button>) so the
+			// `+` button can nest inside it. The header itself shouldn't
+			// surface the rows.length badge.
+			const header = screen
+				.getAllByRole("button", { name: /helmor/i })
+				.find((el) => el.tagName === "DIV");
+			expect(header).toBeDefined();
+			// Row count badge is `1` for this group — assert it's NOT
+			// inside the header.
+			expect(header?.textContent).not.toMatch(/\b1\b/);
+		});
+
+		it("clicking the `+` button doesn't bubble up and toggle the section", async () => {
+			const user = userEvent.setup();
+			const onCreateWorkspaceForRepo = vi.fn();
+
+			render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={repoGroups}
+						archivedRows={[]}
+						sidebarGrouping="repo"
+						onCreateWorkspaceForRepo={onCreateWorkspaceForRepo}
+					/>
+				</TooltipProvider>,
+			);
+
+			// Row visible BEFORE click.
+			expect(screen.getByLabelText("Workspace 1")).toBeInTheDocument();
+
+			await user.click(
+				screen.getByRole("button", { name: "New workspace in helmor" }),
+			);
+
+			// Row STILL visible — click on `+` did not toggle the section
+			// closed (stopPropagation guard works).
+			expect(screen.getByLabelText("Workspace 1")).toBeInTheDocument();
+			expect(onCreateWorkspaceForRepo).toHaveBeenCalledTimes(1);
+		});
+
+		it("clicking the repo header (off the `+` button) toggles the section", async () => {
+			const user = userEvent.setup();
+
+			render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={repoGroups}
+						archivedRows={[]}
+						sidebarGrouping="repo"
+						onCreateWorkspaceForRepo={vi.fn()}
+					/>
+				</TooltipProvider>,
+			);
+
+			expect(screen.getByLabelText("Workspace 1")).toBeInTheDocument();
+
+			const header = screen
+				.getAllByRole("button", { name: /helmor/i })
+				.find((el) => el.tagName === "DIV");
+			expect(header).toBeDefined();
+			await user.click(header as HTMLElement);
+
+			// Row hidden after toggle (collapsed).
+			expect(screen.queryByLabelText("Workspace 1")).toBeNull();
+		});
 	});
 });

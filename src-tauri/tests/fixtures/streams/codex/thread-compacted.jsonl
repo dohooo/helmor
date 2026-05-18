@@ -1,0 +1,2 @@
+{"type":"thread/started","thread":{"id":"codex-thread-compacted"},"session_id":"codex-thread-compacted"}
+{"type":"thread/compacted","threadId":"codex-thread-compacted"}

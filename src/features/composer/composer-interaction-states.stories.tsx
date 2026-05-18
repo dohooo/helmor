@@ -2,10 +2,16 @@
  * Visual reference for the composer interaction surfaces:
  *
  *   - Default: Lexical editor + toolbar
- *   - State A: Permission request — adapted through the shared
- *              `GenericDeferredToolPanel` (same UI as State B)
- *   - State B: Deferred tool approval (GenericDeferredToolPanel)
- *   - State C: Elicitation (FormElicitationPanel / UrlElicitationPanel)
+ *   - State A: Permission request — `PermissionPanel` (its own wire event +
+ *              RPC; uses the shared `ToolApprovalCard` for rendering)
+ *   - State B: Ask-user-question — `UserInputPanel` routes to the
+ *              AskUserQuestion sub-renderer based on `payload.kind =
+ *              "ask-user-question"` (Claude AUQ / multi-question
+ *              format)
+ *   - State C: Form / URL user-input — `UserInputPanel` routes to the
+ *              ElicitationRenderer based on `payload.kind = "form" |
+ *              "url"` (covers MCP elicitations and Codex's synthesized
+ *              user-input form)
  *
  * The stories render the real production components with mocked prop
  * values — no JSX is reimplemented here. If the app's styling changes,
@@ -17,9 +23,7 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingPermission } from "@/features/conversation/hooks/use-streaming";
-import type { PendingDeferredTool } from "@/features/conversation/pending-deferred-tool";
-import type { PendingElicitation } from "@/features/conversation/pending-elicitation";
-import { adaptPermissionToDeferredTool } from "@/features/conversation/permission-as-deferred-tool";
+import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import type { AgentModelSection } from "@/lib/api";
 import { createHelmorQueryClient } from "@/lib/query-client";
 import { WorkspaceComposer } from "./index";
@@ -55,99 +59,83 @@ const MOCK_PERMISSION: PendingPermission = {
 	description: null,
 };
 
-// State A now routes through the same `pendingDeferredTool` channel as State B
-// so the two states share one UI (GenericDeferredToolPanel). The adapter
-// wraps the permission request in a PendingDeferredTool shape with a
-// reserved toolUseId prefix.
-const MOCK_PERMISSION_AS_DEFERRED_TOOL =
-	adaptPermissionToDeferredTool(MOCK_PERMISSION);
-
-const MOCK_DEFERRED_TOOL: PendingDeferredTool = {
+const MOCK_FORM_USER_INPUT: PendingUserInput = {
 	provider: "claude",
 	modelId: "sonnet-4-5",
 	resolvedModel: "claude-sonnet-4-5",
 	providerSessionId: null,
 	workingDirectory: "/tmp/helmor",
 	permissionMode: null,
-	toolUseId: "tool-mock-1",
-	toolName: "Bash",
-	toolInput: {
-		command: "rm -f /Users/kevin/nix-config/.git/hooks/post-checkout",
-		description: "Remove the post-checkout git hook",
-	},
-};
-
-const MOCK_FORM_ELICITATION: PendingElicitation = {
-	provider: "claude",
-	modelId: "sonnet-4-5",
-	resolvedModel: "claude-sonnet-4-5",
-	providerSessionId: null,
-	workingDirectory: "/tmp/helmor",
-	elicitationId: "elicit-mock-form",
-	serverName: "vercel",
+	userInputId: "user-input-mock-form",
+	source: "vercel",
 	message: "Configure the new deployment target.",
-	mode: "form",
-	url: null,
-	requestedSchema: {
-		type: "object",
-		properties: {
-			projectName: {
-				type: "string",
-				title: "Project name",
-				description: "Human-friendly name shown in the dashboard.",
-				minLength: 1,
-				maxLength: 64,
+	payload: {
+		kind: "form",
+		schema: {
+			type: "object",
+			properties: {
+				projectName: {
+					type: "string",
+					title: "Project name",
+					description: "Human-friendly name shown in the dashboard.",
+					minLength: 1,
+					maxLength: 64,
+				},
+				port: {
+					type: "integer",
+					title: "Port",
+					description: "Port the dev server should bind to.",
+					minimum: 1,
+					maximum: 65535,
+					default: 3000,
+				},
+				environment: {
+					type: "string",
+					title: "Environment",
+					description: "Which environment to deploy into.",
+					enum: ["development", "staging", "production"],
+					enumNames: ["Development", "Staging", "Production"],
+				},
+				autoDeploy: {
+					type: "boolean",
+					title: "Auto-deploy on push",
+					description: "Automatically redeploy when main changes.",
+					default: false,
+				},
 			},
-			port: {
-				type: "integer",
-				title: "Port",
-				description: "Port the dev server should bind to.",
-				minimum: 1,
-				maximum: 65535,
-				default: 3000,
-			},
-			environment: {
-				type: "string",
-				title: "Environment",
-				description: "Which environment to deploy into.",
-				enum: ["development", "staging", "production"],
-				enumNames: ["Development", "Staging", "Production"],
-			},
-			autoDeploy: {
-				type: "boolean",
-				title: "Auto-deploy on push",
-				description: "Automatically redeploy when main changes.",
-				default: false,
-			},
+			required: ["projectName", "environment"],
 		},
-		required: ["projectName", "environment"],
 	},
 };
 
-const MOCK_URL_ELICITATION: PendingElicitation = {
-	provider: "claude",
-	modelId: "sonnet-4-5",
-	resolvedModel: "claude-sonnet-4-5",
-	providerSessionId: null,
-	workingDirectory: "/tmp/helmor",
-	elicitationId: "elicit-mock-url",
-	serverName: "auth-server",
-	message: "Finish signing in in the browser to continue.",
-	mode: "url",
-	url: "https://example.com/oauth/authorize?client_id=helmor&state=abc",
-	requestedSchema: null,
-};
-
-const MOCK_ASK_USER_QUESTION: PendingDeferredTool = {
+const MOCK_URL_USER_INPUT: PendingUserInput = {
 	provider: "claude",
 	modelId: "sonnet-4-5",
 	resolvedModel: "claude-sonnet-4-5",
 	providerSessionId: null,
 	workingDirectory: "/tmp/helmor",
 	permissionMode: null,
-	toolUseId: "tool-ask-1",
-	toolName: "AskUserQuestion",
-	toolInput: {
+	userInputId: "user-input-mock-url",
+	source: "auth-server",
+	message: "Finish signing in in the browser to continue.",
+	payload: {
+		kind: "url",
+		url: "https://example.com/oauth/authorize?client_id=helmor&state=abc",
+	},
+};
+
+const MOCK_ASK_USER_QUESTION: PendingUserInput = {
+	provider: "claude",
+	modelId: "sonnet-4-5",
+	resolvedModel: "claude-sonnet-4-5",
+	providerSessionId: null,
+	workingDirectory: "/tmp/helmor",
+	permissionMode: null,
+	userInputId: "tool-ask-1",
+	source: "Claude",
+	message: "Claude is asking for your input.",
+	payload: {
+		kind: "ask-user-question",
 		questions: [
 			{
 				header: "UI",
@@ -206,8 +194,8 @@ function baseComposerProps(contextKey: string): ComposerProps {
 		restoreNonce: 0,
 		slashCommands: [],
 		workspaceRootPath: "/tmp/helmor",
-		pendingElicitation: null,
-		pendingDeferredTool: null,
+		pendingUserInput: null,
+		pendingPermission: null,
 		hasPlanReview: false,
 	};
 }
@@ -288,27 +276,14 @@ export const Default: Story = {
 		)),
 };
 
-export const StateAPermissionBar: Story = {
+export const StateAPermissionPanel: Story = {
 	name: "A — Permission request",
 	render: () =>
 		withProviders(() => (
-			<Harness label="A — Permission request (shared panel with B)">
+			<Harness label="A — Permission request panel">
 				<WorkspaceComposer
 					{...baseComposerProps("story:permission")}
-					pendingDeferredTool={MOCK_PERMISSION_AS_DEFERRED_TOOL}
-				/>
-			</Harness>
-		)),
-};
-
-export const StateBDeferredTool: Story = {
-	name: "B — Deferred tool (generic)",
-	render: () =>
-		withProviders(() => (
-			<Harness label="B — Generic deferred tool panel">
-				<WorkspaceComposer
-					{...baseComposerProps("story:deferred-tool")}
-					pendingDeferredTool={MOCK_DEFERRED_TOOL}
+					pendingPermission={MOCK_PERMISSION}
 				/>
 			</Harness>
 		)),
@@ -318,36 +293,36 @@ export const StateBAskUserQuestion: Story = {
 	name: "B — Ask user question",
 	render: () =>
 		withProviders(() => (
-			<Harness label="B — AskUserQuestion deferred tool panel">
+			<Harness label="B — AskUserQuestion user-input panel">
 				<WorkspaceComposer
 					{...baseComposerProps("story:ask-user-question")}
-					pendingDeferredTool={MOCK_ASK_USER_QUESTION}
+					pendingUserInput={MOCK_ASK_USER_QUESTION}
 				/>
 			</Harness>
 		)),
 };
 
-export const StateCFormElicitation: Story = {
-	name: "C — Form elicitation",
+export const StateCFormUserInput: Story = {
+	name: "C — Form user input",
 	render: () =>
 		withProviders(() => (
-			<Harness label="C — Form elicitation panel">
+			<Harness label="C — Form user-input panel (MCP / Codex form)">
 				<WorkspaceComposer
-					{...baseComposerProps("story:form-elicitation")}
-					pendingElicitation={MOCK_FORM_ELICITATION}
+					{...baseComposerProps("story:form-user-input")}
+					pendingUserInput={MOCK_FORM_USER_INPUT}
 				/>
 			</Harness>
 		)),
 };
 
-export const StateCUrlElicitation: Story = {
-	name: "C — URL elicitation",
+export const StateCUrlUserInput: Story = {
+	name: "C — URL user input",
 	render: () =>
 		withProviders(() => (
-			<Harness label="C — URL elicitation panel">
+			<Harness label="C — URL user-input panel">
 				<WorkspaceComposer
-					{...baseComposerProps("story:url-elicitation")}
-					pendingElicitation={MOCK_URL_ELICITATION}
+					{...baseComposerProps("story:url-user-input")}
+					pendingUserInput={MOCK_URL_USER_INPUT}
 				/>
 			</Harness>
 		)),
@@ -358,7 +333,7 @@ export const AllStates: Story = {
 	render: () =>
 		withProviders(() => (
 			// `maxHeight: 100dvh` + `overflow-y-auto` lets the grid scroll when the
-			// combined height of the six harnesses exceeds the Storybook canvas
+			// combined height of the harnesses exceeds the Storybook canvas
 			// (which is fixed to the viewport because the meta uses
 			// `layout: "fullscreen"`). Without this the overflowing harnesses at
 			// the bottom get clipped.
@@ -372,31 +347,25 @@ export const AllStates: Story = {
 				<Harness label="A — Permission request" width={560}>
 					<WorkspaceComposer
 						{...baseComposerProps("story:grid-permission")}
-						pendingDeferredTool={MOCK_PERMISSION_AS_DEFERRED_TOOL}
-					/>
-				</Harness>
-				<Harness label="B — Deferred tool" width={560}>
-					<WorkspaceComposer
-						{...baseComposerProps("story:grid-deferred-tool")}
-						pendingDeferredTool={MOCK_DEFERRED_TOOL}
+						pendingPermission={MOCK_PERMISSION}
 					/>
 				</Harness>
 				<Harness label="B — Ask user question" width={560}>
 					<WorkspaceComposer
 						{...baseComposerProps("story:grid-ask-user-question")}
-						pendingDeferredTool={MOCK_ASK_USER_QUESTION}
+						pendingUserInput={MOCK_ASK_USER_QUESTION}
 					/>
 				</Harness>
-				<Harness label="C — Form elicitation" width={560}>
+				<Harness label="C — Form user input" width={560}>
 					<WorkspaceComposer
-						{...baseComposerProps("story:grid-form-elicitation")}
-						pendingElicitation={MOCK_FORM_ELICITATION}
+						{...baseComposerProps("story:grid-form-user-input")}
+						pendingUserInput={MOCK_FORM_USER_INPUT}
 					/>
 				</Harness>
-				<Harness label="C — URL elicitation" width={560}>
+				<Harness label="C — URL user input" width={560}>
 					<WorkspaceComposer
-						{...baseComposerProps("story:grid-url-elicitation")}
-						pendingElicitation={MOCK_URL_ELICITATION}
+						{...baseComposerProps("story:grid-url-user-input")}
+						pendingUserInput={MOCK_URL_USER_INPUT}
 					/>
 				</Harness>
 			</div>

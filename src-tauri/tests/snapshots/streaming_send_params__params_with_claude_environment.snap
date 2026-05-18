@@ -1,0 +1,16 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+claudeEnvironment:
+  ANTHROPIC_AUTH_TOKEN: sk-test
+  ANTHROPIC_BASE_URL: "https://api.example.com/anthropic"
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+model: claude-opus-4
+permissionMode: bypassPermissions
+prompt: hello
+provider: claude
+resume: ~
+sessionId: sidecar-sess-1

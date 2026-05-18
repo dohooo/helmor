@@ -4,7 +4,8 @@
 //! later cross-platform refactors (Phase 2+) cannot regress them silently.
 
 use super::events::{
-    UpdateInfoSnapshot, UpdateStage, UpdateStatusSnapshot, APP_UPDATE_STATUS_EVENT,
+    DownloadProgress, UpdateInfoSnapshot, UpdateStage, UpdateStatusSnapshot,
+    APP_UPDATE_STATUS_EVENT,
 };
 
 #[test]
@@ -61,6 +62,7 @@ fn update_status_snapshot_serializes_camel_case_fields() {
         last_error: Some("network".into()),
         last_attempt_at: Some("2026-04-17T00:00:00Z".into()),
         downloaded_at: None,
+        progress: None,
     };
 
     let value = serde_json::to_value(&snap).unwrap();
@@ -82,4 +84,26 @@ fn app_update_status_event_name_is_stable() {
     // Frontend subscribes via this literal; cross-platform refactors must not
     // rename it.
     assert_eq!(APP_UPDATE_STATUS_EVENT, "app-update-status");
+}
+
+#[test]
+fn download_progress_serializes_camel_case() {
+    let progress = DownloadProgress {
+        downloaded: 12_345,
+        total: Some(50_000),
+    };
+    let value = serde_json::to_value(progress).unwrap();
+    assert_eq!(value["downloaded"], 12_345);
+    assert_eq!(value["total"], 50_000);
+}
+
+#[test]
+fn download_progress_total_unknown_serializes_null() {
+    let progress = DownloadProgress {
+        downloaded: 100,
+        total: None,
+    };
+    let value = serde_json::to_value(progress).unwrap();
+    assert_eq!(value["downloaded"], 100);
+    assert!(value["total"].is_null());
 }

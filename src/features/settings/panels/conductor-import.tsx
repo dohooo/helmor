@@ -25,7 +25,9 @@ import {
 	listConductorWorkspaces,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
+import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
 function humanize(directoryName: string): string {
 	return directoryName
@@ -35,9 +37,9 @@ function humanize(directoryName: string): string {
 
 function statusLabel(ws: ConductorWorkspace): string {
 	if (ws.state === "archived") return "Archived";
-	if (ws.derivedStatus === "done") return "Done";
-	if (ws.derivedStatus === "in-progress") return "In progress";
-	return ws.derivedStatus ?? ws.state;
+	if (ws.status === "done") return "Done";
+	if (ws.status === "in-progress") return "In progress";
+	return ws.status ?? ws.state;
 }
 
 function SkeletonRow() {
@@ -131,7 +133,7 @@ function ImportWorkspaceRow({
 	return (
 		<label
 			htmlFor={checkboxId}
-			className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
+			className="flex w-full cursor-interactive items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
 		>
 			<Checkbox
 				id={checkboxId}
@@ -251,12 +253,7 @@ export function ConductorImportPanel() {
 	}, [selectedIds.size, importableWorkspaces]);
 
 	const invalidateAfterImport = useCallback(() => {
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceGroups,
-		});
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.archivedWorkspaces,
-		});
+		requestSidebarReconcile(queryClient);
 		void queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.repositories,
 		});
@@ -311,40 +308,46 @@ export function ConductorImportPanel() {
 
 	return (
 		<>
-			<div className="flex items-center gap-2">
-				{selectedRepoId ? (
-					<Button
-						disabled={importing}
-						variant="ghost"
-						size="icon-xs"
-						className="text-muted-foreground hover:text-foreground"
-						onClick={() => {
-							setSelectedRepoId(null);
-							setImportSuccess(null);
-						}}
-					>
-						<ArrowLeft className="size-3.5" strokeWidth={2} />
-					</Button>
-				) : (
-					<FolderInput
-						className="size-3.5 text-muted-foreground"
-						strokeWidth={1.8}
-					/>
-				)}
-				<div className="text-[13px] font-medium leading-snug text-foreground">
-					{selectedRepoId
-						? (selectedRepo?.name ?? "Repository")
-						: "Import from Conductor"}
-				</div>
-			</div>
-			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-				{selectedRepoId
-					? "Select workspaces to import"
-					: "Import workspaces from a local Conductor installation"}
-			</div>
+			<SettingsGroup>
+				<SettingsRow
+					title={
+						<span className="flex items-center gap-2">
+							{selectedRepoId ? (
+								<Button
+									disabled={importing}
+									variant="ghost"
+									size="icon-xs"
+									className="text-muted-foreground hover:text-foreground"
+									onClick={() => {
+										setSelectedRepoId(null);
+										setImportSuccess(null);
+									}}
+								>
+									<ArrowLeft className="size-3.5" strokeWidth={2} />
+								</Button>
+							) : (
+								<FolderInput
+									className="size-3.5 text-muted-foreground"
+									strokeWidth={1.8}
+								/>
+							)}
+							<span>
+								{selectedRepoId
+									? (selectedRepo?.name ?? "Repository")
+									: "Import from Conductor"}
+							</span>
+						</span>
+					}
+					description={
+						selectedRepoId
+							? "Select workspaces to import"
+							: "Import workspaces from a local Conductor installation"
+					}
+				/>
+			</SettingsGroup>
 
 			{!importing && (
-				<div className="mt-4">
+				<div>
 					<InputGroup className="border-border/40 bg-muted/30 shadow-none">
 						<InputGroupAddon>
 							<Search className="text-muted-foreground/60" strokeWidth={1.9} />

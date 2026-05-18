@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
+import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
 	| "pinned"
@@ -23,16 +24,24 @@ export type WorkspaceState =
 	| "archived";
 
 /**
- * Mirror of the Rust `DerivedStatus` enum
- * (`src-tauri/src/workspace/derived_status.rs`). Drives the sidebar kanban
+ * Mirror of the Rust `WorkspaceStatus` enum
+ * (`src-tauri/src/workspace/status.rs`). Drives the sidebar kanban
  * lanes and PR-driven auto-status transitions.
  */
-export type DerivedStatus =
+export type WorkspaceStatus =
 	| "in-progress"
 	| "done"
 	| "review"
 	| "backlog"
 	| "canceled";
+
+/**
+ * Mirror of the Rust `PrSyncState` enum
+ * (`src-tauri/src/workspace/pr_sync.rs`). Cached on the workspace row so the
+ * inspector can render the PR badge optimistically before the live forge
+ * query returns.
+ */
+export type PrSyncState = "none" | "open" | "closed" | "merged";
 
 /**
  * Mirror of the Rust `ActionKind` enum
@@ -41,6 +50,7 @@ export type DerivedStatus =
  */
 export type ActionKind =
 	| "create-pr"
+	| "review"
 	| "commit-and-push"
 	| "push"
 	| "fix"
@@ -55,24 +65,48 @@ export type WorkspaceRow = {
 	title: string;
 	avatar?: string;
 	directoryName?: string;
+	repoId?: string;
 	repoName?: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state?: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread?: boolean;
 	workspaceUnread?: number;
 	unreadSessionCount?: number;
-	derivedStatus?: DerivedStatus;
-	manualStatus?: DerivedStatus | null;
+	status?: WorkspaceStatus;
 	branch?: string | null;
 	activeSessionId?: string | null;
 	activeSessionTitle?: string | null;
 	activeSessionAgentType?: string | null;
 	activeSessionStatus?: string | null;
+	/** "Primary" conversation = the non-hidden, non-action session in this
+	 * workspace with the most messages (ties broken by recency). The
+	 * meaningful long-running chat — distinct from `activeSession*` which
+	 * may be a transient one-off action like create-pr. */
+	primarySessionId?: string | null;
+	primarySessionTitle?: string | null;
+	primarySessionAgentType?: string | null;
 	prTitle?: string | null;
+	prSyncState?: PrSyncState;
+	prUrl?: string | null;
 	pinnedAt?: string | null;
 	sessionCount?: number;
 	messageCount?: number;
+	/** ISO-8601 timestamp — present for rows coming from the backend; absent
+	 * for ad-hoc optimistic rows that haven't been given one. */
+	createdAt?: string;
+	/** ISO-8601 timestamp — last DB-recorded change to the workspace. */
+	updatedAt?: string;
+	/** Sparse sidebar order. Lower comes first; shared across every grouping
+	 * mode (status / repo / pinned). */
+	displayOrder?: number;
+	/** Sparse order of this row's parent repo bucket. Used in repo grouping
+	 * mode to sort buckets. Mirrors `repos.display_order`. */
+	repoSidebarOrder?: number;
+	/** ISO-8601 timestamp — most recent user message across all sessions
+	 * in this workspace. Null when the workspace has no user messages yet. */
+	lastUserMessageAt?: string | null;
 };
 
 export type WorkspaceGroup = {
@@ -89,21 +123,23 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "cursor";
 
 export type AgentModelOption = {
 	id: string;
 	provider: AgentProvider;
 	label: string;
 	cliModel: string;
+	providerKey?: string | null;
 	effortLevels?: string[];
 	supportsFastMode?: boolean;
+	supportsContextUsage?: boolean;
 };
 
 export type AgentModelSectionStatus = "ready" | "unavailable" | "error";
 
 export type AgentModelSection = {
-	id: AgentProvider;
+	id: string;
 	label: string;
 	status?: AgentModelSectionStatus;
 	options: AgentModelOption[];
@@ -113,7 +149,11 @@ export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
 	prompt: string;
-	resumeOnly?: boolean | null;
+	/** Hidden preamble prepended to `prompt` only on the wire to the agent
+	 *  (e.g. the user's "general preferences"). Persisted user-prompt
+	 *  content keeps `prompt` only — the prefix never enters the DB or
+	 *  the chat bubble. */
+	promptPrefix?: string | null;
 	sessionId?: string | null;
 	helmorSessionId?: string | null;
 	workingDirectory?: string | null;
@@ -123,36 +163,66 @@ export type AgentSendRequest = {
 	userMessageId?: string | null;
 	/** Workspace-relative paths from the @-mention picker. */
 	files?: string[] | null;
+	/** Image attachment paths from the composer (drag-and-drop or
+	 *  paste). Travels alongside `prompt` so the sidecar can lift the
+	 *  matching `@<path>` substrings out as image attachments without
+	 *  re-parsing the text — paths may contain whitespace. */
+	images?: string[] | null;
 };
 
 export type WorkspaceSummary = {
 	id: string;
 	title: string;
 	directoryName: string;
+	repoId: string;
 	repoName: string;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 	state: WorkspaceState;
+	mode?: WorkspaceMode;
 	hasUnread: boolean;
 	workspaceUnread: number;
 	unreadSessionCount: number;
-	derivedStatus: DerivedStatus;
-	manualStatus?: DerivedStatus | null;
+	status: WorkspaceStatus;
 	branch?: string | null;
 	activeSessionId?: string | null;
 	activeSessionTitle?: string | null;
 	activeSessionAgentType?: string | null;
 	activeSessionStatus?: string | null;
+	primarySessionId?: string | null;
+	primarySessionTitle?: string | null;
+	primarySessionAgentType?: string | null;
 	prTitle?: string | null;
+	prSyncState?: PrSyncState;
+	prUrl?: string | null;
+	pinnedAt?: string | null;
+	/** Sparse sidebar order. Mirrors `WorkspaceRow.displayOrder`; carried
+	 * through the archived list so restore can predict the live-group
+	 * position without waiting for refetch. */
+	displayOrder?: number;
 	sessionCount?: number;
 	messageCount?: number;
+	createdAt: string;
+	updatedAt?: string;
+	lastUserMessageAt?: string | null;
 };
+
+export type BranchPrefixType = "username" | "custom" | "none";
 
 export type RepositoryCreateOption = {
 	id: string;
 	name: string;
 	remote?: string | null;
+	remoteUrl?: string | null;
 	defaultBranch?: string | null;
+	/** Per-repo branch prefix mode. NULL is treated as "github" by the
+	 * backend resolver — keeps legacy rows behaving as before. */
+	branchPrefixType?: BranchPrefixType | null;
+	branchPrefixCustom?: string | null;
+	forgeProvider?: ForgeProvider | null;
+	/** gh/glab account login bound to this repo, or null when none had
+	 * access at add-time. UI shows a "Connect" prompt when null. */
+	forgeLogin?: string | null;
 	repoIconSrc?: string | null;
 	repoInitials?: string | null;
 };
@@ -161,80 +231,62 @@ export type AddRepositoryDefaults = {
 	lastCloneDirectory?: string | null;
 };
 
-export type GithubIdentitySession = {
-	provider: string;
-	githubUserId: number;
+/** A single gh / glab account with display profile attached. Listed
+ * by `listForgeAccounts` for the Settings → Account panel. */
+export type ForgeAccount = {
+	provider: ForgeProvider;
+	host: string;
 	login: string;
-	name?: string | null;
-	avatarUrl?: string | null;
-	primaryEmail?: string | null;
-	tokenExpiresAt?: string | null;
-	refreshTokenExpiresAt?: string | null;
-};
-
-export type GithubIdentitySnapshot =
-	| { status: "connected"; session: GithubIdentitySession }
-	| { status: "disconnected" }
-	| { status: "unconfigured"; message: string }
-	| { status: "error"; message: string };
-
-export type GithubIdentityDeviceFlowStart = {
-	deviceCode: string;
-	userCode: string;
-	verificationUri: string;
-	verificationUriComplete?: string | null;
-	expiresAt: string;
-	intervalSeconds: number;
-};
-
-export type GithubCliStatus =
-	| {
-			status: "ready";
-			host: string;
-			login: string;
-			version: string;
-			message: string;
-	  }
-	| {
-			status: "unauthenticated";
-			host: string;
-			version?: string | null;
-			message: string;
-	  }
-	| { status: "unavailable"; host: string; message: string }
-	| {
-			status: "error";
-			host: string;
-			version?: string | null;
-			message: string;
-	  };
-
-export type GithubCliUser = {
-	login: string;
-	id: number;
 	name?: string | null;
 	avatarUrl?: string | null;
 	email?: string | null;
+	/** True for the gh account currently marked active by `gh auth
+	 * switch`. Always true for GitLab (one account per host). */
+	active: boolean;
 };
 
-export type GithubRepositorySummary = {
-	id: number;
-	name: string;
-	fullName: string;
-	ownerLogin: string;
-	private: boolean;
-	defaultBranch?: string | null;
-	htmlUrl: string;
-	updatedAt?: string | null;
-	pushedAt?: string | null;
+export type ForgeProvider = "github" | "gitlab" | "unknown";
+
+export type ForgeLabels = {
+	providerName: string;
+	cliName: string;
+	changeRequestName: string;
+	changeRequestFullName: string;
+	connectAction: string;
+};
+
+export type ForgeDetectionSignal = {
+	/** Layer that produced this signal (wellKnownHost, hostPattern, urlPath, repoFile, httpProbe, cliProbe). */
+	layer: string;
+	/** Short human-readable explanation shown in the UI tooltip. */
+	detail: string;
+};
+
+export type ForgeDetection = {
+	provider: ForgeProvider;
+	host?: string | null;
+	namespace?: string | null;
+	repo?: string | null;
+	remoteUrl?: string | null;
+	labels: ForgeLabels;
+	/**
+	 * Signals that caused the current provider classification. Empty when
+	 * the provider is `unknown` or when the result came from the cached
+	 * `forge_provider` column (stored at repo-creation time).
+	 */
+	detectionSignals: ForgeDetectionSignal[];
 };
 
 export type AddRepositoryResponse = {
 	repositoryId: string;
 	createdRepository: boolean;
-	selectedWorkspaceId: string;
-	createdWorkspaceId?: string | null;
-	createdWorkspaceState: WorkspaceState;
+	/**
+	 * `string` only when the repo was already in the DB and has a visible
+	 * workspace — UI focuses it. `null` for newly-added repos and re-adds
+	 * with only archived workspaces — UI lands on the start page with this
+	 * repo selected.
+	 */
+	selectedWorkspaceId: string | null;
 };
 
 export type WorkspaceDetail = {
@@ -253,8 +305,7 @@ export type WorkspaceDetail = {
 	hasUnread: boolean;
 	workspaceUnread: number;
 	unreadSessionCount: number;
-	derivedStatus: DerivedStatus;
-	manualStatus?: DerivedStatus | null;
+	status: WorkspaceStatus;
 	activeSessionId?: string | null;
 	activeSessionTitle?: string | null;
 	activeSessionAgentType?: string | null;
@@ -262,11 +313,23 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;
+	prSyncState?: PrSyncState;
+	prUrl?: string | null;
 	archiveCommit?: string | null;
 	sessionCount: number;
 	messageCount: number;
+	forgeProvider?: ForgeProvider | null;
+	/** gh/glab account login bound to the parent repo. NULL means no
+	 * account is bound — UI shows the "Connect" prompt. */
+	forgeLogin?: string | null;
+	/** Set when this workspace's setup script last finished with exit
+	 * code 0. NULL means never run (or skipped because the repo had no
+	 * setup script). Drives the inspector's Setup tab "ran in another
+	 * session" notice and the default-tab heuristic on workspace switch. */
+	setupCompletedAt?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -301,6 +364,7 @@ export type RestoreWorkspaceResponse = {
 	 * instead. The frontend uses this to surface an informational toast so
 	 * the rename never happens silently. */
 	branchRename: { original: string; actual: string } | null;
+	restoredFromTargetBranch: string | null;
 };
 
 export type ArchiveWorkspaceResponse = {
@@ -341,11 +405,17 @@ export type PrepareWorkspaceResponse = {
 	defaultBranch: string;
 	state: WorkspaceState;
 	repoScripts: RepoScripts;
+	/** CWD the agent CLI must run in. Local mode: filled with `repo.root_path`
+	 *  immediately. Worktree mode: null until finalize materialises the
+	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
+	workingDirectory: string | null;
 };
 
 export type FinalizeWorkspaceResponse = {
 	workspaceId: string;
 	finalState: WorkspaceState;
+	/** CWD the agent CLI must run in. Always populated when finalize succeeds. */
+	workingDirectory: string;
 };
 
 export type MarkWorkspaceReadResponse = undefined;
@@ -396,6 +466,11 @@ export type AppUpdateInfo = {
 	releaseUrl: string;
 };
 
+export type AppUpdateProgress = {
+	downloaded: number;
+	total?: number | null;
+};
+
 export type AppUpdateStatus = {
 	stage: AppUpdateStage;
 	configured: boolean;
@@ -404,6 +479,7 @@ export type AppUpdateStatus = {
 	lastError?: string | null;
 	lastAttemptAt?: string | null;
 	downloadedAt?: string | null;
+	progress?: AppUpdateProgress | null;
 };
 
 const DEFAULT_WORKSPACE_GROUPS: WorkspaceGroup[] = [
@@ -424,73 +500,184 @@ export async function loadWorkspaceGroups(): Promise<WorkspaceGroup[]> {
 	}
 }
 
-export async function loadGithubIdentitySession(): Promise<GithubIdentitySnapshot> {
+/**
+ * Re-run the per-repo forge auto-bind. Frontend calls this after the
+ * user finishes a `gh auth login` / `glab auth login` flow so the repo
+ * picks up the new account without an app restart. Returns the bound
+ * login (or `null` when no logged-in account had access).
+ */
+export async function retryRepoForgeBinding(
+	repoId: string,
+): Promise<string | null> {
+	return invoke<string | null>("retry_repo_forge_binding", { repoId });
+}
+
+export async function getWorkspaceForge(
+	workspaceId: string,
+): Promise<ForgeDetection> {
 	try {
-		return await invoke<GithubIdentitySnapshot>("get_github_identity_session");
+		return await invoke<ForgeDetection>("get_workspace_forge", { workspaceId });
 	} catch (error) {
-		return {
-			status: "error",
-			message: describeInvokeError(
-				error,
-				"Unable to load GitHub account state.",
-			),
-		};
-	}
-}
-
-export async function startGithubIdentityConnect(): Promise<GithubIdentityDeviceFlowStart> {
-	return invoke<GithubIdentityDeviceFlowStart>("start_github_identity_connect");
-}
-
-export async function cancelGithubIdentityConnect(): Promise<void> {
-	await invoke("cancel_github_identity_connect");
-}
-
-export async function disconnectGithubIdentity(): Promise<void> {
-	await invoke("disconnect_github_identity");
-}
-
-export async function listenGithubIdentityChanged(
-	callback: (snapshot: GithubIdentitySnapshot) => void,
-): Promise<UnlistenFn> {
-	return listen<GithubIdentitySnapshot>(
-		"github-identity-changed",
-		(tauriEvent) => {
-			callback(tauriEvent.payload);
-		},
-	);
-}
-
-export async function loadGithubCliStatus(): Promise<GithubCliStatus> {
-	try {
-		return await invoke<GithubCliStatus>("get_github_cli_status");
-	} catch (error) {
-		return {
-			status: "error",
-			host: "github.com",
-			message: describeInvokeError(error, "Unable to load GitHub CLI state."),
-		};
-	}
-}
-
-export async function loadGithubCliUser(): Promise<GithubCliUser | null> {
-	try {
-		return await invoke<GithubCliUser | null>("get_github_cli_user");
-	} catch {
-		return null;
-	}
-}
-
-export async function listGithubAccessibleRepositories(): Promise<
-	GithubRepositorySummary[]
-> {
-	try {
-		return await invoke<GithubRepositorySummary[]>(
-			"list_github_accessible_repositories",
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace forge."),
 		);
-	} catch {
-		return [];
 	}
+}
+
+/** Enumerate all gh accounts plus one glab account per known host.
+ * `gitlabHosts` is the list of GitLab hosts to probe (gathered from the
+ * repos table — we don't shell out to glab for hosts the user isn't
+ * actively using). */
+export async function listForgeAccounts(
+	gitlabHosts: string[],
+): Promise<ForgeAccount[]> {
+	try {
+		return await invoke<ForgeAccount[]>("list_forge_accounts", {
+			gitlabHosts,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list forge accounts."),
+		);
+	}
+}
+
+/** Spot-fetch the gh/glab account bound to a workspace's parent repo,
+ * with display profile (avatar / name / email). Returns null when the
+ * repo has no resolvable forge account. Backed by the same per-process
+ * cache that `listForgeAccounts` populates. */
+export async function getWorkspaceAccountProfile(
+	workspaceId: string,
+): Promise<ForgeAccount | null> {
+	try {
+		return await invoke<ForgeAccount | null>("get_workspace_account_profile", {
+			workspaceId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load workspace account profile."),
+		);
+	}
+}
+
+/** Download a forge avatar URL into the local on-disk cache and return
+ * the absolute filesystem path. Idempotent: repeated calls with the
+ * same URL hit the cache. Pair with `convertFileSrc` to render via the
+ * `asset://` protocol so page navigations don't re-fetch + re-decode. */
+export async function cacheForgeAvatar(url: string): Promise<string> {
+	try {
+		return await invoke<string>("cache_forge_avatar", { url });
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to cache avatar."));
+	}
+}
+
+/** Lightweight login-only enumeration for `(provider, host)`. Used by
+ * the auth-terminal completion poll: take a snapshot before opening the
+ * terminal, then poll until the set grows. Skips the per-account
+ * profile fetch that `listForgeAccounts` does, so the poll loop stays
+ * cheap. */
+export async function listForgeLogins(
+	provider: ForgeProvider,
+	host: string,
+	options: { forceRefresh?: boolean } = {},
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_forge_logins", {
+			provider,
+			host,
+			forceRefresh: options.forceRefresh ?? false,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to list forge logins."));
+	}
+}
+
+/** Re-run auto-bind for every repo whose `forge_login` is still NULL.
+ * Triggered after Settings → Account adds a fresh CLI login so legacy
+ * repos pick up the new credentials without an app restart. Returns the
+ * count of repos that ended up newly bound on this sweep. */
+export async function backfillForgeRepoBindings(): Promise<number> {
+	try {
+		return await invoke<number>("backfill_forge_repo_bindings");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to backfill forge bindings."),
+		);
+	}
+}
+
+export async function spawnForgeCliAuthTerminal(
+	provider: ForgeProvider,
+	host: string | null,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_forge_cli_auth_terminal", {
+		provider,
+		host,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopForgeCliAuthTerminal(
+	provider: ForgeProvider,
+	host: string | null,
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_forge_cli_auth_terminal", {
+		provider,
+		host,
+		instanceId,
+	});
+}
+
+/** Drop the per-process forge caches (login enumeration, status pairs,
+ * profile) for `(provider, host)` so the very next `listForgeLogins`
+ * poll bypasses the rate-limiter cache. Call this immediately after
+ * the auth terminal exits. */
+export async function invalidateForgeCaches(
+	provider: ForgeProvider,
+	host: string | null,
+): Promise<void> {
+	try {
+		await invoke<void>("invalidate_forge_caches", { provider, host });
+	} catch {
+		// Best-effort: stale cache only delays detection by the cache TTL.
+	}
+}
+
+export async function writeForgeCliAuthTerminalStdin(
+	provider: ForgeProvider,
+	host: string | null,
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_forge_cli_auth_terminal_stdin", {
+		provider,
+		host,
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeForgeCliAuthTerminal(
+	provider: ForgeProvider,
+	host: string | null,
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_forge_cli_auth_terminal", {
+		provider,
+		host,
+		instanceId,
+		cols,
+		rows,
+	});
 }
 
 export async function loadDataInfo(): Promise<DataInfo | null> {
@@ -512,6 +699,23 @@ export async function getCliStatus(): Promise<CliStatus> {
 	return await invoke<CliStatus>("get_cli_status");
 }
 
+export type HelmorSkillsStatus = {
+	installed: boolean;
+	claude: boolean;
+	codex: boolean;
+	command: string;
+};
+
+export async function getHelmorSkillsStatus(): Promise<HelmorSkillsStatus> {
+	try {
+		return await invoke<HelmorSkillsStatus>("get_helmor_skills_status");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load Helmor skills status."),
+		);
+	}
+}
+
 export async function getAppUpdateStatus(): Promise<AppUpdateStatus> {
 	return invoke<AppUpdateStatus>("get_app_update_status");
 }
@@ -526,6 +730,14 @@ export async function installDownloadedAppUpdate(): Promise<AppUpdateStatus> {
 	return invoke<AppUpdateStatus>("install_downloaded_app_update");
 }
 
+export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
+	try {
+		await invoke<void>("sync_global_hotkey", { hotkey });
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to set global hotkey."));
+	}
+}
+
 export async function listenAppUpdateStatus(
 	callback: (payload: AppUpdateStatus) => void,
 ): Promise<UnlistenFn> {
@@ -536,6 +748,94 @@ export async function listenAppUpdateStatus(
 
 export async function installCli(): Promise<CliStatus> {
 	return await invoke<CliStatus>("install_cli");
+}
+
+export async function installHelmorSkills(): Promise<HelmorSkillsStatus> {
+	try {
+		return await invoke<HelmorSkillsStatus>("install_helmor_skills");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to install Helmor skills."),
+		);
+	}
+}
+
+export async function enterOnboardingWindowMode(): Promise<void> {
+	await invoke("enter_onboarding_window_mode");
+}
+
+export async function exitOnboardingWindowMode(): Promise<void> {
+	await invoke("exit_onboarding_window_mode");
+}
+
+export type AgentLoginProvider = "claude" | "codex" | "cursor";
+
+export type AgentLoginStatusResult = {
+	claude: boolean;
+	codex: boolean;
+	cursor: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
+};
+
+export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
+	return await invoke<AgentLoginStatusResult>("get_agent_login_status");
+}
+
+export async function openAgentLoginTerminal(
+	provider: AgentLoginProvider,
+): Promise<void> {
+	await invoke("open_agent_login_terminal", { provider });
+}
+
+export async function spawnAgentLoginTerminal(
+	provider: AgentLoginProvider,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_agent_login_terminal", {
+		provider,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopAgentLoginTerminal(
+	provider: AgentLoginProvider,
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_agent_login_terminal", {
+		provider,
+		instanceId,
+	});
+}
+
+export async function writeAgentLoginTerminalStdin(
+	provider: AgentLoginProvider,
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_agent_login_terminal_stdin", {
+		provider,
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeAgentLoginTerminal(
+	provider: AgentLoginProvider,
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_agent_login_terminal", {
+		provider,
+		instanceId,
+		cols,
+		rows,
+	});
 }
 
 export type DevResetResult = {
@@ -608,6 +908,18 @@ export async function updateRepositoryDefaultBranch(
 	});
 }
 
+export async function updateRepositoryBranchPrefix(
+	repoId: string,
+	branchPrefixType: BranchPrefixType | null,
+	branchPrefixCustom: string | null,
+): Promise<void> {
+	await invoke<void>("update_repository_branch_prefix", {
+		repoId,
+		branchPrefixType,
+		branchPrefixCustom,
+	});
+}
+
 export async function loadAddRepositoryDefaults(): Promise<AddRepositoryDefaults> {
 	try {
 		return await invoke<AddRepositoryDefaults>("get_add_repository_defaults");
@@ -624,10 +936,331 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	}
 }
 
+export type CursorModelParameterValue = {
+	value: string;
+	displayName?: string;
+};
+
+export type CursorModelParameter = {
+	id: string;
+	displayName?: string;
+	values: CursorModelParameterValue[];
+};
+
+export type CursorModelEntry = {
+	id: string;
+	label: string;
+	/** Raw `parameters[]` — persisted into `cursorProvider.cachedModels`. */
+	parameters?: CursorModelParameter[];
+};
+
+/// Live `Cursor.models.list` via sidecar. Optional `apiKey` overrides
+/// the stored key for one-off probes (e.g. onboarding validation).
+export async function listCursorModels(
+	apiKey?: string,
+): Promise<CursorModelEntry[]> {
+	try {
+		return await invoke<CursorModelEntry[]>("list_cursor_models", {
+			apiKey: apiKey ?? null,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Cursor models."),
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Inbox (kanban-mode left sidebar)
+// ---------------------------------------------------------------------------
+
+export type InboxItemSource =
+	| "github_issue"
+	| "github_pr"
+	| "github_discussion"
+	| "gitlab_issue"
+	| "gitlab_mr";
+
+export type InboxItemStateTone =
+	| "open"
+	| "closed"
+	| "merged"
+	| "draft"
+	| "answered"
+	| "unanswered"
+	| "urgent"
+	| "neutral";
+
+export type InboxItem = {
+	id: string;
+	source: InboxItemSource;
+	externalId: string;
+	externalUrl: string;
+	title: string;
+	subtitle?: string | null;
+	state?: { label: string; tone: InboxItemStateTone } | null;
+	lastActivityAt: number;
+};
+
+export type InboxItemDetailRef = {
+	provider: Extract<ForgeProvider, "github" | "gitlab">;
+	login: string;
+	/** Host the item lives on. Critical for self-hosted GitLab where a
+	 *  login may have accounts on multiple instances — without this the
+	 *  detail call could route to the wrong host and 404. */
+	host?: string | null;
+	source: InboxItemSource;
+	externalId: string;
+};
+
+export type GitHubIssueDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	stateReason?: string | null;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
+};
+
+export type GitHubPullRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	baseRefName?: string | null;
+	headRefName?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GitHubDiscussionDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	answered?: boolean | null;
+	authorLogin?: string | null;
+	categoryName?: string | null;
+	categoryEmoji?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type GitLabIssueDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
+};
+
+export type GitLabMergeRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	sourceBranch?: string | null;
+	targetBranch?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
+export type InboxItemDetail =
+	| { type: "github_issue"; data: GitHubIssueDetail }
+	| { type: "github_pr"; data: GitHubPullRequestDetail }
+	| { type: "github_discussion"; data: GitHubDiscussionDetail }
+	| { type: "gitlab_issue"; data: GitLabIssueDetail }
+	| { type: "gitlab_mr"; data: GitLabMergeRequestDetail };
+
+export type InboxPage = {
+	items: InboxItem[];
+	/** Opaque cursor — pass back verbatim to fetch the next page. `null`
+	 * when there are no more pages from any enabled source. */
+	nextCursor: string | null;
+};
+
+/** Sub-tab the inbox is showing. The Tauri command takes one kind per
+ *  call; the frontend maps each tab onto a separate React-Query so
+ *  switching tabs reuses the prior cached pages. */
+export type InboxKind = "issues" | "prs" | "discussions";
+
+export type InboxStateFilter =
+	| "open"
+	| "closed"
+	| "merged"
+	| "all"
+	| "answered"
+	| "unanswered";
+
+export type InboxScopeFilter =
+	| "involves"
+	| "assigned"
+	| "mentioned"
+	| "created"
+	| "author"
+	| "assignee"
+	| "mentions"
+	| "reviewRequested"
+	| "reviewedBy"
+	| "all";
+
+export type InboxSortFilter = "updated" | "created" | "comments";
+export type InboxDraftFilter = "exclude" | "include" | "only";
+
+export type InboxFilters = {
+	query?: string | null;
+	state?: InboxStateFilter | null;
+	scope?: InboxScopeFilter[] | null;
+	sort?: InboxSortFilter | null;
+	draft?: InboxDraftFilter | null;
+	labels?: string | null;
+};
+
+/** Repo-scoped label, shared between GitHub and GitLab — both forges
+ *  expose `(name, color, description)` triples on their labels API. */
+export type ForgeLabelOption = {
+	name: string;
+	color?: string | null;
+	description?: string | null;
+};
+
+/** Union of labels visible across the given repositories. Powers the
+ *  Settings → Context labels multi-select. `host` is required for
+ *  self-hosted GitLab; ignored by GitHub today. */
+export async function listForgeLabels(args: {
+	provider: ForgeProvider;
+	login: string;
+	host?: string | null;
+	repos: string[];
+}): Promise<ForgeLabelOption[]> {
+	try {
+		return await invoke<ForgeLabelOption[]>("list_forge_labels", {
+			provider: args.provider,
+			login: args.login,
+			host: args.host ?? null,
+			repos: args.repos,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load repository labels."),
+		);
+	}
+}
+
+export async function listInboxItems(args: {
+	provider: ForgeProvider;
+	/** Sub-tab kind. Pass one at a time — the backend dispatches via
+	 *  per-kind trait methods. Asking GitLab for "discussions" panics
+	 *  via Rust's `unimplemented!()` (it's a router bug); callers must
+	 *  consult `listSupportedInboxKinds(provider)` first. */
+	kind: InboxKind;
+	login: string;
+	/** Host the API call should target. Required for self-hosted GitLab
+	 *  to avoid querying `gitlab.com` for projects that live elsewhere.
+	 *  When `null`, the backend falls back to the login's home host
+	 *  (correct for the single-host "involves @me" global feed). */
+	host?: string | null;
+	cursor?: string | null;
+	limit?: number;
+	/** `owner/name` (GitHub) or `group/.../project` (GitLab) — scopes
+	 *  the query to one repo on the backend. */
+	repo?: string | null;
+	filters?: InboxFilters | null;
+}): Promise<InboxPage> {
+	try {
+		return await invoke<InboxPage>("list_inbox_items", {
+			provider: args.provider,
+			kind: args.kind,
+			login: args.login,
+			host: args.host ?? null,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 20,
+			repo: args.repo ?? null,
+			filters: args.filters ?? null,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Unable to load inbox items."));
+	}
+}
+
+/** User-facing labels for one inbox kind, scoped to a forge.
+ *
+ *  All inbox copy that differs between GitHub and GitLab ("PR" vs
+ *  "MR", "Pull requests" vs "Merge requests", GitHub-only Discussions
+ *  entry, …) lives in these structs on the backend. The frontend
+ *  renders strings from the fields directly — no provider-branched
+ *  copy in TypeScript. */
+export type InboxKindLabels = {
+	kind: InboxKind;
+	/** Short title-cased form for sub-tab dropdown items
+	 *  ("Issues", "PRs", "MRs", "Discussions"). */
+	short: string;
+	/** Title-cased plural for empty-state titles and section headers
+	 *  ("Issues", "Pull requests", "Merge requests", "Discussions"). */
+	plural: string;
+	/** Lowercase singular for inline mentions ("issue", "pull request",
+	 *  "merge request", "discussion"). */
+	singular: string;
+};
+
+/** Inbox kinds the forge supports + their labels. The set is also the
+ *  capability gate — kinds NOT in the response don't have a backend
+ *  implementation (e.g. GitLab omits Discussions because GitLab has no
+ *  equivalent feature, and `listInboxItems(gitlab, discussions)` would
+ *  panic via `unimplemented!()`). */
+export async function listInboxKindLabels(
+	provider: ForgeProvider,
+): Promise<InboxKindLabels[]> {
+	try {
+		return await invoke<InboxKindLabels[]>("list_inbox_kind_labels", {
+			provider,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load inbox kind labels."),
+		);
+	}
+}
+
+export async function getInboxItemDetail(
+	ref: InboxItemDetailRef,
+): Promise<InboxItemDetail | null> {
+	try {
+		return await invoke<InboxItemDetail | null>("get_inbox_item_detail", {
+			provider: ref.provider,
+			login: ref.login,
+			host: ref.host ?? null,
+			source: ref.source,
+			externalId: ref.externalId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load inbox item details."),
+		);
+	}
+}
+
 export type SlashCommandEntry = {
 	name: string;
 	description: string;
 	argumentHint?: string | null;
+	providers?: AgentProvider[] | null;
 	/**
 	 * - `builtin` / `skill`: command is forwarded to the agent SDK as text.
 	 * - `client-action`: selecting the entry runs a host-app handler instead
@@ -683,6 +1316,19 @@ export async function prewarmSlashCommandsForWorkspace(
 	}
 }
 
+/** Fire-and-forget: prewarm the slash-command cache for a repo (start page). */
+export async function prewarmSlashCommandsForRepo(
+	repoId: string,
+): Promise<void> {
+	try {
+		await invoke<void>("prewarm_slash_commands_for_repo", {
+			repoId,
+		});
+	} catch {
+		// Best-effort; cache will still be populated lazily on first /.
+	}
+}
+
 export async function loadWorkspaceDetail(
 	workspaceId: string,
 ): Promise<WorkspaceDetail | null> {
@@ -701,10 +1347,85 @@ export async function listRemoteBranches(opts: {
 }): Promise<string[]> {
 	try {
 		return await invoke<string[]>("list_remote_branches", opts);
-	} catch {
+	} catch (error) {
+		console.warn("[helmor] listRemoteBranches failed:", error);
 		return [];
 	}
 }
+
+/**
+ * Current HEAD branch of the repo's local working directory. Used by
+ * the start page in local mode to default the picker to the branch
+ * the user is currently on. `null` when the repo path is missing or
+ * HEAD is detached.
+ */
+export async function getRepoCurrentBranch(
+	repoId: string,
+): Promise<string | null> {
+	try {
+		return await invoke<string | null>("get_repo_current_branch", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] getRepoCurrentBranch failed:", error);
+		return null;
+	}
+}
+
+/**
+ * Merged local + remote branches for the local-mode start picker.
+ * Deduped by name, alphabetical. Worktree mode still uses
+ * `listRemoteBranches` (remote-only).
+ */
+export async function listBranchesForLocalPicker(
+	repoId: string,
+): Promise<string[]> {
+	try {
+		return await invoke<string[]>("list_branches_for_local_picker", {
+			repoId,
+		});
+	} catch (error) {
+		console.warn("[helmor] listBranchesForLocalPicker failed:", error);
+		return [];
+	}
+}
+
+/**
+ * `git checkout -b <branch>` against the repo's source path. Caller is
+ * responsible for refreshing whatever query feeds the branch picker.
+ */
+export async function createAndCheckoutBranch(
+	repoId: string,
+	branch: string,
+): Promise<void> {
+	await invoke("create_and_checkout_branch", { repoId, branch });
+}
+
+export type MoveLocalToWorktreeResponse = {
+	workspaceId: string;
+	directoryName: string;
+	branch: string;
+	state: WorkspaceState;
+};
+
+/**
+ * Move a local-mode workspace into a fresh worktree (relocation, not a
+ * clone — the workspace's mode flips Local → Worktree, same id). The
+ * new worktree gets an auto-named branch with the local repo's
+ * current state (tracked + untracked) carried over. The local repo
+ * itself is not modified.
+ */
+export async function moveLocalWorkspaceToWorktree(
+	workspaceId: string,
+): Promise<MoveLocalToWorktreeResponse> {
+	return invoke<MoveLocalToWorktreeResponse>(
+		"move_local_workspace_to_worktree",
+		{ workspaceId },
+	);
+}
+
+/** How a workspace's filesystem is provisioned. */
+export type WorkspaceMode = "worktree" | "local";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -816,13 +1537,16 @@ export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
 	| { type: "sessionListChanged"; workspaceId: string }
+	| { type: "contextUsageChanged"; sessionId: string }
+	| { type: "codexGoalChanged"; sessionId: string }
+	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
-	| { type: "workspacePrChanged"; workspaceId: string }
+	| { type: "workspaceForgeChanged"; workspaceId: string }
+	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
-	| { type: "githubIdentityChanged" }
 	| {
 			type: "pendingCliSendQueued";
 			workspaceId: string;
@@ -830,7 +1554,8 @@ export type UiMutationEvent =
 			prompt: string;
 			modelId: string | null;
 			permissionMode: string | null;
-	  };
+	  }
+	| { type: "activeStreamsChanged" };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -850,11 +1575,16 @@ export async function listenGitRefsChanged(
 
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
-): Promise<void> {
+): Promise<UnlistenFn> {
 	const { Channel } = await import("@tauri-apps/api/core");
+	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
-	await invoke("subscribe_ui_mutations", { onEvent });
+	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
+	return () => {
+		onEvent.onmessage = () => {};
+		void invoke("unsubscribe_ui_mutations", { subscriptionId });
+	};
 }
 
 export type PrefetchRemoteRefsResponse = {
@@ -883,22 +1613,76 @@ export async function loadWorkspaceSessions(
 	}
 }
 
+export type SessionThreadMessagesPage = {
+	messages: ThreadMessageLike[];
+	hasMore: boolean;
+};
+
 /**
- * Load session messages as pipeline-rendered ThreadMessageLike[].
- * The frontend can render these directly without any conversion.
+ * Default tail window for session message loads. Mirrored in
+ * `query-client.ts` as `SESSION_THREAD_DEFAULT_TAIL_LIMIT` — keep in sync.
  */
-export async function loadSessionThreadMessages(
+export const DEFAULT_SESSION_THREAD_TAIL_LIMIT = 200;
+
+/**
+ * Raw page fetch — returns both messages and the `hasMore` flag.
+ *
+ * Lower-level than `loadSessionThreadMessages`. Used by the React Query
+ * queryFn (which then updates the pagination store) and by the
+ * "Load earlier" expand path (which needs `hasMore` after each fetch).
+ */
+export async function fetchSessionThreadMessagesPage(
 	sessionId: string,
-): Promise<ThreadMessageLike[]> {
+	options?: { tailLimit?: number | null },
+): Promise<SessionThreadMessagesPage> {
+	const tailLimit =
+		options?.tailLimit === undefined
+			? DEFAULT_SESSION_THREAD_TAIL_LIMIT
+			: options.tailLimit;
 	try {
-		return await invoke<ThreadMessageLike[]>("list_session_thread_messages", {
-			sessionId,
-		});
+		return await invoke<SessionThreadMessagesPage>(
+			"list_session_thread_messages",
+			{
+				sessionId,
+				tailLimit,
+			},
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to load session thread messages."),
 		);
 	}
+}
+
+/**
+ * Load session messages as pipeline-rendered ThreadMessageLike[].
+ *
+ * Thin wrapper over `fetchSessionThreadMessagesPage` that drops
+ * `hasMore` for callers wanting just the array. As a side effect this
+ * also updates the pagination store so the React Query path (which
+ * calls this for trivial mockability) keeps `hasMore` / `loadedTailLimit`
+ * in sync with the cache.
+ *
+ * Pass `tailLimit: null` (e.g. full session export) to skip the store
+ * update — that path lives under a different cache key and should not
+ * stomp the live panel's pagination state.
+ */
+export async function loadSessionThreadMessages(
+	sessionId: string,
+	options?: { tailLimit?: number | null },
+): Promise<ThreadMessageLike[]> {
+	const page = await fetchSessionThreadMessagesPage(sessionId, options);
+	if (options?.tailLimit !== null) {
+		const tailLimit =
+			options?.tailLimit === undefined
+				? DEFAULT_SESSION_THREAD_TAIL_LIMIT
+				: options.tailLimit;
+		setSessionThreadPaginationState(sessionId, {
+			hasMore: page.hasMore,
+			loadedTailLimit: tailLimit,
+		});
+	}
+	return page.messages;
 }
 
 export async function restoreWorkspace(
@@ -988,6 +1772,12 @@ export async function openWorkspaceInEditor(
 	editor: string,
 ): Promise<void> {
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
+}
+
+export async function openWorkspaceInFinder(
+	workspaceId: string,
+): Promise<void> {
+	await invoke("open_workspace_in_finder", { workspaceId });
 }
 
 export async function readEditorFile(
@@ -1154,7 +1944,7 @@ export async function unstageWorkspaceFile(
 	}
 }
 
-export type PullRequestInfo = {
+export type ChangeRequestInfo = {
 	url: string;
 	number: number;
 	state: "OPEN" | "CLOSED" | "MERGED" | string;
@@ -1163,7 +1953,7 @@ export type PullRequestInfo = {
 };
 
 export type ActionStatusKind = "success" | "pending" | "running" | "failure";
-export type ActionProvider = "github" | "vercel" | "unknown";
+export type ActionProvider = "github" | "gitlab" | "vercel" | "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 export type WorkspacePushStatus = "published" | "unpublished" | "unknown";
 
@@ -1175,6 +1965,10 @@ export type WorkspaceGitActionStatus = {
 	behindTargetCount: number;
 	remoteTrackingRef?: string | null;
 	aheadOfRemoteCount: number;
+	/** Commits this branch has on top of its target branch's remote ref
+	 *  (e.g. `origin/main`). Stays accurate for unpublished branches —
+	 *  unlike `aheadOfRemoteCount`, which reads as 0 without an upstream. */
+	aheadOfTargetCount: number;
 	pushStatus?: WorkspacePushStatus;
 };
 
@@ -1182,7 +1976,7 @@ export type SyncWorkspaceTargetOutcome =
 	| "updated"
 	| "alreadyUpToDate"
 	| "conflict"
-	| "dirtyWorktree";
+	| "stashPopConflict";
 
 export type SyncWorkspaceTargetResponse = {
 	outcome: SyncWorkspaceTargetOutcome;
@@ -1195,7 +1989,13 @@ export type PushWorkspaceToRemoteResponse = {
 	headCommit: string;
 };
 
-export type WorkspacePrActionItem = {
+export type ContinueWorkspaceResponse = {
+	branch: string;
+	targetBranch: string;
+	startPoint: string;
+};
+
+export type ForgeActionItem = {
 	id: string;
 	name: string;
 	provider: ActionProvider;
@@ -1204,34 +2004,29 @@ export type WorkspacePrActionItem = {
 	url?: string | null;
 };
 
-export type WorkspacePrActionStatus = {
-	pr: PullRequestInfo | null;
+export type ForgeActionStatus = {
+	changeRequest: ChangeRequestInfo | null;
 	reviewDecision?: string | null;
 	mergeable?: string | null;
-	deployments: WorkspacePrActionItem[];
-	checks: WorkspacePrActionItem[];
-	remoteState: "ok" | "noPr" | "unavailable" | "error";
+	mergeStateStatus?: string | null;
+	deployments: ForgeActionItem[];
+	checks: ForgeActionItem[];
+	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";
 	message?: string | null;
 };
 
-/**
- * Look up the most recent pull request on GitHub whose head ref matches the
- * workspace's current branch. Returns `null` when there's no matching PR, the
- * workspace has no github.com remote, the user isn't connected to GitHub, or
- * the stored access token has been revoked. Only throws for unexpected
- * transport / parse failures.
- */
-export async function lookupWorkspacePr(
+export async function refreshWorkspaceChangeRequest(
 	workspaceId: string,
-): Promise<PullRequestInfo | null> {
+): Promise<ChangeRequestInfo | null> {
 	try {
-		const result = await invoke<PullRequestInfo | null>("lookup_workspace_pr", {
-			workspaceId,
-		});
+		const result = await invoke<ChangeRequestInfo | null>(
+			"refresh_workspace_change_request",
+			{ workspaceId },
+		);
 		return result ?? null;
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to look up workspace PR."),
+			describeInvokeError(error, "Unable to refresh change request."),
 		);
 	}
 }
@@ -1279,27 +2074,27 @@ export async function pushWorkspaceToRemote(
 	}
 }
 
-export async function loadWorkspacePrActionStatus(
+export async function loadWorkspaceForgeActionStatus(
 	workspaceId: string,
-): Promise<WorkspacePrActionStatus> {
+): Promise<ForgeActionStatus> {
 	try {
-		return await invoke<WorkspacePrActionStatus>(
-			"get_workspace_pr_action_status",
+		return await invoke<ForgeActionStatus>(
+			"get_workspace_forge_action_status",
 			{ workspaceId },
 		);
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to load workspace PR status."),
+			describeInvokeError(error, "Unable to load workspace forge status."),
 		);
 	}
 }
 
-export async function getWorkspacePrCheckInsertText(
+export async function getWorkspaceForgeCheckInsertText(
 	workspaceId: string,
 	itemId: string,
 ): Promise<string> {
 	try {
-		return await invoke<string>("get_workspace_pr_check_insert_text", {
+		return await invoke<string>("get_workspace_forge_check_insert_text", {
 			workspaceId,
 			itemId,
 		});
@@ -1310,42 +2105,51 @@ export async function getWorkspacePrCheckInsertText(
 	}
 }
 
-/**
- * Merge the workspace's open PR via GitHub GraphQL `mergePullRequest`.
- * Returns the refreshed PR info on success, `null` if no PR / not connected.
- */
-export async function mergeWorkspacePr(
+export async function mergeWorkspaceChangeRequest(
 	workspaceId: string,
-): Promise<PullRequestInfo | null> {
+): Promise<ChangeRequestInfo | null> {
 	try {
 		return (
-			(await invoke<PullRequestInfo | null>("merge_workspace_pr", {
-				workspaceId,
-			})) ?? null
+			(await invoke<ChangeRequestInfo | null>(
+				"merge_workspace_change_request",
+				{ workspaceId },
+			)) ?? null
 		);
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to merge workspace PR."),
+			describeInvokeError(error, "Unable to merge change request."),
 		);
 	}
 }
 
-/**
- * Close the workspace's open PR via GitHub GraphQL `closePullRequest`.
- * Returns the refreshed PR info on success, `null` if no PR / not connected.
- */
-export async function closeWorkspacePr(
+export async function closeWorkspaceChangeRequest(
 	workspaceId: string,
-): Promise<PullRequestInfo | null> {
+): Promise<ChangeRequestInfo | null> {
 	try {
 		return (
-			(await invoke<PullRequestInfo | null>("close_workspace_pr", {
-				workspaceId,
-			})) ?? null
+			(await invoke<ChangeRequestInfo | null>(
+				"close_workspace_change_request",
+				{ workspaceId },
+			)) ?? null
 		);
 	} catch (error) {
 		throw new Error(
-			describeInvokeError(error, "Unable to close workspace PR."),
+			describeInvokeError(error, "Unable to close change request."),
+		);
+	}
+}
+
+export async function continueWorkspaceFromTargetBranch(
+	workspaceId: string,
+): Promise<ContinueWorkspaceResponse> {
+	try {
+		return await invoke<ContinueWorkspaceResponse>(
+			"continue_workspace_from_target_branch",
+			{ workspaceId },
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to continue workspace."),
 		);
 	}
 }
@@ -1440,6 +2244,7 @@ export async function updateSessionSettings(
 		model?: string;
 		effortLevel?: string;
 		permissionMode?: string;
+		fastMode?: boolean;
 	},
 ): Promise<void> {
 	await invoke("update_session_settings", {
@@ -1447,6 +2252,7 @@ export async function updateSessionSettings(
 		model: settings.model ?? null,
 		effortLevel: settings.effortLevel ?? null,
 		permissionMode: settings.permissionMode ?? null,
+		fastMode: settings.fastMode ?? null,
 	});
 }
 
@@ -1464,18 +2270,28 @@ export async function createWorkspaceFromRepo(
  * workspace + session UUIDs, inserts the `initializing` DB row + initial
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
+ *
+ * `sourceBranch` (optional): branch to branch the new workspace from. When
+ * omitted, the repo's default branch is used. The kanban "create" flow
+ * forwards the user's branch picker selection here.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
+	sourceBranch?: string | null,
+	mode?: WorkspaceMode | null,
+	initialStatus?: WorkspaceStatus | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
+		sourceBranch: sourceBranch ?? null,
+		mode: mode ?? null,
+		initialStatus: initialStatus ?? null,
 	});
 }
 
 /**
  * Phase 2 of workspace creation. Slow (~200ms-2s): creates the git
- * worktree, scaffolds `.context`, probes `helmor.json`, and flips the
+ * worktree, probes `helmor.json`, and flips the
  * workspace row from `initializing` to `ready` / `setup_pending`. On
  * failure, the workspace row is cleaned up automatically.
  */
@@ -1540,11 +2356,44 @@ export async function unpinWorkspace(workspaceId: string): Promise<void> {
 	return invoke<void>("unpin_workspace", { workspaceId });
 }
 
-export async function setWorkspaceManualStatus(
+export async function setWorkspaceStatus(
 	workspaceId: string,
-	status: DerivedStatus | null,
+	status: WorkspaceStatus,
 ): Promise<void> {
-	return invoke<void>("set_workspace_manual_status", { workspaceId, status });
+	return invoke<void>("set_workspace_status", { workspaceId, status });
+}
+
+/**
+ * Sidebar drag drop. `targetGroupId` matches the frontend grouping ids:
+ *   - `"pinned"`
+ *   - a status lane: `"done"` / `"review"` / `"progress"` / `"backlog"` / `"canceled"`
+ *   - a repo bucket: `"repo:<repoId>"`
+ *
+ * The backend rewrites status / pinned_at / display_order on a single row
+ * in the common case; only the gap-exhausted fallback rebalances neighbours.
+ */
+export async function moveWorkspaceInSidebar(
+	workspaceId: string,
+	targetGroupId: string,
+	beforeWorkspaceId: string | null,
+): Promise<void> {
+	return invoke<void>("move_workspace_in_sidebar", {
+		workspaceId,
+		targetGroupId,
+		beforeWorkspaceId,
+	});
+}
+
+/** Drag-reorder a repo bucket in the sidebar's repo grouping mode.
+ *  `beforeRepoId === null` appends to the end. */
+export async function moveRepositoryInSidebar(
+	repoId: string,
+	beforeRepoId: string | null,
+): Promise<void> {
+	return invoke<void>("move_repository_in_sidebar", {
+		repoId,
+		beforeRepoId,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -1620,7 +2469,8 @@ export type TodoListPart = {
 };
 export type ImageSource =
 	| { kind: "base64"; data: string }
-	| { kind: "url"; url: string };
+	| { kind: "url"; url: string }
+	| { kind: "file"; path: string };
 export type ImagePart = {
 	type: "image";
 	id: string;
@@ -1738,30 +2588,22 @@ export type AgentStreamEvent =
 			description?: string | null;
 	  }
 	| {
-			kind: "deferredToolUse";
+			kind: "userInputRequest";
 			provider: AgentProvider;
 			modelId: string;
 			resolvedModel: string;
 			sessionId?: string | null;
 			workingDirectory: string;
 			permissionMode?: string | null;
-			toolUseId: string;
-			toolName: string;
-			toolInput: Record<string, unknown>;
-	  }
-	| {
-			kind: "elicitationRequest";
-			provider: AgentProvider;
-			modelId: string;
-			resolvedModel: string;
-			sessionId?: string | null;
-			workingDirectory: string;
-			elicitationId?: string | null;
-			serverName: string;
+			userInputId: string;
+			source: string;
 			message: string;
-			mode?: string | null;
-			url?: string | null;
-			requestedSchema?: Record<string, unknown> | null;
+			/** Discriminated by `payload.kind`:
+			 *  - `ask-user-question` → Claude AskUserQuestion (raw multi-question / option / preview shape)
+			 *  - `form` → JSON-Schema form (MCP form elicitation or Codex's synthesized form)
+			 *  - `url` → URL launcher (MCP url-mode elicitation)
+			 *  See `pending-user-input.ts` for the typed payload union. */
+			payload: Record<string, unknown>;
 	  }
 	| { kind: "planCaptured" }
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
@@ -1774,6 +2616,31 @@ export async function savePastedImage(
 	mediaType: string,
 ): Promise<string> {
 	return invoke<string>("save_pasted_image", { data, mediaType });
+}
+
+/**
+ * Write a UTF-8 string to an absolute path the user just picked from the
+ * `plugin-dialog` Save dialog. Used by the chat-view table-download menu
+ * (streamdown's built-in download relies on a synthetic `<a download>` click
+ * that Tauri's webview ignores).
+ */
+export async function saveTextFileAs(
+	path: string,
+	contents: string,
+): Promise<void> {
+	await invoke("save_text_file_as", { path, contents });
+}
+
+export async function showImageInFinder(path: string): Promise<void> {
+	await invoke("show_image_in_finder", { path });
+}
+
+export async function revealPathInFinder(path: string): Promise<void> {
+	await invoke("reveal_path_in_finder", { path });
+}
+
+export async function copyImageToClipboard(path: string): Promise<void> {
+	await invoke("copy_image_to_clipboard", { path });
 }
 
 /**
@@ -1805,11 +2672,29 @@ export async function stopAgentStream(
 	});
 }
 
+/** UI projection of a registered, in-flight agent stream. Mirror of
+ *  `agents::streaming::ActiveStreamSummary` on the Rust side. */
+export type ActiveStreamSummary = {
+	sessionId: string;
+	workspaceId: string | null;
+	provider: string;
+};
+
+/** Snapshot of currently in-flight agent streams. The frontend derives
+ *  `busy / stoppable / busy-workspace` Sets from this list. Refetched
+ *  whenever a `UiMutationEvent::ActiveStreamsChanged` lands via the
+ *  ui-sync bridge. */
+export async function listActiveStreams(): Promise<ActiveStreamSummary[]> {
+	return await invoke<ActiveStreamSummary[]>("list_active_streams");
+}
+
 export type AgentSteerRequest = {
 	sessionId: string;
 	provider?: string;
 	prompt: string;
 	files?: string[];
+	/** Image attachment paths — see `AgentSendRequest.images`. */
+	images?: string[];
 };
 
 export type AgentSteerResponse = {
@@ -1854,32 +2739,28 @@ export async function respondToPermissionRequest(
 	});
 }
 
-export async function respondToDeferredTool(
-	toolUseId: string,
-	behavior: "allow" | "deny",
-	options?: {
-		reason?: string | null;
-		updatedInput?: Record<string, unknown> | null;
-	},
-): Promise<void> {
-	await invoke("respond_to_deferred_tool", {
-		request: {
-			toolUseId,
-			behavior,
-			reason: options?.reason ?? null,
-			updatedInput: options?.updatedInput ?? null,
-		},
-	});
-}
-
-export async function respondToElicitationRequest(
-	elicitationId: string,
-	action: "accept" | "decline" | "cancel",
+/**
+ * Resolve a parked unified `userInputRequest`. The sidecar's pending
+ * resolver closure (`canUseTool` for AskUserQuestion, `onElicitation`
+ * for MCP, Codex's `requestUserInput` JSON-RPC handler) translates
+ * this generic resolution into the matching SDK-specific shape.
+ *
+ * - `submit` → frontend produced a content payload (matched to whatever
+ *   the matching renderer asks for: AUQ updatedInput, schema content
+ *   map, or `{}` for url-mode).
+ * - `decline` → user explicitly rejected; sidecar surfaces this as the
+ *   provider's matching "deny" signal.
+ * - `cancel` → user dismissed without answering; treated as cancel by
+ *   each provider.
+ */
+export async function respondToUserInput(
+	userInputId: string,
+	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
 ): Promise<void> {
-	await invoke("respond_to_elicitation_request", {
+	await invoke("respond_to_user_input", {
 		request: {
-			elicitationId,
+			userInputId,
 			action,
 			content: content ?? null,
 		},
@@ -1903,7 +2784,7 @@ export type ConductorWorkspace = {
 	directoryName: string;
 	state: string;
 	branch: string | null;
-	derivedStatus: string | null;
+	status: string | null;
 	prTitle: string | null;
 	sessionCount: number;
 	messageCount: number;
@@ -1957,12 +2838,25 @@ export async function createSession(
 	options?: {
 		actionKind?: ActionKind | null;
 		permissionMode?: string | null;
+		/** Pin the session row's `model` at creation. Inspector helpers
+		 *  (Create PR/MR, Review) push the user's configured model here so
+		 *  the composer reads it off the row instead of falling back to
+		 *  settings.defaultModelId. Leave null for the default flow. */
+		model?: string | null;
+		/** Pin `effort_level` at creation; null falls back to the user
+		 *  setting on the backend. */
+		effortLevel?: string | null;
+		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
+		fastMode?: boolean | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
 		workspaceId,
 		actionKind: options?.actionKind ?? null,
 		permissionMode: options?.permissionMode ?? null,
+		model: options?.model ?? null,
+		effortLevel: options?.effortLevel ?? null,
+		fastMode: options?.fastMode ?? null,
 	});
 }
 
@@ -2014,6 +2908,127 @@ export async function hideSession(sessionId: string): Promise<void> {
 	await invoke("hide_session", { sessionId });
 }
 
+/** Read the opaque context-usage JSON for one session. Null when nothing
+ *  has been recorded yet (e.g. fresh session pre first turn). */
+export async function getSessionContextUsage(
+	sessionId: string,
+): Promise<string | null> {
+	return await invoke<string | null>("get_session_context_usage", {
+		sessionId,
+	});
+}
+
+/** Frontend-driven write of `context_usage_meta`. Used after a
+ *  trustworthy Claude hover-time live fetch so the persisted baseline
+ *  catches up without waiting for the next turn end. The backend
+ *  broadcasts `ContextUsageChanged`, so other observers refresh too. */
+export async function setSessionContextUsage(
+	sessionId: string,
+	meta: string,
+): Promise<void> {
+	await invoke<void>("set_session_context_usage", { sessionId, meta });
+}
+
+/** Active Codex `/goal` payload as JSON. Null when no goal is set. */
+export type CodexGoalState = {
+	threadId: string;
+	objective: string;
+	status: "active" | "paused" | "budgetLimited" | "complete";
+	tokenBudget: number | null;
+	tokensUsed: number;
+	timeUsedSeconds: number;
+	createdAt: number;
+	updatedAt: number;
+};
+
+/** Read the active Codex `/goal` for one session. Null when no goal. */
+export async function getSessionCodexGoal(
+	sessionId: string,
+): Promise<CodexGoalState | null> {
+	const raw = await invoke<string | null>("get_session_codex_goal", {
+		sessionId,
+	});
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as CodexGoalState;
+	} catch {
+		return null;
+	}
+}
+
+/** Out-of-band Codex `/goal` lifecycle control. `pause` is fired by the
+ *  Composer Stop button (so abort doesn't get re-spawned by codex's
+ *  continuation loop); `clear` is the banner's Clear button. Resume is
+ *  intentionally NOT here — it goes through `/goal resume` on the
+ *  sendMessage path so the resulting stream subscription catches the
+ *  goal-continuation turn codex auto-spawns. */
+export async function mutateCodexGoal(
+	sessionId: string,
+	action: "pause" | "clear",
+): Promise<void> {
+	await invoke("mutate_codex_goal", { sessionId, action });
+}
+
+/** One row of `listSessionDrafts`. `draftState` is opaque JSON (Lexical
+ *  SerializedEditorState) — frontend parses on read. */
+export type SessionDraftRow = {
+	sessionId: string;
+	draftState: string;
+};
+
+/** Bulk-load every persisted composer draft. Called once at app boot
+ *  to hydrate the in-memory draft cache that backs the synchronous
+ *  `loadPersistedDraft` API. */
+export async function listSessionDrafts(): Promise<SessionDraftRow[]> {
+	return await invoke<SessionDraftRow[]>("list_session_drafts");
+}
+
+/** Persist (or clear) a session's composer draft. Pass `null` to clear. */
+export async function setSessionDraft(
+	sessionId: string,
+	draftState: string | null,
+): Promise<void> {
+	await invoke<void>("set_session_draft", {
+		sessionId,
+		draftState,
+	});
+}
+
+/** Read the account-global Codex rate-limit snapshot. Null until Codex has
+ *  emitted at least one `account/rateLimits/updated` notification. */
+export async function getCodexRateLimits(): Promise<string | null> {
+	return await invoke<string | null>("get_codex_rate_limits");
+}
+
+/** Read the account-global Claude rate-limit snapshot. The string is
+ *  the raw Anthropic `/api/oauth/usage` response body — parsed on the
+ *  frontend via `parseClaudeRateLimits`. Null when no fetch has ever
+ *  succeeded (no cache, latest fetch failed). */
+export async function getClaudeRateLimits(): Promise<string | null> {
+	return await invoke<string | null>("get_claude_rate_limits");
+}
+
+/** Live Claude-only context-usage fetch for the hover popover. Pure
+ *  passthrough to the sidecar — no DB read. `model` is required because
+ *  the sidecar stamps it into the returned rich meta (used for the
+ *  model-match check in the ring). Returns slim JSON (never null;
+ *  errors throw). */
+export async function getLiveContextUsage(params: {
+	sessionId: string;
+	providerSessionId: string | null;
+	model: string;
+	cwd: string | null;
+}): Promise<string> {
+	return await invoke<string>("get_live_context_usage", {
+		request: {
+			sessionId: params.sessionId,
+			providerSessionId: params.providerSessionId,
+			model: params.model,
+			cwd: params.cwd,
+		},
+	});
+}
+
 export async function unhideSession(sessionId: string): Promise<void> {
 	await invoke("unhide_session", { sessionId });
 }
@@ -2036,6 +3051,8 @@ export async function loadHiddenSessions(
 
 // ---- Repository scripts ----
 
+export type RunScriptMode = "concurrent" | "non-concurrent";
+
 export type RepoScripts = {
 	setupScript?: string | null;
 	runScript?: string | null;
@@ -2043,10 +3060,19 @@ export type RepoScripts = {
 	setupFromProject: boolean;
 	runFromProject: boolean;
 	archiveFromProject: boolean;
+	/** Auto-run the setup script on workspace creation. Defaults to true. */
+	autoRunSetup: boolean;
+	/**
+	 * "non-concurrent" makes a new run stop any other run script in the
+	 * same repo first — useful when the script binds a fixed port.
+	 * Defaults to "concurrent".
+	 */
+	runScriptMode: RunScriptMode;
 };
 
 export type RepoPreferences = {
 	createPr?: string | null;
+	review?: string | null;
 	fixErrors?: string | null;
 	resolveConflicts?: string | null;
 	branchRename?: string | null;
@@ -2095,6 +3121,20 @@ export async function updateRepoScripts(
 		runScript,
 		archiveScript,
 	});
+}
+
+export async function updateRepoAutoRunSetup(
+	repoId: string,
+	enabled: boolean,
+): Promise<void> {
+	await invoke("update_repo_auto_run_setup", { repoId, enabled });
+}
+
+export async function updateRepoRunScriptMode(
+	repoId: string,
+	mode: RunScriptMode,
+): Promise<void> {
+	await invoke("update_repo_run_script_mode", { repoId, mode });
 }
 
 export async function loadRepoPreferences(
@@ -2181,6 +3221,76 @@ export async function resizeRepoScript(
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		cols,
+		rows,
+	});
+}
+
+/**
+ * Spawn a blank interactive `$SHELL -i -l` on a fresh PTY in the workspace
+ * directory. Each Terminal sub-tab in the Inspector is one of these.
+ *
+ * `instanceId` distinguishes concurrent terminals within the same workspace;
+ * the backend keys its `ScriptProcessManager` on `(repoId, "terminal:<instanceId>",
+ * workspaceId)`, so spawning twice with the same `instanceId` would replace
+ * the previous shell — callers must mint a fresh UUID per sub-tab.
+ *
+ * Nothing is persisted: closing the app discards every sub-tab and its
+ * output. Cross-tab / cross-workspace survival is in-memory only.
+ */
+export async function spawnTerminal(
+	repoId: string,
+	workspaceId: string,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_terminal", {
+		repoId,
+		workspaceId,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopTerminal(
+	repoId: string,
+	workspaceId: string,
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_terminal", {
+		repoId,
+		workspaceId,
+		instanceId,
+	});
+}
+
+export async function writeTerminalStdin(
+	repoId: string,
+	workspaceId: string,
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_terminal_stdin", {
+		repoId,
+		workspaceId,
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeTerminal(
+	repoId: string,
+	workspaceId: string,
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_terminal", {
+		repoId,
+		workspaceId,
+		instanceId,
 		cols,
 		rows,
 	});

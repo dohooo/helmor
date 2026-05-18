@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::data_dir::TEST_ENV_LOCK as TEST_LOCK;
+use crate::error::{extract_code, ErrorCode};
 
 use super::{
     canonicalize_missing_path, list_editor_files, list_workspace_files, read_editor_file,
@@ -82,6 +83,31 @@ fn list_editor_files_returns_existing_workspace_files() {
     assert!(files
         .iter()
         .all(|file| Path::new(&file.absolute_path).is_file()));
+}
+
+#[test]
+fn list_editor_files_returns_empty_when_workspace_root_is_missing() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let harness = EditorFilesHarness::new();
+    fs::remove_dir_all(&harness.workspace_dir).unwrap();
+
+    let files = list_editor_files(harness.workspace_dir.to_str().unwrap()).unwrap();
+
+    assert!(files.is_empty());
+}
+
+#[test]
+fn read_editor_file_marks_missing_workspace_as_broken() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let harness = EditorFilesHarness::new();
+    let file = harness.workspace_dir.join("src").join("App.tsx");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "export const app = true;\n").unwrap();
+    fs::remove_dir_all(&harness.workspace_dir).unwrap();
+
+    let error = read_editor_file(file.to_str().unwrap()).unwrap_err();
+
+    assert_eq!(extract_code(&error), ErrorCode::WorkspaceBroken);
 }
 
 #[test]

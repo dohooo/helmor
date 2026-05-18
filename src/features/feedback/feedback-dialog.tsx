@@ -10,7 +10,7 @@ import {
 import {
 	createHelmorIssue,
 	findExistingHelmorWorkspace,
-	loadGithubIdentitySession,
+	listForgeAccounts,
 } from "@/lib/api";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
@@ -70,12 +70,17 @@ export function FeedbackDialog({
 			try {
 				const [existing, session, version] = await Promise.all([
 					findExistingHelmorWorkspace().catch(() => null),
-					loadGithubIdentitySession().catch(() => null),
+					listForgeAccounts([]).catch(() => []),
 					getVersion().catch(() => "unknown"),
 				]);
 				if (cancelled) return;
 				dispatch({ type: "set-existing", existing });
-				setGithubConnected(session?.status === "connected");
+				setGithubConnected(
+					session.some(
+						(account) =>
+							account.provider === "github" && account.host === "github.com",
+					),
+				);
 				setAppVersion(version);
 			} catch {
 				// Swallow — surface via the step-specific UI when the user acts.

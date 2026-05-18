@@ -34,3 +34,52 @@ if [[ "${OUTPUT}" != *'"buildMode"'* ]] || [[ "${OUTPUT}" != *'"currentBinary"'*
 fi
 
 echo "Bundled CLI smoke check passed."
+
+# ----- Vendor binary architecture check -----------------------------------
+# helmor-cli is built per-arch via cargo --target, so its lipo arch is the
+# source of truth for what this bundle is targeting. Every vendored binary
+# must match — otherwise an x64 .dmg ends up shipping arm64 `gh` and Intel
+# users see "bad CPU type in executable" (#293).
+EXPECTED_ARCH="$(lipo -archs "${CLI_PATH}")"
+case "${EXPECTED_ARCH}" in
+  arm64|x86_64) ;;
+  *)
+    echo "Unexpected helmor-cli arch '${EXPECTED_ARCH}' (want arm64 or x86_64)"
+    exit 1
+    ;;
+esac
+
+# claude-code + codex are now single self-contained native binaries (ripgrep
+# / audio-capture are statically embedded), so there's nothing to verify
+# under their sub-paths anymore.
+VENDOR_ROOT="${APP_BUNDLE}/Contents/Resources/vendor"
+VENDOR_BINARIES=(
+  "${VENDOR_ROOT}/gh/gh"
+  "${VENDOR_ROOT}/glab/glab"
+  "${VENDOR_ROOT}/codex/codex"
+  "${VENDOR_ROOT}/claude-code/claude"
+)
+
+echo "Verifying vendor binary archs (expect ${EXPECTED_ARCH})..."
+mismatches=0
+for bin in "${VENDOR_BINARIES[@]}"; do
+  if [[ ! -e "${bin}" ]]; then
+    echo "  MISSING ${bin}"
+    mismatches=$((mismatches + 1))
+    continue
+  fi
+  actual="$(lipo -archs "${bin}" 2>/dev/null || echo "?")"
+  if [[ "${actual}" != "${EXPECTED_ARCH}" ]]; then
+    echo "  MISMATCH ${bin}: got '${actual}', want '${EXPECTED_ARCH}'"
+    mismatches=$((mismatches + 1))
+  else
+    echo "  ok ${bin}"
+  fi
+done
+
+if [[ "${mismatches}" -ne 0 ]]; then
+  echo "Vendor binary arch check failed (${mismatches} issue(s))"
+  exit 1
+fi
+
+echo "Vendor binary arch check passed."

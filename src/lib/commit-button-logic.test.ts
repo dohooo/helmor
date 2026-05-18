@@ -1,24 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type {
-	PullRequestInfo,
+	ChangeRequestInfo,
+	ForgeActionStatus,
 	WorkspaceGitActionStatus,
-	WorkspacePrActionStatus,
 } from "./api";
 import {
 	type CommitLifecycle,
 	deriveCommitButtonMode,
 	deriveCommitButtonState,
-	deriveWorkspaceStatusFromPr,
 } from "./commit-button-logic";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function makePr(overrides: Partial<PullRequestInfo> = {}): PullRequestInfo {
+function makeChangeRequest(
+	overrides: Partial<ChangeRequestInfo> = {},
+): ChangeRequestInfo {
 	return {
 		url: "https://github.com/test/repo/pull/1",
 		number: 1,
 		state: "OPEN",
-		title: "test pr",
+		title: "test change request",
 		isMerged: false,
 		...overrides,
 	};
@@ -32,16 +33,16 @@ function makeLifecycle(
 		trackedSessionId: null,
 		mode: "create-pr",
 		phase: "creating",
-		prInfo: null,
+		changeRequest: null,
 		...overrides,
 	};
 }
 
-function makePrActionStatus(
-	overrides: Partial<WorkspacePrActionStatus> = {},
-): WorkspacePrActionStatus {
+function makeChangeRequestActionStatus(
+	overrides: Partial<ForgeActionStatus> = {},
+): ForgeActionStatus {
 	return {
-		pr: null,
+		changeRequest: null,
 		reviewDecision: null,
 		mergeable: null,
 		deployments: [],
@@ -63,6 +64,7 @@ function makeGitActionStatus(
 		behindTargetCount: 0,
 		remoteTrackingRef: "refs/remotes/origin/main",
 		aheadOfRemoteCount: 0,
+		aheadOfTargetCount: 0,
 		pushStatus: "published",
 		...overrides,
 	};
@@ -72,30 +74,30 @@ function makeGitActionStatus(
 
 describe("deriveCommitButtonMode", () => {
 	describe("resting state (no lifecycle)", () => {
-		it("returns create-pr when no PR exists", () => {
+		it("returns create-pr when no change request exists", () => {
 			expect(deriveCommitButtonMode(null, null)).toBe("create-pr");
 		});
 
-		it("returns merge when PR is OPEN and no blocking conditions", () => {
-			expect(deriveCommitButtonMode(null, makePr({ state: "OPEN" }))).toBe(
-				"merge",
-			);
+		it("returns merge when change request is OPEN and no blocking conditions", () => {
+			expect(
+				deriveCommitButtonMode(null, makeChangeRequest({ state: "OPEN" })),
+			).toBe("merge");
 		});
 
-		it("returns merged when PR is merged", () => {
+		it("returns merged when change request is merged", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "MERGED", isMerged: true }),
+					makeChangeRequest({ state: "MERGED", isMerged: true }),
 				),
 			).toBe("merged");
 		});
 
-		it("returns open-pr when PR is CLOSED (not merged)", () => {
+		it("returns open-pr when change request is CLOSED (not merged)", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "CLOSED", isMerged: false }),
+					makeChangeRequest({ state: "CLOSED", isMerged: false }),
 				),
 			).toBe("open-pr");
 		});
@@ -106,8 +108,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "CONFLICTING" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "CONFLICTING" }),
 				),
 			).toBe("resolve-conflicts");
 		});
@@ -116,8 +118,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus(),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus(),
 					makeGitActionStatus({ conflictCount: 3 }),
 				),
 			).toBe("resolve-conflicts");
@@ -127,8 +129,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "CONFLICTING" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "CONFLICTING" }),
 					makeGitActionStatus({ uncommittedCount: 5 }),
 				),
 			).toBe("resolve-conflicts");
@@ -138,8 +140,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						mergeable: "CONFLICTING",
 						checks: [
 							{
@@ -160,8 +162,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "MERGEABLE" }),
 					makeGitActionStatus({ uncommittedCount: 2 }),
 				),
 			).toBe("commit-and-push");
@@ -171,8 +173,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						mergeable: "MERGEABLE",
 						checks: [
 							{
@@ -194,8 +196,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "MERGEABLE" }),
 					makeGitActionStatus({ pushStatus: "unpublished" }),
 				),
 			).toBe("push");
@@ -205,8 +207,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "MERGEABLE" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "MERGEABLE" }),
 					makeGitActionStatus({ aheadOfRemoteCount: 2 }),
 				),
 			).toBe("push");
@@ -216,8 +218,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						mergeable: "MERGEABLE",
 						checks: [
 							{
@@ -239,8 +241,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						checks: [
 							{
 								id: "ci-1",
@@ -259,8 +261,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						checks: [
 							{
 								id: "ci-1",
@@ -275,12 +277,12 @@ describe("deriveCommitButtonMode", () => {
 			).toBe("merge");
 		});
 
-		it("returns merge when checks are pending (not failure)", () => {
+		it("returns checks-running when checks are pending", () => {
 			expect(
 				deriveCommitButtonMode(
 					null,
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
 						checks: [
 							{
 								id: "ci-1",
@@ -292,15 +294,101 @@ describe("deriveCommitButtonMode", () => {
 					}),
 					makeGitActionStatus(),
 				),
+			).toBe("checks-running");
+		});
+
+		it("returns checks-running when checks are running", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "running",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("checks-running");
+		});
+
+		it("returns merge-blocked when GitHub reports a blocked merge state", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("merge-blocked");
+		});
+
+		it("returns merge when GitHub reports passing checks with hooks", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "HAS_HOOKS",
+						checks: [
+							{
+								id: "ci-1",
+								name: "build",
+								provider: "github",
+								status: "success",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
 			).toBe("merge");
+		});
+
+		it("returns checks-running when GitHub reports blocked because checks are active", () => {
+			expect(
+				deriveCommitButtonMode(
+					null,
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({
+						mergeable: "MERGEABLE",
+						mergeStateStatus: "BLOCKED",
+						checks: [
+							{
+								id: "ci-1",
+								name: "required gate",
+								provider: "github",
+								status: "pending",
+							},
+						],
+					}),
+					makeGitActionStatus(),
+				),
+			).toBe("checks-running");
 		});
 	});
 
 	describe("backward compatibility (no action status args)", () => {
-		it("returns merge when PR is OPEN with only 2 args", () => {
-			expect(deriveCommitButtonMode(null, makePr({ state: "OPEN" }))).toBe(
-				"merge",
-			);
+		it("returns merge when change request is OPEN with only 2 args", () => {
+			expect(
+				deriveCommitButtonMode(null, makeChangeRequest({ state: "OPEN" })),
+			).toBe("merge");
 		});
 
 		it("returns create-pr with no args", () => {
@@ -342,7 +430,10 @@ describe("deriveCommitButtonMode", () => {
 					makeLifecycle({
 						mode: "create-pr",
 						phase: "done",
-						prInfo: makePr({ state: "OPEN", isMerged: false }),
+						changeRequest: makeChangeRequest({
+							state: "OPEN",
+							isMerged: false,
+						}),
 					}),
 					null,
 				),
@@ -355,17 +446,24 @@ describe("deriveCommitButtonMode", () => {
 					makeLifecycle({
 						mode: "merge",
 						phase: "done",
-						prInfo: makePr({ state: "MERGED", isMerged: true }),
+						changeRequest: makeChangeRequest({
+							state: "MERGED",
+							isMerged: true,
+						}),
 					}),
 					null,
 				),
 			).toBe("merged");
 		});
 
-		it("returns lifecycle mode on error (no prInfo)", () => {
+		it("returns lifecycle mode on error (no change request)", () => {
 			expect(
 				deriveCommitButtonMode(
-					makeLifecycle({ mode: "create-pr", phase: "error", prInfo: null }),
+					makeLifecycle({
+						mode: "create-pr",
+						phase: "error",
+						changeRequest: null,
+					}),
 					null,
 				),
 			).toBe("create-pr");
@@ -375,8 +473,8 @@ describe("deriveCommitButtonMode", () => {
 			expect(
 				deriveCommitButtonMode(
 					makeLifecycle({ mode: "create-pr", phase: "streaming" }),
-					makePr({ state: "OPEN" }),
-					makePrActionStatus({ mergeable: "CONFLICTING" }),
+					makeChangeRequest({ state: "OPEN" }),
+					makeChangeRequestActionStatus({ mergeable: "CONFLICTING" }),
 					makeGitActionStatus({ uncommittedCount: 5 }),
 				),
 			).toBe("create-pr");
@@ -391,11 +489,12 @@ describe("deriveCommitButtonState", () => {
 		expect(deriveCommitButtonState(null)).toBe("idle");
 	});
 
-	it("returns disabled when mergeable is UNKNOWN", () => {
+	it("returns disabled when merge mode hits UNKNOWN mergeable", () => {
 		expect(
 			deriveCommitButtonState(
 				null,
-				makePrActionStatus({ mergeable: "UNKNOWN" }),
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
+				"merge",
 			),
 		).toBe("disabled");
 	});
@@ -404,12 +503,67 @@ describe("deriveCommitButtonState", () => {
 		expect(
 			deriveCommitButtonState(
 				null,
-				makePrActionStatus({ mergeable: "MERGEABLE" }),
+				makeChangeRequestActionStatus({ mergeable: "MERGEABLE" }),
+				"merge",
 			),
 		).toBe("idle");
 	});
 
-	it("returns idle when no prActionStatus", () => {
+	// Regression: GitLab maps `not_open` → "UNKNOWN" and the action-status
+	// poller stops once a PR is merged/closed, so the last recorded mergeable
+	// sticks on UNKNOWN forever. Tying the disabled gate to mode="merge"
+	// (not "merged"/"closed") prevents that stale UNKNOWN from leaking into
+	// the ghost-mode header.
+	it("returns idle for merged mode even when mergeable is UNKNOWN", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
+				"merged",
+			),
+		).toBe("idle");
+	});
+
+	it("returns idle for closed mode even when mergeable is UNKNOWN", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
+				"closed",
+			),
+		).toBe("idle");
+	});
+
+	// Regression: actions like Fix CI / Push / Commit-and-push don't depend
+	// on mergeability — they shouldn't be greyed out while GitHub is still
+	// computing it.
+	it.each([
+		"fix",
+		"push",
+		"commit-and-push",
+		"resolve-conflicts",
+		"checks-running",
+		"merge-blocked",
+	] as const)("returns idle for %s mode even when mergeable is UNKNOWN", (mode) => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
+				mode,
+			),
+		).toBe("idle");
+	});
+
+	it("returns idle when mode is undefined (no PR yet)", () => {
+		expect(
+			deriveCommitButtonState(
+				null,
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
+			),
+		).toBe("idle");
+	});
+
+	it("returns idle when no forgeActionStatus", () => {
 		expect(deriveCommitButtonState(null)).toBe("idle");
 	});
 
@@ -447,42 +601,8 @@ describe("deriveCommitButtonState", () => {
 		expect(
 			deriveCommitButtonState(
 				makeLifecycle({ phase: "streaming" }),
-				makePrActionStatus({ mergeable: "UNKNOWN" }),
+				makeChangeRequestActionStatus({ mergeable: "UNKNOWN" }),
 			),
 		).toBe("busy");
-	});
-});
-
-// ── deriveWorkspaceStatusFromPr ──────────────────────────────────────
-
-describe("deriveWorkspaceStatusFromPr", () => {
-	it("returns null when no PR", () => {
-		expect(deriveWorkspaceStatusFromPr(null)).toBeNull();
-	});
-
-	it("returns review when PR is OPEN", () => {
-		expect(deriveWorkspaceStatusFromPr(makePr({ state: "OPEN" }))).toBe(
-			"review",
-		);
-	});
-
-	it("returns done when PR is merged", () => {
-		expect(
-			deriveWorkspaceStatusFromPr(makePr({ state: "MERGED", isMerged: true })),
-		).toBe("done");
-	});
-
-	it("returns canceled when PR is CLOSED (not merged)", () => {
-		expect(
-			deriveWorkspaceStatusFromPr(makePr({ state: "CLOSED", isMerged: false })),
-		).toBe("canceled");
-	});
-
-	it("prioritizes isMerged over state string", () => {
-		// Edge case: state is CLOSED but isMerged is true (GitHub sets
-		// state to MERGED but some API paths return CLOSED when merged)
-		expect(
-			deriveWorkspaceStatusFromPr(makePr({ state: "CLOSED", isMerged: true })),
-		).toBe("done");
 	});
 });

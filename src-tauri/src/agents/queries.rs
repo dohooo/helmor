@@ -1,5 +1,4 @@
-use std::sync::Mutex;
-
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
@@ -24,9 +23,9 @@ pub struct GenerateSessionTitleResponse {
     pub skipped: bool,
 }
 
-/// Sidecar response timeout. The sidecar gives Claude 30 s and Codex fallback
-/// another 30 s, so keep a small buffer here for request handoff and delivery.
-const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
+/// Sidecar response timeout. The sidecar may try a configured Claude-compatible
+/// model, official Claude, then Codex, so keep a small buffer for handoff.
+const TITLE_GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(95);
 
 type WorkspaceInfo = (String, String, Option<String>, String, Option<String>);
 
@@ -72,40 +71,68 @@ pub async fn generate_session_title(
                    WHERE s.id = ?1 AND w.state {}"#,
             workspace_state::OPERATIONAL_FILTER,
         );
-        connection
-            .query_row(&sql, [&request.session_id], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })
-            .ok()
+        match connection.query_row(&sql, [&request.session_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        }) {
+            Ok(info) => Some(info),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(error) => {
+                tracing::error!(
+                    session_id = %request.session_id,
+                    "generate_session_title: workspace lookup SQL failed: {error:#}"
+                );
+                None
+            }
+        }
     } else {
         None
     };
 
-    let branch_settings = crate::settings::load_branch_prefix_settings().unwrap_or(
-        crate::settings::BranchPrefixSettings {
+    let branch_settings = workspace_info
+        .as_ref()
+        .and_then(|(_, repo_id, _, _, _)| {
+            crate::repos::load_repo_branch_prefix_settings(repo_id).ok()
+        })
+        .unwrap_or(crate::settings::EffectiveBranchPrefixSettings {
             branch_prefix_type: None,
             branch_prefix_custom: None,
-        },
-    );
+            forge_provider: None,
+            remote_url: None,
+            forge_login: None,
+        });
 
     let should_generate_branch =
         workspace_info
             .as_ref()
             .is_some_and(|(_, _, _, directory_name, branch)| {
                 branch.as_deref().is_some_and(|current_branch| {
-                    crate::helpers::is_default_branch_name(
+                    crate::helpers::is_auto_generated_branch_name(
                         current_branch,
                         directory_name,
                         &branch_settings,
                     )
                 })
             });
+    tracing::debug!(
+        session_id = %request.session_id,
+        workspace_info_found = workspace_info.is_some(),
+        current_branch = workspace_info
+            .as_ref()
+            .and_then(|(_, _, _, _, b)| b.as_deref())
+            .unwrap_or(""),
+        directory_name = workspace_info
+            .as_ref()
+            .map(|(_, _, _, d, _)| d.as_str())
+            .unwrap_or(""),
+        should_generate_branch,
+        "generate_session_title branch gating resolved"
+    );
 
     let branch_rename_prompt = workspace_info
         .as_ref()
@@ -126,13 +153,36 @@ pub async fn generate_session_title(
     }
 
     let request_id = Uuid::new_v4().to_string();
+    // Skip the branch slug instruction in the prompt when we already know we
+    // won't apply it (local mode, already-renamed worktree, etc.). Saves a
+    // line of LLM output and the branch-rename instruction block of input.
+    let mut params = serde_json::json!({
+        "userMessage": request.user_message,
+        "branchRenamePrompt": branch_rename_prompt,
+        "generateBranch": should_generate_branch,
+    });
+    if let Some(model) = super::custom_providers::configured_models()
+        .into_iter()
+        .next()
+    {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "claudeModel".to_string(),
+                Value::String(model.cli_model.clone()),
+            );
+            obj.insert(
+                "claudeEnvironment".to_string(),
+                serde_json::json!({
+                    "ANTHROPIC_BASE_URL": model.base_url,
+                    "ANTHROPIC_AUTH_TOKEN": model.api_key,
+                }),
+            );
+        }
+    }
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "generateTitle".to_string(),
-        params: serde_json::json!({
-            "userMessage": request.user_message,
-            "branchRenamePrompt": branch_rename_prompt,
-        }),
+        params,
     };
 
     let rx = sidecar.subscribe(&request_id);
@@ -208,18 +258,45 @@ pub async fn generate_session_title(
 
     let (generated_title, generated_branch) = result;
 
+    if should_generate_title && generated_title.is_none() {
+        tracing::error!(
+            session_id = %session_id,
+            "generate_session_title: sidecar returned no title, but title generation was expected"
+        );
+    }
+    if should_generate_branch && generated_branch.is_none() {
+        tracing::error!(
+            session_id = %session_id,
+            "generate_session_title: sidecar returned no branch name, but branch rename was expected"
+        );
+    }
+
     let mut title_renamed = false;
     if should_generate_title {
         if let Some(ref title) = generated_title {
             let connection = crate::models::db::read_conn()
                 .map_err(|e| anyhow::anyhow!("Failed to open DB: {e}"))?;
-            let latest_title: String = connection
+            // Session may have been deleted while title generation was in flight.
+            // Treat as a silent skip — matches the branch re-read a few lines below.
+            let latest_title: Option<String> = connection
                 .query_row(
                     "SELECT title FROM sessions WHERE id = ?1",
                     [&session_id],
                     |row| row.get(0),
                 )
+                .optional()
                 .map_err(|e| anyhow::anyhow!("Failed to re-read session title: {e}"))?;
+            let Some(latest_title) = latest_title else {
+                tracing::debug!(
+                    session_id = %session_id,
+                    "Skipping auto session rename: session deleted during title generation"
+                );
+                return Ok(GenerateSessionTitleResponse {
+                    title: generated_title,
+                    branch_renamed: false,
+                    skipped: false,
+                });
+            };
 
             if can_replace_session_title(&latest_title, request.title_seed.as_deref()) {
                 crate::sessions::rename_session(&session_id, title)
@@ -269,7 +346,7 @@ pub async fn generate_session_title(
             };
 
             if !old_branch.as_deref().is_some_and(|b| {
-                crate::helpers::is_default_branch_name(b, &directory_name, &branch_settings)
+                crate::helpers::is_auto_generated_branch_name(b, &directory_name, &branch_settings)
             }) {
                 tracing::debug!(
                     workspace_id = %workspace_id,
@@ -428,10 +505,13 @@ pub async fn list_slash_commands(
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
+    // Start page has no workspace, so `working_directory` is empty. Fall
+    // back to the repo's `root_path` so Claude CLI can scan the project's
+    // `.claude/commands/` and the cache key aligns with the repo prewarm.
+    let request = resolve_repo_fallback_cwd(request);
     let cwd = request.working_directory.as_deref().unwrap_or("");
     let repo_id = request.repo_id.as_deref().unwrap_or("");
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    let additional_directories = slash_command_scan_directories(&request);
     tracing::debug!(
         provider = %request.provider,
         cwd,
@@ -507,6 +587,36 @@ pub async fn list_slash_commands(
     Ok(SlashCommandsResponse { commands })
 }
 
+/// When the caller (e.g. start page) has a `repo_id` but no `working_directory`,
+/// resolve it to the repo's local `root_path` so the sidecar can scan
+/// project-level `.claude/commands/`. Same key shape as `dispatch_prewarm_for_repo`,
+/// so cache hits line up.
+fn resolve_repo_fallback_cwd(mut request: ListSlashCommandsRequest) -> ListSlashCommandsRequest {
+    if request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
+        return request;
+    }
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return request;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return request;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return request;
+    }
+    request.working_directory = Some(root_path.to_string());
+    request
+}
+
 fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) -> Vec<String> {
     let Some(workspace_id) = workspace_id else {
         return Vec::new();
@@ -521,6 +631,37 @@ fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) 
             );
             Vec::new()
         }
+    }
+}
+
+fn slash_command_scan_directories(request: &ListSlashCommandsRequest) -> Vec<String> {
+    let mut dirs =
+        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    if request.provider == "codex" {
+        append_repo_root_scan_directory(request, &mut dirs);
+    }
+    dirs
+}
+
+fn append_repo_root_scan_directory(request: &ListSlashCommandsRequest, dirs: &mut Vec<String>) {
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return;
+    }
+    if request.working_directory.as_deref() == Some(root_path) {
+        return;
+    }
+    if !dirs.iter().any(|dir| dir == root_path) {
+        dirs.push(root_path.to_string());
     }
 }
 
@@ -568,7 +709,7 @@ pub fn prewarm_slash_command_cache_for_workspace(app: &AppHandle, workspace_id: 
                 );
                 return;
             };
-            dispatch_prewarm_for(&app, &workspace_id, root_path, &record.repo_id);
+            dispatch_prewarm(&app, Some(&workspace_id), root_path, &record.repo_id);
         });
 }
 
@@ -596,15 +737,51 @@ pub fn prewarm_slash_command_cache(app: &AppHandle) {
         });
 }
 
-fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, repo_id: &str) {
+/// Repo-level prewarm — for the start page where no workspace is selected.
+/// Uses the repo's `root_path` as cwd; cache key matches what
+/// `resolve_repo_fallback_cwd` produces, so the next `/` press hits warm.
+pub fn prewarm_slash_command_cache_for_repo(app: &AppHandle, repo_id: &str) {
+    let app = app.clone();
+    let repo_id = repo_id.to_string();
+    let _ = std::thread::Builder::new()
+        .name("slash-cmd-prewarm-repo".into())
+        .spawn(move || {
+            let record = match crate::models::repos::load_repository_by_id(&repo_id) {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    tracing::debug!(repo_id, "Slash-command prewarm: repo not found");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(repo_id, error = %e, "Slash-command prewarm: load failed");
+                    return;
+                }
+            };
+            let root_path = record.root_path.trim();
+            if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+                tracing::debug!(
+                    repo_id,
+                    root_path,
+                    "Slash-command prewarm: repo root_path missing or not a directory"
+                );
+                return;
+            }
+            dispatch_prewarm(&app, None, root_path, &repo_id);
+        });
+}
+
+/// Schedule a background refresh per provider. Workspace-scoped callers pass
+/// `Some(workspace_id)` (which also pulls in any linked-directory commands);
+/// repo-scoped callers (start page) pass `None` and the key shape matches
+/// `resolve_repo_fallback_cwd` so the next `/` press hits warm cache.
+fn dispatch_prewarm(app: &AppHandle, workspace_id: Option<&str>, root_path: &str, repo_id: &str) {
     let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(Some(workspace_id));
+    let additional_directories = lookup_workspace_linked_directories_for_commands(workspace_id);
     for provider in ["claude", "codex"] {
         let request = ListSlashCommandsRequest {
             provider: provider.to_string(),
             working_directory: Some(root_path.to_string()),
-            workspace_id: Some(workspace_id.to_string()),
+            workspace_id: workspace_id.map(str::to_string),
             repo_id: Some(repo_id.to_string()),
         };
         let ws_key = super::slash_commands::workspace_key(
@@ -614,7 +791,7 @@ fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, re
         );
         tracing::debug!(
             provider,
-            workspace_id,
+            workspace_id = workspace_id.unwrap_or(""),
             cwd = root_path,
             repo_id,
             linked_dir_count = additional_directories.len(),
@@ -768,8 +945,7 @@ fn spawn_background_refresh(
             let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
             let cache_state: tauri::State<'_, super::slash_commands::SlashCommandCache> =
                 app.state();
-            let additional_directories =
-                lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+            let additional_directories = slash_command_scan_directories(&request);
 
             match fetch_from_sidecar(&sidecar_state, &request, &additional_directories) {
                 Ok(commands) => {
@@ -793,130 +969,74 @@ fn spawn_background_refresh(
         .ok();
 }
 
-// ---------------------------------------------------------------------------
-// Dynamic model list
-// ---------------------------------------------------------------------------
-
-use super::catalog::{AgentModelOption, AgentModelSection, AgentModelSectionStatus};
-
-/// Per-provider cached model options. Each provider is cached independently
-/// so a transient failure in one doesn't wipe the other's good data.
-static CLAUDE_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
-static CODEX_CACHE: Mutex<Vec<AgentModelOption>> = Mutex::new(Vec::new());
-
-enum ProviderModelFetchResult {
-    Ready(Vec<AgentModelOption>),
-    Unavailable(String),
-    Error(String),
+pub fn fetch_agent_model_sections() -> Vec<super::catalog::AgentModelSection> {
+    super::catalog::static_model_sections()
 }
 
-struct ResolvedProviderModels {
-    options: Vec<AgentModelOption>,
-    status: AgentModelSectionStatus,
+// ---------------------------------------------------------------------------
+// Cursor model list — proxied to the sidecar's `Cursor.models.list`
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelParameterValue {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
-/// Fetch models from both providers via sidecar. Each provider's result is
-/// cached independently — if a provider fails, its last good cache is used.
-pub fn fetch_agent_model_sections(
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelParameter {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub values: Vec<CursorModelParameterValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorModelEntry {
+    pub id: String,
+    pub label: String,
+    /// Persisted into `cursorProvider.cachedModels` so toolbar UI is
+    /// derived synchronously without a sidecar round-trip per render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Vec<CursorModelParameter>>,
+}
+
+/// 30s budget for `Cursor.models.list` — SDK cold-start can take a few
+/// seconds while it warms its HTTP/2 pool.
+const LIST_CURSOR_MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub fn fetch_cursor_models(
     sidecar: &crate::sidecar::ManagedSidecar,
-) -> Vec<AgentModelSection> {
-    let claude_models = resolve_with_cache(
-        fetch_models_for_provider(sidecar, "claude"),
-        &CLAUDE_CACHE,
-        "claude",
-    );
-    let codex_models = resolve_with_cache(
-        fetch_models_for_provider(sidecar, "codex"),
-        &CODEX_CACHE,
-        "codex",
-    );
-
-    vec![
-        AgentModelSection {
-            id: "claude".to_string(),
-            label: "Claude Code".to_string(),
-            status: claude_models.status,
-            options: claude_models.options,
-        },
-        AgentModelSection {
-            id: "codex".to_string(),
-            label: "Codex".to_string(),
-            status: codex_models.status,
-            options: codex_models.options,
-        },
-    ]
-}
-
-/// Use cached data for transient fetch errors, but never for a provider that
-/// is confirmed unavailable on this machine.
-fn resolve_with_cache(
-    result: ProviderModelFetchResult,
-    cache: &Mutex<Vec<AgentModelOption>>,
-    provider: &str,
-) -> ResolvedProviderModels {
-    let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
-    match result {
-        ProviderModelFetchResult::Ready(fresh) => {
-            *cached = fresh.clone();
-            ResolvedProviderModels {
-                options: fresh,
-                status: AgentModelSectionStatus::Ready,
-            }
-        }
-        ProviderModelFetchResult::Unavailable(reason) => {
-            cached.clear();
-            tracing::info!(provider, reason, "Provider unavailable for model list");
-            ResolvedProviderModels {
-                options: vec![],
-                status: AgentModelSectionStatus::Unavailable,
-            }
-        }
-        ProviderModelFetchResult::Error(reason) => {
-            if !cached.is_empty() {
-                tracing::info!(
-                    provider,
-                    reason,
-                    "Using cached model list after fetch error"
-                );
-            } else {
-                tracing::warn!(provider, reason, "Model list fetch failed");
-            }
-            ResolvedProviderModels {
-                options: cached.clone(),
-                status: AgentModelSectionStatus::Error,
-            }
+    api_key_override: Option<String>,
+) -> CmdResult<Vec<CursorModelEntry>> {
+    let request_id = Uuid::new_v4().to_string();
+    let mut params = serde_json::json!({ "provider": "cursor" });
+    if let Some(key) = api_key_override.filter(|k| !k.is_empty()) {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("apiKey".to_string(), serde_json::Value::String(key));
         }
     }
-}
-
-fn fetch_models_for_provider(
-    sidecar: &crate::sidecar::ManagedSidecar,
-    provider: &str,
-) -> ProviderModelFetchResult {
-    let request_id = Uuid::new_v4().to_string();
-
-    let mut params = serde_json::Map::new();
-    params.insert("provider".into(), Value::String(provider.to_string()));
-
     let sidecar_req = crate::sidecar::SidecarRequest {
         id: request_id.clone(),
         method: "listModels".to_string(),
-        params: Value::Object(params),
+        params,
     };
 
     let rx = sidecar.subscribe(&request_id);
     if let Err(e) = sidecar.send(&sidecar_req) {
         sidecar.unsubscribe(&request_id);
-        return ProviderModelFetchResult::Error(format!(
-            "listModels sidecar send failed for {provider}: {e}"
-        ));
+        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
     }
 
-    let timeout = std::time::Duration::from_secs(15);
-    let mut models: Vec<AgentModelOption> = Vec::new();
+    let mut models: Vec<CursorModelEntry> = Vec::new();
+    let mut error: Option<String> = None;
 
     loop {
-        match rx.recv_timeout(timeout) {
+        match rx.recv_timeout(LIST_CURSOR_MODELS_TIMEOUT) {
             Ok(event) => match event.event_type() {
                 "modelsListed" => {
                     if let Some(entries) = event.raw.get("models").and_then(Value::as_array) {
@@ -929,101 +1049,292 @@ fn fetch_models_for_provider(
                                 .and_then(Value::as_str)
                                 .unwrap_or(id)
                                 .to_string();
-                            let cli_model = entry
-                                .get("cliModel")
-                                .and_then(Value::as_str)
-                                .unwrap_or(id)
-                                .to_string();
-                            let effort_levels = entry
-                                .get("effortLevels")
+                            let parameters = entry
+                                .get("cursorParameters")
                                 .and_then(Value::as_array)
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(Value::as_str)
-                                        .map(str::to_string)
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            let supports_fast_mode = entry
-                                .get("supportsFastMode")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false);
-                            models.push(AgentModelOption {
+                                .map(|values| parse_cursor_parameters(values.as_slice()));
+                            models.push(CursorModelEntry {
                                 id: id.to_string(),
-                                provider: provider.to_string(),
                                 label,
-                                cli_model,
-                                effort_levels,
-                                supports_fast_mode,
+                                parameters,
                             });
                         }
                     }
-                    tracing::info!(provider, count = models.len(), "Dynamic model list loaded");
                     break;
+                }
+                "error" => {
+                    error = Some(
+                        event
+                            .raw
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Unknown error")
+                            .to_string(),
+                    );
+                    break;
+                }
+                _ => {}
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                error = Some(format!(
+                    "Cursor model list timed out after {}s",
+                    LIST_CURSOR_MODELS_TIMEOUT.as_secs()
+                ));
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                error = Some("Sidecar disconnected during Cursor model list".to_string());
+                break;
+            }
+        }
+    }
+
+    sidecar.unsubscribe(&request_id);
+
+    if let Some(message) = error {
+        return Err(anyhow::anyhow!(message).into());
+    }
+    Ok(models)
+}
+
+/// Parse the sidecar's `cursorParameters` field. Best-effort: drops
+/// malformed entries instead of blanking the whole list.
+fn parse_cursor_parameters(arr: &[Value]) -> Vec<CursorModelParameter> {
+    arr.iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?.to_string();
+            let display_name = entry
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let values = entry
+                .get("values")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|v| {
+                            let value = v.get("value").and_then(Value::as_str)?.to_string();
+                            let display_name = v
+                                .get("displayName")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            Some(CursorModelParameterValue {
+                                value,
+                                display_name,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(CursorModelParameter {
+                id,
+                display_name,
+                values,
+            })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Live context-usage (hover popover, Claude only)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetLiveContextUsageRequest {
+    pub session_id: String,
+    pub provider_session_id: Option<String>,
+    /// Model id used by the sidecar and stamped into the returned meta.
+    pub model: String,
+    pub cwd: Option<String>,
+}
+
+/// Slightly longer than the sidecar's own 30 s cap so the timeout surfaces
+/// as a friendly sidecar-side message instead of a Rust-side one.
+const CONTEXT_USAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(32);
+
+pub fn fetch_live_context_usage(
+    sidecar: &crate::sidecar::ManagedSidecar,
+    request: GetLiveContextUsageRequest,
+) -> CmdResult<String> {
+    let request_id = Uuid::new_v4().to_string();
+
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "sessionId".into(),
+        Value::String(request.session_id.clone()),
+    );
+    if let Some(provider_session_id) = request.provider_session_id.as_deref() {
+        params.insert(
+            "providerSessionId".into(),
+            Value::String(provider_session_id.to_string()),
+        );
+    }
+    params.insert("model".into(), Value::String(request.model.clone()));
+    if let Some(cwd) = request.cwd.as_deref() {
+        params.insert("cwd".into(), Value::String(cwd.to_string()));
+    }
+
+    let sidecar_req = crate::sidecar::SidecarRequest {
+        id: request_id.clone(),
+        method: "getContextUsage".to_string(),
+        params: Value::Object(params),
+    };
+
+    let rx = sidecar.subscribe(&request_id);
+    if let Err(e) = sidecar.send(&sidecar_req) {
+        sidecar.unsubscribe(&request_id);
+        return Err(anyhow::anyhow!("getContextUsage sidecar send failed: {e}").into());
+    }
+
+    let result: CmdResult<String> = loop {
+        match rx.recv_timeout(CONTEXT_USAGE_TIMEOUT) {
+            Ok(event) => match event.event_type() {
+                "contextUsageResult" => {
+                    let meta = event
+                        .raw
+                        .get("meta")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    break Ok(meta);
                 }
                 "error" => {
                     let msg = event
                         .raw
                         .get("message")
                         .and_then(Value::as_str)
-                        .unwrap_or("Unknown error");
-                    sidecar.unsubscribe(&request_id);
-                    return classify_model_list_error(msg);
+                        .unwrap_or("Unknown error")
+                        .to_string();
+                    break Err(anyhow::anyhow!("getContextUsage failed: {msg}").into());
                 }
                 _ => {}
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                sidecar.unsubscribe(&request_id);
-                return ProviderModelFetchResult::Error(format!(
-                    "listModels timed out for {provider}"
-                ));
+                break Err(anyhow::anyhow!(
+                    "getContextUsage timed out after {}s",
+                    CONTEXT_USAGE_TIMEOUT.as_secs()
+                )
+                .into());
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                sidecar.unsubscribe(&request_id);
-                return ProviderModelFetchResult::Error(format!(
-                    "Sidecar disconnected while fetching models for {provider}"
-                ));
+                break Err(
+                    anyhow::anyhow!("Sidecar disconnected while waiting for context usage").into(),
+                );
             }
         }
-    }
+    };
 
     sidecar.unsubscribe(&request_id);
-    ProviderModelFetchResult::Ready(models)
-}
-
-fn classify_model_list_error(message: &str) -> ProviderModelFetchResult {
-    if is_provider_unavailable_error(message) {
-        return ProviderModelFetchResult::Unavailable(message.to_string());
-    }
-    ProviderModelFetchResult::Error(message.to_string())
-}
-
-fn is_provider_unavailable_error(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("enoent")
-        || normalized.contains("no such file or directory")
-        || normalized.contains("command not found")
-        || normalized.contains("executable not found")
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn classifies_missing_binary_errors_as_unavailable() {
-        assert!(is_provider_unavailable_error(
-            "spawn codex ENOENT: No such file or directory"
-        ));
-        assert!(is_provider_unavailable_error(
-            "Claude Code executable not found at /tmp/cli.js"
-        ));
+    fn make_request(cwd: Option<&str>, repo_id: Option<&str>) -> ListSlashCommandsRequest {
+        ListSlashCommandsRequest {
+            provider: "claude".to_string(),
+            working_directory: cwd.map(str::to_string),
+            workspace_id: None,
+            repo_id: repo_id.map(str::to_string),
+        }
     }
 
     #[test]
-    fn leaves_timeouts_as_transient_errors() {
-        assert!(!is_provider_unavailable_error(
-            "listModels timed out after 15000ms"
-        ));
+    fn fallback_noop_when_working_directory_already_set() {
+        let req = make_request(Some("/some/path"), Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory.as_deref(), Some("/some/path"));
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_missing() {
+        let req = make_request(None, None);
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_blank() {
+        let req = make_request(None, Some(""));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    fn setup_test_db(dir: &std::path::Path) {
+        let db_path = dir.join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        drop(conn);
+        crate::models::db::init_pools().expect("failed to init test DB pools");
+    }
+
+    fn insert_repo(repo_id: &str, root_path: &str) {
+        let db_path = crate::data_dir::data_dir().unwrap().join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES (?1, 'test-repo', ?2)",
+            rusqlite::params![repo_id, root_path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fallback_resolves_to_repo_root_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        let repo_root = dir.path().join("repo-root");
+        std::fs::create_dir(&repo_root).unwrap();
+        insert_repo("r1", repo_root.to_str().unwrap());
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(
+            resolved.working_directory.as_deref(),
+            Some(repo_root.to_str().unwrap())
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_root_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // Insert a repo whose root_path points at a directory that doesn't
+        // exist — guards the start-page case where the user deleted the
+        // working tree behind Helmor's back.
+        insert_repo("r1", "/nonexistent/path/for/test");
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_not_in_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // No insert_repo — DB lookup returns Ok(None).
+
+        let req = make_request(None, Some("ghost-repo"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
     }
 }

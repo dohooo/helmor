@@ -457,6 +457,20 @@ fn launch_with_open(
     anyhow::bail!("Opening third-party editors is only supported on macOS")
 }
 
+#[cfg(target_os = "macos")]
+fn reveal_in_finder(dir: &std::path::Path) -> anyhow::Result<()> {
+    std::process::Command::new("open")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .context("open command failed")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_in_finder(_dir: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("Opening Finder is only supported on macOS")
+}
+
 #[tauri::command]
 pub async fn detect_installed_editors() -> CmdResult<Vec<DetectedEditor>> {
     run_blocking(detect_installed_editors_blocking).await
@@ -471,8 +485,7 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
         let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
             .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
         if !workspace_dir.is_dir() {
             return Err(anyhow::anyhow!(
                 "Workspace directory not found: {}",
@@ -485,6 +498,25 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
         let resolved = resolve_single(spec);
         launch_with_open(resolved.as_deref(), spec.name, &workspace_dir)
             .with_context(|| format!("Failed to open {}", spec.name))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn open_workspace_in_finder(workspace_id: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let record = workspace_models::load_workspace_record_by_id(&workspace_id)?
+            .with_context(|| format!("Workspace not found: {workspace_id}"))?;
+
+        let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
+        if !workspace_dir.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Workspace directory not found: {}",
+                workspace_dir.display()
+            ));
+        }
+
+        reveal_in_finder(&workspace_dir).context("Failed to open Finder")
     })
     .await
 }

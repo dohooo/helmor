@@ -4,10 +4,12 @@ import type {
 	ExtendedMessagePart,
 	MessagePart,
 	PlanReviewPart,
+	ReasoningPart,
 	ThreadMessageLike,
 	ToolCallPart,
 } from "./api";
 import { measureSync } from "./perf-marks";
+import { reasoningLifecycle } from "./reasoning-lifecycle";
 
 type EstimateOptions = {
 	fontSize: number;
@@ -21,6 +23,11 @@ const USER_LINE_HEIGHT = 28;
 const SYSTEM_LINE_HEIGHT = 18;
 const TOOL_SUMMARY_HEIGHT = 24;
 const REASONING_SUMMARY_HEIGHT = 24;
+// Chrome around the expanded reasoning body: trigger (~28px), CollapsibleContent
+// top padding (6px), and the <pre>'s px-3/py-2.5 so together we match what
+// `ReasoningContent` actually renders in `src/components/ai/reasoning.tsx`.
+const REASONING_EXPANDED_CHROME_HEIGHT = 50;
+const REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING = 24;
 const COLLAPSED_GROUP_HEIGHT = 24;
 const USER_BUBBLE_VERTICAL_PADDING = 16;
 const USER_BUBBLE_HORIZONTAL_PADDING = 24;
@@ -152,7 +159,7 @@ function estimateAssistantPartHeight(
 		case "text":
 			return estimateAssistantTextHeight(part.text, options);
 		case "reasoning":
-			return REASONING_SUMMARY_HEIGHT;
+			return estimateReasoningHeight(part, options);
 		case "tool-call":
 			return estimateToolCallHeight(part);
 		case "collapsed-group":
@@ -168,6 +175,47 @@ function estimateAssistantPartHeight(
 		default:
 			return TOOL_SUMMARY_HEIGHT;
 	}
+}
+
+/**
+ * Reasoning has two height regimes, matching what `ReasoningContent`
+ * actually renders:
+ *
+ *   - `streaming` → expanded → trigger + chrome + wrapped text height.
+ *   - `just-finished` and `historical` → collapsed → just the trigger
+ *     (~24px). The `Reasoning` component now defaults `just-finished`
+ *     blocks closed (matching `historical`), so the DOM is the same
+ *     whether the user watched the stream finish or switched away and
+ *     came back. Aligning the estimate with that DOM keeps the
+ *     streaming row's `max(measured, estimated)` from inflating
+ *     `totalRowsHeight` — the source of the bottom gap below the last
+ *     visible content.
+ */
+function estimateReasoningHeight(
+	part: ReasoningPart,
+	options: { fontSize: number; contentWidth: number },
+) {
+	// Empty body (e.g. Claude Thinking Display = Omitted) renders flat.
+	if (
+		reasoningLifecycle(part) !== "streaming" ||
+		part.text.trim().length === 0
+	) {
+		return REASONING_SUMMARY_HEIGHT;
+	}
+	const bodyWidth = Math.max(
+		MIN_TEXT_WIDTH,
+		options.contentWidth - REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING,
+	);
+	// Streaming row is mounted, so ResizeObserver feeds the real height back.
+	// Skip the per-tick `prepare()` + `layout()` cost (cache miss every frame
+	// since the text grows) and use the cheap fallback estimate as a placeholder.
+	const textHeight = fallbackTextHeight(part.text, {
+		fontSize: options.fontSize,
+		lineHeight: ASSISTANT_LINE_HEIGHT,
+		maxWidth: bodyWidth,
+		whiteSpace: "pre-wrap",
+	});
+	return REASONING_EXPANDED_CHROME_HEIGHT + textHeight;
 }
 
 function estimatePlanReviewHeight(

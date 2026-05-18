@@ -1,14 +1,25 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
 	Check,
 	Circle,
 	CircleDot,
 	ClipboardList,
+	Copy,
+	FolderOpen,
 	MessageSquareText,
 } from "lucide-react";
-import { Suspense } from "react";
-import type { ImagePart, PlanReviewPart, TodoListPart } from "@/lib/api";
+import { Suspense, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { toast } from "sonner";
+import { LazyStreamdown } from "@/components/streamdown-loader";
+import {
+	copyImageToClipboard,
+	type ImagePart,
+	type PlanReviewPart,
+	showImageInFinder,
+	type TodoListPart,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { LazyStreamdown } from "./streamdown-loader";
 
 export function TodoList({ part }: { part: TodoListPart }) {
 	if (part.items.length === 0) {
@@ -107,15 +118,155 @@ export function PlanReviewCard({ part }: { part: PlanReviewPart }) {
 }
 
 export function ImageBlock({ part }: { part: ImagePart }) {
-	const src =
-		part.source.kind === "url"
-			? part.source.url
-			: `data:${part.mediaType ?? "image/png"};base64,${part.source.data}`;
+	const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+	const src = imageSrc(part);
+	const filePath = part.source.kind === "file" ? part.source.path : null;
+
+	useEffect(() => {
+		if (!menuPosition) return;
+		const close = () => setMenuPosition(null);
+		window.addEventListener("pointerdown", close);
+		window.addEventListener("scroll", close, true);
+		window.addEventListener("resize", close);
+		return () => {
+			window.removeEventListener("pointerdown", close);
+			window.removeEventListener("scroll", close, true);
+			window.removeEventListener("resize", close);
+		};
+	}, [menuPosition]);
+
 	return (
-		<img
-			src={src}
-			alt=""
-			className="my-2 max-h-[420px] max-w-full rounded-md border border-border/40"
-		/>
+		<span className="inline-block max-w-full">
+			<img
+				src={src}
+				alt=""
+				onContextMenu={(event) => {
+					event.preventDefault();
+					setMenuPosition(positionMenu(event));
+				}}
+				className="my-2 max-h-[420px] max-w-full rounded-md border border-border/40"
+			/>
+			{menuPosition
+				? createPortal(
+						<div
+							role="menu"
+							style={{ left: menuPosition.x, top: menuPosition.y }}
+							onContextMenu={(event) => event.preventDefault()}
+							onPointerDown={(event) => event.stopPropagation()}
+							className="fixed z-50 min-w-44 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
+						>
+							<button
+								type="button"
+								role="menuitem"
+								onClick={() => {
+									setMenuPosition(null);
+									void copyImage(part);
+								}}
+								className={imageMenuItemClassName}
+							>
+								<Copy className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Copy Image</span>
+							</button>
+							<button
+								type="button"
+								role="menuitem"
+								disabled={!filePath}
+								onClick={() => {
+									if (!filePath) return;
+									setMenuPosition(null);
+									void showInFinder(filePath);
+								}}
+								className={cn(
+									imageMenuItemClassName,
+									!filePath && "cursor-not-allowed opacity-50",
+								)}
+							>
+								<FolderOpen className="size-4 shrink-0" strokeWidth={1.6} />
+								<span>Show in Finder</span>
+							</button>
+						</div>,
+						document.body,
+					)
+				: null}
+		</span>
 	);
+}
+
+type MenuPosition = {
+	x: number;
+	y: number;
+};
+
+const imageMenuItemClassName =
+	"relative flex w-full cursor-interactive items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground disabled:pointer-events-none";
+
+function positionMenu(event: React.MouseEvent): MenuPosition {
+	const width = 176;
+	const height = 76;
+	const margin = 8;
+	return {
+		x: Math.max(
+			margin,
+			Math.min(event.clientX, window.innerWidth - width - margin),
+		),
+		y: Math.max(
+			margin,
+			Math.min(event.clientY, window.innerHeight - height - margin),
+		),
+	};
+}
+
+function imageSrc(part: ImagePart) {
+	if (part.source.kind === "url") return part.source.url;
+	if (part.source.kind === "file") return convertFileSrc(part.source.path);
+	return `data:${part.mediaType ?? "image/png"};base64,${part.source.data}`;
+}
+
+async function copyImage(part: ImagePart) {
+	try {
+		if (part.source.kind === "file") {
+			await copyImageToClipboard(part.source.path);
+			toast.success("Image copied");
+			return;
+		}
+
+		await copyImageBlobToClipboard(await imageBlob(part));
+		toast.success("Image copied");
+	} catch (error) {
+		toast.error("Copy failed", { description: String(error) });
+	}
+}
+
+async function showInFinder(path: string) {
+	try {
+		await showImageInFinder(path);
+	} catch (error) {
+		toast.error("Unable to show image in Finder", {
+			description: String(error),
+		});
+	}
+}
+
+async function imageBlob(part: ImagePart) {
+	if (part.source.kind === "base64") {
+		const response = await fetch(imageSrc(part));
+		return response.blob();
+	}
+	if (part.source.kind !== "url") {
+		throw new Error("Image file clipboard is not available.");
+	}
+
+	const response = await fetch(part.source.url);
+	if (!response.ok) {
+		throw new Error(`Unable to load image (${response.status})`);
+	}
+	return response.blob();
+}
+
+async function copyImageBlobToClipboard(blob: Blob) {
+	if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+		throw new Error("Image clipboard is not available.");
+	}
+	const type = blob.type || "image/png";
+	await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
 }

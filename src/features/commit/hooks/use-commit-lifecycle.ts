@@ -1,44 +1,103 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-	type MutableRefObject,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
-import {
-	closeWorkspacePr,
+	type ChangeRequestInfo,
+	closeWorkspaceChangeRequest,
 	createSession,
-	type DerivedStatus,
+	type ForgeActionStatus,
+	type ForgeDetection,
 	hideSession,
 	loadAutoCloseActionKinds,
 	loadRepoPreferences,
-	lookupWorkspacePr,
-	mergeWorkspacePr,
-	type PullRequestInfo,
+	mergeWorkspaceChangeRequest,
 	pushWorkspaceToRemote,
-	setWorkspaceManualStatus,
+	refreshWorkspaceChangeRequest,
 	type WorkspaceDetail,
 	type WorkspaceGitActionStatus,
-	type WorkspacePrActionStatus,
+	type WorkspaceGroup,
+	type WorkspaceStatus,
 } from "@/lib/api";
 import {
 	deriveCommitButtonMode,
 	deriveCommitButtonState,
+	hasBlockedMergeState,
+	hasNonPassingForgeChecks,
 } from "@/lib/commit-button-logic";
 import {
 	buildCommitButtonPrompt,
 	isActionSessionMode,
 } from "@/lib/commit-button-prompts";
-import { helmorQueryKeys } from "@/lib/query-client";
+import {
+	helmorQueryKeys,
+	workspaceForgeQueryOptions,
+} from "@/lib/query-client";
+import {
+	holdSidebarMutation,
+	requestSidebarReconcile,
+} from "@/lib/sidebar-mutation-gate";
+import { moveWorkspaceToGroup } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { CommitButtonState, WorkspaceCommitButtonMode } from "../button";
+import { useMergeConfirmation } from "./use-merge-confirmation";
 
-function getActionFailureTitle(mode: WorkspaceCommitButtonMode): string {
+/**
+ * Derive the workspace lane this PR state implies. Mirrors the backend's
+ * `pr_sync_state_from_change_request` + `sync_workspace_pr_state` mapping
+ * in `src-tauri/src/workspace/workspaces.rs` so the optimistic placement
+ * lands in the same group the next refetch will choose.
+ */
+function deriveStatusFromChangeRequest(
+	changeRequest: ChangeRequestInfo | null,
+): WorkspaceStatus | null {
+	if (!changeRequest) return null;
+	if (changeRequest.isMerged || changeRequest.state === "MERGED") return "done";
+	if (changeRequest.state === "OPEN") return "review";
+	if (changeRequest.state === "CLOSED") return "canceled";
+	return null;
+}
+
+/**
+ * Snapshot the slice of caches we touch in an optimistic PR-state update so
+ * we can roll back atomically on error. Returned restore() is a no-op once
+ * we know the action succeeded.
+ */
+function applyOptimisticWorkspaceStatus(
+	queryClient: QueryClient,
+	workspaceId: string,
+	nextStatus: WorkspaceStatus,
+): () => void {
+	const previousGroups = queryClient.getQueryData<WorkspaceGroup[]>(
+		helmorQueryKeys.workspaceGroups,
+	);
+	const previousDetail = queryClient.getQueryData<WorkspaceDetail | null>(
+		helmorQueryKeys.workspaceDetail(workspaceId),
+	);
+
+	queryClient.setQueryData<WorkspaceGroup[] | undefined>(
+		helmorQueryKeys.workspaceGroups,
+		(current) => moveWorkspaceToGroup(current, workspaceId, nextStatus),
+	);
+	queryClient.setQueryData<WorkspaceDetail | null | undefined>(
+		helmorQueryKeys.workspaceDetail(workspaceId),
+		(detail) => (detail ? { ...detail, status: nextStatus } : detail),
+	);
+
+	return () => {
+		queryClient.setQueryData(helmorQueryKeys.workspaceGroups, previousGroups);
+		queryClient.setQueryData(
+			helmorQueryKeys.workspaceDetail(workspaceId),
+			previousDetail,
+		);
+	};
+}
+
+function getActionFailureTitle(
+	mode: WorkspaceCommitButtonMode,
+	changeRequestName = "PR",
+): string {
 	switch (mode) {
 		case "create-pr":
-			return "Create PR failed";
+			return `Create ${changeRequestName} failed`;
 		case "commit-and-push":
 			return "Commit and push failed";
 		case "push":
@@ -47,12 +106,14 @@ function getActionFailureTitle(mode: WorkspaceCommitButtonMode): string {
 			return "Fix CI failed";
 		case "resolve-conflicts":
 			return "Resolve conflicts failed";
+		case "checks-running":
+		case "merge-blocked":
 		case "merge":
 			return "Merge failed";
 		case "open-pr":
-			return "Open PR failed";
+			return `Open ${changeRequestName} failed`;
 		case "closed":
-			return "Close PR failed";
+			return `Close ${changeRequestName} failed`;
 		default:
 			return "Action failed";
 	}
@@ -67,14 +128,12 @@ type CommitLifecycle = {
 	trackedSessionId: string | null;
 	mode: WorkspaceCommitButtonMode;
 	phase: "creating" | "streaming" | "verifying" | "done" | "error";
-	prInfo: PullRequestInfo | null;
+	changeRequest: ChangeRequestInfo | null;
 };
 
 export type PendingPromptForSession = {
 	sessionId: string;
 	prompt: string;
-	modelId?: string | null;
-	permissionMode?: string | null;
 	/** When true, submit must queue if a turn is already streaming —
 	 *  regardless of the user's `followUpBehavior` setting. Used for
 	 *  host-triggered prompts (e.g. git-pull conflict resolution) that
@@ -85,29 +144,41 @@ export type PendingPromptForSession = {
 export function useWorkspaceCommitLifecycle({
 	queryClient,
 	selectedWorkspaceId,
-	selectedWorkspaceIdRef,
+	getSelectedWorkspaceId,
 	selectedRepoId,
-	workspaceManualStatus,
-	workspacePrInfo,
-	workspacePrActionStatus,
+	selectedWorkspaceTargetBranch,
+	selectedWorkspaceRemote,
+	changeRequest,
+	forgeDetection,
+	forgeActionStatus,
 	workspaceGitActionStatus,
 	completedSessionIds,
+	abortedSessionIds,
 	interactionRequiredSessionIds,
-	sendingSessionIds,
+	busySessionIds,
 	onSelectSession,
 	pushToast,
 }: {
 	queryClient: QueryClient;
 	selectedWorkspaceId: string | null;
-	selectedWorkspaceIdRef: MutableRefObject<string | null>;
+	/** Resolves the latest selected workspace at call time. Lets the
+	 *  callbacks read the current value without depending on a ref the
+	 *  caller has to thread through. */
+	getSelectedWorkspaceId: () => string | null;
 	selectedRepoId: string | null;
-	workspaceManualStatus: DerivedStatus | null;
-	workspacePrInfo: PullRequestInfo | null;
-	workspacePrActionStatus: WorkspacePrActionStatus | null;
+	selectedWorkspaceTargetBranch?: string | null;
+	/** Git remote name (e.g. "origin") for the selected workspace's repo.
+	 *  Threaded into PR/push prompts so the agent gets a concrete remote
+	 *  instead of a literal `<remote>` placeholder. */
+	selectedWorkspaceRemote?: string | null;
+	changeRequest?: ChangeRequestInfo | null;
+	forgeDetection?: ForgeDetection | null;
+	forgeActionStatus?: ForgeActionStatus | null;
 	workspaceGitActionStatus: WorkspaceGitActionStatus | null;
 	completedSessionIds: Set<string>;
+	abortedSessionIds?: Set<string>;
 	interactionRequiredSessionIds: Set<string>;
-	sendingSessionIds: Set<string>;
+	busySessionIds: Set<string>;
 	onSelectSession: (sessionId: string | null) => void;
 	pushToast?: PushWorkspaceToast;
 }) {
@@ -115,36 +186,48 @@ export function useWorkspaceCommitLifecycle({
 		useState<PendingPromptForSession | null>(null);
 	const [commitLifecycle, setCommitLifecycle] =
 		useState<CommitLifecycle | null>(null);
+	const { requestMergeConfirmation, mergeConfirmDialogNode } =
+		useMergeConfirmation();
+	const currentChangeRequest = changeRequest ?? null;
+	const currentForgeActionStatus = forgeActionStatus ?? null;
+	const changeRequestName = forgeDetection?.labels.changeRequestName ?? "PR";
 
 	// Keep a stable ref so the merge-validation guard in the callback can
 	// read the latest value without adding it to the dependency array.
-	const prActionStatusRef = useRef(workspacePrActionStatus);
-	prActionStatusRef.current = workspacePrActionStatus;
+	const forgeActionStatusRef = useRef(currentForgeActionStatus);
+	forgeActionStatusRef.current = currentForgeActionStatus;
 
+	// `workspaceChangeRequest` is intentionally NOT invalidated here. Callers
+	// that need fresh PR data already write it directly via setQueryData
+	// (either from `await refreshWorkspaceChangeRequest(...)` or from an
+	// optimistic snapshot), so an invalidation would just trigger a duplicate
+	// `gh pr view` round-trip.
 	const refreshWorkspaceRemoteStatus = useCallback(
 		(workspaceId: string) => {
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceGitActionStatus(workspaceId),
 			});
 			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspacePr(workspaceId),
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+				queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 			});
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 		},
 		[queryClient],
 	);
 
 	const handleInspectorCommitAction = useCallback(
-		async (mode: WorkspaceCommitButtonMode) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+		async (
+			mode: WorkspaceCommitButtonMode,
+			overrides?: {
+				modelId?: string | null;
+				effort?: string | null;
+				fastMode?: boolean | null;
+			},
+		) => {
+			const workspaceId = getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
 				return;
@@ -153,16 +236,21 @@ export function useWorkspaceCommitLifecycle({
 			completedSessionHandledRef.current = null;
 			console.log("[commitButton] begin", { mode, workspaceId });
 
-			if (mode === "merge" || mode === "closed") {
+			const isMergeAction =
+				mode === "merge" ||
+				mode === "checks-running" ||
+				mode === "merge-blocked";
+			if (isMergeAction || mode === "closed") {
 				// ── Merge pre-validation ─────────────────────────────────
-				if (mode === "merge") {
-					const currentMergeable = prActionStatusRef.current?.mergeable;
+				if (isMergeAction) {
+					const currentStatus = forgeActionStatusRef.current;
+					const currentMergeable = currentStatus?.mergeable;
 					if (currentMergeable === "CONFLICTING") {
 						console.warn(
-							"[commitButton] merge blocked: PR has merge conflicts",
+							`[commitButton] merge blocked: ${changeRequestName} has merge conflicts`,
 						);
 						pushToast?.(
-							"PR has merge conflicts and cannot be merged yet.",
+							`${changeRequestName} has merge conflicts and cannot be merged yet.`,
 							"Merge blocked",
 							"destructive",
 						);
@@ -179,74 +267,117 @@ export function useWorkspaceCommitLifecycle({
 						);
 						// Trigger a refresh so the status resolves sooner
 						void queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspacePrActionStatus(workspaceId),
+							queryKey: helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
 						});
 						return;
 					}
+					const checksHaveNotPassed = hasNonPassingForgeChecks(currentStatus);
+					if (checksHaveNotPassed) {
+						const confirmed = await requestMergeConfirmation({
+							title: "Merge before checks pass?",
+							description:
+								"GitHub checks have not passed yet. Merge anyway and bypass them?",
+							confirmLabel: "Merge anyway",
+						});
+						if (!confirmed) {
+							console.warn(
+								"[commitButton] merge cancelled: checks have not passed",
+							);
+							void queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+							});
+							return;
+						}
+					}
+					if (!checksHaveNotPassed && hasBlockedMergeState(currentStatus)) {
+						const confirmed = await requestMergeConfirmation({
+							title: "Try blocked merge?",
+							description: "GitHub says this merge is blocked. Try anyway?",
+							confirmLabel: "Try anyway",
+						});
+						if (!confirmed) {
+							console.warn(
+								"[commitButton] merge cancelled: GitHub blocked merge",
+							);
+							void queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+							});
+							return;
+						}
+					}
 				}
 
-				const currentPr = queryClient.getQueryData<PullRequestInfo | null>(
-					helmorQueryKeys.workspacePr(workspaceId),
-				);
-				const optimisticPr: PullRequestInfo | null = currentPr
-					? {
-							...currentPr,
-							state: mode === "merge" ? "MERGED" : "CLOSED",
-							isMerged: mode === "merge",
-						}
-					: null;
-				const optimisticStatus = mode === "merge" ? "done" : "canceled";
-				const previousStatus = workspaceManualStatus;
-
+				const cachedChangeRequest =
+					queryClient.getQueryData<ChangeRequestInfo | null>(
+						helmorQueryKeys.workspaceChangeRequest(workspaceId),
+					);
+				const optimisticChangeRequest: ChangeRequestInfo | null =
+					cachedChangeRequest
+						? {
+								...cachedChangeRequest,
+								state: isMergeAction ? "MERGED" : "CLOSED",
+								isMerged: isMergeAction,
+							}
+						: null;
 				setCommitLifecycle({
 					workspaceId,
 					trackedSessionId: null,
-					mode,
+					mode: isMergeAction ? "merge" : mode,
 					phase: "done",
-					prInfo: optimisticPr,
+					changeRequest: optimisticChangeRequest,
 				});
 				queryClient.setQueryData(
-					helmorQueryKeys.workspacePr(workspaceId),
-					optimisticPr,
+					helmorQueryKeys.workspaceChangeRequest(workspaceId),
+					optimisticChangeRequest,
 				);
-				void setWorkspaceManualStatus(workspaceId, optimisticStatus).then(() =>
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					}),
+				// Move the workspace to its target sidebar group + flip the
+				// detail status in the same tick so the inspector header tone
+				// AND the sidebar lane reflect the new state immediately,
+				// instead of waiting for the GitHub round-trip + event invalidation.
+				const restoreWorkspaceStatus = applyOptimisticWorkspaceStatus(
+					queryClient,
+					workspaceId,
+					isMergeAction ? "done" : "canceled",
 				);
 
+				// Gate sidebar flushes during the forge round-trip — without
+				// this, mark-read on workspace-switch would refetch the
+				// still-pre-merge groups and clobber the optimistic row.
+				const release = holdSidebarMutation(queryClient);
 				void (async () => {
 					try {
-						const result =
-							mode === "merge"
-								? await mergeWorkspacePr(workspaceId)
-								: await closeWorkspacePr(workspaceId);
+						const result = isMergeAction
+							? await mergeWorkspaceChangeRequest(workspaceId)
+							: await closeWorkspaceChangeRequest(workspaceId);
 						queryClient.setQueryData(
-							helmorQueryKeys.workspacePr(workspaceId),
+							helmorQueryKeys.workspaceChangeRequest(workspaceId),
 							result,
 						);
 					} catch (error) {
 						console.error(`[commitButton] ${mode} failed:`, error);
 						pushToast?.(
 							getErrorMessage(error, "Unable to complete action."),
-							getActionFailureTitle(mode),
+							getActionFailureTitle(mode, changeRequestName),
 							"destructive",
 						);
 						queryClient.setQueryData(
-							helmorQueryKeys.workspacePr(workspaceId),
-							currentPr,
+							helmorQueryKeys.workspaceChangeRequest(workspaceId),
+							cachedChangeRequest,
 						);
-						void setWorkspaceManualStatus(workspaceId, previousStatus).then(
-							() =>
-								queryClient.invalidateQueries({
-									queryKey: helmorQueryKeys.workspaceGroups,
-								}),
-						);
+						restoreWorkspaceStatus();
 						setCommitLifecycle((prev) =>
 							prev
-								? { ...prev, phase: "error", prInfo: currentPr ?? null }
+								? {
+										...prev,
+										phase: "error",
+										changeRequest: cachedChangeRequest ?? null,
+									}
 								: prev,
 						);
+					} finally {
+						release();
 					}
 				})();
 				return;
@@ -257,7 +388,7 @@ export function useWorkspaceCommitLifecycle({
 				trackedSessionId: null,
 				mode,
 				phase: "creating",
-				prInfo: null,
+				changeRequest: null,
 			});
 
 			if (mode === "push") {
@@ -285,13 +416,29 @@ export function useWorkspaceCommitLifecycle({
 				return;
 			}
 			try {
+				// Pin the inspector helper's configured model/effort/fast-mode
+				// onto the new session row at creation time. The composer reads
+				// these off `currentSession` via the normal fallback chain, so
+				// no transient pendingPrompt override is needed for them.
 				const { sessionId } = await createSession(workspaceId, {
 					actionKind: mode,
+					model: overrides?.modelId ?? null,
+					effortLevel: overrides?.effort ?? null,
+					fastMode: overrides?.fastMode ?? null,
 				});
 				const repoPreferences = selectedRepoId
 					? await loadRepoPreferences(selectedRepoId)
 					: null;
-				const prompt = buildCommitButtonPrompt(mode, repoPreferences);
+				const forge = await queryClient
+					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
+					.catch(() => null);
+				const prompt = buildCommitButtonPrompt(
+					mode,
+					repoPreferences,
+					selectedWorkspaceTargetBranch,
+					forge,
+					selectedWorkspaceRemote,
+				);
 				console.log("[commitButton] session created", { sessionId });
 
 				await queryClient.invalidateQueries({
@@ -310,7 +457,7 @@ export function useWorkspaceCommitLifecycle({
 				console.error("[commitButton] Failed to start session:", error);
 				pushToast?.(
 					getErrorMessage(error, "Unable to start action."),
-					getActionFailureTitle(mode),
+					getActionFailureTitle(mode, changeRequestName),
 					"destructive",
 				);
 				setCommitLifecycle((current) =>
@@ -321,10 +468,13 @@ export function useWorkspaceCommitLifecycle({
 		[
 			onSelectSession,
 			pushToast,
+			changeRequestName,
 			queryClient,
 			selectedRepoId,
-			selectedWorkspaceIdRef,
-			workspaceManualStatus,
+			selectedWorkspaceTargetBranch,
+			selectedWorkspaceRemote,
+			getSelectedWorkspaceId,
+			requestMergeConfirmation,
 		],
 	);
 
@@ -333,6 +483,72 @@ export function useWorkspaceCommitLifecycle({
 			setPendingPromptForSession(request);
 		},
 		[],
+	);
+
+	const handleInspectorReviewAction = useCallback(
+		async ({
+			modelId,
+			effort,
+			fastMode,
+		}: {
+			modelId: string | null;
+			effort?: string | null;
+			fastMode?: boolean | null;
+		}) => {
+			const workspaceId = getSelectedWorkspaceId();
+			if (!workspaceId) {
+				console.warn("[review] action ignored: no selected workspace");
+				return;
+			}
+			console.log("[review] begin", { workspaceId, modelId, effort, fastMode });
+			try {
+				// Review is auto-created (so it gets a fixed "Review" title
+				// instead of an LLM-generated one), but it's NOT auto-hideable
+				// — the review output is *for the user to read*, so the
+				// session must stay around. The auto-hide gate is enforced
+				// independently in `isAutoHideableActionKind`.
+				const { sessionId } = await createSession(workspaceId, {
+					actionKind: "review",
+					model: modelId,
+					effortLevel: effort ?? null,
+					fastMode: fastMode ?? null,
+				});
+				const repoPreferences = selectedRepoId
+					? await loadRepoPreferences(selectedRepoId)
+					: null;
+				const forge = await queryClient
+					.ensureQueryData(workspaceForgeQueryOptions(workspaceId))
+					.catch(() => null);
+				const prompt = buildCommitButtonPrompt(
+					"review",
+					repoPreferences,
+					selectedWorkspaceTargetBranch,
+					forge,
+					selectedWorkspaceRemote,
+				);
+				await queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
+				});
+				setPendingPromptForSession({ sessionId, prompt });
+				onSelectSession(sessionId);
+			} catch (error) {
+				console.error("[review] failed to start session:", error);
+				pushToast?.(
+					getErrorMessage(error, "Unable to start review."),
+					"Review failed",
+					"destructive",
+				);
+			}
+		},
+		[
+			onSelectSession,
+			pushToast,
+			queryClient,
+			selectedRepoId,
+			getSelectedWorkspaceId,
+			selectedWorkspaceTargetBranch,
+			selectedWorkspaceRemote,
+		],
 	);
 
 	const handlePendingPromptConsumed = useCallback(() => {
@@ -353,8 +569,9 @@ export function useWorkspaceCommitLifecycle({
 	useEffect(() => {
 		const current = commitLifecycleRef.current;
 		console.log("[commitButton] action-session settlement check", {
-			sendingIds: Array.from(sendingSessionIds),
+			sendingIds: Array.from(busySessionIds),
 			completedIds: Array.from(completedSessionIds),
+			abortedIds: abortedSessionIds ? Array.from(abortedSessionIds) : [],
 			interactionRequiredIds: Array.from(interactionRequiredSessionIds),
 			lifecyclePhase: current?.phase ?? null,
 			trackedSessionId: current?.trackedSessionId ?? null,
@@ -366,7 +583,20 @@ export function useWorkspaceCommitLifecycle({
 		if (current.phase !== "creating" && current.phase !== "streaming") return;
 
 		const trackedSessionId = current.trackedSessionId;
-		const isSending = sendingSessionIds.has(trackedSessionId);
+
+		// Aborted sessions clear the lifecycle — no PR was created, so the
+		// button returns to idle rather than proceeding to verify.
+		if (abortedSessionIds?.has(trackedSessionId)) {
+			console.log(
+				"[commitButton] tracked session aborted — clearing lifecycle",
+			);
+			hasObservedSendingRef.current = false;
+			completedSessionHandledRef.current = null;
+			setCommitLifecycle(null);
+			return;
+		}
+
+		const isSending = busySessionIds.has(trackedSessionId);
 		if (isSending) {
 			console.log("[commitButton] tracked session is streaming");
 			hasObservedSendingRef.current = true;
@@ -411,19 +641,49 @@ export function useWorkspaceCommitLifecycle({
 		const workspaceId = current.workspaceId;
 		void (async () => {
 			try {
-				console.log("[commitButton] calling lookupWorkspacePr", workspaceId);
-				const pr = await lookupWorkspacePr(workspaceId);
-				console.log("[commitButton] lookupWorkspacePr result", pr);
+				console.log(
+					"[commitButton] calling refreshWorkspaceChangeRequest",
+					workspaceId,
+				);
+				const currentChangeRequest =
+					await refreshWorkspaceChangeRequest(workspaceId);
+				console.log(
+					"[commitButton] refreshWorkspaceChangeRequest result",
+					currentChangeRequest,
+				);
+				// Seed caches directly from the result we just awaited so the
+				// downstream invalidation in `refreshWorkspaceRemoteStatus`
+				// doesn't trigger a duplicate `gh pr view`, and so the sidebar
+				// lane / inspector header reflect the PR state on the same
+				// frame as the lifecycle transition.
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceChangeRequest(workspaceId),
+					currentChangeRequest ?? null,
+				);
+				const optimisticStatus = deriveStatusFromChangeRequest(
+					currentChangeRequest ?? null,
+				);
+				if (optimisticStatus) {
+					applyOptimisticWorkspaceStatus(
+						queryClient,
+						workspaceId,
+						optimisticStatus,
+					);
+				}
 				setCommitLifecycle((prev) => {
 					if (!prev || prev.workspaceId !== workspaceId) return prev;
-					return { ...prev, phase: "done", prInfo: pr ?? null };
+					return {
+						...prev,
+						phase: "done",
+						changeRequest: currentChangeRequest ?? null,
+					};
 				});
 				refreshWorkspaceRemoteStatus(workspaceId);
 			} catch (error) {
 				console.error("[commitButton] PR lookup failed:", error);
 				pushToast?.(
 					getErrorMessage(error, "Unable to verify action result."),
-					getActionFailureTitle(current.mode),
+					getActionFailureTitle(current.mode, changeRequestName),
 					"destructive",
 				);
 				setCommitLifecycle((prev) =>
@@ -434,11 +694,14 @@ export function useWorkspaceCommitLifecycle({
 			}
 		})();
 	}, [
+		changeRequestName,
 		completedSessionIds,
+		abortedSessionIds,
 		interactionRequiredSessionIds,
 		pushToast,
+		queryClient,
 		refreshWorkspaceRemoteStatus,
-		sendingSessionIds,
+		busySessionIds,
 	]);
 
 	useEffect(() => {
@@ -459,14 +722,8 @@ export function useWorkspaceCommitLifecycle({
 
 			void (async () => {
 				try {
-					if (mode === "create-pr") {
-						await setWorkspaceManualStatus(workspaceId, "review");
-						await queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceGroups,
-						});
-					}
-
 					if (!trackedSessionId) return;
+					if (mode === "checks-running" || mode === "merge-blocked") return;
 					const optedIn = await loadAutoCloseActionKinds();
 					if (!optedIn.includes(mode)) return;
 					await hideSession(trackedSessionId);
@@ -515,28 +772,35 @@ export function useWorkspaceCommitLifecycle({
 		() =>
 			deriveCommitButtonMode(
 				activeLifecycle,
-				workspacePrInfo,
-				workspacePrActionStatus,
+				currentChangeRequest,
+				currentForgeActionStatus,
 				workspaceGitActionStatus,
 			),
 		[
 			activeLifecycle,
-			workspacePrInfo,
-			workspacePrActionStatus,
+			currentChangeRequest,
+			currentForgeActionStatus,
 			workspaceGitActionStatus,
 		],
 	);
 
 	const commitButtonState = useMemo<CommitButtonState>(
-		() => deriveCommitButtonState(activeLifecycle, workspacePrActionStatus),
-		[activeLifecycle, workspacePrActionStatus],
+		() =>
+			deriveCommitButtonState(
+				activeLifecycle,
+				currentForgeActionStatus,
+				commitButtonMode,
+			),
+		[activeLifecycle, currentForgeActionStatus, commitButtonMode],
 	);
 
 	return {
 		commitButtonMode,
 		commitButtonState,
 		handleInspectorCommitAction,
+		handleInspectorReviewAction,
 		handlePendingPromptConsumed,
+		mergeConfirmDialogNode,
 		pendingPromptForSession,
 		queuePendingPromptForSession,
 	};

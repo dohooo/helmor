@@ -45,7 +45,7 @@ fn resolve_workspace(workspace_ref: &str) -> Result<(String, PathBuf)> {
     let id = service::resolve_workspace_ref(workspace_ref)?;
     let record = workspace_models::load_workspace_record_by_id(&id)?
         .with_context(|| format!("Workspace not found: {id}"))?;
-    let root = crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)?;
+    let root = crate::workspace::helpers::workspace_path(&record)?;
     Ok((id, root))
 }
 
@@ -79,10 +79,14 @@ fn format_list(items: &[editor_files::EditorFileListItem]) -> String {
     items
         .iter()
         .map(|f| {
-            format!(
-                "{}\t+{} -{}\t{}",
-                f.status, f.insertions, f.deletions, f.path
-            )
+            // CLI shows total lines added/removed across all three areas.
+            // Some files may be touched in more than one area (e.g.
+            // committed + unstaged); this sum overstates such cases, but
+            // CLI is a coarse view — the inspector UI shows per-area
+            // breakdowns for accuracy.
+            let ins = f.committed_insertions + f.staged_insertions + f.unstaged_insertions;
+            let del = f.committed_deletions + f.staged_deletions + f.unstaged_deletions;
+            format!("{}\t+{ins} -{del}\t{}", f.status, f.path)
         })
         .collect::<Vec<_>>()
         .join("\n")

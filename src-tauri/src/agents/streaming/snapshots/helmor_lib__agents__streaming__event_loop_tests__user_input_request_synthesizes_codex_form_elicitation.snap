@@ -1,0 +1,34 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: turn/started
+  emitted: []
+  side_effects: []
+- event_type: userInputRequest
+  emitted:
+    - kind: Elicitation
+      server_name: Codex
+      elicitation_id: ui-1
+      mode: form
+  side_effects: []
+- event_type: turn/completed
+  emitted:
+    - kind: Update
+      messages:
+        - role: system
+          part_types:
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: end
+  emitted:
+    - kind: Update
+      messages:
+        - role: system
+          part_types:
+            - text
+          streaming: ~
+    - kind: Done
+      persisted: true
+  side_effects: []

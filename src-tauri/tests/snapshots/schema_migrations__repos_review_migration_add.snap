@@ -1,0 +1,6 @@
+---
+source: tests/schema_migrations.rs
+expression: repos_review_columns(&connection)
+---
+- - custom_prompt_review
+  - TEXT

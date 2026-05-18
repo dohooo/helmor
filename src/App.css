@@ -11,21 +11,49 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Font stacks. `--font-sans-user`, `--font-mono-user`, and
+ * `--font-terminal-user` are written by `useThemeApplication` when the user
+ * picks a custom family in Appearance settings; absent, the cascade falls
+ * through to the bundled Geist variable fonts. This is a single source of
+ * truth, every other `--font-sans`/`--font-mono` declaration in this file
+ * chains through the same var() to keep the override consistent.
+ */
 @theme {
 	--font-sans:
-		"Geist Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont,
-		"Segoe UI", sans-serif;
+		var(--font-sans-user, "Geist Variable"), "SF Pro Display", -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
 	--font-mono:
-		"Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
-		Monaco, Consolas, monospace;
+		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
+		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--font-terminal:
+		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
 }
 
 :root {
+	--helmor-interactive-cursor: pointer;
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	-webkit-text-size-adjust: 100%;
+}
+
+/*
+ * Pointer cursors. Use `cursor-interactive` for UI affordances controlled by
+ * the Appearance preference. Functional cursors and real links keep their own
+ * cursor semantics.
+ */
+html.no-pointer-cursors {
+	--helmor-interactive-cursor: default;
+}
+
+:where(.cursor-interactive) {
+	cursor: var(--helmor-interactive-cursor);
+}
+
+:where(.\!cursor-interactive) {
+	cursor: var(--helmor-interactive-cursor) !important;
 }
 
 html,
@@ -90,6 +118,39 @@ body {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
 }
 
+.inbox-coming-soon-pickaxe {
+	transform-origin: 70% 76%;
+	animation: inbox-coming-soon-pickaxe 1.55s cubic-bezier(0.4, 0, 0.2, 1)
+		infinite;
+}
+
+@keyframes inbox-coming-soon-pickaxe {
+	0%,
+	68%,
+	100% {
+		transform: translateY(0) rotate(0deg);
+	}
+
+	76% {
+		transform: translateY(0) rotate(-10deg);
+	}
+
+	84% {
+		transform: translateY(0) rotate(6deg);
+	}
+
+	92% {
+		transform: translateY(0) rotate(-2deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.inbox-coming-soon-pickaxe {
+		animation: none;
+		transform: translateY(0);
+	}
+}
+
 @keyframes conversation-scrollbar-fade-in {
 	from {
 		opacity: 0;
@@ -102,6 +163,265 @@ body {
 
 .conversation-thread-enter {
 	animation: conversation-fade-in 70ms ease-out;
+}
+
+.helmor-logo-css-piece {
+	fill: currentColor;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation-duration: 2100ms;
+	animation-iteration-count: infinite;
+	animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.helmor-logo-css-piece-tl {
+	animation-name: helmor-logo-css-tl;
+}
+
+.helmor-logo-css-piece-ml {
+	animation-name: helmor-logo-css-ml;
+}
+
+.helmor-logo-css-piece-bl {
+	animation-name: helmor-logo-css-bl;
+}
+
+.helmor-logo-css-piece-bridge {
+	animation-name: helmor-logo-css-bridge;
+}
+
+.helmor-logo-css-piece-br {
+	animation-name: helmor-logo-css-br;
+}
+
+.helmor-logo-css-piece-mr {
+	animation-name: helmor-logo-css-mr;
+}
+
+.helmor-logo-css-piece-tr {
+	animation-name: helmor-logo-css-tr;
+}
+
+@keyframes helmor-logo-css-tl {
+	0%,
+	14.2857%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	3.5714% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	7.1429% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	10.7143% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-ml {
+	0%,
+	7.1429%,
+	21.4286%,
+	85.7143%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	10.7143%,
+	96.4286% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	14.2857%,
+	92.8571% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	17.8571%,
+	89.2857% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-bl {
+	0%,
+	14.2857%,
+	28.5714%,
+	78.5714%,
+	92.8571%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	17.8571%,
+	89.2857% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	21.4286%,
+	85.7143% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	25%,
+	82.1429% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-bridge {
+	0%,
+	21.4286%,
+	35.7143%,
+	71.4286%,
+	85.7143%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	25%,
+	82.1429% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	28.5714%,
+	78.5714% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	32.1429%,
+	75% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-br {
+	0%,
+	42.8571%,
+	57.1429%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	46.4286% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	50% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	53.5714% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-mr {
+	0%,
+	35.7143%,
+	50%,
+	57.1429%,
+	71.4286%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	39.2857%,
+	67.8571% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	42.8571%,
+	64.2857% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	46.4286%,
+	60.7143% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+@keyframes helmor-logo-css-tr {
+	0%,
+	28.5714%,
+	42.8571%,
+	64.2857%,
+	78.5714%,
+	100% {
+		transform: scaleX(1);
+		opacity: 1;
+	}
+	32.1429%,
+	75% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+	35.7143%,
+	71.4286% {
+		transform: scaleX(-1);
+		opacity: 0.03;
+	}
+	39.2857%,
+	67.8571% {
+		transform: scaleX(0);
+		opacity: 0.12;
+	}
+}
+
+.shortcut-recording-pulse::after {
+	position: absolute;
+	inset: -2px;
+	border: 1px solid color-mix(in srgb, var(--primary) 72%, transparent);
+	border-radius: inherit;
+	pointer-events: none;
+	content: "";
+	animation: shortcut-recording-ring 1100ms ease-out infinite;
+}
+
+@keyframes shortcut-recording-ring {
+	0% {
+		opacity: 0.58;
+		transform: translate3d(0, 0, 0) scale(1);
+	}
+
+	100% {
+		opacity: 0;
+		transform: translate3d(0, 0, 0) scale(1.2);
+	}
+}
+
+.shortcut-conflict-shake {
+	animation: shortcut-conflict-shake 260ms ease-in-out;
+}
+
+@keyframes shortcut-conflict-shake {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+
+	25% {
+		transform: translateX(-2px);
+	}
+
+	50% {
+		transform: translateX(2px);
+	}
+
+	75% {
+		transform: translateX(-1px);
+	}
 }
 
 @keyframes conversation-fade-in {
@@ -130,7 +450,7 @@ body {
 	color: var(--muted-foreground);
 	border-radius: 9999px;
 	padding: 0;
-	cursor: pointer;
+	cursor: var(--helmor-interactive-cursor);
 	opacity: 1;
 	transition:
 		opacity 200ms ease,
@@ -272,36 +592,52 @@ body {
 	}
 }
 
-* {
-	scrollbar-width: thin;
-	scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent)
-		transparent;
-}
+/*
+ * Global scrollbar styling lives in @layer utilities so that Tailwind v4
+ * `@utility` classes such as `no-scrollbar` (from shadcn) can win via
+ * specificity. Without the layer, these rules are unlayered and beat every
+ * layered utility per CSS cascade spec (unlayered > layered), which silently
+ * breaks `no-scrollbar` in production builds while still working in dev.
+ */
+@layer utilities {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent)
+			transparent;
+	}
 
-*::-webkit-scrollbar {
-	width: 8px;
-	height: 8px;
-	background: transparent;
-}
+	*::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+		background: transparent;
+		background-color: transparent;
+	}
 
-*::-webkit-scrollbar-track {
-	background: transparent;
-}
+	*::-webkit-scrollbar-track,
+	*::-webkit-scrollbar-track-piece {
+		background: transparent !important;
+		background-color: transparent !important;
+		border: 0;
+		box-shadow: none;
+	}
 
-*::-webkit-scrollbar-thumb {
-	border: 2px solid transparent;
-	border-radius: 999px;
-	background: color-mix(in oklch, var(--foreground) 18%, transparent);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-thumb {
+		border: 2px solid transparent;
+		border-radius: 999px;
+		background: color-mix(in oklch, var(--foreground) 18%, transparent);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-thumb:hover {
-	background: color-mix(in oklch, var(--foreground) 30%, transparent);
-	background-clip: padding-box;
-}
+	*::-webkit-scrollbar-thumb:hover {
+		background: color-mix(in oklch, var(--foreground) 30%, transparent);
+		background-clip: padding-box;
+	}
 
-*::-webkit-scrollbar-corner {
-	background: transparent;
+	*::-webkit-scrollbar-corner,
+	*::-webkit-scrollbar-button {
+		background: transparent !important;
+		background-color: transparent !important;
+	}
 }
 
 /* xterm: custom scrollbar shape to match app style */
@@ -339,10 +675,12 @@ body {
 
 @theme inline {
 	--font-heading: var(--font-sans);
-	--font-sans: "Geist Variable", sans-serif;
+	--font-sans: var(--font-sans-user, "Geist Variable"), sans-serif;
 	--font-mono:
-		"Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
-		Monaco, Consolas, monospace;
+		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
+		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--font-terminal:
+		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -471,16 +809,17 @@ body {
 	color: var(--conversation-body-foreground);
 }
 
-.conversation-streamdown [data-sd-animate] {
-	animation: none;
-}
-
 .conversation-streamdown :where(p, li, ul, ol, blockquote, table, strong, em) {
 	color: inherit;
 }
 
 .conversation-streamdown :where(a) {
 	color: var(--chart-3);
+	cursor: pointer;
+}
+
+html.no-pointer-cursors .conversation-streamdown :where(a) {
+	cursor: pointer !important;
 }
 
 .conversation-streamdown :where(blockquote) {
@@ -492,7 +831,7 @@ body {
  * Inline code font-size.
  *
  * Streamdown hard-codes `text-sm` (14px absolute) on inline `<code>` elements,
- * which ignores the user's settings.fontSize and visibly bulges when the
+ * which ignores the user's chatFontSize and visibly bulges when the
  * surrounding text is smaller (e.g. 13px). Force inline code (not the
  * pre-wrapped block code, which uses our CodeBlock) to inherit the parent
  * font-size so it always matches the surrounding text.
@@ -550,6 +889,20 @@ body {
 .group\/tab:hover .tab-content-fade {
 	-webkit-mask-image: linear-gradient(to left, transparent 1.2rem, black 2rem);
 	mask-image: linear-gradient(to left, transparent 1.2rem, black 2rem);
+}
+
+/* Terminal tab: fade text under the close button on hover. Mirrors
+   `tab-content-fade` (session-tab pattern) with a tighter range matching
+   the narrower reserved slot. Layout stability comes from the tab's
+   markup — `overflow-hidden` parent + `flex-1 min-w-0` label wrapper —
+   so toggling mask is purely a paint change and never shifts glyphs. */
+.group\/tab:hover .terminal-tab-fade {
+	-webkit-mask-image: linear-gradient(
+		to left,
+		transparent 0.5rem,
+		black 1.2rem
+	);
+	mask-image: linear-gradient(to left, transparent 0.5rem, black 1.2rem);
 }
 
 /* Workspace row: fade text under hover action icons (mirrors tab-content-fade).

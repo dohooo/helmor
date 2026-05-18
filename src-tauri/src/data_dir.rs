@@ -52,15 +52,6 @@ pub fn workspaces_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Returns the archived-contexts directory inside the data dir.
-pub fn archived_contexts_dir() -> Result<PathBuf> {
-    let dir = data_dir()?.join("archived-contexts");
-    if !dir.exists() {
-        fs::create_dir_all(&dir).context("Failed to create archived-contexts directory")?;
-    }
-    Ok(dir)
-}
-
 /// Returns the logs directory inside the data dir.
 pub fn logs_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("logs");
@@ -75,6 +66,26 @@ pub fn run_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("run");
     if !dir.exists() {
         fs::create_dir_all(&dir).context("Failed to create run directory")?;
+    }
+    Ok(dir)
+}
+
+/// Returns the generated images directory inside the data dir.
+pub fn generated_images_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("generated-images");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create generated images directory")?;
+    }
+    Ok(dir)
+}
+
+/// Returns the avatar cache directory inside the data dir. Forge account
+/// avatars (gh / glab) are downloaded once and served via `asset://` so
+/// page navigations don't re-trigger HTTP fetch + image decode.
+pub fn avatar_cache_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("cache").join("avatars");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create avatar cache directory")?;
     }
     Ok(dir)
 }
@@ -149,22 +160,15 @@ fn dirs_home() -> Option<PathBuf> {
 pub fn ensure_directory_structure() -> Result<()> {
     data_dir()?;
     workspaces_dir()?;
-    archived_contexts_dir()?;
     logs_dir()?;
     run_dir()?;
+    generated_images_dir()?;
     Ok(())
 }
 
 /// Returns the workspace directory for a given repo + workspace.
 pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
     Ok(workspaces_dir()?.join(repo_name).join(directory_name))
-}
-
-/// Returns the archived context directory for a given repo + workspace.
-pub fn archived_context_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
-    Ok(archived_contexts_dir()?
-        .join(repo_name)
-        .join(directory_name))
 }
 
 /// Returns a human-readable description of the data mode.

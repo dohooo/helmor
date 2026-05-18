@@ -1,0 +1,19 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/cursor/abort.jsonl
+---
+line_count: 3
+checkpoint_count: 0
+checkpoints: []
+final_state:
+  message_count: 0
+  roles: []
+  total_parts: 0
+persisted_turns:
+  turn_count: 0
+  total_blocks: 0
+  turns: []
+historical_render:
+  message_count: 0
+  messages: []

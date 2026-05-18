@@ -1,0 +1,56 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: system
+  emitted:
+    - kind: Update
+      messages: []
+  side_effects: []
+- event_type: assistant
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: permissionRequest
+  emitted:
+    - kind: PermissionRequest
+      permission_id: perm-1
+      tool_name: Bash
+  side_effects: []
+- event_type: assistant
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: result
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+            - text
+          streaming: ~
+  side_effects: []
+- event_type: end
+  emitted:
+    - kind: Update
+      messages:
+        - role: assistant
+          part_types:
+            - text
+            - text
+          streaming: ~
+    - kind: Done
+      persisted: true
+  side_effects: []

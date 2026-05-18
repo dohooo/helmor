@@ -1,0 +1,3 @@
+{"type":"cursor/agent_init","session_id":"agent-c06b0ede-9ac6-4724-8512-fcb5cb691aeb","model":"composer-2","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-c06b0ede-9ac6-4724-8512-fcb5cb691aeb","run_id":"run-95759448-a9f7-4625-af6a-d0178c6d3792","status":"RUNNING","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-c06b0ede-9ac6-4724-8512-fcb5cb691aeb","run_id":"run-95759448-a9f7-4625-af6a-d0178c6d3792","status":"FINISHED","id":"test-request"}

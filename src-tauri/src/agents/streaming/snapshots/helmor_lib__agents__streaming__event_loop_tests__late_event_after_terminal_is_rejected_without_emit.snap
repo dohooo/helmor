@@ -1,0 +1,20 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: end
+  emitted:
+    - kind: Update
+      messages: []
+    - kind: Done
+      persisted: true
+  side_effects: []
+- event_type: permissionRequest
+  emitted: []
+  side_effects: []
+- event_type: permissionModeChanged
+  emitted: []
+  side_effects: []
+- event_type: error
+  emitted: []
+  side_effects: []

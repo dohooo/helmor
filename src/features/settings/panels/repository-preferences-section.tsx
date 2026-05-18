@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Eye } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
 import {
 	Collapsible,
@@ -9,7 +10,6 @@ import {
 } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { LazyStreamdown } from "@/features/panel/message-components/streamdown-loader";
 import {
 	loadRepoPreferences,
 	type RepoPreferences,
@@ -25,6 +25,7 @@ import {
 
 const PREFERENCE_KEYS: RepoPreferenceKey[] = [
 	"createPr",
+	"review",
 	"fixErrors",
 	"resolveConflicts",
 	"branchRename",
@@ -57,8 +58,8 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 
 	return (
 		<>
-			<div className="rounded-xl border border-app-border/30 bg-app-base/20 px-5 py-4">
-				<div className="text-[13px] font-medium leading-snug text-app-foreground">
+			<div className="py-5">
+				<div className="text-[13px] font-medium leading-snug text-foreground">
 					Preferences
 				</div>
 				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
@@ -78,7 +79,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 									<CollapsibleTrigger asChild>
 										<button
 											type="button"
-											className="flex w-full cursor-pointer items-start justify-between gap-4 text-left"
+											className="flex w-full cursor-interactive items-start justify-between gap-4 text-left"
 										>
 											<div>
 												<div className="text-[13px] font-medium text-app-foreground">
@@ -115,7 +116,7 @@ export function RepositoryPreferencesSection({ repoId }: { repoId: string }) {
 										<div className="mt-3 flex items-center justify-between gap-3">
 											<button
 												type="button"
-												className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
+												className="inline-flex cursor-interactive items-center gap-2 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
 												onClick={() => setPreviewKey(key)}
 											>
 												<Eye className="size-3.5" strokeWidth={1.8} />

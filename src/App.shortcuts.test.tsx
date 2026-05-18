@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
 	cleanup,
 	fireEvent,
@@ -7,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceDetail } from "./lib/api";
 
 const apiMocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
@@ -18,13 +20,36 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceDetail: vi.fn(),
 	loadWorkspaceSessions: vi.fn(),
 	loadSessionThreadMessages: vi.fn(),
+	getSessionContextUsage: vi.fn(),
+	getCodexRateLimits: vi.fn(),
+	getClaudeRateLimits: vi.fn(),
+	loadRepoScripts: vi.fn(),
+	listRepositories: vi.fn(),
+	listSessionDrafts: vi.fn(),
+	getWorkspaceForge: vi.fn(),
+	refreshWorkspaceChangeRequest: vi.fn(),
+	loadWorkspaceForgeActionStatus: vi.fn(),
+	stopAgentStream: vi.fn(),
+	requestQuit: vi.fn(),
 }));
 
-const windowApiMocks = vi.hoisted(() => ({
-	onCloseRequested: vi.fn(),
-	closeRequestedHandler: null as
-		| ((event: { preventDefault: () => void }) => void | Promise<void>)
-		| null,
+const eventApiMocks = vi.hoisted(() => ({
+	handlers: new Map<string, Set<() => void>>(),
+	listen: vi.fn(async (eventName: string, handler: () => void) => {
+		let handlers = eventApiMocks.handlers.get(eventName);
+		if (!handlers) {
+			handlers = new Set();
+			eventApiMocks.handlers.set(eventName, handlers);
+		}
+		handlers.add(handler);
+		return () => {
+			const currentHandlers = eventApiMocks.handlers.get(eventName);
+			currentHandlers?.delete(handler);
+			if (currentHandlers?.size === 0) {
+				eventApiMocks.handlers.delete(eventName);
+			}
+		};
+	}),
 }));
 
 vi.mock("./App.css", () => ({}));
@@ -39,18 +64,11 @@ vi.mock("./lib/platform", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: () => ({
-		onCloseRequested: windowApiMocks.onCloseRequested.mockImplementation(
-			async (handler: typeof windowApiMocks.closeRequestedHandler) => {
-				windowApiMocks.closeRequestedHandler = handler;
-				return () => {
-					if (windowApiMocks.closeRequestedHandler === handler) {
-						windowApiMocks.closeRequestedHandler = null;
-					}
-				};
-			},
-		),
 		setBadgeCount: vi.fn(async () => {}),
 	}),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+	listen: eventApiMocks.listen,
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -68,7 +86,17 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceSessions: apiMocks.loadWorkspaceSessions,
 		loadSessionMessages: apiMocks.loadSessionThreadMessages,
 		loadSessionThreadMessages: apiMocks.loadSessionThreadMessages,
-		requestQuit: vi.fn(),
+		getSessionContextUsage: apiMocks.getSessionContextUsage,
+		getCodexRateLimits: apiMocks.getCodexRateLimits,
+		getClaudeRateLimits: apiMocks.getClaudeRateLimits,
+		loadRepoScripts: apiMocks.loadRepoScripts,
+		listRepositories: apiMocks.listRepositories,
+		listSessionDrafts: apiMocks.listSessionDrafts,
+		getWorkspaceForge: apiMocks.getWorkspaceForge,
+		refreshWorkspaceChangeRequest: apiMocks.refreshWorkspaceChangeRequest,
+		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
+		requestQuit: apiMocks.requestQuit,
+		stopAgentStream: apiMocks.stopAgentStream,
 	};
 });
 
@@ -207,7 +235,9 @@ function closeSessionFixture(sessionId: string): WorkspaceFixtureId | null {
 	return null;
 }
 
-function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
+function createWorkspaceDetail(
+	workspaceId: WorkspaceFixtureId,
+): WorkspaceDetail {
 	const sessions = runtimeSessionFixtures[workspaceId];
 	const primarySession =
 		sessions.find((session) => session.active) ?? sessions[0];
@@ -223,8 +253,7 @@ function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
 		hasUnread: false,
 		workspaceUnread: 0,
 		unreadSessionCount: 0,
-		derivedStatus: archived ? "archived" : "progress",
-		manualStatus: null,
+		status: archived ? "done" : "in-progress",
 		activeSessionId: primarySession?.id ?? null,
 		activeSessionTitle: primarySession?.title ?? null,
 		activeSessionAgentType: "claude",
@@ -232,6 +261,7 @@ function createWorkspaceDetail(workspaceId: WorkspaceFixtureId) {
 		branch: archived ? "archive/main" : "main",
 		initializationParentBranch: "main",
 		intendedTargetBranch: "main",
+		mode: "worktree",
 		pinnedAt: null,
 		prTitle: null,
 		archiveCommit: null,
@@ -262,6 +292,42 @@ function createWorkspaceSessions(workspaceId: WorkspaceFixtureId) {
 	}));
 }
 
+const UNKNOWN_FORGE_DETECTION = {
+	provider: "unknown",
+	host: null,
+	namespace: null,
+	repo: null,
+	remoteUrl: null,
+	labels: {
+		providerName: "Forge",
+		cliName: "CLI",
+		changeRequestName: "PR",
+		changeRequestFullName: "change request",
+	},
+	cli: null,
+	detectionSignals: [],
+};
+
+const UNAVAILABLE_FORGE_ACTION_STATUS = {
+	changeRequest: null,
+	reviewDecision: null,
+	mergeable: null,
+	deployments: [],
+	checks: [],
+	remoteState: "unavailable",
+	message: null,
+};
+
+const EMPTY_REPO_SCRIPTS = {
+	setupScript: null,
+	runScript: null,
+	archiveScript: null,
+	setupFromProject: false,
+	runFromProject: false,
+	archiveFromProject: false,
+	autoRunSetup: true,
+};
+
 function getSessionTab(title: string) {
 	const tab = screen.getByText(title).closest('[role="tab"]');
 
@@ -276,18 +342,39 @@ function expectSelectedSession(title: string) {
 	expect(getSessionTab(title)).toHaveAttribute("aria-selected", "true");
 }
 
+function getSessionCloseButton(title: string) {
+	const closeButton = getSessionTab(title).querySelector(
+		'[aria-label="Close session"]',
+	);
+
+	if (!closeButton) {
+		throw new Error(`Unable to find close button for "${title}".`);
+	}
+
+	return closeButton as HTMLElement;
+}
+
 function expectSelectedWorkspace(title: string) {
 	expect(screen.getByRole("button", { name: title })).toHaveClass(
 		"workspace-row-selected",
 	);
 }
 
+const NAV_ARROW_BY_LEGACY_KEY = {
+	h: "ArrowUp", // workspace.previous
+	l: "ArrowDown", // workspace.next
+	k: "ArrowLeft", // session.previous
+	j: "ArrowRight", // session.next
+} as const;
+
 function pressGlobalShortcut(
-	key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
+	key: "h" | "j" | "k" | "l",
 	options?: Parameters<typeof fireEvent.keyDown>[1],
 ) {
+	const arrow = NAV_ARROW_BY_LEGACY_KEY[key];
 	fireEvent.keyDown(window, {
-		key,
+		key: arrow,
+		code: arrow,
 		metaKey: true,
 		altKey: true,
 		...options,
@@ -304,13 +391,34 @@ function pressCreateSessionShortcut(
 	});
 }
 
-async function renderAppReady() {
+function emitTauriEvent(eventName: string) {
+	const handlers = eventApiMocks.handlers.get(eventName);
+	if (!handlers) {
+		return;
+	}
+
+	for (const handler of handlers) {
+		handler();
+	}
+}
+
+async function waitForTauriEventListener(eventName: string) {
+	await waitFor(() => {
+		expect(eventApiMocks.handlers.get(eventName)?.size ?? 0).toBeGreaterThan(0);
+	});
+}
+
+async function renderAppReady(expectedSessionTitle = "Done session 1") {
 	render(<App />);
 
-	await waitFor(() => {
-		expectSelectedWorkspace("Done workspace");
-		expectSelectedSession("Done session 1");
-	});
+	// 5s — initial App mount runs many queries; the default 1s flakes under load.
+	await waitFor(
+		() => {
+			expectSelectedWorkspace("Done workspace");
+			expectSelectedSession(expectedSessionTitle);
+		},
+		{ timeout: 5000 },
+	);
 }
 
 describe("App global navigation shortcuts", () => {
@@ -325,8 +433,18 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.loadWorkspaceDetail.mockReset();
 		apiMocks.loadWorkspaceSessions.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
-		windowApiMocks.onCloseRequested.mockClear();
-		windowApiMocks.closeRequestedHandler = null;
+		apiMocks.getSessionContextUsage.mockReset();
+		apiMocks.getCodexRateLimits.mockReset();
+		apiMocks.getClaudeRateLimits.mockReset();
+		apiMocks.loadRepoScripts.mockReset();
+		apiMocks.listRepositories.mockReset();
+		apiMocks.listSessionDrafts.mockReset();
+		apiMocks.getWorkspaceForge.mockReset();
+		apiMocks.refreshWorkspaceChangeRequest.mockReset();
+		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
+		apiMocks.stopAgentStream.mockReset();
+		eventApiMocks.listen.mockClear();
+		eventApiMocks.handlers.clear();
 		apiMocks.createSession.mockImplementation(async (workspaceId: string) => {
 			const nextSessionId = `${workspaceId}-session-new`;
 			addSessionFixture(workspaceId as WorkspaceFixtureId, nextSessionId);
@@ -404,8 +522,7 @@ describe("App global navigation shortcuts", () => {
 				hasUnread: false,
 				workspaceUnread: 0,
 				unreadSessionCount: 0,
-				derivedStatus: "archived",
-				manualStatus: null,
+				status: "done",
 				branch: "archive/main",
 				activeSessionId: "session-archived-1",
 				activeSessionTitle: "Archived session 1",
@@ -426,8 +543,7 @@ describe("App global navigation shortcuts", () => {
 				hasUnread: false,
 				workspaceUnread: 0,
 				unreadSessionCount: 0,
-				derivedStatus: "archived",
-				manualStatus: null,
+				status: "done",
 				branch: "archive/main",
 				activeSessionId: "session-archived-2",
 				activeSessionTitle: "Archived session 2",
@@ -448,6 +564,25 @@ describe("App global navigation shortcuts", () => {
 				createWorkspaceSessions(workspaceId as WorkspaceFixtureId),
 		);
 		apiMocks.loadSessionThreadMessages.mockResolvedValue([]);
+		apiMocks.getSessionContextUsage.mockResolvedValue(null);
+		apiMocks.getCodexRateLimits.mockResolvedValue(null);
+		apiMocks.getClaudeRateLimits.mockResolvedValue(null);
+		apiMocks.loadRepoScripts.mockResolvedValue(EMPTY_REPO_SCRIPTS);
+		apiMocks.listRepositories.mockResolvedValue([
+			{
+				id: "repo-1",
+				name: "helmor",
+				defaultBranch: "main",
+				repoInitials: "H",
+			},
+		]);
+		apiMocks.listSessionDrafts.mockResolvedValue([]);
+		apiMocks.getWorkspaceForge.mockResolvedValue(UNKNOWN_FORGE_DETECTION);
+		apiMocks.refreshWorkspaceChangeRequest.mockResolvedValue(null);
+		apiMocks.loadWorkspaceForgeActionStatus.mockResolvedValue(
+			UNAVAILABLE_FORGE_ACTION_STATUS,
+		);
+		apiMocks.stopAgentStream.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -457,7 +592,7 @@ describe("App global navigation shortcuts", () => {
 	it("selects the next session on Option+Command+Right", async () => {
 		await renderAppReady();
 
-		pressGlobalShortcut("ArrowRight");
+		pressGlobalShortcut("j");
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 2");
@@ -495,13 +630,13 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedSession("Done session 2");
 		});
 
-		pressGlobalShortcut("ArrowRight");
+		pressGlobalShortcut("j");
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 3");
 		});
 
-		pressGlobalShortcut("ArrowRight");
+		pressGlobalShortcut("j");
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 3");
@@ -529,10 +664,71 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
+	it("opens the workspace start composer on Command+N", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "n",
+			code: "KeyN",
+			metaKey: true,
+		});
+
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "New Workspace" }),
+		).toBeDisabled();
+	});
+
+	it("focuses the start composer on Command+L", async () => {
+		const user = userEvent.setup({ pointerEventsCheck: 0 });
+		await renderAppReady();
+
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		const input = await screen.findByLabelText("Workspace input");
+		input.blur();
+		expect(input).not.toHaveFocus();
+
+		fireEvent.keyDown(window, {
+			key: "l",
+			code: "KeyL",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(input).toHaveFocus();
+		});
+	});
+
+	it("opens the add repository menu on Command+Shift+N", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "n",
+			code: "KeyN",
+			metaKey: true,
+			shiftKey: true,
+		});
+
+		await screen.findByRole("menuitem", { name: /Open project/i });
+	});
+
+	it("toggles the context panel on Option+Command+C", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "c",
+			code: "KeyC",
+			metaKey: true,
+			altKey: true,
+		});
+
+		await screen.findByRole("heading", { name: "Contexts" });
+	});
+
 	it("does not wrap session navigation on Option+Command+Left from the first session", async () => {
 		await renderAppReady();
 
-		pressGlobalShortcut("ArrowLeft");
+		pressGlobalShortcut("k");
 
 		await waitFor(() => {
 			expectSelectedSession("Done session 1");
@@ -546,7 +742,7 @@ describe("App global navigation shortcuts", () => {
 	it("selects the next workspace on Option+Command+Down using sidebar order", async () => {
 		await renderAppReady();
 
-		pressGlobalShortcut("ArrowDown");
+		pressGlobalShortcut("l");
 
 		await waitFor(() => {
 			expectSelectedWorkspace("Review workspace");
@@ -557,7 +753,7 @@ describe("App global navigation shortcuts", () => {
 	it("does not wrap workspace navigation on Option+Command+Up from the first workspace", async () => {
 		await renderAppReady();
 
-		pressGlobalShortcut("ArrowUp");
+		pressGlobalShortcut("h");
 
 		await waitFor(() => {
 			expectSelectedWorkspace("Done workspace");
@@ -577,32 +773,32 @@ describe("App global navigation shortcuts", () => {
 	it("navigates through archived workspaces after the active workspace list even while Archived stays collapsed", async () => {
 		await renderAppReady();
 
-		pressGlobalShortcut("ArrowDown");
+		pressGlobalShortcut("l");
 		await waitFor(() => {
 			expectSelectedSession("Review session 1");
 		});
 
-		pressGlobalShortcut("ArrowDown");
+		pressGlobalShortcut("l");
 		await waitFor(() => {
 			expectSelectedSession("Progress session 1");
 		});
 
-		pressGlobalShortcut("ArrowDown");
+		pressGlobalShortcut("l");
 		await waitFor(() => {
 			expectSelectedSession("Archived session 1");
 		});
 
-		pressGlobalShortcut("ArrowDown");
+		pressGlobalShortcut("l");
 		await waitFor(() => {
 			expectSelectedSession("Archived session 2");
 		});
 
-		pressGlobalShortcut("ArrowUp");
+		pressGlobalShortcut("h");
 		await waitFor(() => {
 			expectSelectedSession("Archived session 1");
 		});
 
-		pressGlobalShortcut("ArrowUp");
+		pressGlobalShortcut("h");
 		await waitFor(() => {
 			expectSelectedSession("Progress session 1");
 		});
@@ -619,6 +815,7 @@ describe("App global navigation shortcuts", () => {
 
 		fireEvent.keyDown(composerInput, {
 			key: "ArrowRight",
+			code: "ArrowRight",
 			metaKey: true,
 			altKey: true,
 		});
@@ -627,46 +824,33 @@ describe("App global navigation shortcuts", () => {
 			expectSelectedSession("Done session 2");
 		});
 
-		const newWorkspaceButton = screen.getByRole("button", {
-			name: "New workspace",
-		});
-		await user.click(newWorkspaceButton);
-		const repositoryPicker = await screen.findByRole("dialog");
-		expect(repositoryPicker).toHaveFocus();
-
-		fireEvent.keyDown(repositoryPicker, {
-			key: "ArrowDown",
-			metaKey: true,
-			altKey: true,
-		});
-
-		await waitFor(() => {
-			expectSelectedWorkspace("Review workspace");
-			expectSelectedSession("Review session 1");
-		});
+		await user.click(screen.getByRole("button", { name: "New workspace" }));
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 	});
 
-	it("only responds to the exact meta+alt shortcut combination", async () => {
+	it("only responds to the exact Option shortcut combination", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
-			key: "ArrowRight",
+			key: "l",
+			code: "KeyL",
 			metaKey: true,
 		});
 		fireEvent.keyDown(window, {
-			key: "ArrowRight",
-			altKey: true,
+			key: "l",
+			code: "KeyL",
 		});
 		fireEvent.keyDown(window, {
-			key: "ArrowDown",
-			metaKey: true,
+			key: "l",
+			code: "KeyL",
 			altKey: true,
 			shiftKey: true,
 		});
 		// Strict OS-aware binding: on macOS ctrlKey is the "wrong" modifier
 		// and must reject the shortcut. Restored original pre-Phase-3 assertion.
 		fireEvent.keyDown(window, {
-			key: "ArrowDown",
+			key: "l",
+			code: "KeyL",
 			metaKey: true,
 			altKey: true,
 			ctrlKey: true,
@@ -684,12 +868,8 @@ describe("App global navigation shortcuts", () => {
 		);
 	});
 
-	it("closes the current session on Command+W and swallows the follow-up window close", async () => {
+	it("closes the current session on Command+W", async () => {
 		await renderAppReady();
-
-		await waitFor(() => {
-			expect(windowApiMocks.closeRequestedHandler).not.toBeNull();
-		});
 
 		fireEvent.keyDown(window, {
 			key: "w",
@@ -701,11 +881,203 @@ describe("App global navigation shortcuts", () => {
 		});
 		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
 		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
+	});
 
-		// QuitConfirmDialog always prevents the JS-layer close.
-		const preventDefault = vi.fn();
-		await windowApiMocks.closeRequestedHandler?.({ preventDefault });
+	it("selects the right session after closing a middle session", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+			},
+			{
+				id: "session-done-3",
+				title: "Done session 3",
+				active: false,
+			},
+		];
 
-		expect(preventDefault).toHaveBeenCalledTimes(1);
+		await renderAppReady();
+		await userEvent.click(getSessionTab("Done session 2"));
+		await waitFor(() => {
+			expectSelectedSession("Done session 2");
+		});
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 3");
+		});
+		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-2");
+	});
+
+	it("selects the left session after closing the rightmost session", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+			},
+			{
+				id: "session-done-3",
+				title: "Done session 3",
+				active: false,
+			},
+		];
+
+		await renderAppReady();
+		await userEvent.click(getSessionTab("Done session 3"));
+		await waitFor(() => {
+			expectSelectedSession("Done session 3");
+		});
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 2");
+		});
+		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-3");
+	});
+
+	it("keeps the active session when closing an inactive session tab", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+			},
+			{
+				id: "session-done-3",
+				title: "Done session 3",
+				active: false,
+			},
+		];
+
+		await renderAppReady();
+		await userEvent.click(getSessionCloseButton("Done session 2"));
+
+		await waitFor(() => {
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-2");
+		});
+		expectSelectedSession("Done session 1");
+	});
+
+	it("quits silently on a Rust-emitted quit-requested event when nothing is in flight", async () => {
+		apiMocks.requestQuit.mockReset();
+		await renderAppReady();
+
+		await waitForTauriEventListener("helmor://quit-requested");
+		emitTauriEvent("helmor://quit-requested");
+
+		await waitFor(() => {
+			expect(apiMocks.requestQuit).toHaveBeenCalledWith(false);
+		});
+	});
+
+	it("quits from onboarding when Rust emits quit-requested", async () => {
+		const invokeMock = vi.mocked(invoke);
+		const baseInvokeImpl = invokeMock.getMockImplementation();
+		invokeMock.mockImplementation(
+			async (command: string, ...args: unknown[]) => {
+				if (command === "get_app_settings") {
+					return {
+						"app.onboarding_completed": "false",
+					};
+				}
+				return baseInvokeImpl?.(command, args[0] as undefined);
+			},
+		);
+
+		try {
+			apiMocks.requestQuit.mockReset();
+			render(<App />);
+			await screen.findByLabelText("Helmor onboarding");
+
+			await waitForTauriEventListener("helmor://quit-requested");
+			emitTauriEvent("helmor://quit-requested");
+
+			await waitFor(() => {
+				expect(apiMocks.requestQuit).toHaveBeenCalledWith(false);
+			});
+		} finally {
+			invokeMock.mockImplementation(baseInvokeImpl ?? (async () => undefined));
+		}
+	});
+
+	it("closes the current session when macOS emits the close-current-session event", async () => {
+		await renderAppReady();
+
+		await waitForTauriEventListener("helmor://close-current-session");
+		emitTauriEvent("helmor://close-current-session");
+
+		await waitFor(() => {
+			expectSelectedSession("Done session 2");
+		});
+		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
+		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("prompts before closing a running session on Command+W", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+				status: "running",
+			},
+			{
+				id: "session-done-2",
+				title: "Done session 2",
+				active: false,
+			},
+		];
+
+		render(<App />);
+		await waitFor(() => {
+			expectSelectedWorkspace("Done workspace");
+		});
+		await userEvent.click(getSessionTab("Done session 1"));
+		await waitFor(() => {
+			expectSelectedSession("Done session 1");
+		});
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		expect(await screen.findByText("Close running chat?")).toBeInTheDocument();
+		expect(apiMocks.hideSession).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("button", { name: "Close anyway" }));
+
+		await waitFor(() => {
+			expect(apiMocks.stopAgentStream).toHaveBeenCalledWith(
+				"session-done-1",
+				"claude",
+			);
+			expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
+		});
 	});
 });

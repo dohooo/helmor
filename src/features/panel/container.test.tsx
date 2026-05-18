@@ -86,8 +86,7 @@ function createWorkspaceDetail(
 		hasUnread: false,
 		workspaceUnread: 0,
 		unreadSessionCount: 0,
-		derivedStatus: "in-progress",
-		manualStatus: null,
+		status: "in-progress",
 		activeSessionId,
 		activeSessionTitle: activeSessionId,
 		activeSessionAgentType: "claude",
@@ -253,6 +252,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 			setupFromProject: false,
 			runFromProject: false,
 			archiveFromProject: false,
+			autoRunSetup: true,
 		});
 		apiMocks.loadWorkspaceDetail.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceDetail(workspaceId)),
@@ -711,7 +711,7 @@ describe("WorkspacePanelContainer loading semantics", () => {
 				selectedSessionId="idle"
 				displayedSessionId="idle"
 				sending={false}
-				sendingSessionIds={new Set(["running"])}
+				busySessionIds={new Set(["running"])}
 				onSelectSession={vi.fn()}
 				onResolveDisplayedSession={vi.fn()}
 			/>,

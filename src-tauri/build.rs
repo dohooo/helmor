@@ -8,9 +8,15 @@ const UPDATER_PUBKEY_KEY: &str = "HELMOR_UPDATER_PUBKEY";
 
 fn main() {
     ensure_external_bin_placeholders();
-    tauri_build::build();
 
     println!("cargo:rerun-if-changed=build.rs");
+    for key in [
+        GITHUB_CLIENT_ID_KEY,
+        UPDATER_ENDPOINTS_KEY,
+        UPDATER_PUBKEY_KEY,
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
 
     for env_path in candidate_env_paths() {
         // Only watch files that exist. Watching a missing file makes Cargo
@@ -23,6 +29,8 @@ fn main() {
         load_env_var(&env_path, UPDATER_ENDPOINTS_KEY);
         load_env_var(&env_path, UPDATER_PUBKEY_KEY);
     }
+
+    tauri_build::build();
 }
 
 fn ensure_external_bin_placeholders() {

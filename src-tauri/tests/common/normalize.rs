@@ -220,6 +220,7 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             kind: match source {
                 ImageSource::Base64 { .. } => "base64".to_string(),
                 ImageSource::Url { .. } => "url".to_string(),
+                ImageSource::File { .. } => "file".to_string(),
             },
             media_type: media_type.clone(),
         },

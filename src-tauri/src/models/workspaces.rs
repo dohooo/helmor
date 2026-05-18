@@ -1,7 +1,13 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::Row;
 
-use crate::{repos, workspace_derived_status::DerivedStatus, workspace_state::WorkspaceState};
+use crate::{
+    repos,
+    workspace::sidebar_order,
+    workspace_pr_sync::PrSyncState,
+    workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_status::WorkspaceStatus,
+};
 
 use super::db;
 
@@ -18,39 +24,111 @@ pub struct WorkspaceRecord {
     pub has_unread: bool,
     pub workspace_unread: i64,
     pub unread_session_count: i64,
-    pub derived_status: DerivedStatus,
-    pub manual_status: Option<DerivedStatus>,
+    pub status: WorkspaceStatus,
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
+    pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub active_session_id: Option<String>,
     pub active_session_title: Option<String>,
     pub active_session_agent_type: Option<String>,
     pub active_session_status: Option<String>,
+    /// "Primary" session = the non-hidden, non-action session in this
+    /// workspace with the most messages. Falls back to most recently
+    /// updated when message counts tie. None for workspaces with no
+    /// real conversation yet (only action / hidden sessions).
+    pub primary_session_id: Option<String>,
+    pub primary_session_title: Option<String>,
+    pub primary_session_agent_type: Option<String>,
     pub pr_title: Option<String>,
+    pub pr_sync_state: PrSyncState,
+    pub pr_url: Option<String>,
     pub archive_commit: Option<String>,
     pub session_count: i64,
     pub message_count: i64,
     pub remote: Option<String>,
+    pub forge_provider: Option<String>,
+    /// gh/glab account login bound to the parent repo. NULL means
+    /// auto-detect found no logged-in account with access (or the row
+    /// predates the binding feature).
+    pub forge_login: Option<String>,
+    pub display_order: i64,
+    /// `repos.display_order` for the parent repo — drives bucket ordering
+    /// in the sidebar's repo grouping mode.
+    pub repo_sidebar_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Most recent `last_user_message_at` across all sessions in the
+    /// workspace. `None` for workspaces with no user messages yet.
+    pub last_user_message_at: Option<String>,
+    /// Timestamp of the last successful setup-script run for this
+    /// workspace. `None` means setup was never run (or was skipped
+    /// because the repo has no setup script).
+    pub setup_completed_at: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
-    WITH session_stats AS (
-      SELECT
-        workspace_id,
-        SUM(CASE WHEN COALESCE(unread_count, 0) > 0 THEN 1 ELSE 0 END) AS unread_session_count,
-        COUNT(*) AS session_count
-      FROM sessions
-      GROUP BY workspace_id
+    WITH
+    -- One per-session message count, computed once. Reused by both
+    -- `message_stats` (workspace-level total via SUM) and
+    -- `primary_session` (per-session ranking). Avoids scanning the
+    -- (potentially huge) `session_messages` table twice. Index
+    -- `idx_session_messages_sent_at(session_id, sent_at)` makes the
+    -- group-by index-only.
+    session_message_counts AS (
+      SELECT session_id, COUNT(*) AS message_count
+      FROM session_messages
+      GROUP BY session_id
     ),
-    message_stats AS (
+    -- Per-workspace session aggregates derived in a single sweep:
+    -- session_count, unread_session_count, message_count, last_user_msg.
+    -- One scan of `sessions` (covered by idx_sessions_workspace_id)
+    -- + one LEFT JOIN to the cached session_message_counts.
+    --
+    -- `last_user_message_at` intentionally MAXes across ALL sessions
+    -- (including hidden / action sessions). It signals "any user
+    -- activity in this workspace at all" — distinct from
+    -- `primary_session` below which excludes hidden / action sessions
+    -- because that is for choosing the displayed conversation title.
+    workspace_session_stats AS (
       SELECT
-        ws.workspace_id,
-        COUNT(*) AS message_count
-      FROM sessions ws
-      JOIN session_messages sm ON sm.session_id = ws.id
-      GROUP BY ws.workspace_id
+        s.workspace_id,
+        COUNT(*) AS session_count,
+        SUM(CASE WHEN COALESCE(s.unread_count, 0) > 0 THEN 1 ELSE 0 END) AS unread_session_count,
+        COALESCE(SUM(smc.message_count), 0) AS message_count,
+        MAX(s.last_user_message_at) AS last_user_message_at
+      FROM sessions s
+      LEFT JOIN session_message_counts smc ON smc.session_id = s.id
+      GROUP BY s.workspace_id
+    ),
+    -- Pick the "real" conversation per workspace: the non-hidden,
+    -- non-action session with the most messages. Ties broken by most
+    -- recent updated_at, then session id for determinism. Action /
+    -- hidden sessions (commit-and-push, create-pr, etc.) are excluded
+    -- so a fleeting one-off doesn't masquerade as the workspace's
+    -- topic.
+    primary_session AS (
+      SELECT session_id, workspace_id, session_title, session_agent_type
+      FROM (
+        SELECT
+          s.id AS session_id,
+          s.workspace_id,
+          s.title AS session_title,
+          s.agent_type AS session_agent_type,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.workspace_id
+            ORDER BY
+              COALESCE(smc.message_count, 0) DESC,
+              s.updated_at DESC,
+              s.id DESC
+          ) AS rn
+        FROM sessions s
+        LEFT JOIN session_message_counts smc ON smc.session_id = s.id
+        WHERE COALESCE(s.is_hidden, 0) = 0
+          AND s.action_kind IS NULL
+      )
+      WHERE rn = 1
     )
     SELECT
       w.id,
@@ -62,37 +140,50 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.directory_name,
       w.state,
       CASE
-        WHEN COALESCE(w.unread, 0) > 0 OR COALESCE(ss.unread_session_count, 0) > 0 THEN 1
+        WHEN COALESCE(w.unread, 0) > 0 OR COALESCE(wss.unread_session_count, 0) > 0 THEN 1
         ELSE 0
       END AS has_unread,
       COALESCE(w.unread, 0) AS workspace_unread,
-      COALESCE(ss.unread_session_count, 0) AS unread_session_count,
-      COALESCE(w.derived_status, 'in-progress') AS derived_status,
-      w.manual_status,
+      COALESCE(wss.unread_session_count, 0) AS unread_session_count,
+      COALESCE(w.status, 'in-progress') AS status,
       w.branch,
       w.initialization_parent_branch,
       w.intended_target_branch,
+      COALESCE(w.mode, 'worktree') AS mode,
       w.pinned_at,
       w.active_session_id,
       s.title AS active_session_title,
       s.agent_type AS active_session_agent_type,
       s.status AS active_session_status,
+      ps.session_id AS primary_session_id,
+      ps.session_title AS primary_session_title,
+      ps.session_agent_type AS primary_session_agent_type,
       w.pr_title,
+      COALESCE(w.pr_sync_state, 'none') AS pr_sync_state,
+      w.pr_url,
       w.archive_commit,
-      COALESCE(ss.session_count, 0) AS session_count,
-      COALESCE(ms.message_count, 0) AS message_count,
-      r.remote
+      COALESCE(wss.session_count, 0) AS session_count,
+      COALESCE(wss.message_count, 0) AS message_count,
+      r.remote,
+      r.forge_provider,
+      r.forge_login,
+      w.display_order AS display_order,
+      COALESCE(r.display_order, 0) AS repo_sidebar_order,
+      w.created_at,
+      w.updated_at,
+      wss.last_user_message_at,
+      w.setup_completed_at
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
-    LEFT JOIN session_stats ss ON ss.workspace_id = w.id
-    LEFT JOIN message_stats ms ON ms.workspace_id = w.id
+    LEFT JOIN workspace_session_stats wss ON wss.workspace_id = w.id
+    LEFT JOIN primary_session ps ON ps.workspace_id = w.id
 "#;
 
 pub fn load_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     let connection = db::read_conn()?;
     let sql = format!(
-        "{WORKSPACE_RECORD_SQL} ORDER BY datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
+        "{WORKSPACE_RECORD_SQL} ORDER BY w.display_order ASC, datetime(w.created_at) DESC, datetime(w.updated_at) DESC, w.id DESC"
     );
     let mut statement = connection.prepare(&sql)?;
 
@@ -132,6 +223,7 @@ pub fn load_archived_workspace_records() -> Result<Vec<WorkspaceRecord>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_initializing_workspace_and_session(
     repository: &repos::RepositoryRecord,
     workspace_id: &str,
@@ -139,12 +231,51 @@ pub(crate) fn insert_initializing_workspace_and_session(
     directory_name: &str,
     branch: &str,
     default_branch: &str,
+    status: WorkspaceStatus,
+    timestamp: &str,
+) -> Result<()> {
+    insert_initializing_workspace_and_session_with_mode(
+        repository,
+        workspace_id,
+        session_id,
+        directory_name,
+        branch,
+        default_branch,
+        WorkspaceMode::Worktree,
+        status,
+        timestamp,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_initializing_workspace_and_session_with_mode(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    branch: &str,
+    default_branch: &str,
+    mode: WorkspaceMode,
+    status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
         .transaction()
         .context("Failed to start create-workspace transaction")?;
+    let next_order = transaction
+        .query_row(
+            r#"
+                SELECT COALESCE(MAX(display_order), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?3
+                "#,
+            rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace display order")?;
 
     transaction
         .execute(
@@ -158,11 +289,13 @@ pub(crate) fn insert_initializing_workspace_and_session(
               state,
               initialization_parent_branch,
               intended_target_branch,
-              derived_status,
+              mode,
+              display_order,
+              status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'in-progress', 0, ?9, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
             "#,
             (
                 workspace_id,
@@ -173,6 +306,9 @@ pub(crate) fn insert_initializing_workspace_and_session(
                 WorkspaceState::Initializing,
                 default_branch,
                 default_branch,
+                mode,
+                next_order,
+                status,
                 timestamp,
             ),
         )
@@ -203,6 +339,50 @@ pub(crate) fn insert_initializing_workspace_and_session(
         .context("Failed to commit create-workspace transaction")
 }
 
+/// Atomically convert a local-mode workspace into a worktree-mode one.
+/// Used by the move-local-to-worktree flow once the new worktree
+/// directory + branch have been created on disk.
+pub(crate) fn convert_to_worktree(
+    workspace_id: &str,
+    directory_name: &str,
+    branch: &str,
+    intended_target_branch: &str,
+    initialization_parent_branch: &str,
+    timestamp: &str,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            r#"
+            UPDATE workspaces
+            SET mode = 'worktree',
+                directory_name = ?2,
+                branch = ?3,
+                intended_target_branch = ?4,
+                initialization_parent_branch = ?5,
+                updated_at = ?6
+            WHERE id = ?1 AND COALESCE(mode, 'worktree') = 'local'
+            "#,
+            (
+                workspace_id,
+                directory_name,
+                branch,
+                intended_target_branch,
+                initialization_parent_branch,
+                timestamp,
+            ),
+        )
+        .with_context(|| {
+            format!("Failed to convert workspace {workspace_id} from local to worktree")
+        })?;
+    if updated != 1 {
+        bail!(
+            "Workspace {workspace_id} could not be converted to worktree (already worktree or missing)"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn update_workspace_state(
     workspace_id: &str,
     state: WorkspaceState,
@@ -218,6 +398,27 @@ pub(crate) fn update_workspace_state(
 
     if updated_rows != 1 {
         bail!("Workspace state update affected {updated_rows} rows for {workspace_id}");
+    }
+
+    Ok(())
+}
+
+/// Stamp the workspace as having successfully run its setup script and
+/// flip it to `ready`. Distinct from `update_workspace_state` so the
+/// "skipped setup (no script)" path can stay timestamp-less — that's
+/// what lets the inspector tell apart "ran in another session" vs
+/// "never ran" after a restart.
+pub(crate) fn mark_setup_completed(workspace_id: &str, timestamp: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated_rows = connection
+        .execute(
+            "UPDATE workspaces SET state = ?2, setup_completed_at = ?3, updated_at = ?3 WHERE id = ?1",
+            (workspace_id, WorkspaceState::Ready, timestamp),
+        )
+        .context("Failed to mark workspace setup completed")?;
+
+    if updated_rows != 1 {
+        bail!("Setup-completion update affected {updated_rows} rows for {workspace_id}");
     }
 
     Ok(())
@@ -372,20 +573,33 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         has_unread: row.get::<_, i64>(8)? != 0,
         workspace_unread: row.get(9)?,
         unread_session_count: row.get(10)?,
-        derived_status: row.get(11)?,
-        manual_status: row.get(12)?,
-        branch: row.get(13)?,
-        initialization_parent_branch: row.get(14)?,
-        intended_target_branch: row.get(15)?,
+        status: row.get(11)?,
+        branch: row.get(12)?,
+        initialization_parent_branch: row.get(13)?,
+        intended_target_branch: row.get(14)?,
+        mode: row.get(15)?,
         pinned_at: row.get(16)?,
         active_session_id: row.get(17)?,
         active_session_title: row.get(18)?,
         active_session_agent_type: row.get(19)?,
         active_session_status: row.get(20)?,
-        pr_title: row.get(21)?,
-        archive_commit: row.get(22)?,
-        session_count: row.get(23)?,
-        message_count: row.get(24)?,
-        remote: row.get(25)?,
+        primary_session_id: row.get(21)?,
+        primary_session_title: row.get(22)?,
+        primary_session_agent_type: row.get(23)?,
+        pr_title: row.get(24)?,
+        pr_sync_state: row.get(25)?,
+        pr_url: row.get(26)?,
+        archive_commit: row.get(27)?,
+        session_count: row.get(28)?,
+        message_count: row.get(29)?,
+        remote: row.get(30)?,
+        forge_provider: row.get(31)?,
+        forge_login: row.get(32)?,
+        display_order: row.get(33)?,
+        repo_sidebar_order: row.get(34)?,
+        created_at: row.get(35)?,
+        updated_at: row.get(36)?,
+        last_user_message_at: row.get(37)?,
+        setup_completed_at: row.get(38)?,
     })
 }

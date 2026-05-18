@@ -25,14 +25,14 @@ pub(super) fn resolve_allowed_path(path: &Path, require_existing: bool) -> Resul
 
     let workspace_roots = allowed_workspace_roots()?;
 
-    if workspace_roots.is_empty() {
-        bail!("No workspace roots are available for in-app editing");
-    }
-
     if workspace_roots
         .iter()
         .any(|workspace_root| normalized_path.starts_with(workspace_root))
     {
+        return Ok(normalized_path);
+    }
+
+    if path_is_inside_known_workspace(path)? {
         return Ok(normalized_path);
     }
 
@@ -42,29 +42,54 @@ pub(super) fn resolve_allowed_path(path: &Path, require_existing: bool) -> Resul
     )
 }
 
+pub(super) fn path_is_inside_known_workspace(path: &Path) -> Result<bool> {
+    if !path.is_absolute() {
+        return Ok(false);
+    }
+    let normalized_path = canonicalize_missing_path(path)?;
+
+    for record in workspace_models::load_workspace_records()? {
+        let Ok(workspace_dir) = crate::workspace::helpers::workspace_path(&record) else {
+            continue;
+        };
+        let Ok(normalized_root) = canonicalize_missing_path(&workspace_dir) else {
+            continue;
+        };
+        if normalized_path.starts_with(normalized_root) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 pub(super) fn allowed_workspace_roots() -> Result<Vec<PathBuf>> {
     let mut workspace_roots = Vec::new();
 
     for record in workspace_models::load_workspace_records()? {
-        let workspace_dir =
-            crate::data_dir::workspace_dir(&record.repo_name, &record.directory_name)
-                .with_context(|| {
-                    format!(
-                        "Failed to resolve workspace directory for {}/{}",
-                        record.repo_name, record.directory_name
-                    )
-                })?;
+        let Ok(workspace_dir) = crate::workspace::helpers::workspace_path(&record) else {
+            // Malformed repo/directory name — skip rather than nuke the whole
+            // picker. Not user-actionable.
+            continue;
+        };
 
         if !workspace_dir.is_dir() {
             continue;
         }
 
-        workspace_roots.push(workspace_dir.canonicalize().with_context(|| {
-            format!(
-                "Failed to resolve workspace root {}",
-                workspace_dir.display()
-            )
-        })?);
+        // canonicalize can fail if a parent component vanishes mid-iteration
+        // (symlink chain broken, etc.). One broken workspace must not take
+        // the whole picker down — skip and keep going.
+        match workspace_dir.canonicalize() {
+            Ok(path) => workspace_roots.push(path),
+            Err(error) => {
+                tracing::warn!(
+                    path = %workspace_dir.display(),
+                    error = %error,
+                    "skipping unresolvable workspace root",
+                );
+            }
+        }
     }
 
     workspace_roots.sort();
@@ -83,13 +108,28 @@ pub(super) fn collect_workspace_files_for_mention(
         return Ok(());
     }
 
-    let mut entries = fs::read_dir(current_dir)
-        .with_context(|| {
-            format!(
-                "Failed to read workspace directory {}",
-                current_dir.display()
-            )
-        })?
+    let read_dir = match fs::read_dir(current_dir) {
+        Ok(iter) => iter,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Subdir vanished between walk start and descent (git checkout,
+            // rm -rf, etc.). Skip silently rather than aborting the whole
+            // walk — one missing dir shouldn't break the @-mention picker.
+            tracing::warn!(
+                path = %current_dir.display(),
+                "skipping missing workspace subdir during mention walk",
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to read workspace directory {}",
+                    current_dir.display()
+                )
+            })
+        }
+    };
+    let mut entries = read_dir
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| {
             format!(
@@ -258,13 +298,25 @@ pub(super) fn collect_editor_files(
         return Ok(());
     }
 
-    let mut entries = fs::read_dir(current_dir)
-        .with_context(|| {
-            format!(
-                "Failed to read workspace directory {}",
-                current_dir.display()
-            )
-        })?
+    let read_dir = match fs::read_dir(current_dir) {
+        Ok(iter) => iter,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                path = %current_dir.display(),
+                "skipping missing workspace subdir during editor walk",
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to read workspace directory {}",
+                    current_dir.display()
+                )
+            })
+        }
+    };
+    let mut entries = read_dir
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| {
             format!(

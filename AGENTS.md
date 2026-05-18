@@ -122,7 +122,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **Path alias**: `@/` maps to `src/`
 - **Styling**: Tailwind CSS v4 with oklch semantic color tokens (`bg-app-base`, `text-app-foreground`, etc.)
 - **UI**: shadcn/ui (base-nova), `lucide-react` icons. **No `@assistant-ui/react` or `react-virtuoso`** -- removed, do not re-introduce.
-- **Cursor**: Every clickable element MUST have `cursor-pointer`. This is already baked into base UI components (`Button`, `SidebarMenuButton`, `CommandItem`, `DropdownMenuItem`, `ContextMenuItem`, etc.). When adding custom clickable elements (e.g. `<div onClick>`), always include `cursor-pointer`.
+- **Cursor**: Clickable elements default to `cursor-pointer` (baked into base UI components; keep it on custom `<div onClick>` too). Users can flip the whole app back to the platform arrow via Appearance settings → "Use pointer cursors" (adds `.no-pointer-cursors` on `<html>`); don't bypass with inline `style={{ cursor }}`.
 - **Chat rendering**: `streamdown` + `use-stick-to-bottom`. Markdown overrides in `src/components/streamdown-components.tsx`.
 - **Rich text input**: Lexical in `src/features/composer/editor/`.
 - **File editor**: Monaco, lazy via `src/lib/monaco-runtime.ts`.
@@ -132,9 +132,21 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **Data dir**: `~/helmor/` (release) or `~/helmor-dev/` (debug). Override: `HELMOR_DATA_DIR`.
 - **macOS chrome**: Overlay title bar, traffic lights at (16, 24). Drag via `data-tauri-drag-region`.
 - **Serde**: `#[serde(rename_all = "camelCase")]` -- JSON fields match TypeScript directly.
+- **Persisting React Query data**: Every query is **in-memory only by default**. To persist a query across app restarts, set `meta: PERSIST_META` (alias for `{ persist: true }`) on its `queryOptions` / `useQuery` call. Only do this for data the user must see *immediately on cold start* (sidebar lists, identity chips). Never opt in large or fast-refetching queries — the persisted blob is read synchronously on boot. See `src/lib/query-client.ts` for the wiring; the `react-query.d.ts` augmentation closes `meta`'s shape so typos like `presist` fail at compile time.
+- **Backend → frontend notifications**: Always go through `UiMutationEvent` (`src-tauri/src/ui_sync/events.rs`). Add a typed variant, broadcast with `crate::ui_sync::publish(&app, ...)`, mirror the variant in `UiMutationEvent` in `src/lib/api.ts`, and handle it in `src/shell/hooks/use-ui-sync-bridge.ts` to invalidate the right React Query keys. Do NOT add ad-hoc `app.emit("custom-event", ...)` channels with their own component-level `listen(...)` -- they fragment cache invalidation, skip the global bridge, and are easy to leak.
 - **Clippy**: Must pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
 - **Perf**: `VITE_HELMOR_PERF_HUD=1` enables HUD + react-scan + long-frame tracker.
 - **Logging**: Dev defaults to `debug`. Override: `HELMOR_LOG=info|debug|error`. JSONL logs in `{data_dir}/logs/`.
+- **Bundled forge CLIs (`gh`, `glab`)**: Pinned + SHA256-verified in `sidecar/scripts/stage-vendor.ts`. To upgrade:
+  1. Bump `GH_VERSION` / `GLAB_VERSION`.
+  2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256`.
+  3. Wipe `sidecar/.bundle-cache/` and re-run `bun run build` in `sidecar/` to force re-download + verify.
+  Bump cadence: every release cycle if upstream has shipped a notable fix; immediately on security advisories. Pin so the auth-status JSON shape Helmor parses doesn't drift unexpectedly.
+- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. To upgrade:
+  1. Bump the version in `sidecar/package.json`, `cd sidecar && bun install`.
+  2. Compute the SHA256 of both arch tarballs (`shasum -a 256` on the cached `.tgz`) and update the table in `stage-vendor.ts` (key it under the new version string).
+  3. Wipe `sidecar/.bundle-cache/` and run `bun run build` in `sidecar/` to verify.
+  Both binaries are `bun build --compile` output (~200 MB each on macOS), so `maybeSignMacBinary(_, true)` is required — JSC needs `allow-jit` / `allow-unsigned-executable-memory` under hardened runtime. Run pipeline snapshot tests after every claude-code bump (`cd src-tauri && cargo test --tests`); the SDK event shape is the contract Helmor's accumulator depends on.
 
 ## 🚨 Code organization rules
 

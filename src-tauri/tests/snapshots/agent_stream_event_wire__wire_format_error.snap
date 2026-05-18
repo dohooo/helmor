@@ -1,0 +1,8 @@
+---
+source: tests/agent_stream_event_wire.rs
+expression: "to_value(AgentStreamEvent::Error\n{ message: \"Sidecar crashed\".into(), persisted: false, internal: true, })"
+---
+internal: true
+kind: error
+message: Sidecar crashed
+persisted: false

@@ -10,6 +10,7 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
+import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
 function formatStatusDescription(status: AppUpdateStatus): string {
 	if (!status.configured) {
@@ -38,6 +39,43 @@ function formatStatusDescription(status: AppUpdateStatus): string {
 	}
 }
 
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function DownloadProgressBar({ status }: { status: AppUpdateStatus }) {
+	if (status.stage !== "downloading") return null;
+	const progress = status.progress;
+	const downloaded = progress?.downloaded ?? 0;
+	const total = progress?.total ?? null;
+	const hasTotal = typeof total === "number" && total > 0;
+	const percent = hasTotal
+		? Math.min(100, Math.round((downloaded / total) * 100))
+		: null;
+
+	return (
+		<div className="mt-2 max-w-[280px]">
+			<div className="h-1 w-full overflow-hidden rounded-full bg-muted/40">
+				{percent !== null ? (
+					<div
+						className="h-full bg-foreground/70 transition-[width] duration-200 ease-out"
+						style={{ width: `${percent}%` }}
+					/>
+				) : (
+					<div className="h-full w-1/3 animate-pulse bg-foreground/50" />
+				)}
+			</div>
+			<div className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+				{hasTotal
+					? `${formatBytes(downloaded)} / ${formatBytes(total)} · ${percent}%`
+					: formatBytes(downloaded)}
+			</div>
+		</div>
+	);
+}
+
 export function AppUpdatesPanel() {
 	const [status, setStatus] = useState<AppUpdateStatus | null>(null);
 	const [checking, setChecking] = useState(false);
@@ -63,91 +101,101 @@ export function AppUpdatesPanel() {
 		};
 	}, []);
 
+	const stage = status?.stage;
+	const isAutoChecking = stage === "checking";
+	const isDownloading = stage === "downloading";
+	const isInstallingStage = stage === "installing";
+	const checkBusy = checking || isAutoChecking;
+	const installBusy = installing || isInstallingStage;
+	const anyBusy = checkBusy || isDownloading || installBusy;
+
+	const checkLabel = isDownloading
+		? "Downloading"
+		: installBusy
+			? "Installing"
+			: checkBusy
+				? "Checking"
+				: "Check now";
+
 	return (
-		<div className="flex flex-col gap-3">
-			<div className="rounded-xl border border-border/30 bg-muted/30 px-5 py-4">
-				<div className="flex items-start justify-between gap-4">
-					<div>
-						<div className="text-[13px] font-medium leading-snug text-foreground">
-							App Updates
-						</div>
-						<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
-							{status
-								? formatStatusDescription(status)
-								: "Loading updater status…"}
-						</div>
-						{status?.update && (
-							<div className="mt-2 text-[12px] text-muted-foreground">
-								Current {status.update.currentVersion} · Available{" "}
-								{status.update.version}
-							</div>
-						)}
-					</div>
-					<div className="flex shrink-0 items-center gap-2">
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => {
-								setChecking(true);
-								void checkForAppUpdate(true)
-									.then((nextStatus) => {
-										setStatus(nextStatus);
-										if (nextStatus.stage === "idle") {
-											toast.success("Helmor is up to date");
-										}
-										if (nextStatus.stage === "error") {
-											toast.error("Update check failed", {
-												description:
-													nextStatus.lastError ??
-													"Unable to check for updates.",
-											});
-										}
-									})
-									.finally(() => setChecking(false));
-							}}
-							disabled={checking || installing}
-						>
-							{checking ? (
-								<Loader2 className="size-3.5 animate-spin" />
-							) : (
-								<RefreshCw className="size-3.5" />
-							)}
-							Check now
-						</Button>
-						{status?.stage === "downloaded" && (
-							<Button
-								size="sm"
-								onClick={() => {
-									setInstalling(true);
-									void installDownloadedAppUpdate()
-										.then(setStatus)
-										.catch((error: unknown) => {
-											toast.error("Install failed", {
-												description:
-													error instanceof Error
-														? error.message
-														: "Unable to install the downloaded update.",
-											});
-										})
-										.finally(() => setInstalling(false));
-								}}
-								disabled={checking || installing}
-							>
-								Update and restart
-							</Button>
-						)}
-						{status?.update?.releaseUrl && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => void openUrl(status.update?.releaseUrl ?? "")}
-							>
-								Change log
-							</Button>
-						)}
-					</div>
-				</div>
+		<SettingsRow
+			align="start"
+			title="App Updates"
+			description={
+				<>
+					{status ? formatStatusDescription(status) : "Loading updater status…"}
+					{status?.update ? (
+						<SettingsNotice tone="info">
+							Current {status.update.currentVersion} · Available{" "}
+							{status.update.version}
+						</SettingsNotice>
+					) : null}
+					{status ? <DownloadProgressBar status={status} /> : null}
+				</>
+			}
+		>
+			<div className="flex items-center gap-2">
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => {
+						setChecking(true);
+						void checkForAppUpdate(true)
+							.then((nextStatus) => {
+								setStatus(nextStatus);
+								if (nextStatus.stage === "idle") {
+									toast.success("Helmor is up to date");
+								}
+								if (nextStatus.stage === "error") {
+									toast.error("Update check failed", {
+										description:
+											nextStatus.lastError ?? "Unable to check for updates.",
+									});
+								}
+							})
+							.finally(() => setChecking(false));
+					}}
+					disabled={anyBusy}
+				>
+					{anyBusy ? (
+						<Loader2 className="size-3.5 animate-spin" />
+					) : (
+						<RefreshCw className="size-3.5" />
+					)}
+					{checkLabel}
+				</Button>
+				{status?.stage === "downloaded" && (
+					<Button
+						size="sm"
+						onClick={() => {
+							setInstalling(true);
+							void installDownloadedAppUpdate()
+								.then(setStatus)
+								.catch((error: unknown) => {
+									toast.error("Install failed", {
+										description:
+											error instanceof Error
+												? error.message
+												: "Unable to install the downloaded update.",
+									});
+								})
+								.finally(() => setInstalling(false));
+						}}
+						disabled={anyBusy}
+					>
+						Update and restart
+					</Button>
+				)}
+				{status?.update?.releaseUrl && (
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => void openUrl(status.update?.releaseUrl ?? "")}
+					>
+						Change log
+					</Button>
+				)}
 			</div>
-		</div>
+		</SettingsRow>
 	);
 }

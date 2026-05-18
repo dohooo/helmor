@@ -138,6 +138,7 @@ pub fn is_listener_running() -> bool {
 mod tests {
     use super::*;
     use crate::data_dir::TEST_ENV_LOCK;
+    use crate::ui_sync::events::UiMutationEvent;
 
     #[test]
     fn socket_path_uses_run_dir() {
@@ -147,5 +148,55 @@ mod tests {
 
         let path = socket_path().unwrap();
         assert!(path.ends_with("run/ui-sync.sock"));
+    }
+
+    #[test]
+    fn envelope_parser_accepts_current_version() {
+        let line = serde_json::to_string(&UiMutationEnvelope::new(
+            UiMutationEvent::WorkspaceListChanged,
+        ))
+        .unwrap();
+        let envelope: UiMutationEnvelope = serde_json::from_str(&line).unwrap();
+        assert_eq!(envelope.version, UiMutationEnvelope::VERSION);
+    }
+
+    #[test]
+    fn envelope_parser_rejects_unsupported_version() {
+        // A v2 payload should still parse (forward-compat), but the version
+        // check at the call site is what gates publishing. Verify both halves.
+        let line = r#"{"version":99,"event":{"type":"workspaceListChanged"}}"#;
+        let envelope: UiMutationEnvelope = serde_json::from_str(line).unwrap();
+        assert_ne!(envelope.version, UiMutationEnvelope::VERSION);
+    }
+
+    #[test]
+    fn envelope_parser_rejects_garbage_json() {
+        let result = serde_json::from_str::<UiMutationEnvelope>("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn envelope_parser_rejects_unknown_event_type() {
+        let line = r#"{"version":1,"event":{"type":"madeUpEvent"}}"#;
+        let result = serde_json::from_str::<UiMutationEnvelope>(line);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_listener_running_returns_false_without_socket() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        // Socket file has not been created — listener must report false.
+        assert!(!is_listener_running());
+    }
+
+    #[test]
+    fn notify_running_app_returns_false_without_socket() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+        let result = notify_running_app(UiMutationEvent::WorkspaceListChanged).unwrap();
+        assert!(!result, "with no socket the call must succeed with false");
     }
 }

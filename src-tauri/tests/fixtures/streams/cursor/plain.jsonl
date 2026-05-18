@@ -1,0 +1,6 @@
+{"type":"cursor/agent_init","session_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","model":"composer-2","id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-a9091a36-7a6e-43ea-b4e4-c4f5ecd4769b","status":"RUNNING","id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-a9091a36-7a6e-43ea-b4e4-c4f5ecd4769b","message":{"role":"assistant","content":[{"type":"text","text":"2 "}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-a9091a36-7a6e-43ea-b4e4-c4f5ecd4769b","message":{"role":"assistant","content":[{"type":"text","text":"加 2 "}]},"id":"test-request"}
+{"type":"cursor/assistant","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-a9091a36-7a6e-43ea-b4e4-c4f5ecd4769b","message":{"role":"assistant","content":[{"type":"text","text":"等于 4。"}]},"id":"test-request"}
+{"type":"cursor/status","agent_id":"agent-e9721448-da96-44e4-b124-e01b2663c389","run_id":"run-a9091a36-7a6e-43ea-b4e4-c4f5ecd4769b","status":"FINISHED","id":"test-request"}

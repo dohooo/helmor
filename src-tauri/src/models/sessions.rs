@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -100,10 +100,132 @@ pub fn list_session_historical_records(session_id: &str) -> Result<Vec<Historica
     list_session_historical_records_with_connection(&connection, session_id)
 }
 
+/// Result of a windowed historical load: the tail-most records plus a flag
+/// indicating whether older records exist beyond what was returned.
+pub struct WindowedHistoricalRecords {
+    pub records: Vec<HistoricalRecord>,
+    pub has_more: bool,
+}
+
+/// Load the trailing `tail_limit` historical records for a session, ordered
+/// ascending (oldest -> newest within the window). When `tail_limit` is
+/// `None`, behaves like `list_session_historical_records` and reports
+/// `has_more = false`.
+pub fn list_session_historical_records_windowed(
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    let connection = db::read_conn()?;
+    list_session_historical_records_windowed_with_connection(&connection, session_id, tail_limit)
+}
+
+/// All `provider_session_id`s belonging to a workspace's Claude sessions.
+/// Includes hidden sessions — they can be unhidden and resumed later, so
+/// migrators (e.g. local→worktree cwd change) need to cover them too.
+pub fn list_claude_provider_session_ids(workspace_id: &str) -> Result<Vec<String>> {
+    let connection = db::read_conn()?;
+    let mut statement = connection.prepare(
+        r#"
+            SELECT provider_session_id
+            FROM sessions
+            WHERE workspace_id = ?1
+              AND agent_type = 'claude'
+              AND provider_session_id IS NOT NULL
+            "#,
+    )?;
+    let rows = statement.query_map([workspace_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn adjacent_visible_session_id(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let mut statement = transaction.prepare(
+        r#"
+            SELECT id FROM sessions
+            WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
+            ORDER BY datetime(created_at) ASC
+            "#,
+    )?;
+    let visible_session_ids = statement
+        .query_map([workspace_id], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let Some(index) = visible_session_ids
+        .iter()
+        .position(|candidate| candidate == session_id)
+    else {
+        return Ok(None);
+    };
+
+    Ok(visible_session_ids
+        .get(index + 1)
+        .or_else(|| {
+            index
+                .checked_sub(1)
+                .and_then(|prev| visible_session_ids.get(prev))
+        })
+        .cloned())
+}
+
 fn list_session_historical_records_with_connection(
     connection: &Connection,
     session_id: &str,
 ) -> Result<Vec<HistoricalRecord>> {
+    Ok(
+        list_session_historical_records_windowed_with_connection(connection, session_id, None)?
+            .records,
+    )
+}
+
+fn list_session_historical_records_windowed_with_connection(
+    connection: &Connection,
+    session_id: &str,
+    tail_limit: Option<usize>,
+) -> Result<WindowedHistoricalRecords> {
+    // Strategy:
+    //  - With `tail_limit`: count total rows so we know `has_more`, then
+    //    pull the trailing N rows via `ORDER BY ... DESC LIMIT N` and
+    //    reverse to restore chronological order. The DESC + LIMIT lets
+    //    SQLite stop early — for a 5000-msg session asking for the last
+    //    200 we touch ~200 rows, not 5000.
+    //  - Without `tail_limit`: original full scan.
+    if let Some(limit) = tail_limit {
+        let total: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM session_messages WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .context("Failed to count session messages")?;
+
+        let mut statement = connection.prepare(
+            r#"
+                SELECT
+                  sm.id,
+                  sm.role,
+                  sm.content,
+                  sm.created_at
+                FROM session_messages sm
+                WHERE sm.session_id = ?1
+                ORDER BY sm.sent_at DESC, sm.rowid DESC
+                LIMIT ?2
+                "#,
+        )?;
+
+        let rows = statement.query_map(
+            rusqlite::params![session_id, limit as i64],
+            map_historical_row,
+        )?;
+
+        let mut records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        records.reverse();
+        let has_more = (total as usize) > records.len();
+        return Ok(WindowedHistoricalRecords { records, has_more });
+    }
+
     let mut statement = connection.prepare(
         r#"
             SELECT
@@ -113,30 +235,33 @@ fn list_session_historical_records_with_connection(
               sm.created_at
             FROM session_messages sm
             WHERE sm.session_id = ?1
-            ORDER BY
-              COALESCE(julianday(sm.sent_at), julianday(sm.created_at)) ASC,
-              sm.rowid ASC
+            ORDER BY sm.sent_at ASC, sm.rowid ASC
             "#,
     )?;
 
-    let rows = statement.query_map([session_id], |row| {
-        let content: String = row.get(2)?;
-        // After the user_prompt migration the column is JSON-only. We still
-        // try-parse instead of unwrapping so a corrupted row can't bring the
-        // whole load down — `None` flows through to the adapter which renders
-        // a system "Event" placeholder.
-        let parsed_content = serde_json::from_str::<Value>(&content).ok();
+    let rows = statement.query_map([session_id], map_historical_row)?;
+    let records = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(WindowedHistoricalRecords {
+        records,
+        has_more: false,
+    })
+}
 
-        Ok(HistoricalRecord {
-            id: row.get(0)?,
-            role: row.get(1)?,
-            content,
-            parsed_content,
-            created_at: row.get(3)?,
-        })
-    })?;
+fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalRecord> {
+    let content: String = row.get(2)?;
+    // After the user_prompt migration the column is JSON-only. We still
+    // try-parse instead of unwrapping so a corrupted row can't bring the
+    // whole load down — `None` flows through to the adapter which renders
+    // a system "Event" placeholder.
+    let parsed_content = serde_json::from_str::<Value>(&content).ok();
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    Ok(HistoricalRecord {
+        id: row.get(0)?,
+        role: row.get(1)?,
+        content,
+        parsed_content,
+        created_at: row.get(3)?,
+    })
 }
 
 // ---- Session read/unread functions ----
@@ -183,7 +308,9 @@ pub(crate) fn mark_session_unread_in_transaction(
         )
         .with_context(|| format!("Failed to mark session {session_id} as unread"))?;
 
-    if updated_rows != 1 {
+    // 0 rows = session was deleted mid-flight; benign race, skip silently.
+    // >1 rows = duplicate primary key, genuinely broken schema.
+    if updated_rows > 1 {
         bail!("Session unread update affected {updated_rows} rows for session {session_id}");
     }
 
@@ -275,30 +402,77 @@ pub struct CreateSessionResponse {
     pub session_id: String,
 }
 
-fn default_session_title_for_action_kind(action_kind: Option<ActionKind>) -> &'static str {
-    match action_kind {
-        Some(kind) => kind.default_title(),
-        None => "Untitled",
+/// Forge-aware variant. Looks up the workspace's stored `forge_provider`
+/// so a GitLab workspace gets "Create MR" / "Open MR" instead of the
+/// GitHub-flavored defaults. Falls back to the plain `default_title` when
+/// we have no provider info (e.g. pre-migration rows).
+fn default_session_title_for_action_kind_with_workspace(
+    transaction: &Transaction<'_>,
+    workspace_id: &str,
+    action_kind: Option<ActionKind>,
+) -> Result<String> {
+    let Some(kind) = action_kind else {
+        return Ok("Untitled".to_string());
+    };
+
+    // Only CreatePr/OpenPr care about the forge nouns — skip the query
+    // otherwise.
+    if !matches!(kind, ActionKind::CreatePr | ActionKind::OpenPr) {
+        return Ok(kind.default_title().to_string());
     }
+
+    let provider: Option<String> = transaction
+        .query_row(
+            "SELECT r.forge_provider \
+             FROM workspaces w JOIN repos r ON r.id = w.repository_id \
+             WHERE w.id = ?1",
+            [workspace_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .with_context(|| format!("Failed to read forge_provider for {workspace_id}"))?
+        .flatten();
+
+    let change_request_name = match provider.as_deref() {
+        Some("gitlab") => "MR",
+        _ => "PR",
+    };
+    Ok(kind.default_title_for_change_request(change_request_name))
+}
+
+/// Optional per-session config carried at create time. Inspector helpers
+/// (Create PR/MR, Review) push the user's configured model/effort/fast-mode
+/// here so the new session row is born with the right values — the composer
+/// then reads them off the row via the normal `currentSession` chain instead
+/// of routing them through a transient pendingPromptForSession override.
+#[derive(Debug, Default, Clone)]
+pub struct CreateSessionOverrides<'a> {
+    pub model: Option<&'a str>,
+    pub effort_level: Option<&'a str>,
+    pub fast_mode: Option<bool>,
 }
 
 pub fn create_session(
     workspace_id: &str,
     action_kind: Option<ActionKind>,
     permission_mode: Option<&str>,
+    overrides: CreateSessionOverrides<'_>,
 ) -> Result<CreateSessionResponse> {
     let mut connection = db::write_conn()?;
 
-    // `model` is left NULL on create: the frontend owns model selection via
-    // `settings.defaultModelId` (kept valid by `useEnsureDefaultModel`), and
-    // the value gets persisted into `sessions.model` by the agent streaming
-    // finalizer on the first message. Reading settings here would be a
-    // redundant second source of truth.
-    let default_effort = settings::load_setting_value("app.default_effort")
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "high".to_string());
+    // Effort falls back to the user setting when the caller doesn't pin one
+    // (matches the historical behaviour). Callers that want to force a value
+    // — e.g. PR/MR creation using settings.prEffort — pass it via overrides.
+    let effort_level = match overrides.effort_level {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => settings::load_setting_value("app.default_effort")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "high".to_string()),
+    };
+    let model = overrides.model.filter(|s| !s.is_empty());
+    let fast_mode = overrides.fast_mode.unwrap_or(false);
 
     let transaction = connection
         .transaction()
@@ -319,21 +493,27 @@ pub fn create_session(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let title = default_session_title_for_action_kind(action_kind);
+    let title = default_session_title_for_action_kind_with_workspace(
+        &transaction,
+        workspace_id,
+        action_kind,
+    )?;
 
     transaction
         .execute(
             r#"
-            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level)
-            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, NULL, ?6)
+            INSERT INTO sessions (id, workspace_id, status, title, permission_mode, action_kind, model, effort_level, fast_mode)
+            VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             (
                 &session_id,
                 workspace_id,
-                title,
+                &title,
                 permission_mode.unwrap_or("default"),
                 action_kind,
-                &default_effort,
+                model,
+                &effort_level,
+                fast_mode as i64,
             ),
         )
         .context("Failed to create session")?;
@@ -370,6 +550,130 @@ pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     Ok(model.filter(|s| !s.is_empty()))
 }
 
+/// (model, agent_type) for a session — provider hint for `resolve_model`
+/// when ids like `"default"` are ambiguous.
+pub fn get_session_model_and_provider(
+    session_id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let conn = db::read_conn()?;
+    let row: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT model, agent_type FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("Failed to read model+provider for session {session_id}"))?;
+    Ok((
+        row.0.filter(|s| !s.is_empty()),
+        row.1.filter(|s| !s.is_empty()),
+    ))
+}
+
+/// Read the opaque `context_usage_meta` JSON for the composer's
+/// context-usage ring. Returns `Ok(None)` for missing rows OR empty meta —
+/// the ring renders a placeholder either way and the frontend RPC contract
+/// promises null on "not recorded yet". This matters for the create→fetch
+/// race and the delete-while-mounted race.
+pub fn get_session_context_usage(session_id: &str) -> Result<Option<String>> {
+    let conn = db::read_conn()?;
+    read_session_context_usage(&conn, session_id)
+}
+
+fn read_session_context_usage(conn: &Connection, session_id: &str) -> Result<Option<String>> {
+    let meta: Option<String> = match conn.query_row(
+        "SELECT context_usage_meta FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to read context_usage_meta for session {session_id}")
+            });
+        }
+    };
+    Ok(meta.filter(|s| !s.is_empty()))
+}
+
+/// Read the opaque `codex_goal_meta` JSON for the panel-header goal banner.
+/// `None` means no active goal (cleared, never set, or unknown session).
+pub fn get_session_codex_goal(session_id: &str) -> Result<Option<String>> {
+    let conn = db::read_conn()?;
+    let meta: Option<String> = match conn.query_row(
+        "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to read codex_goal_meta for session {session_id}")
+            });
+        }
+    };
+    Ok(meta.filter(|s| !s.is_empty()))
+}
+
+/// One row in `list_session_drafts`. The `state` payload is whatever
+/// JSON the frontend stored — opaque to Rust (Lexical SerializedEditorState
+/// for chat composer drafts). Empty / NULL rows are filtered out before
+/// returning so the caller never has to distinguish "no draft" from
+/// "empty-string draft".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDraftRow {
+    pub session_id: String,
+    pub draft_state: String,
+}
+
+/// Bulk-load every session that currently has a non-empty draft. Called
+/// once at app boot to hydrate the in-memory draft map; subsequent
+/// reads / writes go through the per-session `set_session_draft` path.
+pub fn list_session_drafts() -> Result<Vec<SessionDraftRow>> {
+    let conn = db::read_conn()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, draft_state FROM sessions \
+             WHERE draft_state IS NOT NULL AND draft_state <> ''",
+        )
+        .context("Failed to prepare list_session_drafts query")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SessionDraftRow {
+                session_id: row.get(0)?,
+                draft_state: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            })
+        })
+        .context("Failed to query session drafts")?;
+    let mut out = Vec::new();
+    for row in rows {
+        let row = row.context("Failed to read draft row")?;
+        if !row.draft_state.is_empty() {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+/// Persist (or clear) a single session's draft. Pass `None` to clear.
+/// Returns `Ok(false)` if the session row doesn't exist — caller can
+/// silently drop the write rather than surface an error.
+pub fn set_session_draft(session_id: &str, draft_state: Option<&str>) -> Result<bool> {
+    let conn = db::write_conn()?;
+    // Treat "" as "clear" — frontend can't always send None cleanly
+    // through the IPC layer, and the loader filter already drops empties.
+    let normalized = draft_state.map(str::trim).filter(|s| !s.is_empty());
+    let updated = conn
+        .execute(
+            "UPDATE sessions SET draft_state = ?1 WHERE id = ?2",
+            (normalized, session_id),
+        )
+        .with_context(|| format!("Failed to update draft for session {session_id}"))?;
+    Ok(updated > 0)
+}
+
 pub fn rename_session(session_id: &str, title: &str) -> Result<()> {
     let connection = db::write_conn()?;
 
@@ -402,6 +706,21 @@ pub fn hide_session(session_id: &str) -> Result<()> {
         )
         .with_context(|| format!("Failed to find session {session_id}"))?;
 
+    // If this was the workspace's active session, switch to its right neighbor,
+    // falling back to the left neighbor when closing the rightmost tab.
+    let current_active: Option<String> = transaction
+        .query_row(
+            "SELECT active_session_id FROM workspaces WHERE id = ?1",
+            [&workspace_id],
+            |row| row.get(0),
+        )
+        .context("Failed to read active session for workspace")?;
+    let next_session_id = if current_active.as_deref() == Some(session_id) {
+        adjacent_visible_session_id(&transaction, &workspace_id, session_id)?
+    } else {
+        None
+    };
+
     transaction
         .execute(
             "UPDATE sessions SET is_hidden = 1 WHERE id = ?1",
@@ -414,29 +733,7 @@ pub fn hide_session(session_id: &str) -> Result<()> {
     // workspace flag can fall off too when this was the last unread session.
     mark_session_read_in_transaction(&transaction, session_id)?;
 
-    // If this was the workspace's active session, switch to the next visible one
-    let current_active: Option<String> = transaction
-        .query_row(
-            "SELECT active_session_id FROM workspaces WHERE id = ?1",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .context("Failed to read active session for workspace")?;
-
     if current_active.as_deref() == Some(session_id) {
-        let next_session_id: Option<String> = transaction
-            .query_row(
-                r#"
-                SELECT id FROM sessions
-                WHERE workspace_id = ?1 AND COALESCE(is_hidden, 0) = 0
-                ORDER BY datetime(created_at) ASC
-                LIMIT 1
-                "#,
-                [&workspace_id],
-                |row| row.get(0),
-            )
-            .ok();
-
         transaction
             .execute(
                 "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2",
@@ -474,6 +771,24 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         )
         .ok();
 
+    let current_active: Option<String> = if let Some(ws_id) = &workspace_id {
+        transaction
+            .query_row(
+                "SELECT active_session_id FROM workspaces WHERE id = ?1",
+                [ws_id],
+                |row| row.get(0),
+            )
+            .ok()
+    } else {
+        None
+    };
+    let next_session_id = match (&workspace_id, current_active.as_deref()) {
+        (Some(ws_id), Some(active_id)) if active_id == session_id => {
+            adjacent_visible_session_id(&transaction, ws_id, session_id)?
+        }
+        _ => None,
+    };
+
     transaction
         .execute(
             "DELETE FROM session_messages WHERE session_id = ?1",
@@ -484,14 +799,14 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
         .context("Failed to delete session")?;
 
-    // Clear active_session_id if it pointed to the deleted session
+    // If this was active, persist the same right-then-left tab fallback as the UI.
     if let Some(ws_id) = &workspace_id {
         transaction
             .execute(
-                "UPDATE workspaces SET active_session_id = NULL WHERE id = ?1 AND active_session_id = ?2",
-                (ws_id, session_id),
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = ?2 AND active_session_id = ?3",
+                (next_session_id.as_deref(), ws_id, session_id),
             )
-            .context("Failed to clear active session")?;
+            .context("Failed to update active session")?;
     }
 
     transaction
@@ -566,8 +881,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state, derived_status) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, display_order) VALUES ('w1', 'r1', 'test-dir', 'active', 'in-progress', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         ).unwrap();
         conn.execute(
             "INSERT INTO sessions (id, workspace_id, status, title) VALUES ('s1', 'w1', 'idle', 'Test Session')",
@@ -594,6 +909,51 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Test Session");
+    }
+
+    #[test]
+    fn windowed_loader_returns_tail_and_reports_has_more() {
+        // Tail-window load: ask for the last N records out of M (where M > N).
+        // The query should:
+        //   - Return exactly N records.
+        //   - Restore chronological order (oldest -> newest within the window).
+        //   - Report has_more = true since older records exist.
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        for i in 1..=10 {
+            let id = format!("m{i:02}");
+            // sent_at lets us assert ordering deterministically; rowid would
+            // already do it but the production query orders on sent_at first.
+            let sent_at = format!("2026-01-01T00:00:{i:02}");
+            conn.execute(
+                "INSERT INTO session_messages (id, session_id, role, content, sent_at) VALUES (?1, 's1', 'user', '\"x\"', ?2)",
+                [&id, &sent_at],
+            )
+            .unwrap();
+        }
+
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(3)).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["m08", "m09", "m10"],
+            "tail window should return the trailing rows in chronological order",
+        );
+        assert!(has_more, "older records exist beyond the window");
+
+        // Window larger than the row count: returns everything, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", Some(100))
+                .unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
+
+        // No window: full scan, has_more = false.
+        let WindowedHistoricalRecords { records, has_more } =
+            list_session_historical_records_windowed_with_connection(&conn, "s1", None).unwrap();
+        assert_eq!(records.len(), 10);
+        assert!(!has_more);
     }
 
     #[test]
@@ -639,7 +999,19 @@ mod tests {
     fn seed_two_sessions(conn: &Connection) {
         seed_with_active_session(conn);
         conn.execute(
+            "UPDATE sessions SET created_at = '2026-01-01T00:00:00', updated_at = '2026-01-01T00:00:00' WHERE id = 's1'",
+            [],
+        ).unwrap();
+        conn.execute(
             "INSERT INTO sessions (id, workspace_id, status, title, created_at, updated_at) VALUES ('s2', 'w1', 'idle', 'Second Session', '2026-01-02T00:00:00', '2026-01-02T00:00:00')",
+            [],
+        ).unwrap();
+    }
+
+    fn seed_three_sessions(conn: &Connection) {
+        seed_two_sessions(conn);
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, status, title, created_at, updated_at) VALUES ('s3', 'w1', 'idle', 'Third Session', '2026-01-03T00:00:00', '2026-01-03T00:00:00')",
             [],
         ).unwrap();
     }
@@ -726,6 +1098,26 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_visible_session_prefers_right_then_left() {
+        let (mut conn, _dir) = test_db();
+        seed_three_sessions(&conn);
+        let transaction = conn.transaction().unwrap();
+
+        assert_eq!(
+            adjacent_visible_session_id(&transaction, "w1", "s1").unwrap(),
+            Some("s2".to_string())
+        );
+        assert_eq!(
+            adjacent_visible_session_id(&transaction, "w1", "s2").unwrap(),
+            Some("s3".to_string())
+        );
+        assert_eq!(
+            adjacent_visible_session_id(&transaction, "w1", "s3").unwrap(),
+            Some("s2".to_string())
+        );
+    }
+
+    #[test]
     fn delete_session_clears_active_session_id() {
         let (conn, _dir) = test_db();
         seed_with_active_session(&conn);
@@ -743,6 +1135,35 @@ mod tests {
 
         assert_eq!(get_active_session_id(&conn, "w1"), None);
         assert_eq!(count_sessions(&conn, "w1"), 0);
+    }
+
+    #[test]
+    fn delete_active_session_switches_to_adjacent_visible_session() {
+        let (mut conn, _dir) = test_db();
+        seed_three_sessions(&conn);
+        conn.execute(
+            "UPDATE workspaces SET active_session_id = 's2' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+
+        let transaction = conn.transaction().unwrap();
+        let next_session_id = adjacent_visible_session_id(&transaction, "w1", "s2").unwrap();
+        transaction
+            .execute("DELETE FROM session_messages WHERE session_id = 's2'", [])
+            .unwrap();
+        transaction
+            .execute("DELETE FROM sessions WHERE id = 's2'", [])
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE workspaces SET active_session_id = ?1 WHERE id = 'w1' AND active_session_id = 's2'",
+                [next_session_id.as_deref()],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+
+        assert_eq!(get_active_session_id(&conn, "w1"), Some("s3".to_string()));
     }
 
     #[test]
@@ -794,16 +1215,75 @@ mod tests {
     }
 
     #[test]
-    fn action_session_uses_local_default_title() {
-        assert_eq!(
-            default_session_title_for_action_kind(Some(ActionKind::CreatePr)),
-            "Create PR"
-        );
-        assert_eq!(
-            default_session_title_for_action_kind(Some(ActionKind::CommitAndPush)),
-            "Commit and Push"
-        );
-        assert_eq!(default_session_title_for_action_kind(None), "Untitled");
+    fn action_session_title_uses_mr_wording_on_gitlab() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute(
+            "UPDATE repos SET forge_provider = 'gitlab' WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+
+        let gitlab_title = default_session_title_for_action_kind_with_workspace(
+            &tx,
+            "w1",
+            Some(ActionKind::CreatePr),
+        )
+        .unwrap();
+        assert_eq!(gitlab_title, "Create MR");
+
+        let open_title = default_session_title_for_action_kind_with_workspace(
+            &tx,
+            "w1",
+            Some(ActionKind::OpenPr),
+        )
+        .unwrap();
+        assert_eq!(open_title, "Open MR");
+
+        // Non-PR kinds still use their normal title.
+        let merge_title = default_session_title_for_action_kind_with_workspace(
+            &tx,
+            "w1",
+            Some(ActionKind::Merge),
+        )
+        .unwrap();
+        assert_eq!(merge_title, "Merge");
+
+        // No action kind → "Untitled".
+        let untitled =
+            default_session_title_for_action_kind_with_workspace(&tx, "w1", None).unwrap();
+        assert_eq!(untitled, "Untitled");
+    }
+
+    #[test]
+    fn action_session_title_keeps_pr_wording_on_github_or_missing_provider() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        let tx = conn.unchecked_transaction().unwrap();
+
+        // forge_provider is NULL (legacy row) → default to PR wording.
+        let null_title = default_session_title_for_action_kind_with_workspace(
+            &tx,
+            "w1",
+            Some(ActionKind::CreatePr),
+        )
+        .unwrap();
+        assert_eq!(null_title, "Create PR");
+
+        // forge_provider = 'github' → also PR.
+        tx.execute(
+            "UPDATE repos SET forge_provider = 'github' WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
+        let gh_title = default_session_title_for_action_kind_with_workspace(
+            &tx,
+            "w1",
+            Some(ActionKind::CreatePr),
+        )
+        .unwrap();
+        assert_eq!(gh_title, "Create PR");
     }
 
     #[test]
@@ -882,5 +1362,49 @@ mod tests {
             .filter_map(Result::ok)
             .collect();
         assert_eq!(roles, vec!["user", "assistant"]);
+    }
+
+    #[test]
+    fn read_session_context_usage_handles_missing_session() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        // No row for "ghost" — must be Ok(None), NOT an error.
+        let meta = read_session_context_usage(&conn, "ghost").unwrap();
+        assert_eq!(meta, None);
+    }
+
+    #[test]
+    fn read_session_context_usage_returns_none_for_null_meta() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        // Seeded session has context_usage_meta NULL by default.
+        let meta = read_session_context_usage(&conn, "s1").unwrap();
+        assert_eq!(meta, None);
+    }
+
+    #[test]
+    fn read_session_context_usage_returns_stored_string() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute(
+            "UPDATE sessions SET context_usage_meta = ?1 WHERE id = 's1'",
+            [r#"{"totalTokens":7}"#],
+        )
+        .unwrap();
+        let meta = read_session_context_usage(&conn, "s1").unwrap();
+        assert_eq!(meta.as_deref(), Some(r#"{"totalTokens":7}"#));
+    }
+
+    #[test]
+    fn read_session_context_usage_filters_empty_string_to_none() {
+        let (conn, _dir) = test_db();
+        seed(&conn);
+        conn.execute(
+            "UPDATE sessions SET context_usage_meta = '' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+        let meta = read_session_context_usage(&conn, "s1").unwrap();
+        assert_eq!(meta, None);
     }
 }

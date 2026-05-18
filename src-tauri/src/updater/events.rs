@@ -25,6 +25,13 @@ pub struct UpdateInfoSnapshot {
     pub release_url: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatusSnapshot {
@@ -35,6 +42,7 @@ pub struct UpdateStatusSnapshot {
     pub last_error: Option<String>,
     pub last_attempt_at: Option<String>,
     pub downloaded_at: Option<String>,
+    pub progress: Option<DownloadProgress>,
 }
 
 impl UpdateStatusSnapshot {
@@ -47,6 +55,7 @@ impl UpdateStatusSnapshot {
             last_error: None,
             last_attempt_at: None,
             downloaded_at: None,
+            progress: None,
         }
     }
 }

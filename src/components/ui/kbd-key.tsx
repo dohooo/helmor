@@ -1,5 +1,9 @@
 import {
 	ArrowBigUp,
+	ArrowDown,
+	ArrowLeft,
+	ArrowRight,
+	ArrowUp,
 	Command,
 	CornerDownLeft,
 	Delete,
@@ -27,6 +31,10 @@ const SHARED_ICON_MAP: Record<string, IconComponent> = {
 	delete: Delete,
 	"⌫": Delete,
 	space: Space,
+	"↑": ArrowUp,
+	"↓": ArrowDown,
+	"←": ArrowLeft,
+	"→": ArrowRight,
 };
 
 /**
@@ -49,6 +57,11 @@ function resolveKey(
 		return isMac()
 			? { kind: "icon", icon: Option }
 			: { kind: "text", text: "Alt" };
+	}
+	if (lower === "control" || lower === "ctrl" || lower === "⌃") {
+		return isMac()
+			? { kind: "text", text: "⌃" }
+			: { kind: "text", text: "Ctrl" };
 	}
 	const shared = SHARED_ICON_MAP[lower];
 	if (shared) {

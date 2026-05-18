@@ -14,3 +14,16 @@ export function isAbortError(err: unknown): boolean {
 	if (typeof e.message === "string" && /abort/i.test(e.message)) return true;
 	return false;
 }
+
+/**
+ * Detect "Query closed before response received" — a transient Claude SDK
+ * race where the claude-code child is torn down (session swap, child exit)
+ * between a control-protocol request and its reply. Caller retries once.
+ */
+export function isQueryClosedTransient(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	const msg = (err as { message?: unknown }).message;
+	return (
+		typeof msg === "string" && msg.includes("Query closed before response")
+	);
+}

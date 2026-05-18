@@ -12,7 +12,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::{github::graphql::parse_github_remote, models::workspaces as workspace_models};
+use crate::{forge::remote::parse_remote, models::workspaces as workspace_models};
 
 pub mod github_rest;
 
@@ -43,10 +43,10 @@ pub struct ExistingHelmorWorkspace {
 /// A renamed fork (`fork-user/helmor-plus`) is deliberately NOT matched —
 /// those users don't need this wizard.
 pub(crate) fn matches_helmor_remote(remote_url: &str) -> bool {
-    let Some((_, name)) = parse_github_remote(remote_url) else {
+    let Some(remote) = parse_remote(remote_url) else {
         return false;
     };
-    name.eq_ignore_ascii_case(HELMOR_UPSTREAM_REPO)
+    remote.host == "github.com" && remote.repo.eq_ignore_ascii_case(HELMOR_UPSTREAM_REPO)
 }
 
 /// Find the most-recently-created local workspace that points at the helmor

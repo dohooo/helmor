@@ -9,6 +9,7 @@
 //! through [`read_conn`] / [`write_conn`] or the closure helpers
 //! [`read`] / [`write_transaction`].
 use std::collections::HashMap;
+use std::panic::Location;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -141,7 +142,21 @@ pub fn init_pools() -> Result<()> {
 /// Ensure pools exist and point at the current `HELMOR_DATA_DIR`. Rebuilds
 /// transparently if the data dir has changed (tests) or if pools were
 /// never built (first call).
+///
+/// Prod fast path skips `db_path()` resolution: pools are built once at
+/// startup and never swapped. Tests still resolve every call so they can
+/// hot-swap `HELMOR_DATA_DIR`.
 fn with_bundle<T>(f: impl FnOnce(&PoolBundle) -> Result<T>) -> Result<T> {
+    #[cfg(not(test))]
+    {
+        let guard = pool_slot()
+            .read()
+            .map_err(|_| anyhow!("pool lock poisoned"))?;
+        if let Some(bundle) = guard.as_ref() {
+            return f(bundle);
+        }
+    }
+
     let current_path = crate::data_dir::db_path()?;
 
     {
@@ -180,7 +195,12 @@ const SLOW_BORROW_WARN_MS: u128 = 100;
 
 /// Borrow a read connection from the read pool. WAL lets multiple readers
 /// proceed concurrently and never block the writer.
+#[track_caller]
 pub fn read_conn() -> Result<PooledConn> {
+    // Capture caller OUTSIDE the closure: `#[track_caller]` only propagates
+    // across the direct call boundary, so calling `Location::caller()`
+    // inside `with_bundle`'s closure would resolve to db.rs itself.
+    let caller = Location::caller();
     with_bundle(|bundle| {
         let start = std::time::Instant::now();
         let conn = bundle
@@ -192,6 +212,8 @@ pub fn read_conn() -> Result<PooledConn> {
             tracing::warn!(
                 elapsed_ms,
                 pool_state = ?bundle.read.state(),
+                caller_file = caller.file(),
+                caller_line = caller.line(),
                 "db: slow read_conn borrow"
             );
         }
@@ -202,13 +224,17 @@ pub fn read_conn() -> Result<PooledConn> {
 /// Borrow the writer connection. Pool `max_size = 1`, so callers serialize
 /// at the pool layer — no SQLITE_BUSY from intra-process contention.
 /// Hold for as short as possible; long-held writes starve all other writers.
+#[track_caller]
 pub fn write_conn() -> Result<PooledConn> {
+    let caller = Location::caller();
     with_bundle(|bundle| {
         let start = std::time::Instant::now();
         let conn = bundle.write.get().map_err(|e| {
             tracing::error!(
                 elapsed_ms = start.elapsed().as_millis(),
                 pool_state = ?bundle.write.state(),
+                caller_file = caller.file(),
+                caller_line = caller.line(),
                 "db: write_conn borrow failed (pool timeout? holder stuck?): {e}"
             );
             anyhow!("Failed to borrow write connection: {e}")
@@ -218,6 +244,8 @@ pub fn write_conn() -> Result<PooledConn> {
             tracing::warn!(
                 elapsed_ms,
                 pool_state = ?bundle.write.state(),
+                caller_file = caller.file(),
+                caller_line = caller.line(),
                 "db: slow write_conn borrow — another writer held the pool"
             );
         }

@@ -87,6 +87,73 @@ impl ToSql for WorkspaceState {
 /// enforced by `sql_filter_agrees_with_rust_predicate` below.
 pub const OPERATIONAL_FILTER: &str = "NOT IN ('archived', 'initializing')";
 
+/// How the workspace's filesystem is provisioned. `Worktree` = a
+/// dedicated `git worktree` directory with its own auto-named branch
+/// (default + most-common). `Local` = operate directly on the source
+/// repo's root path; multiple Local workspaces can coexist as parallel
+/// conversations over the same disk.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMode {
+    #[default]
+    Worktree,
+    Local,
+}
+
+impl WorkspaceMode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Worktree => "worktree",
+            Self::Local => "local",
+        }
+    }
+}
+
+impl fmt::Display for WorkspaceMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug)]
+pub struct UnknownWorkspaceMode(pub String);
+
+impl fmt::Display for UnknownWorkspaceMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown workspace mode: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownWorkspaceMode {}
+
+impl FromStr for WorkspaceMode {
+    type Err = UnknownWorkspaceMode;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "worktree" => Ok(Self::Worktree),
+            "local" => Ok(Self::Local),
+            other => Err(UnknownWorkspaceMode(other.to_string())),
+        }
+    }
+}
+
+impl FromSql for WorkspaceMode {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let s = value.as_str()?;
+        s.parse()
+            .map_err(|e: UnknownWorkspaceMode| FromSqlError::Other(Box::new(e)))
+    }
+}
+
+impl ToSql for WorkspaceMode {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Borrowed(ValueRef::Text(
+            self.as_str().as_bytes(),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +181,57 @@ mod tests {
             let round: WorkspaceState = serde_json::from_str(&json).unwrap();
             assert_eq!(round, *s);
         }
+    }
+
+    #[test]
+    fn workspace_mode_round_trips_through_string() {
+        for mode in [WorkspaceMode::Worktree, WorkspaceMode::Local] {
+            assert_eq!(WorkspaceMode::from_str(mode.as_str()).unwrap(), mode);
+        }
+    }
+
+    #[test]
+    fn workspace_mode_default_is_worktree() {
+        assert_eq!(WorkspaceMode::default(), WorkspaceMode::Worktree);
+    }
+
+    #[test]
+    fn workspace_mode_serializes_as_snake_case() {
+        for mode in [WorkspaceMode::Worktree, WorkspaceMode::Local] {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(json, format!("\"{}\"", mode.as_str()));
+            let round: WorkspaceMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(round, mode);
+        }
+    }
+
+    #[test]
+    fn workspace_mode_rejects_unknown_strings() {
+        assert!(WorkspaceMode::from_str("worktree").is_ok());
+        assert!(WorkspaceMode::from_str("local").is_ok());
+        assert!(WorkspaceMode::from_str("WORKTREE").is_err());
+        assert!(WorkspaceMode::from_str("hybrid").is_err());
+        assert!(WorkspaceMode::from_str("").is_err());
+    }
+
+    #[test]
+    fn workspace_mode_round_trips_through_sqlite() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE t (mode TEXT NOT NULL)", [])
+            .unwrap();
+        for mode in [WorkspaceMode::Worktree, WorkspaceMode::Local] {
+            conn.execute("INSERT INTO t (mode) VALUES (?1)", [mode])
+                .unwrap();
+        }
+        let mut rows: Vec<WorkspaceMode> = conn
+            .prepare("SELECT mode FROM t ORDER BY mode")
+            .unwrap()
+            .query_map([], |r| r.get::<_, WorkspaceMode>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows.sort_by_key(|m| m.as_str());
+        assert_eq!(rows, vec![WorkspaceMode::Local, WorkspaceMode::Worktree]);
     }
 
     #[test]

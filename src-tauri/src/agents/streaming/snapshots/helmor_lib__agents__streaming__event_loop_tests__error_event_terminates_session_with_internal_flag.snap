@@ -1,0 +1,16 @@
+---
+source: src/agents/streaming/event_loop_tests.rs
+expression: entries
+---
+- event_type: system
+  emitted:
+    - kind: Update
+      messages: []
+  side_effects: []
+- event_type: error
+  emitted:
+    - kind: Error
+      message: Sidecar lost connection
+      persisted: true
+      internal: true
+  side_effects: []

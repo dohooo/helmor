@@ -141,7 +141,7 @@ export function CopyMessageButton({
 			size="icon-xs"
 			aria-label={ariaLabel}
 			onClick={handleCopy}
-			className={className}
+			className={`transition-none ${className ?? ""}`}
 		>
 			{copied ? (
 				<Check className="size-3" strokeWidth={2} />

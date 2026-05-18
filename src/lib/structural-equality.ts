@@ -127,6 +127,12 @@ export function partStructurallyEqual(
 			if (a.source.kind === "base64") {
 				return a.source.data === (ib.source as typeof a.source).data;
 			}
+			if (a.source.kind === "file") {
+				return (
+					a.source.path ===
+					(ib.source as Extract<ImagePart["source"], { kind: "file" }>).path
+				);
+			}
 			return (
 				(a.source as { url: string }).url === (ib.source as { url: string }).url
 			);

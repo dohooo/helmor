@@ -11,7 +11,7 @@ test.describe("workspace sidebar", () => {
 			name: "Workspace sidebar",
 		});
 		const collapseButton = app.getByRole("button", {
-			name: "Collapse sidebar",
+			name: "Collapse left sidebar",
 		});
 
 		await expect(sidebar).toBeVisible();
@@ -21,7 +21,9 @@ test.describe("workspace sidebar", () => {
 
 		await expect(sidebar).toHaveCount(0);
 
-		const expandButton = app.getByRole("button", { name: "Expand sidebar" });
+		const expandButton = app.getByRole("button", {
+			name: "Expand left sidebar",
+		});
 		await expect(expandButton).toBeVisible();
 
 		await expandButton.click();

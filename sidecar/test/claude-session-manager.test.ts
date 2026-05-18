@@ -22,13 +22,6 @@ process.env.HELMOR_LOG_DIR = resolve(tmpdir(), "helmor-sidecar-test-logs");
 // ---------------------------------------------------------------------------
 
 type MockQueryResult = AsyncIterable<unknown> & {
-	supportedModels?: () => Promise<
-		Array<{
-			value: string;
-			displayName?: string;
-			supportedEffortLevels?: string[];
-		}>
-	>;
 	supportedCommands?: () => Promise<
 		Array<{
 			name: string;
@@ -36,8 +29,28 @@ type MockQueryResult = AsyncIterable<unknown> & {
 			argumentHint?: string;
 		}>
 	>;
+	getContextUsage?: () => Promise<unknown>;
 	close?: () => void;
 };
+
+type MockHookFn = (
+	input: { hook_event_name: string; tool_name: string },
+	toolUseID: string,
+) => Promise<{
+	hookSpecificOutput?: Record<string, unknown>;
+}>;
+
+type MockCanUseToolFn = (
+	toolName: string,
+	input: Record<string, unknown>,
+	options: {
+		signal: AbortSignal;
+		toolUseID: string;
+		suggestions?: unknown[];
+		title?: string;
+		description?: string;
+	},
+) => Promise<unknown>;
 
 type MockQueryImpl = (options: {
 	prompt?: unknown;
@@ -54,6 +67,10 @@ type MockQueryImpl = (options: {
 			},
 			options: { signal: AbortSignal },
 		) => Promise<{ action: string; content?: Record<string, unknown> }>;
+		hooks?: {
+			PreToolUse?: Array<{ hooks: MockHookFn[] }>;
+		};
+		canUseTool?: MockCanUseToolFn;
 	};
 }) => MockQueryResult;
 
@@ -147,18 +164,15 @@ function emptyAsyncIterable(): AsyncIterable<unknown> {
 
 function makeMockQuery({
 	stream = [],
-	supportedModels,
 	supportedCommands,
 	close,
 }: {
 	stream?: readonly unknown[];
-	supportedModels?: MockQueryResult["supportedModels"];
 	supportedCommands?: MockQueryResult["supportedCommands"];
 	close?: () => void;
 } = {}): MockQueryResult {
 	const iterable = asyncIterableFrom(stream);
 	return {
-		supportedModels,
 		supportedCommands,
 		close: close ?? (() => undefined),
 		[Symbol.asyncIterator]: () => iterable[Symbol.asyncIterator](),
@@ -214,54 +228,264 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
 
-		// One event per SDK message plus a trailing `end`
-		expect(captured).toHaveLength(sdkMessages.length + 1);
+		// One passthrough per SDK message, plus an optional
+		// `contextUsageUpdated` (emitted when the terminal result carries
+		// usage data — most fixtures do), plus a trailing `end`.
+		const withoutCtxUsage = captured.filter(
+			(e) => e.type !== "contextUsageUpdated",
+		);
+		expect(withoutCtxUsage).toHaveLength(sdkMessages.length + 1);
 
 		const last = captured[captured.length - 1];
 		expect(last).toEqual({ id: "REQ-1", type: "end" });
 	});
 
-	test("supportsFastMode comes from the overrides table, not the SDK", async () => {
+	test("emits contextUsageUpdated from the terminal result's usage + modelUsage, stamping the requested modelId", async () => {
+		const sdkMessages = [
+			{
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				session_id: "sdk-sess-1",
+				usage: {
+					input_tokens: 6,
+					cache_creation_input_tokens: 12_267,
+					cache_read_input_tokens: 13_101,
+					output_tokens: 10,
+				},
+				modelUsage: {
+					"claude-opus-4-7[1m]": { contextWindow: 1_000_000 },
+				},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-ctx",
+			{
+				sessionId: "helmor-sess-ctx",
+				prompt: "hi",
+				model: "claude-opus-4-7[1m]",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		const ctxUsage = captured.find((e) => e.type === "contextUsageUpdated");
+		expect(ctxUsage).toBeDefined();
+		expect(ctxUsage?.id).toBe("REQ-ctx");
+		expect(ctxUsage?.sessionId).toBe("helmor-sess-ctx");
+		const meta = JSON.parse(ctxUsage?.meta as string);
+		expect(meta).toEqual({
+			modelId: "claude-opus-4-7[1m]",
+			usedTokens: 25_384,
+			maxTokens: 1_000_000,
+			// 25384 / 1_000_000 * 100 rounded to 2 decimals.
+			percentage: 2.54,
+		});
+	});
+
+	test("getContextUsage fast path reuses the live Query and returns rich meta", async () => {
+		// Feed a terminal result so sendMessage registers the session into
+		// `manager.sessions` before we call getContextUsage.
+		const terminalResult = {
+			type: "result",
+			subtype: "success",
+			is_error: false,
+			session_id: "sdk-sess-rich",
+			usage: { input_tokens: 100, output_tokens: 10 },
+			modelUsage: { "claude-opus-4-7": { contextWindow: 200_000 } },
+		};
+		// Use a never-ending stream so the session stays live — we'll call
+		// getContextUsage before the stream completes.
+		let resolveStream: (v: unknown) => void = () => {};
+		const streamPromise = new Promise((resolve) => {
+			resolveStream = resolve;
+		});
+		const liveIterable: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]: () => ({
+				async next() {
+					await streamPromise;
+					return { value: terminalResult, done: false };
+				},
+			}),
+		};
+
+		let getContextUsageCalls = 0;
 		mockQueryImpl = () =>
-			makeMockQuery({
-				supportedModels: async () => [
-					{
-						value: "default",
-						displayName: "Default",
-						supportedEffortLevels: ["low", "medium", "high", "max"],
-					},
-					{
-						value: "claude-opus-4-7",
-						displayName: "Claude Opus 4.7",
-						supportedEffortLevels: ["low", "medium", "high", "max"],
-					},
-					{
-						value: "claude-sonnet-4-7",
-						displayName: "Claude Sonnet 4.7",
-						supportedEffortLevels: ["low", "medium", "high"],
-					},
-				],
+			Object.assign(liveIterable, {
+				async getContextUsage() {
+					getContextUsageCalls += 1;
+					return {
+						totalTokens: 1500,
+						maxTokens: 200_000,
+						percentage: 0.75,
+						isAutoCompactEnabled: true,
+						categories: [
+							{ name: "Messages", tokens: 800, color: "#000" },
+							{ name: "Free space", tokens: 198_500, color: "#fff" },
+						],
+					};
+				},
+				close: () => undefined,
 			});
 
+		// Kick off sendMessage so `manager.sessions` has an entry;
+		// don't await — stream is intentionally never-ending.
+		void manager.sendMessage(
+			"REQ-live",
+			{
+				sessionId: "helmor-live",
+				prompt: "hi",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		// Wait a microtask so the manager registers the live session
+		// before we hit the fast path.
+		await waitForCondition(
+			// biome-ignore lint/suspicious/noExplicitAny: private for test
+			() => (manager as any).sessions.size > 0,
+			"session registered",
+		);
+
+		const json = await manager.getContextUsage({
+			helmorSessionId: "helmor-live",
+			providerSessionId: null,
+			model: "claude-opus-4-7",
+			cwd: undefined,
+		});
+		expect(getContextUsageCalls).toBe(1);
+		const meta = JSON.parse(json);
+		expect(meta).toEqual({
+			modelId: "claude-opus-4-7",
+			usedTokens: 1500,
+			maxTokens: 200_000,
+			percentage: 0.75,
+			isAutoCompactEnabled: true,
+			// "Free space" filtered out.
+			categories: [{ name: "Messages", tokens: 800 }],
+		});
+
+		// Let the send-message promise settle so the test tears down cleanly.
+		resolveStream(null);
+	});
+
+	test("getContextUsage slow path spawns a transient Query + returns rich meta", async () => {
+		// No live session for this helmor id — slow path kicks in. The
+		// mock query is reused for the transient spawn; `getContextUsage`
+		// resolves immediately so no real 30s timer ever fires.
+		mockQueryImpl = () =>
+			Object.assign(asyncIterableFrom<unknown>([]), {
+				async getContextUsage() {
+					return {
+						totalTokens: 42_000,
+						maxTokens: 1_000_000,
+						percentage: 4.2,
+						isAutoCompactEnabled: false,
+						categories: [],
+					};
+				},
+				close: () => undefined,
+			});
+
+		const json = await manager.getContextUsage({
+			helmorSessionId: "no-live-session",
+			providerSessionId: "provider-xyz",
+			model: "claude-opus-4-7",
+			cwd: undefined,
+		});
+
+		const meta = JSON.parse(json);
+		expect(meta.modelId).toBe("claude-opus-4-7");
+		expect(meta.usedTokens).toBe(42_000);
+		expect(meta.maxTokens).toBe(1_000_000);
+		// Assert the transient query was configured with resume + model so
+		// the SDK loads the correct window size (we check the last recorded
+		// query() args).
+		const args = lastQueryArgs as {
+			options?: { resume?: string; model?: string };
+		};
+		expect(args.options?.resume).toBe("provider-xyz");
+		expect(args.options?.model).toBe("claude-opus-4-7");
+	});
+
+	test("emits contextUsageUpdated for an error-result turn too (same usage shape)", async () => {
+		// Regression: the previous gate filtered out error results via
+		// `isTerminalSuccessResult`, so aborted-by-limit turns lost their
+		// usage update even though the consumed context was real.
+		const sdkMessages = [
+			{
+				type: "result",
+				subtype: "error_max_turns",
+				is_error: true,
+				session_id: "sdk-sess-err",
+				usage: {
+					input_tokens: 5000,
+					cache_creation_input_tokens: 0,
+					cache_read_input_tokens: 0,
+					output_tokens: 100,
+				},
+				modelUsage: {
+					"claude-sonnet-4-5": { contextWindow: 200_000 },
+				},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-err",
+			{
+				sessionId: "helmor-sess-err",
+				prompt: "hi",
+				model: "claude-sonnet-4-5",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		const ctxUsage = captured.find((e) => e.type === "contextUsageUpdated");
+		expect(ctxUsage).toBeDefined();
+		const meta = JSON.parse(ctxUsage?.meta as string);
+		expect(meta.modelId).toBe("claude-sonnet-4-5");
+		expect(meta.usedTokens).toBe(5100);
+		expect(meta.maxTokens).toBe(200_000);
+	});
+
+	test("supportsFastMode comes from the hardcoded catalog", async () => {
 		const models = await manager.listModels();
 		const bySupports = Object.fromEntries(
 			models.map((m) => [m.id, m.supportsFastMode]),
 		);
 
-		// SDK-supplied models (not in the override table) carry no flag.
 		expect(bySupports.default).toBeUndefined();
-		expect(bySupports["claude-opus-4-7"]).toBeUndefined();
-		expect(bySupports["claude-sonnet-4-7"]).toBeUndefined();
-
-		// The override adds claude-opus-4-6[1m] with the flag set.
+		expect(bySupports.sonnet).toBeUndefined();
 		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
 	});
 
-	test("ignores fastMode for models not in the override table", async () => {
+	test("ignores fastMode for models not in the hardcoded catalog", async () => {
 		mockQueryImpl = () => makeMockQuery();
 
 		await manager.sendMessage(
@@ -275,6 +499,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: true,
+				images: [],
 			},
 			emitter,
 		);
@@ -305,6 +530,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: level,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -327,6 +553,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: "ultra",
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -350,6 +577,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -377,14 +605,18 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
 
-		// The passthrough events (everything except the final `end`) must
-		// still carry the SDK's session_id verbatim — that's how the Rust
-		// side learns the provider_session_id to persist.
-		const passthroughs = captured.slice(0, -1);
+		// The passthrough events must carry the SDK's snake_case session_id
+		// verbatim — that's how the Rust side learns the provider_session_id
+		// to persist. Skip the terminal `end` and any `contextUsageUpdated`
+		// (our derived event, which carries a camelCase sessionId instead).
+		const passthroughs = captured.filter(
+			(e) => e.type !== "end" && e.type !== "contextUsageUpdated",
+		);
 		for (const event of passthroughs) {
 			expect(event.session_id).toBe(expectedSessionId);
 		}
@@ -415,6 +647,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -447,6 +680,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 					permissionMode: undefined,
 					effortLevel: undefined,
 					fastMode: undefined,
+					images: [],
 				},
 				emitter,
 			),
@@ -475,6 +709,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 				// Include a duplicate to confirm Claude now forwards the
 				// caller-provided list directly without extra normalization.
 				additionalDirectories: [userDirA, userDirA, userDirB],
@@ -509,6 +744,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: "bypassPermissions",
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 				additionalDirectories: [linkedDirA, linkedDirB],
 			},
 			emitter,
@@ -530,6 +766,50 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(content).toContain(linkedDirA);
 		expect(content).toContain(linkedDirB);
 		expect(content).toContain("summarize what's in these projects");
+	});
+
+	test("preserves process.env when /add-dir adds an env override", async () => {
+		const userDir = makeTempDir("helmor-claude-env-preserve-");
+		// Sentinel set in the parent (sidecar) env that the spawned
+		// claude-code child must inherit. Without ...process.env in the
+		// merge, the SDK passes only { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
+		// and the child loses HOME/credentials → "Not logged in".
+		const sentinelKey = "HELMOR_TEST_ENV_SENTINEL";
+		const sentinelValue = `sentinel-${Date.now()}`;
+		const prevSentinel = process.env[sentinelKey];
+		process.env[sentinelKey] = sentinelValue;
+
+		try {
+			mockQueryImpl = () =>
+				asyncIterableFrom([{ type: "result", result: "ok" }]);
+
+			await manager.sendMessage(
+				"REQ-ENV-PRESERVE",
+				{
+					sessionId: "s-env-preserve",
+					prompt: "ok",
+					model: "opus-1m",
+					cwd: undefined,
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: undefined,
+					fastMode: undefined,
+					images: [],
+					additionalDirectories: [userDir],
+				},
+				emitter,
+			);
+
+			const env = (
+				lastQueryArgs as { options?: { env?: Record<string, string> } }
+			).options?.env;
+			expect(env?.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD).toBe("1");
+			expect(env?.[sentinelKey]).toBe(sentinelValue);
+			expect(env?.HOME).toBe(process.env.HOME);
+		} finally {
+			if (prevSentinel === undefined) delete process.env[sentinelKey];
+			else process.env[sentinelKey] = prevSentinel;
+		}
 	});
 
 	test("listSlashCommands forwards additionalDirectories and env", async () => {
@@ -557,45 +837,69 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		});
 	});
 
-	test("suppresses deferred tool_use passthrough while keeping the deferred control event", async () => {
-		mockQueryImpl = async function* withDeferredTool() {
-			yield {
-				type: "assistant",
-				session_id: "sdk-session-1",
-				uuid: "assistant-1",
-				message: {
-					content: [
-						{ type: "text", text: "Need a quick decision." },
+	// AskUserQuestion goes through `canUseTool`: the sidecar emits a
+	// `deferredToolUse` event, parks the callback on a promise, and the
+	// frontend's `respondToDeferredTool` RPC resolves it with the user's
+	// answer. The same live `query()` continues — no `--resume`, no new
+	// process. The assistant message that contained the AUQ tool_use
+	// block must be stripped on the passthrough so the UI's deferred
+	// panel handles rendering instead of a duplicate tool-use bubble.
+	test("AskUserQuestion: canUseTool emits deferredToolUse, parks, returns answer via updatedInput", async () => {
+		let canUseToolResult: unknown = null;
+
+		mockQueryImpl = (queryArgs) => {
+			const callback = queryArgs.options?.canUseTool;
+			if (callback) {
+				const abortController = new AbortController();
+				void (async () => {
+					canUseToolResult = await callback(
+						"AskUserQuestion",
 						{
-							type: "tool_use",
-							id: "tool-ask-1",
-							name: "AskUserQuestion",
-							input: {
-								questions: [
-									{ question: "Which path should we take?", options: [] },
-								],
-							},
+							questions: [
+								{ question: "Which path should we take?", options: [] },
+							],
 						},
-					],
-				},
-			};
-			yield {
-				type: "result",
-				session_id: "sdk-session-1",
-				result: "",
-				deferred_tool_use: {
-					id: "tool-ask-1",
-					name: "AskUserQuestion",
-					input: {
-						questions: [
-							{ question: "Which path should we take?", options: [] },
-						],
+						{
+							signal: abortController.signal,
+							toolUseID: "tool-ask-1",
+							suggestions: [],
+							title: "AskUserQuestion",
+							description: "",
+						},
+					);
+				})();
+			}
+
+			return makeMockQuery({
+				stream: [
+					{
+						type: "assistant",
+						session_id: "sdk-session-1",
+						uuid: "assistant-1",
+						message: {
+							content: [
+								{ type: "text", text: "Need a quick decision." },
+								{
+									type: "tool_use",
+									id: "tool-ask-1",
+									name: "AskUserQuestion",
+									input: {
+										questions: [
+											{ question: "Which path should we take?", options: [] },
+										],
+									},
+								},
+							],
+						},
 					},
-				},
-			};
+				],
+			});
 		};
 
-		await manager.sendMessage(
+		// Drive sendMessage to completion in the background — it will block on
+		// the for-await once it's emitted the assistant passthrough; we resolve
+		// the parked canUseTool promise below to let it finish.
+		const sending = manager.sendMessage(
 			"REQ-DEFER",
 			{
 				sessionId: "helmor-sess-defer",
@@ -606,29 +910,71 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
 
-		expect(captured).toHaveLength(3);
-		expect(captured[0]?.type).toBe("assistant");
-		expect(
-			(
-				captured[0]?.message as {
-					content?: Array<{ type?: string; name?: string; text?: string }>;
-				}
-			).content ?? [],
-		).toEqual([{ type: "text", text: "Need a quick decision." }]);
-		expect(captured[1]).toEqual({
+		// Wait until the userInputRequest event has been emitted (canUseTool
+		// fired and parked).
+		await waitForCondition(
+			() =>
+				captured.some(
+					(event) => (event as { type?: string }).type === "userInputRequest",
+				),
+			"userInputRequest emit",
+		);
+
+		// User submits answers — resolves the parked canUseTool promise.
+		// The frontend AUQ renderer produces the full `updatedInput` shape
+		// directly (questions + answers), and the sidecar passes that
+		// through to the SDK without further conversion.
+		manager.resolveUserInput("tool-ask-1", {
+			action: "submit",
+			content: {
+				questions: [{ question: "Which path should we take?", options: [] }],
+				answers: { "Which path should we take?": "Option A" },
+			},
+		});
+
+		await sending;
+
+		// Assistant passthrough: the AUQ tool_use block must be stripped so
+		// the UI doesn't double-render it alongside the user-input panel.
+		const assistantEvent = captured.find(
+			(event) => (event as { type?: string }).type === "assistant",
+		) as { message?: { content?: Array<{ type?: string; text?: string }> } };
+		expect(assistantEvent?.message?.content).toEqual([
+			{ type: "text", text: "Need a quick decision." },
+		]);
+
+		// userInputRequest event surfaces the question to the frontend with
+		// the AUQ-flavored payload (questions array kept raw — preview /
+		// notes / header / multiSelect all flow through unchanged).
+		const userInputEvent = captured.find(
+			(event) => (event as { type?: string }).type === "userInputRequest",
+		);
+		expect(userInputEvent).toEqual({
 			id: "REQ-DEFER",
-			type: "deferredToolUse",
-			toolUseId: "tool-ask-1",
-			toolName: "AskUserQuestion",
-			toolInput: {
+			type: "userInputRequest",
+			userInputId: "tool-ask-1",
+			source: "Claude",
+			message: "Claude is asking for your input.",
+			payload: {
+				kind: "ask-user-question",
 				questions: [{ question: "Which path should we take?", options: [] }],
 			},
 		});
-		expect(captured[2]).toEqual({ id: "REQ-DEFER", type: "end" });
+
+		// canUseTool returned the answer through `updatedInput` — the SDK
+		// would then execute the tool with this input and continue the turn.
+		expect(canUseToolResult).toEqual({
+			behavior: "allow",
+			updatedInput: {
+				questions: [{ question: "Which path should we take?", options: [] }],
+				answers: { "Which path should we take?": "Option A" },
+			},
+		});
 	});
 
 	test("stops after a successful result and ignores trailing SDK noise", async () => {
@@ -690,6 +1036,7 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
@@ -791,34 +1138,36 @@ describe("ClaudeSessionManager.stopSession", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
 
 		await waitForCondition(
-			() => captured.some((event) => event.type === "elicitationRequest"),
-			"elicitation request event",
+			() => captured.some((event) => event.type === "userInputRequest"),
+			"userInputRequest event",
 		);
 
 		expect(captured[0]).toEqual({
 			id: "REQ-ELICIT",
-			type: "elicitationRequest",
-			serverName: "design-server",
+			type: "userInputRequest",
+			userInputId: "elicitation-1",
+			source: "design-server",
 			message: "Need more structured input",
-			mode: "form",
-			url: undefined,
-			elicitationId: "elicitation-1",
-			requestedSchema: {
-				type: "object",
-				properties: {
-					name: { type: "string" },
+			payload: {
+				kind: "form",
+				schema: {
+					type: "object",
+					properties: {
+						name: { type: "string" },
+					},
+					required: ["name"],
 				},
-				required: ["name"],
 			},
 		});
 
-		manager.resolveElicitation("elicitation-1", {
-			action: "accept",
+		manager.resolveUserInput("elicitation-1", {
+			action: "submit",
 			content: { name: "Helmor" },
 		});
 
@@ -889,13 +1238,14 @@ describe("ClaudeSessionManager.stopSession", () => {
 				permissionMode: undefined,
 				effortLevel: undefined,
 				fastMode: undefined,
+				images: [],
 			},
 			emitter,
 		);
 
 		await waitForCondition(
-			() => captured.some((event) => event.type === "elicitationRequest"),
-			"stop-session elicitation request event",
+			() => captured.some((event) => event.type === "userInputRequest"),
+			"stop-session userInputRequest event",
 		);
 
 		await manager.stopSession("elicitation-stop-session");
@@ -1046,31 +1396,12 @@ describe("Claude fixture diversity guards", () => {
 });
 
 describe("ClaudeSessionManager.listModels", () => {
-	test("returns formatted Claude model metadata", async () => {
+	test("returns hardcoded Claude model metadata without opening an SDK query", async () => {
 		const manager = new ClaudeSessionManager();
 		lastQueryArgs = null;
-		mockQueryImpl = () =>
-			makeMockQuery({
-				supportedModels: async () => [
-					{
-						value: "default",
-						displayName: "Default",
-						supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-					},
-					{
-						value: "sonnet",
-						displayName: "Sonnet (1M context)",
-						supportedEffortLevels: ["low", "medium", "high"],
-					},
-					{ value: "haiku", displayName: "Haiku" },
-				],
-			});
 
 		const models = await manager.listModels();
 
-		// Order follows sortClaudeModels: opus family first (default pinned to
-		// top via Infinity, then opus-4-6[1m] injected by the override), then
-		// sonnet, then haiku. supportsFastMode only appears on override entries.
 		expect(models).toEqual([
 			{
 				id: "default",
@@ -1087,9 +1418,9 @@ describe("ClaudeSessionManager.listModels", () => {
 			},
 			{
 				id: "sonnet",
-				label: "Sonnet 1M",
+				label: "Sonnet",
 				cliModel: "sonnet",
-				effortLevels: ["low", "medium", "high"],
+				effortLevels: ["low", "medium", "high", "max"],
 			},
 			{
 				id: "haiku",
@@ -1098,25 +1429,7 @@ describe("ClaudeSessionManager.listModels", () => {
 				effortLevels: [],
 			},
 		]);
-		expect(lastQueryArgs).toMatchObject({
-			options: {
-				settingSources: ["user", "project", "local"],
-			},
-		});
-	});
-
-	test("propagates supportedModels failures", async () => {
-		const manager = new ClaudeSessionManager();
-		mockQueryImpl = () =>
-			makeMockQuery({
-				supportedModels: async () => {
-					throw new Error("supportedModels exploded");
-				},
-			});
-
-		await expect(manager.listModels()).rejects.toThrow(
-			"supportedModels exploded",
-		);
+		expect(lastQueryArgs).toBeNull();
 	});
 });
 
@@ -1152,14 +1465,21 @@ describe("Claude full-fixture round-trip", () => {
 					permissionMode: undefined,
 					effortLevel: undefined,
 					fastMode: undefined,
+					images: [],
 				},
 				emitter,
 			);
 
 			// The sidecar forwards every SDK event up to the first successful
-			// terminal result, then emits exactly one terminal `end`.
-			expect(captured).toHaveLength(expectedMessages.length + 1);
-			expect(captured[captured.length - 1]).toEqual({
+			// terminal result, optionally emits a derived `contextUsageUpdated`
+			// just before `end` (when the result carries usage data), then
+			// emits exactly one terminal `end`. Strip the derived event for
+			// the strict passthrough count.
+			const passthroughs = captured.filter(
+				(e) => e.type !== "contextUsageUpdated",
+			);
+			expect(passthroughs).toHaveLength(expectedMessages.length + 1);
+			expect(passthroughs[passthroughs.length - 1]).toEqual({
 				id: `REQ-${fixture}`,
 				type: "end",
 			});
@@ -1173,7 +1493,7 @@ describe("Claude full-fixture round-trip", () => {
 			// source event one-for-one (in order). This is the strict
 			// "no transformation, no reorder, no drop" guarantee.
 			for (let i = 0; i < expectedMessages.length; i++) {
-				expect(captured[i]?.type).toBe(expectedMessages[i]?.type);
+				expect(passthroughs[i]?.type).toBe(expectedMessages[i]?.type);
 			}
 		});
 	}

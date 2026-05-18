@@ -107,7 +107,7 @@ export function DownloadDropdown({ data }: Props) {
 					<span className="dl-chip">ARM</span>
 					<span className="dl-text">
 						<span className="dl-title">Apple Silicon</span>
-						<span className="dl-sub">M1 · M2 · M3 · M4</span>
+						<span className="dl-sub">M series</span>
 					</span>
 					<span className="dl-size">
 						·dmg {formatMegabytes(data.armDmgSize)}
@@ -139,7 +139,7 @@ export function DownloadDropdown({ data }: Props) {
 						) : null}
 					</span>
 					<a href={data.releasesUrl} onClick={closeNow}>
-						All downloads →
+						All →
 					</a>
 				</div>
 			</div>

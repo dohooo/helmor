@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { createElement, useEffect, useRef } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	type AppUpdateStatus,
@@ -57,18 +57,22 @@ function showDownloadedUpdateToast(
 			},
 			"View change log",
 		),
-		duration: Number.POSITIVE_INFINITY,
+		duration: 8000,
 	});
 }
 
-export function useAppUpdater() {
+export function useAppUpdater(): AppUpdateStatus | null {
 	const notifiedVersionRef = useRef<string | null>(null);
+	const [status, setStatus] = useState<AppUpdateStatus | null>(null);
 
 	useEffect(() => {
 		let cleanup: (() => void) | undefined;
 		let mounted = true;
 
 		const handleStatus = (status: AppUpdateStatus | null | undefined) => {
+			if (mounted && status) {
+				setStatus(status);
+			}
 			if (!mounted || !isDownloadedUpdateReady(status)) return;
 			if (notifiedVersionRef.current === status.update.version) return;
 
@@ -91,4 +95,6 @@ export function useAppUpdater() {
 			cleanup?.();
 		};
 	}, []);
+
+	return status;
 }

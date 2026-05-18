@@ -1,40 +1,140 @@
 import { describe, expect, it } from "vitest";
+import type { ForgeDetection } from "./api";
 import {
 	prependGeneralPreferencePrompt,
 	resolveRepoPreferencePreview,
 	resolveRepoPreferencePrompt,
 } from "./repo-preferences-prompts";
 
+const GITLAB_FORGE: ForgeDetection = {
+	provider: "gitlab",
+	host: "gitlab.example.com",
+	namespace: "acme",
+	repo: "repo",
+	remoteUrl: "git@gitlab.example.com:acme/repo.git",
+	labels: {
+		providerName: "GitLab",
+		cliName: "glab",
+		changeRequestName: "MR",
+		changeRequestFullName: "merge request",
+		connectAction: "Connect GitLab",
+	},
+	detectionSignals: [],
+};
+
 describe("repo preference prompts", () => {
 	const targetRefPlaceholder = "$" + "{TARGET_REF}";
-	const dirtyWorktreePlaceholder = "$" + "{DIRTY_WORKTREE}";
 
 	it("leaves the general preview empty when no override exists", () => {
 		expect(resolveRepoPreferencePreview("general", {})).toBe("");
 	});
 
-	it("appends the override after the built-in prompt", () => {
+	it("uses generic prose in the create-pr preview", () => {
+		// Preview has no live workspace context — keep the original generic
+		// wording rather than substituting placeholders into the template.
+		const preview = resolveRepoPreferencePreview("createPr", {});
+		expect(preview).toContain("this workspace's target branch");
+		expect(preview).toContain("`gh pr create`");
+		expect(preview).not.toContain("<target-branch>");
+	});
+
+	it("appends the override after the target-specific create-pr prompt", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "createPr",
 				repoPreferences: { createPr: "Ship it exactly this way." },
+				targetBranch: "develop",
 			}),
-		).toBe(
-			"Create a pull request for the uncommitted work in this workspace.\n\nDo the following, in order:\n1. Run `git status` and `git diff` to survey what's changed.\n2. Stage everything that should ship with `git add`.\n3. Commit with a concise, Conventional-Commits-style message (`feat:`, `fix:`, `refactor:`, `chore:`, etc.) that summarizes the change in one line.\n4. Push the current branch to its remote. If needed, create the remote tracking branch with `git push -u <remote> HEAD`.\n5. Open a pull request against the repository's default branch using `gh pr create`. Use a clear PR title and a body that explains: what changed, why it changed, and any follow-up / test notes.\n6. Report the PR URL in your final message so I can click it.\n\nDon't stop to ask for confirmation — execute each step automatically. If you hit an unrecoverable error (e.g. merge conflict, pre-push hook failure), report it clearly so I can intervene.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nShip it exactly this way.",
+		).toContain("### User Preferences\n\nShip it exactly this way.");
+	});
+
+	it("uses the workspace target branch in the create-pr prompt (GitHub default)", () => {
+		expect(
+			resolveRepoPreferencePrompt({
+				key: "createPr",
+				repoPreferences: {},
+				targetBranch: "develop",
+			}),
+		).toContain(
+			"Open a pull request against `develop` using `gh pr create --base develop`.",
 		);
 	});
 
-	it("renders the dynamic resolve-conflicts fallback", () => {
+	it("uses the GitLab dialect in the create-pr prompt when forge is GitLab", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "createPr",
+			repoPreferences: {},
+			targetBranch: "develop",
+			forge: GITLAB_FORGE,
+		});
+		expect(prompt).toContain("Create a merge request");
+		expect(prompt).toContain(
+			"Open a merge request against `develop` using `glab mr create --target-branch develop`.",
+		);
+	});
+
+	it("throws instead of falling back when create-pr has no target branch", () => {
+		expect(() =>
+			resolveRepoPreferencePrompt({
+				key: "createPr",
+				repoPreferences: {},
+			}),
+		).toThrow("Missing workspace target branch for createPr prompt.");
+	});
+
+	it("uses the GitLab dialect in the fix-errors prompt when forge is GitLab", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "fixErrors",
+			repoPreferences: {},
+			forge: GITLAB_FORGE,
+		});
+		expect(prompt).toContain("`glab ci list` / `glab ci view`");
+	});
+
+	it("renders the intent-only resolve-conflicts prompt for merge conflicts", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.",
 		);
+	});
+
+	it("renders a narrow prompt for stash-pop conflicts", () => {
+		expect(
+			resolveRepoPreferencePrompt({
+				key: "resolveConflicts",
+				repoPreferences: {},
+				targetRef: "origin/main",
+				resolveConflictsKind: "stashPopConflict",
+			}),
+		).toBe(
+			"Resolve the conflicts from restoring the stashed uncommitted work in this branch. Don't commit. Don't push.",
+		);
+	});
+
+	it("uses the workspace target branch in the resolve-conflicts prompt", () => {
+		expect(
+			resolveRepoPreferencePrompt({
+				key: "resolveConflicts",
+				repoPreferences: {},
+				targetBranch: "develop",
+			}),
+		).toContain(
+			"This branch has merge conflicts with `develop`, this workspace's target branch.",
+		);
+	});
+
+	it("throws instead of falling back when resolve-conflicts has no target branch", () => {
+		expect(() =>
+			resolveRepoPreferencePrompt({
+				key: "resolveConflicts",
+				repoPreferences: {},
+			}),
+		).toThrow("Missing workspace target branch for resolveConflicts prompt.");
 	});
 
 	it("prepends the general prompt to the first user message", () => {
@@ -47,18 +147,17 @@ describe("repo preference prompts", () => {
 		);
 	});
 
-	it("appends resolve-conflicts overrides after the dynamic fallback", () => {
+	it("appends resolve-conflicts overrides after the intent-only prompt", () => {
 		expect(
 			resolveRepoPreferencePrompt({
 				key: "resolveConflicts",
 				repoPreferences: {
-					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}. Dirty: ${dirtyWorktreePlaceholder}.`,
+					resolveConflicts: `Prefer rebase when possible. Target: ${targetRefPlaceholder}.`,
 				},
 				targetRef: "origin/main",
-				dirtyWorktree: true,
 			}),
 		).toBe(
-			"Commit uncommitted changes, then merge origin/main into this branch. Then push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main. Dirty: true.",
+			"Bring this branch up to date with origin/main. Resolve any conflicts. Preserve any uncommitted work. Don't push.\n\nIMPORTANT: The following are the user's custom preferences. These preferences take precedence over any default guidelines or instructions provided above. When there is a conflict, always follow the user's preferences.\n\n### User Preferences\n\nPrefer rebase when possible. Target: origin/main.",
 		);
 	});
 
@@ -66,5 +165,72 @@ describe("repo preference prompts", () => {
 		expect(prependGeneralPreferencePrompt("Fix the failing tests.", {})).toBe(
 			"Fix the failing tests.",
 		);
+	});
+
+	it("returns the review default prompt diffing against the target ref when no override is set", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+		});
+		expect(prompt).toContain("relative to `origin/main`");
+		expect(prompt).toContain("IN THIS CHAT ONLY");
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		// Forge-agnostic — no PR / MR machinery.
+		expect(prompt).not.toContain("pull request");
+		expect(prompt).not.toContain("merge request");
+		expect(prompt).not.toContain("gh pr");
+		expect(prompt).not.toContain("glab mr");
+		// Side-effect ban must be explicit.
+		expect(prompt).toContain("Do NOT modify files");
+		expect(prompt).not.toContain("### User Preferences");
+	});
+
+	it("appends review overrides after the built-in prompt", () => {
+		const prompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: { review: "Always check for missing tests." },
+			targetBranch: "main",
+			remote: "origin",
+		});
+		expect(prompt).toContain("git diff origin/main...HEAD");
+		expect(prompt).toContain(
+			"### User Preferences\n\nAlways check for missing tests.",
+		);
+	});
+
+	it("is forge-agnostic — same prompt regardless of GitLab vs GitHub", () => {
+		const githubPrompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+		});
+		const gitlabPrompt = resolveRepoPreferencePrompt({
+			key: "review",
+			repoPreferences: {},
+			targetBranch: "main",
+			remote: "origin",
+			forge: GITLAB_FORGE,
+		});
+		expect(gitlabPrompt).toBe(githubPrompt);
+	});
+
+	it("throws when the review prompt is built without a target branch", () => {
+		expect(() =>
+			resolveRepoPreferencePrompt({
+				key: "review",
+				repoPreferences: {},
+				remote: "origin",
+			}),
+		).toThrow(/target branch/i);
+	});
+
+	it("uses generic prose in the review preview (no live workspace ref)", () => {
+		const preview = resolveRepoPreferencePreview("review", {});
+		expect(preview).toContain("relative to the target branch");
+		expect(preview).toContain("IN THIS CHAT ONLY");
+		expect(preview).not.toContain("origin/");
 	});
 });

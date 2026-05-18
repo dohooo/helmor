@@ -10,6 +10,7 @@
 //!   collection helpers used by both submodules.
 
 mod codex;
+mod cursor;
 mod streaming;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -134,7 +135,7 @@ pub struct StreamAccumulator {
     /// `__part_id` indices when the SDK delivers finalized blocks in
     /// separate per-block `assistant` events (delta-style).
     cur_asst_block_count: usize,
-
+    local_bash_task_refs: HashSet<String>,
     // ── Codex state ──────────────────────────────────────────────────
     /// Per-item delta accumulation for Codex App Server streaming.
     codex_items: HashMap<String, codex::CodexItemState>,
@@ -145,6 +146,10 @@ pub struct StreamAccumulator {
     /// Timestamp (ms since epoch) when the current Codex turn started.
     /// Used to compute turn duration since the App Server doesn't provide it.
     pub(super) codex_turn_started_at: Option<f64>,
+
+    // ── Cursor state ─────────────────────────────────────────────────
+    /// Per-run cursor state; see `cursor.rs`.
+    cursor_state: cursor::CursorRunState,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -300,9 +305,11 @@ impl StreamAccumulator {
             cur_asst_blocks: Vec::new(),
             cur_asst_template: None,
             cur_asst_block_count: 0,
+            local_bash_task_refs: HashSet::new(),
             codex_items: codex::new_item_states(),
             codex_partial_idx: None,
             codex_turn_started_at: None,
+            cursor_state: cursor::new_run_state(),
             dropped_event_types: Vec::new(),
         }
     }
@@ -461,6 +468,10 @@ impl StreamAccumulator {
                 self.codex_turn_started_at = Some(now_ms());
                 PushOutcome::NoOp
             }
+            Some("thread/compacted") => {
+                codex::handle_thread_compacted(self, raw_line, value);
+                PushOutcome::Finalized
+            }
             Some("thread/started") => {
                 if let Some(tid) = value
                     .get("thread")
@@ -472,10 +483,21 @@ impl StreamAccumulator {
                 PushOutcome::NoOp
             }
 
+            // ── Cursor SDK events (namespaced by sidecar manager) ─────
+            // Synthetic — session_id already lifted by push_event extractor.
+            Some("cursor/agent_init") => PushOutcome::NoOp,
+            Some("cursor/status") => cursor::handle_status(self, value),
+            Some("cursor/thinking") => cursor::handle_thinking(self, value),
+            Some("cursor/assistant") => cursor::handle_assistant_delta(self, value),
+            Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
+            Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
+
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")
             | Some("thread/tokenUsage/updated")
             | Some("thread/name/updated")
+            | Some("thread/goal/updated")
+            | Some("thread/goal/cleared")
             | Some("account/rateLimits/updated")
             | Some("account/updated")
             | Some("mcpServer/startupStatus/updated")
@@ -706,6 +728,12 @@ impl StreamAccumulator {
     /// on abort. No-op when no items are in flight.
     pub fn flush_codex_in_progress(&mut self) {
         codex::flush_in_progress(self);
+    }
+
+    /// Drain in-flight cursor state on abort (no FINISHED will arrive).
+    /// Idempotent.
+    pub fn flush_cursor_in_progress(&mut self) {
+        cursor::flush_in_progress(self);
     }
 
     /// Convert any active streaming partial into a finalized assistant
@@ -1040,6 +1068,20 @@ impl StreamAccumulator {
             if crate::pipeline::event_filter::is_suppressed_system_subtype(subtype) {
                 return;
             }
+        }
+        // `local_bash` task_* events duplicate the accompanying Bash tool.
+        // Claude omits `task_type` on the later notification, so remember
+        // refs from the start event and apply them to the completion event.
+        if crate::pipeline::event_filter::is_explicit_local_bash_task(value) {
+            crate::pipeline::event_filter::remember_task_refs(
+                value,
+                &mut self.local_bash_task_refs,
+            );
+            return;
+        }
+        if crate::pipeline::event_filter::is_local_bash_task_ref(value, &self.local_bash_task_refs)
+        {
+            return;
         }
         self.collect_message(raw_line, value, MessageRole::System, None);
     }

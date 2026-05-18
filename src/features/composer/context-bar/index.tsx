@@ -368,7 +368,7 @@ function Chip({
 					tabIndex={-1}
 					disabled={disabled}
 					className={cn(
-						"inline-flex size-3.5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground",
+						"inline-flex size-3.5 shrink-0 cursor-interactive items-center justify-center rounded text-muted-foreground",
 						"opacity-0 group-hover/chip:opacity-100 group-focus-visible/chip:opacity-100",
 						"disabled:pointer-events-none disabled:opacity-30",
 					)}

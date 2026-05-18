@@ -2,7 +2,7 @@ import { test as base, type Page } from "@playwright/test";
 
 // Shared Playwright fixture that boots the Helmor shell past its first-run
 // gates so specs start from the main workspace surface:
-//   - seeds `helmor_onboarding_completed` so the Conductor onboarding overlay
+//   - stubs `get_app_settings` to mark onboarding completed so the overlay
 //     never appears
 //   - exposes `window.__HELMOR_E2E__` as a hook for specs to override
 //     individual invoke commands before the app boots
@@ -22,12 +22,11 @@ type HelmorFixtures = {
 export const test = base.extend<HelmorFixtures>({
 	app: async ({ page }, use) => {
 		await page.addInitScript(() => {
-			try {
-				window.localStorage.setItem("helmor_onboarding_completed", "1");
-			} catch {
-				// private-mode or similar — app has its own fallback path
-			}
-			window.__HELMOR_E2E__ = { invokeOverrides: {} };
+			window.__HELMOR_E2E__ = {
+				invokeOverrides: {
+					get_app_settings: () => ({ "app.onboarding_completed": "true" }),
+				},
+			};
 		});
 
 		await page.goto("/");

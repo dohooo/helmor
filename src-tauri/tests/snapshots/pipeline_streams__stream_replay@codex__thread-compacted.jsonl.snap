@@ -1,0 +1,31 @@
+---
+source: tests/pipeline_streams.rs
+expression: snapshot
+input_file: tests/fixtures/streams/codex/thread-compacted.jsonl
+---
+line_count: 2
+checkpoint_count: 1
+checkpoints:
+  - line_index: 1
+    event_type: thread/compacted
+    roles:
+      - system
+    last_part_types:
+      - system-notice
+final_state:
+  message_count: 1
+  roles:
+    - system
+  total_parts: 1
+persisted_turns:
+  turn_count: 1
+  total_blocks: 0
+  turns:
+    - role: system
+      block_types: []
+historical_render:
+  message_count: 1
+  messages:
+    - role: system
+      part_types:
+        - system-notice

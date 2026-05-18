@@ -7,8 +7,7 @@ import { DownloadDropdown } from "./download-dropdown";
 type Theme = "light" | "dark";
 
 const STORAGE_KEY = "helmor-marketing-theme";
-// Paired with Magic Card spotlight — keep the tilt subtle so the spotlight
-// reads as the primary hover affordance.
+// Keep the product preview tilt subtle so it reads as ambient polish.
 const MAX_TILT_DEG = 4;
 // Atmospheric FX — backlit dust mote count. 18 is the sweet spot from the
 // v2 prototype: enough to read as "air has particles in it" without turning
@@ -83,10 +82,8 @@ export function MarketingShell({ data }: { data: RepoData }) {
 		return () => document.removeEventListener("keydown", onKey);
 	}, []);
 
-	// 3D tilt + Magic Card spotlight + atmospheric smoke swirl — all cursor-
-	// driven. Tilt is gated on prefers-reduced-motion; the spotlight + smoke
-	// swirl runs for everyone (their fades use CSS transitions that the global
-	// reduced-motion rule already neuters).
+	// 3D tilt + atmospheric smoke swirl — cursor-driven. Tilt and smoke swirl
+	// are gated on prefers-reduced-motion.
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	const stageRef = useRef<HTMLDivElement | null>(null);
 	const smokeRef = useRef<HTMLDivElement | null>(null);
@@ -115,19 +112,6 @@ export function MarketingShell({ data }: { data: RepoData }) {
 			d.style.setProperty("--del", `${del}s`);
 			d.style.animationDelay = `${del}s`;
 			host.appendChild(d);
-		}
-
-		// Reduced-motion: also kill the SMIL <animate> inside each feTurbulence
-		// filter. CSS can't pause SMIL, so we endElement() them explicitly.
-		const prefersReduced = window.matchMedia(
-			"(prefers-reduced-motion: reduce)",
-		).matches;
-		if (prefersReduced && smokeRef.current) {
-			const smil = smokeRef.current.querySelectorAll("animate");
-			smil.forEach((el) => {
-				const anim = el as unknown as SVGAnimationElement;
-				if (typeof anim.endElement === "function") anim.endElement();
-			});
 		}
 	}, []);
 
@@ -165,10 +149,6 @@ export function MarketingShell({ data }: { data: RepoData }) {
 
 		const onMove = (e: PointerEvent) => {
 			const rect = stage.getBoundingClientRect();
-			// Magic Card — track cursor in stage-local coords.
-			stage.style.setProperty("--mx", `${e.clientX - rect.left}px`);
-			stage.style.setProperty("--my", `${e.clientY - rect.top}px`);
-			stage.classList.add("hovering");
 
 			// Smoke swirl — write 0..1 cursor position within the mock-wrap so
 			// each plume's --swirl-offset translates toward the cursor. Swirl
@@ -204,10 +184,6 @@ export function MarketingShell({ data }: { data: RepoData }) {
 			schedule();
 		};
 		const onLeave = () => {
-			stage.style.setProperty("--mx", "-500px");
-			stage.style.setProperty("--my", "-500px");
-			stage.classList.remove("hovering");
-
 			// Smoke swirl — ease plumes back to center.
 			const smoke = smokeRef.current;
 			if (smoke) {
@@ -315,14 +291,7 @@ export function MarketingShell({ data }: { data: RepoData }) {
 												numOctaves={3}
 												seed={3}
 												result="noise"
-											>
-												<animate
-													attributeName="baseFrequency"
-													dur="48s"
-													values="0.008 0.014; 0.012 0.010; 0.008 0.014"
-													repeatCount="indefinite"
-												/>
-											</feTurbulence>
+											/>
 											<feDisplacementMap
 												in="SourceGraphic"
 												in2="noise"
@@ -421,14 +390,7 @@ export function MarketingShell({ data }: { data: RepoData }) {
 												numOctaves={4}
 												seed={7}
 												result="noise"
-											>
-												<animate
-													attributeName="baseFrequency"
-													dur="30s"
-													values="0.018 0.028; 0.028 0.018; 0.018 0.028"
-													repeatCount="indefinite"
-												/>
-											</feTurbulence>
+											/>
 											<feDisplacementMap
 												in="SourceGraphic"
 												in2="noise"
@@ -527,14 +489,7 @@ export function MarketingShell({ data }: { data: RepoData }) {
 												numOctaves={5}
 												seed={11}
 												result="noise"
-											>
-												<animate
-													attributeName="baseFrequency"
-													dur="21s"
-													values="0.035 0.050; 0.050 0.038; 0.035 0.050"
-													repeatCount="indefinite"
-												/>
-											</feTurbulence>
+											/>
 											<feDisplacementMap
 												in="SourceGraphic"
 												in2="noise"

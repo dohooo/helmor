@@ -106,6 +106,74 @@ fn accumulate_tool_use_blocks() {
 }
 
 #[test]
+fn claude_local_bash_task_events_are_dropped() {
+    // `task_type: "local_bash"` is Claude wrapping a single Bash command
+    // with its own task_started / task_notification. The `tool_use_id`
+    // points at the Bash tool, which doesn't serve as a subagent parent,
+    // so these notices would render as mislabeled "Subagent started /
+    // completed" siblings next to the real Bash tool call. Drop them.
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    for subtype in ["task_started", "task_progress", "task_notification"] {
+        let event = json!({
+            "type": "system",
+            "subtype": subtype,
+            "task_id": "task_bash",
+            "task_type": "local_bash",
+            "tool_use_id": "toolu_bash_1",
+            "description": "cargo test -p helmor",
+        });
+        acc.push_event(&event, &event.to_string());
+    }
+    assert!(acc.collected().is_empty());
+}
+
+#[test]
+fn claude_local_bash_notification_without_task_type_is_dropped() {
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    let started = json!({
+        "type": "system",
+        "subtype": "task_started",
+        "task_id": "task_bash",
+        "task_type": "local_bash",
+        "tool_use_id": "toolu_bash_1",
+        "description": "bun x vitest run src/foo.test.ts",
+    });
+    acc.push_event(&started, &started.to_string());
+
+    let notification = json!({
+        "type": "system",
+        "subtype": "task_notification",
+        "task_id": "task_bash",
+        "tool_use_id": "toolu_bash_1",
+        "status": "completed",
+        "output_file": "",
+        "summary": "bun x vitest run src/foo.test.ts",
+    });
+    acc.push_event(&notification, &notification.to_string());
+
+    assert!(acc.collected().is_empty());
+}
+
+#[test]
+fn claude_local_agent_task_events_still_render() {
+    // The real subagent lifecycle (`task_type: "local_agent"`) still
+    // enters `collected[]` so the adapter can fold it under the parent
+    // Task tool call (or render it as an orphan sibling when the parent
+    // isn't in the current view).
+    let mut acc = StreamAccumulator::new("claude", "opus");
+    let event = json!({
+        "type": "system",
+        "subtype": "task_started",
+        "task_id": "task_agent",
+        "task_type": "local_agent",
+        "tool_use_id": "toolu_agent_1",
+        "description": "Explore frontend",
+    });
+    acc.push_event(&event, &event.to_string());
+    assert_eq!(acc.collected().len(), 1);
+}
+
+#[test]
 fn handle_assistant_stamps_thinking_block_as_just_finished_live() {
     // When the SDK's finalized `assistant` event arrives, the accumulator
     // must mark thinking blocks with `__is_streaming: false` and a

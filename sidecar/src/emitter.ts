@@ -88,24 +88,48 @@ export type PermissionRequestEvent = {
 	readonly description: string | undefined;
 };
 
-export type ElicitationRequestEvent = {
+/**
+ * Unified "agent needs user input" event. Subsumes what used to be three
+ * separate events (Claude MCP `elicitationRequest`, Claude AUQ
+ * `deferredToolUse`, Codex `userInputRequest`).
+ *
+ * The wire-level event shape is unified, but each `payload.kind` keeps
+ * its provider's native data shape so the matching frontend renderer
+ * can render exactly the UI it always rendered (AUQ keeps preview /
+ * notes / header / always-other; elicitation keeps its JSON-Schema
+ * form / URL launcher; etc.). `source` is a free-form badge string
+ * (e.g. `"Claude"`, `"Codex"`, an MCP server name).
+ *
+ * `userInputId` is the round-trip key — the matching `respondToUserInput`
+ * RPC carries the same id, and the sidecar's `pendingUserInputs` map
+ * uses it to dispatch the user's answer back to the correct waiting
+ * resolver closure. The closure encapsulates all SDK-specific
+ * back-conversion (AUQ `updatedInput`, MCP `ElicitationResult`, Codex
+ * `answers`).
+ */
+export type UserInputRequestEvent = {
 	readonly id: string;
-	readonly type: "elicitationRequest";
-	readonly serverName: string;
+	readonly type: "userInputRequest";
+	readonly userInputId: string;
+	readonly source: string;
 	readonly message: string;
-	readonly mode: "form" | "url" | undefined;
-	readonly url: string | undefined;
-	readonly elicitationId: string | undefined;
-	readonly requestedSchema: Record<string, unknown> | undefined;
+	readonly payload: UserInputPayload;
 };
 
-export type DeferredToolUseEvent = {
-	readonly id: string;
-	readonly type: "deferredToolUse";
-	readonly toolUseId: string;
-	readonly toolName: string;
-	readonly toolInput: Record<string, unknown>;
-};
+export type UserInputPayload =
+	| {
+			readonly kind: "ask-user-question";
+			readonly questions: ReadonlyArray<Record<string, unknown>>;
+			readonly metadata?: Record<string, unknown>;
+	  }
+	| {
+			readonly kind: "form";
+			readonly schema: Record<string, unknown>;
+	  }
+	| {
+			readonly kind: "url";
+			readonly url: string;
+	  };
 
 export type PermissionModeChangedEvent = {
 	readonly id: string;
@@ -120,16 +144,6 @@ export type PlanCapturedEvent = {
 	readonly plan: string | null;
 };
 
-export type UserInputRequestEvent = {
-	readonly id: string;
-	readonly type: "userInputRequest";
-	readonly userInputId: string;
-	readonly questions: ReadonlyArray<{
-		readonly question: string;
-		readonly isOther?: boolean;
-	}>;
-};
-
 export type ModelsListedEvent = {
 	readonly id: string;
 	readonly type: "modelsListed";
@@ -139,7 +153,47 @@ export type ModelsListedEvent = {
 		readonly label: string;
 		readonly cliModel: string;
 		readonly effortLevels?: readonly string[];
+		readonly supportsFastMode?: boolean;
+		/** Cursor only — raw `parameters[]` from `Cursor.models.list`. */
+		readonly cursorParameters?: ReadonlyArray<{
+			readonly id: string;
+			readonly displayName?: string;
+			readonly values: ReadonlyArray<{
+				readonly value: string;
+				readonly displayName?: string;
+			}>;
+		}>;
 	}>;
+};
+
+// Context-window snapshot from the agent SDK. Claude auto-pulls at
+// turn-end; Codex forwards `thread/tokenUsage/updated`. Both ride on
+// the streaming requestId. `meta` is the raw SDK JSON, stringified.
+export type ContextUsageUpdatedEvent = {
+	readonly id: string;
+	readonly type: "contextUsageUpdated";
+	readonly sessionId: string;
+	readonly meta: string | null;
+};
+
+// Ad-hoc response to a `getContextUsage` RPC. Rides on the request's
+// own id (not a stream id) and carries the slim JSON directly — not
+// persisted, frontend caches for 30s.
+export type ContextUsageResultEvent = {
+	readonly id: string;
+	readonly type: "contextUsageResult";
+	readonly meta: string;
+};
+
+// Codex `/goal` state change. `goal` is the stringified `ThreadGoal`
+// payload from `thread/goal/updated`; `null` means the goal was cleared.
+// Rust persists this to an in-memory map so the banner can render the
+// active goal in the panel header.
+export type CodexGoalUpdatedEvent = {
+	readonly id: string;
+	readonly type: "codexGoalUpdated";
+	readonly sessionId: string;
+	readonly goal: string | null;
 };
 
 export type SidecarControlEvent =
@@ -154,12 +208,13 @@ export type SidecarControlEvent =
 	| TitleGeneratedEvent
 	| SlashCommandsListedEvent
 	| PermissionRequestEvent
-	| ElicitationRequestEvent
-	| DeferredToolUseEvent
+	| UserInputRequestEvent
 	| PermissionModeChangedEvent
 	| PlanCapturedEvent
 	| ModelsListedEvent
-	| UserInputRequestEvent;
+	| ContextUsageUpdatedEvent
+	| ContextUsageResultEvent
+	| CodexGoalUpdatedEvent;
 
 /**
  * Typed emitter for the sidecar's stdout protocol.
@@ -199,28 +254,21 @@ export interface SidecarEmitter {
 		title: string | undefined,
 		description: string | undefined,
 	): void;
-	elicitationRequest(
-		requestId: string,
-		serverName: string,
-		message: string,
-		mode: "form" | "url" | undefined,
-		url: string | undefined,
-		elicitationId: string | undefined,
-		requestedSchema: Record<string, unknown> | undefined,
-	): void;
-	deferredToolUse(
-		requestId: string,
-		toolUseId: string,
-		toolName: string,
-		toolInput: Record<string, unknown>,
-	): void;
-	permissionModeChanged(requestId: string, permissionMode: string): void;
-	planCaptured(requestId: string, toolUseId: string, plan: string | null): void;
+	/**
+	 * Surface a user-input request to the frontend. `source` is a free-form
+	 * badge string (e.g. `"Claude"`, `"Codex"`, an MCP server name).
+	 * `payload` carries the kind-specific data the matching frontend
+	 * renderer needs to render its native UI; see [`UserInputPayload`].
+	 */
 	userInputRequest(
 		requestId: string,
 		userInputId: string,
-		questions: ReadonlyArray<{ question: string; isOther?: boolean }>,
+		source: string,
+		message: string,
+		payload: UserInputPayload,
 	): void;
+	permissionModeChanged(requestId: string, permissionMode: string): void;
+	planCaptured(requestId: string, toolUseId: string, plan: string | null): void;
 	modelsListed(
 		requestId: string,
 		provider: string,
@@ -229,7 +277,27 @@ export interface SidecarEmitter {
 			label: string;
 			cliModel: string;
 			effortLevels?: readonly string[];
+			supportsFastMode?: boolean;
+			cursorParameters?: ReadonlyArray<{
+				id: string;
+				displayName?: string;
+				values: ReadonlyArray<{
+					value: string;
+					displayName?: string;
+				}>;
+			}>;
 		}>,
+	): void;
+	contextUsageUpdated(
+		requestId: string,
+		sessionId: string,
+		meta: string | null,
+	): void;
+	contextUsageResult(requestId: string, meta: string): void;
+	codexGoalUpdated(
+		requestId: string,
+		sessionId: string,
+		goal: string | null,
 	): void;
 	/**
 	 * Forward a raw provider SDK message. `id` is appended LAST so an SDK
@@ -291,32 +359,14 @@ export function createSidecarEmitter(
 				title,
 				description,
 			}),
-		elicitationRequest: (
-			requestId,
-			serverName,
-			message,
-			mode,
-			url,
-			elicitationId,
-			requestedSchema,
-		) =>
+		userInputRequest: (requestId, userInputId, source, message, payload) =>
 			write({
 				id: requestId,
-				type: "elicitationRequest",
-				serverName,
+				type: "userInputRequest",
+				userInputId,
+				source,
 				message,
-				mode,
-				url,
-				elicitationId,
-				requestedSchema,
-			}),
-		deferredToolUse: (requestId, toolUseId, toolName, toolInput) =>
-			write({
-				id: requestId,
-				type: "deferredToolUse",
-				toolUseId,
-				toolName,
-				toolInput,
+				payload,
 			}),
 		permissionModeChanged: (requestId, permissionMode) =>
 			write({
@@ -326,15 +376,24 @@ export function createSidecarEmitter(
 			}),
 		planCaptured: (requestId, toolUseId, plan) =>
 			write({ id: requestId, type: "planCaptured", toolUseId, plan }),
-		userInputRequest: (requestId, userInputId, questions) =>
-			write({
-				id: requestId,
-				type: "userInputRequest",
-				userInputId,
-				questions,
-			}),
 		modelsListed: (requestId, provider, models) =>
 			write({ id: requestId, type: "modelsListed", provider, models }),
+		contextUsageUpdated: (requestId, sessionId, meta) =>
+			write({
+				id: requestId,
+				type: "contextUsageUpdated",
+				sessionId,
+				meta,
+			}),
+		contextUsageResult: (requestId, meta) =>
+			write({ id: requestId, type: "contextUsageResult", meta }),
+		codexGoalUpdated: (requestId, sessionId, goal) =>
+			write({
+				id: requestId,
+				type: "codexGoalUpdated",
+				sessionId,
+				goal,
+			}),
 		passthrough: (requestId, message) =>
 			write({ ...(message as Record<string, unknown>), id: requestId }),
 	};

@@ -734,8 +734,8 @@ html.light .dust i {
 	transform-style: preserve-3d;
 	transition: transform 320ms var(--ease-out);
 	will-change: transform;
-	/* Magic Card — cursor-tracked spotlight + border glow.
-	 * --mx / --my are set from JS (px relative to stage top-left). */
+	/* Magic Card spotlight variables are reserved for the disabled hover
+	 * highlight block below. */
 	--mx: -500px;
 	--my: -500px;
 	--magic-spot-size: 340px;
@@ -755,9 +755,8 @@ html.light .mock-stage {
  * DISABLED per design feedback: the bright hover spot fights the atmospheric
  * smoke/burst system (dark-mode white bloom reads as a blob, light-mode
  * bright edge reads as a smudge). To re-enable, uncomment all four rules
- * below. The supporting JS (--mx/--my writes, .hovering class toggle) and
- * the --magic-* CSS vars are kept intact so flipping this back on is a
- * single edit. */
+ * below. The --magic-* CSS vars are kept intact so flipping this back on
+ * stays localized to CSS. */
 /*
 .mock-stage::before {
 	content: "";
