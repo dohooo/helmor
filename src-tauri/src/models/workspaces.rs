@@ -241,6 +241,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
     default_branch: &str,
     status: WorkspaceStatus,
     timestamp: &str,
+    runtime_name: Option<&str>,
 ) -> Result<()> {
     insert_initializing_workspace_and_session_with_mode(
         repository,
@@ -252,6 +253,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
         WorkspaceMode::Worktree,
         status,
         timestamp,
+        runtime_name,
     )
 }
 
@@ -266,6 +268,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     mode: WorkspaceMode,
     status: WorkspaceStatus,
     timestamp: &str,
+    runtime_name: Option<&str>,
 ) -> Result<()> {
     let mut connection = db::write_conn()?;
     let transaction = connection
@@ -302,10 +305,11 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               status,
               unread,
               created_at,
-              updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
+              updated_at,
+              runtime_name
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12, ?13)
             "#,
-            (
+            rusqlite::params![
                 workspace_id,
                 repository.id.as_str(),
                 directory_name,
@@ -318,7 +322,8 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 next_order,
                 status,
                 timestamp,
-            ),
+                runtime_name,
+            ],
         )
         .context("Failed to insert initializing workspace")?;
 

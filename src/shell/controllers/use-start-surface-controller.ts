@@ -39,6 +39,15 @@ export type StartSurfaceState = {
 	startRepository: RepositoryCreateOption | null;
 	startSourceBranch: string;
 	startMode: WorkspaceMode;
+	/**
+	 * Phase 22c: selected runtime for the next workspace creation. `null`
+	 * (or `"local"`) means "use the local runtime"; any other value
+	 * binds the new workspace's `workspaces.runtime_name` column to a
+	 * registered remote on insert. The Where picker in the Start page
+	 * drives this; the controller forwards it to
+	 * `createWorkspaceFromStartComposer`.
+	 */
+	startRuntimeName: string | null;
 	startPendingNewBranch: string | null;
 	startInboxProviderTab: string;
 	startInboxProviderSourceTab: string;
@@ -57,6 +66,8 @@ export type StartSurfaceActions = {
 	selectRepository(repository: RepositoryCreateOption): void;
 	selectSourceBranch(branch: string): void;
 	selectMode(mode: WorkspaceMode): void;
+	/** Phase 22c: pick a registered runtime (or `null` for local). */
+	selectRuntime(runtimeName: string | null): void;
 	stashPendingNewBranch(branch: string): void;
 	refetchBranches(): void;
 	setInboxProviderTab(tab: string): void;
@@ -129,6 +140,11 @@ export function useStartSurfaceController(
 	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
 		useState<readonly string[]>(EMPTY_STRING_LIST);
 	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
+	// Phase 22c: which registered runtime the next-created workspace
+	// should bind to. `null` = local (the historical default); any
+	// other value names a registry entry. The Where picker in
+	// `WorkspaceStartPage` reads + writes this via `selectRuntime`.
+	const [startRuntimeName, setStartRuntimeName] = useState<string | null>(null);
 
 	// Latest cross-controller callbacks, kept in refs so AppShell can pass
 	// inline arrows without thrashing every downstream useCallback.
@@ -249,6 +265,19 @@ export function useStartSurfaceController(
 		setStartPendingNewBranch(null);
 	}, []);
 
+	const selectRuntime = useCallback((runtimeName: string | null) => {
+		// `"local"` and `""` both collapse to null so the controller's
+		// state stays canonical (null = local) and downstream code can
+		// rely on `!== null` to detect a remote pin.
+		const normalised =
+			runtimeName === null ||
+			runtimeName.trim() === "" ||
+			runtimeName === "local"
+				? null
+				: runtimeName;
+		setStartRuntimeName(normalised);
+	}, []);
+
 	const stashPendingNewBranch = useCallback((branch: string) => {
 		// Lazy: just remember the desired name. Actual `git checkout -b` runs
 		// at submit time inside `prepareComposer`.
@@ -327,6 +356,7 @@ export function useStartSurfaceController(
 					repoId: startRepository.id,
 					sourceBranch: startSourceBranch,
 					mode: startMode,
+					runtimeName: startRuntimeName,
 					submitMode: options?.startSubmitMode ?? "startNow",
 					editorStateSnapshot: payload.editorStateSnapshot,
 					composerConfig: {
@@ -430,6 +460,7 @@ export function useStartSurfaceController(
 			startPendingLinkedDirectories,
 			startPendingNewBranch,
 			startRepository?.id,
+			startRuntimeName,
 			startSourceBranch,
 		],
 	);
@@ -462,6 +493,7 @@ export function useStartSurfaceController(
 		selectRepository,
 		selectSourceBranch,
 		selectMode,
+		selectRuntime,
 		stashPendingNewBranch,
 		refetchBranches,
 		setInboxProviderTab: setStartInboxProviderTab,
@@ -479,6 +511,7 @@ export function useStartSurfaceController(
 			startRepository,
 			startSourceBranch,
 			startMode,
+			startRuntimeName,
 			startPendingNewBranch,
 			startInboxProviderTab,
 			startInboxProviderSourceTab,
@@ -499,6 +532,7 @@ export function useStartSurfaceController(
 			startInboxStateFilterBySource,
 			startLinkedDirectoriesController,
 			startMode,
+			startRuntimeName,
 			startPendingNewBranch,
 			startRepository,
 			startRepositoryId,

@@ -2854,18 +2854,26 @@ export async function createWorkspaceFromRepo(
  * `sourceBranch` (optional): branch to branch the new workspace from. When
  * omitted, the repo's default branch is used. The kanban "create" flow
  * forwards the user's branch picker selection here.
+ *
+ * `runtimeName` (optional, phase 22c): binds the new workspace to a
+ * registered remote runtime at creation time. `"local"` and `null` both
+ * mean "use the local runtime" — the backend collapses them into a NULL
+ * `workspaces.runtime_name` column so the resolver's NULL/"local"
+ * equivalence holds.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
 	initialStatus?: WorkspaceStatus | null,
+	runtimeName?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
 		initialStatus: initialStatus ?? null,
+		runtimeName: runtimeName ?? null,
 	});
 }
 

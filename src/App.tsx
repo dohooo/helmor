@@ -63,6 +63,7 @@ import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	createSession,
 	exitOnboardingWindowMode,
+	listRemoteRuntimes,
 	openWorkspaceInEditor,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
@@ -467,6 +468,28 @@ function AppShell({
 		startSurfaceActions.setInboxStateFilterBySource;
 	const startSourceBranch = startSurface.startSourceBranch;
 	const startMode = startSurface.startMode;
+	const startRuntimeName = startSurface.startRuntimeName;
+	const handleStartRuntimeSelect = startSurfaceActions.selectRuntime;
+	// Phase 22c: fetch registered runtimes so the Where picker in the
+	// Start page can list the non-local ones. The picker only appears
+	// when at least one remote is registered; the runtime-debug panel
+	// is where the operator adds them. Stale-while-revalidate suits
+	// the flow — the dropdown isn't an inner loop.
+	const remoteRuntimesQuery = useQuery({
+		queryKey: ["remote-runtimes"],
+		queryFn: listRemoteRuntimes,
+		refetchOnWindowFocus: true,
+		staleTime: 30_000,
+	});
+	const startRuntimeOptions = useMemo(() => {
+		const all = remoteRuntimesQuery.data ?? [];
+		// The "Local" option is always rendered by the picker; filter
+		// the built-in entry out of the dropdown's "remote" list so it
+		// doesn't appear twice.
+		return all
+			.filter((entry) => !entry.isLocal)
+			.map((entry) => ({ name: entry.name }));
+	}, [remoteRuntimesQuery.data]);
 	const handleStartSourceBranchSelect = startSurfaceActions.selectSourceBranch;
 	const handleStartRepositorySelect = startSurfaceActions.selectRepository;
 	const handleAddRepositoryNeedsStart =
@@ -1494,6 +1517,9 @@ function AppShell({
 													onSelectBranch={handleStartSourceBranchSelect}
 													mode={startMode}
 													onModeChange={startSurfaceActions.selectMode}
+													runtimes={startRuntimeOptions}
+													selectedRuntime={startRuntimeName}
+													onSelectRuntime={handleStartRuntimeSelect}
 													onCreateAndCheckoutBranch={async (branch) => {
 														if (!startRepository) return;
 														// Lazy: just remember the desired name. Actual
