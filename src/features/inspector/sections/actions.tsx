@@ -8,7 +8,6 @@ import {
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
-import { motion } from "motion/react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -49,6 +48,7 @@ import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import {
+	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_SECTION_TITLE_CLASS,
@@ -322,17 +322,19 @@ export function ActionsSection({
 		[workspaceId],
 	);
 	return (
-		<motion.section
+		<section
 			ref={sectionRef}
 			aria-label="Inspector section Actions"
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
-			initial={false}
-			animate={{
-				height: INSPECTOR_SECTION_HEADER_HEIGHT + (open ? bodyHeight : 0),
+			style={{
+				// 高度走 CSS 变量,拖动期间由 mousemove 直接更新。collapsed 时固定 header 高,
+				// 跳过 calc()。fallback 兜底 layout-effect 写 var 之前那一帧的 mount。
+				height: open
+					? `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px))`
+					: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`,
 			}}
-			transition={{ duration: 0 }}
 		>
 			<div
 				className={cn(
@@ -366,7 +368,9 @@ export function ActionsSection({
 					<ScrollArea
 						aria-label="Actions panel body"
 						className="min-h-0 bg-muted/18 text-[11.5px]"
-						style={{ height: `${bodyHeight}px` }}
+						style={{
+							height: `var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px)`,
+						}}
 					>
 						{showHelpersGroup && (
 							<>
@@ -521,7 +525,7 @@ export function ActionsSection({
 					</ScrollArea>
 				</div>
 			)}
-		</motion.section>
+		</section>
 	);
 }
 

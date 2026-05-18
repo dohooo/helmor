@@ -19,7 +19,6 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
@@ -65,7 +64,10 @@ import {
 import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import { INSPECTOR_SECTION_HEADER_HEIGHT } from "../layout";
+import {
+	INSPECTOR_CHANGES_BODY_VAR,
+	INSPECTOR_SECTION_HEADER_HEIGHT,
+} from "../layout";
 import { useChangesState } from "./changes/use-changes-state";
 import { useGitMutations } from "./changes/use-git-mutations";
 import { GitSectionHeader } from "./git-section-header";
@@ -273,12 +275,14 @@ export function ChangesSection({
 	const isForgeRefreshing = workspaceId !== null && forgeIsRefreshing;
 
 	return (
-		<motion.section
+		<section
 			aria-label="Inspector section Git"
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			initial={false}
-			animate={{ height: INSPECTOR_SECTION_HEADER_HEIGHT + bodyHeight }}
-			transition={{ duration: 0 }}
+			style={{
+				// 拖动期间 var() 由 mousemove 直接更新,完全跳过 React。fallback 兜底
+				// 首次 mount 时 layout-effect 还没把 var 写到容器上的那一帧。
+				height: `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_CHANGES_BODY_VAR}, ${bodyHeight}px))`,
+			}}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
@@ -385,7 +389,7 @@ export function ChangesSection({
 					</div>
 				)}
 			</ScrollArea>
-		</motion.section>
+		</section>
 	);
 }
 

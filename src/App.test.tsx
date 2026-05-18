@@ -187,14 +187,27 @@ describe("App", () => {
 			render(<App />);
 			await screen.findByRole("main", { name: "Application shell" });
 
+			// Section heights are driven by CSS variables on the inspector
+			// container so that mid-drag mousemove can update them without
+			// going through React. Verify the container has the right vars
+			// written via useLayoutEffect (synchronous, runs before first paint).
 			await waitFor(() => {
-				expect(screen.getByLabelText("Inspector section Git")).toHaveStyle({
-					height: "273px",
-				});
+				const container = screen.getByLabelText("Inspector section Git")
+					.parentElement as HTMLElement;
+				expect(
+					container.style.getPropertyValue("--inspector-changes-body-height"),
+				).toBe("240px");
 			});
-			expect(screen.getByLabelText("Inspector section Actions")).toHaveStyle({
-				height: "594px",
-			});
+			const container = screen.getByLabelText("Inspector section Git")
+				.parentElement as HTMLElement;
+			expect(
+				container.style.getPropertyValue("--inspector-actions-body-height"),
+			).toBe("561px");
+			expect(
+				container.style.getPropertyValue("--inspector-tabs-body-height"),
+			).toBe("0px");
+			// Tabs wrapper is collapsed (tabsOpen=false default) so its height
+			// is fixed at the section-header constant — not driven by the var.
 			const tabsWrapper = screen.getByLabelText("Inspector section Tabs")
 				.parentElement?.parentElement;
 			expect(tabsWrapper).toHaveStyle({
