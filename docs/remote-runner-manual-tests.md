@@ -17,9 +17,29 @@ Tick each item before tagging a release that bumps anything under
 2. Stand up a real remote host with SSH key auth working
    (`ssh <host>` should succeed non-interactively).
 3. Open **Settings → Runtime debug**.
-4. Add a runtime: choose **ssh**, enter the host, click **Connect**.
+4. Add a runtime: choose **SSH**, enter the host, click **Connect**.
    The runtime should appear in the list with a green "connected"
    chip.
+
+### Command transport (phase 21b)
+
+For non-SSH transports (Teleport, Tailscale SSH, kubectl exec):
+
+1. Pick **Command** in the Connect form.
+2. Paste the argv list — e.g. `tsh ssh dev-box helmor-server --proxy`
+   or, for embedded-whitespace tokens, switch to the one-token-
+   per-line form by hitting Enter inside the textarea.
+3. The "Parsed:" preview underneath confirms the argv the wrapper
+   will send. Click **Connect**.
+4. ✅ The runtime should appear in the list with `cmd: <prog>` as
+   its connection label.
+5. ❌ If the connect hangs > 10 s, the argv probably isn't invoking
+   `helmor-server --proxy` correctly. Check `{data_dir}/logs/` for
+   stderr from the spawned process.
+
+Auto-install is **not** available for Command transports — the
+operator must have `helmor-server` already installed on the
+remote side.
 
 ## File tree — 5k-file repo over SSH
 

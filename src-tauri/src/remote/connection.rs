@@ -36,6 +36,15 @@ pub enum RuntimeConnectionConfig {
     /// system ssh-agent / key files provide — the spike intentionally
     /// doesn't try to manage credentials.
     Ssh { host: String, remote_binary: String },
+    /// Spawn an arbitrary `argv`. Used for transports like Teleport
+    /// (`tsh ssh host helmor-server --proxy`), Tailscale SSH
+    /// (`tailscale ssh host helmor-server --proxy`), or
+    /// `kubectl exec`-based dev pods. The argv list is handed to
+    /// `Command` verbatim — no shell tokenisation — so quoting hazards
+    /// don't apply. Auto-install is out of scope for this transport;
+    /// the operator is expected to have `helmor-server` already
+    /// installed on the remote side.
+    Command { argv: Vec<String> },
 }
 
 impl RuntimeConnectionConfig {
@@ -51,6 +60,26 @@ impl RuntimeConnectionConfig {
                 host,
                 remote_binary,
             } => format!("ssh: {host} {remote_binary}"),
+            Self::Command { argv } => {
+                // Join with spaces for the label only — the underlying
+                // transport never shell-tokenises argv, so a label
+                // with spaces is unambiguous in context (the form
+                // shows the literal argv list next to it). Single
+                // quotes around tokens with whitespace keep the label
+                // copy-pasteable into a debug log without ambiguity.
+                let joined = argv
+                    .iter()
+                    .map(|s| {
+                        if s.contains(char::is_whitespace) {
+                            format!("'{s}'")
+                        } else {
+                            s.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("cmd: {joined}")
+            }
         }
     }
 }
@@ -103,8 +132,61 @@ mod tests {
             remote_binary: "y".into(),
         }
         .describe();
+        let d = RuntimeConnectionConfig::Command {
+            argv: vec!["tsh".into(), "ssh".into()],
+        }
+        .describe();
         assert_ne!(a, b);
         assert_ne!(b, c);
         assert_ne!(a, c);
+        assert_ne!(c, d);
+    }
+
+    #[test]
+    fn command_variant_serialises_with_camel_case_tag_and_argv_array() {
+        let cfg = RuntimeConnectionConfig::Command {
+            argv: vec![
+                "tsh".into(),
+                "ssh".into(),
+                "host".into(),
+                "helmor-server".into(),
+                "--proxy".into(),
+            ],
+        };
+        let wire = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(wire["type"], "command");
+        let argv = wire["argv"].as_array().expect("argv is an array");
+        assert_eq!(argv.len(), 5);
+        assert_eq!(argv[0], "tsh");
+        assert_eq!(argv[4], "--proxy");
+    }
+
+    #[test]
+    fn command_variant_round_trips_through_serde() {
+        let cfg = RuntimeConnectionConfig::Command {
+            argv: vec![
+                "tailscale".into(),
+                "ssh".into(),
+                "dev-box".into(),
+                "helmor-server".into(),
+                "--proxy".into(),
+            ],
+        };
+        let wire = serde_json::to_string(&cfg).unwrap();
+        let restored: RuntimeConnectionConfig = serde_json::from_str(&wire).unwrap();
+        assert_eq!(cfg, restored);
+    }
+
+    #[test]
+    fn command_variant_describe_quotes_tokens_with_whitespace() {
+        // A label with a space in a token would be ambiguous when
+        // copy-pasted from a log — single-quote those tokens so the
+        // boundary is visible.
+        let cfg = RuntimeConnectionConfig::Command {
+            argv: vec!["ssh".into(), "user@host with space".into(), "cmd".into()],
+        };
+        let label = cfg.describe();
+        assert!(label.contains("'user@host with space'"), "{label}");
+        assert!(label.starts_with("cmd: "), "{label}");
     }
 }

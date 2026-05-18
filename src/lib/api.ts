@@ -755,7 +755,14 @@ export type RuntimeState =
 
 export type RuntimeConnectionConfig =
 	| { type: "local"; binaryPath?: string }
-	| { type: "ssh"; host: string; remoteBinary: string };
+	| { type: "ssh"; host: string; remoteBinary: string }
+	/**
+	 * Custom transport (Teleport, Tailscale SSH, kubectl exec, etc.).
+	 * `argv` is the literal token list — no shell tokenisation happens
+	 * anywhere along the wire, so spaces / quotes / special chars inside
+	 * a single token survive intact.
+	 */
+	| { type: "command"; argv: string[] };
 
 export type RuntimeEntry = {
 	name: string;
@@ -833,6 +840,20 @@ export async function connectRemoteRuntime(
 		host,
 		remoteBinary,
 	});
+}
+
+/**
+ * Connect via a custom transport (Teleport, Tailscale SSH,
+ * `kubectl exec`, etc.). `argv` is the literal token list — no shell
+ * tokenisation, so embedded whitespace inside a single token survives
+ * intact. The argv must invoke `helmor-server --proxy` (or equivalent)
+ * on the remote side; auto-install is out of scope for this transport.
+ */
+export async function connectCommandRuntime(
+	name: string,
+	argv: string[],
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_command_runtime", { name, argv });
 }
 
 /**

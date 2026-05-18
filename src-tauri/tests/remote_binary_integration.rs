@@ -23,8 +23,8 @@ use helmor_lib::remote::{
         WorkspaceFileTreeParams, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
         WorkspaceReadFileAtRefParams, WorkspaceReadFileParams, WorkspaceStatFileParams,
     },
-    OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RpcClient, RuntimeKind, WorkspaceStatusMethod,
-    WorkspaceStatusParams,
+    CommandTransport, OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RemoteTransport, RpcClient,
+    RuntimeKind, WorkspaceStatusMethod, WorkspaceStatusParams,
 };
 
 /// Path to the just-built `helmor-server` binary. Provided by Cargo
@@ -73,6 +73,35 @@ fn spawned_helmor_server_completes_handshake_via_rpc_client() {
     assert!(
         !info.hostname.is_empty(),
         "server should report a non-empty hostname"
+    );
+}
+
+#[test]
+fn spawned_helmor_server_completes_handshake_via_command_transport() {
+    // Phase 21b end-to-end: drive the real binary through the new
+    // `CommandTransport` instead of the ad-hoc `connect_command` path.
+    // Proves the trait dispatch lands on the same dispatcher (same
+    // handshake, same wire shape) so the registry's command-transport
+    // entries actually work — and that the persisted Command variant
+    // round-trips through `connect_from_config` without surprise.
+    let transport: Arc<dyn RemoteTransport> =
+        Arc::new(CommandTransport::new(vec![HELMOR_SERVER_BIN.to_string()]));
+    let client = RpcClient::connect_with_transport(transport)
+        .expect("handshake through CommandTransport should succeed");
+
+    let info = client.server_info();
+    assert_eq!(info.protocol_version, helmor_lib::remote::PROTOCOL_VERSION);
+    // A real workspace.status round-trip through the same pipe — proves
+    // the trait isn't just a connect-time hook.
+    let repo = init_repo();
+    let status = client
+        .call::<WorkspaceStatusMethod>(WorkspaceStatusParams {
+            workspace_dir: repo.path().display().to_string(),
+        })
+        .expect("workspace.status round-trip via CommandTransport");
+    assert!(
+        status.is_clean,
+        "fresh repo via CommandTransport should report clean"
     );
 }
 

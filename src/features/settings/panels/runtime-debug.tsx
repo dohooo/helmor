@@ -18,6 +18,7 @@ import {
 	attachRemoteTerminal,
 	clearWorkspaceRuntimeBinding,
 	closeRemoteTerminal,
+	connectCommandRuntime,
 	connectLocalRuntime,
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
@@ -301,7 +302,33 @@ function describeConfig(config: RuntimeEntry["config"]): string | undefined {
 				: "local: auto-detect";
 		case "ssh":
 			return `ssh: ${config.host} ${config.remoteBinary}`;
+		case "command":
+			return `cmd: ${config.argv.join(" ")}`;
 	}
+}
+
+/**
+ * Tokenise a free-form argv string the user typed into the connect
+ * form. Supports two flavours so muscle-memory `tsh ssh host bin
+ * --proxy` works AND tokens with embedded whitespace stay representable:
+ *
+ * - Multi-line input → one token per non-empty line.
+ * - Single-line input → split on any whitespace run.
+ *
+ * Both flavours trim, and drop empty tokens. The backend rejects an
+ * empty argv with a clear error, but we filter here so a stray space
+ * at the end of the input doesn't trip that check.
+ */
+export function parseArgvInput(raw: string): string[] {
+	const trimmed = raw.trim();
+	if (!trimmed) return [];
+	if (trimmed.includes("\n")) {
+		return trimmed
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+	}
+	return trimmed.split(/\s+/).filter((token) => token.length > 0);
 }
 
 function HealthDescription({
@@ -330,7 +357,7 @@ function HealthDescription({
 
 // ── 2. Connect form ──────────────────────────────────────────────────
 
-type ConnectMode = "local" | "ssh";
+type ConnectMode = "local" | "ssh" | "command";
 
 function ConnectSection() {
 	const [mode, setMode] = useState<ConnectMode>("local");
@@ -338,6 +365,11 @@ function ConnectSection() {
 	const [binaryPath, setBinaryPath] = useState("");
 	const [host, setHost] = useState("");
 	const [remoteBinary, setRemoteBinary] = useState("helmor-server");
+	// `argv` input is free-form; the parser handles both space- and
+	// line-separated flavours. We keep the raw text in state so the
+	// preview can render the parsed argv next to it.
+	const [argvInput, setArgvInput] = useState("");
+	const parsedArgv = useMemo(() => parseArgvInput(argvInput), [argvInput]);
 
 	// SSH hostname suggestions sourced from `~/.ssh/config`. Loaded
 	// lazily on mount because the file rarely changes mid-session and
@@ -360,6 +392,12 @@ function ConnectSection() {
 			if (mode === "local") {
 				return connectLocalRuntime(name, binaryPath.trim() || undefined);
 			}
+			if (mode === "command") {
+				if (parsedArgv.length === 0) {
+					throw new Error("argv must not be empty");
+				}
+				return connectCommandRuntime(name, parsedArgv);
+			}
 			if (!host.trim()) {
 				throw new Error("host must not be empty");
 			}
@@ -372,6 +410,7 @@ function ConnectSection() {
 			setName("");
 			setBinaryPath("");
 			setHost("");
+			setArgvInput("");
 		},
 	});
 
@@ -380,7 +419,7 @@ function ConnectSection() {
 			<SectionHeader
 				icon={<Plug2 className="size-3.5" strokeWidth={1.8} />}
 				title="Connect a runtime"
-				description="`local-binary` spawns the bundled helmor-server directly — handy for smoke testing the RPC vertical without an SSH host."
+				description="`Local binary` spawns the bundled helmor-server directly (handy for smoke testing). `SSH` runs `ssh <host>` and auto-installs the remote binary on first connect. `Command` runs an arbitrary argv (Teleport, Tailscale SSH, kubectl exec, etc.); the remote binary must already be installed."
 			/>
 			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
 				<ToggleGroup
@@ -394,6 +433,9 @@ function ConnectSection() {
 					</ToggleGroupItem>
 					<ToggleGroupItem value="ssh" aria-label="SSH">
 						SSH
+					</ToggleGroupItem>
+					<ToggleGroupItem value="command" aria-label="Command">
+						Command
 					</ToggleGroupItem>
 				</ToggleGroup>
 
@@ -420,7 +462,7 @@ function ConnectSection() {
 								placeholder="(auto-detect via HELMOR_SERVER_PATH or exe dir)"
 							/>
 						</>
-					) : (
+					) : mode === "ssh" ? (
 						<>
 							<Label htmlFor="runtime-host" className="text-xs">
 								Host
@@ -457,6 +499,38 @@ function ConnectSection() {
 								onChange={(e) => setRemoteBinary(e.target.value)}
 								placeholder="helmor-server"
 							/>
+						</>
+					) : (
+						<>
+							<Label htmlFor="runtime-argv" className="text-xs">
+								Command argv
+							</Label>
+							<div className="flex flex-col gap-1">
+								<textarea
+									id="runtime-argv"
+									value={argvInput}
+									onChange={(e) => setArgvInput(e.target.value)}
+									placeholder={
+										"tsh ssh dev-box helmor-server --proxy\n" +
+										"(or one token per line — handy for args containing whitespace)"
+									}
+									rows={3}
+									className={cn(
+										"flex w-full rounded-md border border-input bg-transparent px-3 py-2",
+										"font-mono text-[11px] shadow-sm transition-colors",
+										"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+									)}
+								/>
+								<span
+									className="text-[11px] text-muted-foreground"
+									aria-label="Parsed argv preview"
+								>
+									Parsed:{" "}
+									{parsedArgv.length === 0
+										? "(empty)"
+										: parsedArgv.map((t) => JSON.stringify(t)).join(" ")}
+								</span>
+							</div>
 						</>
 					)}
 				</div>

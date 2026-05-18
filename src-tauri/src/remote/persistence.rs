@@ -36,10 +36,20 @@ use super::connection::RuntimeConnectionConfig;
 use super::methods::WorkspaceStatusResult;
 use super::registry::{RuntimeRegistry, RuntimeState};
 use super::runtime::{RemoteRuntime, RuntimeHealth, RuntimeKind};
+use super::transport::{CommandTransport, RemoteTransport};
 
-/// Schema version on the persisted file. Bump when the on-disk
-/// shape changes in a way the loader has to branch on.
-const CURRENT_VERSION: u8 = 1;
+/// Schema version on the persisted file. Bumped from 1 → 2 in phase
+/// 21b when [`RuntimeConnectionConfig::Command`] joined the variant
+/// list — v1 readers can't deserialise the new tag (`serde(tag =
+/// "type")` errors on unknown), so the version field is the explicit
+/// "expect new shapes here" signal even though it doesn't gate the
+/// deserialiser by itself.
+///
+/// Older v1 files are still loadable — they only contain `Local` /
+/// `Ssh` entries, both of which still deserialise — so the bump is a
+/// forward-compat marker rather than a real migration. The first
+/// successful save after a Helmor upgrade rewrites the file as v2.
+const CURRENT_VERSION: u8 = 2;
 
 /// Filename inside `<data_dir>`. Centralised so tests can override
 /// via [`file_path`] under a tempdir.
@@ -197,6 +207,20 @@ pub fn connect_from_config(config: &RuntimeConnectionConfig) -> Result<Arc<dyn R
                 None => remote_binary.clone(),
             };
             let runtime = RemoteSshRuntime::connect_ssh(host, &resolved_binary)?;
+            Ok(Arc::new(runtime))
+        }
+        RuntimeConnectionConfig::Command { argv } => {
+            // No auto-install for command transports — the operator
+            // has to put helmor-server in the right place themselves
+            // because we can't introspect the destination filesystem
+            // (the remote half of `kubectl exec` / `tsh ssh` is opaque
+            // until the binary is running). The argv list is passed
+            // through unchanged; the transport's own checks reject
+            // an empty argv or empty program with a clear error.
+            let transport: Arc<dyn RemoteTransport> = Arc::new(CommandTransport::new(argv.clone()));
+            let peer_label = CommandTransport::new(argv.clone()).peer_label();
+            let client = RpcClient::connect_with_transport(transport)?;
+            let runtime = RemoteSshRuntime::new(client, peer_label);
             Ok(Arc::new(runtime))
         }
     }
@@ -359,6 +383,15 @@ mod tests {
     }
 
     #[test]
+    fn current_version_is_v2_after_phase_21b() {
+        // Wedges the version bump so a future refactor that drops the
+        // marker (or rolls it back) trips this test instead of
+        // silently breaking forward-compat for clients that key off
+        // it.
+        assert_eq!(CURRENT_VERSION, 2);
+    }
+
+    #[test]
     fn save_then_load_round_trips_entries() {
         let d = dir();
         let snapshot = PersistedRuntimes::new(vec![
@@ -396,6 +429,62 @@ mod tests {
         fs::write(file_path(d.path()), "{not json").unwrap();
         let loaded = load(d.path());
         assert!(loaded.entries.is_empty());
+    }
+
+    #[test]
+    fn loader_accepts_a_v1_file_with_only_local_and_ssh_entries() {
+        // Pre-phase-21b files claim `"version": 1` and only contain
+        // Local / Ssh entries. The loader should accept them
+        // verbatim — the version field is informational; the actual
+        // gate is whether each entry's tag deserialises.
+        let d = dir();
+        let v1_payload = serde_json::json!({
+            "version": 1,
+            "entries": [
+                { "name": "old-local", "config": { "type": "local" } },
+                {
+                    "name": "old-ssh",
+                    "config": {
+                        "type": "ssh",
+                        "host": "dev.box",
+                        "remoteBinary": "helmor-server"
+                    }
+                }
+            ]
+        });
+        fs::write(
+            file_path(d.path()),
+            serde_json::to_string_pretty(&v1_payload).unwrap(),
+        )
+        .unwrap();
+        let loaded = load(d.path());
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.entries[0].name, "old-local");
+        // The `version` field reflects whatever the file said —
+        // v1 readers don't rewrite the file on a read.
+        assert_eq!(loaded.version, 1);
+    }
+
+    #[test]
+    fn save_then_load_round_trips_a_command_entry() {
+        let d = dir();
+        let snapshot = PersistedRuntimes::new(vec![PersistedRuntimeEntry {
+            name: "teleport.dev".into(),
+            config: RuntimeConnectionConfig::Command {
+                argv: vec![
+                    "tsh".into(),
+                    "ssh".into(),
+                    "dev-box".into(),
+                    "helmor-server".into(),
+                    "--proxy".into(),
+                ],
+            },
+        }]);
+        save(d.path(), &snapshot);
+
+        let loaded = load(d.path());
+        assert_eq!(loaded.version, 2, "saves should be tagged with v2");
+        assert_eq!(loaded, snapshot);
     }
 
     #[test]

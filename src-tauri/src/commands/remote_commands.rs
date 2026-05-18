@@ -31,9 +31,10 @@ use crate::remote::{
         WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
         WorkspaceReadFileParams, WorkspaceStatFileParams, WorkspaceStatusResult,
     },
-    persistence, NotificationSubscription, OwnedTerminals, RemoteRuntime, RemoteSshRuntime,
-    RpcClient, RuntimeConnectionConfig, RuntimeHealth, RuntimeRegistry, RuntimeState,
-    WorkspaceRuntimeBinding, WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
+    persistence, CommandTransport, NotificationSubscription, OwnedTerminals, RemoteRuntime,
+    RemoteSshRuntime, RemoteTransport, RpcClient, RuntimeConnectionConfig, RuntimeHealth,
+    RuntimeRegistry, RuntimeState, WorkspaceRuntimeBinding, WorkspaceRuntimeBindings,
+    LOCAL_RUNTIME_NAME,
 };
 use crate::workspace::files::{EditorFileReadResponse, EditorFileStatResponse};
 
@@ -618,6 +619,41 @@ pub async fn connect_local_runtime(
         let cmd = std::process::Command::new(&path);
         let client = RpcClient::connect_command(cmd, label.clone())?;
         let runtime = RemoteSshRuntime::new(client, label);
+        let health = runtime.runtime_health()?;
+        registry.register(name, Arc::new(runtime), Some(config))?;
+        persist_registry(&registry);
+        Ok(health)
+    })
+    .await
+}
+
+/// Connect to a `helmor-server` reachable via an arbitrary `argv`
+/// list. The argv is handed straight to `Command`; no shell tokenises
+/// it, so quoting hazards don't apply. Used for transports like
+/// Teleport, Tailscale SSH, or `kubectl exec` where the wrapper isn't
+/// `ssh(1)` itself.
+///
+/// Auto-install is out of scope: the operator must have
+/// `helmor-server` pre-installed on the remote side and pass an argv
+/// that invokes it with `--proxy`. Mirrors the contract of
+/// [`connect_remote_runtime`] otherwise — same registry, same persist
+/// path, same idempotent reconnect on restart.
+#[tauri::command]
+pub async fn connect_command_runtime(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+    argv: Vec<String>,
+) -> CmdResult<RuntimeHealth> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        if argv.is_empty() {
+            bail!("argv must not be empty");
+        }
+        let config = RuntimeConnectionConfig::Command { argv: argv.clone() };
+        let transport: Arc<dyn RemoteTransport> = Arc::new(CommandTransport::new(argv.clone()));
+        let peer_label = CommandTransport::new(argv).peer_label();
+        let client = RpcClient::connect_with_transport(transport)?;
+        let runtime = RemoteSshRuntime::new(client, peer_label);
         let health = runtime.runtime_health()?;
         registry.register(name, Arc::new(runtime), Some(config))?;
         persist_registry(&registry);

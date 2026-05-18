@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 const apiMocks = vi.hoisted(() => ({
 	listRemoteRuntimes: vi.fn(),
 	getRuntimeHealth: vi.fn(),
+	connectCommandRuntime: vi.fn(),
 	connectLocalRuntime: vi.fn(),
 	connectRemoteRuntime: vi.fn(),
 	disconnectRemoteRuntime: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		listRemoteRuntimes: apiMocks.listRemoteRuntimes,
 		getRuntimeHealth: apiMocks.getRuntimeHealth,
+		connectCommandRuntime: apiMocks.connectCommandRuntime,
 		connectLocalRuntime: apiMocks.connectLocalRuntime,
 		connectRemoteRuntime: apiMocks.connectRemoteRuntime,
 		disconnectRemoteRuntime: apiMocks.disconnectRemoteRuntime,
@@ -54,7 +56,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	};
 });
 
-import { RuntimeDebugPanel } from "./runtime-debug";
+import { parseArgvInput, RuntimeDebugPanel } from "./runtime-debug";
 
 const LOCAL_ENTRY: RuntimeEntry = {
 	name: "local",
@@ -172,6 +174,89 @@ describe("RuntimeDebugPanel", () => {
 				"dev.box",
 				"helmor-server",
 			);
+		});
+	});
+
+	it("submits the Command form with the parsed argv when Command mode is picked", async () => {
+		const user = userEvent.setup();
+		apiMocks.connectCommandRuntime.mockResolvedValue(REMOTE_HEALTH);
+
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+
+		// Switch to Command mode + fill in argv. Space-separated form
+		// is the muscle-memory path the placeholder shows.
+		await user.click(screen.getByRole("radio", { name: /^Command$/i }));
+		await user.type(screen.getByLabelText(/Name/), "teleport-dev");
+		await user.type(
+			screen.getByLabelText(/Command argv/),
+			"tsh ssh dev-box helmor-server --proxy",
+		);
+
+		// The parsed preview should reflect what gets sent on the wire.
+		expect(screen.getByLabelText(/Parsed argv preview/)).toHaveTextContent(
+			'Parsed: "tsh" "ssh" "dev-box" "helmor-server" "--proxy"',
+		);
+
+		await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.connectCommandRuntime).toHaveBeenCalledWith(
+				"teleport-dev",
+				["tsh", "ssh", "dev-box", "helmor-server", "--proxy"],
+			);
+		});
+	});
+
+	it("refuses to submit Command form with an empty argv", async () => {
+		const user = userEvent.setup();
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+
+		await user.click(screen.getByRole("radio", { name: /^Command$/i }));
+		await user.type(screen.getByLabelText(/Name/), "broken");
+		// argv left empty.
+		await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+		await waitFor(() => {
+			expect(screen.getByText(/argv must not be empty/)).toBeInTheDocument();
+		});
+		// And the wire wrapper must NOT have been hit — empty argv
+		// should be caught client-side before the IPC.
+		expect(apiMocks.connectCommandRuntime).not.toHaveBeenCalled();
+	});
+
+	it("parses multi-line argv input as one token per line (preserves whitespace)", async () => {
+		// The line-per-token form is the escape hatch for argv slots
+		// that legitimately contain whitespace (e.g. a kubectl exec
+		// where the command is a multi-word shell invocation).
+		const user = userEvent.setup();
+		apiMocks.connectCommandRuntime.mockResolvedValue(REMOTE_HEALTH);
+
+		renderPanel();
+		await screen.findByLabelText(/Name/);
+		await user.click(screen.getByRole("radio", { name: /^Command$/i }));
+		await user.type(screen.getByLabelText(/Name/), "k8s-pod");
+		// Newlines via Shift+Enter in a textarea. user-event treats
+		// `{Enter}` as a regular newline inside a textarea.
+		const argvInput = screen.getByLabelText(/Command argv/);
+		await user.type(
+			argvInput,
+			"kubectl{Enter}exec{Enter}-it{Enter}helmor-pod{Enter}--{Enter}helmor-server --proxy",
+		);
+		await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.connectCommandRuntime).toHaveBeenCalledWith("k8s-pod", [
+				"kubectl",
+				"exec",
+				"-it",
+				"helmor-pod",
+				"--",
+				// Last line keeps embedded whitespace intact — that's the
+				// whole point of the line-per-token escape hatch.
+				"helmor-server --proxy",
+			]);
 		});
 	});
 
@@ -1101,5 +1186,52 @@ describe("RuntimeDebugPanel", () => {
 		expect(
 			screen.getByRole("button", { name: /Open terminal/ }),
 		).toBeInTheDocument();
+	});
+});
+
+describe("parseArgvInput", () => {
+	it("splits a single-line input on whitespace runs", () => {
+		expect(parseArgvInput("tsh ssh dev-box helmor-server --proxy")).toEqual([
+			"tsh",
+			"ssh",
+			"dev-box",
+			"helmor-server",
+			"--proxy",
+		]);
+	});
+
+	it("collapses repeated whitespace between tokens", () => {
+		// Stray double-spaces shouldn't surface as empty tokens —
+		// the backend rejects empty argv slots, so we filter here.
+		expect(parseArgvInput("a   b\t\tc")).toEqual(["a", "b", "c"]);
+	});
+
+	it("treats a multi-line input as one token per line", () => {
+		// The escape hatch for tokens with embedded whitespace.
+		const input = ["kubectl", "exec", "-it", "pod", "--", "helmor server"].join(
+			"\n",
+		);
+		expect(parseArgvInput(input)).toEqual([
+			"kubectl",
+			"exec",
+			"-it",
+			"pod",
+			"--",
+			"helmor server",
+		]);
+	});
+
+	it("returns an empty array for whitespace-only input", () => {
+		expect(parseArgvInput("")).toEqual([]);
+		expect(parseArgvInput("   ")).toEqual([]);
+		expect(parseArgvInput("\n  \n")).toEqual([]);
+	});
+
+	it("trims surrounding whitespace on each line in multi-line mode", () => {
+		expect(parseArgvInput("  tsh  \n  ssh  \n  dev-box  ")).toEqual([
+			"tsh",
+			"ssh",
+			"dev-box",
+		]);
 	});
 });

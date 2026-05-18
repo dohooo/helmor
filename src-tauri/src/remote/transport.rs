@@ -20,14 +20,16 @@
 //! right ergonomics for the registry path and keeps adding new
 //! transports a one-file change.
 //!
-//! ## Scope of phase 21a (this commit)
+//! ## Scope after phase 21b
 //!
-//! Surface-only: the trait + the [`OpenSshTransport`] impl that's a
-//! verbatim lift of `connect_ssh`'s existing arg-building, plus a
-//! placeholder [`CommandTransport`] whose `spawn_pipe` bails. Phase
-//! 21b fills the command transport in and grows the persistence wire
-//! shape (`RuntimeConnectionConfig::Command`). Phase 21c/d add the
-//! SSH-config maturity work. None of that lands here.
+//! Two production transports today: [`OpenSshTransport`] (verbatim
+//! lift of the pre-phase-21 `connect_ssh` arg-building) and
+//! [`CommandTransport`] (any user-supplied argv list — Teleport,
+//! Tailscale SSH, `kubectl exec`, etc.). The persistence layer's
+//! [`super::connection::RuntimeConnectionConfig`] grew a `Command`
+//! variant alongside the existing `Local` and `Ssh`; the registry
+//! restores all three transparently at boot. Phase 21c/d add SSH
+//! config maturity (`Include` directives + `Match` blocks).
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -191,24 +193,29 @@ impl RemoteTransport for OpenSshTransport {
     }
 }
 
-// ── Command (placeholder; phase 21b fills in) ──────────────────────
+// ── Command transport ──────────────────────────────────────────────
 
 /// Wraps any user-supplied `argv` as a transport. The argv form (not
 /// a shell line) avoids quoting hazards: the desktop tokenises in the
 /// UI, the transport hands the tokens straight to `Command`, no shell
-/// is involved.
+/// is involved. Suitable for Teleport (`tsh ssh host helmor-server
+/// --proxy`), Tailscale SSH (`tailscale ssh host helmor-server
+/// --proxy`), `kubectl exec`-based dev pods, or any pre-installed
+/// helmor-server reachable via a single `Command` invocation.
 ///
-/// **Phase 21a status:** the type + `RemoteTransport` impl are landed
-/// so the trait surface compiles. `spawn_pipe` bails with a clear
-/// message until phase 21b adds the real implementation alongside the
-/// persistence migration (`RuntimeConnectionConfig::Command`) and the
-/// frontend transport picker.
+/// **Auto-install is out of scope for `CommandTransport`.** The
+/// `OpenSshTransport` scp's the binary up on first connect; for
+/// command transports the operator is expected to have the binary
+/// pre-installed on the remote side (and the argv must invoke it
+/// with `--proxy` so it speaks JSON-RPC on stdio).
 #[derive(Debug, Clone)]
 pub struct CommandTransport {
     argv: Vec<String>,
 }
 
 impl CommandTransport {
+    /// Construct from a non-empty argv list. The first element is the
+    /// binary to invoke; the rest are passed as arguments.
     pub fn new(argv: Vec<String>) -> Self {
         Self { argv }
     }
@@ -216,14 +223,40 @@ impl CommandTransport {
     pub fn argv(&self) -> &[String] {
         &self.argv
     }
+
+    /// Human-readable peer label. Uses the binary name (first argv
+    /// element) so log lines disambiguate between e.g. `cmd:tsh` and
+    /// `cmd:tailscale` runtimes without dumping the whole argv.
+    pub fn peer_label(&self) -> String {
+        match self.argv.first() {
+            Some(prog) => format!("cmd:{prog}"),
+            None => "cmd:<empty>".to_string(),
+        }
+    }
+
+    /// Build the literal `Command` this transport would spawn, without
+    /// actually spawning. Mirrors [`OpenSshTransport::build_command`]
+    /// so the test surface stays consistent across transports.
+    pub fn build_command(&self) -> Result<Command> {
+        let (program, rest) = self
+            .argv
+            .split_first()
+            .ok_or_else(|| anyhow!("CommandTransport argv must not be empty"))?;
+        if program.is_empty() {
+            anyhow::bail!("CommandTransport argv[0] (program) must not be empty");
+        }
+        let mut cmd = Command::new(program);
+        for arg in rest {
+            cmd.arg(arg);
+        }
+        Ok(cmd)
+    }
 }
 
 impl RemoteTransport for CommandTransport {
     fn spawn_pipe(&self) -> Result<TransportPipe> {
-        anyhow::bail!(
-            "CommandTransport is not yet implemented (phase 21b); argv={:?}",
-            self.argv
-        )
+        let cmd = self.build_command()?;
+        spawn_command_as_pipe(cmd, self.peer_label())
     }
 }
 
@@ -410,21 +443,87 @@ mod tests {
     }
 
     #[test]
-    fn command_transport_bails_with_argv_in_message_until_phase_21b() {
-        // Documents the intentional 21a state: the type compiles and
-        // satisfies `RemoteTransport`, but the spawn_pipe surface
-        // tells callers to wait for 21b. Useful regression check —
-        // when 21b lands and replaces this, the test gets retargeted.
-        let transport = CommandTransport::new(vec!["tsh".into(), "ssh".into(), "box".into()]);
-        let err = transport.spawn_pipe().expect_err("placeholder must bail");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("not yet implemented"),
-            "error should signal the placeholder status: {msg}"
+    fn command_transport_build_command_passes_argv_through_unmodified() {
+        // Whitespace inside an arg must not be split — the whole point
+        // of taking an argv list is to avoid shell tokenisation. A bug
+        // here is a security regression (would let argv slots leak
+        // into adjacent args).
+        let transport = CommandTransport::new(vec![
+            "tsh".into(),
+            "ssh".into(),
+            "user@host with spaces".into(),
+            "helmor-server".into(),
+            "--proxy".into(),
+        ]);
+        let cmd = transport.build_command().expect("non-empty argv");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "ssh".to_string(),
+                "user@host with spaces".to_string(),
+                "helmor-server".to_string(),
+                "--proxy".to_string(),
+            ],
+            "argv should reach Command verbatim, no shell splitting",
         );
+        // Program is `tsh`.
+        assert_eq!(cmd.get_program().to_string_lossy(), "tsh");
+    }
+
+    #[test]
+    fn command_transport_build_command_rejects_empty_argv() {
+        let transport = CommandTransport::new(vec![]);
+        let err = transport
+            .build_command()
+            .expect_err("empty argv must be rejected before reaching Command");
+        assert!(format!("{err}").contains("argv must not be empty"));
+    }
+
+    #[test]
+    fn command_transport_build_command_rejects_empty_program() {
+        // First arg is the binary; an empty string would make Command
+        // try to spawn `""` which fails in a confusing way ("entity
+        // not found"). Catch it at the seam with a clear error.
+        let transport = CommandTransport::new(vec!["".into(), "helmor-server".into()]);
+        let err = transport
+            .build_command()
+            .expect_err("empty program must be rejected");
+        assert!(format!("{err}").contains("argv[0]"));
+    }
+
+    #[test]
+    fn command_transport_peer_label_uses_cmd_scheme_with_program_name() {
+        // The label is what shows up in log lines + error messages —
+        // we want "cmd:tsh" not the whole 6-element argv blob.
+        let transport = CommandTransport::new(vec![
+            "tsh".into(),
+            "ssh".into(),
+            "h".into(),
+            "helmor-server".into(),
+            "--proxy".into(),
+        ]);
+        assert_eq!(transport.peer_label(), "cmd:tsh");
+    }
+
+    #[test]
+    fn command_transport_spawn_pipe_surfaces_missing_binary_error() {
+        // No subprocess can spawn; the error should name the binary
+        // (via the peer label) so the operator knows what's missing.
+        let transport = CommandTransport::new(vec![
+            "/definitely/not/a/real/binary".into(),
+            "--proxy".into(),
+        ]);
+        let err = transport
+            .spawn_pipe()
+            .expect_err("missing binary must surface");
+        let msg = format!("{err:#}");
         assert!(
-            msg.contains("tsh") && msg.contains("ssh") && msg.contains("box"),
-            "argv should be echoed for diagnostics: {msg}"
+            msg.contains("cmd:/definitely/not/a/real/binary"),
+            "error should carry the peer label: {msg}",
         );
     }
 
