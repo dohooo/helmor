@@ -590,6 +590,31 @@ pub(crate) fn run_script_with_shell(
     );
     let killed = manager.register(key.clone(), pid, pgid, stdin.clone());
 
+    // Persist a registry row so the next launch's crash-recovery
+    // sweep can classify this PID if the app dies before
+    // `record_ended` runs below. Best-effort — a registry write
+    // failure must NOT block the actual script run, so we log and
+    // continue. Returns `None` on failure; `record_ended` no-ops
+    // when the id is missing.
+    let registry_id = match super::runtime_registry::record_started(
+        repo_id,
+        workspace_id,
+        script_type,
+        pid,
+        pgid,
+    ) {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::warn!(
+                pid,
+                pgid,
+                %error,
+                "runtime registry: failed to record process start; crash recovery will miss this row"
+            );
+            None
+        }
+    };
+
     // Single reader on the PTY master — stdout+stderr are merged by the PTY.
     let ch = channel.clone();
     let stop_reader = Arc::new(AtomicBool::new(false));
@@ -663,6 +688,20 @@ pub(crate) fn run_script_with_shell(
     let status = child.wait().ok();
 
     manager.unregister(&key, pid);
+
+    // Mark the registry row ended once the child has been reaped.
+    // Failure here logs and continues — the next launch's
+    // classifier will probe the PID and stamp it as dead anyway.
+    if let Some(id) = registry_id.as_deref() {
+        if let Err(error) = super::runtime_registry::record_ended(id) {
+            tracing::warn!(
+                pid,
+                registry_id = id,
+                %error,
+                "runtime registry: failed to mark process ended; will be cleaned up on next startup sweep"
+            );
+        }
+    }
 
     stop_reader.store(true, Ordering::Release);
     if let Some(h) = reader {

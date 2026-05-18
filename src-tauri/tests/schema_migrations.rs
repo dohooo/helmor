@@ -254,3 +254,77 @@ fn workspaces_port_range_migration_adds_columns_when_missing() {
         workspaces_port_columns(&connection)
     );
 }
+
+fn runtime_processes_columns(
+    connection: &rusqlite::Connection,
+) -> Vec<(String, String, i64, Option<String>)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT name, type, \"notnull\", dflt_value
+             FROM pragma_table_info('runtime_processes')
+             ORDER BY cid",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn runtime_processes_migration_creates_table_on_legacy_dbs() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    // Bare pre-feature schema: no `runtime_processes` table at all.
+    // The dashboard / sidebar migrations expect a workspaces shape
+    // with `repository_id`, so seed the same minimal columns the
+    // other migration tests use.
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                repository_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .unwrap();
+
+    schema::ensure_schema(&connection).unwrap();
+    // Idempotency — second pass must be a no-op.
+    schema::ensure_schema(&connection).unwrap();
+
+    // Sanity: a row matching the shape the runtime registry writes
+    // should round-trip without coercion errors. We hard-code the
+    // PID values as i64 since SQLite stores them as INTEGER.
+    connection
+        .execute(
+            "INSERT INTO runtime_processes (id, repo_id, workspace_id, script_type, pid, pgid)
+             VALUES (?1, 'r1', 'w1', 'run', ?2, ?3)",
+            rusqlite::params!["row-1", 12345i64, 12345i64],
+        )
+        .unwrap();
+    let (script_type, pid, pgid, ended_at): (String, i64, i64, Option<String>) = connection
+        .query_row(
+            "SELECT script_type, pid, pgid, ended_at FROM runtime_processes WHERE id = 'row-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(script_type, "run");
+    assert_eq!(pid, 12345);
+    assert_eq!(pgid, 12345);
+    assert!(
+        ended_at.is_none(),
+        "ended_at defaults to NULL — rows only get stamped on process exit"
+    );
+
+    assert_yaml_snapshot!(
+        "runtime_processes_migration",
+        runtime_processes_columns(&connection)
+    );
+}

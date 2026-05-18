@@ -141,6 +141,19 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
             }
 
+            // Runtime registry crash-recovery sweep. Probes every
+            // still-open row from a prior launch via `kill(pid, 0)`,
+            // stamps dead rows ended, and logs the "maybe alive"
+            // ones. Strictly diagnostic — we never auto-kill on this
+            // path because PIDs can be reused and a free port is not
+            // proof of process identity.
+            if let Err(error) = workspace::runtime_registry::run_startup_classification() {
+                tracing::warn!(
+                    %error,
+                    "Runtime registry: startup classification sweep failed"
+                );
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, bun, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —

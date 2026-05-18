@@ -1229,6 +1229,25 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         );
     }
 
+    // Belt-and-suspenders: stamp every still-open runtime registry
+    // row as ended, so the next launch's classification sweep
+    // doesn't waste cycles probing PIDs we've already terminated.
+    // The per-process `record_ended` calls in `run_script_with_shell`
+    // cover the common case; this catches handles that didn't make
+    // it through their reaper before app exit.
+    match crate::workspace::runtime_registry::record_all_ended() {
+        Ok(0) => {}
+        Ok(stamped) => tracing::debug!(
+            stamped,
+            "request_quit: stamped runtime registry rows as ended"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "request_quit: failed to stamp runtime registry rows ended; \
+             next launch's sweep will reclassify"
+        ),
+    }
+
     // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     let (cooperative, escalation) = if force {
