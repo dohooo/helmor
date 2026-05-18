@@ -1829,6 +1829,7 @@ dependencies = [
  "clap_complete",
  "core-foundation",
  "dotenvy",
+ "glob",
  "insta",
  "libc",
  "notify",
