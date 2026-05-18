@@ -8,6 +8,7 @@ import {
 	ChevronRightIcon,
 	CloudIcon,
 	CopyIcon,
+	ExternalLinkIcon,
 	FolderOpenIcon,
 	LaptopIcon,
 	LinkIcon,
@@ -33,13 +34,20 @@ import {
 } from "@/components/ui/context-menu";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import {
 	type ChangeRequestInfo,
+	type DetectedEditor,
 	type ForgeDetection,
+	openFileInEditor,
 	revealPathInFinder,
 } from "@/lib/api";
 import {
@@ -89,6 +97,7 @@ type ChangesSectionProps = {
 	changes: InspectorFileItem[];
 	editorMode: boolean;
 	activeEditor?: ActiveEditorTarget | null;
+	preferredEditor?: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -114,6 +123,7 @@ export function ChangesSection({
 	changes,
 	editorMode,
 	activeEditor,
+	preferredEditor = null,
 	onOpenEditorFile,
 	flashingPaths,
 	onCommitAction,
@@ -259,6 +269,22 @@ export function ChangesSection({
 		await onCommitAction(commitButtonMode);
 	}, [commitButtonMode, onCommitAction]);
 
+	const handleOpenExternalEditor = useCallback(
+		(path: string) => {
+			if (!preferredEditor) {
+				pushToast("Select a default editor before opening files.", "No editor");
+				return;
+			}
+			void openFileInEditor(path, preferredEditor.id).catch((error) => {
+				pushToast(
+					error instanceof Error ? error.message : String(error),
+					`Failed to open ${preferredEditor.name}`,
+				);
+			});
+		},
+		[preferredEditor, pushToast],
+	);
+
 	// Header shimmer is owned by App: it knows when the change-request and
 	// forge-action-status queries are on their *first* cold fetch (vs. just a
 	// background refresh or a placeholder render).
@@ -312,6 +338,7 @@ export function ChangesSection({
 								editorMode={editorMode}
 								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
+								onOpenExternalEditor={handleOpenExternalEditor}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
@@ -341,6 +368,7 @@ export function ChangesSection({
 								editorMode={editorMode}
 								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
+								onOpenExternalEditor={handleOpenExternalEditor}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
@@ -363,6 +391,7 @@ export function ChangesSection({
 						editorMode={editorMode}
 						activeEditor={activeEditor}
 						onOpenEditorFile={onOpenEditorFile}
+						onOpenExternalEditor={handleOpenExternalEditor}
 						flashingPaths={flashingPaths}
 						workspaceBranch={workspaceBranch}
 						workspaceRemoteUrl={workspaceRemoteUrl}
@@ -397,6 +426,7 @@ function ChangesGroup({
 	editorMode,
 	activeEditor,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	workspaceBranch,
 	workspaceRemoteUrl,
@@ -418,6 +448,7 @@ function ChangesGroup({
 	editorMode: boolean;
 	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
@@ -500,6 +531,7 @@ function ChangesGroup({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -513,6 +545,7 @@ function ChangesGroup({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -539,6 +572,7 @@ function BranchDiffSection({
 	editorMode,
 	activeEditor,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	workspaceBranch,
 	workspaceRemoteUrl,
@@ -554,6 +588,7 @@ function BranchDiffSection({
 	editorMode: boolean;
 	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
@@ -632,6 +667,7 @@ function BranchDiffSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							workspaceBranch={workspaceBranch}
 							workspaceRemoteUrl={workspaceRemoteUrl}
@@ -642,6 +678,7 @@ function BranchDiffSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							workspaceBranch={workspaceBranch}
 							workspaceRemoteUrl={workspaceRemoteUrl}
@@ -693,6 +730,7 @@ function ChangesTreeView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -704,6 +742,7 @@ function ChangesTreeView({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -738,6 +777,7 @@ function ChangesTreeView({
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
+				onOpenExternalEditor={onOpenExternalEditor}
 				flashingPaths={flashingPaths}
 				action={action}
 				onStageAction={onStageAction}
@@ -768,6 +808,7 @@ function TreeNodeList({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -782,6 +823,7 @@ function TreeNodeList({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -843,6 +885,7 @@ function TreeNodeList({
 									editorMode={editorMode}
 									activeEditorPath={activeEditorPath}
 									onOpenEditorFile={onOpenEditorFile}
+									onOpenExternalEditor={onOpenExternalEditor}
 									flashingPaths={flashingPaths}
 									action={action}
 									onStageAction={onStageAction}
@@ -896,6 +939,7 @@ function TreeNodeList({
 							<StageActionSlot
 								file={file}
 								action={action}
+								onOpenExternalEditor={onOpenExternalEditor}
 								onStageAction={onStageAction}
 								onDiscard={onDiscard}
 							/>
@@ -928,6 +972,7 @@ function ChangesFlatView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -939,6 +984,7 @@ function ChangesFlatView({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -948,91 +994,98 @@ function ChangesFlatView({
 }) {
 	const hasStage = !!action && !!onStageAction;
 	const hasDiscard = !!onDiscard;
-	const hasAction = hasStage || hasDiscard;
 
 	return (
 		<div className="py-0.5">
-			{changes.map((change) => (
-				<FileRowContextMenu
-					key={change.path}
-					file={change}
-					workspaceBranch={workspaceBranch}
-					workspaceRemoteUrl={workspaceRemoteUrl}
-				>
-					<div
-						className={cn(
-							"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-							change.absolutePath === activeEditorPath &&
-								(editorMode
-									? "bg-accent text-foreground"
-									: "bg-muted/60 text-foreground"),
-						)}
-						role="button"
-						tabIndex={0}
-						onClick={() =>
-							onOpenEditorFile(change.absolutePath, {
-								fileStatus: change.status,
-							})
-						}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" || event.key === " ") {
-								event.preventDefault();
+			{changes.map((change) => {
+				const canOpenExternalEditor = change.status !== "D";
+				const hasHoverAction = canOpenExternalEditor || hasStage || hasDiscard;
+
+				return (
+					<FileRowContextMenu
+						key={change.path}
+						file={change}
+						workspaceBranch={workspaceBranch}
+						workspaceRemoteUrl={workspaceRemoteUrl}
+					>
+						<div
+							className={cn(
+								"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+								change.absolutePath === activeEditorPath &&
+									(editorMode
+										? "bg-accent text-foreground"
+										: "bg-muted/60 text-foreground"),
+							)}
+							role="button"
+							tabIndex={0}
+							onClick={() =>
 								onOpenEditorFile(change.absolutePath, {
 									fileStatus: change.status,
-								});
+								})
 							}
-						}}
-					>
-						<img
-							src={getMaterialFileIcon(change.name)}
-							alt=""
-							className="size-4 shrink-0"
-						/>
-						<span className="min-w-0 max-w-[60%] truncate">
-							<ShinyFlash active={flashingPaths.has(change.path)}>
-								{change.name}
-							</ShinyFlash>
-						</span>
-						<span
-							className={cn(
-								"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
-								hasAction && "group-hover/row:hidden",
-							)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									onOpenEditorFile(change.absolutePath, {
+										fileStatus: change.status,
+									});
+								}
+							}}
 						>
-							{change.path.includes("/")
-								? change.path.slice(0, change.path.lastIndexOf("/"))
-								: ""}
-						</span>
-						<span
-							className={cn(
-								"flex shrink-0 items-center gap-1 tabular-nums",
-								hasAction && "group-hover/row:hidden",
-							)}
-						>
-							<LineStats
-								insertions={change.insertions}
-								deletions={change.deletions}
+							<img
+								src={getMaterialFileIcon(change.name)}
+								alt=""
+								className="size-4 shrink-0"
 							/>
+							<span className="min-w-0 max-w-[60%] truncate">
+								<ShinyFlash active={flashingPaths.has(change.path)}>
+									{change.name}
+								</ShinyFlash>
+							</span>
 							<span
 								className={cn(
-									"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
-									STATUS_COLORS[change.status],
+									"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
+									hasHoverAction && "group-hover/row:hidden",
 								)}
 							>
-								{change.status}
+								{change.path.includes("/")
+									? change.path.slice(0, change.path.lastIndexOf("/"))
+									: ""}
 							</span>
-						</span>
-						{hasAction && (
-							<RowHoverActions
-								path={change.path}
-								action={action}
-								onStageAction={onStageAction}
-								onDiscard={onDiscard}
-							/>
-						)}
-					</div>
-				</FileRowContextMenu>
-			))}
+							<span
+								className={cn(
+									"flex shrink-0 items-center gap-1 tabular-nums",
+									hasHoverAction && "group-hover/row:hidden",
+								)}
+							>
+								<LineStats
+									insertions={change.insertions}
+									deletions={change.deletions}
+								/>
+								<span
+									className={cn(
+										"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+										STATUS_COLORS[change.status],
+									)}
+								>
+									{change.status}
+								</span>
+							</span>
+							{hasHoverAction && (
+								<RowHoverActions
+									path={change.path}
+									absolutePath={change.absolutePath}
+									canOpenExternalEditor={canOpenExternalEditor}
+									action={hasStage ? action : undefined}
+									onOpenExternalEditor={onOpenExternalEditor}
+									onStageAction={hasStage ? onStageAction : undefined}
+									onDiscard={hasDiscard ? onDiscard : undefined}
+								/>
+							)}
+						</div>
+					</FileRowContextMenu>
+				);
+			})}
 		</div>
 	);
 }
@@ -1040,24 +1093,27 @@ function ChangesFlatView({
 function StageActionSlot({
 	file,
 	action,
+	onOpenExternalEditor,
 	onStageAction,
 	onDiscard,
 }: {
 	file: ChangeRow;
 	action?: StageActionKind;
+	onOpenExternalEditor: (path: string) => void;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
 }) {
 	const hasStage = !!action && !!onStageAction;
 	const hasDiscard = !!onDiscard;
-	const hasAction = hasStage || hasDiscard;
+	const canOpenExternalEditor = file.status !== "D";
+	const hasHoverAction = canOpenExternalEditor || hasStage || hasDiscard;
 
 	return (
 		<>
 			<span
 				className={cn(
 					"ml-auto flex shrink-0 items-center gap-1.5",
-					hasAction && "group-hover/row:hidden",
+					hasHoverAction && "group-hover/row:hidden",
 				)}
 			>
 				<LineStats insertions={file.insertions} deletions={file.deletions} />
@@ -1070,12 +1126,15 @@ function StageActionSlot({
 					{file.status}
 				</span>
 			</span>
-			{hasAction && (
+			{hasHoverAction && (
 				<RowHoverActions
 					path={file.path}
-					action={action}
-					onStageAction={onStageAction}
-					onDiscard={onDiscard}
+					absolutePath={file.absolutePath}
+					canOpenExternalEditor={canOpenExternalEditor}
+					action={hasStage ? action : undefined}
+					onOpenExternalEditor={onOpenExternalEditor}
+					onStageAction={hasStage ? onStageAction : undefined}
+					onDiscard={hasDiscard ? onDiscard : undefined}
 				/>
 			)}
 		</>
@@ -1084,17 +1143,37 @@ function StageActionSlot({
 
 function RowHoverActions({
 	path,
+	absolutePath,
+	canOpenExternalEditor,
 	action,
+	onOpenExternalEditor,
 	onStageAction,
 	onDiscard,
 }: {
 	path: string;
+	absolutePath: string;
+	canOpenExternalEditor: boolean;
 	action?: StageActionKind;
+	onOpenExternalEditor: (path: string) => void;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
 }) {
 	return (
 		<span className="ml-auto hidden items-center gap-0.5 group-hover/row:inline-flex">
+			{canOpenExternalEditor && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<RowIconButton
+							aria-label="Open in editor"
+							onClick={() => onOpenExternalEditor(absolutePath)}
+							className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+						>
+							<ExternalLinkIcon className="size-3.5" strokeWidth={2} />
+						</RowIconButton>
+					</TooltipTrigger>
+					<TooltipContent side="top">Open in editor</TooltipContent>
+				</Tooltip>
+			)}
 			{onDiscard && (
 				<RowIconButton
 					aria-label="Discard file changes"

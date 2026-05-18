@@ -69,6 +69,7 @@ import {
 } from "./lib/api";
 import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
+import { isMarkdownPath } from "./lib/editor-session";
 import {
 	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
@@ -695,20 +696,69 @@ function AppShell({
 			? null
 			: (selectedWorkspaceDetail?.rootPath ?? null);
 
-	const { state: editorSessionState, actions: editorSessionActions } =
-		useEditorSessionController({
-			pushToast: pushWorkspaceToast,
-			workspaceRootPath,
-			selectedWorkspaceId,
-			enterEditorMode: () => selectionActions.setViewMode("editor"),
-			exitEditorMode: () => selectionActions.setViewMode("conversation"),
-		});
+	const {
+		state: editorSessionState,
+		actions: editorSessionActions,
+		dialogNode: editorDiscardConfirmDialog,
+	} = useEditorSessionController({
+		pushToast: pushWorkspaceToast,
+		workspaceRootPath,
+		selectedWorkspaceId,
+		enterEditorMode: () => selectionActions.setViewMode("editor"),
+		exitEditorMode: () => selectionActions.setViewMode("conversation"),
+	});
 	const editorSession = editorSessionState.editorSession;
 	const handleOpenEditorFile = editorSessionActions.openFile;
 	const handleOpenFileReference = editorSessionActions.openFileReference;
 	const handleEditorSessionChange = editorSessionActions.changeSession;
 	const handleExitEditorMode = editorSessionActions.exit;
 	const handleEditorSurfaceError = editorSessionActions.reportError;
+	const canEditEditorSession =
+		(editorSession?.kind === "diff" && editorSession.fileStatus !== "D") ||
+		(editorSession?.kind === "file" &&
+			editorSession.fileStatus !== undefined &&
+			editorSession.fileStatus !== "D");
+	const handleEnterEditorEditMode = useCallback(() => {
+		if (!editorSession || editorSession.fileStatus === "D") {
+			return;
+		}
+		if (editorSession.kind === "diff") {
+			handleEditorSessionChange({
+				kind: "file",
+				path: editorSession.path,
+				line: editorSession.line,
+				column: editorSession.column,
+				dirty: false,
+				inline: editorSession.inline,
+				fileStatus: editorSession.fileStatus,
+				originalRef: editorSession.originalRef,
+				modifiedRef: editorSession.modifiedRef,
+				diffOriginalText: editorSession.originalText,
+				diffModifiedText: editorSession.modifiedText,
+				viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+			});
+			return;
+		}
+		if (editorSession.fileStatus === undefined) return;
+		handleEditorSessionChange({
+			kind: "diff",
+			path: editorSession.path,
+			line: editorSession.line,
+			column: editorSession.column,
+			dirty: editorSession.dirty,
+			inline: editorSession.inline,
+			fileStatus: editorSession.fileStatus,
+			originalRef: editorSession.originalRef,
+			modifiedRef: editorSession.modifiedRef,
+			originalText: editorSession.diffOriginalText,
+			modifiedText: editorSession.dirty
+				? editorSession.modifiedText
+				: editorSession.diffModifiedText,
+			diffOriginalText: editorSession.diffOriginalText,
+			diffModifiedText: editorSession.diffModifiedText,
+			viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+		});
+	}, [editorSession, handleEditorSessionChange]);
 
 	const handleCopyWorkspacePath = useCallback(() => {
 		if (!workspaceRootPath) return;
@@ -1223,6 +1273,11 @@ function AppShell({
 				enabled: workspaceViewMode === "conversation",
 			},
 			{
+				id: "editor.edit" as const,
+				callback: handleEnterEditorEditMode,
+				enabled: workspaceViewMode === "editor" && canEditEditorSession,
+			},
+			{
 				id: "composer.toggleContextPanel" as const,
 				callback: () => publishShellEvent({ type: "toggle-context-panel" }),
 				enabled:
@@ -1261,6 +1316,7 @@ function AppShell({
 			handleOpenPreferredEditor,
 			handleOpenPullRequest,
 			handleOpenSettings,
+			handleEnterEditorEditMode,
 			handlePullLatest,
 			handleReopenClosedSession,
 			handleToggleTheme,
@@ -1276,6 +1332,7 @@ function AppShell({
 			workspacePreviewActive,
 			workspacePreviewCard,
 			workspaceViewMode,
+			canEditEditorSession,
 		],
 	);
 	useAppShortcuts({
@@ -1465,6 +1522,10 @@ function AppShell({
 										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
+												editShortcut={getShortcut(
+													appSettings.shortcuts,
+													"editor.edit",
+												)}
 												workspaceRootPath={workspaceRootPath}
 												onChangeSession={handleEditorSessionChange}
 												onExit={handleExitEditorMode}
@@ -1712,6 +1773,7 @@ function AppShell({
 														}
 													: null
 											}
+											preferredEditor={preferredEditor}
 											onOpenEditorFile={handleOpenEditorFile}
 											onCommitAction={handleCommitAction}
 											onReviewAction={() =>
@@ -1760,6 +1822,7 @@ function AppShell({
 							}}
 						/>
 						{closeConfirmDialog}
+						{editorDiscardConfirmDialog}
 						{mergeConfirmDialogNode}
 					</ComposerInsertProvider>
 				</SessionRunStatesProvider>

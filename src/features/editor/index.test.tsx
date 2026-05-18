@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
@@ -105,18 +106,29 @@ function EditorSurfaceHarness({
 	onError?: (description: string, title?: string) => void;
 }) {
 	const [session, setSession] = useState(initialSession);
+	const [queryClient] = useState(
+		() =>
+			new QueryClient({
+				defaultOptions: {
+					queries: { retry: false },
+					mutations: { retry: false },
+				},
+			}),
+	);
 
 	return (
-		<WorkspaceEditorSurface
-			editorSession={session}
-			workspaceRootPath="/tmp/helmor-workspace"
-			onChangeSession={(next) => {
-				onChangeSpy(next);
-				setSession(next);
-			}}
-			onError={onError}
-			onExit={vi.fn()}
-		/>
+		<QueryClientProvider client={queryClient}>
+			<WorkspaceEditorSurface
+				editorSession={session}
+				workspaceRootPath="/tmp/helmor-workspace"
+				onChangeSession={(next) => {
+					onChangeSpy(next);
+					setSession(next);
+				}}
+				onError={onError}
+				onExit={vi.fn()}
+			/>
+		</QueryClientProvider>
 	);
 }
 
@@ -197,6 +209,40 @@ describe("WorkspaceEditorSurface", () => {
 		});
 
 		expect(screen.queryByLabelText("Markdown view mode")).toBeNull();
+	});
+
+	it("switches a diff into file edit mode from the toolbar", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "diff",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						fileStatus: "M",
+						originalText: "const value = 1;\n",
+						modifiedText: "const value = 2;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createDiffEditor).toHaveBeenCalled();
+		});
+
+		await user.click(screen.getByRole("button", { name: "Edit" }));
+
+		expect(onChangeSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				dirty: false,
+				kind: "file",
+				path: "/tmp/helmor-workspace/src/App.tsx",
+			}),
+		);
 	});
 
 	it("shows source/preview toggle for .md files and starts in source mode by default", async () => {

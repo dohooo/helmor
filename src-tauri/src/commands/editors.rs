@@ -437,13 +437,13 @@ fn resolve_single(spec: &EditorSpec) -> Option<String> {
 fn launch_with_open(
     app_path: Option<&str>,
     app_name: &str,
-    dir: &std::path::Path,
+    target: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let dir_str = dir.display().to_string();
+    let target_str = target.display().to_string();
     let mut cmd = std::process::Command::new("open");
     match app_path {
-        Some(p) => cmd.args(["-a", p, &dir_str]),
-        None => cmd.args(["-a", app_name, &dir_str]),
+        Some(p) => cmd.args(["-a", p, &target_str]),
+        None => cmd.args(["-a", app_name, &target_str]),
     };
     cmd.spawn().map(|_| ()).context("open command failed")
 }
@@ -497,6 +497,24 @@ pub async fn open_workspace_in_editor(workspace_id: String, editor: String) -> C
         // which trips on renamed bundles and ambiguous names).
         let resolved = resolve_single(spec);
         launch_with_open(resolved.as_deref(), spec.name, &workspace_dir)
+            .with_context(|| format!("Failed to open {}", spec.name))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn open_file_in_editor(path: String, editor: String) -> CmdResult<()> {
+    run_blocking(move || {
+        let spec =
+            spec_by_id(&editor).ok_or_else(|| anyhow::anyhow!("Unsupported editor: {editor}"))?;
+
+        let stat = crate::editor_files::stat_editor_file(&path)?;
+        if !stat.exists || !stat.is_file {
+            return Err(anyhow::anyhow!("Editor file not found: {path}"));
+        }
+
+        let resolved = resolve_single(spec);
+        launch_with_open(resolved.as_deref(), spec.name, std::path::Path::new(&path))
             .with_context(|| format!("Failed to open {}", spec.name))
     })
     .await

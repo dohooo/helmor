@@ -293,6 +293,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "editor.edit",
+		title: "Toggle diff and edit",
+		group: "Editor",
+		defaultHotkey: "Mod+E",
+		scopes: ["editor"],
+		editable: true,
+	},
+	{
 		id: "terminal.new",
 		title: "New terminal",
 		group: "Terminal",

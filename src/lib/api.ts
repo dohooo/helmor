@@ -1774,6 +1774,13 @@ export async function openWorkspaceInEditor(
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
 }
 
+export async function openFileInEditor(
+	path: string,
+	editor: string,
+): Promise<void> {
+	await invoke("open_file_in_editor", { path, editor });
+}
+
 export async function openWorkspaceInFinder(
 	workspaceId: string,
 ): Promise<void> {

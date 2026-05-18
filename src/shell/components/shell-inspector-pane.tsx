@@ -10,6 +10,7 @@ import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
 import type {
 	ChangeRequestInfo,
+	DetectedEditor,
 	RepositoryCreateOption,
 	WorkspaceDetail,
 } from "@/lib/api";
@@ -49,6 +50,7 @@ type Props = {
 	selectedWorkspaceDetail: WorkspaceDetail | null;
 	displayedSessionId: string | null;
 	activeEditor: ActiveEditorTarget | null;
+	preferredEditor: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	onCommitAction: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction: () => Promise<void>;
@@ -84,6 +86,7 @@ export function ShellInspectorPane({
 	selectedWorkspaceDetail,
 	displayedSessionId,
 	activeEditor,
+	preferredEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -168,6 +171,7 @@ export function ShellInspectorPane({
 						workspaceTargetBranch={targetBranch}
 						editorMode={editorMode}
 						activeEditor={activeEditor}
+						preferredEditor={preferredEditor}
 						onOpenEditorFile={onOpenEditorFile}
 						onCommitAction={onCommitAction}
 						onReviewAction={onReviewAction}

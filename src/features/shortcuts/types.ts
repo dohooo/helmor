@@ -34,6 +34,7 @@ export type ShortcutId =
 	| "composer.toggleContextPanel"
 	| "composer.openModelPicker"
 	| "composer.toggleFollowUpBehavior"
+	| "editor.edit"
 	| "terminal.new"
 	| "terminal.close"
 	| "terminal.next"
@@ -48,6 +49,7 @@ export type ShortcutGroup =
 	| "Actions"
 	| "System"
 	| "Composer"
+	| "Editor"
 	| "Terminal";
 
 // Scopes a shortcut can live in. "app" = always active regardless of focus.
