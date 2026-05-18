@@ -26,6 +26,7 @@ import {
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { FeedbackDialog } from "@/features/feedback";
+import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
 import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
 import {
 	applySidebarView,
@@ -830,6 +831,15 @@ function AppShell({
 		[selectionActions],
 	);
 
+	const submitFeedbackPrompt = useFeedbackSubmit({
+		queryClient,
+		appSettings,
+		selectWorkspace: handleSelectWorkspace,
+		selectSession: handleSelectSession,
+		setViewMode: selectionActions.setViewMode,
+		pushToast: pushWorkspaceToast,
+	});
+
 	const {
 		commitButtonMode,
 		commitButtonState,
@@ -1402,12 +1412,22 @@ function AppShell({
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<SessionRunStatesProvider value={effectiveSessionRunStates}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
-						<FeedbackDialog
-							open={feedbackOpen}
-							onOpenChange={setFeedbackOpen}
-							onOpenSettings={handleOpenSettings}
-							onSelectWorkspace={handleSelectWorkspace}
-						/>
+						{/* Conditionally mount so closing the dialog tears the tree
+						 *  down via React directly instead of waiting on Radix
+						 *  Presence + `animationend`. In WKWebview the workspace
+						 *  switch that fires from "Send to agent" can flip
+						 *  `document.hidden` to true mid-animation, which pauses
+						 *  the exit keyframes indefinitely — `animationend`
+						 *  never fires, Presence never unmounts, and the closed
+						 *  dialog lingers as a ghost over the new conversation. */}
+						{feedbackOpen ? (
+							<FeedbackDialog
+								open={feedbackOpen}
+								onOpenChange={setFeedbackOpen}
+								onOpenSettings={handleOpenSettings}
+								onSubmitPrompt={submitFeedbackPrompt}
+							/>
+						) : null}
 						<main
 							aria-label="Application shell"
 							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"

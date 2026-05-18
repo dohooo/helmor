@@ -98,10 +98,6 @@ export function StepClone({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<h2 className="text-[13px] font-medium tracking-[-0.01em]">
-				Step 1 · Prepare your fork
-			</h2>
-
 			<div className="flex items-start gap-2 text-[12px] leading-snug">
 				{phase === "forking" ? (
 					<>

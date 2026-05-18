@@ -1,5 +1,6 @@
-import { getVersion } from "@tauri-apps/api/app";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import {
 	Dialog,
@@ -9,23 +10,15 @@ import {
 } from "@/components/ui/dialog";
 import {
 	createHelmorIssue,
-	findExistingHelmorWorkspace,
+	type ExistingHelmorRepo,
+	findExistingHelmorRepo,
 	listForgeAccounts,
 } from "@/lib/api";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
-import {
-	buildIssueBody,
-	buildIssueTitle,
-	detectOsLabel,
-	type EnvironmentInfo,
-} from "./helpers";
+import { splitIssueTitleAndBody } from "./helpers";
 import { StepClone } from "./step-clone";
-import { StepHandoff } from "./step-handoff";
 import { StepInput } from "./step-input";
-import { StepIssueDone } from "./step-issue-done";
-import { StepIssueSending } from "./step-issue-sending";
-import { StepPrHint } from "./step-pr-hint";
 import { StepPrompt } from "./step-prompt";
 import { useFeedbackState } from "./use-feedback-state";
 
@@ -33,132 +26,128 @@ type FeedbackDialogProps = {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onOpenSettings: () => void;
-	onSelectWorkspace: (workspaceId: string) => void;
+	/** Creates a new workspace on `repoId`, queues `prompt` as the first
+	 *  message, selects the workspace, and switches to conversation view.
+	 *  The conversation hook auto-fires the prompt once finalize completes. */
+	onSubmitPrompt: (input: { repoId: string; prompt: string }) => Promise<void>;
 };
 
 export function FeedbackDialog({
 	open,
 	onOpenChange,
 	onOpenSettings,
-	onSelectWorkspace,
+	onSubmitPrompt,
 }: FeedbackDialogProps) {
 	const [state, dispatch] = useFeedbackState();
+	// Existing-repo hint and github connection state. The parent conditionally
+	// mounts this dialog, so a fresh open always re-fetches — that's fine,
+	// findExistingHelmorRepo hits local SQLite and resolves in ~50ms.
+	const [existing, setExisting] = useState<ExistingHelmorRepo | null>(null);
 	const [githubConnected, setGithubConnected] = useState(false);
-	const [appVersion, setAppVersion] = useState("unknown");
-	const inFlightIssueRef = useRef(false);
+	// Two-click confirmation for issue creation.
+	const [confirming, setConfirming] = useState(false);
+	const [sending, setSending] = useState(false);
 
-	const env: EnvironmentInfo = useMemo(
-		() => ({ os: detectOsLabel(), appVersion }),
-		[appVersion],
-	);
-
-	// Reset when closed so re-opening starts from a clean slate.
 	useEffect(() => {
-		if (!open) {
-			dispatch({ type: "reset" });
-			inFlightIssueRef.current = false;
-		}
-	}, [open, dispatch]);
-
-	// Detect existing local helmor workspace + current GitHub identity when the
-	// dialog opens. Both are local/cached lookups (no network) so there's no
-	// loading UI.
-	useEffect(() => {
-		if (!open) return;
 		let cancelled = false;
 		void (async () => {
-			try {
-				const [existing, session, version] = await Promise.all([
-					findExistingHelmorWorkspace().catch(() => null),
-					listForgeAccounts([]).catch(() => []),
-					getVersion().catch(() => "unknown"),
-				]);
-				if (cancelled) return;
-				dispatch({ type: "set-existing", existing });
-				setGithubConnected(
-					session.some(
-						(account) =>
-							account.provider === "github" && account.host === "github.com",
-					),
-				);
-				setAppVersion(version);
-			} catch {
-				// Swallow — surface via the step-specific UI when the user acts.
-			}
+			const [e, accounts] = await Promise.all([
+				findExistingHelmorRepo().catch(() => null),
+				listForgeAccounts([]).catch(() => []),
+			]);
+			if (cancelled) return;
+			setExisting(e);
+			setGithubConnected(
+				accounts.some(
+					(account) =>
+						account.provider === "github" && account.host === "github.com",
+				),
+			);
 		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [open, dispatch]);
+	}, []);
 
+	// First click → arm confirm UI. Second click → send via API.
 	const handleCreateIssue = useCallback(async () => {
-		if (inFlightIssueRef.current) return;
 		if (state.step.kind !== "input") return;
-		const { input } = state.step;
-		const title = buildIssueTitle(input);
-		const body = buildIssueBody(input, env);
-		inFlightIssueRef.current = true;
-		dispatch({ type: "start-create-issue" });
+		if (!confirming) {
+			setConfirming(true);
+			return;
+		}
+		const { title, body } = splitIssueTitleAndBody(state.step.input);
+		setSending(true);
 		try {
 			const result = await createHelmorIssue(title, body);
-			dispatch({
-				type: "issue-succeeded",
-				url: result.url,
-				number: result.number,
+			dispatch({ type: "reset" });
+			setConfirming(false);
+			toast.success(`Issue #${result.number} created`, {
+				description: result.url,
+				action: {
+					label: "View",
+					onClick: () => {
+						void openUrl(result.url);
+					},
+				},
 			});
 		} catch (error) {
-			dispatch({
-				type: "issue-failed",
-				message: describeUnknownError(error, "Failed to create issue"),
+			toast.error("Failed to create issue", {
+				description: describeUnknownError(error, "Please try again."),
 			});
 		} finally {
-			inFlightIssueRef.current = false;
+			setSending(false);
 		}
-	}, [dispatch, env, state.step]);
+	}, [confirming, dispatch, state.step]);
 
-	const handleOpenWorkspace = useCallback(() => {
-		if (state.step.kind !== "pr-hint") return;
-		onSelectWorkspace(state.step.workspaceId);
+	const handleCancelConfirm = useCallback(() => setConfirming(false), []);
+
+	const handleQuickFix = useCallback(() => {
+		setConfirming(false);
+		dispatch({ type: "start-quick-fix", existing });
+	}, [dispatch, existing]);
+
+	// "Send to agent": close the dialog FIRST (the parent conditionally
+	// mounts this tree, so close immediately tears it down), then kick off
+	// the async workspace switch. Order matters — if we awaited the switch
+	// before closing, the heavy AppShell re-render fires while the dialog is
+	// still mounted, dropping focus events and risking visual artifacts on
+	// top of the new conversation.
+	const handleSendPrompt = useCallback(() => {
+		if (state.step.kind !== "prompt" || !state.step.repoId) return;
+		const { repoId, draftPrompt } = state.step;
 		onOpenChange(false);
-	}, [onOpenChange, onSelectWorkspace, state.step]);
-
-	const handleClose = useCallback(() => {
-		onOpenChange(false);
-	}, [onOpenChange]);
-
-	const title = titleForStep(state.step.kind);
+		void onSubmitPrompt({ repoId, prompt: draftPrompt });
+	}, [onOpenChange, onSubmitPrompt, state.step]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="flex flex-col gap-3 p-4 sm:max-w-md">
+			<DialogContent className="flex flex-col gap-5 p-4 sm:max-w-md">
 				<DialogHeader>
 					<DialogTitle className="text-[13px] font-medium tracking-[-0.01em]">
-						{title}
+						{state.step.kind === "input"
+							? "Send feedback"
+							: "Contribute to Helmor"}
 					</DialogTitle>
 				</DialogHeader>
 
 				{state.step.kind === "input" ? (
 					<StepInput
 						input={state.step.input}
-						error={state.step.error}
-						existing={state.existing}
+						existing={existing}
 						githubConnected={githubConnected}
-						onInputChange={(input) => dispatch({ type: "set-input", input })}
+						confirming={confirming}
+						sending={sending}
+						onInputChange={(input) => {
+							setConfirming(false);
+							dispatch({ type: "set-input", input });
+						}}
 						onCreateIssue={() => {
 							void handleCreateIssue();
 						}}
-						onQuickFix={() => dispatch({ type: "start-quick-fix" })}
+						onCancelConfirm={handleCancelConfirm}
+						onQuickFix={handleQuickFix}
 						onOpenSettings={onOpenSettings}
-					/>
-				) : null}
-
-				{state.step.kind === "issue-sending" ? <StepIssueSending /> : null}
-
-				{state.step.kind === "issue-done" ? (
-					<StepIssueDone
-						issueUrl={state.step.issueUrl}
-						issueNumber={state.step.issueNumber}
-						onClose={handleClose}
 					/>
 				) : null}
 
@@ -187,56 +176,11 @@ export function FeedbackDialog({
 						input={state.step.input}
 						draftPrompt={state.step.draftPrompt}
 						existing={state.step.existing}
-						env={env}
 						onEditPrompt={(prompt) => dispatch({ type: "edit-prompt", prompt })}
-						onSubmit={() => dispatch({ type: "start-handoff" })}
+						onSubmit={handleSendPrompt}
 					/>
-				) : null}
-
-				{state.step.kind === "handoff" ? (
-					<StepHandoff
-						draftPrompt={state.step.draftPrompt}
-						repoId={state.step.repoId}
-						error={state.step.error}
-						onFailed={(message) =>
-							dispatch({ type: "handoff-failed", message })
-						}
-						onSucceeded={(workspaceId, sessionId) =>
-							dispatch({
-								type: "handoff-succeeded",
-								workspaceId,
-								sessionId,
-							})
-						}
-						onClose={handleClose}
-					/>
-				) : null}
-
-				{state.step.kind === "pr-hint" ? (
-					<StepPrHint onOpenWorkspace={handleOpenWorkspace} />
 				) : null}
 			</DialogContent>
 		</Dialog>
 	);
-}
-
-function titleForStep(kind: string): string {
-	switch (kind) {
-		case "input":
-			return "Send feedback";
-		case "issue-sending":
-			return "Creating issue";
-		case "issue-done":
-			return "Thanks for the feedback!";
-		case "clone":
-			return "Contribute to Helmor";
-		case "prompt":
-			return "Contribute to Helmor";
-		case "handoff":
-			return "Contribute to Helmor";
-		case "pr-hint":
-			return "Nearly there";
-		default:
-			return "Feedback";
-	}
 }

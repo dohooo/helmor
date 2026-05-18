@@ -1,5 +1,5 @@
 /** Upstream helmor repository — hardcoded. Users never configure this. */
-export const HELMOR_UPSTREAM_OWNER = "Dohoo";
+export const HELMOR_UPSTREAM_OWNER = "dohooo";
 export const HELMOR_UPSTREAM_REPO = "helmor";
 export const HELMOR_UPSTREAM_SLUG = `${HELMOR_UPSTREAM_OWNER}/${HELMOR_UPSTREAM_REPO}`;
 export const HELMOR_UPSTREAM_HTML_URL = `https://github.com/${HELMOR_UPSTREAM_SLUG}`;

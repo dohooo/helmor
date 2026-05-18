@@ -3,15 +3,14 @@ import { useEffect, useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { ExistingHelmorWorkspace } from "@/lib/api";
+import type { ExistingHelmorRepo } from "@/lib/api";
 
-import { buildPromptTemplate, type EnvironmentInfo } from "./helpers";
+import { buildPromptTemplate } from "./helpers";
 
 type StepPromptProps = {
 	input: string;
 	draftPrompt: string;
-	existing: ExistingHelmorWorkspace | null;
-	env: EnvironmentInfo;
+	existing: ExistingHelmorRepo | null;
 	onEditPrompt: (prompt: string) => void;
 	onSubmit: () => void;
 };
@@ -20,11 +19,10 @@ export function StepPrompt({
 	input,
 	draftPrompt,
 	existing,
-	env,
 	onEditPrompt,
 	onSubmit,
 }: StepPromptProps) {
-	const template = useMemo(() => buildPromptTemplate(input, env), [input, env]);
+	const template = useMemo(() => buildPromptTemplate(input), [input]);
 
 	// Seed the prompt textarea with the default template the first time the
 	// step renders. Subsequent edits are preserved verbatim.
@@ -40,21 +38,10 @@ export function StepPrompt({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<h2 className="text-[13px] font-medium tracking-[-0.01em]">
-				Step 2 · Refine your prompt
-			</h2>
 			<p className="text-[12px] leading-snug text-muted-foreground">
-				This is the message the agent will receive. Tweak it if you want — the
-				agent will ask clarifying questions before writing any code.
+				Tweak this if you want — it's what the agent starts with.
+				{existing ? " Reusing your local helmor repo." : null}
 			</p>
-
-			{existing ? (
-				<p className="text-[11px] text-muted-foreground">
-					Reusing your existing helmor workspace
-					{existing.branch ? ` (branch ${existing.branch})` : ""}. A new branch
-					will be created for this change.
-				</p>
-			) : null}
 
 			<Textarea
 				value={draftPrompt}

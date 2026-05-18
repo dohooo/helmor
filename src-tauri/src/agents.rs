@@ -221,6 +221,21 @@ pub async fn send_agent_message_stream(
     request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
+    start_agent_stream(&app, &sidecar, request, on_event)
+}
+
+/// Shared kickoff used by `send_agent_message_stream` and by other commands
+/// that need to spawn a stream as part of a larger atomic operation (e.g.
+/// the feedback "create workspace + send prompt" flow). Validates the
+/// request, resolves the model + cwd, and hands off to `stream_via_sidecar`,
+/// which moves `on_event` into a detached background task — this function
+/// returns as soon as the sidecar request is dispatched.
+pub(crate) fn start_agent_stream(
+    app: &AppHandle,
+    sidecar: &crate::sidecar::ManagedSidecar,
+    request: AgentSendRequest,
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
@@ -244,7 +259,7 @@ pub async fn send_agent_message_stream(
     stream_via_sidecar(
         app.clone(),
         on_event,
-        &sidecar,
+        sidecar,
         &active_streams,
         &stream_id,
         &model,

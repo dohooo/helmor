@@ -133,13 +133,11 @@ export function ShellSidebarPane({
 					</Tooltip>
 				</div>
 				<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-					<div className="flex items-center gap-1">
-						<FeedbackButton onClick={onOpenFeedback} />
-						<SettingsButton
-							onClick={onOpenSettings}
-							shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
-						/>
-					</div>
+					<SettingsButton
+						onClick={onOpenSettings}
+						shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
+					/>
+					<FeedbackButton onClick={onOpenFeedback} />
 				</div>
 			</div>
 		</aside>

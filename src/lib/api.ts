@@ -3309,21 +3309,19 @@ export type ForkResult = {
 	htmlUrl: string;
 };
 
-export type IssueResult = {
-	url: string;
-	number: number;
-};
-
-export type ExistingHelmorWorkspace = {
-	workspaceId: string;
+export type ExistingHelmorRepo = {
 	repoId: string;
 	repoName: string;
-	branch: string | null;
 };
 
 export async function forkHelmorUpstream(): Promise<ForkResult> {
 	return invoke<ForkResult>("fork_helmor_upstream");
 }
+
+export type IssueResult = {
+	url: string;
+	number: number;
+};
 
 export async function createHelmorIssue(
 	title: string,
@@ -3332,10 +3330,38 @@ export async function createHelmorIssue(
 	return invoke<IssueResult>("create_helmor_issue", { title, body });
 }
 
-export async function findExistingHelmorWorkspace(): Promise<ExistingHelmorWorkspace | null> {
-	return invoke<ExistingHelmorWorkspace | null>(
-		"find_existing_helmor_workspace",
-	);
+export async function findExistingHelmorRepo(): Promise<ExistingHelmorRepo | null> {
+	return invoke<ExistingHelmorRepo | null>("find_existing_helmor_repo");
+}
+
+export type FeedbackSubmitRequest = {
+	repoId: string;
+	prompt: string;
+	provider: string;
+	modelId: string;
+	effortLevel?: string;
+	fastMode?: boolean;
+	permissionMode?: string;
+};
+
+export type FeedbackSubmitResult = {
+	workspaceId: string;
+	sessionId: string;
+};
+
+/** Atomic "create workspace + send first prompt" for the feedback dialog.
+ *  Prepares the workspace row, materialises the worktree on disk, and
+ *  spawns the agent stream — all in one IPC. Returns workspace + session
+ *  IDs the caller selects to navigate. Streaming events go to an internal
+ *  backend sink because there is no frontend `Channel` to deliver to until
+ *  the conversation surface mounts; the first turn re-renders from DB +
+ *  `ActiveStreamsChanged` invalidations. */
+export async function submitFeedbackWorkspaceAndPrompt(
+	request: FeedbackSubmitRequest,
+): Promise<FeedbackSubmitResult> {
+	return invoke<FeedbackSubmitResult>("submit_feedback_workspace_and_prompt", {
+		request,
+	});
 }
 
 function describeInvokeError(error: unknown, fallback: string): string {

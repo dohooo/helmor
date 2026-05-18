@@ -1,5 +1,3 @@
-import { Hammer, Send } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -7,113 +5,113 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ExistingHelmorWorkspace } from "@/lib/api";
+import type { ExistingHelmorRepo } from "@/lib/api";
+
+import { HELMOR_UPSTREAM_SLUG } from "./constants";
 
 type StepInputProps = {
 	input: string;
-	error: string | null;
-	existing: ExistingHelmorWorkspace | null;
+	existing: ExistingHelmorRepo | null;
 	githubConnected: boolean;
+	/** True after the first "Create issue" click — show the confirm UI. */
+	confirming: boolean;
+	/** True while the issue API call is in flight. */
+	sending: boolean;
 	onInputChange: (input: string) => void;
 	onCreateIssue: () => void;
+	onCancelConfirm: () => void;
 	onQuickFix: () => void;
 	onOpenSettings: () => void;
 };
 
 export function StepInput({
 	input,
-	error,
 	existing,
 	githubConnected,
+	confirming,
+	sending,
 	onInputChange,
 	onCreateIssue,
+	onCancelConfirm,
 	onQuickFix,
 	onOpenSettings,
 }: StepInputProps) {
-	const trimmed = input.trim();
-	const canSubmit = trimmed.length > 0 && githubConnected;
+	const canSubmit = input.trim().length > 0 && githubConnected;
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="flex flex-col gap-1">
-				<label
-					htmlFor="feedback-input"
-					className="text-[12px] font-medium tracking-[-0.01em]"
-				>
-					What would you like to tell us?
-				</label>
-				<Textarea
-					id="feedback-input"
-					value={input}
-					onChange={(event) => onInputChange(event.target.value)}
-					placeholder="Describe a bug, suggest an improvement, or ask a question."
-					rows={6}
-					autoFocus
-					className="text-[13px] leading-snug"
-				/>
-			</div>
-
+			<Textarea
+				value={input}
+				onChange={(event) => onInputChange(event.target.value)}
+				placeholder="Describe a bug, suggest an improvement, or ask a question."
+				autoFocus
+				aria-label="Feedback"
+				disabled={sending}
+				className="min-h-32"
+			/>
 			{!githubConnected ? (
-				<p className="text-[12px] leading-snug text-muted-foreground">
-					Connect your GitHub account in{" "}
-					<button
-						type="button"
+				<p className="text-xs text-muted-foreground">
+					Connect GitHub in{" "}
+					<Button
+						variant="link"
+						size="xs"
+						className="h-auto p-0 text-xs"
 						onClick={onOpenSettings}
-						className="cursor-pointer text-foreground underline underline-offset-2 hover:text-primary"
 					>
 						Settings
-					</button>{" "}
-					to continue.
+					</Button>{" "}
+					to send feedback.
 				</p>
 			) : null}
-
-			{error ? (
-				<p role="alert" className="text-[12px] leading-snug text-destructive">
-					{error}. If this keeps failing, you can create an issue directly.
+			{existing && githubConnected && !confirming ? (
+				<p className="text-xs text-muted-foreground">
+					Will reuse your local helmor repo.
 				</p>
 			) : null}
-
-			<div className="flex flex-col gap-1.5 pt-1">
-				<div className="flex items-center justify-end gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={onCreateIssue}
-						disabled={!canSubmit}
-					>
-						<Send data-icon="inline-start" />
-						Create issue
-					</Button>
-					<Tooltip>
-						<TooltipTrigger asChild>
+			<div className="mt-1 flex items-center justify-between gap-3">
+				<p className="text-xs text-muted-foreground">
+					{confirming
+						? `This will open an issue in ${HELMOR_UPSTREAM_SLUG}. Confirm?`
+						: null}
+				</p>
+				<div className="flex shrink-0 items-center gap-2">
+					{confirming ? (
+						<>
 							<Button
-								type="button"
+								variant="outline"
 								size="sm"
-								onClick={onQuickFix}
+								onClick={onCancelConfirm}
+								disabled={sending}
+							>
+								Cancel
+							</Button>
+							<Button size="sm" onClick={onCreateIssue} disabled={sending}>
+								{sending ? "Sending…" : "Confirm send"}
+							</Button>
+						</>
+					) : (
+						<>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={onCreateIssue}
 								disabled={!canSubmit}
 							>
-								<Hammer data-icon="inline-start" />
-								Quick fix
+								Create issue
 							</Button>
-						</TooltipTrigger>
-						<TooltipContent
-							side="top"
-							sideOffset={6}
-							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
-						>
-							<span className="leading-none">
-								Contribute to Helmor — super easy
-							</span>
-						</TooltipContent>
-					</Tooltip>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button size="sm" onClick={onQuickFix} disabled={!canSubmit}>
+										Quick fix
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top" sideOffset={6}>
+									Contribute to Helmor — super easy
+								</TooltipContent>
+							</Tooltip>
+						</>
+					)}
 				</div>
-				{existing && githubConnected ? (
-					<p className="text-right text-[11px] text-muted-foreground">
-						Will reuse your local helmor workspace
-						{existing.branch ? ` (branch ${existing.branch})` : ""}.
-					</p>
-				) : null}
 			</div>
 		</div>
 	);

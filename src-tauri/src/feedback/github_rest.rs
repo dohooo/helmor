@@ -1,16 +1,12 @@
-//! Two REST calls we need for the feedback / Quick-fix flow:
+//! REST calls for the feedback / Quick-fix flow.
 //!
 //!   1. `fork_helmor_upstream()` — POST /repos/{owner}/{repo}/forks
-//!      Used when the user picks "Quick fix". GitHub treats repeat forks
-//!      as idempotent and returns the same fork metadata, so no "has this
-//!      user already forked?" probe is needed.
-//!
+//!      Idempotent on GitHub's side; re-forking returns the same metadata.
 //!   2. `create_helmor_issue(title, body)` — POST /repos/{owner}/{repo}/issues
-//!      Used when the user picks "Create issue".
+//!      Called after the user has confirmed in the dialog.
 //!
-//! Both calls reuse the first logged-in `gh` account for github.com through
-//! the shared forge account backend. Errors are surfaced verbatim so the UI
-//! can show the GitHub-provided reason.
+//! Both go through the shared `gh api` forge backend so we inherit the
+//! account selection + auth that the rest of the app uses.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -124,7 +120,6 @@ pub fn create_helmor_issue(title: &str, body: &str) -> Result<IssueResult> {
     if title.is_empty() {
         return Err(anyhow!("Issue title must not be empty"));
     }
-
     let login = require_github_login()?;
     let path = format!("repos/{HELMOR_UPSTREAM_OWNER}/{HELMOR_UPSTREAM_REPO}/issues");
     let title_field = format!("title={title}");
@@ -150,7 +145,6 @@ pub fn create_helmor_issue(title: &str, body: &str) -> Result<IssueResult> {
     )?;
     let parsed: IssueResponse =
         serde_json::from_str(&stdout).context("Failed to parse GitHub issue response")?;
-
     Ok(IssueResult {
         url: parsed.html_url,
         number: parsed.number,

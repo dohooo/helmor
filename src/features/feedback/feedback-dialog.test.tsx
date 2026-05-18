@@ -9,10 +9,6 @@ import * as api from "@/lib/api";
 
 import { FeedbackDialog } from "./feedback-dialog";
 
-vi.mock("@tauri-apps/api/app", () => ({
-	getVersion: vi.fn(async () => "1.0.0"),
-}));
-
 vi.mock("@tauri-apps/plugin-dialog", () => ({
 	open: vi.fn(),
 }));
@@ -21,12 +17,21 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 	openUrl: vi.fn(),
 }));
 
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+	toast: {
+		success: (...args: unknown[]) => toastSuccess(...args),
+		error: (...args: unknown[]) => toastError(...args),
+	},
+}));
+
 vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof api>("@/lib/api");
 	return {
 		...actual,
 		listForgeAccounts: vi.fn(),
-		findExistingHelmorWorkspace: vi.fn(),
+		findExistingHelmorRepo: vi.fn(),
 		createHelmorIssue: vi.fn(),
 		forkHelmorUpstream: vi.fn(),
 		cloneRepositoryFromUrl: vi.fn(),
@@ -38,15 +43,12 @@ vi.mock("@/lib/api", async () => {
 
 const mockedApi = vi.mocked(api);
 
-function renderDialog(
-	overrides: Partial<React.ComponentProps<typeof FeedbackDialog>> = {},
-) {
+function renderDialog() {
 	const onOpenChange = vi.fn();
 	const onOpenSettings = vi.fn();
-	const onSelectWorkspace = vi.fn();
+	const onSubmitPrompt = vi.fn(async () => {});
 	// Radix Dialog applies pointer-events styles that confuse jsdom; disable
-	// the check so userEvent can interact with the textarea + buttons. A
-	// fresh user is returned per render so state doesn't leak across tests.
+	// the check so userEvent can interact with the textarea + buttons.
 	const user = userEvent.setup({
 		pointerEventsCheck: PointerEventsCheckLevel.Never,
 	});
@@ -56,12 +58,11 @@ function renderDialog(
 				open
 				onOpenChange={onOpenChange}
 				onOpenSettings={onOpenSettings}
-				onSelectWorkspace={onSelectWorkspace}
-				{...overrides}
+				onSubmitPrompt={onSubmitPrompt}
 			/>
 		</TooltipProvider>,
 	);
-	return { user, onOpenChange, onOpenSettings, onSelectWorkspace };
+	return { user, onOpenChange, onOpenSettings, onSubmitPrompt };
 }
 
 afterEach(() => {
@@ -69,8 +70,6 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-	// resetAllMocks clears both call state AND stale implementations — some of
-	// these mocks are configured inside individual tests and must not leak.
 	vi.resetAllMocks();
 	mockedApi.listForgeAccounts.mockResolvedValue([
 		{
@@ -83,7 +82,7 @@ beforeEach(() => {
 			active: true,
 		},
 	]);
-	mockedApi.findExistingHelmorWorkspace.mockResolvedValue(null);
+	mockedApi.findExistingHelmorRepo.mockResolvedValue(null);
 });
 
 describe("FeedbackDialog — input step", () => {
@@ -99,7 +98,7 @@ describe("FeedbackDialog — input step", () => {
 		expect(quickFix).toBeDisabled();
 
 		await user.type(
-			screen.getByLabelText(/what would you like to tell us/i),
+			screen.getByPlaceholderText(/describe a bug/i),
 			"Panel flickers on scroll",
 		);
 
@@ -109,17 +108,17 @@ describe("FeedbackDialog — input step", () => {
 		});
 	});
 
-	it("gates both actions when the user is not connected to GitHub", async () => {
+	it("gates both actions when GitHub isn't connected", async () => {
 		mockedApi.listForgeAccounts.mockResolvedValue([]);
 
 		const { user } = renderDialog();
 
-		await screen.findByText(/connect your github account/i);
+		await screen.findByText(/connect github/i);
 		const createIssue = screen.getByRole("button", { name: /create issue/i });
 		const quickFix = screen.getByRole("button", { name: /quick fix/i });
 
 		await user.type(
-			screen.getByLabelText(/what would you like to tell us/i),
+			screen.getByPlaceholderText(/describe a bug/i),
 			"Has a bug",
 		);
 		expect(createIssue).toBeDisabled();
@@ -128,82 +127,141 @@ describe("FeedbackDialog — input step", () => {
 });
 
 describe("FeedbackDialog — create issue flow", () => {
-	it("creates an issue and shows the confirmation step", async () => {
+	it("requires a second click to confirm, then sends via API and shows a toast", async () => {
 		mockedApi.createHelmorIssue.mockResolvedValue({
-			url: "https://github.com/Dohoo/helmor/issues/42",
-			number: 42,
+			url: "https://github.com/dohooo/helmor/issues/7",
+			number: 7,
 		});
 
-		const { user } = renderDialog();
+		const { user, onOpenChange } = renderDialog();
 
-		const textarea = await screen.findByLabelText(
-			/what would you like to tell us/i,
-		);
-		await user.type(textarea, "Panel flickers on scroll");
+		const textarea = await screen.findByPlaceholderText(/describe a bug/i);
+		await user.type(textarea, "Dark mode plz");
 		const createIssue = screen.getByRole("button", { name: /create issue/i });
-		await waitFor(() => {
-			expect(createIssue).not.toBeDisabled();
-		});
-		await user.click(createIssue);
+		await waitFor(() => expect(createIssue).not.toBeDisabled());
 
-		await waitFor(() => {
-			expect(mockedApi.createHelmorIssue).toHaveBeenCalled();
-		});
-		expect(mockedApi.createHelmorIssue).toHaveBeenCalledWith(
-			"Panel flickers on scroll",
-			expect.stringContaining("Panel flickers on scroll"),
+		// First click arms the confirmation UI but doesn't send.
+		await user.click(createIssue);
+		expect(mockedApi.createHelmorIssue).not.toHaveBeenCalled();
+		expect(await screen.findByText(/confirm\?/i)).toBeInTheDocument();
+
+		// Second click actually sends.
+		await user.click(screen.getByRole("button", { name: /confirm send/i }));
+
+		await waitFor(() =>
+			expect(mockedApi.createHelmorIssue).toHaveBeenCalledWith(
+				"Dark mode plz",
+				"",
+			),
 		);
 
-		expect(await screen.findByText(/issue #42 created/i)).toBeInTheDocument();
+		// Dialog stays open, input clears, success toast fires with issue URL.
+		expect(onOpenChange).not.toHaveBeenCalled();
+		await waitFor(() => expect(textarea).toHaveValue(""));
+		expect(toastSuccess).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				description: "https://github.com/dohooo/helmor/issues/7",
+			}),
+		);
 	});
 
-	it("surfaces failure copy and keeps the input so the user can retry", async () => {
+	it("cancel reverts the confirmation UI", async () => {
+		const { user } = renderDialog();
+
+		const textarea = await screen.findByPlaceholderText(/describe a bug/i);
+		await user.type(textarea, "Something");
+		const createIssue = screen.getByRole("button", { name: /create issue/i });
+		await waitFor(() => expect(createIssue).not.toBeDisabled());
+		await user.click(createIssue);
+
+		await user.click(screen.getByRole("button", { name: /cancel/i }));
+		expect(
+			screen.queryByRole("button", { name: /confirm send/i }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /create issue/i }),
+		).toBeInTheDocument();
+	});
+
+	it("surfaces API failure via an error toast and leaves the input intact", async () => {
 		mockedApi.createHelmorIssue.mockRejectedValue(new Error("rate limited"));
 
 		const { user } = renderDialog();
 
-		await user.type(
-			await screen.findByLabelText(/what would you like to tell us/i),
-			"Needs dark mode",
-		);
+		const textarea = await screen.findByPlaceholderText(/describe a bug/i);
+		await user.type(textarea, "Broken thing");
 		const createIssue = screen.getByRole("button", { name: /create issue/i });
-		await waitFor(() => {
-			expect(createIssue).not.toBeDisabled();
-		});
+		await waitFor(() => expect(createIssue).not.toBeDisabled());
 		await user.click(createIssue);
+		await user.click(screen.getByRole("button", { name: /confirm send/i }));
 
-		expect(
-			await screen.findByText(/if this keeps failing/i),
-		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith(
+				"Failed to create issue",
+				expect.objectContaining({
+					description: expect.stringMatching(/rate/i),
+				}),
+			),
+		);
+		expect(textarea).toHaveValue("Broken thing");
 	});
 });
 
 describe("FeedbackDialog — quick fix flow", () => {
-	it("skips fork + clone when a local helmor workspace already exists", async () => {
-		mockedApi.findExistingHelmorWorkspace.mockResolvedValue({
-			workspaceId: "ws-1",
+	it("skips fork + clone when a local helmor repo already exists", async () => {
+		mockedApi.findExistingHelmorRepo.mockResolvedValue({
 			repoId: "repo-1",
 			repoName: "helmor",
-			branch: "feature-x",
 		});
 
 		const { user } = renderDialog();
 
 		await waitFor(() =>
-			expect(mockedApi.findExistingHelmorWorkspace).toHaveBeenCalled(),
+			expect(mockedApi.findExistingHelmorRepo).toHaveBeenCalled(),
 		);
 
 		await user.type(
-			await screen.findByLabelText(/what would you like to tell us/i),
+			await screen.findByPlaceholderText(/describe a bug/i),
 			"Improve the inspector",
 		);
 		await user.click(screen.getByRole("button", { name: /quick fix/i }));
 
-		// Jumps straight to the prompt step — no "Step 1 · Prepare your fork"
-		// header.
+		// Jumps straight to the prompt step — the prompt textarea is mounted
+		// and Quick fix never triggered a fork.
 		expect(
-			await screen.findByRole("heading", { name: /refine your prompt/i }),
+			await screen.findByRole("button", { name: /send to agent/i }),
 		).toBeInTheDocument();
 		expect(mockedApi.forkHelmorUpstream).not.toHaveBeenCalled();
+	});
+
+	it("Send to agent invokes onSubmitPrompt with the draft and closes the dialog", async () => {
+		mockedApi.findExistingHelmorRepo.mockResolvedValue({
+			repoId: "repo-9",
+			repoName: "helmor",
+		});
+
+		const { user, onSubmitPrompt, onOpenChange } = renderDialog();
+
+		await user.type(
+			await screen.findByPlaceholderText(/describe a bug/i),
+			"Fix the inspector",
+		);
+		await user.click(screen.getByRole("button", { name: /quick fix/i }));
+
+		const sendBtn = await screen.findByRole("button", {
+			name: /send to agent/i,
+		});
+		// The prompt template autofills on entry — wait for it.
+		await waitFor(() => expect(sendBtn).not.toBeDisabled());
+		await user.click(sendBtn);
+
+		expect(onSubmitPrompt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				repoId: "repo-9",
+				prompt: expect.stringContaining("Fix the inspector"),
+			}),
+		);
+		expect(onOpenChange).toHaveBeenCalledWith(false);
 	});
 });

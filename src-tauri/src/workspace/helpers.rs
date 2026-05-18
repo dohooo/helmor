@@ -726,6 +726,19 @@ pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
     allocate_directory_name_with_conn(&connection, repo_id)
 }
 
+fn lookup_repo_name(connection: &rusqlite::Connection, repo_id: &str) -> Result<Option<String>> {
+    let mut stmt = connection
+        .prepare("SELECT name FROM repos WHERE id = ?1")
+        .context("Failed to prepare repo name lookup")?;
+    let mut rows = stmt
+        .query_map([repo_id], |row| row.get::<_, String>(0))
+        .context("Failed to query repo name")?;
+    match rows.next() {
+        Some(name) => Ok(Some(name?)),
+        None => Ok(None),
+    }
+}
+
 pub fn allocate_directory_name_with_conn(
     connection: &rusqlite::Connection,
     repo_id: &str,
@@ -744,10 +757,28 @@ pub fn allocate_directory_name_with_conn(
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read existing workspace names")?;
 
-    let used = names
+    let mut used = names
         .into_iter()
         .map(|value| value.to_ascii_lowercase())
         .collect::<std::collections::HashSet<_>>();
+
+    // Also exclude any directory names that already exist on disk under the
+    // repo's workspace root. Orphan dirs (DB row gone but folder still on
+    // disk) would otherwise cause `prepare → finalize` to fail later with a
+    // "target already exists" error.
+    if let Some(repo_name) = lookup_repo_name(connection, repo_id)? {
+        if let Ok(workspaces_root) = crate::data_dir::workspace_dir(&repo_name, "") {
+            if let Ok(entries) = std::fs::read_dir(&workspaces_root) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        if let Some(name) = entry.file_name().to_str() {
+                            used.insert(name.to_ascii_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Collect available names (not yet used) and pick one randomly
     let available: Vec<&&str> = WORKSPACE_NAMES
