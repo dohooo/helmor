@@ -261,6 +261,35 @@ pub fn run() {
                     count = restored_count,
                     "remote-runner: restored per-workspace runtime bindings"
                 );
+                // Phase 22a: one-time copy of the JSON binding sidecar
+                // into `workspaces.runtime_name`. The column is dead
+                // data until phase 22b wires the resolver to read it;
+                // we backfill now so 22b's flip is a one-line change
+                // rather than a multi-touch migration. Failures log
+                // but don't roll back — the sidecar JSON stays
+                // authoritative until the resolver flip.
+                let migration_input: Vec<(String, String)> = bindings_store
+                    .list()
+                    .into_iter()
+                    .map(|b| (b.workspace_id, b.runtime_name))
+                    .collect();
+                match models::workspaces::backfill_runtime_name_from_bindings(
+                    &migration_input,
+                ) {
+                    Ok(0) => {}
+                    Ok(written) => {
+                        tracing::info!(
+                            count = written,
+                            "remote-runner: copied workspace runtime bindings into workspaces.runtime_name"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %format!("{err:#}"),
+                            "remote-runner: runtime_name backfill failed; the JSON sidecar is still authoritative"
+                        );
+                    }
+                }
             }
             app.manage(std::sync::Arc::new(bindings_store));
 

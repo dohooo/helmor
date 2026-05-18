@@ -66,6 +66,13 @@ pub struct WorkspaceRecord {
     /// workspace. `None` means setup was never run (or was skipped
     /// because the repo has no setup script).
     pub setup_completed_at: Option<String>,
+    /// Name of the registered remote runtime this workspace is bound
+    /// to (matches a `RuntimeRegistry` entry). `None` and `"local"`
+    /// are equivalent — both route through the in-process
+    /// [`crate::remote::LocalRuntime`]. Anything else funnels through
+    /// `resolve_runtime_for_call` to dispatch over the
+    /// [`crate::remote::RemoteSshRuntime`] for that entry.
+    pub runtime_name: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -172,7 +179,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.created_at,
       w.updated_at,
       wss.last_user_message_at,
-      w.setup_completed_at
+      w.setup_completed_at,
+      w.runtime_name
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -560,6 +568,63 @@ pub(crate) fn update_restored_workspace_state(
         .context("Failed to commit restore transaction")
 }
 
+/// Phase 22a one-time copy from the JSON binding sidecar
+/// (`<data_dir>/workspace_runtime_bindings.json`) into the new
+/// `workspaces.runtime_name` column. Idempotent: only fills rows
+/// that currently have `runtime_name IS NULL`, so re-running on an
+/// already-migrated DB is a no-op.
+///
+/// The binding sidecar itself stays on disk — it's still the source
+/// of truth for the pre-22b resolver code path. Phase 22b flips the
+/// resolver to consult the column first; until then the column is
+/// dead data + only this backfill writes to it.
+///
+/// Returns the number of rows that got a value written, so the
+/// startup hook can log a single info-level line summarising the
+/// import.
+pub fn backfill_runtime_name_from_bindings(bindings: &[(String, String)]) -> Result<usize> {
+    if bindings.is_empty() {
+        return Ok(0);
+    }
+    let mut connection = db::write_conn()?;
+    backfill_runtime_name_into(&mut connection, bindings)
+}
+
+/// Pool-agnostic body of [`backfill_runtime_name_from_bindings`].
+/// Tests drive this directly with a fresh `rusqlite::Connection`
+/// rather than spinning up the global pool; production keeps using
+/// the convenience wrapper above.
+pub fn backfill_runtime_name_into(
+    connection: &mut rusqlite::Connection,
+    bindings: &[(String, String)],
+) -> Result<usize> {
+    if bindings.is_empty() {
+        return Ok(0);
+    }
+    let tx = connection
+        .transaction()
+        .context("Failed to begin runtime_name backfill transaction")?;
+    let mut written = 0_usize;
+    for (workspace_id, runtime_name) in bindings {
+        // The `WHERE runtime_name IS NULL` predicate makes this
+        // idempotent: a row that was already migrated (or written
+        // directly via a future 22b write path) is left alone.
+        let rows_updated = tx
+            .execute(
+                "UPDATE workspaces SET runtime_name = ?2 \
+                 WHERE id = ?1 AND runtime_name IS NULL",
+                rusqlite::params![workspace_id, runtime_name],
+            )
+            .with_context(|| {
+                format!("Failed to backfill runtime_name for workspace {workspace_id}")
+            })?;
+        written += rows_updated;
+    }
+    tx.commit()
+        .context("Failed to commit runtime_name backfill transaction")?;
+    Ok(written)
+}
+
 fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
     Ok(WorkspaceRecord {
         id: row.get(0)?,
@@ -601,5 +666,121 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         updated_at: row.get(36)?,
         last_user_message_at: row.get(37)?,
         setup_completed_at: row.get(38)?,
+        runtime_name: row.get(39)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_db_with_workspaces() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Just the columns the backfill cares about — full schema
+        // ensures `runtime_name` exists and `id` is the PK.
+        conn.execute_batch(
+            "CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                runtime_name TEXT
+            )",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn backfill_writes_runtime_name_for_each_known_workspace() {
+        let mut conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id) VALUES ('ws-1'), ('ws-2'), ('ws-3');")
+            .unwrap();
+
+        let bindings = vec![
+            ("ws-1".to_string(), "dev.box".to_string()),
+            ("ws-2".to_string(), "local".to_string()),
+        ];
+        let written = backfill_runtime_name_into(&mut conn, &bindings).unwrap();
+        assert_eq!(written, 2);
+
+        let read_one = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT runtime_name FROM workspaces WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(read_one("ws-1").as_deref(), Some("dev.box"));
+        assert_eq!(read_one("ws-2").as_deref(), Some("local"));
+        // ws-3 had no binding — column stays NULL.
+        assert!(read_one("ws-3").is_none());
+    }
+
+    #[test]
+    fn backfill_skips_workspaces_with_an_existing_runtime_name() {
+        // Re-running the backfill on a row that's already been
+        // migrated (or written via a future 22b path) must not
+        // clobber the existing value.
+        let mut conn = open_db_with_workspaces();
+        conn.execute_batch(
+            "INSERT INTO workspaces (id, runtime_name) VALUES ('ws-1', 'pre-existing');",
+        )
+        .unwrap();
+
+        let bindings = vec![("ws-1".to_string(), "overwrite-me".to_string())];
+        let written = backfill_runtime_name_into(&mut conn, &bindings).unwrap();
+        assert_eq!(
+            written, 0,
+            "row with a non-NULL runtime_name must be left alone"
+        );
+
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT runtime_name FROM workspaces WHERE id = 'ws-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("pre-existing"));
+    }
+
+    #[test]
+    fn backfill_with_empty_bindings_is_a_noop() {
+        let mut conn = open_db_with_workspaces();
+        let written = backfill_runtime_name_into(&mut conn, &[]).unwrap();
+        assert_eq!(written, 0);
+    }
+
+    #[test]
+    fn backfill_silently_skips_bindings_for_unknown_workspaces() {
+        // A workspace id present in the sidecar JSON but missing
+        // from the DB (e.g. the row was deleted while the binding
+        // wasn't cleaned up). Should not error; just contribute
+        // zero writes for that id.
+        let mut conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id) VALUES ('ws-real');")
+            .unwrap();
+
+        let bindings = vec![
+            ("ws-real".to_string(), "dev.box".to_string()),
+            ("ws-orphan".to_string(), "unknown".to_string()),
+        ];
+        let written = backfill_runtime_name_into(&mut conn, &bindings).unwrap();
+        assert_eq!(
+            written, 1,
+            "only the row that actually exists should be written"
+        );
+    }
+
+    #[test]
+    fn backfill_is_idempotent_across_two_runs() {
+        // First run writes; second run on the same DB writes zero
+        // because every targeted row already has a value.
+        let mut conn = open_db_with_workspaces();
+        conn.execute_batch("INSERT INTO workspaces (id) VALUES ('ws-1');")
+            .unwrap();
+
+        let bindings = vec![("ws-1".to_string(), "dev.box".to_string())];
+        assert_eq!(backfill_runtime_name_into(&mut conn, &bindings).unwrap(), 1);
+        assert_eq!(backfill_runtime_name_into(&mut conn, &bindings).unwrap(), 0,);
+    }
 }
