@@ -906,6 +906,30 @@ export async function reconnectRemoteRuntime(
 	return invoke<RuntimeHealth>("reconnect_remote_runtime", { name });
 }
 
+/**
+ * Phase 23d: push an SDK API key (or clear it) into a remote
+ * runtime's secrets store. The daemon persists to
+ * `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-pushes
+ * to the live sidecar via `updateConfig` — keys NEVER persist on
+ * the desktop side. Pass `apiKey: null` to clear.
+ *
+ * `provider` is the SDK identifier the sidecar uses internally
+ * (`"cursor"` today; future providers reuse the same RPC).
+ */
+export async function setRuntimeAgentAuth(
+	name: string,
+	provider: string,
+	apiKey: string | null,
+	baseUrl?: string | null,
+): Promise<void> {
+	return invoke<void>("set_runtime_agent_auth", {
+		name,
+		provider,
+		apiKey,
+		baseUrl: baseUrl ?? null,
+	});
+}
+
 // ── remote terminals ────────────────────────────────────────────
 
 /**

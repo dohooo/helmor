@@ -851,6 +851,14 @@ impl RemoteRuntime for RemoteSshRuntime {
             .call::<super::methods::AgentAttachMethod>(params)
     }
 
+    fn agent_set_auth(
+        &self,
+        params: super::methods::AgentSetAuthParams,
+    ) -> Result<super::methods::AgentSetAuthResult> {
+        self.client
+            .call::<super::methods::AgentSetAuthMethod>(params)
+    }
+
     fn subscribe_agent_events(
         &self,
         callback: Box<dyn Fn(super::methods::AgentEventNotification) + Send + Sync>,

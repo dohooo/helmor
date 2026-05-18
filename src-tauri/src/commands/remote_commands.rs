@@ -594,6 +594,55 @@ pub async fn reconnect_remote_runtime(
     .await
 }
 
+/// Phase 23d: push an SDK API key (or clear it) into a remote
+/// runtime's secrets store. The daemon persists to
+/// `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-pushes
+/// to the live sidecar via `updateConfig` — keys never persist on
+/// the desktop side.
+///
+/// `provider` is the SDK identifier the sidecar uses internally
+/// (`"cursor"` today; future providers reuse the same RPC).
+/// `api_key = None` clears the stored key (with the matching live
+/// push so the next provider call reverts to unauthenticated).
+#[tauri::command]
+pub async fn set_runtime_agent_auth(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+    provider: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+) -> CmdResult<()> {
+    if name.trim().is_empty() {
+        return Err(anyhow::anyhow!("runtime name must not be empty").into());
+    }
+    if provider.trim().is_empty() {
+        return Err(anyhow::anyhow!("provider must not be empty").into());
+    }
+    // Refuse to ship secrets to the built-in local runtime — that
+    // entry doesn't have a remote sidecar to push them to, and the
+    // desktop already manages its own Cursor key through
+    // `app.cursor_provider`. Surface the misuse rather than
+    // silently no-op (the trait's `agent_set_auth` default would
+    // also bail, but with a less-helpful "only on connected
+    // remote" message).
+    if name == crate::remote::LOCAL_RUNTIME_NAME {
+        return Err(anyhow::anyhow!(
+            "agent.setAuth is only available on registered remote runtimes (got `{name}`)"
+        )
+        .into());
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    run_blocking(move || -> anyhow::Result<()> {
+        let _ = runtime.agent_set_auth(crate::remote::AgentSetAuthParams {
+            provider,
+            api_key,
+            base_url,
+        })?;
+        Ok(())
+    })
+    .await
+}
+
 /// Snapshot the registry's current configs and write them to
 /// `<data_dir>/remote_runtimes.json`. Best-effort — failures log
 /// without rolling back the mutation that triggered the save.

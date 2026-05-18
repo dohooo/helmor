@@ -271,6 +271,17 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("agent.attach is only supported on a connected remote runtime")
     }
 
+    /// Push an SDK API key (or null to clear) into the runtime's
+    /// secrets store. Phase 23d: only the SSH-backed `RemoteSshRuntime`
+    /// implements this; the local runtime keeps using the desktop's
+    /// existing `app.cursor_provider` settings row directly.
+    fn agent_set_auth(
+        &self,
+        _params: super::methods::AgentSetAuthParams,
+    ) -> Result<super::methods::AgentSetAuthResult> {
+        anyhow::bail!("agent.setAuth is only supported on a connected remote runtime")
+    }
+
     /// Subscribe to `agent.event` notifications coming back from the
     /// runtime. Default `None` mirrors [`subscribe_terminal_events`]:
     /// local + tombstoned runtimes don't stream, so the desktop's

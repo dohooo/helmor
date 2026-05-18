@@ -111,6 +111,13 @@ pub enum Method {
     /// — the previous subscriber stops seeing live events. Used
     /// by reconnect flows and by tests.
     AgentAttach,
+    /// Push an SDK API key + optional base URL into the daemon's
+    /// secrets store. The daemon persists it to
+    /// `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-
+    /// pushes it to the live sidecar via its `updateConfig` RPC.
+    /// Keys never persist on the desktop side — phase 23d's
+    /// design intent is "auth lives remote-only".
+    AgentSetAuth,
 }
 
 impl Method {
@@ -136,6 +143,7 @@ impl Method {
             Self::AgentAbort => "agent.abort",
             Self::AgentList => "agent.list",
             Self::AgentAttach => "agent.attach",
+            Self::AgentSetAuth => "agent.setAuth",
         }
     }
 }
@@ -179,6 +187,7 @@ impl FromStr for Method {
             "agent.abort" => Ok(Self::AgentAbort),
             "agent.list" => Ok(Self::AgentList),
             "agent.attach" => Ok(Self::AgentAttach),
+            "agent.setAuth" => Ok(Self::AgentSetAuth),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -853,6 +862,36 @@ impl RpcMethod for AgentAttachMethod {
     type Result = AgentAttachResult;
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSetAuthParams {
+    /// Provider this secret applies to. Today: `"cursor"` (the only
+    /// provider that reads its key from the desktop side); future
+    /// custom Claude / Codex providers would extend this set.
+    pub provider: String,
+    /// `Some(_)` to set; `None` to clear. The daemon writes `null`
+    /// to its on-disk store and pushes `{ cursorApiKey: null }` (or
+    /// the provider-equivalent) to the live sidecar so the next
+    /// call reverts to the unauthenticated state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Optional base URL — used by custom Claude providers that
+    /// proxy through a different host. `None` for the default
+    /// provider endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetAuthResult {}
+
+pub struct AgentSetAuthMethod;
+impl RpcMethod for AgentSetAuthMethod {
+    const NAME: &'static str = "agent.setAuth";
+    type Params = AgentSetAuthParams;
+    type Result = AgentSetAuthResult;
+}
+
 /// Notification payload pushed via
 /// `Notifier::notify(AGENT_EVENT_METHOD, ...)`. The `event` field is
 /// the *raw* `SidecarEvent` JSON — the daemon doesn't interpret it
@@ -897,6 +936,7 @@ mod tests {
             Method::AgentAbort,
             Method::AgentList,
             Method::AgentAttach,
+            Method::AgentSetAuth,
         ] {
             assert_eq!(method.as_str().parse::<Method>().ok(), Some(method));
         }
@@ -1426,5 +1466,44 @@ mod tests {
     #[test]
     fn agent_event_method_constant_matches_the_catalogue() {
         assert_eq!(AGENT_EVENT_METHOD, "agent.event");
+    }
+
+    #[test]
+    fn agent_set_auth_params_omit_optional_fields_when_absent() {
+        // Wire shape for a clear: provider + api_key=None should
+        // emit just `{ provider: "cursor" }` — `null` would mean
+        // "explicit clear" too, but skipping the field keeps the
+        // payload tight and the daemon treats both as
+        // "remove the entry".
+        let params = AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: None,
+            base_url: None,
+        };
+        let wire = serde_json::to_value(&params).unwrap();
+        assert_eq!(wire["provider"], "cursor");
+        assert!(
+            wire.get("apiKey").is_none(),
+            "absent apiKey should be skipped: {wire}"
+        );
+        assert!(
+            wire.get("baseUrl").is_none(),
+            "absent baseUrl should be skipped: {wire}"
+        );
+    }
+
+    #[test]
+    fn agent_set_auth_params_round_trip_with_full_payload() {
+        let params = AgentSetAuthParams {
+            provider: "claude".into(),
+            api_key: Some("sk-test".into()),
+            base_url: Some("https://proxy.example.com".into()),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        let restored: AgentSetAuthParams = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, params);
+        // CamelCase on the wire.
+        assert!(wire.contains("\"apiKey\""));
+        assert!(wire.contains("\"baseUrl\""));
     }
 }

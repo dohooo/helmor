@@ -22,19 +22,20 @@ use super::codec::write_frame;
 use super::methods::{
     AgentAbortMethod, AgentAbortParams, AgentAbortResult, AgentAttachMethod, AgentAttachParams,
     AgentAttachResult, AgentListMethod, AgentListParams, AgentListResult, AgentSendMethod,
-    AgentSendParams, AgentSendResult, InitializeMethod, InitializeParams, InitializeResult, Method,
-    PingMethod, PingParams, PingResult, RpcMethod, TerminalAttachMethod, TerminalAttachParams,
-    TerminalAttachResult, TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult,
-    TerminalListMethod, TerminalListParams, TerminalListResult, TerminalOpenMethod,
-    TerminalOpenParams, TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams,
-    TerminalResizeResult, TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult,
-    WorkspaceBranchInfoMethod, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
-    WorkspaceChangesMethod, WorkspaceChangesParams, WorkspaceChangesResult,
-    WorkspaceFileTreeMethod, WorkspaceFileTreeParams, WorkspaceFileTreeResult,
-    WorkspaceMutateFileMethod, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
-    WorkspaceReadFileAtRefMethod, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-    WorkspaceReadFileMethod, WorkspaceReadFileParams, WorkspaceStatFileMethod,
-    WorkspaceStatFileParams, WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
+    AgentSendParams, AgentSendResult, AgentSetAuthMethod, AgentSetAuthParams, AgentSetAuthResult,
+    InitializeMethod, InitializeParams, InitializeResult, Method, PingMethod, PingParams,
+    PingResult, RpcMethod, TerminalAttachMethod, TerminalAttachParams, TerminalAttachResult,
+    TerminalCloseMethod, TerminalCloseParams, TerminalCloseResult, TerminalListMethod,
+    TerminalListParams, TerminalListResult, TerminalOpenMethod, TerminalOpenParams,
+    TerminalOpenResult, TerminalResizeMethod, TerminalResizeParams, TerminalResizeResult,
+    TerminalWriteMethod, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoMethod,
+    WorkspaceBranchInfoParams, WorkspaceBranchInfoResult, WorkspaceChangesMethod,
+    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeMethod,
+    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileMethod,
+    WorkspaceMutateFileParams, WorkspaceMutateFileResult, WorkspaceReadFileAtRefMethod,
+    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileMethod,
+    WorkspaceReadFileParams, WorkspaceStatFileMethod, WorkspaceStatFileParams,
+    WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use super::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -347,6 +348,9 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         }
         Method::AgentAttach => {
             handle::<AgentAttachMethod, _>(req.params, |params| handle_agent_attach(ctx, params))
+        }
+        Method::AgentSetAuth => {
+            handle::<AgentSetAuthMethod, _>(req.params, |params| handle_agent_set_auth(ctx, params))
         }
     };
 
@@ -682,6 +686,18 @@ fn handle_agent_attach(
                 format!("agent.attach failed: {err:#}"),
             )
         })
+}
+
+fn handle_agent_set_auth(
+    ctx: &ServerContext,
+    params: AgentSetAuthParams,
+) -> Result<AgentSetAuthResult, JsonRpcError> {
+    ctx.agent_state().set_auth(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.setAuth failed: {err:#}"),
+        )
+    })
 }
 
 /// Two semver strings are protocol-compatible iff their *major*

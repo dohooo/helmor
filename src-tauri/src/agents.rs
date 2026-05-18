@@ -293,6 +293,7 @@ pub async fn list_active_streams(
 
 #[tauri::command]
 pub async fn stop_agent_stream(
+    app: AppHandle,
     sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentStopRequest,
 ) -> CmdResult<()> {
@@ -304,7 +305,18 @@ pub async fn stop_agent_stream(
             "provider": request.provider.unwrap_or_else(|| "claude".to_string()),
         }),
     };
-    sidecar
+    // Phase 23d: route the stop through the same transport
+    // resolver as the send. `request.session_id` is the helmor
+    // session id (frontend reads it off `ActiveStreamSummary`),
+    // which is what the resolver needs to look up the workspace's
+    // bound runtime. Anonymous streams + locally-bound workspaces
+    // still hit the desktop's `ManagedSidecar`.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        Some(&request.session_id),
+    );
+    transport
         .send(&stop_req)
         .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
     Ok(())
@@ -378,9 +390,20 @@ pub async fn steer_agent_stream(
         }),
     };
 
-    let rx = sidecar.subscribe(&request_id);
-    if let Err(error) = sidecar.send(&steer_req) {
-        sidecar.unsubscribe(&request_id);
+    // Phase 23d: route the steer through the workspace's bound
+    // transport. `request.session_id` is the helmor session id
+    // (matches the resolver's contract on `send_agent_message_stream`
+    // + `stop_agent_stream`). Remote-bound workspaces hit the
+    // daemon's sidecar; local-bound ones keep using the desktop's
+    // own `ManagedSidecar`.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        Some(&request.session_id),
+    );
+    let rx = transport.subscribe(&request_id);
+    if let Err(error) = transport.send(&steer_req) {
+        transport.unsubscribe(&request_id);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
 
@@ -431,7 +454,7 @@ pub async fn steer_agent_stream(
     .await
     .map_err(|e| anyhow::anyhow!("Steer worker join failed: {e}"))?;
 
-    sidecar.unsubscribe(&rid_for_worker);
+    transport.unsubscribe(&rid_for_worker);
     let (accepted, reason) = outcome?;
     Ok(AgentSteerResponse { accepted, reason })
 }

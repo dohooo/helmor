@@ -396,6 +396,7 @@ pub fn run() {
             commands::remote_commands::open_remote_terminal,
             commands::remote_commands::reconnect_remote_runtime,
             commands::remote_commands::resize_remote_terminal,
+            commands::remote_commands::set_runtime_agent_auth,
             commands::remote_commands::set_workspace_runtime_binding,
             commands::remote_commands::write_remote_terminal,
             commands::system_commands::get_cli_status,
