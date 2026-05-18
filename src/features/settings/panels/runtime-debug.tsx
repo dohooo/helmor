@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	FileText,
+	KeyRound,
 	Link2,
 	Loader2,
 	Plug,
@@ -37,6 +38,7 @@ import {
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
+	setRuntimeAgentAuth,
 	setWorkspaceRuntimeBinding,
 	type TerminalEventNotification,
 	type WorkspaceBranchInfoResult,
@@ -90,6 +92,7 @@ export function RuntimeDebugPanel() {
 			<WorkspaceStatusProbeSection entries={entries} />
 			<WorkspaceInspectorProbeSection entries={entries} />
 			<WorkspaceBindingsSection entries={entries} />
+			<SetAgentAuthSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
 	);
@@ -1849,6 +1852,178 @@ function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {
 					</div>
 				</div>
 			)}
+		</section>
+	);
+}
+
+/// Phase 23e: dev-panel surface for `agent.setAuth`. Lets the
+/// operator push an SDK API key to a remote runtime's secrets
+/// store without dropping into the developer console. Keys never
+/// touch the desktop's settings DB — the wrapper just forwards.
+function SetAgentAuthSection({ entries }: { entries: RuntimeEntry[] }) {
+	// Filter to *remote* runtimes — the built-in `local` entry is
+	// rejected server-side anyway, but the picker shouldn't even
+	// offer it. Empty list → no remotes registered yet; render a
+	// hint instead of a broken form.
+	const remoteEntries = useMemo(
+		() => entries.filter((e) => !e.isLocal),
+		[entries],
+	);
+	const [runtimeName, setRuntimeName] = useState<string>("");
+	const [provider, setProvider] = useState<string>("cursor");
+	const [apiKey, setApiKey] = useState<string>("");
+
+	// Keep the selected runtime valid as the registry list shifts.
+	useEffect(() => {
+		if (!runtimeName && remoteEntries[0]) {
+			setRuntimeName(remoteEntries[0].name);
+			return;
+		}
+		if (runtimeName && !remoteEntries.some((e) => e.name === runtimeName)) {
+			setRuntimeName(remoteEntries[0]?.name ?? "");
+		}
+	}, [remoteEntries, runtimeName]);
+
+	const pushAuth = useMutation({
+		mutationFn: async ({
+			name,
+			providerName,
+			key,
+		}: {
+			name: string;
+			providerName: string;
+			key: string | null;
+		}) => setRuntimeAgentAuth(name, providerName, key),
+		onSuccess: () => {
+			// Clear the input on success so the key doesn't sit
+			// visible in the form after submit. The remote already
+			// has it persisted; the desktop has nothing to remember.
+			setApiKey("");
+		},
+	});
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<KeyRound className="size-3.5" strokeWidth={1.8} />}
+				title="Set agent auth"
+				description="Push an SDK API key to a remote runtime's secrets store. Keys live in ~/.helmor/server/secrets.json on the remote (mode 0600) and hot-push to the live sidecar via updateConfig. Keys NEVER persist on the desktop."
+			/>
+
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remoteEntries.length === 0 ? (
+					<SettingsNotice tone="info">
+						Register a remote runtime in the Connect form above to push an API
+						key to it.
+					</SettingsNotice>
+				) : (
+					<>
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
+							<Label htmlFor="rt-auth-runtime" className="text-xs">
+								Runtime
+							</Label>
+							<select
+								id="rt-auth-runtime"
+								value={runtimeName}
+								onChange={(e) => setRuntimeName(e.target.value)}
+								className={cn(
+									"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 shadow-sm",
+									"text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+								)}
+							>
+								{remoteEntries.map((e) => (
+									<option key={e.name} value={e.name}>
+										{e.name}
+									</option>
+								))}
+							</select>
+
+							<Label htmlFor="rt-auth-provider" className="text-xs">
+								Provider
+							</Label>
+							<Input
+								id="rt-auth-provider"
+								value={provider}
+								onChange={(e) => setProvider(e.target.value)}
+								placeholder="cursor"
+							/>
+
+							<Label htmlFor="rt-auth-key" className="text-xs">
+								API key
+							</Label>
+							<div className="flex flex-col gap-1">
+								<Input
+									id="rt-auth-key"
+									type="password"
+									value={apiKey}
+									onChange={(e) => setApiKey(e.target.value)}
+									placeholder="sk-..."
+									autoComplete="off"
+								/>
+								<span className="text-[11px] text-muted-foreground">
+									Leave blank and click <em>Clear</em> to remove a stored key.
+								</span>
+							</div>
+						</div>
+
+						<div className="flex items-center justify-between gap-3">
+							<div className="min-w-0 flex-1">
+								{pushAuth.isError ? (
+									<SettingsNotice tone="error">
+										{errorMessage(pushAuth.error)}
+									</SettingsNotice>
+								) : pushAuth.isSuccess ? (
+									<SettingsNotice tone="ok">Saved on remote.</SettingsNotice>
+								) : null}
+							</div>
+							<div className="flex items-center gap-2">
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={
+										pushAuth.isPending || !runtimeName || !provider.trim()
+									}
+									onClick={() =>
+										pushAuth.mutate({
+											name: runtimeName,
+											providerName: provider.trim(),
+											key: null,
+										})
+									}
+								>
+									Clear
+								</Button>
+								<Button
+									variant="default"
+									size="sm"
+									disabled={
+										pushAuth.isPending ||
+										!runtimeName ||
+										!provider.trim() ||
+										!apiKey
+									}
+									onClick={() =>
+										pushAuth.mutate({
+											name: runtimeName,
+											providerName: provider.trim(),
+											key: apiKey,
+										})
+									}
+								>
+									{pushAuth.isPending ? (
+										<>
+											<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+											Saving…
+										</>
+									) : (
+										"Save"
+									)}
+								</Button>
+							</div>
+						</div>
+					</>
+				)}
+			</div>
 		</section>
 	);
 }

@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 	connectRemoteRuntime: vi.fn(),
 	disconnectRemoteRuntime: vi.fn(),
 	reconnectRemoteRuntime: vi.fn(),
+	setRuntimeAgentAuth: vi.fn(),
 	getWorkspaceStatus: vi.fn(),
 	listSshHosts: vi.fn(),
 	listWorkspaceRuntimeBindings: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		connectRemoteRuntime: apiMocks.connectRemoteRuntime,
 		disconnectRemoteRuntime: apiMocks.disconnectRemoteRuntime,
 		reconnectRemoteRuntime: apiMocks.reconnectRemoteRuntime,
+		setRuntimeAgentAuth: apiMocks.setRuntimeAgentAuth,
 		getWorkspaceStatus: apiMocks.getWorkspaceStatus,
 		listSshHosts: apiMocks.listSshHosts,
 		listWorkspaceRuntimeBindings: apiMocks.listWorkspaceRuntimeBindings,
@@ -1306,6 +1308,116 @@ describe("RuntimeDebugPanel", () => {
 		expect(
 			screen.getByRole("button", { name: /Open terminal/ }),
 		).toBeInTheDocument();
+	});
+
+	// ── Set agent auth section (phase 23e) ────────────────────────
+
+	it("shows the empty hint when no remote runtimes are registered", async () => {
+		// Only the built-in local entry exists → the auth section
+		// should refuse to render the form and explain why.
+		renderPanel();
+		await screen.findByText(
+			/Register a remote runtime in the Connect form above/,
+		);
+	});
+
+	it("submits the auth form through setRuntimeAgentAuth and clears the key on success", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockImplementation((name?: string) =>
+			Promise.resolve(name === "dev.box" ? REMOTE_HEALTH : LOCAL_HEALTH),
+		);
+		apiMocks.setRuntimeAgentAuth.mockResolvedValue(undefined);
+
+		renderPanel();
+		// The provider input is part of the auth form section.
+		const providerInput = await screen.findByLabelText(/^Provider$/);
+		// Default-selected runtime is the first remote entry.
+		// Scope to the section's own select id since "Runtime"
+		// appears as a label in the probe sections above too.
+		const runtimeSelect = document.getElementById(
+			"rt-auth-runtime",
+		) as HTMLSelectElement;
+		expect(runtimeSelect).toHaveValue("dev.box");
+
+		// Provider defaults to "cursor"; verify + type a key.
+		expect(providerInput).toHaveValue("cursor");
+		const apiKeyInput = screen.getByLabelText(/^API key$/);
+		await user.type(apiKeyInput, "sk-test-key");
+
+		const saveButton = screen.getByRole("button", { name: /^Save$/ });
+		await user.click(saveButton);
+
+		await waitFor(() => {
+			expect(apiMocks.setRuntimeAgentAuth).toHaveBeenCalledWith(
+				"dev.box",
+				"cursor",
+				"sk-test-key",
+			);
+		});
+		// Key cleared on success so it doesn't linger visible.
+		await waitFor(() => {
+			expect(screen.getByLabelText(/^API key$/)).toHaveValue("");
+		});
+		// And a confirmation appears.
+		expect(screen.getByText(/Saved on remote/)).toBeInTheDocument();
+	});
+
+	it("Clear button posts a null key to setRuntimeAgentAuth", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.setRuntimeAgentAuth.mockResolvedValue(undefined);
+
+		renderPanel();
+		await screen.findByLabelText(/^API key$/);
+		// API key intentionally left blank — Clear should still fire
+		// with `null` regardless.
+		const clearButton = screen.getByRole("button", { name: /^Clear$/ });
+		await user.click(clearButton);
+
+		await waitFor(() => {
+			expect(apiMocks.setRuntimeAgentAuth).toHaveBeenCalledWith(
+				"dev.box",
+				"cursor",
+				null,
+			);
+		});
+	});
+
+	it("surfaces backend errors from setRuntimeAgentAuth verbatim", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.setRuntimeAgentAuth.mockRejectedValue(
+			new Error("agent runtime is not available: HELMOR_SIDECAR_PATH not set"),
+		);
+
+		renderPanel();
+		const apiKeyInput = await screen.findByLabelText(/^API key$/);
+		await user.type(apiKeyInput, "sk");
+		await user.click(screen.getByRole("button", { name: /^Save$/ }));
+
+		await waitFor(() => {
+			expect(
+				screen.getByText(/HELMOR_SIDECAR_PATH not set/),
+			).toBeInTheDocument();
+		});
 	});
 });
 

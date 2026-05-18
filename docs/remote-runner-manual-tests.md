@@ -160,6 +160,102 @@ for non-default ports).
 6. Unpin the workspace and re-verify: it now hits local without any
    restart.
 
+### Remote agents (phases 23a–e)
+
+The headline #453 feature: `claude-code` / `codex` / `cursor`
+runs on the remote machine, not the desktop. After phase 23,
+sending a prompt against a remote-bound workspace dispatches to
+the *remote* sidecar over SSH, with output streaming back through
+the existing chat pipeline.
+
+**Pre-flight on the remote:**
+
+1. Build `helmor-sidecar` for the remote's platform. The desktop
+   bundle drops it at `Resources/vendor/helmor-sidecar` on
+   macOS; cross-compile or rebuild on the remote if needed.
+2. Place it on disk somewhere stable (e.g. `~/.helmor/server/helmor-sidecar`).
+3. Set `HELMOR_SIDECAR_PATH=<absolute path>` in the operator
+   login shell **before** restarting the daemon. The daemon resolves
+   this env var on each spawn — bundling alongside `helmor-server`
+   itself is deferred to a follow-on slice; until then, env var
+   is the only resolution path.
+4. ✅ Disconnect and reconnect the runtime from Settings → Runtime
+   Debug. The daemon's startup log should show
+   `daemon: agent bridge configured` (look in
+   `~/.helmor/server/log/helmor-server.log`).
+5. ❌ If the log shows `HELMOR_SIDECAR_PATH not set; agent.* surfaces
+   will report disabled`, the env var didn't reach the daemon. SSH
+   doesn't inherit your login shell's env when running `--ensure-daemon`
+   — set the var system-wide (e.g. via `/etc/environment` or a
+   `~/.ssh/environment` file with `PermitUserEnvironment yes` in
+   `sshd_config`).
+
+**Auth setup (Cursor key required):**
+
+1. Settings → Runtime Debug → **Set agent auth** section.
+2. Pick the remote runtime from the dropdown.
+3. Provider = `cursor`, paste the API key, click **Save**.
+4. ✅ A "Saved on remote" notice appears. On the remote, check
+   `~/.helmor/server/secrets.json` — file should exist with
+   mode `0600` and contain `{"providers":{"cursor":{"apiKey":"..."}}}`.
+5. ✅ Click **Clear** to remove a stored key. The file's
+   `providers.cursor` entry disappears.
+6. Keys NEVER persist on the desktop side — they ship over the
+   wire to the remote, get written remote-side, and the desktop
+   forgets them on submit. Inspect the desktop's settings DB or
+   `$HOME/Library/Application Support/Helmor/...` if you want
+   to confirm the absence locally.
+
+**Send-message routing (the headline path):**
+
+1. Pin a workspace to a remote runtime (phase 22c — Add Workspace
+   dialog's Where picker, or the binding section).
+2. Open that workspace, type a prompt, send.
+3. ✅ The conversation streams as normal — no UI change vs a
+   local workspace. The desktop logs should show
+   `stream_via_sidecar` with `transport=Remote` (phase 23c).
+4. ✅ Check the remote's daemon log: events flow as `agent.event`
+   notifications.
+5. ✅ Abort the running stream from the UI. The remote sidecar's
+   stopSession handler fires (visible in remote logs).
+6. ✅ Send a mid-turn steer (multi-line input → Send while a
+   reply is in flight). The remote sidecar's steerSession
+   handler picks it up.
+
+**Same-runtime resume constraint:**
+
+The SDKs store their conversation state (JSONL files for
+claude-code, etc.) on whichever machine ran the turn. A
+workspace's `provider_session_id` only resumes correctly on the
+SAME runtime that wrote it. Out of scope for the spike — if you
+move a workspace's binding from local to remote (or between two
+remotes), the next send starts a fresh session.
+
+**Cross-runtime fallbacks:**
+
+1. ✅ If `HELMOR_SIDECAR_PATH` is unset on the remote, `agent.send`
+   surfaces as `"agent runtime is not available: HELMOR_SIDECAR_PATH
+   not set"` in the desktop's send-message error toast — legible
+   reason, not a cryptic spawn failure.
+2. ✅ If the remote runtime is disconnected mid-stream, the
+   desktop's heartbeat watchdog (45s) cleans up the active
+   stream and surfaces "Sidecar connection was lost" — same UX
+   as a local sidecar crash.
+3. ✅ If a workspace bound to a (now-unregistered) remote
+   runtime sends, the resolver falls back to the local sidecar
+   with a `transport resolver: bound runtime not registered;
+   falling back to local sidecar` warn-log on the desktop side.
+
+**SSH bandwidth notes:**
+
+Event streams during active turns run ~5–15 kB/s sustained
+(Claude tool-use events with full JSON payloads are the
+bandwidth-heavy ones; plain assistant deltas are tiny). The SSH
+ControlMaster multiplexing wired in phase 21a keeps the
+per-connection overhead negligible. If you see steady stalls,
+verify the SSH connection itself isn't bandwidth-capped before
+suspecting the bridge.
+
 ## After every checked-in change to the remote-runner code
 
 Run the automated gates that already exist:
