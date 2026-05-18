@@ -222,7 +222,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	selectedCardId?: string | null;
 	appendContextTarget?: ComposerInsertTarget;
 	showWindowSafeTop?: boolean;
-	/** Repository the kanban is currently scoped to. Used to derive
+	/** Repository the inbox is currently scoped to. Used to derive
 	 *  which forge tab (GitHub vs GitLab) is shown — only the project's
 	 *  own forge appears, never both. */
 	repository?: RepositoryCreateOption | null;

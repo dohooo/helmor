@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	DEFAULT_KANBAN_VIEW_STATE,
+	DEFAULT_START_SURFACE_PREFERENCES,
 	getPreloadedSettings,
+	LEGACY_SETTING_KEYS,
 	loadSettings,
+	readRepoPreference,
 	saveSettings,
+	writeRepoPreference,
 } from "./settings";
 
 const invokeMock = vi.mocked(invoke);
@@ -39,65 +42,120 @@ describe("settings", () => {
 		invokeMock.mockReset();
 	});
 
-	it("hydrates kanban view state with per-repo branches and inbox filters", async () => {
+	it("hydrates start-surface preferences from the current storage key", async () => {
 		invokeMock.mockResolvedValue({
-			"app.kanban_view_state": JSON.stringify({
+			"app.start_surface_preferences": JSON.stringify({
 				createState: "backlog",
 				repoId: "repo-1",
-				inboxProviderTab: "github",
-				inboxProviderSourceTab: "github_pr",
-				sourceBranchByRepoId: {
-					"repo-1": "release/next",
-				},
-				inboxStateFilterBySource: {
-					github_pr: "merged",
-				},
-				openInboxCards: [],
+				sourceBranchByRepoId: { "repo-1": "release/next" },
+				modeByRepoId: { "repo-1": "local" },
+				branchIntentByRepoId: { "repo-1": "use_branch" },
 			}),
 		});
 
 		const settings = await loadSettings();
 
-		expect(settings.kanbanViewState).toMatchObject({
+		expect(settings.startSurfacePreferences).toEqual({
 			createState: "backlog",
 			repoId: "repo-1",
-			inboxProviderSourceTab: "github_pr",
-			sourceBranchByRepoId: {
-				"repo-1": "release/next",
-			},
-			inboxStateFilterBySource: {
-				github_pr: "merged",
-			},
+			sourceBranchByRepoId: { "repo-1": "release/next" },
+			modeByRepoId: { "repo-1": "local" },
+			branchIntentByRepoId: { "repo-1": "use_branch" },
 		});
 	});
 
-	it("keeps old kanban view state blobs compatible", async () => {
+	it("hydrates per-repo mode and branch-intent and drops invalid entries", async () => {
 		invokeMock.mockResolvedValue({
-			"app.kanban_view_state": JSON.stringify({
-				createState: "in-progress",
-				repoId: "repo-1",
-				inboxProviderTab: "github",
-				inboxProviderSourceTab: "github_issue",
-				openInboxCards: [],
+			"app.start_surface_preferences": JSON.stringify({
+				modeByRepoId: {
+					"repo-1": "local",
+					"repo-2": "worktree",
+					"repo-3": "bogus",
+					"": "local",
+				},
+				branchIntentByRepoId: {
+					"repo-1": "use_branch",
+					"repo-2": "from_branch",
+					"repo-3": "nope",
+				},
 			}),
 		});
 
 		const settings = await loadSettings();
 
-		expect(settings.kanbanViewState).toMatchObject({
-			...DEFAULT_KANBAN_VIEW_STATE,
-			repoId: "repo-1",
+		expect(settings.startSurfacePreferences.modeByRepoId).toEqual({
+			"repo-1": "local",
+			"repo-2": "worktree",
+		});
+		expect(settings.startSurfacePreferences.branchIntentByRepoId).toEqual({
+			"repo-1": "use_branch",
+			"repo-2": "from_branch",
 		});
 	});
 
-	it("saves kanban view state as one JSON blob", async () => {
+	const LEGACY_KEY = LEGACY_SETTING_KEYS.startSurfacePreferences;
+	const CURRENT_KEY = "app.start_surface_preferences";
+
+	it("migrates legacy storage key and drops retired fields", async () => {
+		invokeMock.mockResolvedValue({
+			[LEGACY_KEY]: JSON.stringify({
+				createState: "backlog",
+				repoId: "repo-1",
+				mode: "local",
+				branchIntent: "use_branch",
+				inboxProviderTab: "github",
+				inboxProviderSourceTab: "github_pr",
+				inboxStateFilterBySource: { github_pr: "merged" },
+				openInboxCards: [{ id: "c" }],
+				sourceBranchByRepoId: { "repo-1": "main" },
+				modeByRepoId: { "repo-1": "local" },
+				branchIntentByRepoId: { "repo-1": "use_branch" },
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.startSurfacePreferences).toEqual({
+			createState: "backlog",
+			repoId: "repo-1",
+			sourceBranchByRepoId: { "repo-1": "main" },
+			modeByRepoId: { "repo-1": "local" },
+			branchIntentByRepoId: { "repo-1": "use_branch" },
+		});
+
+		const writeCall = invokeMock.mock.calls.find(
+			([command]) => command === "update_app_settings",
+		);
+		expect(writeCall).toBeDefined();
+		const writtenMap = (
+			writeCall?.[1] as { settingsMap: Record<string, string> } | undefined
+		)?.settingsMap;
+		expect(writtenMap?.[CURRENT_KEY]).toEqual(expect.any(String));
+		expect(writtenMap?.[LEGACY_KEY]).toBe("");
+	});
+
+	it("prefers the current key when both legacy and current are present", async () => {
+		invokeMock.mockResolvedValue({
+			[CURRENT_KEY]: JSON.stringify({ repoId: "new" }),
+			[LEGACY_KEY]: JSON.stringify({ repoId: "old" }),
+		});
+
+		const settings = await loadSettings();
+		expect(settings.startSurfacePreferences.repoId).toBe("new");
+		const wroteAnything = invokeMock.mock.calls.some(
+			([command]) => command === "update_app_settings",
+		);
+		expect(wroteAnything).toBe(false);
+	});
+
+	it("saves start-surface preferences as one JSON blob under the new key", async () => {
 		invokeMock.mockResolvedValue(undefined);
 
 		await saveSettings({
-			kanbanViewState: {
-				...DEFAULT_KANBAN_VIEW_STATE,
+			startSurfacePreferences: {
+				...DEFAULT_START_SURFACE_PREFERENCES,
 				sourceBranchByRepoId: { "repo-1": "main" },
-				inboxStateFilterBySource: { github_issue: "closed" },
+				modeByRepoId: { "repo-1": "local" },
 			},
 		});
 
@@ -105,12 +163,29 @@ describe("settings", () => {
 			"update_app_settings",
 			expect.objectContaining({
 				settingsMap: expect.objectContaining({
-					"app.kanban_view_state": expect.stringContaining(
+					"app.start_surface_preferences": expect.stringContaining(
 						"sourceBranchByRepoId",
 					),
 				}),
 			}),
 		);
+	});
+
+	it("readRepoPreference returns record entry, falls back, and tolerates missing repoId", () => {
+		const record = { "repo-1": "local" as const };
+		expect(readRepoPreference(record, "repo-1", "worktree")).toBe("local");
+		expect(readRepoPreference(record, "repo-2", "worktree")).toBe("worktree");
+		expect(readRepoPreference(record, null, "worktree")).toBe("worktree");
+		expect(readRepoPreference(record, undefined, "worktree")).toBe("worktree");
+		expect(readRepoPreference({}, "repo-1", "worktree")).toBe("worktree");
+	});
+
+	it("writeRepoPreference returns a new record without mutating the input", () => {
+		const before = { "repo-1": "local" as const };
+		const after = writeRepoPreference(before, "repo-2", "worktree");
+		expect(after).toEqual({ "repo-1": "local", "repo-2": "worktree" });
+		expect(before).toEqual({ "repo-1": "local" });
+		expect(after).not.toBe(before);
 	});
 
 	it("preloads terminal font from localStorage", () => {

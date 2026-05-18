@@ -25,7 +25,7 @@ export type WorkspaceState =
 
 /**
  * Mirror of the Rust `WorkspaceStatus` enum
- * (`src-tauri/src/workspace/status.rs`). Drives the sidebar kanban
+ * (`src-tauri/src/workspace/status.rs`). Drives the sidebar status
  * lanes and PR-driven auto-status transitions.
  */
 export type WorkspaceStatus =
@@ -981,7 +981,7 @@ export async function listCursorModels(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox (kanban-mode left sidebar)
+// Inbox (start-surface left sidebar)
 // ---------------------------------------------------------------------------
 
 export type InboxItemSource =

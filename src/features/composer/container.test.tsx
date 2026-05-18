@@ -503,8 +503,8 @@ describe("WorkspaceComposerContainer", () => {
 				value={{
 					settings: {
 						...DEFAULT_SETTINGS,
-						kanbanViewState: {
-							...DEFAULT_SETTINGS.kanbanViewState,
+						startSurfacePreferences: {
+							...DEFAULT_SETTINGS.startSurfacePreferences,
 							createState: "backlog",
 						},
 					},
@@ -543,8 +543,8 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.lastOnStartSubmitModeChange?.("startNow");
 
 		expect(updateSettings).toHaveBeenCalledWith({
-			kanbanViewState: {
-				...DEFAULT_SETTINGS.kanbanViewState,
+			startSurfacePreferences: {
+				...DEFAULT_SETTINGS.startSurfacePreferences,
 				createState: "in-progress",
 			},
 		});

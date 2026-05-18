@@ -104,9 +104,10 @@ type WorkspaceComposerProps = {
 			startSubmitMode?: StartSubmitMode;
 			/** Snapshot of the editor's full Lexical state at submit time.
 			 *  Captured synchronously before the editor clears so callers
-			 *  that need to round-trip chips/text/images (e.g. the kanban
-			 *  "backlog" submit handler that copies the draft into a freshly
-			 *  created session) can do so without a re-encode pass. */
+			 *  that need to round-trip chips/text/images (e.g. the
+			 *  start-composer "backlog" submit handler that copies the
+			 *  draft into a freshly created session) can do so without a
+			 *  re-encode pass. */
 			editorStateSnapshot?: SerializedEditorState;
 		},
 	) => void;
@@ -184,8 +185,9 @@ type WorkspaceComposerProps = {
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	/** Custom placeholder string. When omitted, falls back to the default
-	 *  "Ask to make changes…" copy. The kanban view supplies a hint that
-	 *  nudges the user toward composing inbox sources for new workspaces. */
+	 *  "Ask to make changes…" copy. The start surface supplies a hint
+	 *  that nudges the user toward composing inbox sources for new
+	 *  workspaces. */
 	placeholder?: string;
 	startSubmitMenu?: boolean;
 	startSubmitMode?: StartSubmitMode;
@@ -500,9 +502,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				if (!startSubmitMenu) return;
 			// Snapshot the editor's full Lexical state BEFORE the clear below
 			// wipes it. Synchronous capture is critical because callers that
-			// want to round-trip the draft (e.g. kanban "backlog" submit
-			// copying chips/text/images into a freshly-created session) read
-			// from this snapshot — by the time their async work runs, the
+			// want to round-trip the draft (e.g. the start-composer "backlog"
+			// submit copying chips/text/images into a freshly-created session)
+			// read from this snapshot — by the time their async work runs, the
 			// editor is already empty.
 			const editorStateSnapshot = editor
 				.getEditorState()

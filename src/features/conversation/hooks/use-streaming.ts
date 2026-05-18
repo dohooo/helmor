@@ -119,9 +119,9 @@ type SubmitPayload = {
 	startSubmitMode?: StartSubmitMode;
 	/** Snapshot of the editor's full Lexical state at submit time. Captured
 	 *  synchronously inside the composer so callers that need to round-trip
-	 *  chips/text/images (e.g. the kanban "backlog" handler that copies the
-	 *  draft to a freshly-created session) can do so without losing the
-	 *  badge nodes that a plain prompt-string would discard. */
+	 *  chips/text/images (e.g. the start-composer "backlog" handler that
+	 *  copies the draft to a freshly-created session) can do so without
+	 *  losing the badge nodes that a plain prompt-string would discard. */
 	editorStateSnapshot?: SerializedEditorState;
 };
 

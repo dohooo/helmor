@@ -25,7 +25,13 @@ import {
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { helmorQueryKeys } from "@/lib/query-client";
-import type { AppSettings } from "@/lib/settings";
+import {
+	type AppSettings,
+	readRepoPreference,
+	START_SURFACE_BRANCH_INTENT_FALLBACK,
+	START_SURFACE_MODE_FALLBACK,
+	writeRepoPreference,
+} from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -131,14 +137,23 @@ export function useStartSurfaceController(
 	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
 		useState<readonly string[]>(EMPTY_STRING_LIST);
 
-	// Pickers read straight from settings; writes go through `updateSettings`.
-	// Branch is per-repo, mode/intent are global.
-	const startMode = appSettings.kanbanViewState.mode;
-	const startBranchIntent = appSettings.kanbanViewState.branchIntent;
-	const startSourceBranchOverride = startRepositoryId
-		? (appSettings.kanbanViewState.sourceBranchByRepoId[startRepositoryId] ??
-			null)
-		: null;
+	// Pickers read from settings; writes go through `updateSettings`.
+	const prefs = appSettings.startSurfacePreferences;
+	const startMode = readRepoPreference(
+		prefs.modeByRepoId,
+		startRepositoryId,
+		START_SURFACE_MODE_FALLBACK,
+	);
+	const startBranchIntent = readRepoPreference(
+		prefs.branchIntentByRepoId,
+		startRepositoryId,
+		START_SURFACE_BRANCH_INTENT_FALLBACK,
+	);
+	const startSourceBranchOverride = readRepoPreference(
+		prefs.sourceBranchByRepoId,
+		startRepositoryId,
+		null,
+	);
 
 	// Latest cross-controller callbacks, kept in refs so AppShell can pass
 	// inline arrows without thrashing every downstream useCallback.
@@ -157,8 +172,9 @@ export function useStartSurfaceController(
 		repositories[0] ??
 		null;
 
-	// Default repo selection: prefer kanbanViewState.repoId, fall back to the
-	// first repo. Re-runs when the kanban repo persists or the list refreshes.
+	// Default repo selection: prefer the persisted `repoId`, fall back to
+	// the first repo. Re-runs when the persisted value resolves or the
+	// repository list refreshes.
 	useEffect(() => {
 		if (!areSettingsLoaded || repositories.length === 0) return;
 		if (
@@ -169,11 +185,12 @@ export function useStartSurfaceController(
 		}
 		const savedRepository =
 			repositories.find(
-				(repository) => repository.id === appSettings.kanbanViewState.repoId,
+				(repository) =>
+					repository.id === appSettings.startSurfacePreferences.repoId,
 			) ?? null;
 		setStartRepositoryId((savedRepository ?? repositories[0]).id);
 	}, [
-		appSettings.kanbanViewState.repoId,
+		appSettings.startSurfacePreferences.repoId,
 		areSettingsLoaded,
 		repositories,
 		startRepositoryId,
@@ -229,13 +246,13 @@ export function useStartSurfaceController(
 		(repository: RepositoryCreateOption) => {
 			setStartRepositoryId(repository.id);
 			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
+				startSurfacePreferences: {
+					...appSettings.startSurfacePreferences,
 					repoId: repository.id,
 				},
 			});
 		},
-		[appSettings.kanbanViewState, updateSettings],
+		[appSettings.startSurfacePreferences, updateSettings],
 	);
 
 	const selectSourceBranch = useCallback(
@@ -244,43 +261,57 @@ export function useStartSurfaceController(
 			// Picking an existing branch drops any in-flight create-new stash.
 			setStartPendingNewBranch(null);
 			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
-					sourceBranchByRepoId: {
-						...appSettings.kanbanViewState.sourceBranchByRepoId,
-						[startRepository.id]: branch,
-					},
+				startSurfacePreferences: {
+					...appSettings.startSurfacePreferences,
+					sourceBranchByRepoId: writeRepoPreference(
+						appSettings.startSurfacePreferences.sourceBranchByRepoId,
+						startRepository.id,
+						branch,
+					),
 				},
 			});
 		},
-		[appSettings.kanbanViewState, startRepository, updateSettings],
+		[appSettings.startSurfacePreferences, startRepository, updateSettings],
 	);
 
 	const selectMode = useCallback(
 		(mode: WorkspaceMode) => {
+			if (!startRepository) return;
 			// pendingNewBranch is local-mode-only; clear it on any mode flip.
 			setStartPendingNewBranch(null);
 			void updateSettings({
-				kanbanViewState: { ...appSettings.kanbanViewState, mode },
+				startSurfacePreferences: {
+					...appSettings.startSurfacePreferences,
+					modeByRepoId: writeRepoPreference(
+						appSettings.startSurfacePreferences.modeByRepoId,
+						startRepository.id,
+						mode,
+					),
+				},
 			});
 		},
-		[appSettings.kanbanViewState, updateSettings],
+		[appSettings.startSurfacePreferences, startRepository, updateSettings],
 	);
 
 	const selectBranchIntent = useCallback(
 		(intent: WorkspaceBranchIntent) => {
+			if (!startRepository) return;
 			// use_branch + pendingNewBranch is a logical conflict; drop the pending.
 			if (intent === "use_branch") {
 				setStartPendingNewBranch(null);
 			}
 			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
-					branchIntent: intent,
+				startSurfacePreferences: {
+					...appSettings.startSurfacePreferences,
+					branchIntentByRepoId: writeRepoPreference(
+						appSettings.startSurfacePreferences.branchIntentByRepoId,
+						startRepository.id,
+						intent,
+					),
 				},
 			});
 		},
-		[appSettings.kanbanViewState, updateSettings],
+		[appSettings.startSurfacePreferences, startRepository, updateSettings],
 	);
 
 	const stashPendingNewBranch = useCallback(
@@ -288,16 +319,26 @@ export function useStartSurfaceController(
 			// Transient only — actual `git checkout -b` runs at submit time.
 			// Don't persist to `sourceBranchByRepoId` (branch doesn't exist yet).
 			setStartPendingNewBranch(branch);
-			if (appSettings.kanbanViewState.branchIntent !== "from_branch") {
+			if (!startRepository) return;
+			if (startBranchIntent !== "from_branch") {
 				void updateSettings({
-					kanbanViewState: {
-						...appSettings.kanbanViewState,
-						branchIntent: "from_branch",
+					startSurfacePreferences: {
+						...appSettings.startSurfacePreferences,
+						branchIntentByRepoId: writeRepoPreference(
+							appSettings.startSurfacePreferences.branchIntentByRepoId,
+							startRepository.id,
+							"from_branch",
+						),
 					},
 				});
 			}
 		},
-		[appSettings.kanbanViewState, updateSettings],
+		[
+			appSettings.startSurfacePreferences,
+			startBranchIntent,
+			startRepository,
+			updateSettings,
+		],
 	);
 
 	const refetchBranches = useCallback(() => {
@@ -330,14 +371,14 @@ export function useStartSurfaceController(
 		(repositoryId: string) => {
 			setStartRepositoryId(repositoryId);
 			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
+				startSurfacePreferences: {
+					...appSettings.startSurfacePreferences,
 					repoId: repositoryId,
 				},
 			});
 			openWorkspaceStartRef.current();
 		},
-		[appSettings.kanbanViewState, updateSettings],
+		[appSettings.startSurfacePreferences, updateSettings],
 	);
 
 	const prepareComposer = useCallback(

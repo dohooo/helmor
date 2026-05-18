@@ -27,7 +27,7 @@ import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 const PAGE_SIZE = 20;
 /** Stale window — keep cached pages fresh enough to feel live without
- * re-fetching on every kanban switch. Manual refetch path lives on the
+ * re-fetching on every tab switch. Manual refetch path lives on the
  * caller (e.g. a refresh button). */
 const STALE_MS = 60_000;
 
@@ -104,16 +104,16 @@ function scopeForKind(kind: InboxKind, toggles: ActiveInboxToggles) {
 	return null;
 }
 
-/** Drives the kanban-inbox list for ONE sub-tab at a time. The caller
- * passes the current forge provider plus sub-type tab; switching tabs
- * swaps to a different cached query (TanStack reuses prior pages on
+/** Drives the inbox list for ONE sub-tab at a time. The caller passes
+ * the current forge provider plus sub-type tab; switching tabs swaps
+ * to a different cached query (TanStack reuses prior pages on
  * switch-back).
  *
  * `repoFilter` is the `owner/name` (GitHub) or `group/sub/project`
- * (GitLab) for the kanban's currently-selected repo. When provided,
- * every kind is scoped to that single repo on the backend. Each repo
- * gets its own cache key so switching the repo picker doesn't trash
- * the previous repo's cached pages.
+ * (GitLab) for the currently-selected repo. When provided, every kind
+ * is scoped to that single repo on the backend. Each repo gets its own
+ * cache key so switching the repo picker doesn't trash the previous
+ * repo's cached pages.
  *
  * Single-account today — picks the first matching login. The hook is
  * shaped for future multi-account fan-out (run one infinite query per

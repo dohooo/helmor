@@ -973,10 +973,10 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
 
 #[test]
 fn execute_archive_plan_short_circuits_for_local_workspace() {
-    // CRITICAL regression test: `execute_archive_plan` is the path used
-    // by the queue / kanban-style archive flow. For local mode it MUST
-    // skip the worktree removal — `remove_worktree` would rename + delete
-    // the user's actual repo (since workspace_dir == repo_root).
+    // CRITICAL regression test: `execute_archive_plan` is the archive
+    // flow's path. For local mode it MUST skip worktree removal —
+    // `remove_worktree` would rename + delete the user's actual repo
+    // (since workspace_dir == repo_root).
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -1018,7 +1018,7 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     // rename + delete the user's repo. Short-circuit to a DB-only flip
     // here BEFORE we touch anything on disk. The frontend's
     // `archive_workspace_impl` already does this; this is a second
-    // line of defence for the kanban / queue path that goes through
+    // line of defence for the archive path that goes through
     // `prepare_archive_plan` + this function.
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?;
     if let Some(record) = record.as_ref() {
