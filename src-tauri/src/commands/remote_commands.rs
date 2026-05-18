@@ -26,12 +26,16 @@ use crate::remote::{
         TerminalAttachParams, TerminalAttachResult, TerminalCloseParams, TerminalEventNotification,
         TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOpenResult,
         TerminalResizeParams, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoResult,
-        WorkspaceStatusResult,
+        WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
+        WorkspaceFileTreeResult, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
+        WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
+        WorkspaceReadFileParams, WorkspaceStatFileParams, WorkspaceStatusResult,
     },
     persistence, NotificationSubscription, OwnedTerminals, RemoteRuntime, RemoteSshRuntime,
     RpcClient, RuntimeConnectionConfig, RuntimeHealth, RuntimeRegistry, RuntimeState,
     WorkspaceRuntimeBinding, WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
 };
+use crate::workspace::files::{EditorFileReadResponse, EditorFileStatResponse};
 
 use super::common::{run_blocking, CmdResult};
 
@@ -143,6 +147,273 @@ pub async fn get_workspace_branch_info(
         resolved.workspace_branch_info(&path)
     })
     .await
+}
+
+// ── workspace inspector ops (phase 20c) ─────────────────────────────
+//
+// Every command below routes through `resolve_runtime_for_call` so the
+// same `workspace_id` → binding precedence rule that `get_workspace_status`
+// established also applies to file tree / changes / read / stat /
+// mutate. Frontend keeps passing the binding triple verbatim.
+//
+// Per-command `*_inner` helpers exist because the Tauri command body
+// can't be invoked from a unit test directly — `tauri::State` can't be
+// constructed outside the IPC dispatcher — so we factor the body into
+// a free function that takes plain `&Arc<...>` and exercise it from
+// tests. The `#[tauri::command]` wrapper is then a four-liner that
+// `Arc::clone`s the state and hops onto the blocking pool.
+
+/// Recursive file listing for a workspace, routed through the seam.
+/// Hot caller on workspace switch — pages the inspector's file tree.
+#[tauri::command]
+pub async fn get_workspace_file_tree(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceFileTreeResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        get_workspace_file_tree_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn get_workspace_file_tree_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<WorkspaceFileTreeResult> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_file_tree(WorkspaceFileTreeParams { workspace_dir })
+}
+
+/// `git status`-aware projection plus optional per-file diff bodies.
+/// `include_content=false` is the cheap mode the inspector sidebar
+/// polls; `true` is the diff-panel mode that prefetches the per-file
+/// content for the diff viewer.
+#[tauri::command]
+pub async fn get_workspace_changes(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    include_content: bool,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceChangesResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        get_workspace_changes_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            include_content,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn get_workspace_changes_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    include_content: bool,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<WorkspaceChangesResult> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_changes(WorkspaceChangesParams {
+        workspace_dir,
+        include_content,
+    })
+}
+
+/// Read a single file's bytes + mtime. Used by both the editor surface
+/// and the diff viewer's "working tree" side.
+#[tauri::command]
+pub async fn read_workspace_file(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    relative_path: String,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<EditorFileReadResponse> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        read_workspace_file_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            relative_path,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn read_workspace_file_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    relative_path: String,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<EditorFileReadResponse> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_read_file(WorkspaceReadFileParams {
+        workspace_dir,
+        relative_path,
+    })
+}
+
+/// `git show <ref>:<path>` body. `None` content means "the path
+/// didn't exist at that ref" — distinct from an empty file.
+#[tauri::command]
+pub async fn read_workspace_file_at_ref(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    relative_path: String,
+    git_ref: String,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceReadFileAtRefResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        read_workspace_file_at_ref_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            relative_path,
+            git_ref,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn read_workspace_file_at_ref_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    relative_path: String,
+    git_ref: String,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<WorkspaceReadFileAtRefResult> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+        workspace_dir,
+        relative_path,
+        git_ref,
+    })
+}
+
+/// Stat probe. `exists=false` (rather than an error) for a missing
+/// path so the inspector can render a "no longer exists" hint
+/// without a red toast.
+#[tauri::command]
+pub async fn stat_workspace_file(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    relative_path: String,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<EditorFileStatResponse> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        stat_workspace_file_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            relative_path,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn stat_workspace_file_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    relative_path: String,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<EditorFileStatResponse> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_stat_file(WorkspaceStatFileParams {
+        workspace_dir,
+        relative_path,
+    })
+}
+
+/// All write-side ops in one command, discriminated by the `action`
+/// tag (`write` | `discard` | `stage` | `unstage`). One IPC entry per
+/// mutation kind would balloon the registered command list without
+/// shrinking any individual handler.
+#[tauri::command]
+pub async fn mutate_workspace_file(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    relative_path: String,
+    action: WorkspaceMutateFileAction,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceMutateFileResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        mutate_workspace_file_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            relative_path,
+            action,
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+fn mutate_workspace_file_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    relative_path: String,
+    action: WorkspaceMutateFileAction,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<WorkspaceMutateFileResult> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_mutate_file(WorkspaceMutateFileParams {
+        workspace_dir,
+        relative_path,
+        action,
+    })
 }
 
 /// Pick the runtime the dispatch should land on. Explicit
@@ -1003,5 +1274,527 @@ mod tests {
         let bindings = bindings_with("ws-1", "stub.box");
         let runtime = resolve_runtime_for_call(&registry, &bindings, Some(""), Some("")).unwrap();
         assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+    }
+
+    // ── workspace inspector ops (phase 20c) ──────────────────────
+    //
+    // For each new command we exercise:
+    //   1. The resolver picks the right runtime (explicit
+    //      `runtime_name`, workspace binding, no-binding fallback).
+    //   2. Params flow through to the trait method untouched.
+    //   3. The trait method's return value bubbles back unchanged.
+    //
+    // `InspectorStubRuntime` records every call so the assertions
+    // can verify both axes from one fixture.
+
+    use crate::remote::methods::{
+        WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
+        WorkspaceFileTreeResult, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
+        WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
+        WorkspaceReadFileParams, WorkspaceStatFileParams,
+    };
+    use crate::workspace::files::{
+        EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
+    };
+    use std::sync::Mutex;
+
+    /// Stub runtime that records every inspector call so tests can
+    /// assert both "which runtime got it" + "with what params".
+    #[derive(Default)]
+    struct InspectorStubRuntime {
+        hostname: &'static str,
+        file_tree_calls: Mutex<Vec<WorkspaceFileTreeParams>>,
+        changes_calls: Mutex<Vec<WorkspaceChangesParams>>,
+        read_calls: Mutex<Vec<WorkspaceReadFileParams>>,
+        read_at_ref_calls: Mutex<Vec<WorkspaceReadFileAtRefParams>>,
+        stat_calls: Mutex<Vec<WorkspaceStatFileParams>>,
+        mutate_calls: Mutex<Vec<WorkspaceMutateFileParams>>,
+    }
+
+    impl InspectorStubRuntime {
+        fn new(hostname: &'static str) -> Self {
+            Self {
+                hostname,
+                ..Default::default()
+            }
+        }
+
+        fn fixed_file_tree_entry(path: &str) -> EditorFileListItem {
+            EditorFileListItem {
+                path: path.to_string(),
+                absolute_path: format!("/stub/{path}"),
+                name: path.to_string(),
+                status: "M".into(),
+                staged_insertions: 0,
+                staged_deletions: 0,
+                unstaged_insertions: 0,
+                unstaged_deletions: 0,
+                committed_insertions: 0,
+                committed_deletions: 0,
+                is_binary: false,
+                staged_status: None,
+                unstaged_status: None,
+                committed_status: None,
+            }
+        }
+    }
+
+    impl RemoteRuntime for InspectorStubRuntime {
+        fn runtime_health(&self) -> Result<RuntimeHealth> {
+            Ok(RuntimeHealth {
+                kind: RuntimeKind::Remote {
+                    host: self.hostname.into(),
+                },
+                hostname: self.hostname.into(),
+                version: "inspector-stub".into(),
+            })
+        }
+        fn workspace_status(&self, _: &Path) -> Result<WorkspaceStatusResult> {
+            Ok(WorkspaceStatusResult {
+                is_clean: true,
+                changed_paths: vec![],
+            })
+        }
+        fn workspace_branch_info(&self, _: &Path) -> Result<WorkspaceBranchInfoResult> {
+            Ok(WorkspaceBranchInfoResult {
+                current_branch: "main".into(),
+                head_commit: "stub-sha".into(),
+                upstream_ref: None,
+            })
+        }
+        fn ping(&self) -> Result<()> {
+            Ok(())
+        }
+        fn workspace_file_tree(
+            &self,
+            params: WorkspaceFileTreeParams,
+        ) -> Result<WorkspaceFileTreeResult> {
+            // Encode the workspace_dir into the entry path so the
+            // test can prove the param flowed through.
+            let echo = format!("echo:{}", params.workspace_dir);
+            self.file_tree_calls.lock().unwrap().push(params);
+            Ok(WorkspaceFileTreeResult {
+                entries: vec![Self::fixed_file_tree_entry(&echo)],
+            })
+        }
+        fn workspace_changes(
+            &self,
+            params: WorkspaceChangesParams,
+        ) -> Result<WorkspaceChangesResult> {
+            // Echo the include_content flag through the item count so
+            // the test can verify it flowed verbatim.
+            let item_count = if params.include_content { 2 } else { 1 };
+            let prefetched = if params.include_content {
+                vec![EditorFilePrefetchItem {
+                    absolute_path: "/stub/file.txt".into(),
+                    content: "prefetched".into(),
+                }]
+            } else {
+                Vec::new()
+            };
+            self.changes_calls.lock().unwrap().push(params);
+            Ok(WorkspaceChangesResult {
+                items: (0..item_count)
+                    .map(|i| Self::fixed_file_tree_entry(&format!("change-{i}.txt")))
+                    .collect(),
+                prefetched,
+            })
+        }
+        fn workspace_read_file(
+            &self,
+            params: WorkspaceReadFileParams,
+        ) -> Result<EditorFileReadResponse> {
+            let path = format!("/stub/{}/{}", params.workspace_dir, params.relative_path);
+            self.read_calls.lock().unwrap().push(params);
+            Ok(EditorFileReadResponse {
+                path,
+                content: "stub-content".into(),
+                mtime_ms: 1234,
+            })
+        }
+        fn workspace_read_file_at_ref(
+            &self,
+            params: WorkspaceReadFileAtRefParams,
+        ) -> Result<WorkspaceReadFileAtRefResult> {
+            // Echo the ref into the content so the test asserts the
+            // git_ref reached the trait method.
+            let content = if params.git_ref == "MISSING" {
+                None
+            } else {
+                Some(format!("at:{}", params.git_ref))
+            };
+            self.read_at_ref_calls.lock().unwrap().push(params);
+            Ok(WorkspaceReadFileAtRefResult { content })
+        }
+        fn workspace_stat_file(
+            &self,
+            params: WorkspaceStatFileParams,
+        ) -> Result<EditorFileStatResponse> {
+            let path = format!("/stub/{}/{}", params.workspace_dir, params.relative_path);
+            self.stat_calls.lock().unwrap().push(params);
+            Ok(EditorFileStatResponse {
+                path,
+                exists: true,
+                is_file: true,
+                mtime_ms: Some(999),
+                size: Some(42),
+            })
+        }
+        fn workspace_mutate_file(
+            &self,
+            params: WorkspaceMutateFileParams,
+        ) -> Result<WorkspaceMutateFileResult> {
+            // For Write actions, surface a fake mtime so the test can
+            // tell write from the non-mtime variants.
+            let mtime_ms =
+                matches!(params.action, WorkspaceMutateFileAction::Write { .. }).then_some(777_i64);
+            self.mutate_calls.lock().unwrap().push(params);
+            Ok(WorkspaceMutateFileResult { mtime_ms })
+        }
+    }
+
+    fn registry_with_inspector_stub() -> (Arc<RuntimeRegistry>, Arc<InspectorStubRuntime>) {
+        let registry = Arc::new(RuntimeRegistry::new());
+        let stub = Arc::new(InspectorStubRuntime::new("stub.box"));
+        registry
+            .register(
+                "stub.box",
+                Arc::clone(&stub) as Arc<dyn RemoteRuntime>,
+                None,
+            )
+            .unwrap();
+        (registry, stub)
+    }
+
+    // ── get_workspace_file_tree ───────────────────────────────────
+
+    #[test]
+    fn get_workspace_file_tree_with_no_binding_routes_to_local() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        // Local runtime's `workspace_file_tree` walks the actual fs;
+        // passing a path that doesn't exist is a clean way to prove
+        // we hit the local runtime (it returns an empty list rather
+        // than the stub's echo entry).
+        let result = get_workspace_file_tree_inner(
+            &registry,
+            &bindings,
+            "/path/that/does/not/exist".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            result.entries.is_empty(),
+            "local runtime walks the fs and returns nothing for a missing dir"
+        );
+        assert!(
+            stub.file_tree_calls.lock().unwrap().is_empty(),
+            "stub should not have been called when no binding is set"
+        );
+    }
+
+    #[test]
+    fn get_workspace_file_tree_with_runtime_name_routes_to_named_runtime() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let result = get_workspace_file_tree_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        let recorded = stub.file_tree_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].workspace_dir, "/ws");
+        // The stub encodes the workspace_dir back into its echo entry.
+        assert_eq!(result.entries[0].path, "echo:/ws");
+    }
+
+    #[test]
+    fn get_workspace_file_tree_with_workspace_binding_routes_through_the_binding() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        get_workspace_file_tree_inner(&registry, &bindings, "/ws".into(), Some("ws-bound"), None)
+            .unwrap();
+        let recorded = stub.file_tree_calls.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "binding should resolve to the stub runtime"
+        );
+    }
+
+    #[test]
+    fn get_workspace_file_tree_explicit_local_overrides_binding() {
+        // Workspace is bound to stub.box but caller passes
+        // runtime_name="local" — the explicit override must win and
+        // the stub must NOT see the call.
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        get_workspace_file_tree_inner(
+            &registry,
+            &bindings,
+            "/path/that/does/not/exist".into(),
+            Some("ws-bound"),
+            Some("local"),
+        )
+        .unwrap();
+        assert!(
+            stub.file_tree_calls.lock().unwrap().is_empty(),
+            "explicit `runtime_name=local` must beat the binding"
+        );
+    }
+
+    // ── get_workspace_changes ─────────────────────────────────────
+
+    #[test]
+    fn get_workspace_changes_flows_include_content_to_the_trait() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let result_without = get_workspace_changes_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            false,
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(result_without.items.len(), 1);
+        assert!(result_without.prefetched.is_empty());
+
+        let result_with = get_workspace_changes_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            true,
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(result_with.items.len(), 2);
+        assert_eq!(result_with.prefetched.len(), 1);
+
+        let recorded = stub.changes_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert!(!recorded[0].include_content);
+        assert!(recorded[1].include_content);
+    }
+
+    // ── read_workspace_file ───────────────────────────────────────
+
+    #[test]
+    fn read_workspace_file_forwards_workspace_dir_and_relative_path() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let resp = read_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "src/main.rs".into(),
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(resp.content, "stub-content");
+        assert_eq!(resp.mtime_ms, 1234);
+
+        let recorded = stub.read_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].workspace_dir, "/ws");
+        assert_eq!(recorded[0].relative_path, "src/main.rs");
+    }
+
+    #[test]
+    fn read_workspace_file_propagates_runtime_error_to_caller() {
+        // No registered runtime + an explicit override that doesn't
+        // exist should surface a registry-lookup error — the inner
+        // helper must not swallow it.
+        let registry = Arc::new(RuntimeRegistry::new());
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let err = read_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "src/main.rs".into(),
+            None,
+            Some("not-registered"),
+        )
+        .expect_err("missing runtime must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not-registered"),
+            "error should name the missing runtime: {msg}"
+        );
+    }
+
+    // ── read_workspace_file_at_ref ────────────────────────────────
+
+    #[test]
+    fn read_workspace_file_at_ref_forwards_git_ref_to_the_trait() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let resp = read_workspace_file_at_ref_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "src/main.rs".into(),
+            "origin/main".into(),
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(resp.content, Some("at:origin/main".into()));
+
+        let recorded = stub.read_at_ref_calls.lock().unwrap();
+        assert_eq!(recorded[0].git_ref, "origin/main");
+    }
+
+    #[test]
+    fn read_workspace_file_at_ref_surfaces_missing_as_none() {
+        // Stub returns `None` content when the git_ref is "MISSING".
+        // Verifies the trait's Option<String> contract round-trips.
+        let (registry, _stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let resp = read_workspace_file_at_ref_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "src/main.rs".into(),
+            "MISSING".into(),
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert!(resp.content.is_none());
+    }
+
+    // ── stat_workspace_file ───────────────────────────────────────
+
+    #[test]
+    fn stat_workspace_file_forwards_params_and_returns_metadata() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        let resp = stat_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "Cargo.toml".into(),
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert!(resp.exists);
+        assert!(resp.is_file);
+        assert_eq!(resp.size, Some(42));
+        assert_eq!(resp.mtime_ms, Some(999));
+
+        let recorded = stub.stat_calls.lock().unwrap();
+        assert_eq!(recorded[0].relative_path, "Cargo.toml");
+    }
+
+    // ── mutate_workspace_file ─────────────────────────────────────
+
+    #[test]
+    fn mutate_workspace_file_forwards_each_action_variant() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+
+        // Drive every action variant; assert the action reaches the
+        // trait method intact (no flattening / no swallowed content).
+        let write_resp = mutate_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "file.txt".into(),
+            WorkspaceMutateFileAction::Write {
+                content: "new body\n".into(),
+            },
+            None,
+            Some("stub.box"),
+        )
+        .unwrap();
+        assert_eq!(
+            write_resp.mtime_ms,
+            Some(777),
+            "write should surface the stub mtime"
+        );
+
+        for action in [
+            WorkspaceMutateFileAction::Discard,
+            WorkspaceMutateFileAction::Stage,
+            WorkspaceMutateFileAction::Unstage,
+        ] {
+            let resp = mutate_workspace_file_inner(
+                &registry,
+                &bindings,
+                "/ws".into(),
+                "file.txt".into(),
+                action,
+                None,
+                Some("stub.box"),
+            )
+            .unwrap();
+            assert!(
+                resp.mtime_ms.is_none(),
+                "non-write actions must not surface an mtime"
+            );
+        }
+
+        let recorded = stub.mutate_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 4);
+        // Spot-check the write variant carried its content payload.
+        let write_call = recorded
+            .iter()
+            .find(|p| matches!(p.action, WorkspaceMutateFileAction::Write { .. }))
+            .expect("write call recorded");
+        if let WorkspaceMutateFileAction::Write { content } = &write_call.action {
+            assert_eq!(content, "new body\n");
+        }
+        // Spot-check the rest by variant tag.
+        assert!(recorded
+            .iter()
+            .any(|p| matches!(p.action, WorkspaceMutateFileAction::Discard)));
+        assert!(recorded
+            .iter()
+            .any(|p| matches!(p.action, WorkspaceMutateFileAction::Stage)));
+        assert!(recorded
+            .iter()
+            .any(|p| matches!(p.action, WorkspaceMutateFileAction::Unstage)));
+    }
+
+    #[test]
+    fn mutate_workspace_file_routes_through_workspace_binding_by_default() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        mutate_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "file.txt".into(),
+            WorkspaceMutateFileAction::Stage,
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            stub.mutate_calls.lock().unwrap().len(),
+            1,
+            "binding should resolve mutate to the bound runtime"
+        );
     }
 }
