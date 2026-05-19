@@ -5,6 +5,7 @@ import {
 	KeyRound,
 	Link2,
 	Loader2,
+	Network,
 	Plug,
 	Plug2,
 	RefreshCw,
@@ -37,11 +38,13 @@ import {
 	getWorkspaceStatus,
 	listOwnedTerminals,
 	listRemoteAgentSessions,
+	listRemotePortForwards,
 	listRemoteRuntimes,
 	listRemoteTerminals,
 	listSshHosts,
 	listWorkspaceRuntimeBindings,
 	openRemoteTerminal,
+	type PortForwardEntry,
 	type RemoteAgentSession,
 	type RemoteTerminalListEntry,
 	type RuntimeDiagnostics,
@@ -50,6 +53,8 @@ import {
 	reconnectRemoteRuntime,
 	setRuntimeAgentAuth,
 	setWorkspaceRuntimeBinding,
+	startRemotePortForward,
+	stopRemotePortForward,
 	type TerminalEventNotification,
 	type WorkspaceBranchInfoResult,
 	type WorkspaceChangesResult,
@@ -106,6 +111,7 @@ export function RuntimeDebugPanel() {
 			<WorkspaceBindingsSection entries={entries} />
 			<SetAgentAuthSection entries={entries} />
 			<RemoteAgentSessionsSection entries={entries} />
+			<RemotePortForwardSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
 	);
@@ -2197,6 +2203,292 @@ function formatAgo(ms: number): string {
 	if (min < 60) return `${min}m ago`;
 	const hr = Math.floor(min / 60);
 	return `${hr}h ago`;
+}
+
+function RemotePortForwardSection({ entries }: { entries: RuntimeEntry[] }) {
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	const [runtimeName, setRuntimeName] = useState<string>("");
+	const [localPortText, setLocalPortText] = useState<string>("");
+	const [remotePortText, setRemotePortText] = useState<string>("");
+	const [label, setLabel] = useState<string>("");
+	const [notice, setNotice] = useState<{
+		tone: "info" | "error" | "ok" | "warn";
+		text: string;
+	} | null>(null);
+
+	useEffect(() => {
+		if (!runtimeName && remotes[0]) {
+			setRuntimeName(remotes[0].name);
+			return;
+		}
+		if (runtimeName && !remotes.some((e) => e.name === runtimeName)) {
+			setRuntimeName(remotes[0]?.name ?? "");
+		}
+	}, [remotes, runtimeName]);
+
+	const forwardsQuery = useQuery({
+		queryKey: ["remote-port-forwards", runtimeName],
+		queryFn: () => listRemotePortForwards(runtimeName),
+		enabled: runtimeName.length > 0,
+		refetchOnWindowFocus: false,
+	});
+
+	const startMutation = useMutation({
+		mutationFn: async (args: {
+			localPort: number;
+			remotePort: number;
+			label: string | undefined;
+		}) =>
+			startRemotePortForward({
+				runtimeName,
+				localPort: args.localPort,
+				remotePort: args.remotePort,
+				label: args.label,
+			}),
+		onSuccess: (entry) => {
+			setNotice({
+				tone: "ok",
+				text: `Forwarding localhost:${entry.localPort} → ${entry.runtimeName}:${entry.remotePort}.`,
+			});
+			setLocalPortText("");
+			setRemotePortText("");
+			setLabel("");
+			void forwardsQuery.refetch();
+		},
+		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
+	});
+
+	const stopMutation = useMutation({
+		mutationFn: async (localPort: number) =>
+			stopRemotePortForward({ runtimeName, localPort }),
+		onSuccess: (_result, localPort) => {
+			setNotice({
+				tone: "info",
+				text: `Stopped forward on localhost:${localPort}.`,
+			});
+			void forwardsQuery.refetch();
+		},
+		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
+	});
+
+	const submitStart = () => {
+		const localPort = Number.parseInt(localPortText, 10);
+		const remotePort = Number.parseInt(remotePortText, 10);
+		if (
+			!Number.isFinite(localPort) ||
+			localPort < 1 ||
+			localPort > 65535 ||
+			!Number.isFinite(remotePort) ||
+			remotePort < 1 ||
+			remotePort > 65535
+		) {
+			setNotice({
+				tone: "error",
+				text: "Local and remote ports must each be a number between 1 and 65535.",
+			});
+			return;
+		}
+		startMutation.mutate({
+			localPort,
+			remotePort,
+			label: label.trim().length > 0 ? label.trim() : undefined,
+		});
+	};
+
+	const forwards = forwardsQuery.data ?? [];
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Network className="size-3.5" strokeWidth={1.8} />}
+				title="Port forwards"
+				description="Tunnel a TCP port from the remote to localhost on this desktop. Uses the runtime's existing SSH ControlMaster, so no new auth + the forward rides the same TCP channel as the RPC pipe. SSH runtimes only — Command transports surface a hint pointing at their wrapper's own forwarding tool."
+			/>
+
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remotes.length === 0 ? (
+					<SettingsNotice tone="info">
+						Register a remote SSH runtime in the Connect form above to add a
+						port forward.
+					</SettingsNotice>
+				) : (
+					<>
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:items-center">
+							<Label htmlFor="rt-pf-runtime" className="text-xs">
+								Runtime
+							</Label>
+							<select
+								id="rt-pf-runtime"
+								className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
+								value={runtimeName}
+								onChange={(e) => setRuntimeName(e.currentTarget.value)}
+							>
+								{remotes.map((entry) => (
+									<option key={entry.name} value={entry.name}>
+										{entry.name}
+									</option>
+								))}
+							</select>
+
+							<Label htmlFor="rt-pf-local-port" className="text-xs">
+								Local port
+							</Label>
+							<Input
+								id="rt-pf-local-port"
+								type="number"
+								min={1}
+								max={65535}
+								inputMode="numeric"
+								placeholder="e.g. 5173"
+								value={localPortText}
+								onChange={(e) => setLocalPortText(e.currentTarget.value)}
+								className="h-7 text-xs"
+							/>
+
+							<Label htmlFor="rt-pf-remote-port" className="text-xs">
+								Remote port
+							</Label>
+							<Input
+								id="rt-pf-remote-port"
+								type="number"
+								min={1}
+								max={65535}
+								inputMode="numeric"
+								placeholder="e.g. 3000"
+								value={remotePortText}
+								onChange={(e) => setRemotePortText(e.currentTarget.value)}
+								className="h-7 text-xs"
+							/>
+
+							<Label htmlFor="rt-pf-label" className="text-xs">
+								Label (optional)
+							</Label>
+							<Input
+								id="rt-pf-label"
+								type="text"
+								placeholder="e.g. Vite, Rails, Jupyter"
+								value={label}
+								onChange={(e) => setLabel(e.currentTarget.value)}
+								className="h-7 text-xs"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={
+									!runtimeName ||
+									startMutation.isPending ||
+									localPortText.length === 0 ||
+									remotePortText.length === 0
+								}
+								onClick={() => submitStart()}
+							>
+								{startMutation.isPending ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Starting…
+									</>
+								) : (
+									<>
+										<Plug className="mr-1.5 size-3.5" />
+										Start forward
+									</>
+								)}
+							</Button>
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={!runtimeName || forwardsQuery.isFetching}
+								onClick={() => void forwardsQuery.refetch()}
+								aria-label="Refresh port forwards"
+							>
+								{forwardsQuery.isFetching ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Refreshing…
+									</>
+								) : (
+									<>
+										<RefreshCw className="mr-1.5 size-3.5" />
+										Refresh
+									</>
+								)}
+							</Button>
+						</div>
+
+						{notice && (
+							<SettingsNotice tone={notice.tone}>{notice.text}</SettingsNotice>
+						)}
+
+						{forwardsQuery.error ? (
+							<SettingsNotice tone="error">
+								{errorMessage(forwardsQuery.error)}
+							</SettingsNotice>
+						) : forwardsQuery.isLoading ? (
+							<span className="text-[11px] text-muted-foreground">
+								Listing port forwards…
+							</span>
+						) : forwards.length === 0 ? (
+							<span className="text-[11px] text-muted-foreground">
+								No port forwards active on this runtime.
+							</span>
+						) : (
+							<ul className="flex flex-col gap-1">
+								{forwards.map((entry) => (
+									<PortForwardRow
+										key={`${entry.runtimeName}:${entry.localPort}`}
+										entry={entry}
+										busy={stopMutation.isPending}
+										onStop={() => stopMutation.mutate(entry.localPort)}
+									/>
+								))}
+							</ul>
+						)}
+					</>
+				)}
+			</div>
+		</section>
+	);
+}
+
+function PortForwardRow({
+	entry,
+	busy,
+	onStop,
+}: {
+	entry: PortForwardEntry;
+	busy: boolean;
+	onStop: () => void;
+}) {
+	const startedAgoMs = Date.now() - entry.startedAtMs;
+	return (
+		<li
+			className="flex items-center justify-between gap-2 rounded border border-border/30 bg-card/40 px-2 py-1.5"
+			data-testid={`remote-port-forward-${entry.runtimeName}-${entry.localPort}`}
+		>
+			<div className="flex min-w-0 flex-1 flex-col">
+				<span className="truncate font-mono text-[11px]">
+					localhost:{entry.localPort} → {entry.runtimeName}:{entry.remotePort}
+				</span>
+				<span className="truncate text-[10px] text-muted-foreground">
+					{entry.label ? `${entry.label} · ` : ""}
+					started {formatAgo(startedAgoMs)}
+				</span>
+			</div>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={busy}
+				onClick={onStop}
+				aria-label={`Stop forward on localhost:${entry.localPort}`}
+			>
+				<X className="mr-1.5 size-3.5" />
+				Stop
+			</Button>
+		</li>
+	);
 }
 
 function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {

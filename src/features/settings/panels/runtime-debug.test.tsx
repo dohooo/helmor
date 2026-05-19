@@ -33,6 +33,9 @@ const apiMocks = vi.hoisted(() => ({
 	reattachRemoteAgentSessionStream: vi.fn(),
 	releaseRemoteAgentStream: vi.fn(),
 	getRemoteRuntimeDiagnostics: vi.fn(),
+	startRemotePortForward: vi.fn(),
+	stopRemotePortForward: vi.fn(),
+	listRemotePortForwards: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -67,6 +70,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		reattachRemoteAgentSessionStream: apiMocks.reattachRemoteAgentSessionStream,
 		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
 		getRemoteRuntimeDiagnostics: apiMocks.getRemoteRuntimeDiagnostics,
+		startRemotePortForward: apiMocks.startRemotePortForward,
+		stopRemotePortForward: apiMocks.stopRemotePortForward,
+		listRemotePortForwards: apiMocks.listRemotePortForwards,
 	};
 });
 
@@ -153,6 +159,24 @@ describe("RuntimeDebugPanel", () => {
 			lastPingMs: 1,
 			lastError: null,
 		});
+		// Port forwards default to empty list + happy-path
+		// start/stop mocks — individual tests override.
+		apiMocks.listRemotePortForwards.mockResolvedValue([]);
+		apiMocks.stopRemotePortForward.mockResolvedValue({ stopped: true });
+		apiMocks.startRemotePortForward.mockImplementation(
+			async (args: {
+				runtimeName: string;
+				localPort: number;
+				remotePort: number;
+				label?: string;
+			}) => ({
+				runtimeName: args.runtimeName,
+				localPort: args.localPort,
+				remotePort: args.remotePort,
+				label: args.label ?? null,
+				startedAtMs: Date.now(),
+			}),
+		);
 	});
 
 	afterEach(() => {
@@ -1881,6 +1905,216 @@ describe("RuntimeDebugPanel", () => {
 		renderPanel();
 		expect(
 			await screen.findByText(/registry: runtime not found/),
+		).toBeInTheDocument();
+	});
+
+	// ── Port forwards section (phase 24k) ───────────────────────────
+
+	it("port forwards: shows hint when no remote runtimes are registered", async () => {
+		renderPanel();
+		expect(
+			await screen.findByText(
+				/Register a remote SSH runtime in the Connect form above/i,
+			),
+		).toBeInTheDocument();
+		expect(document.getElementById("rt-pf-runtime")).toBeNull();
+	});
+
+	it("port forwards: start fires startRemotePortForward with parsed ports + label", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+
+		renderPanel();
+
+		const localPortInput = (await waitFor(() => {
+			const el = document.getElementById("rt-pf-local-port");
+			if (!el) throw new Error("local port not mounted");
+			return el as HTMLInputElement;
+		})) as HTMLInputElement;
+		const remotePortInput = document.getElementById(
+			"rt-pf-remote-port",
+		) as HTMLInputElement;
+		const labelInput = document.getElementById(
+			"rt-pf-label",
+		) as HTMLInputElement;
+		await user.type(localPortInput, "5173");
+		await user.type(remotePortInput, "3000");
+		await user.type(labelInput, "Vite");
+
+		await user.click(screen.getByRole("button", { name: /Start forward/ }));
+
+		await waitFor(() => {
+			expect(apiMocks.startRemotePortForward).toHaveBeenCalledWith({
+				runtimeName: "dev.box",
+				localPort: 5173,
+				remotePort: 3000,
+				label: "Vite",
+			});
+		});
+		// Success notice surfaces.
+		expect(
+			await screen.findByText(/Forwarding localhost:5173 → dev.box:3000/),
+		).toBeInTheDocument();
+	});
+
+	it("port forwards: rejects non-numeric ports locally without firing the RPC", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+
+		renderPanel();
+		const localPortInput = (await waitFor(() => {
+			const el = document.getElementById("rt-pf-local-port");
+			if (!el) throw new Error("local port not mounted");
+			return el as HTMLInputElement;
+		})) as HTMLInputElement;
+		const remotePortInput = document.getElementById(
+			"rt-pf-remote-port",
+		) as HTMLInputElement;
+		// type=number inputs strip non-numeric chars but a value
+		// of 0 still parses to 0; drive that path.
+		await user.type(localPortInput, "0");
+		await user.type(remotePortInput, "3000");
+		await user.click(screen.getByRole("button", { name: /Start forward/ }));
+
+		expect(
+			await screen.findByText(/must each be a number between 1 and 65535/i),
+		).toBeInTheDocument();
+		expect(apiMocks.startRemotePortForward).not.toHaveBeenCalled();
+	});
+
+	it("port forwards: renders active forwards with stop buttons", async () => {
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemotePortForwards.mockResolvedValue([
+			{
+				runtimeName: "dev.box",
+				localPort: 5173,
+				remotePort: 3000,
+				label: "Vite",
+				startedAtMs: Date.now() - 5_000,
+			},
+			{
+				runtimeName: "dev.box",
+				localPort: 8080,
+				remotePort: 8080,
+				label: null,
+				startedAtMs: Date.now() - 30_000,
+			},
+		]);
+
+		renderPanel();
+
+		expect(
+			await screen.findByTestId("remote-port-forward-dev.box-5173"),
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId("remote-port-forward-dev.box-8080"),
+		).toBeInTheDocument();
+		// Label surfaces in the descriptive line.
+		const viteRow = screen.getByTestId("remote-port-forward-dev.box-5173");
+		expect(viteRow.textContent).toContain("Vite");
+		// Forward target renders verbatim.
+		expect(viteRow.textContent).toMatch(/localhost:5173 → dev\.box:3000/);
+	});
+
+	it("port forwards: Stop button calls stopRemotePortForward + refreshes the list", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemotePortForwards.mockResolvedValue([
+			{
+				runtimeName: "dev.box",
+				localPort: 5173,
+				remotePort: 3000,
+				label: null,
+				startedAtMs: Date.now() - 1_000,
+			},
+		]);
+
+		renderPanel();
+		await screen.findByTestId("remote-port-forward-dev.box-5173");
+		await user.click(
+			screen.getByRole("button", { name: /Stop forward on localhost:5173/ }),
+		);
+		await waitFor(() => {
+			expect(apiMocks.stopRemotePortForward).toHaveBeenCalledWith({
+				runtimeName: "dev.box",
+				localPort: 5173,
+			});
+		});
+		expect(
+			await screen.findByText(/Stopped forward on localhost:5173/),
+		).toBeInTheDocument();
+	});
+
+	it("port forwards: surfaces a backend error from startRemotePortForward", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.startRemotePortForward.mockRejectedValueOnce(
+			new Error(
+				"ssh -O forward failed for `dev.box` (5173->3000): bind: Address already in use",
+			),
+		);
+
+		renderPanel();
+		const localPortInput = (await waitFor(() => {
+			const el = document.getElementById("rt-pf-local-port");
+			if (!el) throw new Error("local port not mounted");
+			return el as HTMLInputElement;
+		})) as HTMLInputElement;
+		const remotePortInput = document.getElementById(
+			"rt-pf-remote-port",
+		) as HTMLInputElement;
+		await user.type(localPortInput, "5173");
+		await user.type(remotePortInput, "3000");
+		await user.click(screen.getByRole("button", { name: /Start forward/ }));
+
+		expect(
+			await screen.findByText(/Address already in use/),
+		).toBeInTheDocument();
+	});
+
+	it("port forwards: empty state renders when listRemotePortForwards returns []", async () => {
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemotePortForwards.mockResolvedValue([]);
+
+		renderPanel();
+		expect(
+			await screen.findByText(/No port forwards active on this runtime/i),
 		).toBeInTheDocument();
 	});
 });

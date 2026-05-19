@@ -89,6 +89,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             commands::workspace_watch::WorkspaceFileWatchManager::new(),
         ))
+        .manage(std::sync::Arc::new(
+            commands::remote_port_forward::RemotePortForwardManager::new(),
+        ))
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -226,6 +229,12 @@ pub fn run() {
                     .state::<std::sync::Arc<remote::RuntimeRegistry>>()
                     .inner()
                     .clone();
+                let port_forward_manager = app
+                    .state::<std::sync::Arc<
+                        commands::remote_port_forward::RemotePortForwardManager,
+                    >>()
+                    .inner()
+                    .clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let dir = match data_dir::data_dir() {
                         Ok(d) => d,
@@ -238,14 +247,23 @@ pub fn run() {
                         }
                     };
                     let persisted = remote::persistence::load(&dir);
-                    if persisted.entries.is_empty() {
-                        return;
+                    if !persisted.entries.is_empty() {
+                        tracing::info!(
+                            count = persisted.entries.len(),
+                            "remote-runner: restoring persisted runtimes"
+                        );
+                        remote::persistence::restore_on_startup(&registry, persisted);
                     }
-                    tracing::info!(
-                        count = persisted.entries.len(),
-                        "remote-runner: restoring persisted runtimes"
+                    // Port-forward restore depends on the registry
+                    // being populated above — each forward looks up
+                    // its runtime by name to find the SSH host. Run
+                    // it here so the lookup hits the freshly-restored
+                    // entries instead of the empty registry.
+                    commands::remote_port_forward::restore_persisted_forwards(
+                        &registry,
+                        &port_forward_manager,
+                        &dir,
                     );
-                    remote::persistence::restore_on_startup(&registry, persisted);
                 });
             }
 
@@ -414,6 +432,9 @@ pub fn run() {
             commands::remote_commands::write_remote_terminal,
             commands::workspace_watch::start_workspace_watch,
             commands::workspace_watch::stop_workspace_watch,
+            commands::remote_port_forward::start_remote_port_forward,
+            commands::remote_port_forward::stop_remote_port_forward,
+            commands::remote_port_forward::list_remote_port_forwards,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
