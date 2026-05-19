@@ -109,6 +109,10 @@ type WorkspaceComposerProps = {
 			 *  draft into a freshly created session) can do so without a
 			 *  re-encode pass. */
 			editorStateSnapshot?: SerializedEditorState;
+			/** Composer's mount-time provisional session id; forwarded to
+			 *  `SubmitPayload` so StartPage submit seeds the new
+			 *  `sessions.id` with it. Ignored when already bound. */
+			provisionalSessionId?: string;
 		},
 	) => void;
 	disabled?: boolean;
@@ -280,6 +284,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	useEffect(() => {
 		recordComposerRender(contextKey, instanceIdRef.current);
 	});
+
+	// Pre-allocated UUID used as the paste-cache bucket id when
+	// `sessionId` isn't bound yet (StartPage). Forwarded on submit so the
+	// new session row reuses it; otherwise reclaimed by the paste-cache
+	// sweep after `UNCLAIMED_GRACE`.
+	const provisionalSessionIdRef = useRef<string>(crypto.randomUUID());
+	const effectiveSessionId = sessionId ?? provisionalSessionIdRef.current;
 	const editorRef = useRef<LexicalEditor | null>(null);
 	// Root element of the composer surface. Used as the portal anchor for the
 	// slash/@ typeahead popups so they hug the top edge of the composer box
@@ -519,6 +530,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						? options?.startSubmitMode
 						: "createOnly",
 				editorStateSnapshot,
+				provisionalSessionId: provisionalSessionIdRef.current,
 			});
 			editor.update(() => {
 				$getRoot().clear();
@@ -756,7 +768,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							disabled={submitDisabledForPlugin}
 						/>
 						<CompositionGuardPlugin />
-						<PasteImagePlugin />
+						<PasteImagePlugin sessionId={effectiveSessionId} />
 						<DropFilePlugin />
 						<AutoResizePlugin minHeight={64} maxHeight={240} />
 						<EditorRefPlugin editorRef={editorRef} />

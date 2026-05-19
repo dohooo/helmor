@@ -11,6 +11,7 @@ pub mod global_hotkey;
 pub mod image_store;
 mod import;
 pub mod logging;
+pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
@@ -122,6 +123,20 @@ pub fn run() {
                     })
                     .ok();
             }
+
+            // GC orphan `cache/paste/<id>/` buckets. Off the main thread
+            // — slow IO can't stall startup. Legacy `paste-cache/` and
+            // `query-cache/` at the data-dir root are intentionally
+            // left alone (historical messages embed absolute paths into
+            // them).
+            std::thread::Builder::new()
+                .name("helmor-paste-cache-sweep".into())
+                .spawn(|| {
+                    if let Err(error) = maintenance::paste_cache::sweep() {
+                        tracing::warn!(error = %error, "paste-cache sweep failed");
+                    }
+                })
+                .ok();
 
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved

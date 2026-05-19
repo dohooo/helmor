@@ -1108,7 +1108,9 @@ fn normalize_repo_preference(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Delete a repository and all related data (workspaces, sessions, messages, etc.)
+/// Delete a repository and all related data (workspaces, sessions, messages, etc.).
+/// Paste-cache buckets owned by deleted sessions are reclaimed on next
+/// boot by `maintenance::paste_cache::sweep`.
 pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
     let tx = connection

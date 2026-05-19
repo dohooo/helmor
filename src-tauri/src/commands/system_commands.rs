@@ -428,18 +428,14 @@ pub fn get_cli_status() -> CmdResult<CliStatus> {
     Ok(cli_status_for_paths(&install_path, &cli_binary))
 }
 
-/// File-backed React Query persister storage. The cache lives in the
-/// data dir (next to `helmor.db`) instead of localStorage, so it isn't
-/// bound by the webview's ~5–10 MB localStorage quota. The frontend
-/// addresses each cache key as a distinct file under
-/// `<data_dir>/query-cache/<key>` — only one key is in use today
-/// (`helmor-query-cache`), but the namespacing keeps the door open for
-/// the persister's optional `entries()` extension.
+/// File-backed React Query persister storage. The cache lives at
+/// `<data_dir>/cache/query/` instead of localStorage so it isn't bound
+/// by the webview's ~5–10 MB localStorage quota. The frontend addresses
+/// each cache key as a distinct file under this dir — only one key is
+/// in use today (`helmor-query-cache`), but the namespacing keeps the
+/// door open for the persister's optional `entries()` extension.
 fn query_cache_dir() -> anyhow::Result<PathBuf> {
-    let dir = data_dir::data_dir()?.join("query-cache");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create query cache dir at {dir:?}"))?;
-    Ok(dir)
+    data_dir::query_cache_dir()
 }
 
 /// Reject anything that could escape the cache dir (`..`, `/`, etc.) —
@@ -1001,8 +997,15 @@ pub async fn drain_pending_cli_sends() -> CmdResult<Vec<service::PendingCliSend>
     run_blocking(service::drain_pending_cli_sends).await
 }
 
+/// `session_id` is the composer's bound `sessions.id` or its provisional
+/// UUID. Required — paste-cache GC keys on it (see
+/// `maintenance::paste_cache`).
 #[tauri::command]
-pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
+pub async fn save_pasted_image(
+    data: String,
+    media_type: String,
+    session_id: String,
+) -> CmdResult<String> {
     run_blocking(move || {
         use std::fs;
         use uuid::Uuid;
@@ -1014,7 +1017,10 @@ pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<St
             _ => "png",
         };
 
-        let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
+        // <paste-cache>/<session_id>/paste-<uuid>.<ext>; destination_dir
+        // bails on path-unsafe ids.
+        let paste_root = crate::data_dir::paste_cache_dir()?;
+        let paste_dir = crate::maintenance::paste_cache::destination_dir(&paste_root, &session_id)?;
         fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
 
         let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
@@ -1324,7 +1330,10 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         // --- Filesystem cleanup (best-effort) ----------------------------
         let mut dirs_removed = Vec::new();
 
-        let dirs_to_clear = [data_dir.join("workspaces"), data_dir.join("paste-cache")];
+        let dirs_to_clear = [
+            data_dir.join("workspaces"),
+            data_dir.join("cache").join("paste"),
+        ];
 
         for dir in &dirs_to_clear {
             if dir.is_dir() {

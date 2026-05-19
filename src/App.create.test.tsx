@@ -404,6 +404,8 @@ describe("App create workspace flow", () => {
 				"worktree",
 				"from_branch",
 				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {
@@ -462,6 +464,8 @@ describe("App create workspace flow", () => {
 				"worktree",
 				"from_branch",
 				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {

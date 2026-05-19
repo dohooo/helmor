@@ -90,15 +90,39 @@ pub fn generated_images_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Returns the avatar cache directory inside the data dir. Forge account
-/// avatars (gh / glab) are downloaded once and served via `asset://` so
-/// page navigations don't re-trigger HTTP fetch + image decode.
-pub fn avatar_cache_dir() -> Result<PathBuf> {
-    let dir = data_dir()?.join("cache").join("avatars");
+/// Returns `<data_dir>/cache/<kind>/`, creating it if missing. All
+/// disposable caches live under `cache/` so the data-dir root stays
+/// small and scannable.
+pub fn cache_dir(kind: &str) -> Result<PathBuf> {
+    debug_assert!(
+        !kind.is_empty()
+            && kind
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "cache kind must match [A-Za-z0-9_-]+: {kind}",
+    );
+    let dir = data_dir()?.join("cache").join(kind);
     if !dir.exists() {
-        fs::create_dir_all(&dir).context("Failed to create avatar cache directory")?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
     }
     Ok(dir)
+}
+
+/// Forge account avatars (gh / glab), served via `asset://`.
+pub fn avatar_cache_dir() -> Result<PathBuf> {
+    cache_dir("avatars")
+}
+
+/// Composer-pasted images, bucketed by session id. See
+/// `crate::maintenance::paste_cache` for GC.
+pub fn paste_cache_dir() -> Result<PathBuf> {
+    cache_dir("paste")
+}
+
+/// React Query persister cache (one file per cache key).
+pub fn query_cache_dir() -> Result<PathBuf> {
+    cache_dir("query")
 }
 
 /// Returns the Conductor source database path for import.

@@ -2332,6 +2332,10 @@ export async function prepareWorkspaceFromRepo(
 	mode?: WorkspaceMode | null,
 	branchIntent?: WorkspaceBranchIntent | null,
 	initialStatus?: WorkspaceStatus | null,
+	/** Pre-allocated session UUID, so pre-submit paste-cache files
+	 *  (`cache/paste/<seedSessionId>/`) end up owned by the new session.
+	 *  Omit unless the caller is pre-allocating. */
+	seedSessionId?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
@@ -2339,6 +2343,7 @@ export async function prepareWorkspaceFromRepo(
 		mode: mode ?? null,
 		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -2365,9 +2370,12 @@ export async function finalizeWorkspaceFromRepo(
  */
 export async function prepareChatWorkspace(
 	initialStatus?: WorkspaceStatus | null,
+	/** See `prepareWorkspaceFromRepo`'s `seedSessionId`. */
+	seedSessionId?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_chat_workspace", {
 		initialStatus: initialStatus ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -2677,13 +2685,17 @@ export type AgentStreamEvent =
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
- * Save a pasted clipboard image (base64) to a temp file and return its path.
+ * Save a pasted clipboard image (base64) under `cache/paste/<sessionId>/`
+ * and return its absolute path. Callers without a real `sessions.id`
+ * (StartPage composer) must pre-allocate a UUID and submit with the
+ * same value so the bucket gets owned by the new session.
  */
 export async function savePastedImage(
 	data: string,
 	mediaType: string,
+	sessionId: string,
 ): Promise<string> {
-	return invoke<string>("save_pasted_image", { data, mediaType });
+	return invoke<string>("save_pasted_image", { data, mediaType, sessionId });
 }
 
 /**
@@ -2916,6 +2928,8 @@ export async function createSession(
 		effortLevel?: string | null;
 		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
 		fastMode?: boolean | null;
+		/** Pre-allocated session UUID; see `prepareWorkspaceFromRepo`. */
+		seedSessionId?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
@@ -2925,6 +2939,7 @@ export async function createSession(
 		model: options?.model ?? null,
 		effortLevel: options?.effortLevel ?? null,
 		fastMode: options?.fastMode ?? null,
+		seedSessionId: options?.seedSessionId ?? null,
 	});
 }
 

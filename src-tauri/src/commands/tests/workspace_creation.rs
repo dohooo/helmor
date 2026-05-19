@@ -96,6 +96,7 @@ fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -158,6 +159,7 @@ fn prepare_local_workspace_switches_branch_when_source_differs() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -205,6 +207,7 @@ fn prepare_local_workspace_checks_out_remote_only_branch_via_dwim() {
         &harness.repo_id,
         Some("remote-only"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -535,6 +538,7 @@ fn prepare_local_workspace_rejects_dirty_tracked_changes() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -560,6 +564,7 @@ fn prepare_local_workspace_allows_untracked_files_when_switching_branch() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     assert_eq!(response.branch, "develop");
@@ -581,6 +586,7 @@ fn prepare_local_workspace_rolls_back_db_when_checkout_fails() {
         &harness.repo_id,
         Some(nonexistent),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
     assert!(format!("{err:#}").to_lowercase().contains("checkout"));
@@ -605,6 +611,7 @@ fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -640,6 +647,7 @@ fn finalize_workspace_short_circuits_for_orphaned_initializing_local_row() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     // Force the row back into Initializing to mimic the orphaned state.
@@ -793,6 +801,7 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -858,6 +867,7 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let workspace_dir = harness.workspace_dir(&prepared.directory_name);
@@ -906,6 +916,7 @@ fn finalize_workspace_reports_setup_pending_when_helmor_json_has_setup() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -928,6 +939,7 @@ fn finalize_workspace_stays_ready_when_helmor_json_has_setup_but_auto_run_disabl
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -949,6 +961,7 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -989,6 +1002,7 @@ fn execute_archive_plan_short_circuits_for_local_workspace() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
@@ -1027,6 +1041,7 @@ fn archive_local_workspace_only_updates_db() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
@@ -1067,6 +1082,7 @@ fn restore_local_workspace_only_flips_state() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
@@ -1131,6 +1147,7 @@ fn validate_restore_local_workspace_short_circuits_to_no_conflict() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
@@ -1151,6 +1168,7 @@ fn move_local_workspace_to_worktree_carries_uncommitted_changes() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1235,6 +1253,7 @@ fn move_local_workspace_to_worktree_works_on_clean_local() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1260,6 +1279,7 @@ fn move_local_workspace_to_worktree_rejects_worktree_mode_workspace() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1318,6 +1338,7 @@ fn finalize_workspace_is_idempotent_for_ready_workspace() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let first = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1347,6 +1368,7 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let connection = Connection::open(harness.db_path()).unwrap();
@@ -1363,6 +1385,7 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1416,6 +1439,7 @@ fn git_action_status_returns_fresh_defaults_for_initializing_workspace() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1458,6 +1482,7 @@ fn pr_lookups_short_circuit_for_initializing_workspace_without_network() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1510,6 +1535,7 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1554,6 +1580,7 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let worktree_dir = harness.workspace_dir(&prepared.directory_name);
@@ -1591,6 +1618,7 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1622,6 +1650,7 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&keep.workspace_id).unwrap();
@@ -1630,6 +1659,7 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&drop.workspace_id).unwrap();
@@ -1702,6 +1732,7 @@ fn cleanup_orphaned_initializing_workspaces_skips_non_initializing_states() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1738,9 +1769,13 @@ fn prepare_local_workspace_with_backlog_initial_status_lands_in_backlog() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let response =
-        workspaces::prepare_local_workspace_impl(&harness.repo_id, None, WorkspaceStatus::Backlog)
-            .unwrap();
+    let response = workspaces::prepare_local_workspace_impl(
+        &harness.repo_id,
+        None,
+        WorkspaceStatus::Backlog,
+        None,
+    )
+    .unwrap();
 
     let connection = Connection::open(harness.db_path()).unwrap();
     let status: String = connection
@@ -1769,6 +1804,7 @@ fn prepare_workspace_from_repo_with_backlog_initial_status_lands_in_backlog() {
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::Backlog,
+        None,
     )
     .unwrap();
 
@@ -1800,6 +1836,7 @@ fn prepare_workspace_use_branch_stores_existing_branch_verbatim() {
         Some("feature/reuse-me"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1837,6 +1874,7 @@ fn prepare_workspace_use_branch_errors_when_branch_missing() {
         Some("nope/does-not-exist"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
 
@@ -1858,6 +1896,7 @@ fn prepare_workspace_use_branch_errors_when_branch_already_checked_out_elsewhere
         Some("feature/in-use"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prior.workspace_id).unwrap();
@@ -1867,6 +1906,7 @@ fn prepare_workspace_use_branch_errors_when_branch_already_checked_out_elsewhere
         Some("feature/in-use"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
 
@@ -1891,6 +1931,7 @@ fn prepare_workspace_use_branch_errors_when_source_branch_omitted() {
         None,
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
 
@@ -1912,6 +1953,7 @@ fn finalize_workspace_use_branch_attaches_worktree_to_existing_branch() {
         Some("feature/attach-me"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1939,6 +1981,7 @@ fn finalize_workspace_use_branch_does_not_delete_branch_on_failure() {
         Some("feature/keep-me"),
         WorkspaceBranchIntent::UseBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1998,6 +2041,7 @@ fn finalize_workspace_from_branch_falls_back_to_local_ref_when_remote_missing() 
         Some("wip/local-only"),
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();

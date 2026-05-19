@@ -1507,7 +1507,9 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
         )
         .ok();
 
-    // Delete all DB records in a transaction
+    // Delete all DB records in a transaction. Paste-cache buckets owned
+    // by deleted sessions are reclaimed on next boot by
+    // `maintenance::paste_cache::sweep`.
     let transaction = connection
         .transaction()
         .context("Failed to start delete workspace transaction")?;
@@ -2128,6 +2130,7 @@ mod tests {
 
         let response = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
 
@@ -2179,6 +2182,7 @@ mod tests {
         insert_chat_repo(&env);
         let response = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
 
@@ -2223,10 +2227,12 @@ mod tests {
         insert_chat_repo(&env);
         let a = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
         let b = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
 
@@ -2260,6 +2266,7 @@ mod tests {
         insert_chat_repo(&env);
         let response = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
         let scratch_dir = response.working_directory.clone().unwrap();
@@ -2288,6 +2295,7 @@ mod tests {
         insert_chat_repo(&env);
         let response = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
         let scratch_dir = response.working_directory.clone().unwrap();
@@ -2316,6 +2324,7 @@ mod tests {
         insert_chat_repo(&env);
         let response = super::super::lifecycle::prepare_chat_workspace_impl(
             crate::workspace_status::WorkspaceStatus::InProgress,
+            None,
         )
         .unwrap();
 

@@ -35,6 +35,7 @@ export async function createWorkspaceFromStartComposer({
 	editorStateSnapshot,
 	composerConfig,
 	linkedDirectories,
+	seedSessionId,
 }: {
 	/** Ignored in `chat` mode. */
 	repoId: string;
@@ -57,6 +58,9 @@ export async function createWorkspaceFromStartComposer({
 	 *  workspace row immediately so the conversation-mode composer (which
 	 *  reads the workspace-scoped query) sees them on first mount. */
 	linkedDirectories?: readonly string[];
+	/** Pre-allocated session UUID; forwarded to the prepare IPC so the
+	 *  new `sessions.id` matches the paste-cache bucket already on disk. */
+	seedSessionId?: string;
 }): Promise<WorkspaceStartCreateResult> {
 	// "Save for later" creates the workspace directly in `backlog` status
 	// — passing it through to Phase 1 means the DB row is born in the
@@ -66,13 +70,14 @@ export async function createWorkspaceFromStartComposer({
 	// Chat mode has no repo/branch — single-phase create.
 	const prepared =
 		mode === "chat"
-			? await prepareChatWorkspace(initialStatus)
+			? await prepareChatWorkspace(initialStatus, seedSessionId)
 			: await prepareWorkspaceFromRepo(
 					repoId,
 					sourceBranch,
 					mode,
 					branchIntent ?? null,
 					initialStatus,
+					seedSessionId,
 				);
 
 	// Persist pending /add-dir picks before kicking off finalize. The DB

@@ -429,6 +429,9 @@ export function useStartSurfaceController(
 						fastMode: payload.fastMode,
 					},
 					linkedDirectories: startPendingLinkedDirectories,
+					// Reuse the composer's provisional id so pre-submit
+					// paste-cache files end up owned by this session.
+					seedSessionId: payload.provisionalSessionId,
 				});
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.

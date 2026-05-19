@@ -122,6 +122,23 @@ pub struct TargetBranchConflict {
     pub remote: String,
 }
 
+/// Caller-provided UUID for the new session row, or a freshly minted
+/// one. Malformed seeds (anything outside `[0-9a-f-]`, >64 chars) are
+/// rejected so path traversal can't reach the workspace row.
+pub(crate) fn resolve_seed_session_id(seed: Option<&str>) -> String {
+    let trimmed = seed.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(value) = trimmed {
+        if value.chars().all(|c| c.is_ascii_hexdigit() || c == '-') && value.len() <= 64 {
+            return value.to_string();
+        }
+        tracing::warn!(
+            seed_len = value.len(),
+            "prepare_*_impl: rejecting malformed seed_session_id; generating fresh UUID",
+        );
+    }
+    uuid::Uuid::new_v4().to_string()
+}
+
 /// Phase 1: fast prep (DB row + metadata). Phase 2 materializes the
 /// worktree. `branch_intent::FromBranch` treats `source_branch` as the
 /// fork base; `UseBranch` treats it as the existing branch to attach to.
@@ -130,6 +147,7 @@ pub fn prepare_workspace_from_repo_impl(
     source_branch: Option<&str>,
     branch_intent: WorkspaceBranchIntent,
     initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -193,7 +211,7 @@ pub fn prepare_workspace_from_repo_impl(
     };
 
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
     let timestamp = db::current_timestamp()?;
 
     workspace_models::insert_initializing_workspace_and_session(
@@ -291,6 +309,7 @@ pub fn prepare_local_workspace_impl(
     repo_id: &str,
     source_branch: Option<&str>,
     initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -329,7 +348,7 @@ pub fn prepare_local_workspace_impl(
     // Local shares the repo root; empty directory_name is fine.
     let directory_name = String::new();
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
     let timestamp = db::current_timestamp()?;
 
     // DB insert before any git mutation. Local mode tags as UseBranch
@@ -411,6 +430,7 @@ pub fn prepare_local_workspace_impl(
 /// for chat workspaces (the row is already `Ready`).
 pub fn prepare_chat_workspace_impl(
     initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     // Lazy-upsert the synthetic `__chat__` repo row on first chat
     // creation. Doing it here (rather than at schema migration time)
@@ -427,7 +447,7 @@ pub fn prepare_chat_workspace_impl(
 
     let (directory_name, working_directory) = helpers::allocate_chat_workspace_dir()?;
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
     let timestamp = db::current_timestamp()?;
 
     // The scratch dir is already on disk; anything that fails from here
@@ -842,6 +862,7 @@ pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceR
         None,
         WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::default(),
+        None,
     )?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 

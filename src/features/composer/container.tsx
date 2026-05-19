@@ -174,6 +174,8 @@ type WorkspaceComposerContainerProps = {
 		 *  freshly-created session's `sessions.draft_state`) can do so
 		 *  without re-encoding the badge nodes. */
 		editorStateSnapshot?: SerializedEditorState;
+		/** Mount-time provisional session id (see `ComposerSubmitPayload`). */
+		provisionalSessionId?: string;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 *  session matches `sessionId`. Per-session config (model / effort /
@@ -718,6 +720,7 @@ export const WorkspaceComposerContainer = memo(
 					oppositeFollowUp?: boolean;
 					startSubmitMode?: StartSubmitMode;
 					editorStateSnapshot?: SerializedEditorState;
+					provisionalSessionId?: string;
 				},
 			) => {
 				if (!effectiveModel) {
@@ -745,6 +748,7 @@ export const WorkspaceComposerContainer = memo(
 					followUpBehaviorOverride,
 					startSubmitMode: options?.startSubmitMode,
 					editorStateSnapshot: options?.editorStateSnapshot,
+					provisionalSessionId: options?.provisionalSessionId,
 				});
 			},
 			[

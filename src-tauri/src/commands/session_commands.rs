@@ -37,6 +37,8 @@ pub async fn list_session_thread_messages(
     .await
 }
 
+/// `seed_session_id`: see `sessions::CreateSessionOverrides::seed_session_id` —
+/// frontend-provided UUID used as the new `sessions.id` when present.
 #[tauri::command]
 pub async fn create_session(
     workspace_id: String,
@@ -45,6 +47,7 @@ pub async fn create_session(
     model: Option<String>,
     effort_level: Option<String>,
     fast_mode: Option<bool>,
+    seed_session_id: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
         sessions::create_session(
@@ -55,6 +58,7 @@ pub async fn create_session(
                 model: model.as_deref(),
                 effort_level: effort_level.as_deref(),
                 fast_mode,
+                seed_session_id: seed_session_id.as_deref(),
             },
         )
     })

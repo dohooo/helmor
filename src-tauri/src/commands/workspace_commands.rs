@@ -21,6 +21,9 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 /// frontend should follow up with `finalize_workspace_from_repo` to kick
 /// off the slow git worktree creation; UI remains visible during that
 /// phase with state=initializing.
+/// `seed_session_id`: frontend-provided UUID for the initial session
+/// row, so pre-submit paste-cache files (`cache/paste/<seed>/`) survive
+/// submit. Backend mints one when absent.
 #[tauri::command]
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
@@ -29,6 +32,7 @@ pub async fn prepare_workspace_from_repo(
     mode: Option<crate::workspace_state::WorkspaceMode>,
     branch_intent: Option<crate::workspace_state::WorkspaceBranchIntent>,
     initial_status: Option<WorkspaceStatus>,
+    seed_session_id: Option<String>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let mode = mode.unwrap_or_default();
     let branch_intent = branch_intent.unwrap_or_default();
@@ -42,6 +46,7 @@ pub async fn prepare_workspace_from_repo(
                     source_branch.as_deref(),
                     branch_intent,
                     initial_status,
+                    seed_session_id.as_deref(),
                 )
             }
             crate::workspace_state::WorkspaceMode::Local => {
@@ -50,6 +55,7 @@ pub async fn prepare_workspace_from_repo(
                     &repo_id,
                     source_branch.as_deref(),
                     initial_status,
+                    seed_session_id.as_deref(),
                 )
             }
             crate::workspace_state::WorkspaceMode::Chat => {
@@ -70,15 +76,20 @@ pub async fn prepare_workspace_from_repo(
 /// bound to any repository — they're a scratch directory under
 /// `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
 /// AI chat session. No git, no branch, no finalize phase.
+/// `seed_session_id`: see `prepare_workspace_from_repo`.
 #[tauri::command]
 pub async fn prepare_chat_workspace(
     app: AppHandle,
     initial_status: Option<WorkspaceStatus>,
+    seed_session_id: Option<String>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let initial_status = initial_status.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::prepare_chat_workspace_impl(initial_status)).await?
+        run_blocking(move || {
+            workspaces::prepare_chat_workspace_impl(initial_status, seed_session_id.as_deref())
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)

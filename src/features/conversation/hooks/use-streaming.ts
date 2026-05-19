@@ -123,6 +123,10 @@ type SubmitPayload = {
 	 *  copies the draft to a freshly-created session) can do so without
 	 *  losing the badge nodes that a plain prompt-string would discard. */
 	editorStateSnapshot?: SerializedEditorState;
+	/** Composer's pre-allocated UUID. StartPage submit forwards it to
+	 *  `prepareChatWorkspace` / `prepareWorkspaceFromRepo` as
+	 *  `seedSessionId`; other paths ignore it. */
+	provisionalSessionId?: string;
 };
 
 export type ComposerSubmitPayload = SubmitPayload;
