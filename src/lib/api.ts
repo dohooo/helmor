@@ -1210,17 +1210,57 @@ export async function abortRemoteAgentSession(
 }
 
 /**
+ * Result of {@link attachRemoteAgentSession}. Phase 24q-2 swaps
+ * the prior `boolean` return for a struct so the frontend can
+ * stash the daemon's `lastSeq` for a future reattach + render the
+ * `replayGap` warning when the journal's ring evicted entries the
+ * desktop hadn't persisted yet.
+ */
+export type AttachRemoteAgentSessionResult = {
+	/** Mirrors the original `boolean` return contract. */
+	found: boolean;
+	/**
+	 * Daemon's high-water-mark seq for this session. Frontend
+	 * stashes it; future reattaches don't need to consult the
+	 * local DB to set `helmorSessionId`. `0` when `found=false`
+	 * or the journal is empty.
+	 */
+	lastSeq: number;
+	/** Number of journal entries the daemon flushed on this attach. */
+	replayedCount: number;
+	/**
+	 * Earliest seq still in the daemon's ring when the caller's
+	 * `since_seq` was older. `null`/undefined means a clean replay;
+	 * a value means some events were evicted before this attach
+	 * (the frontend should fall back to a full DB reload for the
+	 * gap).
+	 */
+	replayGap?: number | null;
+};
+
+/**
  * Reattach the desktop's notification subscriber to an existing
- * remote agent session. Returns `true` when the daemon swapped the
- * per-session notifier; `false` when the session expired or never
- * existed on the daemon (the desktop should drop any tentative
- * local subscription).
+ * remote agent session. Returns `{found:true}` when the daemon
+ * swapped the per-session notifier; `{found:false}` when the
+ * session expired or never existed on the daemon (the desktop
+ * should drop any tentative local subscription).
+ *
+ * Pass `helmorSessionId` so the backend can compute `since_seq`
+ * from the local DB's `MAX(last_event_seq)` for this session — the
+ * daemon replays only journal entries newer than the desktop has
+ * already persisted. Omit it for cold-attach diagnostics on
+ * sessions the desktop doesn't track locally.
  */
 export async function attachRemoteAgentSession(
 	name: string,
 	requestId: string,
-): Promise<boolean> {
-	return invoke<boolean>("attach_remote_agent_session", { name, requestId });
+	helmorSessionId?: string,
+): Promise<AttachRemoteAgentSessionResult> {
+	return invoke<AttachRemoteAgentSessionResult>("attach_remote_agent_session", {
+		name,
+		requestId,
+		helmorSessionId: helmorSessionId ?? null,
+	});
 }
 
 /**
@@ -1242,6 +1282,22 @@ export type ReattachAgentStreamResult = {
 	 * reattach affordance.
 	 */
 	found: boolean;
+	/**
+	 * Phase 24q-2: daemon's high-water-mark seq for this session.
+	 * Stash this so a subsequent reattach can pass it back as
+	 * `since_seq` without a DB round-trip. `0` when `found=false`.
+	 */
+	lastSeq: number;
+	/** Number of journal entries the daemon flushed on attach. */
+	replayedCount: number;
+	/**
+	 * Earliest seq the daemon's ring can still deliver when the
+	 * caller's `since_seq` predates the oldest entry. `null`/undef
+	 * means the replay was complete; a value means the desktop
+	 * missed events and should fall back to a full DB reload for
+	 * the gap.
+	 */
+	replayGap?: number | null;
 };
 
 export type ReleaseAgentStreamResult = {
@@ -1269,12 +1325,18 @@ export async function reattachRemoteAgentSessionStream(
 	name: string,
 	requestId: string,
 	onEvent: (event: ReattachedAgentEvent) => void,
+	helmorSessionId?: string,
 ): Promise<ReattachAgentStreamResult> {
 	const channel = new Channel<ReattachedAgentEvent>();
 	channel.onmessage = onEvent;
 	return invoke<ReattachAgentStreamResult>(
 		"reattach_remote_agent_session_stream",
-		{ name, requestId, onEvent: channel },
+		{
+			name,
+			requestId,
+			helmorSessionId: helmorSessionId ?? null,
+			onEvent: channel,
+		},
 	);
 }
 

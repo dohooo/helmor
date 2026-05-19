@@ -36,6 +36,9 @@ describe("useReattachAgentStream", () => {
 		// Default: every reattach succeeds; every release succeeds.
 		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValue({
 			found: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies ReattachAgentStreamResult);
 		apiMocks.releaseRemoteAgentStream.mockResolvedValue({
 			released: true,
@@ -69,7 +72,34 @@ describe("useReattachAgentStream", () => {
 			"dev.box",
 			"req-1",
 			expect.any(Function),
+			undefined,
 		);
+	});
+
+	it("forwards helmorSessionId + surfaces daemon replay diagnostics", async () => {
+		// Phase 24q-2: the hook hands `helmorSessionId` through to
+		// the API call (the backend computes `since_seq` from it)
+		// and stashes the daemon-reported lastSeq / replayedCount /
+		// replayGap on its state so the panel can render them.
+		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValueOnce({
+			found: true,
+			lastSeq: 99,
+			replayedCount: 4,
+			replayGap: 50,
+		});
+		const { result } = renderHook(() => useReattachAgentStream());
+		await act(async () => {
+			await result.current.start("dev.box", "req-resume", "hs-1");
+		});
+		expect(apiMocks.reattachRemoteAgentSessionStream).toHaveBeenCalledWith(
+			"dev.box",
+			"req-resume",
+			expect.any(Function),
+			"hs-1",
+		);
+		expect(result.current.lastSeq).toBe(99);
+		expect(result.current.replayedCount).toBe(4);
+		expect(result.current.replayGap).toBe(50);
 	});
 
 	it("captures events delivered through the runtime callback", async () => {
@@ -79,7 +109,7 @@ describe("useReattachAgentStream", () => {
 		apiMocks.reattachRemoteAgentSessionStream.mockImplementation(
 			async (_name: string, _requestId: string, cb: typeof onEvent) => {
 				onEvent = cb;
-				return { found: true };
+				return { found: true, lastSeq: 0, replayedCount: 0, replayGap: null };
 			},
 		);
 
@@ -109,6 +139,9 @@ describe("useReattachAgentStream", () => {
 	it("surfaces notFound phase when the daemon reports the session is gone", async () => {
 		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValueOnce({
 			found: false,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		});
 		const { result } = renderHook(() => useReattachAgentStream());
 		await act(async () => {
@@ -168,7 +201,7 @@ describe("useReattachAgentStream", () => {
 		apiMocks.reattachRemoteAgentSessionStream.mockImplementation(
 			async (_name: string, _requestId: string, cb: typeof onEvent) => {
 				onEvent = cb;
-				return { found: true };
+				return { found: true, lastSeq: 0, replayedCount: 0, replayGap: null };
 			},
 		);
 		const { result } = renderHook(() => useReattachAgentStream());

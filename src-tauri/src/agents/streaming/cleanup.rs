@@ -40,7 +40,8 @@ pub(crate) fn cleanup_abnormal_stream_exit(
         }
     };
 
-    let err_persist_ok = match persist_error_message(&conn, ctx, resolved_model, user_message) {
+    let err_persist_ok = match persist_error_message(&conn, ctx, resolved_model, user_message, None)
+    {
         Ok(_) => true,
         Err(error) => {
             tracing::error!(

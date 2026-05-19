@@ -38,7 +38,29 @@ export type ReattachAgentStreamState = {
 	error: string | null;
 	events: ReattachLogEntry[];
 	currentRequestId: string | null;
-	start: (runtimeName: string, requestId: string) => Promise<void>;
+	/**
+	 * Phase 24q-2: the daemon-reported journal high-water-mark
+	 * captured at attach time. The panel surfaces this so an
+	 * operator can verify `since_seq` semantics.
+	 */
+	lastSeq: number | null;
+	/**
+	 * Phase 24q-2: events the daemon replayed during attach.
+	 * Counts events the desktop's local DB hadn't already persisted.
+	 */
+	replayedCount: number | null;
+	/**
+	 * Phase 24q-2: earliest seq the daemon's ring can still
+	 * deliver when the desktop's `since_seq` predated the oldest
+	 * entry. Non-null means events were evicted; the frontend
+	 * should fall back to a full DB reload for the gap.
+	 */
+	replayGap: number | null;
+	start: (
+		runtimeName: string,
+		requestId: string,
+		helmorSessionId?: string,
+	) => Promise<void>;
 	stop: () => Promise<void>;
 	clear: () => void;
 };
@@ -55,6 +77,9 @@ export function useReattachAgentStream(): ReattachAgentStreamState {
 	const [error, setError] = useState<string | null>(null);
 	const [events, setEvents] = useState<ReattachLogEntry[]>([]);
 	const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
+	const [lastSeq, setLastSeq] = useState<number | null>(null);
+	const [replayedCount, setReplayedCount] = useState<number | null>(null);
+	const [replayGap, setReplayGap] = useState<number | null>(null);
 	// Sequencer for unique per-event keys. Plain monotonic counter
 	// is simpler + faster than a UUID per event.
 	const eventSequenceRef = useRef(0);
@@ -81,65 +106,82 @@ export function useReattachAgentStream(): ReattachAgentStreamState {
 		}
 	}, []);
 
-	const start = useCallback(async (runtimeName: string, requestId: string) => {
-		// If a previous stream is running, tear it down first
-		// so we never leak callbacks. The release call is
-		// idempotent so a stale id won't error out.
-		if (currentRequestIdRef.current) {
-			const prior = currentRequestIdRef.current;
-			currentRequestIdRef.current = null;
-			try {
-				await releaseRemoteAgentStream(prior);
-			} catch {
-				// swallow — see stop().
+	const start = useCallback(
+		async (
+			runtimeName: string,
+			requestId: string,
+			helmorSessionId?: string,
+		) => {
+			// If a previous stream is running, tear it down first
+			// so we never leak callbacks. The release call is
+			// idempotent so a stale id won't error out.
+			if (currentRequestIdRef.current) {
+				const prior = currentRequestIdRef.current;
+				currentRequestIdRef.current = null;
+				try {
+					await releaseRemoteAgentStream(prior);
+				} catch {
+					// swallow — see stop().
+				}
 			}
-		}
-		setError(null);
-		setEvents([]);
-		setPhase("attaching");
-		currentRequestIdRef.current = requestId;
-		setCurrentRequestId(requestId);
-		try {
-			const result = await reattachRemoteAgentSessionStream(
-				runtimeName,
-				requestId,
-				(event) => {
-					const id = ++eventSequenceRef.current;
-					setEvents((prev) => [
-						...prev,
-						{
-							id,
-							receivedAt: Date.now(),
-							event,
-						},
-					]);
-				},
-			);
-			// Race: the consumer may have called stop() while
-			// the RPC was in flight. If currentRequestIdRef
-			// has moved on, the new start owns the state —
-			// don't clobber its phase. Only commit our phase
-			// transition when we're still the owner.
-			if (currentRequestIdRef.current !== requestId) return;
-			if (result.found) {
-				setPhase("streaming");
-			} else {
-				setPhase("notFound");
+			setError(null);
+			setEvents([]);
+			setLastSeq(null);
+			setReplayedCount(null);
+			setReplayGap(null);
+			setPhase("attaching");
+			currentRequestIdRef.current = requestId;
+			setCurrentRequestId(requestId);
+			try {
+				const result = await reattachRemoteAgentSessionStream(
+					runtimeName,
+					requestId,
+					(event) => {
+						const id = ++eventSequenceRef.current;
+						setEvents((prev) => [
+							...prev,
+							{
+								id,
+								receivedAt: Date.now(),
+								event,
+							},
+						]);
+					},
+					helmorSessionId,
+				);
+				// Race: the consumer may have called stop() while
+				// the RPC was in flight. If currentRequestIdRef
+				// has moved on, the new start owns the state —
+				// don't clobber its phase. Only commit our phase
+				// transition when we're still the owner.
+				if (currentRequestIdRef.current !== requestId) return;
+				if (result.found) {
+					setPhase("streaming");
+					setLastSeq(result.lastSeq);
+					setReplayedCount(result.replayedCount);
+					setReplayGap(result.replayGap ?? null);
+				} else {
+					setPhase("notFound");
+					currentRequestIdRef.current = null;
+					setCurrentRequestId(null);
+				}
+			} catch (err) {
+				if (currentRequestIdRef.current !== requestId) return;
+				setError(errorMessage(err));
+				setPhase("error");
 				currentRequestIdRef.current = null;
 				setCurrentRequestId(null);
 			}
-		} catch (err) {
-			if (currentRequestIdRef.current !== requestId) return;
-			setError(errorMessage(err));
-			setPhase("error");
-			currentRequestIdRef.current = null;
-			setCurrentRequestId(null);
-		}
-	}, []);
+		},
+		[],
+	);
 
 	const clear = useCallback(() => {
 		setEvents([]);
 		setError(null);
+		setLastSeq(null);
+		setReplayedCount(null);
+		setReplayGap(null);
 	}, []);
 
 	// On unmount, release any active subscription so the daemon
@@ -159,6 +201,9 @@ export function useReattachAgentStream(): ReattachAgentStreamState {
 		error,
 		events,
 		currentRequestId,
+		lastSeq,
+		replayedCount,
+		replayGap,
 		start,
 		stop,
 		clear,

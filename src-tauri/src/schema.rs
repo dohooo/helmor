@@ -638,6 +638,25 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.runtime_name column")?;
     }
 
+    // Migration: per-row event-seq cursor for the daemon's event
+    // journal (phase 24q-2). The streaming pipeline writes the seq
+    // of the daemon-side event that produced this row; the reattach
+    // call queries `MAX(last_event_seq)` for the session and passes
+    // it back to the daemon as `since_seq` so a reconnect only
+    // replays events the desktop hasn't already persisted.
+    //
+    // Nullable: rows written before 24q-2 (and any non-remote-runner
+    // write path) leave it NULL. The MAX aggregate skips NULLs, so
+    // a session with mixed legacy + new rows still computes the
+    // correct cursor.
+    if has_table(connection, "session_messages")
+        && !has_column(connection, "session_messages", "last_event_seq")
+    {
+        connection
+            .execute_batch("ALTER TABLE session_messages ADD COLUMN last_event_seq INTEGER")
+            .context("Failed to add session_messages.last_event_seq column")?;
+    }
+
     Ok(())
 }
 
@@ -792,7 +811,13 @@ CREATE TABLE IF NOT EXISTS session_messages (
     role TEXT,
     content TEXT,
     sent_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Phase 24q-2: seq of the daemon-side journal event that
+    -- produced this row. NULL on non-remote-runner writes; the
+    -- reattach call passes MAX(last_event_seq) per session to the
+    -- daemon as `since_seq` so a reconnect replays only what was
+    -- missed.
+    last_event_seq INTEGER
 );
 
 -- Indexes
