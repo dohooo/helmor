@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.23.2
+
+### Patch Changes
+
+- [#592](https://github.com/dohooo/helmor/pull/592) [`5ce7f6d`](https://github.com/dohooo/helmor/commit/5ce7f6d1fe2a726433f2e3322460837e636253fd) Thanks [@natllian](https://github.com/natllian)! - Remember the window size and position across restarts.
+
+- [#597](https://github.com/dohooo/helmor/pull/597) [`636fc4a`](https://github.com/dohooo/helmor/commit/636fc4a1583e4ea7b490a82e2940517a117aa918) Thanks [@natllian](https://github.com/natllian)! - Stop clearing the follow-up message queue when switching to the Start Page so queued messages survive the trip back to the workspace.
+
+- [#594](https://github.com/dohooo/helmor/pull/594) [`4906e39`](https://github.com/dohooo/helmor/commit/4906e39ee13646b2aa4e68c690c610e5246430ba) Thanks [@natllian](https://github.com/natllian)! - Fix composer effort/model/permission/fast-mode picks reverting to defaults when switching back to a workspace whose first turn hasn't finished.
+
+- [#595](https://github.com/dohooo/helmor/pull/595) [`e89064e`](https://github.com/dohooo/helmor/commit/e89064e4e2496f2d39cb5451c94c6d343050ca2a) Thanks [@natllian](https://github.com/natllian)! - Fix sidebar and inspector resize stuttering that persisted for the rest of the session after the file editor had been opened.
+
 ## 0.23.1
 
 ### Patch Changes
