@@ -125,7 +125,15 @@ export function FeedbackDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="flex flex-col gap-5 p-4 sm:max-w-md">
+			<DialogContent
+				className="flex flex-col gap-5 p-4 sm:max-w-md"
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					document
+						.getElementById("feedback-input")
+						?.focus({ preventScroll: true });
+				}}
+			>
 				<DialogHeader>
 					<DialogTitle className="text-[13px] font-medium tracking-[-0.01em]">
 						{state.step.kind === "input"

@@ -49,33 +49,32 @@ export function StepInput({
 	return (
 		<div className="flex flex-col gap-3">
 			<Textarea
+				id="feedback-input"
 				value={input}
 				onChange={(event) => onInputChange(event.target.value)}
 				placeholder="Describe a bug, suggest an improvement, or ask a question."
-				autoFocus
 				aria-label="Feedback"
 				disabled={sending}
 				className="min-h-32"
 			/>
-			{!githubConnected ? (
-				<p className="text-xs text-muted-foreground">
-					Connect GitHub in{" "}
-					<Button
-						variant="link"
-						size="xs"
-						className="h-auto p-0 text-xs"
-						onClick={onOpenSettings}
-					>
-						Settings
-					</Button>{" "}
-					to send feedback.
-				</p>
-			) : null}
-			{existing && githubConnected && !confirming ? (
-				<p className="text-xs text-muted-foreground">
-					Will reuse your local helmor repo.
-				</p>
-			) : null}
+			<div className="min-h-4 text-xs text-muted-foreground">
+				{!githubConnected ? (
+					<>
+						Connect GitHub in{" "}
+						<Button
+							variant="link"
+							size="xs"
+							className="h-auto p-0 text-xs"
+							onClick={onOpenSettings}
+						>
+							Settings
+						</Button>{" "}
+						to send feedback.
+					</>
+				) : existing && !confirming ? (
+					"Will reuse your local helmor repo."
+				) : null}
+			</div>
 			<div className="mt-1 flex items-center justify-between gap-3">
 				<p className="text-xs text-muted-foreground">
 					{confirming
