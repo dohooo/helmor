@@ -348,6 +348,102 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
         .context("Failed to commit create-workspace transaction")
 }
 
+/// Insert a Chat-mode workspace + its initial session in a single
+/// transaction. Chat workspaces have no branch and no parent/intended
+/// target branch — those columns stay NULL. `repository_id` points at
+/// the synthetic `SYSTEM_CHAT_REPO_ID` row.
+///
+/// `directory_name` stores the relative scratch path
+/// (`"YYYY-MM-DD/new-chat[-N]"`); `helpers::workspace_path` joins it
+/// under `chats_dir` to resolve the absolute cwd at read time.
+pub(crate) fn insert_chat_workspace_and_session(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    status: WorkspaceStatus,
+    timestamp: &str,
+) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start create-chat-workspace transaction")?;
+
+    let next_order = transaction
+        .query_row(
+            r#"
+                SELECT COALESCE(MAX(display_order), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?3
+                "#,
+            rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace display order")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id,
+              repository_id,
+              directory_name,
+              active_session_id,
+              branch,
+              state,
+              initialization_parent_branch,
+              intended_target_branch,
+              mode,
+              branch_intent,
+              display_order,
+              status,
+              unread,
+              created_at,
+              updated_at
+            ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, NULL, ?6, ?7, ?8, ?9, 0, ?10, ?10)
+            "#,
+            (
+                workspace_id,
+                repository.id.as_str(),
+                directory_name,
+                session_id,
+                WorkspaceState::Initializing,
+                WorkspaceMode::Chat,
+                WorkspaceBranchIntent::UseBranch,
+                next_order,
+                status,
+                timestamp,
+            ),
+        )
+        .context("Failed to insert chat workspace")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO sessions (
+              id,
+              workspace_id,
+              title,
+              status,
+              permission_mode,
+              unread_count,
+              fast_mode,
+              created_at,
+              updated_at,
+              is_hidden
+            ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
+            "#,
+            (session_id, workspace_id, timestamp),
+        )
+        .context("Failed to insert initial chat session")?;
+
+    transaction
+        .commit()
+        .context("Failed to commit create-chat-workspace transaction")
+}
+
 /// Atomically convert a local-mode workspace into a worktree-mode one.
 /// Used by the move-local-to-worktree flow once the new worktree
 /// directory + branch have been created on disk.

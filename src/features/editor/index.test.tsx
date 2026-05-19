@@ -16,6 +16,7 @@ const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChangesWithContent: vi.fn(),
 	listWorkspaceFiles: vi.fn(),
 	readEditorFile: vi.fn(),
+	readFileAtRef: vi.fn(),
 }));
 
 const runtimeMocks = vi.hoisted(() => {
@@ -24,6 +25,7 @@ const runtimeMocks = vi.hoisted(() => {
 
 	const fileController = {
 		dispose: vi.fn(),
+		focus: vi.fn(),
 		getValue: vi.fn(() => fileValue),
 		onDidChangeModelContent: vi.fn((callback: (value: string) => void) => {
 			changeHandler = callback;
@@ -45,6 +47,7 @@ const runtimeMocks = vi.hoisted(() => {
 
 	const diffController = {
 		dispose: vi.fn(),
+		focus: vi.fn(),
 		setTexts: vi.fn(),
 	};
 
@@ -68,8 +71,10 @@ const runtimeMocks = vi.hoisted(() => {
 			this.createDiffEditor.mockClear();
 			this.createFileEditor.mockClear();
 			this.diffController.dispose.mockClear();
+			this.diffController.focus.mockClear();
 			this.diffController.setTexts.mockClear();
 			this.fileController.dispose.mockClear();
+			this.fileController.focus.mockClear();
 			this.fileController.getValue.mockClear();
 			this.fileController.onDidChangeModelContent.mockClear();
 			this.fileController.revealPosition.mockClear();
@@ -89,6 +94,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
 		listWorkspaceFiles: apiMocks.listWorkspaceFiles,
 		readEditorFile: apiMocks.readEditorFile,
+		readFileAtRef: apiMocks.readFileAtRef,
 	};
 });
 
@@ -155,6 +161,7 @@ describe("WorkspaceEditorSurface", () => {
 		});
 		apiMocks.listWorkspaceFiles.mockReset();
 		apiMocks.readEditorFile.mockReset();
+		apiMocks.readFileAtRef.mockReset();
 	});
 
 	afterEach(() => {
@@ -580,6 +587,193 @@ describe("WorkspaceEditorSurface", () => {
 		await waitFor(() => {
 			expect(screen.queryByLabelText("Markdown preview")).toBeNull();
 		});
+	});
+
+	it("settles keyboard focus inside the editor surface after first render", async () => {
+		// Real invariant being protected: after the editor mounts, focus must
+		// be somewhere inside [data-focus-scope=editor] so Cmd+E/T/W resolve
+		// to the editor scope without a manual click. Whether the focus ends
+		// up on Monaco's textarea, the surface container, or an internal tab
+		// is an implementation detail — the only thing that matters is that
+		// it's NOT stranded outside the surface (e.g. on a changes-list row).
+		const onChangeSpy = vi.fn();
+
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/App.tsx",
+			content: "const value = 1;\n",
+			mtimeMs: 10,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileEditor).toHaveBeenCalled();
+		});
+
+		const surface = screen.getByLabelText("Workspace editor surface");
+		expect(surface.contains(document.activeElement)).toBe(true);
+	});
+
+	it("reclaims focus after switching to another file via search", async () => {
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.listWorkspaceFiles.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 0,
+				unstagedDeletions: 0,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/utils.ts",
+			content: "export const value = 1;\n",
+			mtimeMs: 20,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "file",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						originalText: "const app = 1;\n",
+						modifiedText: "const app = 1;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createFileEditor).toHaveBeenCalled();
+		});
+
+		// First-mount focus already happened; we care about post-switch.
+		runtimeMocks.fileController.focus.mockClear();
+
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		await user.type(
+			screen.getByPlaceholderText("Search files"),
+			"utils{enter}",
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.fileController.switchFile).toHaveBeenCalledWith(
+				"/tmp/helmor-workspace/src/utils.ts",
+				expect.anything(),
+				undefined,
+				undefined,
+			);
+			expect(runtimeMocks.fileController.focus).toHaveBeenCalled();
+		});
+	});
+
+	it("rebuilds the diff editor on file switch so the first frame is fully rendered", async () => {
+		// Why slow path (dispose + createDiffEditor) instead of model-reuse:
+		// Monaco computes diffs in a worker. setValue() on an existing diff
+		// model defers hunk decorations to a later frame — users see
+		// "incomplete first frame, complete second frame". createDiffEditor
+		// computes the diff synchronously during construction, so the first
+		// post-switch paint is the fully-decorated final result. The Monaco
+		// runtime is cached after first use, so the dispose+create round
+		// trip resolves inside the same microtask burst (no blank paint).
+		const onChangeSpy = vi.fn();
+		const user = userEvent.setup();
+
+		apiMocks.listWorkspaceFiles.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 3,
+				unstagedDeletions: 1,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
+		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+			items: [
+				{
+					path: "src/utils.ts",
+					absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+					name: "utils.ts",
+					status: "M",
+					stagedInsertions: 0,
+					stagedDeletions: 0,
+					unstagedInsertions: 3,
+					unstagedDeletions: 1,
+					committedInsertions: 0,
+					committedDeletions: 0,
+				},
+			],
+			prefetched: [],
+		});
+		apiMocks.readFileAtRef.mockResolvedValue("export const value = 0;\n");
+		apiMocks.readEditorFile.mockResolvedValue({
+			path: "/tmp/helmor-workspace/src/utils.ts",
+			content: "export const value = 1;\n",
+			mtimeMs: 20,
+		});
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<EditorSurfaceHarness
+					initialSession={{
+						kind: "diff",
+						path: "/tmp/helmor-workspace/src/App.tsx",
+						fileStatus: "M",
+						originalText: "const app = 1;\n",
+						modifiedText: "const app = 2;\n",
+					}}
+					onChangeSpy={onChangeSpy}
+				/>
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(runtimeMocks.createDiffEditor).toHaveBeenCalledTimes(1);
+		});
+
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		await user.type(
+			screen.getByPlaceholderText("Search files"),
+			"utils{enter}",
+		);
+
+		// New file → second createDiffEditor call with the new file's content.
+		await waitFor(() => {
+			expect(runtimeMocks.createDiffEditor).toHaveBeenCalledTimes(2);
+		});
+		expect(runtimeMocks.createDiffEditor).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				path: "/tmp/helmor-workspace/src/utils.ts",
+				originalText: "export const value = 0;\n",
+				modifiedText: "export const value = 1;\n",
+			}),
+		);
+		// The old diff controller was disposed as part of the rebuild.
+		expect(runtimeMocks.diffController.dispose).toHaveBeenCalled();
 	});
 
 	it("surfaces read failures without breaking the shell", async () => {

@@ -52,8 +52,33 @@ pub async fn prepare_workspace_from_repo(
                     initial_status,
                 )
             }
+            crate::workspace_state::WorkspaceMode::Chat => {
+                // Chat workspaces don't bind to a repository; callers
+                // should use `prepare_chat_workspace` directly.
+                anyhow::bail!(
+                    "Chat workspaces must be created via prepare_chat_workspace, not prepare_workspace_from_repo"
+                )
+            }
         })
         .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+/// One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+/// bound to any repository — they're a scratch directory under
+/// `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+/// AI chat session. No git, no branch, no finalize phase.
+#[tauri::command]
+pub async fn prepare_chat_workspace(
+    app: AppHandle,
+    initial_status: Option<WorkspaceStatus>,
+) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let initial_status = initial_status.unwrap_or_default();
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || workspaces::prepare_chat_workspace_impl(initial_status)).await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)

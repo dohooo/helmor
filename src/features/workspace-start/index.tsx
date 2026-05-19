@@ -4,6 +4,7 @@ import {
 	GitBranchPlus,
 	GitMerge,
 	Laptop,
+	MessageCircle,
 	Plus,
 	Split,
 	X,
@@ -260,115 +261,130 @@ export function WorkspaceStartPage({
 								"left-1/2 -translate-x-1/2 text-[24px]",
 							)}
 						>
-							<span
-								className={cn(
-									"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-									previewCard
-										? "max-w-0 -translate-y-1 opacity-0"
-										: "max-w-[22rem] translate-y-0 opacity-100",
-								)}
-							>
-								What should we build
-							</span>
-							<span
-								className={cn(
-									"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-									previewCard
-										? "max-w-0 -translate-y-1 opacity-0"
-										: "max-w-[2rem] translate-y-0 opacity-100",
-								)}
-							>
-								in
-							</span>
-							<DropdownMenu>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<DropdownMenuTrigger asChild>
-											<Button
-												type="button"
-												variant="ghost"
-												disabled={repositories.length === 0}
-												className={cn(
-													"font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-													"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px]",
-												)}
-											>
-												{selectedRepository ? (
-													<>
-														<WorkspaceAvatar
-															repoIconSrc={selectedRepository.repoIconSrc}
-															repoInitials={selectedRepository.repoInitials}
-															repoName={selectedRepository.name}
-															title={selectedRepository.name}
-															className={cn(
-																"rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																"size-6",
-															)}
-															fallbackClassName="text-[9px]"
-														/>
-														<span className="min-w-0 truncate">
-															{selectedRepository.name}
-														</span>
-														<ChevronDown
-															className={cn(
-																"shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-																"size-4",
-															)}
-															strokeWidth={2}
-														/>
-													</>
-												) : (
-													<span className="text-muted-foreground">
-														a repository
-													</span>
-												)}
-											</Button>
-										</DropdownMenuTrigger>
-									</TooltipTrigger>
-									<TooltipContent
-										side="top"
-										sideOffset={4}
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							{mode === "chat" ? (
+								<span
+									className={cn(
+										"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+										previewCard
+											? "max-w-0 -translate-y-1 opacity-0"
+											: "max-w-[32rem] translate-y-0 opacity-100",
+									)}
+								>
+									What should we work on?
+								</span>
+							) : (
+								<>
+									<span
+										className={cn(
+											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+											previewCard
+												? "max-w-0 -translate-y-1 opacity-0"
+												: "max-w-[22rem] translate-y-0 opacity-100",
+										)}
 									>
-										<span>Switch repository</span>
-										<InlineShortcutDisplay
-											hotkey={SWITCH_REPOSITORY_SHORTCUT}
-											className="text-background/60"
-										/>
-									</TooltipContent>
-								</Tooltip>
-								<DropdownMenuContent align="center" className="min-w-56">
-									{repositories.map((repository) => (
-										<DropdownMenuItem
-											key={repository.id}
-											onClick={() => onSelectRepository(repository)}
-											className="gap-2"
-										>
-											<WorkspaceAvatar
-												repoIconSrc={repository.repoIconSrc}
-												repoInitials={repository.repoInitials}
-												repoName={repository.name}
-												title={repository.name}
-												className="size-5 rounded-md"
-												fallbackClassName="text-[8px]"
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{repository.name}
-											</span>
-										</DropdownMenuItem>
-									))}
-								</DropdownMenuContent>
-							</DropdownMenu>
-							<span
-								className={cn(
-									"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-									previewCard
-										? "max-w-0 -translate-y-1 opacity-0"
-										: "max-w-[2rem] translate-y-0 opacity-100",
-								)}
-							>
-								?
-							</span>
+										What should we build
+									</span>
+									<span
+										className={cn(
+											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+											previewCard
+												? "max-w-0 -translate-y-1 opacity-0"
+												: "max-w-[2rem] translate-y-0 opacity-100",
+										)}
+									>
+										in
+									</span>
+									<DropdownMenu>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<DropdownMenuTrigger asChild>
+													<Button
+														type="button"
+														variant="ghost"
+														disabled={repositories.length === 0}
+														className={cn(
+															"font-semibold leading-none tracking-normal transition-[height,max-width,padding,font-size,gap] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+															"h-9 max-w-[18rem] gap-1.5 px-2 text-[24px]",
+														)}
+													>
+														{selectedRepository ? (
+															<>
+																<WorkspaceAvatar
+																	repoIconSrc={selectedRepository.repoIconSrc}
+																	repoInitials={selectedRepository.repoInitials}
+																	repoName={selectedRepository.name}
+																	title={selectedRepository.name}
+																	className={cn(
+																		"rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+																		"size-6",
+																	)}
+																	fallbackClassName="text-[9px]"
+																/>
+																<span className="min-w-0 truncate">
+																	{selectedRepository.name}
+																</span>
+																<ChevronDown
+																	className={cn(
+																		"shrink-0 text-muted-foreground transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+																		"size-4",
+																	)}
+																	strokeWidth={2}
+																/>
+															</>
+														) : (
+															<span className="text-muted-foreground">
+																a repository
+															</span>
+														)}
+													</Button>
+												</DropdownMenuTrigger>
+											</TooltipTrigger>
+											<TooltipContent
+												side="top"
+												sideOffset={4}
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+											>
+												<span>Switch repository</span>
+												<InlineShortcutDisplay
+													hotkey={SWITCH_REPOSITORY_SHORTCUT}
+													className="text-background/60"
+												/>
+											</TooltipContent>
+										</Tooltip>
+										<DropdownMenuContent align="center" className="min-w-56">
+											{repositories.map((repository) => (
+												<DropdownMenuItem
+													key={repository.id}
+													onClick={() => onSelectRepository(repository)}
+													className="gap-2"
+												>
+													<WorkspaceAvatar
+														repoIconSrc={repository.repoIconSrc}
+														repoInitials={repository.repoInitials}
+														repoName={repository.name}
+														title={repository.name}
+														className="size-5 rounded-md"
+														fallbackClassName="text-[8px]"
+													/>
+													<span className="min-w-0 flex-1 truncate">
+														{repository.name}
+													</span>
+												</DropdownMenuItem>
+											))}
+										</DropdownMenuContent>
+									</DropdownMenu>
+									<span
+										className={cn(
+											"inline-block overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+											previewCard
+												? "max-w-0 -translate-y-1 opacity-0"
+												: "max-w-[2rem] translate-y-0 opacity-100",
+										)}
+									>
+										?
+									</span>
+								</>
+							)}
 						</div>
 					</div>
 					<div className="w-full px-4">{children}</div>
@@ -380,7 +396,8 @@ export function WorkspaceStartPage({
 								: "-mt-5 h-7 translate-y-0 opacity-100",
 						)}
 					>
-						{previewCard ? (
+						{/* Preview-mode repo selector: hidden in chat mode (no repo). */}
+						{previewCard && mode !== "chat" ? (
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<button
@@ -440,11 +457,18 @@ export function WorkspaceStartPage({
 									<DropdownMenuTrigger asChild>
 										<button
 											type="button"
-											disabled={!selectedRepository}
+											// Chat mode is always enabled (no repo needed);
+											// other modes require a selected repository.
+											disabled={mode !== "chat" && !selectedRepository}
 											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											{mode === "local" ? (
 												<Laptop
+													className="size-3.5 shrink-0"
+													strokeWidth={1.8}
+												/>
+											) : mode === "chat" ? (
+												<MessageCircle
 													className="size-3.5 shrink-0"
 													strokeWidth={1.8}
 												/>
@@ -455,7 +479,11 @@ export function WorkspaceStartPage({
 												/>
 											)}
 											<span>
-												{mode === "local" ? "Work locally" : "New worktree"}
+												{mode === "local"
+													? "Work locally"
+													: mode === "chat"
+														? "Just chat"
+														: "New worktree"}
 											</span>
 											<ChevronDown
 												className="size-3 shrink-0 text-muted-foreground"
@@ -488,6 +516,14 @@ export function WorkspaceStartPage({
 								>
 									<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
 									<span>New worktree</span>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => onModeChange("chat")}
+									className="gap-2 pr-3"
+									data-checked={mode === "chat" ? "true" : undefined}
+								>
+									<MessageCircle className="size-3.5" strokeWidth={1.8} />
+									<span>Just chat</span>
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -569,78 +605,83 @@ export function WorkspaceStartPage({
 								</DropdownMenuContent>
 							</DropdownMenu>
 						) : null}
-						<Tooltip>
-							<BranchPickerPopover
-								currentBranch={selectedBranch}
-								entries={branches}
-								loading={branchesLoading}
-								onOpen={onOpenBranchPicker}
-								onSelect={onSelectBranch}
-								renderFooter={
-									mode === "local" && onCreateAndCheckoutBranch
-										? ({ close }) => (
-												<button
-													type="button"
-													className="flex w-full cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-													onClick={() => {
-														close();
-														setCreateBranchOpen(true);
-													}}
-												>
-													<Plus className="size-3.5" strokeWidth={2} />
-													<span>Create and checkout new branch…</span>
-												</button>
-											)
-										: undefined
-								}
-							>
-								<TooltipTrigger asChild>
-									<button
-										type="button"
-										disabled={!selectedRepository}
-										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+						{/* Branch picker: hidden in chat mode (no branches). */}
+						{mode !== "chat" ? (
+							<>
+								<Tooltip>
+									<BranchPickerPopover
+										currentBranch={selectedBranch}
+										entries={branches}
+										loading={branchesLoading}
+										onOpen={onOpenBranchPicker}
+										onSelect={onSelectBranch}
+										renderFooter={
+											mode === "local" && onCreateAndCheckoutBranch
+												? ({ close }) => (
+														<button
+															type="button"
+															className="flex w-full cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+															onClick={() => {
+																close();
+																setCreateBranchOpen(true);
+															}}
+														>
+															<Plus className="size-3.5" strokeWidth={2} />
+															<span>Create and checkout new branch…</span>
+														</button>
+													)
+												: undefined
+										}
 									>
-										<GitBranch
-											className="size-3.5 shrink-0"
-											strokeWidth={1.8}
-										/>
-										<span className="min-w-0 truncate">
-											{/* Pill prefix follows the resolved source of the selected
-											 *  branch: `origin/<x>` when it'll come from remote,
-											 *  bare `<x>` when from local. */}
-											{selectedBranchSource === "remote"
-												? `${selectedRepository?.remote ?? "origin"}/${selectedBranch}`
-												: selectedBranch}
-										</span>
-										<ChevronDown
-											className="size-3 shrink-0 text-muted-foreground"
-											strokeWidth={2}
-										/>
-									</button>
-								</TooltipTrigger>
-							</BranchPickerPopover>
-							<TooltipContent
-								side="top"
-								sideOffset={4}
-								className="rounded-md px-2 text-[12px] leading-none"
-							>
-								{mode === "local"
-									? "Switch branch"
-									: branchIntent === "use_branch"
-										? "Branch to reuse"
-										: "Base to fork off"}
-							</TooltipContent>
-						</Tooltip>
-						<CreateBranchDialog
-							open={createBranchOpen}
-							onOpenChange={setCreateBranchOpen}
-							defaultPrefix={defaultBranchPrefix(selectedRepository)}
-							existingBranches={branches.map((b) => b.name)}
-							onSubmit={async (branch) => {
-								if (!onCreateAndCheckoutBranch) return;
-								await onCreateAndCheckoutBranch(branch);
-							}}
-						/>
+										<TooltipTrigger asChild>
+											<button
+												type="button"
+												disabled={!selectedRepository}
+												className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											>
+												<GitBranch
+													className="size-3.5 shrink-0"
+													strokeWidth={1.8}
+												/>
+												<span className="min-w-0 truncate">
+													{/* Pill prefix follows the resolved source of the
+													 *  selected branch: `origin/<x>` when it'll come
+													 *  from remote, bare `<x>` when from local. */}
+													{selectedBranchSource === "remote"
+														? `${selectedRepository?.remote ?? "origin"}/${selectedBranch}`
+														: selectedBranch}
+												</span>
+												<ChevronDown
+													className="size-3 shrink-0 text-muted-foreground"
+													strokeWidth={2}
+												/>
+											</button>
+										</TooltipTrigger>
+									</BranchPickerPopover>
+									<TooltipContent
+										side="top"
+										sideOffset={4}
+										className="rounded-md px-2 text-[12px] leading-none"
+									>
+										{mode === "local"
+											? "Switch branch"
+											: branchIntent === "use_branch"
+												? "Branch to reuse"
+												: "Base to fork off"}
+									</TooltipContent>
+								</Tooltip>
+								<CreateBranchDialog
+									open={createBranchOpen}
+									onOpenChange={setCreateBranchOpen}
+									defaultPrefix={defaultBranchPrefix(selectedRepository)}
+									existingBranches={branches.map((b) => b.name)}
+									onSubmit={async (branch) => {
+										if (!onCreateAndCheckoutBranch) return;
+										await onCreateAndCheckoutBranch(branch);
+									}}
+								/>
+							</>
+						) : null}
 					</div>
 				</div>
 			</div>

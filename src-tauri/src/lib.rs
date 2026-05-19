@@ -96,6 +96,13 @@ pub fn run() {
             // Build read/write connection pools (must happen after schema).
             db::init_pools()?;
 
+            // Refresh the synthetic chat repo's display name in case the
+            // canonical value moved between releases. No-op for installs
+            // that have never created a chat workspace (no row to update).
+            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
+                tracing::warn!(%error, "Failed to refresh chat repo name");
+            }
+
             tracing::info!(
                 mode = data_dir::data_mode_label(),
                 data = %db_path.display(),
@@ -243,6 +250,7 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_chat_workspace,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,

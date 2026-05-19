@@ -628,12 +628,23 @@ export function WorkspaceEditorSurface({
 		};
 	}, [canRenderDiff, canRenderFile, editorSession, workspaceRootPath]);
 
+	// Reclaim focus on mount AND on every file/kind switch — without it, a click
+	// in the changes list (a tabIndex={0} row outside any focus-scope) leaves
+	// keyboard focus on that row and editor-scoped shortcuts (Cmd+E/T/W) stop
+	// firing. The `surface.contains(activeElement)` guard means we only step in
+	// when focus is currently outside the editor — typing inside Monaco isn't
+	// disturbed by tab switches.
 	useEffect(() => {
 		const surface = surfaceRef.current;
 		if (!surface) return;
 		if (surface.contains(document.activeElement)) return;
+		const controller = fileControllerRef.current ?? diffControllerRef.current;
+		if (controller) {
+			controller.focus();
+			return;
+		}
 		surface.focus({ preventScroll: true });
-	}, []);
+	}, [editorSession.path, editorSession.kind]);
 
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).
@@ -743,6 +754,18 @@ export function WorkspaceEditorSurface({
 			return;
 		}
 
+		// Note: there is intentionally no diff fast path. setValue() on an
+		// existing diff model defers diff computation to Monaco's worker, so
+		// the first paint after a path switch shows the new text without
+		// hunk decorations / line gutters — visually "incomplete first
+		// frame, complete second frame". createDiffEditor() computes the
+		// diff synchronously during construction, so the slow path (dispose
+		// + recreate) is what gives the "one-shot, fully-rendered first
+		// frame" behavior users expect. Since the Monaco runtime is cached
+		// after first use, the dispose+create round-trip resolves inside
+		// the same microtask burst (no blank paint), so we pay no visual
+		// cost for keeping diff on the slow path.
+
 		// ── Guard: need content for initial editor creation ──
 		if (!canRenderFile && !canRenderDiff) {
 			return;
@@ -800,6 +823,13 @@ export function WorkspaceEditorSurface({
 							});
 						},
 					);
+					// Slow path drops focus during the dispose→create cycle. If
+					// the user hasn't moved focus elsewhere while we were async,
+					// reclaim it so editor-scoped shortcuts work without a click.
+					const surface = surfaceRef.current;
+					if (surface && !surface.contains(document.activeElement)) {
+						controller.focus();
+					}
 					setSurfaceStatus({ kind: "ready" });
 				} catch (error) {
 					const message = describeUnknownError(
@@ -828,6 +858,10 @@ export function WorkspaceEditorSurface({
 					}
 
 					diffControllerRef.current = controller;
+					const surface = surfaceRef.current;
+					if (surface && !surface.contains(document.activeElement)) {
+						controller.focus();
+					}
 					setSurfaceStatus({ kind: "ready" });
 				} catch (error) {
 					const message = describeUnknownError(

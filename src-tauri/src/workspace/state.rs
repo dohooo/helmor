@@ -91,13 +91,16 @@ pub const OPERATIONAL_FILTER: &str = "NOT IN ('archived', 'initializing')";
 /// dedicated `git worktree` directory with its own auto-named branch
 /// (default + most-common). `Local` = operate directly on the source
 /// repo's root path; multiple Local workspaces can coexist as parallel
-/// conversations over the same disk.
+/// conversations over the same disk. `Chat` = a scratch directory with
+/// no git binding at all — used for "Just Chat" sessions that aren't
+/// tied to any repository.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceMode {
     #[default]
     Worktree,
     Local,
+    Chat,
 }
 
 impl WorkspaceMode {
@@ -105,7 +108,16 @@ impl WorkspaceMode {
         match self {
             Self::Worktree => "worktree",
             Self::Local => "local",
+            Self::Chat => "chat",
         }
+    }
+
+    /// True when the workspace has no git context (no repo, no branch,
+    /// no worktree). Chat-mode workspaces are the only such variant
+    /// today. Used by code paths that should early-return on chat
+    /// workspaces (git status watcher, branch ops, PR sync, etc.).
+    pub const fn is_chat(&self) -> bool {
+        matches!(self, Self::Chat)
     }
 }
 
@@ -133,6 +145,7 @@ impl FromStr for WorkspaceMode {
         match s {
             "worktree" => Ok(Self::Worktree),
             "local" => Ok(Self::Local),
+            "chat" => Ok(Self::Chat),
             other => Err(UnknownWorkspaceMode(other.to_string())),
         }
     }

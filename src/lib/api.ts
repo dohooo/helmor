@@ -1460,8 +1460,14 @@ export async function moveLocalWorkspaceToWorktree(
 	);
 }
 
-/** How a workspace's filesystem is provisioned. */
-export type WorkspaceMode = "worktree" | "local";
+/**
+ * How a workspace's filesystem is provisioned.
+ * - `worktree`: a dedicated git worktree with its own auto-named branch.
+ * - `local`: operates directly on the source repo's root path.
+ * - `chat`: a scratch dir under `<data_dir>/chats/<YYYY-MM-DD>/<name>`
+ *   with no git context. "Just Chat" mode from the start page.
+ */
+export type WorkspaceMode = "worktree" | "local" | "chat";
 
 /** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
 export type WorkspaceBranchIntent = "from_branch" | "use_branch";
@@ -2347,6 +2353,21 @@ export async function finalizeWorkspaceFromRepo(
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+	});
+}
+
+/**
+ * One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+ * bound to any repo — they're a scratch dir under
+ * `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+ * AI chat session. No `finalize_*` follow-up — the row is `ready`
+ * immediately.
+ */
+export async function prepareChatWorkspace(
+	initialStatus?: WorkspaceStatus | null,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_chat_workspace", {
+		initialStatus: initialStatus ?? null,
 	});
 }
 

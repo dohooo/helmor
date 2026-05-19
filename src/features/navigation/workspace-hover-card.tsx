@@ -7,6 +7,7 @@ import {
 	GitBranch,
 	GitPullRequest,
 	type LucideIcon,
+	MessageCircle,
 } from "lucide-react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
@@ -582,6 +583,11 @@ export function WorkspaceHoverCard({
 								repoName={row.repoName}
 								title={title}
 								className="size-4 rounded-[4px]"
+								fallbackIcon={
+									row.mode === "chat" ? (
+										<MessageCircle className="size-[10px]" strokeWidth={1.9} />
+									) : undefined
+								}
 							/>
 							{subtitle ? (
 								<span className="truncate text-[11px] text-muted-foreground">
@@ -589,17 +595,22 @@ export function WorkspaceHoverCard({
 								</span>
 							) : null}
 						</div>
-						<div className="mt-0.5 flex shrink-0 items-center gap-2">
-							<GitStats workspaceId={row.id} />
-							<span
-								aria-label={statusDot.label}
-								title={statusDot.label}
-								className={cn(
-									"size-2 shrink-0 rounded-full",
-									statusDot.dotClass,
-								)}
-							/>
-						</div>
+						{/* Chat workspaces have no git context and no kanban
+						 *  status — the entire right-side cluster (branch +
+						 *  diff chips + status dot) is meaningless for them. */}
+						{row.mode !== "chat" ? (
+							<div className="mt-0.5 flex shrink-0 items-center gap-2">
+								<GitStats workspaceId={row.id} />
+								<span
+									aria-label={statusDot.label}
+									title={statusDot.label}
+									className={cn(
+										"size-2 shrink-0 rounded-full",
+										statusDot.dotClass,
+									)}
+								/>
+							</div>
+						) : null}
 					</div>
 
 					{/* Title row + Helmor logo + elapsed timer (when streaming). */}

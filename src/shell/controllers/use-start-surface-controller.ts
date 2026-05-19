@@ -21,6 +21,7 @@ import {
 	prewarmSlashCommandsForRepo,
 	type RepositoryCreateOption,
 	type WorkspaceBranchIntent,
+	type WorkspaceDetail,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { extractError } from "@/lib/errors";
@@ -386,7 +387,9 @@ export function useStartSurfaceController(
 			payload: ComposerSubmitPayload,
 			options?: { startSubmitMode?: StartSubmitMode },
 		): Promise<ComposerCreatePrepareOutcome> => {
-			if (!startRepository?.id) {
+			// Chat mode doesn't require a repo selection — every other
+			// mode does.
+			if (startMode !== "chat" && !startRepository?.id) {
 				pushToastRef.current(
 					"Pick a repository before sending.",
 					"Can't create workspace",
@@ -395,7 +398,7 @@ export function useStartSurfaceController(
 			}
 
 			try {
-				if (startPendingNewBranch) {
+				if (startMode !== "chat" && startPendingNewBranch && startRepository) {
 					await createAndCheckoutBranch(
 						startRepository.id,
 						startPendingNewBranch,
@@ -409,10 +412,12 @@ export function useStartSurfaceController(
 					sessionId,
 					preparedWorkingDirectory,
 				} = await createWorkspaceFromStartComposer({
-					repoId: startRepository.id,
-					sourceBranch: startSourceBranch,
+					// Chat mode ignores repoId/sourceBranch — pass empty
+					// strings so the function signature stays the same.
+					repoId: startRepository?.id ?? "",
+					sourceBranch: startMode === "chat" ? "" : startSourceBranch,
 					mode: startMode,
-					// Local mode ignores `branchIntent`; only forward in worktree.
+					// Only worktree mode honors branchIntent.
 					branchIntent:
 						startMode === "worktree" ? startBranchIntent : undefined,
 					submitMode: options?.startSubmitMode ?? "startNow",
@@ -428,6 +433,38 @@ export function useStartSurfaceController(
 				// Picks belonged to the in-flight create; clear regardless of
 				// outcome so the next start-page session begins clean.
 				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
+
+				// Chat workspaces ship as `ready` from a single-phase prep,
+				// so a real WorkspaceDetail isn't materialised until the
+				// follow-up query roundtrips. Without something in the
+				// detail cache, the inspector pane reads `mode === undefined`
+				// → renders one frame → re-renders with `mode === "chat"`
+				// → vanishes. Seed a minimal synthetic detail with the
+				// fields the inspector gate checks; the real fetch
+				// overwrites it shortly after.
+				if (startMode === "chat") {
+					const synthetic: WorkspaceDetail = {
+						id: workspaceId,
+						title: "New chat",
+						repoId: "",
+						repoName: "Chats",
+						directoryName: "",
+						state: "ready",
+						hasUnread: false,
+						workspaceUnread: 0,
+						unreadSessionCount: 0,
+						status: "in-progress",
+						mode: "chat",
+						sessionCount: 1,
+						messageCount: 0,
+						rootPath: preparedWorkingDirectory ?? null,
+						activeSessionId: sessionId,
+					};
+					queryClient.setQueryData<WorkspaceDetail | null>(
+						helmorQueryKeys.workspaceDetail(workspaceId),
+						(existing) => existing ?? synthetic,
+					);
+				}
 
 				requestSidebarReconcile(queryClient);
 
@@ -530,9 +567,12 @@ export function useStartSurfaceController(
 		],
 	);
 
-	const startComposerContextKey = startRepository
-		? `start:repo:${startRepository.id}`
-		: "start:no-repo";
+	const startComposerContextKey =
+		startMode === "chat"
+			? "start:chat"
+			: startRepository
+				? `start:repo:${startRepository.id}`
+				: "start:no-repo";
 	const startComposerInsertTarget = useMemo(
 		() => ({ contextKey: startComposerContextKey }),
 		[startComposerContextKey],

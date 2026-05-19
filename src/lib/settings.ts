@@ -745,22 +745,43 @@ function parseStartSurfacePreferences(
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			return DEFAULT_START_SURFACE_PREFERENCES;
 		}
-		const o = parsed as Partial<StartSurfacePreferences>;
+		const o = parsed as Partial<StartSurfacePreferences> & {
+			mode?: unknown;
+			branchIntent?: unknown;
+		};
+		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
+		const modeByRepoId = parseEnumRecord(o.modeByRepoId, [
+			"worktree",
+			"local",
+			"chat",
+		] as const);
+		const branchIntentByRepoId = parseEnumRecord(o.branchIntentByRepoId, [
+			"from_branch",
+			"use_branch",
+		] as const);
+		if (repoId && !modeByRepoId[repoId]) {
+			const legacyMode =
+				o.mode === "worktree" || o.mode === "local" || o.mode === "chat"
+					? o.mode
+					: null;
+			if (legacyMode) modeByRepoId[repoId] = legacyMode;
+		}
+		if (repoId && !branchIntentByRepoId[repoId]) {
+			const legacyBranchIntent =
+				o.branchIntent === "from_branch" || o.branchIntent === "use_branch"
+					? o.branchIntent
+					: null;
+			if (legacyBranchIntent) branchIntentByRepoId[repoId] = legacyBranchIntent;
+		}
 		return {
 			createState:
 				o.createState === "backlog" || o.createState === "in-progress"
 					? o.createState
 					: DEFAULT_START_SURFACE_PREFERENCES.createState,
-			repoId: typeof o.repoId === "string" && o.repoId ? o.repoId : null,
+			repoId,
 			sourceBranchByRepoId: parseStringRecord(o.sourceBranchByRepoId),
-			modeByRepoId: parseEnumRecord(o.modeByRepoId, [
-				"worktree",
-				"local",
-			] as const),
-			branchIntentByRepoId: parseEnumRecord(o.branchIntentByRepoId, [
-				"from_branch",
-				"use_branch",
-			] as const),
+			modeByRepoId,
+			branchIntentByRepoId,
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;

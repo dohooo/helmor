@@ -1,7 +1,7 @@
 {
 	"items": [
 		{
-			"text": "Edit code right from the diff view, ⌘E flips between Diff and Edit."
+			"text": "You can now edit code right from the diff view."
 		}
 	]
 }

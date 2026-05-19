@@ -57,6 +57,8 @@ type FileEditorController = {
 	setValue(value: string): void;
 	setReadOnly(readOnly: boolean): void;
 	revealPosition(line?: number, column?: number): void;
+	/** Move keyboard focus into the editor's hidden textarea. */
+	focus(): void;
 	onDidChangeModelContent(callback: (value: string) => void): DisposableLike;
 	/** Swap the active model. Returns false if no cached model and no content provided. */
 	switchFile(
@@ -75,6 +77,8 @@ type DiffEditorController = {
 		modifiedText: string;
 		inline: boolean;
 	}): void;
+	/** Move keyboard focus into the modified-side textarea. */
+	focus(): void;
 };
 
 let runtimePromise: Promise<MonacoRuntime> | null = null;
@@ -180,6 +184,9 @@ export async function createFileEditor(options: {
 		},
 		revealPosition(line?: number, column?: number) {
 			revealEditorPosition(editor, line, column);
+		},
+		focus() {
+			editor.focus();
 		},
 		onDidChangeModelContent(callback) {
 			return currentModel.onDidChangeContent(() => {
@@ -305,6 +312,11 @@ export async function createDiffEditor(options: {
 				modifiedModel.setValue(modifiedText);
 			}
 			editor.updateOptions({ renderSideBySide: !inline });
+		},
+		focus() {
+			// Modified side carries the user's edits when they jump to Edit mode,
+			// so it's the more useful focus target than the read-only original.
+			editor.getModifiedEditor().focus();
 		},
 	};
 }

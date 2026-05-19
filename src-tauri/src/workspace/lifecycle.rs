@@ -398,6 +398,90 @@ pub fn prepare_local_workspace_impl(
     })
 }
 
+/// One-shot Chat workspace creation. Chat-mode workspaces aren't bound
+/// to any repository — they're a scratch directory under
+/// `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for an
+/// agent CLI session. No git init, no branch, no setup script — the
+/// row is inserted directly in `Ready` state and the caller can hand
+/// off to the agent immediately.
+///
+/// Returns a `PrepareWorkspaceResponse` shaped like the worktree/local
+/// equivalents so the frontend's optimistic-render code can reuse the
+/// same path. The companion `finalize_workspace_from_repo` is a no-op
+/// for chat workspaces (the row is already `Ready`).
+pub fn prepare_chat_workspace_impl(
+    initial_status: WorkspaceStatus,
+) -> Result<PrepareWorkspaceResponse> {
+    // Lazy-upsert the synthetic `__chat__` repo row on first chat
+    // creation. Doing it here (rather than at schema migration time)
+    // keeps `repos` empty for tests that don't touch the chat path and
+    // sidesteps schema-version juggling in legacy migration tests.
+    crate::repos::ensure_system_chat_repo()?;
+    let repository = repos::load_repository_by_id(crate::models::repos::SYSTEM_CHAT_REPO_ID)?
+        .with_context(|| {
+            format!(
+                "Synthetic chat repository row missing after upsert. id={}",
+                crate::models::repos::SYSTEM_CHAT_REPO_ID
+            )
+        })?;
+
+    let (directory_name, working_directory) = helpers::allocate_chat_workspace_dir()?;
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = db::current_timestamp()?;
+
+    // The scratch dir is already on disk; anything that fails from here
+    // on must clean it up before bubbling so retries don't accumulate
+    // empty `new-chat-N` directories.
+    if let Err(error) = workspace_models::insert_chat_workspace_and_session(
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        initial_status,
+        &timestamp,
+    ) {
+        let _ = fs::remove_dir_all(&working_directory);
+        return Err(error);
+    }
+
+    // Flip to Ready immediately — there's no worktree / setup phase.
+    if let Err(error) =
+        workspace_models::update_workspace_state(&workspace_id, WorkspaceState::Ready, &timestamp)
+    {
+        let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
+        let _ = fs::remove_dir_all(&working_directory);
+        return Err(error);
+    }
+
+    Ok(PrepareWorkspaceResponse {
+        workspace_id,
+        initial_session_id: session_id,
+        repo_id: repository.id,
+        repo_name: repository.name,
+        directory_name,
+        // Chat workspaces have no branch — empty string keeps the type
+        // shape stable for the frontend. The header gates on
+        // `workspace.mode === "chat"` and doesn't read this field.
+        branch: String::new(),
+        default_branch: String::new(),
+        state: WorkspaceState::Ready,
+        // No setup/run scripts for chat mode — return the empty shape.
+        repo_scripts: repos::RepoScripts {
+            setup_script: None,
+            run_script: None,
+            archive_script: None,
+            setup_from_project: false,
+            run_from_project: false,
+            archive_from_project: false,
+            auto_run_setup: false,
+            run_script_mode: "concurrent".to_string(),
+        },
+        working_directory: Some(working_directory.display().to_string()),
+        branch_intent: WorkspaceBranchIntent::UseBranch,
+    })
+}
+
 /// Phase 2 of workspace creation: creates the git worktree, probes
 /// `helmor.json` for a setup script, and
 /// upgrades the workspace row from `Initializing` to `Ready` /
@@ -409,12 +493,13 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    // Local workspaces never need worktree materialisation. Short-circuit
-    // unconditionally — even an orphaned `Initializing` local row (left by
-    // a partially-failed prepare) must not enter the worktree-creation
-    // path below, where a failure would route into
+    // Non-worktree workspaces never need worktree materialisation.
+    // Short-circuit unconditionally — even an orphaned `Initializing`
+    // row (left by a partially-failed prepare) must not enter the
+    // worktree-creation path below, where a failure would route into
     // `cleanup_failed_created_workspace(repo_root, root_path, ...)`.
-    if record.mode == WorkspaceMode::Local {
+    // Covers both Local (operates on user repo) and Chat (scratch dir).
+    if record.mode != WorkspaceMode::Worktree {
         let working_directory = helpers::workspace_path(&record)?.display().to_string();
         return Ok(FinalizeWorkspaceResponse {
             workspace_id: workspace_id.to_string(),
@@ -784,12 +869,16 @@ pub fn cleanup_orphaned_initializing_workspaces(max_age_seconds: i64) -> Result<
         let repo_root_value = record.root_path.as_deref().unwrap_or("").trim();
         let repo_root = PathBuf::from(repo_root_value);
         // Local-mode orphans: never touch the worktree path (it's the
-        // user's actual repo). Just remove the DB row.
-        if record.mode == crate::workspace_state::WorkspaceMode::Local {
+        // user's actual repo). Chat-mode orphans: the scratch dir is
+        // owned by helmor, but the cleanup logic below targets git
+        // worktrees only, so skip it too — the empty scratch dir is
+        // cheap to GC out-of-band.
+        if record.mode != crate::workspace_state::WorkspaceMode::Worktree {
             let _ = workspace_models::delete_workspace_and_session_rows(&record.id);
             tracing::info!(
                 workspace_id = %record.id,
-                "Cleaned up orphaned initializing local workspace (DB only)",
+                mode = %record.mode,
+                "Cleaned up orphaned initializing non-worktree workspace (DB only)",
             );
             continue;
         }
@@ -942,6 +1031,21 @@ pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
         );
     }
 
+    // Chat workspaces have no repo / branch / git worktree — archive is
+    // a pure DB state flip. Return a placeholder plan so the manager's
+    // prepared/start handshake still works; `execute_archive_plan`
+    // short-circuits before touching any of these fields when
+    // `mode != Worktree`.
+    if record.mode != WorkspaceMode::Worktree {
+        let workspace_dir = helpers::workspace_path(&record).unwrap_or_default();
+        return Ok(ArchivePreparedPlan {
+            workspace_id: workspace_id.to_string(),
+            repo_root: PathBuf::new(),
+            branch: String::new(),
+            workspace_dir,
+        });
+    }
+
     let repo_root = helpers::non_empty(&record.root_path)
         .map(PathBuf::from)
         .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
@@ -983,11 +1087,12 @@ pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
 }
 
 pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
-    // Local workspaces: archive is purely a DB state flip. We MUST NOT
-    // touch the worktree (it's the user's repo) or delete the branch
-    // (the user / other local workspaces may still be using it).
+    // Non-worktree workspaces: archive is purely a DB state flip. We
+    // MUST NOT touch the worktree (Local: it's the user's repo; Chat:
+    // it's a scratch dir we'd rather keep around for diagnostic
+    // reasons) or delete branches.
     if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
-        if record.mode == WorkspaceMode::Local {
+        if record.mode != WorkspaceMode::Worktree {
             if !is_archive_eligible_state(record.state) {
                 bail!(
                     "Workspace is not archive-ready: {workspace_id} (state: {})",
@@ -1013,16 +1118,17 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     let workspace_dir = &plan.workspace_dir;
     let workspace_id = &plan.workspace_id;
 
-    // CRITICAL safety check: for local-mode workspaces, `workspace_dir`
-    // IS the user's repo root. The downstream `remove_worktree` would
-    // rename + delete the user's repo. Short-circuit to a DB-only flip
-    // here BEFORE we touch anything on disk. The frontend's
+    // CRITICAL safety check: for non-worktree workspaces, `workspace_dir`
+    // points at something we must not blow away (Local: the user's repo;
+    // Chat: helmor's scratch dir). The downstream `remove_worktree`
+    // would rename + delete it. Short-circuit to a DB-only flip here
+    // BEFORE we touch anything on disk. The frontend's
     // `archive_workspace_impl` already does this; this is a second
     // line of defence for the archive path that goes through
     // `prepare_archive_plan` + this function.
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?;
     if let Some(record) = record.as_ref() {
-        if record.mode == WorkspaceMode::Local {
+        if record.mode != WorkspaceMode::Worktree {
             workspace_models::update_archived_workspace_state(workspace_id, "")?;
             return Ok(ArchiveWorkspaceResponse {
                 archived_workspace_id: workspace_id.clone(),
@@ -1172,9 +1278,9 @@ pub fn validate_restore_workspace(workspace_id: &str) -> Result<ValidateRestoreR
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    // Local restore is a pure DB state flip — no git involved, so no
-    // target-branch conflict is ever possible.
-    if record.mode == WorkspaceMode::Local {
+    // Non-worktree restore is a pure DB state flip — no git involved,
+    // so no target-branch conflict is ever possible.
+    if record.mode != WorkspaceMode::Worktree {
         return Ok(ValidateRestoreResponse {
             target_branch_conflict: None,
         });
@@ -1220,10 +1326,10 @@ pub fn restore_workspace_impl(
     workspace_id: &str,
     target_branch_override: Option<&str>,
 ) -> Result<RestoreWorkspaceResponse> {
-    // Local workspaces aren't materialised as a worktree — restoring
-    // one is purely a DB state flip. Skip every git operation (branch
-    // creation, worktree creation, archive_commit verification, …)
-    // that the worktree path performs.
+    // Non-worktree workspaces aren't materialised as a worktree —
+    // restoring one is purely a DB state flip. Skip every git
+    // operation (branch creation, worktree creation, archive_commit
+    // verification, …) that the worktree path performs.
     {
         let record = workspace_models::load_workspace_record_by_id(workspace_id)?
             .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
@@ -1231,7 +1337,7 @@ pub fn restore_workspace_impl(
         if record.state != WorkspaceState::Archived {
             bail!("Workspace is not archived: {workspace_id}");
         }
-        if record.mode == WorkspaceMode::Local {
+        if record.mode != WorkspaceMode::Worktree {
             workspace_models::update_restored_workspace_state(
                 workspace_id,
                 target_branch_override,

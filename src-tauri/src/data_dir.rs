@@ -52,6 +52,17 @@ pub fn workspaces_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Returns the chats directory inside the data dir. Houses Chat-mode
+/// workspaces — scratch dirs grouped by local date (`<chats>/YYYY-MM-DD/`)
+/// because chat workspaces aren't bound to any repository.
+pub fn chats_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("chats");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create chats directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the logs directory inside the data dir.
 pub fn logs_dir() -> Result<PathBuf> {
     let dir = data_dir()?.join("logs");
@@ -160,6 +171,7 @@ fn dirs_home() -> Option<PathBuf> {
 pub fn ensure_directory_structure() -> Result<()> {
     data_dir()?;
     workspaces_dir()?;
+    chats_dir()?;
     logs_dir()?;
     run_dir()?;
     generated_images_dir()?;
