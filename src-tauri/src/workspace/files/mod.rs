@@ -3,6 +3,7 @@ mod editor;
 mod search;
 mod support;
 mod types;
+mod watcher;
 
 pub use changes::{
     discard_workspace_file, discard_workspace_file_inner, list_workspace_changes,
@@ -20,6 +21,7 @@ pub use types::{
     EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
     EditorFileWriteResponse, EditorFilesWithContentResponse,
 };
+pub use watcher::{FileChange, FileChangeKind, FileWatcher, DEFAULT_DEBOUNCE};
 
 #[cfg(test)]
 mod tests;

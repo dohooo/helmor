@@ -794,6 +794,83 @@ impl RpcMethod for WorkspaceSearchMethod {
     type Result = WorkspaceSearchResult;
 }
 
+// ── workspace.startWatch / stopWatch (phase 24f — wire shape) ────────
+//
+// Defines the wire vocabulary for a future remote file watcher. The
+// kernel — [`crate::workspace::files::FileWatcher`] — is shipped
+// today and has full unit-test coverage; binding it to a daemon-side
+// subscription + a desktop-side React Query invalidation is a
+// follow-on slice. Surfacing the types here means future work flips
+// the dispatch on a single switch instead of co-locating a new
+// wire-format change with the wiring change.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStartWatchParams {
+    /// Workspace root on the runtime's filesystem.
+    pub workspace_dir: String,
+    /// Client-chosen watch id. Used by `workspace.stopWatch` and
+    /// to key the per-event notification stream. Must be unique
+    /// within a connection — the server rejects duplicates with
+    /// `INVALID_PARAMS`.
+    pub watch_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStartWatchResult {
+    /// Echo the `watch_id` so a future tagged-response pipeline can
+    /// correlate without keeping client-side request state. Empty
+    /// when the watcher couldn't start (the surface returns
+    /// `HANDLER_FAILED` in that case, so `watch_id` is always
+    /// `Some` here — the field exists for forward compatibility).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub watch_id: String,
+}
+
+pub struct WorkspaceStartWatchMethod;
+impl RpcMethod for WorkspaceStartWatchMethod {
+    const NAME: &'static str = "workspace.startWatch";
+    type Params = WorkspaceStartWatchParams;
+    type Result = WorkspaceStartWatchResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStopWatchParams {
+    pub watch_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStopWatchResult {
+    /// `false` when no watcher with `watch_id` was running on this
+    /// connection — clients use it to debug a lost handle.
+    #[serde(default)]
+    pub stopped: bool,
+}
+
+pub struct WorkspaceStopWatchMethod;
+impl RpcMethod for WorkspaceStopWatchMethod {
+    const NAME: &'static str = "workspace.stopWatch";
+    type Params = WorkspaceStopWatchParams;
+    type Result = WorkspaceStopWatchResult;
+}
+
+/// Server-pushed notification fired for every debounced batch of
+/// file changes the watcher observed. Keyed by the same `watch_id`
+/// the client picked on `startWatch` so multiple concurrent
+/// watchers per connection don't cross-talk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileEventNotification {
+    pub watch_id: String,
+    pub changes: Vec<crate::workspace::files::FileChange>,
+}
+
+/// JSON-RPC method name for [`WorkspaceFileEventNotification`].
+pub const WORKSPACE_FILE_EVENT_METHOD: &str = "workspace.fileEvent";
+
 // ── agent.send / agent.abort / agent.list / agent.attach (phase 23a) ──
 //
 // `SidecarRequest` is the existing local-sidecar envelope (id + method
@@ -1514,6 +1591,73 @@ mod tests {
         // rename in one place fails the test in the other.
         assert_eq!(WorkspaceSearchMethod::NAME, "workspace.search");
         assert_eq!(Method::WorkspaceSearch.as_str(), "workspace.search");
+    }
+
+    // ── workspace.startWatch / stopWatch wire shapes (phase 24f) ──
+
+    #[test]
+    fn workspace_start_watch_params_round_trip_with_camel_case() {
+        let params = WorkspaceStartWatchParams {
+            workspace_dir: "/srv/repo".into(),
+            watch_id: "watch-1".into(),
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"workspaceDir\""));
+        assert!(wire.contains("\"watchId\":\"watch-1\""));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+        let restored: WorkspaceStartWatchParams = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.workspace_dir, "/srv/repo");
+        assert_eq!(restored.watch_id, "watch-1");
+    }
+
+    #[test]
+    fn workspace_stop_watch_result_serialises_stopped_flag() {
+        let yes = WorkspaceStopWatchResult { stopped: true };
+        let wire = serde_json::to_string(&yes).unwrap();
+        assert!(wire.contains("\"stopped\":true"));
+        let no = WorkspaceStopWatchResult { stopped: false };
+        let wire = serde_json::to_string(&no).unwrap();
+        let restored: WorkspaceStopWatchResult = serde_json::from_str(&wire).unwrap();
+        assert!(!restored.stopped);
+    }
+
+    #[test]
+    fn workspace_file_event_notification_carries_changes() {
+        // The notification's wire shape feeds the
+        // `workspace.fileEvent` JSON-RPC notification stream the
+        // desktop will subscribe to once the wire dispatch lands.
+        let notification = WorkspaceFileEventNotification {
+            watch_id: "w-7".into(),
+            changes: vec![
+                crate::workspace::files::FileChange {
+                    path: "src/main.rs".into(),
+                    kind: crate::workspace::files::FileChangeKind::Modified,
+                },
+                crate::workspace::files::FileChange {
+                    path: "Cargo.lock".into(),
+                    kind: crate::workspace::files::FileChangeKind::Added,
+                },
+            ],
+        };
+        let wire = serde_json::to_string(&notification).unwrap();
+        assert!(wire.contains("\"watchId\":\"w-7\""));
+        // FileChange uses camelCase via its serde rename attr.
+        assert!(wire.contains("\"path\":\"src/main.rs\""));
+        assert!(wire.contains("\"kind\":\"modified\""));
+        assert!(wire.contains("\"kind\":\"added\""));
+        let restored: WorkspaceFileEventNotification = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.watch_id, "w-7");
+        assert_eq!(restored.changes.len(), 2);
+    }
+
+    #[test]
+    fn workspace_watch_method_constants_match_the_catalogue() {
+        // Lock the method names to their RpcMethod::NAME so a
+        // future rename in one place breaks the test rather than
+        // letting the wire silently drift.
+        assert_eq!(WorkspaceStartWatchMethod::NAME, "workspace.startWatch");
+        assert_eq!(WorkspaceStopWatchMethod::NAME, "workspace.stopWatch");
+        assert_eq!(WORKSPACE_FILE_EVENT_METHOD, "workspace.fileEvent");
     }
 
     // ── agent.* wire shapes (phase 23a) ───────────────────────────
