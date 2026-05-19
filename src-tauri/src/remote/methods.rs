@@ -96,6 +96,15 @@ pub enum Method {
     /// line numbers + match text the frontend's "Search files"
     /// panel renders directly.
     WorkspaceSearch,
+    /// Start a recursive file watcher on `workspace_dir`. Returns
+    /// immediately; subsequent file changes flow as server-pushed
+    /// `workspace.fileEvent` notifications keyed by the same
+    /// `watch_id`.
+    WorkspaceStartWatch,
+    /// Stop a live workspace file watcher by `watch_id`. Returns
+    /// `stopped=false` when the id was never registered (the
+    /// desktop uses it to detect stale handles).
+    WorkspaceStopWatch,
     /// Forward an opaque `SidecarRequest` (sendMessage / abort /
     /// resolveUserInput / generateTitle / …) to the daemon's
     /// managed sidecar process. Events flow back as
@@ -145,6 +154,8 @@ impl Method {
             Self::WorkspaceStatFile => "workspace.statFile",
             Self::WorkspaceMutateFile => "workspace.mutateFile",
             Self::WorkspaceSearch => "workspace.search",
+            Self::WorkspaceStartWatch => "workspace.startWatch",
+            Self::WorkspaceStopWatch => "workspace.stopWatch",
             Self::AgentSend => "agent.send",
             Self::AgentAbort => "agent.abort",
             Self::AgentList => "agent.list",
@@ -190,6 +201,8 @@ impl FromStr for Method {
             "workspace.statFile" => Ok(Self::WorkspaceStatFile),
             "workspace.mutateFile" => Ok(Self::WorkspaceMutateFile),
             "workspace.search" => Ok(Self::WorkspaceSearch),
+            "workspace.startWatch" => Ok(Self::WorkspaceStartWatch),
+            "workspace.stopWatch" => Ok(Self::WorkspaceStopWatch),
             "agent.send" => Ok(Self::AgentSend),
             "agent.abort" => Ok(Self::AgentAbort),
             "agent.list" => Ok(Self::AgentList),
@@ -1087,6 +1100,8 @@ mod tests {
             Method::WorkspaceStatFile,
             Method::WorkspaceMutateFile,
             Method::WorkspaceSearch,
+            Method::WorkspaceStartWatch,
+            Method::WorkspaceStopWatch,
             Method::AgentSend,
             Method::AgentAbort,
             Method::AgentList,

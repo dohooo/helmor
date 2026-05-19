@@ -53,6 +53,7 @@ import { useShellPanels } from "@/shell/hooks/use-panels";
 import { usePullLatest } from "@/shell/hooks/use-pull-latest";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
+import { useWorkspaceFileWatch } from "@/shell/hooks/use-workspace-file-watch";
 import {
 	findAdjacentSessionId,
 	findAdjacentWorkspaceId,
@@ -717,6 +718,18 @@ function AppShell({
 		selectedWorkspaceDetail?.state === "archived"
 			? null
 			: (selectedWorkspaceDetail?.rootPath ?? null);
+
+	// Phase 24g: drive a file watcher for the currently-open workspace
+	// so the inspector's React Query keys (changes / fileTree / git
+	// status) invalidate on every debounced batch of file changes.
+	// `runtimeName` picks the local FileWatcher (None / "local") vs
+	// a remote-bound watcher dispatched over SSH; the desktop side
+	// publishes `WorkspaceFilesChanged` either way.
+	useWorkspaceFileWatch({
+		workspaceId: selectedWorkspaceId,
+		workspaceDir: workspaceRootPath,
+		runtimeName: selectedWorkspaceDetail?.runtimeName ?? null,
+	});
 
 	const { state: editorSessionState, actions: editorSessionActions } =
 		useEditorSessionController({

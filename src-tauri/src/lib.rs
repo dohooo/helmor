@@ -83,6 +83,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             commands::remote_commands::RemoteTerminalSubscriptions::new(),
         ))
+        .manage(std::sync::Arc::new(
+            commands::workspace_watch::WorkspaceFileWatchManager::new(),
+        ))
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -403,6 +406,8 @@ pub fn run() {
             commands::remote_commands::set_runtime_agent_auth,
             commands::remote_commands::set_workspace_runtime_binding,
             commands::remote_commands::write_remote_terminal,
+            commands::workspace_watch::start_workspace_watch,
+            commands::workspace_watch::stop_workspace_watch,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

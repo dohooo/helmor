@@ -624,6 +624,103 @@ fn notification_request_returns_no_response_even_on_error() {
     assert!(resp.is_none());
 }
 
+// ── workspace.startWatch / stopWatch dispatch (phase 24g) ─────
+
+#[test]
+fn workspace_start_watch_rejects_pre_initialize_requests() {
+    // The handshake gate must cover the new watch entry points
+    // — a probing client can't open a watcher before initialize.
+    let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+    let resp = dispatch_request(
+        &ctx,
+        request(
+            "workspace.startWatch",
+            json!({ "workspaceDir": "/tmp", "watchId": "w-1" }),
+            1,
+        ),
+    )
+    .unwrap();
+    let err = resp.error.expect("error response");
+    assert_eq!(err.code, error_codes::NOT_INITIALIZED);
+}
+
+#[test]
+fn workspace_start_watch_invalid_params_surfaces_invalid_params() {
+    // Both `workspaceDir` and `watchId` are required; omitting
+    // either should land as INVALID_PARAMS rather than reaching
+    // the handler (which would bail with a different message).
+    let ctx = default_bail_ctx();
+    let resp = run_after_initialize(
+        &ctx,
+        request("workspace.startWatch", json!({ "watchId": "w-1" }), 2),
+    );
+    let err = resp.error.expect("error response");
+    assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    assert!(
+        err.message.contains("`workspace.startWatch`"),
+        "error should name the method: {err:?}"
+    );
+}
+
+#[test]
+fn workspace_start_watch_runtime_failure_surfaces_as_handler_failed() {
+    // The handler reaches the `RemoteWatchState`, which validates
+    // params + spawns notify. A missing workspace_dir reaches
+    // canonicalize and fails — dispatcher converts the anyhow
+    // error into HANDLER_FAILED with the legible reason.
+    let ctx = default_bail_ctx();
+    let resp = run_after_initialize(
+        &ctx,
+        request(
+            "workspace.startWatch",
+            json!({
+                "workspaceDir": "/definitely/does/not/exist/12345",
+                "watchId": "w-1",
+            }),
+            2,
+        ),
+    );
+    let err = resp.error.expect("error response");
+    assert_eq!(err.code, error_codes::HANDLER_FAILED);
+    assert!(
+        err.message.starts_with("workspace.startWatch failed:"),
+        "error should mention the method: {err:?}"
+    );
+}
+
+#[test]
+fn workspace_stop_watch_unknown_id_returns_stopped_false_through_dispatch() {
+    // The wire contract: stopping a watcher that was never started
+    // surfaces as a successful response with stopped=false. Tests
+    // the full dispatch round-trip — params → handler → result
+    // envelope.
+    let ctx = default_bail_ctx();
+    let resp = run_after_initialize(
+        &ctx,
+        request(
+            "workspace.stopWatch",
+            json!({ "watchId": "never-started" }),
+            2,
+        ),
+    );
+    let result = resp.result.expect("ok response");
+    assert_eq!(result["stopped"], false);
+}
+
+#[test]
+fn workspace_stop_watch_pre_initialize_is_gated_too() {
+    // Same gate as every other method — even a no-op like
+    // "stop a non-existent watch" must require initialize first.
+    let ctx = ServerContext::with_runtime("0.22.1", "test-host", Arc::new(StubRuntime));
+    let resp = dispatch_request(
+        &ctx,
+        request("workspace.stopWatch", json!({ "watchId": "w-1" }), 1),
+    )
+    .unwrap();
+    let err = resp.error.expect("error response");
+    assert_eq!(err.code, error_codes::NOT_INITIALIZED);
+}
+
 // ── major_versions_match ──────────────────────────────────────
 
 #[test]
