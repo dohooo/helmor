@@ -1,7 +1,13 @@
 import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEntry, RuntimeHealth } from "@/lib/api";
+import type {
+	AgentReattachRequest,
+	AgentReattachResponse,
+	AgentStreamEvent,
+	RuntimeEntry,
+	RuntimeHealth,
+} from "@/lib/api";
 import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
@@ -32,6 +38,7 @@ const apiMocks = vi.hoisted(() => ({
 	attachRemoteAgentSession: vi.fn(),
 	reattachRemoteAgentSessionStream: vi.fn(),
 	releaseRemoteAgentStream: vi.fn(),
+	startAgentReattachStream: vi.fn(),
 	getRemoteRuntimeDiagnostics: vi.fn(),
 	startRemotePortForward: vi.fn(),
 	stopRemotePortForward: vi.fn(),
@@ -69,6 +76,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		attachRemoteAgentSession: apiMocks.attachRemoteAgentSession,
 		reattachRemoteAgentSessionStream: apiMocks.reattachRemoteAgentSessionStream,
 		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
+		startAgentReattachStream: apiMocks.startAgentReattachStream,
 		getRemoteRuntimeDiagnostics: apiMocks.getRemoteRuntimeDiagnostics,
 		startRemotePortForward: apiMocks.startRemotePortForward,
 		stopRemotePortForward: apiMocks.stopRemotePortForward,
@@ -142,6 +150,12 @@ describe("RuntimeDebugPanel", () => {
 			found: true,
 		});
 		apiMocks.releaseRemoteAgentStream.mockResolvedValue({ released: true });
+		// Default: chat-cooked reattach accepts and emits no events
+		// — individual tests override to capture the callback so
+		// they can drive scripted AgentStreamEvents through it.
+		apiMocks.startAgentReattachStream.mockResolvedValue({
+			accepted: true,
+		} satisfies AgentReattachResponse);
 		// Default: a minimal diagnostics snapshot that the
 		// Connection diagnostics section can render without
 		// crashing. Individual tests override with richer
@@ -1735,6 +1749,231 @@ describe("RuntimeDebugPanel", () => {
 				"req-streaming",
 			);
 		});
+	});
+
+	// ── Chat preview (phase 24l) ──────────────────────────────
+
+	it("agent sessions section: Chat preview button is disabled until the row reports a helmor session id", async () => {
+		// 24l's invariant: the cooked stream needs a helmor
+		// session id to know where to route messages. Sessions
+		// without one (anonymous test flows) still appear in the
+		// list, but the chat-preview affordance must stay
+		// disabled so the operator gets a tooltip instead of an
+		// RPC error.
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-anon",
+				helmorSessionId: null,
+				provider: "claude",
+				workspaceDir: "/srv/demo",
+				startedAtMs: Date.now() - 10_000,
+				lastEventMs: Date.now() - 200,
+			},
+		]);
+
+		renderPanel();
+		const previewButton = await screen.findByRole("button", {
+			name: /Open chat preview for req-anon/,
+		});
+		expect(previewButton).toBeDisabled();
+	});
+
+	it("agent sessions section: Chat preview pipes daemon AgentStreamEvents into the preview list", async () => {
+		// The full wiring test: click the Chat preview button,
+		// drive scripted AgentStreamEvent envelopes through the
+		// captured callback, and assert the preview rows render
+		// the cooked message text. This is the automatic
+		// counterpart to a manual SSH reattach.
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		let capturedRequest: AgentReattachRequest | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (
+				request: AgentReattachRequest,
+				cb: (event: AgentStreamEvent) => void,
+			) => {
+				capturedRequest = request;
+				onEvent = cb;
+				return { accepted: true } satisfies AgentReattachResponse;
+			},
+		);
+
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-chat-1",
+				helmorSessionId: "hs-chat-1",
+				provider: "claude",
+				workspaceDir: "/srv/demo",
+				startedAtMs: Date.now() - 5_000,
+				lastEventMs: Date.now() - 100,
+			},
+		]);
+
+		renderPanel();
+		await screen.findByText("req-chat-1");
+		await user.click(
+			screen.getByRole("button", { name: /Open chat preview for req-chat-1/ }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.startAgentReattachStream).toHaveBeenCalled();
+		});
+		// The request payload carries the row's identifiers verbatim
+		// so the backend can resolve the right transport.
+		expect(capturedRequest).toMatchObject({
+			requestId: "req-chat-1",
+			helmorSessionId: "hs-chat-1",
+			provider: "claude",
+			workingDirectory: "/srv/demo",
+		});
+		// The preview mounts as soon as start() resolves.
+		expect(
+			await screen.findByTestId("reattach-chat-preview"),
+		).toBeInTheDocument();
+
+		// Drive a streamingPartial → update → done sequence. The
+		// preview should accumulate the cooked message text and
+		// then surface the terminal label.
+		expect(onEvent).not.toBeNull();
+		await act(async () => {
+			onEvent?.({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", id: "p1", text: "thinking…" }],
+				},
+			});
+		});
+		expect(
+			(await screen.findByTestId("reattach-chat-preview-list")).textContent,
+		).toContain("thinking");
+
+		await act(async () => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						id: "m1",
+						role: "assistant",
+						content: [
+							{ type: "text", id: "t1", text: "Hello from the daemon." },
+						],
+					},
+				],
+			});
+		});
+		expect(
+			(await screen.findByTestId("reattach-chat-preview-list")).textContent,
+		).toContain("Hello from the daemon.");
+
+		await act(async () => {
+			onEvent?.({
+				kind: "done",
+				provider: "claude",
+				modelId: "claude-opus-4-7",
+				resolvedModel: "claude-opus-4-7",
+				sessionId: "sdk-session-7",
+				workingDirectory: "/srv/demo",
+				persisted: false,
+			});
+		});
+		// Terminal label is bubbled into the header so the operator
+		// knows the daemon emitted `result` rather than the connection
+		// dropping.
+		expect(
+			(await screen.findByTestId("reattach-chat-preview")).textContent,
+		).toMatch(/Turn finished/);
+	});
+
+	it("agent sessions section: Stop preview tears down the active chat stream", async () => {
+		// Stopping mid-stream returns the row to its default
+		// affordance and clears `currentRequestId` on the chat
+		// hook — verified by the button label flipping back.
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (
+				_request: AgentReattachRequest,
+				cb: (event: AgentStreamEvent) => void,
+			) => {
+				onEvent = cb;
+				return { accepted: true } satisfies AgentReattachResponse;
+			},
+		);
+
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-chat-stop",
+				helmorSessionId: "hs-chat-stop",
+				provider: "claude",
+				workspaceDir: "/srv/demo",
+				startedAtMs: Date.now() - 1_000,
+				lastEventMs: Date.now() - 50,
+			},
+		]);
+
+		renderPanel();
+		await screen.findByText("req-chat-stop");
+		await user.click(
+			screen.getByRole("button", {
+				name: /Open chat preview for req-chat-stop/,
+			}),
+		);
+		// Drive one event so the preview mounts.
+		await waitFor(() => expect(onEvent).not.toBeNull());
+		await act(async () => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "text", id: "x", text: "hi" }],
+					},
+				],
+			});
+		});
+		// Button flips to "Stop chat preview ..." while active.
+		const stopButton = await screen.findByRole("button", {
+			name: /Stop chat preview for req-chat-stop/,
+		});
+		await user.click(stopButton);
+
+		// Once stopped, the row's button reverts and the preview
+		// component drops the "streaming" header in favour of the
+		// idle "Chat preview" label.
+		await waitFor(() => {
+			expect(
+				screen.queryByRole("button", {
+					name: /Stop chat preview for req-chat-stop/,
+				}),
+			).toBeNull();
+		});
+		expect(
+			screen.getByRole("button", {
+				name: /Open chat preview for req-chat-stop/,
+			}),
+		).toBeInTheDocument();
 	});
 
 	it("agent sessions section: surfaces runtime errors instead of swallowing them", async () => {

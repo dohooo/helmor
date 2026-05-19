@@ -87,6 +87,14 @@ pub enum AgentStreamEvent {
     StreamingPartial {
         message: crate::pipeline::types::ThreadMessageLike,
     },
+    // serde's enum-level `rename_all` renames variant names but
+    // does NOT propagate into struct-variant fields, so each
+    // variant whose fields need camelCasing has to declare it
+    // itself. Drop the per-variant attribute and the wire shape
+    // silently regresses to snake_case while the TypeScript types
+    // keep claiming camelCase — caught by the 24l reattach
+    // integration test, not by the type checker.
+    #[serde(rename_all = "camelCase")]
     Done {
         provider: String,
         model_id: String,
@@ -98,6 +106,7 @@ pub enum AgentStreamEvent {
     /// User-initiated termination (stop button or app shutdown). The UI
     /// treats this as a non-error state. Persisted state includes the
     /// flushed turns and sets `sessions.status = 'aborted'`.
+    #[serde(rename_all = "camelCase")]
     Aborted {
         provider: String,
         model_id: String,
@@ -128,6 +137,7 @@ pub enum AgentStreamEvent {
     /// form elicitations and Codex's synthesized form); `url` is a
     /// URL-launcher card. The Rust side just forwards the payload — all
     /// schema normalization happens in the sidecar.
+    #[serde(rename_all = "camelCase")]
     UserInputRequest {
         provider: String,
         model_id: String,
@@ -135,7 +145,6 @@ pub enum AgentStreamEvent {
         session_id: Option<String>,
         working_directory: String,
         permission_mode: Option<String>,
-        #[serde(rename = "userInputId")]
         user_input_id: String,
         source: String,
         message: String,

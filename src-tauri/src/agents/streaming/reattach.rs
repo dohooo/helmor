@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
 
 use crate::pipeline::{MessagePipeline, PipelineEmit};
@@ -53,8 +53,8 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Parameters for the reattach entry point. Owned values
 /// throughout so the function can hand the bundle to
 /// `spawn_blocking` without borrow-lifetime contortions.
-pub struct ReattachStreamInput {
-    pub app: AppHandle,
+pub struct ReattachStreamInput<R: Runtime = tauri::Wry> {
+    pub app: AppHandle<R>,
     pub on_event: Channel<AgentStreamEvent>,
     pub transport: Arc<dyn SidecarTransport>,
     /// The daemon's session id — the same id the desktop would
@@ -80,7 +80,7 @@ pub struct ReattachStreamInput {
 /// Registers an [`ActiveStreamHandle`] for the duration so the
 /// desktop's busy badge + abort affordance work for the
 /// reattached turn.
-pub(crate) fn stream_reattach_via_sidecar(input: ReattachStreamInput) {
+pub(crate) fn stream_reattach_via_sidecar<R: Runtime>(input: ReattachStreamInput<R>) {
     let ReattachStreamInput {
         app,
         on_event,
@@ -111,8 +111,8 @@ pub(crate) fn stream_reattach_via_sidecar(input: ReattachStreamInput) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_reattach_loop(
-    app: AppHandle,
+fn run_reattach_loop<R: Runtime>(
+    app: AppHandle<R>,
     on_event: Channel<AgentStreamEvent>,
     transport: Arc<dyn SidecarTransport>,
     request_id: String,
@@ -632,5 +632,346 @@ mod tests {
         let snapshot = captured.lock().unwrap();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0]["kind"], "update");
+    }
+
+    // ── End-to-end loop tests ────────────────────────────────────
+    //
+    // The 24l-tests follow-up. The unit tests above pin individual
+    // decisions; these run the full `run_reattach_loop` with a
+    // mock AppHandle, a ManualTransport, and a capturing channel.
+    // They prove the loop's orchestration — subscribe, receive,
+    // push through pipeline, emit AgentStreamEvent, detect
+    // terminal — in one go, so a regression that breaks the seams
+    // surfaces here instead of waiting on a manual SSH session.
+
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+
+    /// Build a Tauri AppHandle with the state the reattach loop
+    /// reads (`ActiveStreams`, `UiSyncManager`). No window, no
+    /// real IPC — just the registry slots `app.state::<T>()`
+    /// returns inside the loop.
+    fn mock_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        let app = mock_builder()
+            .manage(ActiveStreams::new())
+            .manage(crate::ui_sync::UiSyncManager::new())
+            .build(mock_context(noop_assets()))
+            .expect("mock app should build");
+        app.handle().clone()
+    }
+
+    /// Wait up to `timeout` for the captured-channel vec to satisfy
+    /// `pred`. Returns the final snapshot either way; tests assert
+    /// on the result so a timeout produces a legible failure rather
+    /// than a hang.
+    fn wait_for_events(
+        captured: &Arc<Mutex<Vec<Value>>>,
+        timeout: Duration,
+        pred: impl Fn(&[Value]) -> bool,
+    ) -> Vec<Value> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snapshot = captured.lock().unwrap().clone();
+            if pred(&snapshot) {
+                return snapshot;
+            }
+            if Instant::now() >= deadline {
+                return snapshot;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn run_loop_streams_delta_then_finalises_on_result() {
+        // The happy path: fire a content-block delta, then an
+        // assistant finalize, then a `result` terminal. The
+        // channel should see StreamingPartial / Update /
+        // Update (finish) / Done in order.
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, captured) = capturing_channel();
+
+        // Run the loop on a worker so the test thread can fire
+        // events into the transport while it spins.
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-loop-1".into(),
+                    "hs-loop-1".into(),
+                    Some("ws-1".into()),
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/loop"),
+                )
+            })
+        };
+
+        // Give the loop a moment to register its subscription —
+        // ManualTransport::fire is a no-op for non-matching rids.
+        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
+
+        transport.fire(
+            "rid-loop-1",
+            serde_json::json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": { "type": "text_delta", "text": "Hi" }
+                }
+            }),
+        );
+        transport.fire(
+            "rid-loop-1",
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "Hi there" }]
+                }
+            }),
+        );
+        transport.fire(
+            "rid-loop-1",
+            serde_json::json!({
+                "type": "result",
+                "session_id": "sdk-session-loop-1",
+            }),
+        );
+
+        loop_handle.join().expect("reattach loop should exit");
+
+        let events = captured.lock().unwrap().clone();
+        // At least: one partial-or-update, one final update on
+        // finish, one Done. The accumulator may emit additional
+        // updates between — we assert the *terminal sequence*
+        // and the *presence* of intermediate cooked events.
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|v| v["kind"].as_str().unwrap_or(""))
+            .collect();
+        assert!(
+            kinds.contains(&"streamingPartial") || kinds.contains(&"update"),
+            "expected at least one streamingPartial or update before terminal, got {kinds:?}",
+        );
+        assert_eq!(
+            kinds.last().copied(),
+            Some("done"),
+            "last event should be Done, got {kinds:?}",
+        );
+        // The Done envelope carries the captured session id.
+        // Wire keys are camelCase — the frontend's AgentStreamEvent
+        // type claims this shape and the IPC channel emits it via
+        // serde. A snake_case regression here would silently break
+        // the chat's "did this turn finish?" handler.
+        let done = events.last().unwrap();
+        assert_eq!(done["sessionId"], "sdk-session-loop-1");
+        assert_eq!(done["persisted"], false);
+        assert_eq!(done["workingDirectory"], "/tmp/loop");
+        assert_eq!(done["modelId"], "claude-opus-4");
+    }
+
+    #[test]
+    fn run_loop_emits_aborted_with_reason_when_daemon_reports_abort() {
+        // The aborted path: a single `aborted` event with a
+        // `reason` should produce one final Update + one Aborted
+        // carrying the reason verbatim.
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, captured) = capturing_channel();
+
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-abort-1".into(),
+                    "hs-abort-1".into(),
+                    None,
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/abort"),
+                )
+            })
+        };
+        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
+
+        transport.fire(
+            "rid-abort-1",
+            serde_json::json!({
+                "type": "aborted",
+                "reason": "rate_limited",
+            }),
+        );
+        loop_handle.join().expect("loop should exit on aborted");
+
+        let events = captured.lock().unwrap().clone();
+        let terminal = events.last().expect("at least one event should be emitted");
+        assert_eq!(terminal["kind"], "aborted");
+        assert_eq!(terminal["reason"], "rate_limited");
+        assert_eq!(terminal["persisted"], false);
+    }
+
+    #[test]
+    fn run_loop_emits_error_envelope_when_daemon_reports_error() {
+        // The daemon's `error` event surfaces as an AgentStreamEvent
+        // Error envelope with message + internal flag preserved.
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, captured) = capturing_channel();
+
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-err-1".into(),
+                    "hs-err-1".into(),
+                    None,
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/err"),
+                )
+            })
+        };
+        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
+
+        transport.fire(
+            "rid-err-1",
+            serde_json::json!({
+                "type": "error",
+                "message": "Sidecar crashed",
+                "internal": true,
+            }),
+        );
+        loop_handle.join().expect("loop should exit on error");
+
+        let events = captured.lock().unwrap().clone();
+        let terminal = events.last().expect("at least one event");
+        assert_eq!(terminal["kind"], "error");
+        assert_eq!(terminal["message"], "Sidecar crashed");
+        assert_eq!(terminal["internal"], true);
+    }
+
+    #[test]
+    fn run_loop_unsubscribes_and_unregisters_after_terminal_event() {
+        // After a terminal event, the loop must:
+        //  - tear down the transport subscription so the daemon
+        //    can stop forwarding events for this request_id,
+        //  - release the per-session ActiveStreams slot so a
+        //    subsequent send isn't gated.
+        let app = mock_app_handle();
+        let app_for_query = app.clone();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, _captured) = capturing_channel();
+
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-unsub-1".into(),
+                    "hs-unsub-1".into(),
+                    None,
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/unsub"),
+                )
+            })
+        };
+        // Sub registered → fire terminal → join.
+        std::thread::sleep(Duration::from_millis(20));
+        transport.fire("rid-unsub-1", serde_json::json!({ "type": "result" }));
+        loop_handle.join().expect("loop should exit");
+
+        let unsubscribed = transport.unsubscribed.lock().unwrap().clone();
+        assert!(
+            unsubscribed.iter().any(|r| r == "rid-unsub-1"),
+            "loop must call transport.unsubscribe for its request_id; saw {unsubscribed:?}",
+        );
+        // ActiveStreams snapshot should not still hold our handle.
+        let active = app_for_query.state::<ActiveStreams>();
+        assert_eq!(
+            active.len(),
+            0,
+            "loop must call ActiveStreams::unregister on exit",
+        );
+    }
+
+    #[test]
+    fn run_loop_refuses_to_run_when_another_stream_holds_the_session_lock() {
+        // Issue #398's per-session lock: if another stream
+        // already holds the session, the reattach loop must
+        // immediately emit an Error and bail. No subscribe call,
+        // no pipeline work.
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, captured) = capturing_channel();
+
+        // Pre-register a competing handle on the same helmor
+        // session id so try_register_for_session returns false.
+        let competing = ActiveStreamHandle {
+            request_id: "rid-other".into(),
+            sidecar_session_id: "hs-busy".into(),
+            provider: "claude".into(),
+            helmor_session_id: Some("hs-busy".into()),
+            workspace_id: None,
+        };
+        assert!(app
+            .state::<ActiveStreams>()
+            .try_register_for_session(competing));
+
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-blocked".into(),
+                    "hs-busy".into(),
+                    None,
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/blocked"),
+                )
+            })
+        };
+        loop_handle.join().expect("loop should exit quickly");
+
+        let events = captured.lock().unwrap().clone();
+        assert_eq!(events.len(), 1, "expected exactly one envelope: {events:?}");
+        assert_eq!(events[0]["kind"], "error");
+        assert_eq!(events[0]["internal"], false);
+        let msg = events[0]["message"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("Another send is already running"),
+            "error message should mention the lock; got {msg:?}",
+        );
+        // The blocked loop never even subscribed.
+        let unsubscribed = transport.unsubscribed.lock().unwrap().clone();
+        assert!(
+            unsubscribed.is_empty(),
+            "blocked loop must not subscribe → no unsubscribe call; saw {unsubscribed:?}",
+        );
     }
 }
