@@ -538,6 +538,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 .execute_batch("ALTER TABLE workspaces DROP COLUMN derived_status")
                 .context("Failed to drop workspace derived_status column")?;
         }
+
+        // Normalize legacy status spellings on existing rows. Older builds
+        // wrote "in-review" / "cancelled"; the canonical form is
+        // "review" / "canceled". The SELECT-time COALESCE only handles
+        // NULL, so without this the legacy string survives and the
+        // frontend's status-dot dict lookup misses (rendering a
+        // transparent, visually grey-white dot).
+        connection
+            .execute_batch(
+                "UPDATE workspaces SET status = 'review' WHERE status = 'in-review';\
+                 UPDATE workspaces SET status = 'canceled' WHERE status = 'cancelled';\
+                 UPDATE workspaces SET status = 'in-progress' WHERE status NOT IN ('in-progress', 'done', 'review', 'backlog', 'canceled');",
+            )
+            .context("Failed to normalize workspace status values")?;
     }
 
     drop_dead_schema(connection)?;
@@ -590,6 +604,39 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     }
 
     seed_workspace_display_orders(connection)?;
+
+    // Per-workspace port range. `port_base`/`port_count` get assigned the
+    // first time a script env is built for the workspace (lazy allocation
+    // in `workspace::port_allocation`). NULL means "not yet allocated" —
+    // legacy rows stay NULL until they next run a script.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_base") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_base INTEGER")
+            .context("Failed to add workspaces.port_base column")?;
+    }
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_count") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_count INTEGER")
+            .context("Failed to add workspaces.port_count column")?;
+    }
+
+    // Phase 22a: a workspace can now be pinned to a registered remote
+    // runtime. `NULL` means "use the local runtime" — the historical
+    // default and what every existing row carries until the operator
+    // explicitly binds elsewhere. New rows can opt in at create time
+    // (lands in phase 22c with the Add Workspace dialog).
+    //
+    // The column is nullable rather than `DEFAULT 'local'` so the
+    // distinction "no preference (legacy)" vs "explicitly local"
+    // stays representable. The resolver in `resolve_runtime_for_call`
+    // treats NULL and "local" identically, so this only matters for
+    // future write paths.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "runtime_name")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN runtime_name TEXT")
+            .context("Failed to add workspaces.runtime_name column")?;
+    }
 
     Ok(())
 }
@@ -711,6 +758,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
     display_order INTEGER NOT NULL DEFAULT 0,
+    port_base INTEGER,
+    port_count INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1465,6 +1514,61 @@ mod tests {
         assert_eq!(
             stored.as_deref(),
             Some(r#"{"totalTokens":12,"maxTokens":100}"#)
+        );
+    }
+
+    // ── workspaces.runtime_name (phase 22a) ─────────────────────
+
+    #[test]
+    fn workspaces_runtime_name_present_on_fresh_install() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "workspaces", "runtime_name"));
+    }
+
+    #[test]
+    fn workspaces_runtime_name_added_to_legacy_and_idempotent() {
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        assert!(!column_exists(&connection, "workspaces", "runtime_name"));
+
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "workspaces", "runtime_name"));
+
+        // Re-running migrations on an already-migrated DB must not
+        // error or duplicate the column.
+        run_migrations(&connection).unwrap();
+        assert!(column_exists(&connection, "workspaces", "runtime_name"));
+    }
+
+    #[test]
+    fn workspaces_runtime_name_defaults_to_null_for_existing_rows() {
+        // A legacy row predates the column; after migration it must
+        // carry NULL (= "use the local runtime") rather than some
+        // other sentinel. Subsequent reads should see NULL.
+        let (connection, _dir) = open_test_db();
+        create_legacy_schema(&connection);
+        // Insert against the legacy column set — `directory_name`
+        // isn't on the legacy table; only `id` + `repository_id`
+        // are. The migration adds the rest.
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id) VALUES ('legacy-ws', 'repo-1')",
+                [],
+            )
+            .unwrap();
+        run_migrations(&connection).unwrap();
+
+        let value: Option<String> = connection
+            .query_row(
+                "SELECT runtime_name FROM workspaces WHERE id = 'legacy-ws'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            value.is_none(),
+            "legacy row should carry NULL runtime_name, got {value:?}"
         );
     }
 }

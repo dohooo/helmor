@@ -10,6 +10,7 @@ export type SettingsSection =
 	| "experimental"
 	| "import"
 	| "developer"
+	| "runtime-debug"
 	| "account"
 	| "inbox"
 	| `repo:${string}`;

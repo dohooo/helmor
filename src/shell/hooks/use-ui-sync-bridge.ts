@@ -187,6 +187,14 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.activeStreams,
 			});
 			return;
+		case "runtimeStateChanged":
+			// The dev runtime-debug panel keys off ["remote-runtimes"];
+			// a state flip invalidates the list + every per-runtime
+			// health query so the chip re-paints with the new colour.
+			void queryClient.invalidateQueries({
+				queryKey: ["remote-runtimes"],
+			});
+			return;
 	}
 }
 

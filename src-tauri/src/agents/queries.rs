@@ -39,7 +39,7 @@ fn can_replace_session_title(current_title: &str, title_seed: Option<&str>) -> b
 
 pub async fn generate_session_title(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: GenerateSessionTitleRequest,
 ) -> CmdResult<GenerateSessionTitleResponse> {
     let connection =
@@ -197,7 +197,8 @@ pub async fn generate_session_title(
         let rid = request_id;
         let session_id_for_logs = session_id.clone();
         move || {
-            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+            let sidecar_state: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>> =
+                app.state();
             let mut title: Option<String> = None;
             let mut branch_name: Option<String> = None;
 
@@ -501,7 +502,7 @@ pub struct SlashCommandsResponse {
 
 pub async fn list_slash_commands(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
@@ -942,7 +943,8 @@ fn spawn_background_refresh(
     std::thread::Builder::new()
         .name("slash-cmd-refresh".into())
         .spawn(move || {
-            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
+            let sidecar_state: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>> =
+                app.state();
             let cache_state: tauri::State<'_, super::slash_commands::SlashCommandCache> =
                 app.state();
             let additional_directories = slash_command_scan_directories(&request);

@@ -43,7 +43,7 @@ export function InspectorChangeRowUI({
 			onClick={onClick}
 			className={cn(
 				"group/row flex items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-				onClick && "cursor-pointer",
+				onClick && "cursor-interactive",
 				active && "bg-muted/60 text-foreground",
 			)}
 		>

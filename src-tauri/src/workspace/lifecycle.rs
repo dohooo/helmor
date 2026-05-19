@@ -135,6 +135,7 @@ pub fn prepare_workspace_from_repo_impl(
     repo_id: &str,
     source_branch: Option<&str>,
     initial_status: WorkspaceStatus,
+    runtime_name: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -183,6 +184,7 @@ pub fn prepare_workspace_from_repo_impl(
         &base_branch,
         initial_status,
         &timestamp,
+        runtime_name,
     )?;
 
     // `load_repo_scripts` is the single truth source. The worktree
@@ -238,6 +240,7 @@ pub fn prepare_local_workspace_impl(
     repo_id: &str,
     source_branch: Option<&str>,
     initial_status: WorkspaceStatus,
+    runtime_name: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -255,6 +258,13 @@ pub fn prepare_local_workspace_impl(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| current_branch.clone());
+    let base_branch = repository
+        .default_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "main".to_string());
 
     // Tracked-only check — `git checkout` is fine with untracked files.
     if target_branch != current_branch
@@ -279,10 +289,11 @@ pub fn prepare_local_workspace_impl(
         &session_id,
         &directory_name,
         &target_branch,
-        &target_branch,
+        &base_branch,
         crate::workspace_state::WorkspaceMode::Local,
         initial_status,
         &timestamp,
+        runtime_name,
     )?;
 
     if target_branch != current_branch {
@@ -324,7 +335,8 @@ pub fn prepare_local_workspace_impl(
         repo_name: repository.name,
         directory_name,
         branch: target_branch.clone(),
-        default_branch: target_branch,
+        // Field name is legacy; value is the initial PR/review base.
+        default_branch: base_branch,
         state: WorkspaceState::Ready,
         repo_scripts,
         // Local mode operates directly on the repo root — already on disk,
@@ -661,7 +673,13 @@ pub fn move_local_workspace_to_worktree_impl(
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
 pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceResponse> {
-    let prepared = prepare_workspace_from_repo_impl(repo_id, None, WorkspaceStatus::default())?;
+    // Non-UI callers (CLI, MCP, add-repo bulk import) never bind a
+    // remote runtime — they always create local workspaces. The
+    // Tauri command path in `workspace_commands::create_workspace_from_repo`
+    // is what carries the runtime_name through from the Add Workspace
+    // dialog.
+    let prepared =
+        prepare_workspace_from_repo_impl(repo_id, None, WorkspaceStatus::default(), None)?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {

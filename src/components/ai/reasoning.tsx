@@ -179,7 +179,7 @@ export const ReasoningTrigger = memo(
 		const label = children ?? getThinkingMessage(isStreaming, duration);
 
 		// No body to expand into → render a flat, non-interactive label:
-		// no chevron, no cursor-pointer, no hover affordance.
+		// no chevron, no cursor-interactive, no hover affordance.
 		if (!hasContent) {
 			return (
 				<div
@@ -197,7 +197,7 @@ export const ReasoningTrigger = memo(
 		return (
 			<CollapsibleTrigger
 				className={cn(
-					"group/reasoning inline-flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden",
+					"group/reasoning inline-flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden",
 					className,
 				)}
 				{...props}

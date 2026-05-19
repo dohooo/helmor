@@ -25,6 +25,7 @@ import { BranchPickerPopover } from "@/components/branch-picker";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
+import { RuntimeHostChip } from "@/components/runtime-host-chip";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -222,6 +223,13 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
 				>
 					{headerLeading}
+					{/*
+					 * Phase 22d: surface the bound remote runtime in the workspace
+					 * header so an operator never loses track of where a workspace
+					 * runs. Rendered before the branch label so it occupies a fixed
+					 * slot — long branch names truncate but the chip stays put.
+					 */}
+					<RuntimeHostChip runtimeName={workspace?.runtimeName} />
 					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
 						{(() => {
 							// Avatar always wins when we have a URL AND the
@@ -303,7 +311,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Rename branch"
 											onClick={branchRename.startBranchRename}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											<Pencil className="size-3" strokeWidth={2} />
 										</span>
@@ -311,7 +319,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											role="button"
 											aria-label="Copy branch name"
 											onClick={branchRename.copyBranchName}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 										>
 											{branchRename.branchCopied ? (
 												<Check
@@ -508,7 +516,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																event.stopPropagation();
 																onCloseContextPreview?.();
 															}}
-															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+															className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</span>
@@ -623,7 +631,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	onClick={(event) =>
 																		sessionActions.startRename(session, event)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<Pencil className="size-3" strokeWidth={2} />
 																</span>
@@ -637,7 +645,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																			event,
 																		)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<X className="size-3" strokeWidth={2} />
 																</span>

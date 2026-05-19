@@ -21,6 +21,7 @@ import {
 	useState,
 } from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
+import { RuntimeHostChip } from "@/components/runtime-host-chip";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -58,7 +59,7 @@ import {
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-pointer",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -361,12 +362,20 @@ export const WorkspaceRowItem = memo(
 							<HyperText text={displayTitle} className="inline" />
 						</span>
 					);
+					// Phase 22d: surface the bound remote runtime inline so an
+					// operator can tell at a glance "this row runs on dev.box"
+					// without opening the hover card. `shrink-0` on the chip
+					// keeps it visible even when the title truncates.
+					const runtimeChipSlot = (
+						<RuntimeHostChip runtimeName={row.runtimeName} />
+					);
 					if (hideRepoAvatar) {
 						return (
 							<div className="flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}
 								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 									{titleSlot}
+									{runtimeChipSlot}
 								</div>
 							</div>
 						);
@@ -386,6 +395,7 @@ export const WorkspaceRowItem = memo(
 							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}
 								{titleSlot}
+								{runtimeChipSlot}
 							</div>
 						</div>
 					);
@@ -420,7 +430,7 @@ export const WorkspaceRowItem = memo(
 										"size-5 rounded-md p-0 text-muted-foreground",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
-											: "cursor-pointer hover:text-foreground",
+											: "cursor-interactive hover:text-foreground",
 									)}
 								>
 									{actionIcon}
@@ -459,7 +469,7 @@ export const WorkspaceRowItem = memo(
 									"size-5 rounded-md p-0 text-muted-foreground",
 									workspaceActionsDisabled
 										? "cursor-not-allowed opacity-60"
-										: "cursor-pointer hover:text-destructive",
+										: "cursor-interactive hover:text-destructive",
 								)}
 							>
 								<Trash2 className="size-3.5" strokeWidth={2.1} />

@@ -491,7 +491,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								title={tabLabel}
 								onClick={() => setSelectedSource(filterId)}
 								className={cn(
-									"relative flex cursor-pointer items-center justify-center text-muted-foreground transition-[background-color,color,box-shadow]",
+									"relative flex cursor-interactive items-center justify-center text-muted-foreground transition-[background-color,color,box-shadow]",
 									providerTabsCompact ? "h-6 rounded-[5px]" : "h-7 rounded-md",
 									"hover:bg-accent/60 hover:text-foreground",
 									selectedSource === filterId &&
@@ -544,7 +544,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 									type="button"
 									aria-label="Clear search"
 									onClick={() => setSearchQuery("")}
-									className="flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+									className="flex size-4 cursor-interactive items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 								>
 									<X className="size-3" strokeWidth={2} />
 								</button>
@@ -558,7 +558,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 										type="button"
 										aria-label={`Filter by ${activeKindLabels.short}`}
 										title={activeKindLabels.short}
-										className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/45 bg-background/35 text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+										className="inline-flex size-7 shrink-0 cursor-interactive items-center justify-center rounded-md border border-border/45 bg-background/35 text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
 									>
 										{(() => {
 											const source =
@@ -613,7 +613,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<DropdownMenuTrigger asChild>
 								<button
 									type="button"
-									className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+									className="inline-flex h-7 shrink-0 cursor-interactive items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
 								>
 									<span>{activeStateFilter.label}</span>
 									<ChevronDown className="size-3" strokeWidth={2} />
@@ -776,7 +776,7 @@ function InboxErrorState({
 				variant="ghost"
 				size="sm"
 				onClick={onRetry}
-				className="mt-1 cursor-pointer text-[12px]"
+				className="mt-1 cursor-interactive text-[12px]"
 			>
 				Try again
 			</Button>
@@ -886,7 +886,7 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"mt-1 flex cursor-pointer items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-[11px] text-muted-foreground/80 transition-colors",
+				"mt-1 flex cursor-interactive items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-[11px] text-muted-foreground/80 transition-colors",
 				"hover:bg-accent/40 hover:text-foreground",
 			)}
 		>
@@ -924,7 +924,7 @@ function ConnectForgeState({
 				type="button"
 				size="sm"
 				onClick={onConfigure}
-				className="mt-1 cursor-pointer gap-1.5"
+				className="mt-1 cursor-interactive gap-1.5"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure
@@ -963,7 +963,7 @@ function KindDisabledState({
 				variant="ghost"
 				size="sm"
 				onClick={onConfigure}
-				className="mt-1 cursor-pointer gap-1.5 text-[12px]"
+				className="mt-1 cursor-interactive gap-1.5 text-[12px]"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure

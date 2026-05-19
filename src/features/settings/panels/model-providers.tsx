@@ -232,7 +232,7 @@ function ProviderPicker({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				className={cn(
-					"flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+					"flex h-8 min-w-0 flex-1 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 				)}
 			>
 				<span className="flex min-w-0 items-center gap-2">

@@ -966,6 +966,7 @@ describe("WorkspaceComposerContainer", () => {
 			await waitFor(() => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
+					"goal",
 					"compact",
 					"clear",
 				]);
@@ -1005,6 +1006,41 @@ describe("WorkspaceComposerContainer", () => {
 				argumentHint: "<objective>",
 				source: "builtin",
 				providers: ["codex"],
+			});
+		});
+
+		it("adds a built-in /goal command for Claude sessions without duplicating an agent-provided goal", async () => {
+			apiMockState.listSlashCommands.mockResolvedValue({
+				commands: [
+					{
+						name: "goal",
+						description: "Agent supplied goal command",
+						source: "builtin",
+					},
+					{
+						name: "clear",
+						description: "Clear history",
+						source: "builtin",
+					},
+				],
+				isComplete: true,
+			});
+
+			renderWithLinkedDirs([]);
+
+			await waitFor(() => {
+				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
+					"add-dir",
+					"goal",
+					"clear",
+				]);
+			});
+			expect(composerMockState.lastSlashCommands[1]).toEqual({
+				name: "goal",
+				description: "Set a completion condition for Claude to work toward",
+				argumentHint: "<condition>",
+				source: "builtin",
+				providers: ["claude"],
 			});
 		});
 

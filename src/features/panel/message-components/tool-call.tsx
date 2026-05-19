@@ -228,12 +228,12 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				<summary
 					className={cn(
 						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden",
-						canExpand ? "cursor-pointer" : "cursor-default",
+						canExpand ? "cursor-interactive" : "cursor-default",
 					)}
 				>
 					{toolLine}
 					{canExpand ? (
-						<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
+						<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
 							<svg
 								className="size-2.5 group-open/out:rotate-90"
 								viewBox="0 0 12 12"
@@ -406,7 +406,7 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 			<summary
 				className={cn(
 					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-destructive [&::-webkit-details-marker]:hidden",
-					expandable ? "cursor-pointer" : "cursor-default",
+					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
@@ -422,7 +422,7 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 					</span>
 				) : null}
 				{expandable ? (
-					<span className="shrink-0 cursor-pointer text-destructive/40 hover:text-destructive">
+					<span className="shrink-0 cursor-interactive text-destructive/40 hover:text-destructive">
 						<svg
 							className="size-2.5 group-open/err:rotate-90"
 							viewBox="0 0 12 12"
@@ -623,7 +623,7 @@ export function CollapsedToolGroup({
 			}}
 			open={open}
 		>
-			<summary className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
+			<summary className="flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
@@ -634,7 +634,7 @@ export function CollapsedToolGroup({
 				) : (
 					<Check className="size-3 text-chart-2" strokeWidth={2} />
 				)}
-				<span className="shrink-0 cursor-pointer text-muted-foreground/40 hover:text-muted-foreground">
+				<span className="shrink-0 cursor-interactive text-muted-foreground/40 hover:text-muted-foreground">
 					<svg
 						className="size-2.5 group-open/collapse:rotate-90"
 						viewBox="0 0 12 12"

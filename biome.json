@@ -15,6 +15,7 @@
 			"!**/node_modules",
 			"!!**/.claude",
 			"!!**/coverage",
+			"!storybook-static",
 			"!**/.local-data",
 			"!**/.bundle-cache",
 			"!src-tauri/gen",

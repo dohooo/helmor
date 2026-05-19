@@ -76,6 +76,11 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
+    /// Registered runtime this workspace is bound to. `None` and
+    /// `Some("local")` mean "use the local runtime" (the resolver
+    /// treats them identically). Non-None values drive the host chip
+    /// rendered in the sidebar row.
+    pub runtime_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +126,11 @@ pub struct WorkspaceSummary {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
+    /// Registered runtime this workspace is bound to. `None` and
+    /// `Some("local")` mean "use the local runtime" (the resolver
+    /// treats them identically). The sidebar uses this to render a
+    /// host chip on remote-bound workspaces.
+    pub runtime_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +176,12 @@ pub struct WorkspaceDetail {
     /// has been bound (auto-detect didn't find one); the UI shows the
     /// "Connect" prompt in that case.
     pub forge_login: Option<String>,
+    /// Registered runtime this workspace is bound to. `None` and
+    /// `Some("local")` mean "use the local runtime"; anything else
+    /// names a registered remote and the workspace header / tab
+    /// title chip surfaces it. Drives the same resolution rule the
+    /// dispatcher uses in `resolve_runtime_for_call`.
+    pub runtime_name: Option<String>,
     /// Timestamp of the most recent successful setup-script run for
     /// this workspace. NULL if setup has never been run (or the
     /// workspace was created before this column existed). Drives the
@@ -1151,6 +1167,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
+        runtime_name: record.runtime_name,
     }
 }
 
@@ -1192,6 +1209,7 @@ pub fn record_to_summary(record: WorkspaceRecord) -> WorkspaceSummary {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
+        runtime_name: record.runtime_name,
     }
 }
 
@@ -1250,6 +1268,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         message_count: record.message_count,
         forge_provider: record.forge_provider,
         forge_login: record.forge_login,
+        runtime_name: record.runtime_name,
         setup_completed_at: record.setup_completed_at,
     }
 }

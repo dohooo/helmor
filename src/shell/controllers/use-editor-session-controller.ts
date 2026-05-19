@@ -93,7 +93,20 @@ export function useEditorSessionController(
 				);
 				return;
 			}
-			if (editorSession?.path === path) return;
+			const nextOriginalRef = options?.originalRef;
+			const nextModifiedRef = options?.modifiedRef;
+			// Same path can appear in multiple inspector areas (Staged / Unstaged /
+			// Remote) with different diff bases — short-circuit only when the
+			// destination matches the current view byte-for-byte. Comparing path
+			// alone would freeze the editor on the first-opened area's bases.
+			if (
+				editorSession?.kind === "diff" &&
+				editorSession.path === path &&
+				editorSession.originalRef === nextOriginalRef &&
+				editorSession.modifiedRef === nextModifiedRef
+			) {
+				return;
+			}
 			if (!confirmDiscardEditorChanges("open another file")) return;
 
 			const status = options?.fileStatus ?? "M";
@@ -108,15 +121,18 @@ export function useEditorSessionController(
 				inline: status !== "M",
 				dirty: false,
 				fileStatus: status,
-				originalRef: options?.originalRef,
-				modifiedRef: options?.modifiedRef,
+				originalRef: nextOriginalRef,
+				modifiedRef: nextModifiedRef,
 				// Diff click is "see what changed" — default to source even for `.md`.
 				viewMode: isMarkdownPath(path) ? "source" : undefined,
 			});
 		},
 		[
 			confirmDiscardEditorChanges,
+			editorSession?.kind,
 			editorSession?.path,
+			editorSession?.originalRef,
+			editorSession?.modifiedRef,
 			selectedWorkspaceId,
 			workspaceRootPath,
 		],
@@ -151,9 +167,16 @@ export function useEditorSessionController(
 			enterEditorModeRef.current();
 			setEditorSession((current) => {
 				const samePath = current?.path === path;
+				// `originalText` carries area-specific bytes when `current` is a
+				// diff session (HEAD/INDEX content) — reusing those for a file
+				// session would make dirty-tracking compare against a git ref,
+				// not the working-tree, and a Save could clobber unstaged work.
+				// Only reuse texts when we're staying inside a `file` session.
+				const sameFile = samePath && current?.kind === "file";
 				// Chat-link open of markdown defaults to preview; preserve a user
-				// toggle if the same file is reopened. Non-markdown paths leave
-				// viewMode unset.
+				// toggle if the same file is reopened. The view-mode preference
+				// is presentation-only, so the loose samePath check is safe even
+				// across kind transitions.
 				const viewMode = isMarkdownPath(path)
 					? samePath && current?.viewMode
 						? current.viewMode
@@ -164,10 +187,10 @@ export function useEditorSessionController(
 					path,
 					line,
 					column,
-					dirty: samePath ? current.dirty : false,
-					originalText: samePath ? current.originalText : undefined,
-					modifiedText: samePath ? current.modifiedText : undefined,
-					mtimeMs: samePath ? current.mtimeMs : undefined,
+					dirty: sameFile ? current.dirty : false,
+					originalText: sameFile ? current.originalText : undefined,
+					modifiedText: sameFile ? current.modifiedText : undefined,
+					mtimeMs: sameFile ? current.mtimeMs : undefined,
 					viewMode,
 				};
 			});

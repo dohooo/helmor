@@ -37,6 +37,13 @@ const SEGMENT_CLASS = [
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
 	workspaceRootPath?: string | null;
+	/**
+	 * Workspace id used by the binding-aware IPC resolver. If the workspace
+	 * is bound to a remote runtime, file reads / writes happen on the
+	 * remote; otherwise the call falls back to the local runtime. Omitting
+	 * preserves pre-phase-20d behaviour (always local).
+	 */
+	workspaceId?: string | null;
 	onChangeSession: (session: EditorSessionState) => void;
 	onExit: () => void;
 	onError?: (description: string, title?: string) => void;
@@ -58,6 +65,7 @@ type DiffController = Awaited<
 export function WorkspaceEditorSurface({
 	editorSession,
 	workspaceRootPath,
+	workspaceId,
 	onChangeSession,
 	onExit,
 	onError,
@@ -114,24 +122,46 @@ export function WorkspaceEditorSurface({
 				const isDiff = editorSession.kind === "diff";
 				const status = editorSession.fileStatus ?? "M";
 				const origRef = editorSession.originalRef ?? "HEAD";
+				const workspaceIdForCalls = workspaceId ?? undefined;
 
 				// Fetch original side (from git ref)
 				const originalPromise =
 					isDiff && status !== "A" && workspaceRootPath
-						? api.readFileAtRef(workspaceRootPath, editorSession.path, origRef)
+						? api.readFileAtRef(
+								workspaceRootPath,
+								editorSession.path,
+								origRef,
+								workspaceIdForCalls,
+							)
 						: Promise.resolve(null);
 
-				// Fetch modified side (from disk or git ref)
+				// Fetch modified side. When the workspace is bound, route the
+				// read through the binding-aware resolver so a remote pin hits
+				// the remote filesystem. Falls back to the legacy absolute-path
+				// reader when no workspace context is available (rare — usually
+				// means the workspace is mid-bootstrap).
 				const modifiedPromise = editorSession.modifiedRef
 					? workspaceRootPath
 						? api.readFileAtRef(
 								workspaceRootPath,
 								editorSession.path,
 								editorSession.modifiedRef,
+								workspaceIdForCalls,
 							)
 						: Promise.resolve(null)
 					: status !== "D"
-						? api.readEditorFile(editorSession.path).then((r) => r.content)
+						? workspaceRootPath
+							? api
+									.readWorkspaceFile(
+										workspaceRootPath,
+										api.toWorkspaceRelativePath(
+											workspaceRootPath,
+											editorSession.path,
+										),
+										workspaceIdForCalls,
+									)
+									.then((r) => r.content)
+							: api.readEditorFile(editorSession.path).then((r) => r.content)
 						: Promise.resolve(null);
 
 				const [original, modified] = await Promise.all([
@@ -168,7 +198,13 @@ export function WorkspaceEditorSurface({
 		return () => {
 			cancelled = true;
 		};
-	}, [canRenderDiff, canRenderFile, editorSession, workspaceRootPath]);
+	}, [
+		canRenderDiff,
+		canRenderFile,
+		editorSession,
+		workspaceId,
+		workspaceRootPath,
+	]);
 
 	// Dispose editors on unmount (separate from the switching effect so the
 	// fast-path can skip cleanup without leaking on unmount).

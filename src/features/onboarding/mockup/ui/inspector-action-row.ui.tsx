@@ -73,7 +73,7 @@ export function InspectorActionRowUI({
 				<button
 					type="button"
 					onClick={onActionClick}
-					className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80"
+					className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-primary transition-colors hover:text-primary/80"
 				>
 					{actionLabel}
 				</button>

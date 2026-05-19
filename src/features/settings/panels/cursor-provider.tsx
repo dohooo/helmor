@@ -241,7 +241,7 @@ function ModelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
@@ -267,7 +267,7 @@ function ModelMultiSelect({
 											event.stopPropagation();
 											onToggle(model.id);
 										}}
-										className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+										className="inline-flex size-4 cursor-interactive items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 									>
 										<X className="size-3" strokeWidth={2} />
 									</button>

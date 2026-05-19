@@ -107,6 +107,13 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime" — the sidebar renders no chip in
+	 * those cases. Anything else surfaces a small `cmd:<name>` chip
+	 * inline with the workspace title.
+	 */
+	runtimeName?: string | null;
 };
 
 export type WorkspaceGroup = {
@@ -196,11 +203,21 @@ export type WorkspaceSummary = {
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
 	pinnedAt?: string | null;
+	/** Sparse sidebar order. Mirrors `WorkspaceRow.displayOrder`; carried
+	 * through the archived list so restore can predict the live-group
+	 * position without waiting for refetch. */
+	displayOrder?: number;
 	sessionCount?: number;
 	messageCount?: number;
 	createdAt: string;
 	updatedAt?: string;
 	lastUserMessageAt?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime" (the backend treats them identically).
+	 * Anything else names a remote and the sidebar renders a host chip.
+	 */
+	runtimeName?: string | null;
 };
 
 export type BranchPrefixType = "username" | "custom" | "none";
@@ -321,6 +338,13 @@ export type WorkspaceDetail = {
 	/** gh/glab account login bound to the parent repo. NULL means no
 	 * account is bound — UI shows the "Connect" prompt. */
 	forgeLogin?: string | null;
+	/**
+	 * Registered runtime this workspace is bound to. `null` and `"local"`
+	 * mean "use the local runtime"; anything else names a remote and the
+	 * workspace header surfaces a chip with that name. Drives the same
+	 * resolution rule the dispatcher uses in `resolve_runtime_for_call`.
+	 */
+	runtimeName?: string | null;
 	/** Set when this workspace's setup script last finished with exit
 	 * code 0. NULL means never run (or skipped because the repo had no
 	 * setup script). Drives the inspector's Setup tab "ran in another
@@ -684,6 +708,508 @@ export async function loadDataInfo(): Promise<DataInfo | null> {
 	}
 }
 
+export type RuntimeKind = { type: "local" } | { type: "remote"; host: string };
+
+export type RuntimeHealth = {
+	kind: RuntimeKind;
+	hostname: string;
+	version: string;
+};
+
+export async function getRuntimeHealth(
+	runtimeName?: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("get_runtime_health", { runtimeName });
+}
+
+export type WorkspaceStatusResult = {
+	isClean: boolean;
+	changedPaths: string[];
+};
+
+/**
+ * Resolution order on the backend:
+ *   1. `runtimeName` — explicit override; ignored if empty/undefined.
+ *   2. `workspaceId` — look up the persisted binding for that
+ *      workspace; falls back to local if no binding or if the
+ *      bound runtime isn't currently registered.
+ *   3. Neither → local.
+ */
+export async function getWorkspaceStatus(
+	workspaceDir: string,
+	options: { workspaceId?: string; runtimeName?: string } = {},
+): Promise<WorkspaceStatusResult> {
+	return invoke<WorkspaceStatusResult>("get_workspace_status", {
+		workspaceDir,
+		workspaceId: options.workspaceId,
+		runtimeName: options.runtimeName,
+	});
+}
+
+/**
+ * "Where am I?" projection — current branch, head commit, upstream
+ * tracking ref. Same resolver as `getWorkspaceStatus` (binding /
+ * explicit override / local fallback).
+ */
+export type WorkspaceBranchInfoResult = {
+	currentBranch: string;
+	headCommit: string;
+	upstreamRef?: string;
+};
+
+export async function getWorkspaceBranchInfo(
+	workspaceDir: string,
+	options: { workspaceId?: string; runtimeName?: string } = {},
+): Promise<WorkspaceBranchInfoResult> {
+	return invoke<WorkspaceBranchInfoResult>("get_workspace_branch_info", {
+		workspaceDir,
+		workspaceId: options.workspaceId,
+		runtimeName: options.runtimeName,
+	});
+}
+
+export type RuntimeState =
+	| { type: "connected" }
+	| { type: "degraded"; reason: string }
+	| { type: "disconnected"; reason: string };
+
+export type RuntimeConnectionConfig =
+	| { type: "local"; binaryPath?: string }
+	| { type: "ssh"; host: string; remoteBinary: string }
+	/**
+	 * Custom transport (Teleport, Tailscale SSH, kubectl exec, etc.).
+	 * `argv` is the literal token list — no shell tokenisation happens
+	 * anywhere along the wire, so spaces / quotes / special chars inside
+	 * a single token survive intact.
+	 */
+	| { type: "command"; argv: string[] };
+
+export type RuntimeEntry = {
+	name: string;
+	isLocal: boolean;
+	state: RuntimeState;
+	/**
+	 * Connection config the entry was last registered with, if any.
+	 * `undefined` for the built-in local runtime and for entries
+	 * registered without a persisted config (tests, ad-hoc tools).
+	 */
+	config?: RuntimeConnectionConfig;
+};
+
+export async function listRemoteRuntimes(): Promise<RuntimeEntry[]> {
+	return invoke<RuntimeEntry[]>("list_remote_runtimes");
+}
+
+/**
+ * Surface host aliases the user named in `~/.ssh/config` so the SSH
+ * connect form can offer type-ahead suggestions. Missing or
+ * unreadable config → empty array (treated as "no suggestions").
+ */
+export async function listSshHosts(): Promise<string[]> {
+	return invoke<string[]>("list_ssh_hosts");
+}
+
+/**
+ * One persisted "this workspace routes through that runtime" pin.
+ * `runtimeName` is a string key into the runtime registry (not a
+ * validated reference) — a binding can outlive its target runtime
+ * and reattach when the same name reconnects.
+ */
+export type WorkspaceRuntimeBinding = {
+	workspaceId: string;
+	runtimeName: string;
+};
+
+export async function listWorkspaceRuntimeBindings(): Promise<
+	WorkspaceRuntimeBinding[]
+> {
+	return invoke<WorkspaceRuntimeBinding[]>("list_workspace_runtime_bindings");
+}
+
+/**
+ * Pin a workspace to a runtime by name. Overwrites any prior
+ * binding for the same workspace. Empty inputs are rejected.
+ */
+export async function setWorkspaceRuntimeBinding(
+	workspaceId: string,
+	runtimeName: string,
+): Promise<void> {
+	return invoke<void>("set_workspace_runtime_binding", {
+		workspaceId,
+		runtimeName,
+	});
+}
+
+/**
+ * Remove a workspace's binding. Idempotent — clearing an unbound
+ * workspace is a no-op.
+ */
+export async function clearWorkspaceRuntimeBinding(
+	workspaceId: string,
+): Promise<void> {
+	return invoke<void>("clear_workspace_runtime_binding", { workspaceId });
+}
+
+export async function connectRemoteRuntime(
+	name: string,
+	host: string,
+	remoteBinary: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_remote_runtime", {
+		name,
+		host,
+		remoteBinary,
+	});
+}
+
+/**
+ * Connect via a custom transport (Teleport, Tailscale SSH,
+ * `kubectl exec`, etc.). `argv` is the literal token list — no shell
+ * tokenisation, so embedded whitespace inside a single token survives
+ * intact. The argv must invoke `helmor-server --proxy` (or equivalent)
+ * on the remote side; auto-install is out of scope for this transport.
+ */
+export async function connectCommandRuntime(
+	name: string,
+	argv: string[],
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_command_runtime", { name, argv });
+}
+
+/**
+ * Spawn the bundled `helmor-server` binary as a local child process —
+ * smoke-test affordance for dev builds. Skips SSH; reaches the same
+ * RPC dispatcher the production path uses.
+ *
+ * `binaryPath` is optional: omit to fall back to `$HELMOR_SERVER_PATH`
+ * or the binary next to the running app.
+ */
+export async function connectLocalRuntime(
+	name: string,
+	binaryPath?: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("connect_local_runtime", { name, binaryPath });
+}
+
+export async function disconnectRemoteRuntime(name: string): Promise<void> {
+	return invoke<void>("disconnect_remote_runtime", { name });
+}
+
+/**
+ * Re-establish a connection using the entry's previously-persisted
+ * config. Used to recover from a Disconnected state (typically a
+ * tombstone from boot-time restore failure).
+ */
+export async function reconnectRemoteRuntime(
+	name: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("reconnect_remote_runtime", { name });
+}
+
+/**
+ * Phase 23d: push an SDK API key (or clear it) into a remote
+ * runtime's secrets store. The daemon persists to
+ * `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-pushes
+ * to the live sidecar via `updateConfig` — keys NEVER persist on
+ * the desktop side. Pass `apiKey: null` to clear.
+ *
+ * `provider` is the SDK identifier the sidecar uses internally
+ * (`"cursor"` today; future providers reuse the same RPC).
+ */
+export async function setRuntimeAgentAuth(
+	name: string,
+	provider: string,
+	apiKey: string | null,
+	baseUrl?: string | null,
+): Promise<void> {
+	return invoke<void>("set_runtime_agent_auth", {
+		name,
+		provider,
+		apiKey,
+		baseUrl: baseUrl ?? null,
+	});
+}
+
+// ── workspace search (phase 24e) ───────────────────────────────────
+
+/**
+ * One match returned by `workspace.search`. `lineNumber` is
+ * 1-indexed (git grep convention); `line` is the matched line's
+ * text trimmed of trailing newline but with leading whitespace
+ * preserved.
+ */
+export type WorkspaceSearchMatch = {
+	relativePath: string;
+	lineNumber: number;
+	line: string;
+};
+
+export type WorkspaceSearchResult = {
+	matches: WorkspaceSearchMatch[];
+	/** `true` when the server hit `maxResults` and stopped emitting. */
+	truncated: boolean;
+};
+
+/**
+ * Run a workspace-wide text search. Backed by `git grep` on the
+ * runtime's side (local or remote) so gitignore + binary-file
+ * skipping come for free. Honours the workspace's resolved runtime
+ * binding when `workspaceId` is supplied; `runtimeName` overrides
+ * if both are set.
+ *
+ * `query` is a regex unless `fixedString` is `true`. The server
+ * clamps `maxResults` to a hard cap so a runaway request can't
+ * exhaust memory; if `maxResults` is omitted the server picks a
+ * conservative default (200 today).
+ */
+export async function searchWorkspace(args: {
+	workspaceDir: string;
+	query: string;
+	maxResults?: number;
+	caseInsensitive?: boolean;
+	fixedString?: boolean;
+	workspaceId?: string;
+	runtimeName?: string;
+}): Promise<WorkspaceSearchResult> {
+	return invoke<WorkspaceSearchResult>("search_workspace", {
+		workspaceDir: args.workspaceDir,
+		query: args.query,
+		maxResults: args.maxResults ?? null,
+		caseInsensitive: args.caseInsensitive ?? false,
+		fixedString: args.fixedString ?? false,
+		workspaceId: args.workspaceId ?? null,
+		runtimeName: args.runtimeName ?? null,
+	});
+}
+
+// ── remote agent sessions (phase 24d — reattach UX) ────────────────
+
+/**
+ * One row from `agent.list` on a connected remote runtime. Mirrors
+ * `AgentSessionEntry` in the Rust backend; populated lazily by the
+ * daemon as the sidecar emits `system.init` (so `provider` and
+ * `workspaceDir` may be `null` for a freshly-accepted send that
+ * hasn't yet seen the first event).
+ */
+export type RemoteAgentSession = {
+	requestId: string;
+	helmorSessionId: string | null;
+	provider: string | null;
+	workspaceDir: string | null;
+	startedAtMs: number;
+	lastEventMs: number;
+};
+
+/**
+ * Snapshot the daemon's active agent sessions on a connected remote
+ * runtime. Drives the reattach UX (visibility into orphaned remote
+ * turns + manual abort affordance).
+ *
+ * Refuses the built-in `"local"` runtime — there's no daemon-side
+ * agent.list to call; local in-flight turns are tracked through
+ * `ActiveStreams` instead.
+ */
+export async function listRemoteAgentSessions(
+	name: string,
+): Promise<RemoteAgentSession[]> {
+	return invoke<RemoteAgentSession[]>("list_remote_agent_sessions", { name });
+}
+
+/**
+ * Abort an in-flight remote agent session by request id. The remote
+ * sidecar emits a terminating `aborted` event that the daemon
+ * broadcasts to any attached client; if no client is attached the
+ * event is dropped (and the session removed) by the daemon's
+ * per-session map.
+ */
+export async function abortRemoteAgentSession(
+	name: string,
+	requestId: string,
+): Promise<void> {
+	return invoke<void>("abort_remote_agent_session", { name, requestId });
+}
+
+/**
+ * Reattach the desktop's notification subscriber to an existing
+ * remote agent session. Returns `true` when the daemon swapped the
+ * per-session notifier; `false` when the session expired or never
+ * existed on the daemon (the desktop should drop any tentative
+ * local subscription).
+ */
+export async function attachRemoteAgentSession(
+	name: string,
+	requestId: string,
+): Promise<boolean> {
+	return invoke<boolean>("attach_remote_agent_session", { name, requestId });
+}
+
+// ── remote terminals ────────────────────────────────────────────
+
+/**
+ * Streamed event from a server-side terminal. Discriminated by
+ * `event.kind`; the union matches the Rust `TerminalEventKind`
+ * enum (`stdout` / `exited` / `error`).
+ */
+export type TerminalEventNotification = {
+	terminalId: string;
+	event:
+		| { kind: "stdout"; data: string }
+		| { kind: "exited"; code: number | null }
+		| { kind: "error"; message: string };
+};
+
+export type RemoteTerminalOpenResult = {
+	pid: number;
+};
+
+export type RemoteTerminalWriteResult = {
+	bytesWritten: number;
+};
+
+/**
+ * Open a PTY-backed shell on the named remote runtime. `onEvent`
+ * fires for every `terminal.event` matching `terminalId` — stdout
+ * chunks, the exit code, or a fatal error. The returned promise
+ * resolves once the open handshake completes; output starts
+ * arriving on the next tick.
+ */
+export async function openRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	workspaceDir: string,
+	options: {
+		shell?: string;
+		cols: number;
+		rows: number;
+		onEvent: (event: TerminalEventNotification) => void;
+	},
+): Promise<RemoteTerminalOpenResult> {
+	const channel = new Channel<TerminalEventNotification>();
+	channel.onmessage = options.onEvent;
+	return invoke<RemoteTerminalOpenResult>("open_remote_terminal", {
+		runtimeName,
+		terminalId,
+		workspaceDir,
+		shell: options.shell,
+		cols: options.cols,
+		rows: options.rows,
+		channel,
+	});
+}
+
+export async function writeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	data: string,
+): Promise<RemoteTerminalWriteResult> {
+	return invoke<RemoteTerminalWriteResult>("write_remote_terminal", {
+		runtimeName,
+		terminalId,
+		data,
+	});
+}
+
+export async function resizeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	cols: number,
+	rows: number,
+): Promise<void> {
+	return invoke<void>("resize_remote_terminal", {
+		runtimeName,
+		terminalId,
+		cols,
+		rows,
+	});
+}
+
+export async function closeRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+): Promise<void> {
+	return invoke<void>("close_remote_terminal", {
+		runtimeName,
+		terminalId,
+	});
+}
+
+/**
+ * Per-row metadata for a terminal still alive on the named remote.
+ * Mirrors the Rust `TerminalListEntry` wire shape — `pid` is the
+ * shell's PID on the remote, `openedAtMs` is the server-side open
+ * time so the UI can sort "most recent first" without per-client
+ * clocks.
+ */
+export type RemoteTerminalListEntry = {
+	terminalId: string;
+	pid: number;
+	workspaceDir: string;
+	openedAtMs: number;
+	cols: number;
+	rows: number;
+};
+
+/**
+ * Snapshot the server-side list of live terminals on the named
+ * remote. Returns every running PTY — both ones this desktop opened
+ * and any others (e.g. opened by a previous instance of the app, or
+ * by another machine connected to the same daemon).
+ */
+export async function listRemoteTerminals(
+	runtimeName: string,
+): Promise<RemoteTerminalListEntry[]> {
+	const result = await invoke<{ terminals: RemoteTerminalListEntry[] }>(
+		"list_remote_terminals",
+		{ runtimeName },
+	);
+	return result.terminals;
+}
+
+/**
+ * The desktop's view of "which terminal IDs did I open against this
+ * runtime?". Synchronous (no RPC round-trip) — pulled from the
+ * sidecar JSON hydrated at boot. Combine with
+ * [`listRemoteTerminals`] to mark "yours" vs "other sessions".
+ */
+export async function listOwnedTerminals(
+	runtimeName: string,
+): Promise<string[]> {
+	return invoke<string[]>("list_owned_terminals", { runtimeName });
+}
+
+/**
+ * Server-side initial state surfaced through `terminal.attach`.
+ * `scrollback` is the captured stdout since the previous attach (or
+ * since the open); paint it before the live stream resumes.
+ */
+export type RemoteTerminalAttachResult = {
+	scrollback: string;
+	cols: number;
+	rows: number;
+};
+
+/**
+ * Re-bind output for a live remote terminal to this desktop. Like
+ * [`openRemoteTerminal`] but talks to `terminal.attach` instead of
+ * `terminal.open`. The promise resolves with the captured scrollback;
+ * subsequent stdout flows on `onEvent` as it does for a fresh open.
+ */
+export async function attachRemoteTerminal(
+	runtimeName: string,
+	terminalId: string,
+	options: {
+		onEvent: (event: TerminalEventNotification) => void;
+	},
+): Promise<RemoteTerminalAttachResult> {
+	const channel = new Channel<TerminalEventNotification>();
+	channel.onmessage = options.onEvent;
+	return invoke<RemoteTerminalAttachResult>("attach_remote_terminal", {
+		runtimeName,
+		terminalId,
+		channel,
+	});
+}
+
 export type CliStatus = {
 	installed: boolean;
 	installPath: string | null;
@@ -770,6 +1296,8 @@ export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -1549,7 +2077,8 @@ export type UiMutationEvent =
 			modelId: string | null;
 			permissionMode: string | null;
 	  }
-	| { type: "activeStreamsChanged" };
+	| { type: "activeStreamsChanged" }
+	| { type: "runtimeStateChanged"; name: string; state: RuntimeState };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -1790,16 +2319,53 @@ export function triggerWorkspaceFetch(workspaceId: string): void {
 	void invoke("trigger_workspace_fetch", { workspaceId });
 }
 
+/**
+ * Read a file's content at a git ref. Routes through the binding-aware
+ * resolver — if `workspaceId` is bound to a remote runtime, the read
+ * happens on the remote.
+ *
+ * `filePath` may be absolute (legacy contract) or workspace-relative.
+ * Absolute paths inside the workspace root are normalised to relative
+ * by stripping the workspace prefix; anything else is passed through
+ * verbatim and the backend's seam-level sandbox rejects it.
+ */
 export async function readFileAtRef(
 	workspaceRootPath: string,
 	filePath: string,
 	gitRef: string,
+	workspaceId?: string,
 ): Promise<string | null> {
-	return await invoke<string | null>("read_file_at_ref", {
+	const relativePath = toWorkspaceRelativePath(workspaceRootPath, filePath);
+	return await readWorkspaceFileAtRef(
 		workspaceRootPath,
-		filePath,
+		relativePath,
 		gitRef,
-	});
+		workspaceId,
+	);
+}
+
+/**
+ * Normalise an absolute-or-relative `filePath` against `workspaceRootPath`.
+ * Strips the root prefix when the path starts with it; otherwise returns
+ * the input unchanged. Used by the wire-level wrappers that took absolute
+ * paths in their pre-phase-20 contract and now have to forward relative
+ * paths to the new commands.
+ */
+export function toWorkspaceRelativePath(
+	workspaceRootPath: string,
+	filePath: string,
+): string {
+	if (!filePath.startsWith("/") && !filePath.match(/^[A-Za-z]:[\\/]/)) {
+		// Already relative — nothing to strip.
+		return filePath;
+	}
+	const root = workspaceRootPath.endsWith("/")
+		? workspaceRootPath
+		: `${workspaceRootPath}/`;
+	if (filePath === workspaceRootPath || filePath.startsWith(root)) {
+		return filePath.slice(root.length);
+	}
+	return filePath;
 }
 
 export async function writeEditorFile(
@@ -1850,16 +2416,10 @@ export async function listEditorFiles(
  */
 export async function listWorkspaceFiles(
 	workspaceRootPath: string,
+	workspaceId?: string,
 ): Promise<InspectorFileItem[]> {
-	try {
-		return await invoke<InspectorFileItem[]>("list_workspace_files", {
-			workspaceRootPath,
-		});
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list workspace files."),
-		);
-	}
+	const result = await getWorkspaceFileTree(workspaceRootPath, workspaceId);
+	return result.entries;
 }
 
 export async function listEditorFilesWithContent(
@@ -1877,28 +2437,28 @@ export async function listEditorFilesWithContent(
 
 export async function listWorkspaceChangesWithContent(
 	workspaceRootPath: string,
+	workspaceId?: string,
 ): Promise<EditorFilesWithContentResponse> {
-	try {
-		return await invoke<EditorFilesWithContentResponse>(
-			"list_workspace_changes_with_content",
-			{ workspaceRootPath },
-		);
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to list workspace changes."),
-		);
-	}
+	const result = await getWorkspaceChanges(
+		workspaceRootPath,
+		true,
+		workspaceId,
+	);
+	return { items: result.items, prefetched: result.prefetched };
 }
 
 export async function discardWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("discard_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "discard" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to discard workspace file."),
@@ -1909,12 +2469,15 @@ export async function discardWorkspaceFile(
 export async function stageWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("stage_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "stage" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to stage workspace file."),
@@ -1925,15 +2488,195 @@ export async function stageWorkspaceFile(
 export async function unstageWorkspaceFile(
 	workspaceRootPath: string,
 	relativePath: string,
+	workspaceId?: string,
 ): Promise<void> {
 	try {
-		await invoke<void>("unstage_workspace_file", {
+		await mutateWorkspaceFile(
 			workspaceRootPath,
 			relativePath,
-		});
+			{ type: "unstage" },
+			workspaceId,
+		);
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to unstage workspace file."),
+		);
+	}
+}
+
+// ── workspace inspector ops on the remote-runner seam (phase 20d) ────
+//
+// Every wrapper below routes through the binding-aware Tauri commands
+// added in phase 20c. A `workspaceId` lets the backend resolve the
+// pinned runtime for that workspace (if any) so a workspace bound to
+// a remote pair flows over the wire transparently. Pass `undefined`
+// (or omit) for call sites that have no workspace context — the
+// backend falls back to the local runtime.
+
+export type WorkspaceMutateFileAction =
+	| { type: "write"; content: string }
+	| { type: "discard" }
+	| { type: "stage" }
+	| { type: "unstage" };
+
+export type WorkspaceFileTreeResult = {
+	entries: InspectorFileItem[];
+};
+
+export type WorkspaceChangesResult = {
+	items: InspectorFileItem[];
+	prefetched: EditorFilePrefetchItem[];
+};
+
+export type WorkspaceReadFileAtRefResult = {
+	content: string | null;
+};
+
+export type WorkspaceMutateFileResult = {
+	mtimeMs: number | null;
+};
+
+export async function getWorkspaceFileTree(
+	workspaceDir: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceFileTreeResult> {
+	try {
+		return await invoke<WorkspaceFileTreeResult>("get_workspace_file_tree", {
+			workspaceDir,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace files."),
+		);
+	}
+}
+
+export async function getWorkspaceChanges(
+	workspaceDir: string,
+	includeContent: boolean,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceChangesResult> {
+	try {
+		return await invoke<WorkspaceChangesResult>("get_workspace_changes", {
+			workspaceDir,
+			includeContent,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
+}
+
+export async function readWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<EditorFileReadResponse> {
+	try {
+		return await invoke<EditorFileReadResponse>("read_workspace_file", {
+			workspaceDir,
+			relativePath,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to open the selected file."),
+		);
+	}
+}
+
+export async function readWorkspaceFileAtRef(
+	workspaceDir: string,
+	relativePath: string,
+	gitRef: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<string | null> {
+	try {
+		const result = await invoke<WorkspaceReadFileAtRefResult>(
+			"read_workspace_file_at_ref",
+			{
+				workspaceDir,
+				relativePath,
+				gitRef,
+				workspaceId,
+				runtimeName,
+			},
+		);
+		return result.content;
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read file at the given ref."),
+		);
+	}
+}
+
+export async function statWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<EditorFileStatResponse> {
+	try {
+		return await invoke<EditorFileStatResponse>("stat_workspace_file", {
+			workspaceDir,
+			relativePath,
+			workspaceId,
+			runtimeName,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to inspect the selected file."),
+		);
+	}
+}
+
+export async function mutateWorkspaceFile(
+	workspaceDir: string,
+	relativePath: string,
+	action: WorkspaceMutateFileAction,
+	workspaceId?: string,
+	runtimeName?: string,
+): Promise<WorkspaceMutateFileResult> {
+	return await invoke<WorkspaceMutateFileResult>("mutate_workspace_file", {
+		workspaceDir,
+		relativePath,
+		action,
+		workspaceId,
+		runtimeName,
+	});
+}
+
+/**
+ * Convenience wrapper: write a file via `mutateWorkspaceFile`. Mirrors
+ * `writeEditorFile`'s shape but routes through the binding-aware
+ * resolver so a workspace bound to a remote flows over the wire.
+ */
+export async function writeWorkspaceFile(
+	workspaceRootPath: string,
+	relativePath: string,
+	content: string,
+	workspaceId?: string,
+): Promise<WorkspaceMutateFileResult> {
+	try {
+		return await mutateWorkspaceFile(
+			workspaceRootPath,
+			relativePath,
+			{ type: "write", content },
+			workspaceId,
+		);
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save the selected file."),
 		);
 	}
 }
@@ -2002,6 +2745,7 @@ export type ForgeActionStatus = {
 	changeRequest: ChangeRequestInfo | null;
 	reviewDecision?: string | null;
 	mergeable?: string | null;
+	mergeStateStatus?: string | null;
 	deployments: ForgeActionItem[];
 	checks: ForgeActionItem[];
 	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";
@@ -2267,18 +3011,26 @@ export async function createWorkspaceFromRepo(
  * `sourceBranch` (optional): branch to branch the new workspace from. When
  * omitted, the repo's default branch is used. The kanban "create" flow
  * forwards the user's branch picker selection here.
+ *
+ * `runtimeName` (optional, phase 22c): binds the new workspace to a
+ * registered remote runtime at creation time. `"local"` and `null` both
+ * mean "use the local runtime" — the backend collapses them into a NULL
+ * `workspaces.runtime_name` column so the resolver's NULL/"local"
+ * equivalence holds.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
 	initialStatus?: WorkspaceStatus | null,
+	runtimeName?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
 		initialStatus: initialStatus ?? null,
+		runtimeName: runtimeName ?? null,
 	});
 }
 

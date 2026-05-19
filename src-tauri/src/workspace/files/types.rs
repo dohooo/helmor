@@ -1,6 +1,14 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+// All Editor* shapes carry `Deserialize` + `PartialEq` so they can
+// double as the wire-shape for the remote-runner's `workspace.*`
+// methods. The inspector's local contract is exactly what flows over
+// JSON-RPC; defining a parallel "wire type" would just duplicate the
+// invariants. `#[serde(default)]` paired with `skip_serializing_if`
+// keeps the round-trip lossless: absent → default on the way in,
+// default → absent on the way out.
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFileReadResponse {
     pub path: String,
@@ -8,14 +16,14 @@ pub struct EditorFileReadResponse {
     pub mtime_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFileWriteResponse {
     pub path: String,
     pub mtime_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFileStatResponse {
     pub path: String,
@@ -25,7 +33,7 @@ pub struct EditorFileStatResponse {
     pub size: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFileListItem {
     pub path: String,
@@ -45,13 +53,13 @@ pub struct EditorFileListItem {
     /// True when git reports the file as binary (`-\t-` in numstat) or when
     /// an untracked file fails UTF-8 decoding. Line counts are 0 for binary
     /// files since they have no meaningful line diff.
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub is_binary: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staged_status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unstaged_status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub committed_status: Option<String>,
 }
 
@@ -59,14 +67,14 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFilePrefetchItem {
     pub absolute_path: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFilesWithContentResponse {
     pub items: Vec<EditorFileListItem>,

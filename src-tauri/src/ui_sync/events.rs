@@ -58,6 +58,16 @@ pub enum UiMutationEvent {
     /// `list_active_streams`. See `agents::streaming::active_streams` for
     /// the source of truth this notification mirrors.
     ActiveStreamsChanged,
+    /// A registered remote runtime transitioned to a new connection
+    /// state. Frontends invalidate `["remote-runtimes"]` so the
+    /// list re-renders with the fresh state-keyed chip. The payload
+    /// carries the new state so listeners can short-circuit a fetch
+    /// if they're feeling clever; the canonical source remains
+    /// `list_remote_runtimes`.
+    RuntimeStateChanged {
+        name: String,
+        state: crate::remote::RuntimeState,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

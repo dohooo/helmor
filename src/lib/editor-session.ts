@@ -1,10 +1,45 @@
 export type DiffFileStatus = "M" | "A" | "D";
 
+/** Git stage-0 (clean index) syntax. `read_file_at_ref` concatenates
+ * `<ref>:<path>`, so passing `":0"` yields `:0:<path>` — the canonical
+ * way to read a file's staged content. Used by the unstaged area as its
+ * diff base, and by the staged area as its modified side. */
+export const INDEX_REF = ":0";
+
 export type DiffOpenOptions = {
 	fileStatus: DiffFileStatus;
 	originalRef?: string;
 	modifiedRef?: string;
 };
+
+/** What the inspector knows about the open editor target. We carry the
+ * diff bases (not just the path) so that "same file opened from Staged"
+ * vs "same file opened from Unstaged" can render as distinct selections —
+ * comparing path alone highlights both rows at once. Null when no file is
+ * open. */
+export type ActiveEditorTarget = {
+	path: string;
+	originalRef?: string;
+	modifiedRef?: string;
+};
+
+/** Returns true when the open editor's diff bases match the supplied
+ * area refs. Used by inspector groups to decide whether *their* row for
+ * a given path should render selected — comparing path alone breaks down
+ * when the same file lives in multiple areas (Staged + Unstaged) with
+ * different bases. Refs are compared strictly so `undefined`
+ * ("read modified side from disk") matches itself. */
+export function isActiveEditorTarget(
+	target: ActiveEditorTarget | null | undefined,
+	originalRef: string | undefined,
+	modifiedRef: string | undefined,
+): target is ActiveEditorTarget {
+	return (
+		!!target &&
+		target.originalRef === originalRef &&
+		target.modifiedRef === modifiedRef
+	);
+}
 
 /** "source" = Monaco editor; "preview" = rendered streamdown view. Only meaningful for markdown paths. */
 export type EditorViewMode = "source" | "preview";

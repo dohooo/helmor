@@ -21,6 +21,10 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 /// frontend should follow up with `finalize_workspace_from_repo` to kick
 /// off the slow git worktree creation; UI remains visible during that
 /// phase with state=initializing.
+/// Phase 22c: optional `runtime_name` binds the new workspace to a
+/// registered runtime at creation time, no separate bind step
+/// required. `None` and `"local"` both produce a NULL column (= use
+/// the local runtime).
 #[tauri::command]
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
@@ -28,9 +32,11 @@ pub async fn prepare_workspace_from_repo(
     source_branch: Option<String>,
     mode: Option<crate::workspace_state::WorkspaceMode>,
     initial_status: Option<WorkspaceStatus>,
+    runtime_name: Option<String>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let mode = mode.unwrap_or_default();
     let initial_status = initial_status.unwrap_or_default();
+    let runtime_name = normalise_runtime_name_input(runtime_name);
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
         run_blocking(move || match mode {
@@ -39,6 +45,7 @@ pub async fn prepare_workspace_from_repo(
                     &repo_id,
                     source_branch.as_deref(),
                     initial_status,
+                    runtime_name.as_deref(),
                 )
             }
             crate::workspace_state::WorkspaceMode::Local => {
@@ -46,6 +53,7 @@ pub async fn prepare_workspace_from_repo(
                     &repo_id,
                     source_branch.as_deref(),
                     initial_status,
+                    runtime_name.as_deref(),
                 )
             }
         })
@@ -53,6 +61,16 @@ pub async fn prepare_workspace_from_repo(
     };
     notify_workspace_changed_in_background(app);
     Ok(result)
+}
+
+/// Phase 22c: collapse `None`, `Some("")`, and `Some("local")` into
+/// `None` (the canonical "use the local runtime" form). Frontend
+/// sends `"local"` from the Where picker when the user wants the
+/// explicit local option; the backend stores NULL either way so
+/// the resolver's NULL/`"local"` equivalence holds.
+fn normalise_runtime_name_input(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "local")
 }
 
 /// Phase 2: slow (~200ms-2s) materialization. Creates the git worktree,
@@ -159,14 +177,43 @@ pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<St
 /// Legacy combined flow (prepare + finalize in a single call). Retained
 /// for CLI / MCP / add-repository callers that don't benefit from the
 /// two-phase UI split.
+///
+/// Phase 22c: accepts an optional `runtime_name` so the same command
+/// surface works for "create on remote" calls from MCP / CLI without
+/// forcing them to drive the two-phase flow. Non-UI callers
+/// (`add_repository_from_local_path`, the MCP bridge, etc.) call
+/// `workspaces::create_workspace_from_repo_impl` directly with no
+/// runtime — only the Tauri command path threads the binding.
 #[tauri::command]
 pub async fn create_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
+    runtime_name: Option<String>,
 ) -> CmdResult<workspaces::CreateWorkspaceResponse> {
+    let runtime_name = normalise_runtime_name_input(runtime_name);
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
-        run_blocking(move || workspaces::create_workspace_from_repo_impl(&repo_id)).await?
+        run_blocking(move || {
+            // Same shape as the two-phase path: prepare runs the
+            // INSERT (where `runtime_name` lands), finalize creates
+            // the worktree.
+            let prepared = workspaces::prepare_workspace_from_repo_impl(
+                &repo_id,
+                None,
+                WorkspaceStatus::default(),
+                runtime_name.as_deref(),
+            )?;
+            let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
+            Ok::<_, anyhow::Error>(workspaces::CreateWorkspaceResponse {
+                created_workspace_id: prepared.workspace_id.clone(),
+                selected_workspace_id: prepared.workspace_id,
+                initial_session_id: prepared.initial_session_id,
+                created_state: finalized.final_state,
+                directory_name: prepared.directory_name,
+                branch: prepared.branch,
+            })
+        })
+        .await?
     };
     notify_workspace_changed_in_background(app);
     Ok(result)

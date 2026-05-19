@@ -17,6 +17,8 @@ Rules:
    - HELMOR_WORKSPACE_PATH: the current workspace's worktree path, and the directory where the script runs.
    - HELMOR_WORKSPACE_NAME: the current workspace name.
    - HELMOR_DEFAULT_BRANCH: the repository default branch.
+   - HELMOR_PORT: the first port in this workspace's stable, non-overlapping port range.
+   - HELMOR_PORT_COUNT: how many ports are reserved starting at HELMOR_PORT.
 4. Migration from conductor.json:
    - If helmor.json does not exist but conductor.json exists, copy conductor.json to helmor.json.
    - Rename every CONDUCTOR_* environment variable reference in helmor.json to its Helmor equivalent. Cover both $VAR and \${VAR} forms. Do this whether helmor.json was just copied or an earlier incomplete migration left stale references:
@@ -71,6 +73,8 @@ Rules:
    - HELMOR_WORKSPACE_PATH: the current workspace's worktree path, and the directory where the script runs.
    - HELMOR_WORKSPACE_NAME: the current workspace name.
    - HELMOR_DEFAULT_BRANCH: the repository default branch.
+   - HELMOR_PORT: the first port in this workspace's stable, non-overlapping port range.
+   - HELMOR_PORT_COUNT: how many ports are reserved starting at HELMOR_PORT.
 4. Migration from conductor.json:
    - If helmor.json does not exist but conductor.json exists, copy conductor.json to helmor.json.
    - Rename every CONDUCTOR_* environment variable reference in helmor.json to its Helmor equivalent. Cover both $VAR and \${VAR} forms. Do this whether helmor.json was just copied or an earlier incomplete migration left stale references:
@@ -83,7 +87,8 @@ Rules:
 5. If the migrated helmor.json already contains scripts.run, stop and tell me the migration is complete.
 6. Do not overfit this run script to the current task, a single test file, or a one-off command.
 7. Do not quietly choose a heavy, destructive, or highly opinionated command when multiple reasonable defaults exist.
-8. Ask at most 3 rounds of questions, and only when they materially change the choice.
+8. For dev servers or local services, prefer HELMOR_PORT over hardcoded defaults so parallel workspaces do not collide. If the project needs multiple ports, use the range from HELMOR_PORT through HELMOR_PORT + HELMOR_PORT_COUNT - 1.
+9. Ask at most 3 rounds of questions, and only when they materially change the choice.
 
 What to inspect:
 - helmor.json, conductor.json
@@ -123,6 +128,8 @@ Rules:
    - HELMOR_WORKSPACE_PATH: the current workspace's worktree path, and the directory where the script runs.
    - HELMOR_WORKSPACE_NAME: the current workspace name.
    - HELMOR_DEFAULT_BRANCH: the repository default branch.
+   - HELMOR_PORT: the first port in this workspace's stable, non-overlapping port range.
+   - HELMOR_PORT_COUNT: how many ports are reserved starting at HELMOR_PORT.
 4. Migration from conductor.json:
    - If helmor.json does not exist but conductor.json exists, copy conductor.json to helmor.json.
    - Rename every CONDUCTOR_* environment variable reference in helmor.json to its Helmor equivalent. Cover both $VAR and \${VAR} forms. Do this whether helmor.json was just copied or an earlier incomplete migration left stale references:

@@ -239,6 +239,8 @@ pub async fn spawn_forge_cli_auth_terminal(
         workspace_path: None,
         workspace_name: None,
         default_branch: None,
+        port_base: None,
+        port_count: None,
     };
     let mgr = manager.inner().clone();
     let script_type = forge_cli_auth_script_type(provider, &host, &instance_id);

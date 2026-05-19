@@ -8,7 +8,7 @@ import {
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
 import type { ChangeRequestInfo } from "@/lib/api";
-import type { DiffOpenOptions } from "@/lib/editor-session";
+import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
@@ -39,12 +39,19 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceRemote?: string | null;
 	workspaceRemoteUrl?: string | null;
 	workspaceState?: string | null;
+	/**
+	 * Phase 22d: name of the bound remote runtime (NULL / `"local"`
+	 * means use the local runtime). Surfaced in the
+	 * "permanently delete" toast so the operator knows which host's
+	 * workspace they're nuking.
+	 */
+	workspaceRuntimeName?: string | null;
 	/** Timestamp from `WorkspaceDetail.setupCompletedAt`. Null when setup
 	 * was never run (or skipped); drives the Setup tab placeholder copy
 	 * and the "default to Run tab" behaviour after restart. */
 	workspaceSetupCompletedAt?: string | null;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -76,10 +83,11 @@ export function WorkspaceInspectorSidebar({
 	workspaceRemote,
 	workspaceRemoteUrl,
 	workspaceState,
+	workspaceRuntimeName,
 	workspaceSetupCompletedAt,
 	repoId,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -374,10 +382,12 @@ export function WorkspaceInspectorSidebar({
 		? terminalInstances.find((t) => t.id === activeTab)
 		: undefined;
 	const canHoverExpand = isTerminalTabActive
-		? !activeTerminalInstance?.hoverZoomDisabled
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
+		? appSettings.terminalHoverExpansion &&
+			!activeTerminalInstance?.hoverZoomDisabled
+		: appSettings.terminalHoverExpansion &&
+			(scriptTabState === "running" ||
+				scriptTabState === "success" ||
+				scriptTabState === "failure");
 
 	const handleOpenSettings = onOpenSettings ?? (() => {});
 
@@ -395,9 +405,10 @@ export function WorkspaceInspectorSidebar({
 				workspaceBranch={workspaceBranch ?? null}
 				workspaceRemoteUrl={workspaceRemoteUrl ?? null}
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
+				workspaceRuntimeName={workspaceRuntimeName ?? null}
 				changes={changes}
 				editorMode={editorMode}
-				activeEditorPath={activeEditorPath}
+				activeEditor={activeEditor}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}

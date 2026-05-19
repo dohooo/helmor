@@ -17,6 +17,7 @@ export type ThemeApplicationOptions = {
 	darkTheme: DarkTheme;
 	uiFontFamily: string | null;
 	codeFontFamily: string | null;
+	terminalFontFamily: string | null;
 	chatFontSize: number;
 	usePointerCursors: boolean;
 };
@@ -39,6 +40,7 @@ export function useThemeApplication(opts: ThemeApplicationOptions): void {
 		darkTheme,
 		uiFontFamily,
 		codeFontFamily,
+		terminalFontFamily,
 		chatFontSize,
 		usePointerCursors,
 	} = opts;
@@ -89,6 +91,14 @@ export function useThemeApplication(opts: ThemeApplicationOptions): void {
 			codeFontFamily,
 		);
 	}, [codeFontFamily]);
+
+	useEffect(() => {
+		setOrRemoveProperty(
+			document.documentElement,
+			"--font-terminal-user",
+			terminalFontFamily,
+		);
+	}, [terminalFontFamily]);
 
 	// Chat font size mirrored to a CSS var so message components can pick
 	// it up without prop drilling. (They currently inline-style it from

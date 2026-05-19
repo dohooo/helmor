@@ -6,6 +6,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceGroup, WorkspaceRow } from "@/lib/api";
@@ -25,6 +26,49 @@ const workspaceGroups: WorkspaceGroup[] = [
 		label: "In Progress",
 		tone: "progress",
 		rows: [workspaceRow],
+	},
+];
+
+const repositoryOptions = [
+	{ id: "repo-alpha", name: "Alpha" },
+	{ id: "repo-beta", name: "Beta" },
+	{ id: "repo-gamma", name: "Gamma" },
+];
+
+const repoWorkspaceGroups: WorkspaceGroup[] = [
+	{
+		id: "progress",
+		label: "In Progress",
+		tone: "progress",
+		rows: [
+			{
+				...workspaceRow,
+				id: "ws-beta",
+				title: "Beta workspace",
+				repoId: "repo-beta",
+				repoName: "Beta",
+				createdAt: "2024-01-01T00:00:00Z",
+				updatedAt: "2024-01-03T00:00:00Z",
+			},
+			{
+				...workspaceRow,
+				id: "ws-alpha",
+				title: "Alpha workspace",
+				repoId: "repo-alpha",
+				repoName: "Alpha",
+				createdAt: "2024-01-02T00:00:00Z",
+				updatedAt: "2024-01-02T00:00:00Z",
+			},
+			{
+				...workspaceRow,
+				id: "ws-gamma",
+				title: "Gamma workspace",
+				repoId: "repo-gamma",
+				repoName: "Gamma",
+				createdAt: "2024-01-03T00:00:00Z",
+				updatedAt: "2024-01-01T00:00:00Z",
+			},
+		],
 	},
 ];
 
@@ -112,6 +156,201 @@ describe("WorkspacesSidebar", () => {
 		expect(screen.queryByText("Repositories")).toBeNull();
 		expect(screen.queryByRole("option", { name: /helmor/i })).toBeNull();
 		expect(onOpenNewWorkspace).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens sidebar filter controls and selects multiple repositories", async () => {
+		const user = userEvent.setup();
+		function ControlledSidebar() {
+			const [repoFilterIds, setRepoFilterIds] = useState<string[]>([]);
+			const groups =
+				repoFilterIds.length === 0
+					? repoWorkspaceGroups
+					: [
+							{
+								...repoWorkspaceGroups[0]!,
+								rows: repoWorkspaceGroups[0]!.rows.filter((row) =>
+									repoFilterIds.includes(row.repoId ?? ""),
+								),
+							},
+						];
+			return (
+				<WorkspacesSidebar
+					groups={groups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarRepoFilterIds={repoFilterIds}
+					onSidebarRepoFilterChange={setRepoFilterIds}
+				/>
+			);
+		}
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<ControlledSidebar />
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("button", { name: "All repositories" }));
+		await user.click(screen.getByText("Alpha"));
+		await user.click(screen.getByText("Gamma"));
+
+		expect(
+			screen.getByRole("button", { name: "Alpha workspace" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Gamma workspace" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Beta workspace" })).toBeNull();
+	});
+
+	it("opens sidebar filter controls from the app shortcut event", () => {
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={repoWorkspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarFilterShortcut="Mod+Shift+F"
+				/>
+			</TooltipProvider>,
+		);
+
+		fireEvent(window, new CustomEvent("helmor:open-sidebar-filter"));
+
+		expect(screen.getByText("Group by")).toBeInTheDocument();
+		expect(screen.getByText("Sort by")).toBeInTheDocument();
+	});
+
+	it("changes sidebar grouping from the filter popover", async () => {
+		const user = userEvent.setup();
+		const onSidebarGroupingChange = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={repoWorkspaceGroups}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="status"
+					onSidebarGroupingChange={onSidebarGroupingChange}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("radio", { name: "Repository" }));
+
+		expect(onSidebarGroupingChange).toHaveBeenCalledWith("repo");
+	});
+
+	it("renders an active sidebar filter and clears it", async () => {
+		const user = userEvent.setup();
+		const onSidebarRepoFilterChange = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							...repoWorkspaceGroups[0],
+							rows: repoWorkspaceGroups[0]!.rows.filter(
+								(row) => row.repoId === "repo-alpha",
+							),
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarRepoFilterIds={["repo-alpha"]}
+					onSidebarRepoFilterChange={onSidebarRepoFilterChange}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Alpha workspace" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Beta workspace" })).toBeNull();
+
+		await user.click(
+			screen.getByRole("button", { name: "Filter and sort sidebar" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Alpha" }));
+		await user.click(screen.getByText("All repositories"));
+
+		expect(onSidebarRepoFilterChange).toHaveBeenCalledWith([]);
+	});
+
+	it("hides the repo drag handle when sort is not custom", () => {
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							id: "repo:repo-beta",
+							label: "Beta",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[0]!],
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="repo"
+					sidebarSort="updatedAt"
+					onMoveRepositoryInSidebar={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		expect(container.querySelector("[data-repo-dnd-handle='true']")).toBeNull();
+	});
+
+	it("forwards a repo drop directly under custom sort", () => {
+		const onMoveRepositoryInSidebar = vi.fn();
+
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={[
+						{
+							id: "repo:repo-beta",
+							label: "Beta",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[0]!],
+						},
+						{
+							id: "repo:repo-alpha",
+							label: "Alpha",
+							tone: "pinned",
+							rows: [repoWorkspaceGroups[0]!.rows[1]!],
+						},
+					]}
+					archivedRows={[]}
+					availableRepositories={repositoryOptions}
+					sidebarGrouping="repo"
+					sidebarSort="custom"
+					onMoveRepositoryInSidebar={onMoveRepositoryInSidebar}
+				/>
+			</TooltipProvider>,
+		);
+
+		const repoHandle = container.querySelector("[data-repo-dnd-handle='true']");
+		expect(repoHandle).toBeInTheDocument();
+
+		fireEvent.pointerDown(repoHandle!, {
+			button: 0,
+			clientX: 10,
+			clientY: 10,
+			pointerId: 1,
+		});
+		fireEvent.pointerMove(window, { clientX: 10, clientY: 30, pointerId: 1 });
+		fireEvent.pointerUp(window, { clientX: 10, clientY: 30, pointerId: 1 });
+
+		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null);
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {

@@ -14,7 +14,7 @@ import {
 	findReplacementWorkspaceIdAfterRemoval,
 	getWorkspaceBranchTone,
 	inferDefaultModelId,
-	insertRowByCreatedAtDesc,
+	insertRowBySidebarOrder,
 	isNewSession,
 	moveWorkspaceToGroup,
 	reorderWorkspaceInSidebar,
@@ -166,57 +166,91 @@ describe("workspaceGroupIdFromStatus", () => {
 	});
 });
 
-describe("insertRowByCreatedAtDesc", () => {
-	const row = (id: string, createdAt?: string): WorkspaceRow => ({
+describe("insertRowBySidebarOrder", () => {
+	const row = (
+		id: string,
+		createdAt?: string,
+		displayOrder?: number,
+	): WorkspaceRow => ({
 		id,
 		title: id,
 		...(createdAt ? { createdAt } : {}),
+		...(displayOrder !== undefined ? { displayOrder } : {}),
 	});
 
-	it("inserts at the correct position to preserve DESC order", () => {
+	it("falls back to createdAt DESC when displayOrder ties (all zero)", () => {
 		const rows = [
 			row("a", "2024-03-01T00:00:00Z"),
 			row("b", "2024-02-01T00:00:00Z"),
 			row("c", "2024-01-01T00:00:00Z"),
 		];
-		const inserted = insertRowByCreatedAtDesc(
+		const inserted = insertRowBySidebarOrder(
 			rows,
 			row("new", "2024-02-15T00:00:00Z"),
 		);
 		expect(inserted.map((r) => r.id)).toEqual(["a", "new", "b", "c"]);
 	});
 
-	it("appends when new row is the oldest", () => {
+	it("appends when new row is the oldest under createdAt fallback", () => {
 		const rows = [
 			row("a", "2024-03-01T00:00:00Z"),
 			row("b", "2024-02-01T00:00:00Z"),
 		];
-		const inserted = insertRowByCreatedAtDesc(
+		const inserted = insertRowBySidebarOrder(
 			rows,
 			row("new", "2023-01-01T00:00:00Z"),
 		);
 		expect(inserted.map((r) => r.id)).toEqual(["a", "b", "new"]);
 	});
 
-	it("prepends when new row is the newest", () => {
+	it("prepends when new row is the newest under createdAt fallback", () => {
 		const rows = [
 			row("a", "2024-03-01T00:00:00Z"),
 			row("b", "2024-02-01T00:00:00Z"),
 		];
-		const inserted = insertRowByCreatedAtDesc(
+		const inserted = insertRowBySidebarOrder(
 			rows,
 			row("new", "2025-01-01T00:00:00Z"),
 		);
 		expect(inserted.map((r) => r.id)).toEqual(["new", "a", "b"]);
 	});
 
-	it("treats a missing createdAt as newest", () => {
+	it("treats a missing createdAt as oldest under createdAt fallback (mirrors backend NULL DESC)", () => {
 		const rows = [
 			row("a", "2024-03-01T00:00:00Z"),
 			row("b", "2024-02-01T00:00:00Z"),
 		];
-		const inserted = insertRowByCreatedAtDesc(rows, row("new"));
-		expect(inserted.map((r) => r.id)).toEqual(["new", "a", "b"]);
+		const inserted = insertRowBySidebarOrder(rows, row("new"));
+		expect(inserted.map((r) => r.id)).toEqual(["a", "b", "new"]);
+	});
+
+	it("respects displayOrder ASC over createdAt", () => {
+		// Backend order: display_order ASC, created_at DESC.
+		const rows = [
+			row("a", "2024-01-01T00:00:00Z", 1024),
+			row("b", "2024-02-01T00:00:00Z", 2048),
+			row("c", "2024-03-01T00:00:00Z", 3072),
+		];
+		// Restored row has an old createdAt but mid displayOrder — it must
+		// land between `a` and `b`, not at the top (createdAt would put it
+		// last) and not at the bottom.
+		const inserted = insertRowBySidebarOrder(
+			rows,
+			row("new", "2020-01-01T00:00:00Z", 1536),
+		);
+		expect(inserted.map((r) => r.id)).toEqual(["a", "new", "b", "c"]);
+	});
+
+	it("appends when displayOrder is higher than every existing row", () => {
+		const rows = [
+			row("a", "2024-01-01T00:00:00Z", 1024),
+			row("b", "2024-02-01T00:00:00Z", 2048),
+		];
+		const inserted = insertRowBySidebarOrder(
+			rows,
+			row("new", "2030-01-01T00:00:00Z", 5000),
+		);
+		expect(inserted.map((r) => r.id)).toEqual(["a", "b", "new"]);
 	});
 });
 

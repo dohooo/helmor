@@ -13,7 +13,7 @@ import type {
 	RepositoryCreateOption,
 	WorkspaceDetail,
 } from "@/lib/api";
-import type { DiffOpenOptions } from "@/lib/editor-session";
+import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -48,7 +48,7 @@ type Props = {
 	workspaceRootPath: string | null;
 	selectedWorkspaceDetail: WorkspaceDetail | null;
 	displayedSessionId: string | null;
-	editorSessionPath: string | null;
+	activeEditor: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	onCommitAction: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction: () => Promise<void>;
@@ -83,7 +83,7 @@ export function ShellInspectorPane({
 	workspaceRootPath,
 	selectedWorkspaceDetail,
 	displayedSessionId,
-	editorSessionPath,
+	activeEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -166,8 +166,9 @@ export function ShellInspectorPane({
 						workspaceRemote={selectedWorkspaceDetail?.remote ?? null}
 						workspaceRemoteUrl={selectedWorkspaceDetail?.remoteUrl ?? null}
 						workspaceTargetBranch={targetBranch}
+						workspaceRuntimeName={selectedWorkspaceDetail?.runtimeName ?? null}
 						editorMode={editorMode}
-						activeEditorPath={editorSessionPath}
+						activeEditor={activeEditor}
 						onOpenEditorFile={onOpenEditorFile}
 						onCommitAction={onCommitAction}
 						onReviewAction={onReviewAction}

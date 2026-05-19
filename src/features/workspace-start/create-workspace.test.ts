@@ -76,6 +76,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"origin/main",
 			"worktree",
 			null,
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -114,6 +115,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"origin/dev",
 			"worktree",
 			"backlog",
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -147,6 +149,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"origin/dev",
 			"worktree",
 			null,
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -178,5 +181,55 @@ describe("createWorkspaceFromStartComposer", () => {
 		});
 
 		expect(result.preparedWorkingDirectory).toBe("/Users/me/repos/local-only");
+	});
+
+	it("forwards a selected runtime name into prepareWorkspaceFromRepo (phase 22c)", async () => {
+		// Where-picker selection lands as the 5th arg on the wire.
+		// The backend collapses null / "local" into NULL on the row,
+		// so the equivalence is tested separately at the
+		// `normalise_runtime_name_input` layer; here we just make sure
+		// the value isn't lost between the controller and the wrapper.
+		resetMocks();
+
+		await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "main",
+			mode: "worktree",
+			runtimeName: "dev.box",
+			submitMode: "startNow",
+			editorStateSnapshot,
+		});
+
+		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+			"repo-1",
+			"main",
+			"worktree",
+			null,
+			"dev.box",
+		);
+	});
+
+	it("defaults runtimeName to null when omitted", async () => {
+		// Existing call sites that don't pass runtimeName should keep
+		// working — the wrapper must default the arg to null on the
+		// wire so the backend's normaliser sees the canonical "local"
+		// form.
+		resetMocks();
+
+		await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "main",
+			mode: "worktree",
+			submitMode: "startNow",
+			editorStateSnapshot,
+		});
+
+		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
+			"repo-1",
+			"main",
+			"worktree",
+			null,
+			null,
+		);
 	});
 });

@@ -735,7 +735,7 @@ function PickerButton({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"flex h-full cursor-pointer items-center justify-center gap-2 rounded-lg border text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring/60",
+				"flex h-full cursor-interactive items-center justify-center gap-2 rounded-lg border text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring/60",
 				muted
 					? "border-border/40 bg-card/40 text-muted-foreground hover:border-border/70 hover:bg-card/70 hover:text-foreground"
 					: "border-border/55 bg-card/80 text-foreground hover:bg-card focus-visible:bg-card",
@@ -1019,7 +1019,7 @@ function GitlabHostSlot({
 						type="button"
 						onClick={onClose}
 						aria-label="Cancel"
-						className="absolute top-3 right-3 inline-flex size-6 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						className="absolute top-3 right-3 inline-flex size-6 cursor-interactive items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					>
 						<X className="size-3.5" strokeWidth={2.4} />
 					</button>

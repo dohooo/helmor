@@ -96,9 +96,17 @@ export function filterFiles(
 
 export function FileMentionPlugin({
 	workspaceRootPath,
+	workspaceId,
 	popupAnchorRef,
 }: {
 	workspaceRootPath: string | null;
+	/**
+	 * Workspace id passed through to the binding-aware IPC resolver so a
+	 * workspace pinned to a remote runtime walks files on the remote
+	 * instead of the desktop's filesystem. `undefined` falls back to the
+	 * local runtime — same behaviour as before phase 20d.
+	 */
+	workspaceId?: string | null;
 	/**
 	 * Optional portal target for the popup. When provided, the popup is rendered
 	 * inside this element (expected to be `position: relative`) so `bottom-full`
@@ -136,7 +144,10 @@ export function FileMentionPlugin({
 	// Light up immediately if the picker opens before idle.
 	const pickerActive = query !== null;
 	const filesQuery = useQuery({
-		...workspaceFilesQueryOptions(workspaceRootPath ?? ""),
+		...workspaceFilesQueryOptions(
+			workspaceRootPath ?? "",
+			workspaceId ?? undefined,
+		),
 		enabled: Boolean(workspaceRootPath) && (hasIdledOnce || pickerActive),
 	});
 

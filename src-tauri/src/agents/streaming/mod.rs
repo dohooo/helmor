@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Maximum time we wait between sidecar events before declaring the sidecar
@@ -17,8 +18,10 @@ mod cleanup;
 pub(crate) mod codex_goal;
 pub(crate) mod context_usage;
 mod params;
+mod plan_review;
 mod session_id;
 mod state;
+pub(super) mod transports;
 
 #[cfg(test)]
 mod event_loop_tests;
@@ -40,9 +43,9 @@ use serde_json::{json, Value};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::pipeline::types::{
-    ExtendedMessagePart, MessagePart, MessageRole, PlanAllowedPrompt, ThreadMessageLike,
-};
+use crate::pipeline::types::ThreadMessageLike;
+
+use plan_review::build_exit_plan_review_message;
 
 use super::{
     finalize_session_metadata, persist_error_message, persist_exit_plan_message,
@@ -54,7 +57,7 @@ use super::{
 pub(super) fn stream_via_sidecar(
     app: AppHandle,
     on_event: Channel<AgentStreamEvent>,
-    sidecar: &crate::sidecar::ManagedSidecar,
+    transport: Arc<dyn transports::SidecarTransport>,
     active_streams: &ActiveStreams,
     stream_id: &str,
     model: &super::ResolvedModel,
@@ -69,6 +72,7 @@ pub(super) fn stream_via_sidecar(
         model = %model.cli_model,
         cwd = %working_directory.display(),
         prompt_len = prompt.len(),
+        transport = ?transport.kind(),
         "stream_via_sidecar"
     );
 
@@ -213,10 +217,10 @@ pub(super) fn stream_via_sidecar(
     // visibility here) couples this call site to UI policy.
     crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
 
-    let rx = sidecar.subscribe(&request_id);
+    let rx = transport.subscribe(&request_id);
 
-    if let Err(error) = sidecar.send(&sidecar_req) {
-        sidecar.unsubscribe(&request_id);
+    if let Err(error) = transport.send(&sidecar_req) {
+        transport.unsubscribe(&request_id);
         active_streams.unregister(&request_id);
         crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
@@ -236,6 +240,7 @@ pub(super) fn stream_via_sidecar(
     let images_copy = request.images.clone().unwrap_or_default();
     let sidecar_session_id_copy = sidecar_session_id.clone();
     let rid = request_id.clone();
+    let transport_for_loop = Arc::clone(&transport);
 
     tauri::async_runtime::spawn_blocking(move || {
         let stream_started_at = Instant::now();
@@ -248,7 +253,6 @@ pub(super) fn stream_via_sidecar(
             "stream: event loop starting"
         );
 
-        let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
         let active_streams_state: tauri::State<'_, ActiveStreams> = app.state();
         let mut resolved_session_id: Option<String> = resume_session_id.clone();
         let context_key = rid.clone();
@@ -377,7 +381,7 @@ pub(super) fn stream_via_sidecar(
                                 "provider": provider,
                             }),
                         };
-                        if let Err(e) = sidecar_state.send(&stop_req) {
+                        if let Err(e) = transport_for_loop.send(&stop_req) {
                             tracing::warn!(rid = %rid, "stopSession during abnormal exit failed: {e}");
                         }
                     }
@@ -1128,59 +1132,10 @@ pub(super) fn stream_via_sidecar(
             elapsed_ms = stream_started_at.elapsed().as_millis(),
             "stream: event loop exited, cleaning up subscription"
         );
-        sidecar_state.unsubscribe(&rid);
+        transport_for_loop.unsubscribe(&rid);
         active_streams_state.unregister(&rid);
         crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
     });
 
     Ok(())
-}
-
-fn build_exit_plan_review_message(
-    id: Option<String>,
-    created_at: Option<String>,
-    tool_use_id: &str,
-    tool_name: &str,
-    tool_input: &Value,
-) -> ThreadMessageLike {
-    let plan = tool_input
-        .get("plan")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let plan_file_path = tool_input
-        .get("planFilePath")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let allowed_prompts = tool_input
-        .get("allowedPrompts")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    let tool = entry.get("tool").and_then(Value::as_str)?;
-                    let prompt = entry.get("prompt").and_then(Value::as_str)?;
-                    Some(PlanAllowedPrompt {
-                        tool: tool.to_string(),
-                        prompt: prompt.to_string(),
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    ThreadMessageLike {
-        role: MessageRole::Assistant,
-        id,
-        created_at,
-        content: vec![ExtendedMessagePart::Basic(MessagePart::PlanReview {
-            tool_use_id: tool_use_id.to_string(),
-            tool_name: tool_name.to_string(),
-            plan,
-            plan_file_path,
-            allowed_prompts,
-        })],
-        status: None,
-        streaming: None,
-    }
 }

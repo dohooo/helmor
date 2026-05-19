@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod cli;
+pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod mcp;
 pub mod models;
 pub mod pipeline;
 pub mod rate_limits;
+pub mod remote;
 pub mod schema;
 pub mod service;
 mod shell_env;
@@ -64,7 +66,11 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     let app = builder
-        .manage(sidecar::ManagedSidecar::new())
+        // Phase 23c: ManagedSidecar is managed behind an `Arc` so the
+        // local-vs-remote `SidecarTransport` resolver can hold the
+        // local-path sidecar in an `Arc<LocalSidecarTransport>` without
+        // taking it out of Tauri's state.
+        .manage(std::sync::Arc::new(sidecar::ManagedSidecar::new()))
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
@@ -73,6 +79,10 @@ pub fn run() {
         .manage(ui_sync::UiSyncManager::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
+        .manage(std::sync::Arc::new(remote::RuntimeRegistry::new()))
+        .manage(std::sync::Arc::new(
+            commands::remote_commands::RemoteTerminalSubscriptions::new(),
+        ))
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -187,6 +197,121 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
+            // Background poller flips the per-remote-runtime state
+            // chip when a ping fails (or recovers). The local entry
+            // is always Connected by construction; the loop only
+            // iterates over registered remotes.
+            {
+                let app_handle = app.handle().clone();
+                let registry = app
+                    .state::<std::sync::Arc<remote::RuntimeRegistry>>()
+                    .inner()
+                    .clone();
+                remote::spawn_liveness_loop(app_handle, registry);
+            }
+
+            // Restore the persisted remote-runtime list. Each entry
+            // either reconnects (lands as Connected) or becomes a
+            // tombstone with state=Disconnected so the user can hit
+            // Reconnect from the dev panel. Runs on the blocking pool
+            // because SSH spawns can take seconds.
+            {
+                let registry = app
+                    .state::<std::sync::Arc<remote::RuntimeRegistry>>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let dir = match data_dir::data_dir() {
+                        Ok(d) => d,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %format!("{err:#}"),
+                                "remote-runner: cannot resolve data dir; skipping restore"
+                            );
+                            return;
+                        }
+                    };
+                    let persisted = remote::persistence::load(&dir);
+                    if persisted.entries.is_empty() {
+                        return;
+                    }
+                    tracing::info!(
+                        count = persisted.entries.len(),
+                        "remote-runner: restoring persisted runtimes"
+                    );
+                    remote::persistence::restore_on_startup(&registry, persisted);
+                });
+            }
+
+            // Hydrate the per-workspace runtime bindings store from
+            // its sidecar JSON file. Cheap synchronous read — small
+            // file, no network — so no spawn_blocking needed. Always
+            // registers *something* (even on data-dir resolution
+            // failure) so the command layer can always reach a state
+            // object.
+            let bindings_store = match data_dir::data_dir() {
+                Ok(dir) => remote::WorkspaceRuntimeBindings::load_from_disk(&dir),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %format!("{err:#}"),
+                        "remote-runner: cannot resolve data dir; using empty bindings store"
+                    );
+                    remote::WorkspaceRuntimeBindings::new()
+                }
+            };
+            let restored_count = bindings_store.list().len();
+            if restored_count > 0 {
+                tracing::info!(
+                    count = restored_count,
+                    "remote-runner: restored per-workspace runtime bindings"
+                );
+                // Phase 22a: one-time copy of the JSON binding sidecar
+                // into `workspaces.runtime_name`. The column is dead
+                // data until phase 22b wires the resolver to read it;
+                // we backfill now so 22b's flip is a one-line change
+                // rather than a multi-touch migration. Failures log
+                // but don't roll back — the sidecar JSON stays
+                // authoritative until the resolver flip.
+                let migration_input: Vec<(String, String)> = bindings_store
+                    .list()
+                    .into_iter()
+                    .map(|b| (b.workspace_id, b.runtime_name))
+                    .collect();
+                match models::workspaces::backfill_runtime_name_from_bindings(
+                    &migration_input,
+                ) {
+                    Ok(0) => {}
+                    Ok(written) => {
+                        tracing::info!(
+                            count = written,
+                            "remote-runner: copied workspace runtime bindings into workspaces.runtime_name"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %format!("{err:#}"),
+                            "remote-runner: runtime_name backfill failed; the JSON sidecar is still authoritative"
+                        );
+                    }
+                }
+            }
+            app.manage(std::sync::Arc::new(bindings_store));
+
+            // Hydrate the desktop's "terminals I opened" sidecar. Like
+            // the bindings store, missing/corrupt file degrades to
+            // empty so a fresh install boots cleanly.
+            let owned_terminals = match data_dir::data_dir() {
+                Ok(dir) => remote::OwnedTerminals::load_from_disk(&dir),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %format!("{err:#}"),
+                        "remote-runner: cannot resolve data dir; using empty owned-terminals store"
+                    );
+                    remote::OwnedTerminals::new()
+                }
+            };
+            app.manage(std::sync::Arc::new(owned_terminals));
+
             agents::prewarm_slash_command_cache(app.handle());
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
@@ -247,6 +372,37 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::remote_commands::connect_command_runtime,
+            commands::remote_commands::connect_local_runtime,
+            commands::remote_commands::connect_remote_runtime,
+            commands::remote_commands::disconnect_remote_runtime,
+            commands::remote_commands::get_runtime_health,
+            commands::remote_commands::get_workspace_branch_info,
+            commands::remote_commands::get_workspace_changes,
+            commands::remote_commands::get_workspace_file_tree,
+            commands::remote_commands::get_workspace_status,
+            commands::remote_commands::mutate_workspace_file,
+            commands::remote_commands::read_workspace_file,
+            commands::remote_commands::read_workspace_file_at_ref,
+            commands::remote_commands::stat_workspace_file,
+            commands::remote_commands::attach_remote_terminal,
+            commands::remote_commands::clear_workspace_runtime_binding,
+            commands::remote_commands::abort_remote_agent_session,
+            commands::remote_commands::attach_remote_agent_session,
+            commands::remote_commands::close_remote_terminal,
+            commands::remote_commands::list_owned_terminals,
+            commands::remote_commands::list_remote_agent_sessions,
+            commands::remote_commands::list_remote_runtimes,
+            commands::remote_commands::list_remote_terminals,
+            commands::remote_commands::list_ssh_hosts,
+            commands::remote_commands::list_workspace_runtime_bindings,
+            commands::remote_commands::open_remote_terminal,
+            commands::remote_commands::reconnect_remote_runtime,
+            commands::remote_commands::resize_remote_terminal,
+            commands::remote_commands::search_workspace,
+            commands::remote_commands::set_runtime_agent_auth,
+            commands::remote_commands::set_workspace_runtime_binding,
+            commands::remote_commands::write_remote_terminal,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,

@@ -27,6 +27,7 @@ type Props = {
 	interactionRequiredWorkspaceIds: Set<string>;
 	newWorkspaceShortcut: string | null;
 	addRepositoryShortcut: string | null;
+	sidebarFilterShortcut: string | null;
 	leftSidebarToggleShortcut: string | null;
 	appUpdateStatus: AppUpdateStatus | null;
 	appSettings: AppSettings;
@@ -49,6 +50,7 @@ export function ShellSidebarPane({
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
+	sidebarFilterShortcut,
 	leftSidebarToggleShortcut,
 	appUpdateStatus,
 	appSettings,
@@ -91,6 +93,7 @@ export function ShellSidebarPane({
 						interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 						newWorkspaceShortcut={newWorkspaceShortcut}
 						addRepositoryShortcut={addRepositoryShortcut}
+						sidebarFilterShortcut={sidebarFilterShortcut}
 						onSelectWorkspace={onSelectWorkspace}
 						onOpenNewWorkspace={onOpenNewWorkspace}
 						onAddRepositoryNeedsStart={onAddRepositoryNeedsStart}

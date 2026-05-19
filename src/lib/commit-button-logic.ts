@@ -23,11 +23,61 @@ type CommitLifecycleRecord = CommitLifecycleBase & {
 };
 
 export type CommitLifecycle = CommitLifecycleRecord | null;
+type CheckStatus = ForgeActionStatus["checks"][number]["status"];
 
 function lifecycleChangeRequest(
 	lifecycle: CommitLifecycleRecord,
 ): ChangeRequestInfo | null {
 	return lifecycle.changeRequest;
+}
+
+function hasCheckStatus(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+	statuses: ReadonlySet<CheckStatus>,
+): boolean {
+	return (
+		forgeActionStatus?.checks?.some((check) => statuses.has(check.status)) ??
+		false
+	);
+}
+
+const ACTIVE_CHECK_STATUSES = new Set<CheckStatus>(["pending", "running"]);
+const FAILED_CHECK_STATUSES = new Set<CheckStatus>(["failure"]);
+const NOT_GREEN_CHECK_STATUSES = new Set<CheckStatus>([
+	"pending",
+	"running",
+	"failure",
+]);
+const BLOCKED_MERGE_STATE_STATUSES = new Set([
+	"BEHIND",
+	"BLOCKED",
+	"DRAFT",
+	"UNSTABLE",
+]);
+
+export function hasActiveForgeChecks(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+): boolean {
+	return hasCheckStatus(forgeActionStatus, ACTIVE_CHECK_STATUSES);
+}
+
+export function hasFailingForgeChecks(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+): boolean {
+	return hasCheckStatus(forgeActionStatus, FAILED_CHECK_STATUSES);
+}
+
+export function hasNonPassingForgeChecks(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+): boolean {
+	return hasCheckStatus(forgeActionStatus, NOT_GREEN_CHECK_STATUSES);
+}
+
+export function hasBlockedMergeState(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+): boolean {
+	const state = forgeActionStatus?.mergeStateStatus;
+	return state ? BLOCKED_MERGE_STATE_STATUSES.has(state) : false;
 }
 
 /**
@@ -43,7 +93,9 @@ function lifecycleChangeRequest(
  *   2. commit-and-push    — local dirty changes need committing first
  *   3. push               — committed local work is ahead of origin
  *   4. fix                — CI needs fixing before merge
- *   5. merge              — ready to merge
+ *   5. checks-running     — CI is not done yet; merge needs explicit bypass
+ *   6. merge-blocked      — branch protection blocks normal merge
+ *   7. merge              — ready to merge
  */
 export function deriveCommitButtonMode(
 	lifecycle: CommitLifecycle,
@@ -85,12 +137,17 @@ export function deriveCommitButtonMode(
 			}
 
 			// 4. Any failing CI check → show Fix CI
-			const hasFailingCheck = forgeActionStatus?.checks?.some(
-				(c) => c.status === "failure",
-			);
-			if (hasFailingCheck) return "fix";
+			if (hasFailingForgeChecks(forgeActionStatus)) return "fix";
 
-			// 5. Ready to merge
+			// 5. Pending/running CI should not look ready to merge. Keep the
+			// action available, but the click path asks for an explicit bypass.
+			if (hasActiveForgeChecks(forgeActionStatus)) return "checks-running";
+
+			// 6. Branch protection can block merge for reasons outside CI,
+			// like unresolved conversations. Keep the action explicit.
+			if (hasBlockedMergeState(forgeActionStatus)) return "merge-blocked";
+
+			// 7. Ready to merge
 			return "merge";
 		}
 

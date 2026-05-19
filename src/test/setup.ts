@@ -9,6 +9,49 @@ import { vi } from "vitest";
 // is unchanged.
 configure({ asyncUtilTimeout: 3000 });
 
+if (typeof window !== "undefined" && !window.localStorage) {
+	const store = new Map<string, string>();
+	const localStorageMock = Object.create(Storage.prototype) as Storage;
+	Object.defineProperties(localStorageMock, {
+		clear: {
+			value: () => store.clear(),
+			configurable: true,
+		},
+		getItem: {
+			value: (key: string) => store.get(key) ?? null,
+			configurable: true,
+		},
+		key: {
+			value: (index: number) => Array.from(store.keys())[index] ?? null,
+			configurable: true,
+		},
+		length: {
+			get: () => store.size,
+			configurable: true,
+		},
+		removeItem: {
+			value: (key: string) => {
+				store.delete(key);
+			},
+			configurable: true,
+		},
+		setItem: {
+			value: (key: string, value: string) => {
+				store.set(key, String(value));
+			},
+			configurable: true,
+		},
+	});
+	Object.defineProperty(window, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+	Object.defineProperty(globalThis, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+}
+
 // React 19.2's dev build schedules passive-effect work through
 // `setImmediate`, and its callback reads `window.event` (react-dom's
 // `schedulerEvent = window.event;` at react-dom-client.development.js L17920).

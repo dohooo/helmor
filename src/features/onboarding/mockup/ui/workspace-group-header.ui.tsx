@@ -37,7 +37,7 @@ export function WorkspaceGroupHeaderUI({
 			className={cn(
 				"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 				"py-1",
-				canCollapse ? "cursor-pointer" : "cursor-default",
+				canCollapse ? "cursor-interactive" : "cursor-default",
 			)}
 			data-empty-group={isEmptyGroup ? "true" : "false"}
 			disabled={!canCollapse}

@@ -1820,7 +1820,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helmor"
-version = "0.21.1"
+version = "0.22.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1829,6 +1829,7 @@ dependencies = [
  "clap_complete",
  "core-foundation",
  "dotenvy",
+ "glob",
  "insta",
  "libc",
  "notify",
@@ -1853,6 +1854,8 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
+ "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
  "url",

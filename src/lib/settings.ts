@@ -20,6 +20,7 @@ export type ClaudeThinkingDisplay = "summarized" | "omitted";
 export type AppSurface = "workspace" | "workspace-start";
 export type WorkspaceRightSidebarMode = "inspector" | "context";
 export type SidebarGrouping = "status" | "repo";
+export type SidebarSort = "custom" | "repoName" | "updatedAt" | "createdAt";
 
 export type ShortcutOverrides = Record<string, string | null>;
 
@@ -192,12 +193,16 @@ export type AppSettings = {
 	uiFontFamily: string | null;
 	/** Override for the monospace code font stack. `null` = preset default. */
 	codeFontFamily: string | null;
+	/** Override for embedded terminal font stack. `null` = preset default. */
+	terminalFontFamily: string | null;
 	/** When true, all clickable elements show a pointer cursor on hover.
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
 	theme: ThemeMode;
 	darkTheme: DarkTheme;
 	notifications: boolean;
+	/** When true, hovering a terminal-like inspector tab body expands it. */
+	terminalHoverExpansion: boolean;
 	lastWorkspaceId: string | null;
 	lastSessionId: string | null;
 	lastSurface: AppSurface;
@@ -213,14 +218,13 @@ export type AppSettings = {
 	/** Fast-mode flag for the Review helper. When null, falls back to
 	 *  `defaultFastMode`. */
 	reviewFastMode: boolean | null;
-	/** Model used when the inspector "Create PR/MR" action starts a session.
-	 *  Applies to both GitHub PRs and GitLab MRs. When null, falls back to
-	 *  `defaultModelId`. */
+	/** Model used by simple action sessions: create/reopen PR/MR and
+	 *  commit-and-push. When null, falls back to `defaultModelId`. */
 	prModelId: string | null;
-	/** Effort level for the Create PR/MR helper. When null, falls back to
+	/** Effort level for simple action sessions. When null, falls back to
 	 *  `defaultEffort`. */
 	prEffort: string | null;
-	/** Fast-mode flag for the Create PR/MR helper. When null, falls back to
+	/** Fast-mode flag for simple action sessions. When null, falls back to
 	 *  `defaultFastMode`. */
 	prFastMode: boolean | null;
 	defaultEffort: string | null;
@@ -246,6 +250,11 @@ export type AppSettings = {
 	 *  to avoid the sidebar flashing the wrong grouping while SQLite-backed
 	 *  settings load asynchronously). */
 	sidebarGrouping: SidebarGrouping;
+	/** Sidebar repository filter. Empty means all repositories. Persisted
+	 *  to localStorage because it affects first-paint navigation shape. */
+	sidebarRepoFilterIds: string[];
+	/** Sidebar view-only sort. `custom` preserves saved drag order. */
+	sidebarSort: SidebarSort;
 };
 
 export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
@@ -269,10 +278,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	chatFontSize: 14,
 	uiFontFamily: null,
 	codeFontFamily: null,
+	terminalFontFamily: null,
 	usePointerCursors: true,
 	theme: "system",
 	darkTheme: "default",
 	notifications: true,
+	terminalHoverExpansion: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
 	lastSurface: "workspace",
@@ -308,13 +319,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	inboxSourceConfig: { accounts: {} },
 	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
 	sidebarGrouping: "status",
+	sidebarRepoFilterIds: [],
+	sidebarSort: "custom",
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
+export const SIDEBAR_REPO_FILTER_STORAGE_KEY = "helmor-sidebar-repo-filter";
+export const SIDEBAR_SORT_STORAGE_KEY = "helmor-sidebar-sort";
 export const UI_FONT_FAMILY_STORAGE_KEY = "helmor-ui-font-family";
 export const CODE_FONT_FAMILY_STORAGE_KEY = "helmor-code-font-family";
+export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
 
 /** Keys mirrored to localStorage for flash-free synchronous boot reads.
  *  Anything visible in the first paint must live here so we don't wait
@@ -323,13 +339,22 @@ const LOCALSTORAGE_KEYS = {
 	theme: THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
 	sidebarGrouping: SIDEBAR_GROUPING_STORAGE_KEY,
+	sidebarRepoFilterIds: SIDEBAR_REPO_FILTER_STORAGE_KEY,
+	sidebarSort: SIDEBAR_SORT_STORAGE_KEY,
 	uiFontFamily: UI_FONT_FAMILY_STORAGE_KEY,
 	codeFontFamily: CODE_FONT_FAMILY_STORAGE_KEY,
+	terminalFontFamily: TERMINAL_FONT_FAMILY_STORAGE_KEY,
 } as const;
 
 type LocalStorageKey = keyof typeof LOCALSTORAGE_KEYS;
 
 const VALID_SIDEBAR_GROUPINGS: readonly SidebarGrouping[] = ["status", "repo"];
+const VALID_SIDEBAR_SORTS: readonly SidebarSort[] = [
+	"custom",
+	"repoName",
+	"updatedAt",
+	"createdAt",
+];
 
 const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"default",
@@ -364,12 +389,32 @@ export function getPreloadedSettings(): AppSettings {
 			? (raw as DarkTheme)
 			: DEFAULT_SETTINGS.darkTheme;
 	})();
+	const sidebarGrouping = (() => {
+		const raw = readLocalStorageString(SIDEBAR_GROUPING_STORAGE_KEY);
+		return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)
+			? (raw as SidebarGrouping)
+			: DEFAULT_SETTINGS.sidebarGrouping;
+	})();
+	const sidebarSort = (() => {
+		const raw = readLocalStorageString(SIDEBAR_SORT_STORAGE_KEY);
+		return VALID_SIDEBAR_SORTS.includes(raw as SidebarSort)
+			? (raw as SidebarSort)
+			: DEFAULT_SETTINGS.sidebarSort;
+	})();
 	return {
 		...DEFAULT_SETTINGS,
 		theme: getPreloadedTheme(),
 		darkTheme,
+		sidebarGrouping,
+		sidebarRepoFilterIds: parseSidebarRepoFilterIds(
+			readLocalStorageString(SIDEBAR_REPO_FILTER_STORAGE_KEY) ?? undefined,
+		),
+		sidebarSort,
 		uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 		codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+		terminalFontFamily: readLocalStorageString(
+			TERMINAL_FONT_FAMILY_STORAGE_KEY,
+		),
 	};
 }
 
@@ -382,6 +427,7 @@ const SETTINGS_KEY_MAP: Record<
 	chatFontSize: "app.chat_font_size",
 	usePointerCursors: "app.use_pointer_cursors",
 	notifications: "app.notifications",
+	terminalHoverExpansion: "app.terminal_hover_expansion",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
 	lastSurface: "app.last_surface",
@@ -408,6 +454,24 @@ const SETTINGS_KEY_MAP: Record<
 	inboxSourceConfig: "app.inbox_source_config",
 	kanbanViewState: "app.kanban_view_state",
 };
+
+function parseSidebarRepoFilterIds(raw: string | undefined): string[] {
+	if (!raw) return DEFAULT_SETTINGS.sidebarRepoFilterIds;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return DEFAULT_SETTINGS.sidebarRepoFilterIds;
+		return Array.from(
+			new Set(
+				parsed.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0,
+				),
+			),
+		);
+	} catch {
+		return DEFAULT_SETTINGS.sidebarRepoFilterIds;
+	}
+}
 
 function parseShortcutOverrides(raw: string | undefined): ShortcutOverrides {
 	if (!raw) return DEFAULT_SETTINGS.shortcuts;
@@ -791,6 +855,10 @@ function readClampedInt(
 	return Math.min(max, Math.max(min, Math.round(n)));
 }
 
+function readModelId(value: string | undefined): string | null {
+	return value && value !== "" ? value : null;
+}
+
 export async function loadSettings(): Promise<AppSettings> {
 	try {
 		const raw = await invoke<Record<string, string>>("get_app_settings");
@@ -812,6 +880,9 @@ export async function loadSettings(): Promise<AppSettings> {
 			),
 			uiFontFamily: readLocalStorageString(UI_FONT_FAMILY_STORAGE_KEY),
 			codeFontFamily: readLocalStorageString(CODE_FONT_FAMILY_STORAGE_KEY),
+			terminalFontFamily: readLocalStorageString(
+				TERMINAL_FONT_FAMILY_STORAGE_KEY,
+			),
 			usePointerCursors:
 				raw[SETTINGS_KEY_MAP.usePointerCursors] !== undefined
 					? raw[SETTINGS_KEY_MAP.usePointerCursors] === "true"
@@ -831,10 +902,23 @@ export async function loadSettings(): Promise<AppSettings> {
 					? (raw as SidebarGrouping)
 					: DEFAULT_SETTINGS.sidebarGrouping;
 			})(),
+			sidebarRepoFilterIds: parseSidebarRepoFilterIds(
+				localStorage.getItem(SIDEBAR_REPO_FILTER_STORAGE_KEY) ?? undefined,
+			),
+			sidebarSort: (() => {
+				const raw = localStorage.getItem(SIDEBAR_SORT_STORAGE_KEY);
+				return VALID_SIDEBAR_SORTS.includes(raw as SidebarSort)
+					? (raw as SidebarSort)
+					: DEFAULT_SETTINGS.sidebarSort;
+			})(),
 			notifications:
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			terminalHoverExpansion:
+				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
+					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
+					: DEFAULT_SETTINGS.terminalHoverExpansion,
 			lastWorkspaceId: raw[SETTINGS_KEY_MAP.lastWorkspaceId] || null,
 			lastSessionId: raw[SETTINGS_KEY_MAP.lastSessionId] || null,
 			lastSurface:
@@ -849,14 +933,8 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.workspaceRightSidebarMode] === "context"
 					? "context"
 					: DEFAULT_SETTINGS.workspaceRightSidebarMode,
-			defaultModelId:
-				rawDefaultModelId && rawDefaultModelId !== "default"
-					? rawDefaultModelId
-					: DEFAULT_SETTINGS.defaultModelId,
-			reviewModelId:
-				rawReviewModelId && rawReviewModelId !== "default"
-					? rawReviewModelId
-					: DEFAULT_SETTINGS.reviewModelId,
+			defaultModelId: readModelId(rawDefaultModelId),
+			reviewModelId: readModelId(rawReviewModelId),
 			reviewEffort:
 				rawReviewEffort && rawReviewEffort !== ""
 					? rawReviewEffort
@@ -867,10 +945,7 @@ export async function loadSettings(): Promise<AppSettings> {
 					: rawReviewFastMode === "false"
 						? false
 						: DEFAULT_SETTINGS.reviewFastMode,
-			prModelId:
-				rawPrModelId && rawPrModelId !== "default"
-					? rawPrModelId
-					: DEFAULT_SETTINGS.prModelId,
+			prModelId: readModelId(rawPrModelId),
 			prEffort:
 				rawPrEffort && rawPrEffort !== ""
 					? rawPrEffort
@@ -944,6 +1019,12 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 		try {
 			if (value === null || value === "") {
 				localStorage.removeItem(lsKey);
+			} else if (Array.isArray(value)) {
+				if (value.length === 0) {
+					localStorage.removeItem(lsKey);
+				} else {
+					localStorage.setItem(lsKey, JSON.stringify(value));
+				}
 			} else {
 				localStorage.setItem(lsKey, String(value));
 			}

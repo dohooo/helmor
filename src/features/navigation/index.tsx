@@ -32,10 +32,16 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
-import type { SidebarGrouping } from "@/lib/settings";
+import type {
+	RepositoryCreateOption,
+	WorkspaceGroup,
+	WorkspaceRow,
+	WorkspaceStatus,
+} from "@/lib/api";
+import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
+import { useShellEvent } from "@/shell/event-bus";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import { RepoDragGhost, WorkspaceDragGhost } from "./dnd/drag-ghosts";
@@ -56,6 +62,7 @@ import {
 	GroupIcon,
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
+import { SidebarViewPopover } from "./sidebar-view-popover";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -107,13 +114,20 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
+	availableRepositories = [],
 	sidebarGrouping = "status",
+	sidebarRepoFilterIds = [],
+	sidebarSort = "custom",
+	onSidebarGroupingChange,
+	onSidebarRepoFilterChange,
+	onSidebarSortChange,
 	addingRepository,
 	selectedWorkspaceId,
 	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
+	sidebarFilterShortcut,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onOpenCloneDialog,
@@ -141,13 +155,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
+	availableRepositories?: RepositoryCreateOption[];
 	sidebarGrouping?: SidebarGrouping;
+	sidebarRepoFilterIds?: string[];
+	sidebarSort?: SidebarSort;
+	onSidebarGroupingChange?: (grouping: SidebarGrouping) => void;
+	onSidebarRepoFilterChange?: (repoIds: string[]) => void;
+	onSidebarSortChange?: (sort: SidebarSort) => void;
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
+	sidebarFilterShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
@@ -186,6 +207,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId?: string | null;
 }) {
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
+		useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const dndPolicy = useMemo<WorkspaceDndPolicy>(
 		() =>
@@ -228,8 +251,12 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					},
 		[sidebarGrouping],
 	);
+	// Drag-to-reorder is only meaningful under custom sort: the dragged
+	// position would otherwise be immediately overruled by the active sort
+	// key. Disable the gesture entirely instead of pretending it works.
+	const dragReorderEnabled = sidebarSort === "custom";
 	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
-		onMoveWorkspace: onMoveWorkspaceInSidebar,
+		onMoveWorkspace: dragReorderEnabled ? onMoveWorkspaceInSidebar : undefined,
 		policy: dndPolicy,
 	});
 	const {
@@ -237,7 +264,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		dropIndicator: repoDropIndicator,
 		startRepoDragGesture,
 	} = useRepoDnd({
-		onMoveRepo: onMoveRepositoryInSidebar,
+		onMoveRepo: dragReorderEnabled ? onMoveRepositoryInSidebar : undefined,
 	});
 	const activeRepoDragId = repoDragState?.repoId ?? null;
 	const repoDropBeforeId = repoDropIndicator?.beforeRepoId ?? null;
@@ -658,6 +685,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
 
+	useShellEvent("open-sidebar-filter", () => {
+		setIsSidebarViewPopoverOpen(true);
+	});
+
 	// ── Toggle section ────────────────────────────────────────────────
 	const toggleSection = useCallback((groupId: string) => {
 		setSectionOpenState((current) => ({
@@ -730,7 +761,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					const repoToggleSection = () => {
 						if (item.canCollapse) toggleSection(item.groupId);
 					};
-					const repoDndHandleEnabled = Boolean(onMoveRepositoryInSidebar);
+					const repoDndHandleEnabled =
+						Boolean(onMoveRepositoryInSidebar) && dragReorderEnabled;
 					return (
 						<div
 							role="button"
@@ -741,7 +773,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							data-repo-dnd-id={repoId}
 							className={cn(
 								headerClassName,
-								item.canCollapse ? "cursor-pointer" : "cursor-default",
+								item.canCollapse ? "cursor-interactive" : "cursor-default",
 								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
 							)}
 							data-empty-group={isEmptyGroup ? "true" : "false"}
@@ -797,7 +829,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						type="button"
 						className={cn(
 							headerClassName,
-							item.canCollapse ? "cursor-pointer" : "cursor-default",
+							item.canCollapse ? "cursor-interactive" : "cursor-default",
 						)}
 						data-empty-group={isEmptyGroup ? "true" : "false"}
 						data-workspace-drop-group-id={item.groupId}
@@ -855,7 +887,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
 						groupId={item.groupId}
-						onDragPointerDown={startDragGesture}
+						onDragPointerDown={
+							dragReorderEnabled ? startDragGesture : undefined
+						}
 						disableHoverCard={isAnyDragging}
 						archivingWorkspaceIds={archivingWorkspaceIds}
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
@@ -929,6 +963,19 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<SidebarViewPopover
+						repositories={availableRepositories}
+						grouping={sidebarGrouping}
+						selectedRepoIds={sidebarRepoFilterIds}
+						sort={sidebarSort}
+						open={isSidebarViewPopoverOpen}
+						onOpenChange={setIsSidebarViewPopoverOpen}
+						shortcut={sidebarFilterShortcut}
+						onGroupingChange={onSidebarGroupingChange}
+						onRepoFilterChange={onSidebarRepoFilterChange}
+						onSortChange={onSidebarSortChange}
+					/>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}

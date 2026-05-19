@@ -28,6 +28,7 @@ export async function createWorkspaceFromStartComposer({
 	repoId,
 	sourceBranch,
 	mode,
+	runtimeName,
 	submitMode,
 	editorStateSnapshot,
 	composerConfig,
@@ -36,6 +37,12 @@ export async function createWorkspaceFromStartComposer({
 	repoId: string;
 	sourceBranch: string;
 	mode: WorkspaceMode;
+	/**
+	 * Phase 22c: registered runtime to bind the new workspace to.
+	 * `null` (or omit) means "use the local runtime" — the backend
+	 * leaves `workspaces.runtime_name` NULL in that case.
+	 */
+	runtimeName?: string | null;
 	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 	/** StartPage composer picks. Only persisted to the session row on
@@ -61,6 +68,7 @@ export async function createWorkspaceFromStartComposer({
 		sourceBranch,
 		mode,
 		initialStatus,
+		runtimeName ?? null,
 	);
 
 	// Persist pending /add-dir picks before kicking off finalize. The DB

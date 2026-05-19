@@ -38,6 +38,7 @@ query($owner: String!, $name: String!, $head: String!) {
         merged
         reviewDecision
         mergeable
+        mergeStateStatus
         isCrossRepository
         headRepositoryOwner { login }
         commits(last: 1) {
@@ -259,6 +260,7 @@ fn build_action_status(node: ActionPullRequestNode) -> ForgeActionStatus {
     };
     let review_decision = node.review_decision;
     let mergeable = node.mergeable;
+    let merge_state_status = node.merge_state_status;
     let latest_commit = node
         .commits
         .nodes
@@ -296,6 +298,7 @@ fn build_action_status(node: ActionPullRequestNode) -> ForgeActionStatus {
         change_request: Some(pr),
         review_decision,
         mergeable,
+        merge_state_status,
         deployments,
         checks,
         remote_state: RemoteState::Ok,
@@ -697,6 +700,7 @@ mod tests {
             merged: false,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             is_cross_repository: cross,
             head_repository_owner: owner.map(|login| HeadRepositoryOwner {
                 login: login.to_string(),
@@ -750,6 +754,7 @@ mod tests {
             merged: false,
             review_decision: Some("CHANGES_REQUESTED".to_string()),
             mergeable: Some("CONFLICTING".to_string()),
+            merge_state_status: Some("DIRTY".to_string()),
             is_cross_repository: false,
             head_repository_owner: None,
             commits: ActionCommitConnection {
@@ -795,6 +800,7 @@ mod tests {
         assert_eq!(status.remote_state, RemoteState::Ok);
         assert_eq!(status.review_decision.as_deref(), Some("CHANGES_REQUESTED"));
         assert_eq!(status.mergeable.as_deref(), Some("CONFLICTING"));
+        assert_eq!(status.merge_state_status.as_deref(), Some("DIRTY"));
         assert_eq!(status.checks.len(), 1);
         assert_eq!(status.checks[0].status, ActionStatusKind::Success);
         assert_eq!(status.checks[0].provider, ActionProvider::Github);
@@ -813,6 +819,7 @@ mod tests {
             merged: false,
             review_decision: None,
             mergeable: Some("MERGEABLE".to_string()),
+            merge_state_status: Some("CLEAN".to_string()),
             is_cross_repository: false,
             head_repository_owner: None,
             commits: ActionCommitConnection {

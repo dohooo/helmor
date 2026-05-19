@@ -36,6 +36,7 @@ export type GitMutationsController = {
 export function useGitMutations({
 	workspaceId,
 	workspaceRootPath,
+	runtimeName,
 	stagedChanges,
 	unstagedChanges,
 	queryClient,
@@ -43,6 +44,13 @@ export function useGitMutations({
 }: {
 	workspaceId: string | null;
 	workspaceRootPath: string | null;
+	/**
+	 * Phase 22d: workspace's bound runtime, surfaced in the
+	 * "permanently delete" toast so the operator can tell at a glance
+	 * which host's workspace they're nuking. `null` (default) collapses
+	 * to the legacy host-agnostic copy.
+	 */
+	runtimeName?: string | null;
 	stagedChanges: ChangeRow[];
 	unstagedChanges: ChangeRow[];
 	queryClient: QueryClient;
@@ -70,40 +78,61 @@ export function useGitMutations({
 					workspaceId,
 					pushToast,
 					queryClient,
+					runtimeName,
 				});
 				return;
 			}
 			pushToast(message, `Unable to ${action}`, "destructive");
 		},
-		[pushToast, queryClient, workspaceId],
+		[pushToast, queryClient, runtimeName, workspaceId],
 	);
+
+	const workspaceIdForCalls = workspaceId ?? undefined;
 
 	const stageFile = useCallback(
 		async (relativePath: string) => {
 			if (!workspaceRootPath) return;
 			try {
-				await stageWorkspaceFile(workspaceRootPath, relativePath);
+				await stageWorkspaceFile(
+					workspaceRootPath,
+					relativePath,
+					workspaceIdForCalls,
+				);
 			} catch (error) {
 				surfaceChangeError("stage file", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[
+			invalidateChanges,
+			surfaceChangeError,
+			workspaceIdForCalls,
+			workspaceRootPath,
+		],
 	);
 
 	const unstageFile = useCallback(
 		async (relativePath: string) => {
 			if (!workspaceRootPath) return;
 			try {
-				await unstageWorkspaceFile(workspaceRootPath, relativePath);
+				await unstageWorkspaceFile(
+					workspaceRootPath,
+					relativePath,
+					workspaceIdForCalls,
+				);
 			} catch (error) {
 				surfaceChangeError("unstage file", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[
+			invalidateChanges,
+			surfaceChangeError,
+			workspaceIdForCalls,
+			workspaceRootPath,
+		],
 	);
 
 	const stageAll = useCallback(async () => {
@@ -111,7 +140,7 @@ export function useGitMutations({
 		const paths = unstagedChanges.map((change) => change.path);
 		try {
 			for (const path of paths) {
-				await stageWorkspaceFile(workspaceRootPath, path);
+				await stageWorkspaceFile(workspaceRootPath, path, workspaceIdForCalls);
 			}
 		} catch (error) {
 			surfaceChangeError("stage files", error);
@@ -122,6 +151,7 @@ export function useGitMutations({
 		invalidateChanges,
 		surfaceChangeError,
 		unstagedChanges,
+		workspaceIdForCalls,
 		workspaceRootPath,
 	]);
 
@@ -130,27 +160,46 @@ export function useGitMutations({
 		const paths = stagedChanges.map((change) => change.path);
 		try {
 			for (const path of paths) {
-				await unstageWorkspaceFile(workspaceRootPath, path);
+				await unstageWorkspaceFile(
+					workspaceRootPath,
+					path,
+					workspaceIdForCalls,
+				);
 			}
 		} catch (error) {
 			surfaceChangeError("unstage files", error);
 		} finally {
 			invalidateChanges();
 		}
-	}, [invalidateChanges, stagedChanges, surfaceChangeError, workspaceRootPath]);
+	}, [
+		invalidateChanges,
+		stagedChanges,
+		surfaceChangeError,
+		workspaceIdForCalls,
+		workspaceRootPath,
+	]);
 
 	const discardFile = useCallback(
 		async (relativePath: string) => {
 			if (!workspaceRootPath) return;
 			try {
-				await discardWorkspaceFile(workspaceRootPath, relativePath);
+				await discardWorkspaceFile(
+					workspaceRootPath,
+					relativePath,
+					workspaceIdForCalls,
+				);
 			} catch (error) {
 				surfaceChangeError("discard changes", error);
 			} finally {
 				invalidateChanges();
 			}
 		},
-		[invalidateChanges, surfaceChangeError, workspaceRootPath],
+		[
+			invalidateChanges,
+			surfaceChangeError,
+			workspaceIdForCalls,
+			workspaceRootPath,
+		],
 	);
 
 	const continueWorkspace = useCallback(async () => {

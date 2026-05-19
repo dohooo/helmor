@@ -58,6 +58,7 @@ import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { RuntimeDebugPanel } from "./panels/runtime-debug";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -71,6 +72,7 @@ import type { SettingsSection } from "./types";
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
 	inbox: "Contexts",
+	"runtime-debug": "Runtime Debug",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
@@ -195,7 +197,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"model",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
-		...(isDev ? (["developer"] as const) : []),
+		...(isDev ? (["developer", "runtime-debug"] as const) : []),
 		"account",
 		"inbox",
 		"experimental",
@@ -290,20 +292,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "general" && (
 								<SettingsGroup>
 									<SettingsRow
-										title="Group sidebar by repository"
-										releaseMarker={{ kind: "feature" }}
-										description="Group workspaces in the sidebar by repository instead of status."
-									>
-										<Switch
-											checked={settings.sidebarGrouping === "repo"}
-											onCheckedChange={(checked) =>
-												updateSettings({
-													sidebarGrouping: checked ? "repo" : "status",
-												})
-											}
-										/>
-									</SettingsRow>
-									<SettingsRow
 										title="Desktop Notifications"
 										description="Show system notifications when sessions complete or need input"
 									>
@@ -311,6 +299,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 											checked={settings.notifications}
 											onCheckedChange={(checked) =>
 												updateSettings({ notifications: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
+										title="Expand terminals on hover"
+										releaseMarker={{ kind: "feature" }}
+										description="Enlarge inspector terminals when the cursor rests over them."
+									>
+										<Switch
+											checked={settings.terminalHoverExpansion}
+											onCheckedChange={(checked) =>
+												updateSettings({ terminalHoverExpansion: checked })
 											}
 										/>
 									</SettingsRow>
@@ -531,15 +531,15 @@ export const SettingsDialog = memo(function SettingsDialog({
 										}}
 									/>
 									<ModelSettingRow
-										title="PR / MR model"
-										description="Model for PRs and MRs"
+										title="Action model"
+										description="Model for PRs/MRs and commit-and-push"
 										models={allModels}
 										modelSections={modelSections}
 										isLoadingModels={modelSectionsQuery.isPending}
 										modelId={settings.prModelId ?? settings.defaultModelId}
 										effort={settings.prEffort ?? settings.defaultEffort}
 										fastMode={settings.prFastMode ?? settings.defaultFastMode}
-										ariaPrefix="PR / MR"
+										ariaPrefix="Action"
 										onChange={(p) => {
 											const patch: Partial<AppSettings> = {};
 											if (p.modelId !== undefined) patch.prModelId = p.modelId;
@@ -563,6 +563,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "import" && <ConductorImportPanel />}
 
 							{activeSection === "developer" && <DevToolsPanel />}
+
+							{activeSection === "runtime-debug" && <RuntimeDebugPanel />}
 
 							{activeSection === "account" && (
 								<AccountPanel repositories={repositories} />
@@ -680,7 +682,7 @@ function ModelSettingRow({
 				<DropdownMenu>
 					<DropdownMenuTrigger
 						className={cn(
-							"flex h-8 cursor-pointer items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+							"flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 							"min-w-0 flex-1 gap-1.5",
 						)}
 					>
@@ -724,7 +726,7 @@ function ModelSettingRow({
 							"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
 							"shrink-0 gap-1.5",
 							supportsEffort
-								? "cursor-pointer text-foreground hover:bg-muted/50"
+								? "cursor-interactive text-foreground hover:bg-muted/50"
 								: "cursor-not-allowed text-muted-foreground opacity-60",
 						)}
 					>
@@ -745,7 +747,7 @@ function ModelSettingRow({
 				</DropdownMenu>
 				<div
 					className={cn(
-						"flex h-8 cursor-pointer items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+						"flex h-8 cursor-interactive items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
 						"shrink-0 gap-2",
 					)}
 				>

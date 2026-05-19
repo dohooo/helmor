@@ -207,7 +207,7 @@ pub async fn list_agent_model_sections() -> CmdResult<Vec<AgentModelSection>> {
 
 #[tauri::command]
 pub async fn list_cursor_models(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     api_key: Option<String>,
 ) -> CmdResult<Vec<queries::CursorModelEntry>> {
     // Inline blocking — same pattern as `list_slash_commands`.
@@ -217,7 +217,7 @@ pub async fn list_cursor_models(
 #[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
@@ -241,10 +241,21 @@ pub async fn send_agent_message_stream(
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
+    // Phase 23c: pick the right sidecar transport based on the
+    // workspace's runtime binding. Anonymous streams + workspaces
+    // bound to the local runtime keep going through the desktop's
+    // own `ManagedSidecar`; workspaces bound to a registered remote
+    // route through `agent.send` over the JSON-RPC pipe.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        request.helmor_session_id.as_deref(),
+    );
+
     stream_via_sidecar(
         app.clone(),
         on_event,
-        &sidecar,
+        transport,
         &active_streams,
         &stream_id,
         &model,
@@ -282,7 +293,8 @@ pub async fn list_active_streams(
 
 #[tauri::command]
 pub async fn stop_agent_stream(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    app: AppHandle,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentStopRequest,
 ) -> CmdResult<()> {
     let stop_req = crate::sidecar::SidecarRequest {
@@ -293,7 +305,18 @@ pub async fn stop_agent_stream(
             "provider": request.provider.unwrap_or_else(|| "claude".to_string()),
         }),
     };
-    sidecar
+    // Phase 23d: route the stop through the same transport
+    // resolver as the send. `request.session_id` is the helmor
+    // session id (frontend reads it off `ActiveStreamSummary`),
+    // which is what the resolver needs to look up the workspace's
+    // bound runtime. Anonymous streams + locally-bound workspaces
+    // still hit the desktop's `ManagedSidecar`.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        Some(&request.session_id),
+    );
+    transport
         .send(&stop_req)
         .map_err(|e| anyhow::anyhow!("Failed to stop session: {e}"))?;
     Ok(())
@@ -334,7 +357,7 @@ pub struct AgentSteerResponse {
 #[tauri::command]
 pub async fn steer_agent_stream(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: AgentSteerRequest,
 ) -> CmdResult<AgentSteerResponse> {
     let prompt = request.prompt.trim().to_string();
@@ -367,9 +390,20 @@ pub async fn steer_agent_stream(
         }),
     };
 
-    let rx = sidecar.subscribe(&request_id);
-    if let Err(error) = sidecar.send(&steer_req) {
-        sidecar.unsubscribe(&request_id);
+    // Phase 23d: route the steer through the workspace's bound
+    // transport. `request.session_id` is the helmor session id
+    // (matches the resolver's contract on `send_agent_message_stream`
+    // + `stop_agent_stream`). Remote-bound workspaces hit the
+    // daemon's sidecar; local-bound ones keep using the desktop's
+    // own `ManagedSidecar`.
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        Some(&request.session_id),
+    );
+    let rx = transport.subscribe(&request_id);
+    if let Err(error) = transport.send(&steer_req) {
+        transport.unsubscribe(&request_id);
         return Err(anyhow::anyhow!("Sidecar send failed: {error}").into());
     }
 
@@ -420,7 +454,7 @@ pub async fn steer_agent_stream(
     .await
     .map_err(|e| anyhow::anyhow!("Steer worker join failed: {e}"))?;
 
-    sidecar.unsubscribe(&rid_for_worker);
+    transport.unsubscribe(&rid_for_worker);
     let (accepted, reason) = outcome?;
     Ok(AgentSteerResponse { accepted, reason })
 }
@@ -436,7 +470,7 @@ pub struct PermissionResponseRequest {
 
 #[tauri::command]
 pub async fn respond_to_permission_request(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: PermissionResponseRequest,
 ) -> CmdResult<()> {
     tracing::info!(permission_id = %request.permission_id, behavior = %request.behavior, "Permission response");
@@ -475,7 +509,7 @@ pub struct UserInputResponseRequest {
 
 #[tauri::command]
 pub async fn respond_to_user_input(
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: UserInputResponseRequest,
 ) -> CmdResult<()> {
     tracing::info!(
@@ -501,7 +535,7 @@ pub async fn respond_to_user_input(
 #[tauri::command]
 pub async fn generate_session_title(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     request: GenerateSessionTitleRequest,
 ) -> CmdResult<GenerateSessionTitleResponse> {
     queries::generate_session_title(app, sidecar, request).await
@@ -510,7 +544,7 @@ pub async fn generate_session_title(
 #[tauri::command]
 pub async fn list_slash_commands(
     app: AppHandle,
-    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
     cache: tauri::State<'_, SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {

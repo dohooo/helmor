@@ -14,6 +14,7 @@ export type ShellEvent =
 	| { type: "open-model-picker" }
 	| { type: "open-new-workspace" }
 	| { type: "open-add-repository" }
+	| { type: "open-sidebar-filter" }
 	| { type: "run-script" }
 	| { type: "focus-composer" }
 	| { type: "toggle-context-panel" }

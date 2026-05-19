@@ -19,7 +19,7 @@ describe("selectReleaseAnnouncement", () => {
 				currentVersion: "0.20.0",
 				lastSeenVersion: null,
 				isFirstHelmorBoot: true,
-				dismissedReleaseVersions: new Set(),
+				lastDismissedReleaseVersion: null,
 			}),
 		).toBeNull();
 	});
@@ -30,7 +30,7 @@ describe("selectReleaseAnnouncement", () => {
 			currentVersion: "0.20.0",
 			lastSeenVersion: null,
 			isFirstHelmorBoot: false,
-			dismissedReleaseVersions: new Set(),
+			lastDismissedReleaseVersion: null,
 		});
 		expect(result?.releaseVersions).toEqual(["0.20.0"]);
 		expect(result?.items).toEqual([{ text: "A" }, { text: "B" }]);
@@ -43,7 +43,7 @@ describe("selectReleaseAnnouncement", () => {
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.20.0",
 				isFirstHelmorBoot: false,
-				dismissedReleaseVersions: new Set(),
+				lastDismissedReleaseVersion: null,
 			}),
 		).toBeNull();
 	});
@@ -55,7 +55,7 @@ describe("selectReleaseAnnouncement", () => {
 				currentVersion: "0.19.0",
 				lastSeenVersion: "0.20.0",
 				isFirstHelmorBoot: false,
-				dismissedReleaseVersions: new Set(),
+				lastDismissedReleaseVersion: null,
 			}),
 		).toBeNull();
 	});
@@ -66,7 +66,7 @@ describe("selectReleaseAnnouncement", () => {
 			currentVersion: "0.20.0",
 			lastSeenVersion: "0.19.1",
 			isFirstHelmorBoot: false,
-			dismissedReleaseVersions: new Set(),
+			lastDismissedReleaseVersion: null,
 		});
 		expect(result).toEqual({
 			releaseVersions: ["0.20.0"],
@@ -75,16 +75,33 @@ describe("selectReleaseAnnouncement", () => {
 		});
 	});
 
-	it("skips dismissed versions", () => {
+	it("skips releases ≤ the dismissed watermark", () => {
 		expect(
 			selectReleaseAnnouncement({
 				catalog,
 				currentVersion: "0.20.0",
 				lastSeenVersion: "0.19.1",
 				isFirstHelmorBoot: false,
-				dismissedReleaseVersions: new Set(["0.20.0"]),
+				lastDismissedReleaseVersion: "0.20.0",
 			}),
 		).toBeNull();
+	});
+
+	it("collapses older versions under a newer dismiss watermark", () => {
+		const wideCatalog: readonly ReleaseAnnouncementCatalogEntry[] = [
+			{ releaseVersion: "0.19.0", items: [{ text: "OLD" }] },
+			{ releaseVersion: "0.20.0", items: [{ text: "MID" }] },
+			{ releaseVersion: "0.21.0", items: [{ text: "NEW" }] },
+		];
+		const result = selectReleaseAnnouncement({
+			catalog: wideCatalog,
+			currentVersion: "0.21.0",
+			lastSeenVersion: "0.18.0",
+			isFirstHelmorBoot: false,
+			lastDismissedReleaseVersion: "0.20.0",
+		});
+		expect(result?.releaseVersions).toEqual(["0.21.0"]);
+		expect(result?.items).toEqual([{ text: "NEW" }]);
 	});
 
 	it("replays every version in (lastSeen, current] when the user skipped releases", () => {
@@ -97,7 +114,7 @@ describe("selectReleaseAnnouncement", () => {
 			currentVersion: "0.21.0",
 			lastSeenVersion: "0.19.1",
 			isFirstHelmorBoot: false,
-			dismissedReleaseVersions: new Set(),
+			lastDismissedReleaseVersion: null,
 		});
 		expect(result).toEqual({
 			releaseVersions: ["0.21.0", "0.20.0"],
@@ -116,7 +133,7 @@ describe("selectReleaseAnnouncement", () => {
 			currentVersion: "0.20.0",
 			lastSeenVersion: "0.19.1",
 			isFirstHelmorBoot: false,
-			dismissedReleaseVersions: new Set(),
+			lastDismissedReleaseVersion: null,
 		});
 		expect(result?.releaseVersions).toEqual(["0.20.0"]);
 	});
@@ -131,7 +148,7 @@ describe("selectReleaseAnnouncement", () => {
 			currentVersion: "0.21.0",
 			lastSeenVersion: "0.19.1",
 			isFirstHelmorBoot: false,
-			dismissedReleaseVersions: new Set(),
+			lastDismissedReleaseVersion: null,
 		});
 		expect(result?.releaseVersions).toEqual(["0.21.0", "0.20.0"]);
 		expect(result?.items).toEqual([{ text: "NEWER" }, { text: "OLDER" }]);
@@ -144,7 +161,7 @@ describe("selectReleaseAnnouncement", () => {
 				currentVersion: "0.21.0",
 				lastSeenVersion: "0.20.0",
 				isFirstHelmorBoot: false,
-				dismissedReleaseVersions: new Set(),
+				lastDismissedReleaseVersion: null,
 			}),
 		).toBeNull();
 	});
