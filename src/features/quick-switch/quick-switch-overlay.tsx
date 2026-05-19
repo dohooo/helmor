@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch } from "lucide-react";
+import { GitBranch, MessageCircle } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
@@ -135,6 +135,11 @@ function QuickSwitchCard({
 					repoName={row.repoName}
 					className="size-4 rounded-[5px]"
 					fallbackClassName="text-[7px]"
+					fallbackIcon={
+						row.mode === "chat" ? (
+							<MessageCircle className="size-[10px]" strokeWidth={1.9} />
+						) : undefined
+					}
 				/>
 				<span
 					className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-tight text-foreground"

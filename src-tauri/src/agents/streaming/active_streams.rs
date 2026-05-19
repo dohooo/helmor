@@ -120,6 +120,20 @@ impl ActiveStreams {
         })
     }
 
+    /// True iff any registered handle targets `workspace_id`. Used by
+    /// auto-archive-after-merge to skip workspaces with an in-flight
+    /// agent turn — yanking the worktree under a running session would
+    /// crash it.
+    pub fn has_active_for_workspace(&self, workspace_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|map| {
+                map.values()
+                    .any(|h| h.workspace_id.as_deref() == Some(workspace_id))
+            })
+            .unwrap_or(false)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.inner.lock().map(|map| map.len()).unwrap_or(0)
     }
@@ -222,5 +236,18 @@ mod tests {
         // Anonymous streams never collide.
         assert!(streams.try_register_for_session(handle("r3", None)));
         assert!(streams.try_register_for_session(handle("r4", None)));
+    }
+
+    #[test]
+    fn has_active_for_workspace_tracks_handles() {
+        let streams = ActiveStreams::new();
+        assert!(!streams.has_active_for_workspace("ws-s1"));
+
+        assert!(streams.try_register_for_session(handle("r1", Some("s1"))));
+        assert!(streams.has_active_for_workspace("ws-s1"));
+        assert!(!streams.has_active_for_workspace("ws-other"));
+
+        streams.unregister("r1");
+        assert!(!streams.has_active_for_workspace("ws-s1"));
     }
 }

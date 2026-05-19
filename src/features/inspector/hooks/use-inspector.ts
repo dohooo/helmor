@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { suspendTerminalFit } from "@/components/terminal-output";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
@@ -17,13 +18,15 @@ import {
 	getInitialChangesHeight,
 	getInitialTabsHeight,
 	getInitialTabsOpen,
+	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
 	INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
+	INSPECTOR_CHANGES_BODY_VAR,
 	INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
+	INSPECTOR_TABS_BODY_VAR,
 	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
 	INSPECTOR_TABS_OPEN_STORAGE_KEY,
-	TABS_ANIMATION_MS,
 } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
 
@@ -61,7 +64,21 @@ type ResizeState = {
 	bodyBudget: number;
 	tabsBody: number;
 	actionsOpen: boolean;
+	tabsOpen: boolean;
 };
+
+function writeBodyVars(container: HTMLElement | null, sizes: DerivedSizes) {
+	if (!container) return;
+	container.style.setProperty(
+		INSPECTOR_CHANGES_BODY_VAR,
+		`${sizes.changesBody}px`,
+	);
+	container.style.setProperty(
+		INSPECTOR_ACTIONS_BODY_VAR,
+		`${sizes.actionsBody}px`,
+	);
+	container.style.setProperty(INSPECTOR_TABS_BODY_VAR, `${sizes.tabsBody}px`);
+}
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
@@ -162,31 +179,10 @@ export function useWorkspaceInspectorSidebar({
 		getInitialTabsHeight(DEFAULT_TABS_BODY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
-	const [isPanelToggleAnimating, setIsPanelToggleAnimating] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
-	const panelToggleTimerRef = useRef<number | null>(null);
-
-	const beginPanelToggleAnimation = useCallback(() => {
-		if (panelToggleTimerRef.current !== null) {
-			window.clearTimeout(panelToggleTimerRef.current);
-		}
-		setIsPanelToggleAnimating(true);
-		panelToggleTimerRef.current = window.setTimeout(() => {
-			panelToggleTimerRef.current = null;
-			setIsPanelToggleAnimating(false);
-		}, TABS_ANIMATION_MS + 50);
-	}, []);
-
-	useEffect(() => {
-		return () => {
-			if (panelToggleTimerRef.current !== null) {
-				window.clearTimeout(panelToggleTimerRef.current);
-			}
-		};
-	}, []);
 
 	useLayoutEffect(() => {
 		const element = containerRef.current;
@@ -232,6 +228,20 @@ export function useWorkspaceInspectorSidebar({
 			}),
 		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
 	);
+
+	// 拖动期间 mousemove 直接写 CSS 变量,React state 是 stale 的;mouseup 才 commit
+	// 回来。这个 layout effect 负责非拖动场景(toggle、键盘步进、初始 mount)的
+	// React state → CSS 变量同步。拖动期间用 isResizingRef gate 掉,防止 stale
+	// state 在拖动中途被 effect 写回去把 mousemove 的实时值盖掉。
+	const isResizingRef = useRef(false);
+	useLayoutEffect(() => {
+		if (isResizingRef.current) return;
+		writeBodyVars(containerRef.current, {
+			changesBody,
+			actionsBody,
+			tabsBody,
+		});
+	}, [changesBody, actionsBody, tabsBody]);
 
 	useEffect(() => {
 		try {
@@ -397,54 +407,72 @@ export function useWorkspaceInspectorSidebar({
 	}, [changesQuery.data]);
 
 	const handleToggleTabs = useCallback(() => {
-		beginPanelToggleAnimation();
 		setTabsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	const handleToggleActions = useCallback(() => {
-		beginPanelToggleAnimation();
 		setActionsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
+		isResizingRef.current = true;
+		// 拖动期间挂起所有已挂载 xterm 的 FitAddon —— 否则容器 ResizeObserver 会
+		// 每帧把 5000 行 scrollback 重新 reflow,在拖 scripts section 时尤其卡。
+		// 拖动结束 release,FitAddon 自己会做一次最终 fit。
+		const releaseFitSuspend = suspendTerminalFit();
+
+		const captured = resizeState;
+		const container = containerRef.current;
+
 		let pendingMove: globalThis.MouseEvent | null = null;
 		let animationFrameId: number | null = null;
+		let lastStoredChanges: number = captured.initialChangesBody;
+		let lastStoredTabs: number = captured.initialTabsBody;
+
 		const flush = () => {
 			animationFrameId = null;
 			const event = pendingMove;
 			pendingMove = null;
 			if (!event) return;
-			const deltaY = event.clientY - resizeState.pointerY;
+			const deltaY = event.clientY - captured.pointerY;
 
-			if (resizeState.target === RESIZE_TARGET_ACTIONS) {
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
 				// Drag down → changes grows, actions auto-shrinks.
 				const max = Math.max(
 					MIN_CHANGES_BODY,
-					resizeState.bodyBudget - resizeState.tabsBody - MIN_ACTIONS_BODY,
+					captured.bodyBudget - captured.tabsBody - MIN_ACTIONS_BODY,
 				);
-				const next = clamp(
-					resizeState.initialChangesBody + deltaY,
+				lastStoredChanges = clamp(
+					captured.initialChangesBody + deltaY,
 					MIN_CHANGES_BODY,
 					max,
 				);
-				setStoredChangesBody(next);
-				return;
+			} else {
+				// Drag down → tabs shrinks, upper region (actions or changes) grows.
+				const upperMin =
+					MIN_CHANGES_BODY + (captured.actionsOpen ? MIN_ACTIONS_BODY : 0);
+				const max = Math.max(MIN_TABS_BODY, captured.bodyBudget - upperMin);
+				lastStoredTabs = clamp(
+					captured.initialTabsBody - deltaY,
+					MIN_TABS_BODY,
+					max,
+				);
 			}
 
-			// Drag down → tabs shrinks, upper region (actions or changes) grows.
-			const upperMin =
-				MIN_CHANGES_BODY + (resizeState.actionsOpen ? MIN_ACTIONS_BODY : 0);
-			const max = Math.max(MIN_TABS_BODY, resizeState.bodyBudget - upperMin);
-			const next = clamp(
-				resizeState.initialTabsBody - deltaY,
-				MIN_TABS_BODY,
-				max,
-			);
-			setStoredTabsBody(next);
+			// 直接算出 derived sizes 并写 CSS 变量 —— 不进 setState、不进 React
+			// 渲染路径。三个 section 通过 var(--inspector-X-body-height) 读取。
+			const sizes = deriveSizes({
+				bodyBudget: captured.bodyBudget,
+				actionsOpen: captured.actionsOpen,
+				tabsOpen: captured.tabsOpen,
+				storedChangesBody: lastStoredChanges,
+				storedTabsBody: lastStoredTabs,
+			});
+			writeBodyVars(container, sizes);
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
@@ -460,6 +488,18 @@ export function useWorkspaceInspectorSidebar({
 				animationFrameId = null;
 			}
 			flush();
+			// Commit 最终值回 React state:触发 localStorage 持久化 + 让外部消费者
+			// (如设置面板里显示当前高度)拿到最新数值。同值 setState 是 no-op。
+			isResizingRef.current = false;
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
+				if (lastStoredChanges !== captured.initialChangesBody) {
+					setStoredChangesBody(lastStoredChanges);
+				}
+			} else {
+				if (lastStoredTabs !== captured.initialTabsBody) {
+					setStoredTabsBody(lastStoredTabs);
+				}
+			}
 			setResizeState(null);
 		};
 
@@ -475,6 +515,8 @@ export function useWorkspaceInspectorSidebar({
 			if (animationFrameId !== null) {
 				window.cancelAnimationFrame(animationFrameId);
 			}
+			isResizingRef.current = false;
+			releaseFitSuspend();
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);
@@ -494,9 +536,17 @@ export function useWorkspaceInspectorSidebar({
 				bodyBudget,
 				tabsBody,
 				actionsOpen,
+				tabsOpen,
 			});
 		},
-		[storedChangesBody, storedTabsBody, bodyBudget, tabsBody, actionsOpen],
+		[
+			storedChangesBody,
+			storedTabsBody,
+			bodyBudget,
+			tabsBody,
+			actionsOpen,
+			tabsOpen,
+		],
 	);
 
 	return {
@@ -512,7 +562,6 @@ export function useWorkspaceInspectorSidebar({
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,

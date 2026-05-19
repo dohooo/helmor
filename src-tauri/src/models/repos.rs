@@ -11,6 +11,19 @@ use crate::{git_ops, helpers, workspace::sidebar_order, workspace_state};
 
 use super::db;
 
+/// Synthetic repository ID owned by Chat-mode workspaces. They aren't
+/// bound to a real repo on disk, but the `workspaces.repository_id`
+/// column is filled in for every row, so we stash them under a hidden
+/// placeholder repo. The row is upserted on every startup
+/// (`ensure_chat_repo`) and excluded from the repo picker because it's
+/// flagged `hidden = 1`.
+pub const SYSTEM_CHAT_REPO_ID: &str = "__chat__";
+
+/// Display name for the synthetic chat repo. Surfaces as the sidebar
+/// group header label when chat workspaces are bucketed under their
+/// (hidden) repo — kept short and pluralized to read like "Chats".
+pub const SYSTEM_CHAT_REPO_NAME: &str = "Chats";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryCreateOption {
@@ -149,6 +162,73 @@ pub fn list_repositories() -> Result<Vec<RepositoryCreateOption>> {
 
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to deserialize repositories")
+}
+
+/// Refresh the synthetic `__chat__` repo's `name` (and other display
+/// fields) on existing rows, without creating one. Safe to call on
+/// every startup — touches no rows on installs that have never used
+/// chat-mode, and keeps the sidebar label current when the canonical
+/// `SYSTEM_CHAT_REPO_NAME` constant is bumped between releases.
+pub(crate) fn refresh_system_chat_repo_name_if_exists() -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            "UPDATE repos SET name = ?2 WHERE id = ?1",
+            rusqlite::params![SYSTEM_CHAT_REPO_ID, SYSTEM_CHAT_REPO_NAME],
+        )
+        .context("Failed to refresh synthetic chat repository name")?;
+    Ok(())
+}
+
+/// Lazily upsert the synthetic `__chat__` repository row, creating it
+/// on first use rather than at startup. Keeps existing test fixtures
+/// untouched (they don't expect this row in `repos`) and avoids a
+/// schema-level dependency on column availability.
+///
+/// Errors from `chats_dir()` propagate rather than fall back to a
+/// sentinel string: `repos.root_path` has a UNIQUE index, and a stray
+/// placeholder row would later block any legitimate repo whose root
+/// matched it.
+pub(crate) fn ensure_system_chat_repo() -> Result<()> {
+    let connection = db::write_conn()?;
+    let chats_dir_path = crate::data_dir::chats_dir()
+        .context("Failed to resolve chats directory while upserting synthetic chat repo")?
+        .display()
+        .to_string();
+    connection
+        .execute(
+            r#"
+            INSERT OR IGNORE INTO repos (
+              id, name, root_path, hidden, display_order
+            ) VALUES (?1, ?2, ?3, 1, ?4)
+            "#,
+            rusqlite::params![
+                SYSTEM_CHAT_REPO_ID,
+                SYSTEM_CHAT_REPO_NAME,
+                chats_dir_path,
+                i64::MIN,
+            ],
+        )
+        .context("Failed to upsert synthetic chat repository row")?;
+    connection
+        .execute(
+            r#"
+            UPDATE repos
+            SET name = ?2,
+                hidden = 1,
+                display_order = ?3,
+                root_path = ?4
+            WHERE id = ?1
+            "#,
+            rusqlite::params![
+                SYSTEM_CHAT_REPO_ID,
+                SYSTEM_CHAT_REPO_NAME,
+                i64::MIN,
+                chats_dir_path,
+            ],
+        )
+        .context("Failed to refresh synthetic chat repository row")?;
+    Ok(())
 }
 
 pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRecord>> {

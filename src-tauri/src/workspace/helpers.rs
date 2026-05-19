@@ -18,7 +18,9 @@ use crate::{
 
 /// Resolve the on-disk path a workspace operates against. Worktree
 /// workspaces live under the helmor data dir; Local workspaces operate
-/// directly on the source repo's root path.
+/// directly on the source repo's root path; Chat workspaces store
+/// their relative scratch path (`"YYYY-MM-DD/new-chat[-N]"`) in
+/// `directory_name` and resolve it under the `chats` data dir.
 pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
     match record.mode {
         WorkspaceMode::Worktree => {
@@ -27,6 +29,13 @@ pub fn workspace_path(record: &WorkspaceRecord) -> Result<PathBuf> {
         WorkspaceMode::Local => non_empty(&record.root_path)
             .map(PathBuf::from)
             .with_context(|| format!("Workspace {} (local) is missing repo root_path", record.id)),
+        WorkspaceMode::Chat => {
+            let dir_name = record.directory_name.trim();
+            if dir_name.is_empty() {
+                bail!("Workspace {} (chat) is missing directory_name", record.id);
+            }
+            Ok(crate::data_dir::chats_dir()?.join(dir_name))
+        }
     }
 }
 
@@ -38,13 +47,12 @@ pub fn display_title(record: &WorkspaceRecord) -> String {
     }
 
     // Local workspaces don't own a `directory_name` (they share the
-    // user's repo root with potentially other local workspaces). Use
-    // the first conversation's title to differentiate them in the
-    // sidebar; primary_session_title is the most-message-count
-    // non-hidden session, which lines up with "the conversation" in
-    // practice. Fall back to "Untitled" / repo name when nothing is
-    // populated yet.
-    if record.mode == WorkspaceMode::Local {
+    // user's repo root with potentially other local workspaces). Chat
+    // workspaces own a synthetic directory name like
+    // `"YYYY-MM-DD/new-chat-N"` which doesn't humanize nicely. Both
+    // prefer the live session title when one is available, falling
+    // back to a generic placeholder rather than the directory name.
+    if matches!(record.mode, WorkspaceMode::Local | WorkspaceMode::Chat) {
         if let Some(title) = non_empty(&record.primary_session_title)
             .or_else(|| non_empty(&record.active_session_title))
         {
@@ -52,7 +60,11 @@ pub fn display_title(record: &WorkspaceRecord) -> String {
                 return title.to_string();
             }
         }
-        return record.repo_name.clone();
+        return if record.mode == WorkspaceMode::Chat {
+            "New chat".to_string()
+        } else {
+            record.repo_name.clone()
+        };
     }
 
     if let Some(session_title) = non_empty(&record.active_session_title) {
@@ -726,6 +738,74 @@ pub fn allocate_directory_name_for_repo(repo_id: &str) -> Result<String> {
     allocate_directory_name_with_conn(&connection, repo_id)
 }
 
+/// Allocate a fresh scratch directory for a Chat-mode workspace.
+///
+/// Layout: `<data_dir>/chats/<YYYY-MM-DD>/<name>` where `<name>` starts
+/// at `new-chat`, then `new-chat-1`, `new-chat-2`, ... — a slot is free
+/// only when BOTH the filesystem dir is absent AND no DB row already
+/// owns the same relative `directory_name`. Checking only the FS would
+/// re-issue a name to a new row whenever the user manually deletes a
+/// chat directory while the DB row still exists, causing two rows to
+/// resolve to the same `workspace_path`.
+///
+/// Creates the dir on disk before returning so the caller can immediately
+/// use it as a CLI `cwd`. Returns `(directory_name, absolute_path)`.
+pub fn allocate_chat_workspace_dir() -> Result<(String, PathBuf)> {
+    let today = chrono::Local::now().date_naive().to_string(); // "YYYY-MM-DD"
+    let date_dir = crate::data_dir::chats_dir()?.join(&today);
+    fs::create_dir_all(&date_dir).with_context(|| {
+        format!(
+            "Failed to create chat date directory {}",
+            date_dir.display()
+        )
+    })?;
+
+    // Snapshot every chat row's `directory_name` once up-front. The
+    // alternative — one COUNT query per candidate — is fine for 9999
+    // iterations but allocates a connection per loop tick.
+    let connection = crate::db::read_conn()?;
+    let mut used_names: std::collections::HashSet<String> = connection
+        .prepare(
+            "SELECT directory_name FROM workspaces \
+             WHERE COALESCE(mode, 'worktree') = 'chat' \
+               AND directory_name IS NOT NULL",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(connection);
+
+    // Allocate first un-taken slot. Cap at 9999 to avoid pathological
+    // loops; the user would have to spin up a chat per minute for a
+    // week to hit it.
+    for index in 0..=9999 {
+        let candidate_name = if index == 0 {
+            "new-chat".to_string()
+        } else {
+            format!("new-chat-{index}")
+        };
+        let relative = format!("{today}/{candidate_name}");
+        if used_names.contains(&relative) {
+            continue;
+        }
+        let candidate_path = date_dir.join(&candidate_name);
+        if !candidate_path.exists() {
+            fs::create_dir(&candidate_path).with_context(|| {
+                format!(
+                    "Failed to create chat workspace directory {}",
+                    candidate_path.display()
+                )
+            })?;
+            // Reserve the name in-memory in case a future call inside
+            // the same process iterates here before the new row lands
+            // in the DB read snapshot.
+            used_names.insert(relative.clone());
+            return Ok((relative, candidate_path));
+        }
+    }
+
+    bail!("Unable to allocate a chat workspace directory under {date_dir:?}")
+}
+
 fn lookup_repo_name(connection: &rusqlite::Connection, repo_id: &str) -> Result<Option<String>> {
     let mut stmt = connection
         .prepare("SELECT name FROM repos WHERE id = ?1")
@@ -830,6 +910,7 @@ mod tests {
             initialization_parent_branch: Some("main".to_string()),
             intended_target_branch: Some("main".to_string()),
             mode,
+            branch_intent: crate::workspace_state::WorkspaceBranchIntent::FromBranch,
             pinned_at: None,
             active_session_id: None,
             active_session_title: None,
@@ -887,6 +968,99 @@ mod tests {
         assert!(
             msg.contains("local") && msg.contains("root_path"),
             "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn workspace_path_for_chat_joins_chats_dir() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock();
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", temp.path());
+        let mut record = fixture_record(WorkspaceMode::Chat, None);
+        record.directory_name = "2026-05-19/new-chat".to_string();
+        let path = workspace_path(&record).unwrap();
+        assert_eq!(
+            path,
+            temp.path()
+                .join("chats")
+                .join("2026-05-19")
+                .join("new-chat")
+        );
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn allocate_chat_workspace_dir_creates_unique_names() {
+        // `allocate_chat_workspace_dir` now consults the `workspaces`
+        // table to avoid handing out a name an orphaned DB row already
+        // owns, so the test needs a real schema-initialised env.
+        let _env = crate::testkit::TestEnv::new("alloc-chat-dir-unique");
+
+        let (name1, path1) = allocate_chat_workspace_dir().unwrap();
+        let (name2, path2) = allocate_chat_workspace_dir().unwrap();
+        let (name3, path3) = allocate_chat_workspace_dir().unwrap();
+
+        // First allocation gets the bare `new-chat`; subsequent ones
+        // append `-1`, `-2`. Date prefix is `YYYY-MM-DD/`.
+        assert!(
+            name1.ends_with("/new-chat"),
+            "expected first to end with /new-chat: {name1}"
+        );
+        assert!(
+            name2.ends_with("/new-chat-1"),
+            "expected second to end with /new-chat-1: {name2}"
+        );
+        assert!(
+            name3.ends_with("/new-chat-2"),
+            "expected third to end with /new-chat-2: {name3}"
+        );
+        assert!(path1.is_dir(), "first dir should exist: {path1:?}");
+        assert!(path2.is_dir(), "second dir should exist: {path2:?}");
+        assert!(path3.is_dir(), "third dir should exist: {path3:?}");
+    }
+
+    #[test]
+    fn allocate_chat_workspace_dir_skips_orphaned_db_name() {
+        // Simulate the failure mode from the review: a DB row still
+        // points at "new-chat" but the user wiped the dir. The allocator
+        // must NOT hand the same slot to a fresh chat — otherwise two
+        // rows resolve to the same workspace_path and one's delete
+        // would clobber the other's contents.
+        let env = crate::testkit::TestEnv::new("alloc-chat-skips-orphan");
+        let today = chrono::Local::now().date_naive().to_string();
+        let orphan_directory_name = format!("{today}/new-chat");
+
+        // Seed an orphan chat row with the slot we expect to be skipped.
+        let conn = env.db_connection();
+        conn.execute(
+            "INSERT OR IGNORE INTO repos (id, name, hidden, display_order) \
+             VALUES (?1, ?2, 1, ?3)",
+            rusqlite::params![
+                crate::models::repos::SYSTEM_CHAT_REPO_ID,
+                crate::models::repos::SYSTEM_CHAT_REPO_NAME,
+                i64::MIN,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, mode, state, status, display_order) \
+             VALUES ('orphan', ?1, ?2, 'chat', 'ready', 'in-progress', ?3)",
+            rusqlite::params![
+                crate::models::repos::SYSTEM_CHAT_REPO_ID,
+                &orphan_directory_name,
+                crate::workspace::sidebar_order::ORDER_STEP,
+            ],
+        )
+        .unwrap();
+
+        let (name, _path) = allocate_chat_workspace_dir().unwrap();
+        assert_ne!(
+            name, orphan_directory_name,
+            "must not reuse a slot owned by an existing chat row"
+        );
+        assert!(
+            name.ends_with("/new-chat-1"),
+            "should fall through to the next free slot, got {name}"
         );
     }
 

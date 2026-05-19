@@ -1,5 +1,4 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { createContext, useCallback, useContext } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,10 +29,8 @@ import {
 export const MIN_SECTION_HEIGHT = 48;
 export const DEFAULT_TABS_BODY_HEIGHT = 128;
 export const RESIZE_HIT_AREA = 10;
-export const TABS_ANIMATION_MS = 350;
-/** Apple-style easing — used consistently across panel toggle, chevron, and hover-zoom. */
+/** Apple-style easing for hover-zoom. */
 export const TABS_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
-export const TABS_EASING_CURVE = [0.32, 0.72, 0, 1] as const;
 
 /** 300ms is the industry-standard hover-intent threshold (VSCode/Material). */
 export const TABS_HOVER_ACTIVATION_MS = 300;
@@ -47,6 +44,13 @@ export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 /** 32px header (h-8) + 1px section border-b. */
 export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
+
+// CSS variables written on the inspector container by `useWorkspaceInspectorSidebar`.
+// 拖动期间 mousemove 直接更新这些变量,不进 React 渲染路径 —— 和 shell/use-panels.ts
+// 里水平拖动的实现策略保持一致,把每帧 setState 的代价归零。
+export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
+export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
+export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
 
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
@@ -214,9 +218,6 @@ type InspectorTabsSectionProps = {
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	bodyHeight: number;
-	/** Enables the height transition only for explicit panel toggles. */
-	animatePanelToggle?: boolean;
-	isResizing?: boolean;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
@@ -241,23 +242,11 @@ export function InspectorTabsSection({
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
-	const chevronTransitionMs =
-		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 
 	const {
 		isHoverExpanded,
@@ -299,24 +288,20 @@ export function InspectorTabsSection({
 	}, [open, onAddTerminal, onToggle]);
 
 	return (
-		<motion.div
+		<div
 			ref={wrapperRef}
 			className={cn(
 				"relative flex min-h-0 shrink-0 flex-col",
 				!isZoomPresented && "overflow-hidden",
 			)}
-			initial={false}
-			animate={{
-				height: TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX + (open ? bodyHeight : 0),
-			}}
-			transition={panelTransition}
 			style={{
-				// The real content lives inside the absolutely-positioned child
-				// below, which contributes nothing to layout. Reserve header
-				// height when the panel is closed so the parent flex column
-				// keeps a stable footprint for us.
+				// 高度走 CSS 变量,拖动期间由 useWorkspaceInspectorSidebar 的 mousemove
+				// 直接 setProperty 更新,跳过 React 渲染。collapsed 状态固定 header 高,
+				// 确保父级 flex column 的占位稳定。
+				height: open
+					? `calc(${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px + var(${INSPECTOR_TABS_BODY_VAR}, ${bodyHeight}px))`
+					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
 				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-				willChange: isResizing ? undefined : "height",
 			}}
 		>
 			<div
@@ -635,7 +620,7 @@ export function InspectorTabsSection({
 										strokeWidth={1.9}
 										style={{
 											transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-											transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
+											transition: "none",
 										}}
 									/>
 								</Button>
@@ -659,7 +644,7 @@ export function InspectorTabsSection({
 					</div>
 				</section>
 			</div>
-		</motion.div>
+		</div>
 	);
 }
 

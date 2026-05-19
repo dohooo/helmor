@@ -71,6 +71,7 @@ import {
 } from "./lib/api";
 import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
+import { isMarkdownPath } from "./lib/editor-session";
 import {
 	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
@@ -470,6 +471,8 @@ function AppShell({
 		startSurfaceActions.setInboxStateFilterBySource;
 	const startSourceBranch = startSurface.startSourceBranch;
 	const startMode = startSurface.startMode;
+	const startBranchIntent = startSurface.startBranchIntent;
+	const handleStartBranchIntentChange = startSurfaceActions.selectBranchIntent;
 	const handleStartSourceBranchSelect = startSurfaceActions.selectSourceBranch;
 	const handleStartRepositorySelect = startSurfaceActions.selectRepository;
 	const handleAddRepositoryNeedsStart =
@@ -698,20 +701,69 @@ function AppShell({
 			? null
 			: (selectedWorkspaceDetail?.rootPath ?? null);
 
-	const { state: editorSessionState, actions: editorSessionActions } =
-		useEditorSessionController({
-			pushToast: pushWorkspaceToast,
-			workspaceRootPath,
-			selectedWorkspaceId,
-			enterEditorMode: () => selectionActions.setViewMode("editor"),
-			exitEditorMode: () => selectionActions.setViewMode("conversation"),
-		});
+	const {
+		state: editorSessionState,
+		actions: editorSessionActions,
+		dialogNode: editorDiscardConfirmDialog,
+	} = useEditorSessionController({
+		pushToast: pushWorkspaceToast,
+		workspaceRootPath,
+		selectedWorkspaceId,
+		enterEditorMode: () => selectionActions.setViewMode("editor"),
+		exitEditorMode: () => selectionActions.setViewMode("conversation"),
+	});
 	const editorSession = editorSessionState.editorSession;
 	const handleOpenEditorFile = editorSessionActions.openFile;
 	const handleOpenFileReference = editorSessionActions.openFileReference;
 	const handleEditorSessionChange = editorSessionActions.changeSession;
 	const handleExitEditorMode = editorSessionActions.exit;
 	const handleEditorSurfaceError = editorSessionActions.reportError;
+	const canEditEditorSession =
+		(editorSession?.kind === "diff" && editorSession.fileStatus !== "D") ||
+		(editorSession?.kind === "file" &&
+			editorSession.fileStatus !== undefined &&
+			editorSession.fileStatus !== "D");
+	const handleEnterEditorEditMode = useCallback(() => {
+		if (!editorSession || editorSession.fileStatus === "D") {
+			return;
+		}
+		if (editorSession.kind === "diff") {
+			handleEditorSessionChange({
+				kind: "file",
+				path: editorSession.path,
+				line: editorSession.line,
+				column: editorSession.column,
+				dirty: false,
+				inline: editorSession.inline,
+				fileStatus: editorSession.fileStatus,
+				originalRef: editorSession.originalRef,
+				modifiedRef: editorSession.modifiedRef,
+				diffOriginalText: editorSession.originalText,
+				diffModifiedText: editorSession.modifiedText,
+				viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+			});
+			return;
+		}
+		if (editorSession.fileStatus === undefined) return;
+		handleEditorSessionChange({
+			kind: "diff",
+			path: editorSession.path,
+			line: editorSession.line,
+			column: editorSession.column,
+			dirty: editorSession.dirty,
+			inline: editorSession.inline,
+			fileStatus: editorSession.fileStatus,
+			originalRef: editorSession.originalRef,
+			modifiedRef: editorSession.modifiedRef,
+			originalText: editorSession.diffOriginalText,
+			modifiedText: editorSession.dirty
+				? editorSession.modifiedText
+				: editorSession.diffModifiedText,
+			diffOriginalText: editorSession.diffOriginalText,
+			diffModifiedText: editorSession.diffModifiedText,
+			viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+		});
+	}, [editorSession, handleEditorSessionChange]);
 
 	const handleCopyWorkspacePath = useCallback(() => {
 		if (!workspaceRootPath) return;
@@ -1235,6 +1287,11 @@ function AppShell({
 				enabled: workspaceViewMode === "conversation",
 			},
 			{
+				id: "editor.edit" as const,
+				callback: handleEnterEditorEditMode,
+				enabled: workspaceViewMode === "editor" && canEditEditorSession,
+			},
+			{
 				id: "composer.toggleContextPanel" as const,
 				callback: () => publishShellEvent({ type: "toggle-context-panel" }),
 				enabled:
@@ -1273,6 +1330,7 @@ function AppShell({
 			handleOpenPreferredEditor,
 			handleOpenPullRequest,
 			handleOpenSettings,
+			handleEnterEditorEditMode,
 			handlePullLatest,
 			handleReopenClosedSession,
 			handleToggleTheme,
@@ -1288,6 +1346,7 @@ function AppShell({
 			workspacePreviewActive,
 			workspacePreviewCard,
 			workspaceViewMode,
+			canEditEditorSession,
 		],
 	);
 	useAppShortcuts({
@@ -1479,7 +1538,7 @@ function AppShell({
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
 								>
-									{workspaceViewMode === "conversation" && (
+									{workspaceViewMode !== "editor" && (
 										<div
 											aria-label="Workspace panel drag region"
 											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
@@ -1494,6 +1553,11 @@ function AppShell({
 										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
+												editShortcut={getShortcut(
+													appSettings.shortcuts,
+													"editor.edit",
+												)}
+												shortcutOverrides={appSettings.shortcuts}
 												workspaceRootPath={workspaceRootPath}
 												onChangeSession={handleEditorSessionChange}
 												onExit={handleExitEditorMode}
@@ -1522,6 +1586,8 @@ function AppShell({
 													onSelectBranch={handleStartSourceBranchSelect}
 													mode={startMode}
 													onModeChange={startSurfaceActions.selectMode}
+													branchIntent={startBranchIntent}
+													onBranchIntentChange={handleStartBranchIntentChange}
 													onCreateAndCheckoutBranch={async (branch) => {
 														if (!startRepository) return;
 														// Lazy: just remember the desired name. Actual
@@ -1670,6 +1736,9 @@ function AppShell({
 																	rightSidebarToggleShortcut
 																}
 																inspectorCollapsed={inspectorCollapsed}
+																isChatMode={
+																	selectedWorkspaceDetail?.mode === "chat"
+																}
 																onOpenPreferredEditor={
 																	handleOpenPreferredEditor
 																}
@@ -1689,84 +1758,92 @@ function AppShell({
 									</div>
 								</section>
 
-								{rightSidebarAvailable && (
-									<>
-										<ShellResizeSeparator
-											side="inspector"
-											collapsed={inspectorCollapsed}
-											resizing={isInspectorResizing}
-											width={inspectorWidth}
-											onMouseDown={handleResizeStart("inspector")}
-											onKeyDown={handleResizeKeyDown("inspector")}
-										/>
-										<ShellInspectorPane
-											collapsed={inspectorCollapsed}
-											resizing={isInspectorResizing}
-											width={inspectorWidth}
-											rightSidebarMode={rightSidebarMode}
-											viewMode={workspaceViewMode}
-											startRepository={startRepository}
-											selectedWorkspaceRepository={selectedWorkspaceRepository}
-											startInboxProviderTab={startInboxProviderTab}
-											onStartInboxProviderTabChange={setStartInboxProviderTab}
-											startInboxProviderSourceTab={startInboxProviderSourceTab}
-											onStartInboxProviderSourceTabChange={
-												setStartInboxProviderSourceTab
-											}
-											startInboxStateFilterBySource={
-												startInboxStateFilterBySource
-											}
-											onStartInboxStateFilterBySourceChange={
-												setStartInboxStateFilterBySource
-											}
-											startComposerInsertTarget={startComposerInsertTarget}
-											startPreviewCardId={startPreviewCard?.id ?? null}
-											workspacePreviewCardId={workspacePreviewCard?.id ?? null}
-											onOpenStartContextCard={handleStartContextCardOpen}
-											onOpenWorkspaceContextCard={
-												handleWorkspaceContextCardOpen
-											}
-											selectedWorkspaceId={selectedWorkspaceId}
-											workspaceRootPath={workspaceRootPath}
-											selectedWorkspaceDetail={
-												selectedWorkspaceDetailQuery.data ?? null
-											}
-											displayedSessionId={displayedSessionId}
-											activeEditor={
-												editorSession
-													? {
-															path: editorSession.path,
-															originalRef: editorSession.originalRef,
-															modifiedRef: editorSession.modifiedRef,
-														}
-													: null
-											}
-											onOpenEditorFile={handleOpenEditorFile}
-											onCommitAction={handleCommitAction}
-											onReviewAction={() =>
-												handleInspectorReviewAction({
-													modelId:
-														appSettings.reviewModelId ??
-														appSettings.defaultModelId,
-													effort:
-														appSettings.reviewEffort ??
-														appSettings.defaultEffort,
-													fastMode:
-														appSettings.reviewFastMode ??
-														appSettings.defaultFastMode,
-												})
-											}
-											onQueuePendingPromptForSession={
-												queuePendingPromptForSession
-											}
-											commitButtonMode={commitButtonMode}
-											commitButtonState={commitButtonState}
-											workspaceChangeRequest={workspaceChangeRequest}
-											workspaceForgeIsRefreshing={workspaceForgeIsRefreshing}
-											onOpenSettings={handleOpenSettings}
-										/>
-									</>
-								)}
+								{rightSidebarAvailable &&
+									selectedWorkspaceDetail?.mode !== "chat" && (
+										<>
+											<ShellResizeSeparator
+												side="inspector"
+												collapsed={inspectorCollapsed}
+												resizing={isInspectorResizing}
+												width={inspectorWidth}
+												onMouseDown={handleResizeStart("inspector")}
+												onKeyDown={handleResizeKeyDown("inspector")}
+											/>
+											<ShellInspectorPane
+												collapsed={inspectorCollapsed}
+												resizing={isInspectorResizing}
+												width={inspectorWidth}
+												rightSidebarMode={rightSidebarMode}
+												viewMode={workspaceViewMode}
+												startRepository={startRepository}
+												selectedWorkspaceRepository={
+													selectedWorkspaceRepository
+												}
+												startInboxProviderTab={startInboxProviderTab}
+												onStartInboxProviderTabChange={setStartInboxProviderTab}
+												startInboxProviderSourceTab={
+													startInboxProviderSourceTab
+												}
+												onStartInboxProviderSourceTabChange={
+													setStartInboxProviderSourceTab
+												}
+												startInboxStateFilterBySource={
+													startInboxStateFilterBySource
+												}
+												onStartInboxStateFilterBySourceChange={
+													setStartInboxStateFilterBySource
+												}
+												startComposerInsertTarget={startComposerInsertTarget}
+												startPreviewCardId={startPreviewCard?.id ?? null}
+												workspacePreviewCardId={
+													workspacePreviewCard?.id ?? null
+												}
+												onOpenStartContextCard={handleStartContextCardOpen}
+												onOpenWorkspaceContextCard={
+													handleWorkspaceContextCardOpen
+												}
+												selectedWorkspaceId={selectedWorkspaceId}
+												workspaceRootPath={workspaceRootPath}
+												selectedWorkspaceDetail={
+													selectedWorkspaceDetailQuery.data ?? null
+												}
+												displayedSessionId={displayedSessionId}
+												activeEditor={
+													editorSession
+														? {
+																path: editorSession.path,
+																originalRef: editorSession.originalRef,
+																modifiedRef: editorSession.modifiedRef,
+															}
+														: null
+												}
+												preferredEditor={preferredEditor}
+												onOpenEditorFile={handleOpenEditorFile}
+												onCommitAction={handleCommitAction}
+												onReviewAction={() =>
+													handleInspectorReviewAction({
+														modelId:
+															appSettings.reviewModelId ??
+															appSettings.defaultModelId,
+														effort:
+															appSettings.reviewEffort ??
+															appSettings.defaultEffort,
+														fastMode:
+															appSettings.reviewFastMode ??
+															appSettings.defaultFastMode,
+													})
+												}
+												onQueuePendingPromptForSession={
+													queuePendingPromptForSession
+												}
+												commitButtonMode={commitButtonMode}
+												commitButtonState={commitButtonState}
+												workspaceChangeRequest={workspaceChangeRequest}
+												workspaceForgeIsRefreshing={workspaceForgeIsRefreshing}
+												onOpenSettings={handleOpenSettings}
+											/>
+										</>
+									)}
 							</div>
 						</main>
 						<Toaster
@@ -1778,6 +1855,9 @@ function AppShell({
 							onOpenChangelog={handleOpenReleaseChangelog}
 							onOpenSettings={handleOpenAnnouncementSettings}
 							onSetRightSidebarMode={contextPanelActions.setMode}
+							onOpenStartPage={() =>
+								handleOpenWorkspaceStart({ persist: false })
+							}
 						/>
 						<QuickSwitchOverlay
 							state={quickSwitch.state}
@@ -1789,6 +1869,7 @@ function AppShell({
 							}}
 						/>
 						{closeConfirmDialog}
+						{editorDiscardConfirmDialog}
 						{mergeConfirmDialogNode}
 					</ComposerInsertProvider>
 				</SessionRunStatesProvider>

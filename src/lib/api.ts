@@ -25,7 +25,7 @@ export type WorkspaceState =
 
 /**
  * Mirror of the Rust `WorkspaceStatus` enum
- * (`src-tauri/src/workspace/status.rs`). Drives the sidebar kanban
+ * (`src-tauri/src/workspace/status.rs`). Drives the sidebar status
  * lanes and PR-driven auto-status transitions.
  */
 export type WorkspaceStatus =
@@ -376,14 +376,22 @@ export type PrepareArchiveWorkspaceResponse = {
 	workspaceId: string;
 };
 
+/** Mirrors `workspace::archive::ArchiveOrigin`. `manual` drives the existing
+ *  `pendingArchives` + `archiveGate` UI flow; `autoAfterMerge` has no
+ *  optimistic state and needs the controller to reconcile + use a calmer
+ *  failure toast on its own. */
+export type ArchiveOrigin = "manual" | "autoAfterMerge";
+
 export type ArchiveExecutionFailedPayload = {
 	workspaceId: string;
 	code: ErrorCode;
 	message: string;
+	origin: ArchiveOrigin;
 };
 
 export type ArchiveExecutionSucceededPayload = {
 	workspaceId: string;
+	origin: ArchiveOrigin;
 };
 
 export type CreateWorkspaceResponse = {
@@ -409,6 +417,8 @@ export type PrepareWorkspaceResponse = {
 	 *  immediately. Worktree mode: null until finalize materialises the
 	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
 	workingDirectory: string | null;
+	/** Echo of the branch-intent the workspace was created with. */
+	branchIntent: WorkspaceBranchIntent;
 };
 
 export type FinalizeWorkspaceResponse = {
@@ -971,7 +981,7 @@ export async function listCursorModels(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox (kanban-mode left sidebar)
+// Inbox (start-surface left sidebar)
 // ---------------------------------------------------------------------------
 
 export type InboxItemSource =
@@ -1390,6 +1400,32 @@ export async function listBranchesForLocalPicker(
 	}
 }
 
+/** One row of the start-page branch picker. */
+export type BranchPickerEntry = {
+	name: string;
+	hasLocal: boolean;
+	hasRemote: boolean;
+};
+
+/**
+ * Merged local + remote branches with source flags so the picker can
+ * show an icon and the pill can decide whether to prefix with `origin/`.
+ * Pure local fs reads — no network.
+ */
+export async function listBranchesForWorkspacePicker(
+	repoId: string,
+): Promise<BranchPickerEntry[]> {
+	try {
+		return await invoke<BranchPickerEntry[]>(
+			"list_branches_for_workspace_picker",
+			{ repoId },
+		);
+	} catch (error) {
+		console.warn("[helmor] listBranchesForWorkspacePicker failed:", error);
+		return [];
+	}
+}
+
 /**
  * `git checkout -b <branch>` against the repo's source path. Caller is
  * responsible for refreshing whatever query feeds the branch picker.
@@ -1424,8 +1460,17 @@ export async function moveLocalWorkspaceToWorktree(
 	);
 }
 
-/** How a workspace's filesystem is provisioned. */
-export type WorkspaceMode = "worktree" | "local";
+/**
+ * How a workspace's filesystem is provisioned.
+ * - `worktree`: a dedicated git worktree with its own auto-named branch.
+ * - `local`: operates directly on the source repo's root path.
+ * - `chat`: a scratch dir under `<data_dir>/chats/<YYYY-MM-DD>/<name>`
+ *   with no git context. "Just Chat" mode from the start page.
+ */
+export type WorkspaceMode = "worktree" | "local" | "chat";
+
+/** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
+export type WorkspaceBranchIntent = "from_branch" | "use_branch";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -1772,6 +1817,13 @@ export async function openWorkspaceInEditor(
 	editor: string,
 ): Promise<void> {
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
+}
+
+export async function openFileInEditor(
+	path: string,
+	editor: string,
+): Promise<void> {
+	await invoke("open_file_in_editor", { path, editor });
 }
 
 export async function openWorkspaceInFinder(
@@ -2271,20 +2323,21 @@ export async function createWorkspaceFromRepo(
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
  *
- * `sourceBranch` (optional): branch to branch the new workspace from. When
- * omitted, the repo's default branch is used. The kanban "create" flow
- * forwards the user's branch picker selection here.
+ * `sourceBranch` is the fork base for `from_branch` (default) or the
+ * branch to attach to for `use_branch` (required).
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
+	branchIntent?: WorkspaceBranchIntent | null,
 	initialStatus?: WorkspaceStatus | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
 	});
 }
@@ -2300,6 +2353,21 @@ export async function finalizeWorkspaceFromRepo(
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+	});
+}
+
+/**
+ * One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+ * bound to any repo — they're a scratch dir under
+ * `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+ * AI chat session. No `finalize_*` follow-up — the row is `ready`
+ * immediately.
+ */
+export async function prepareChatWorkspace(
+	initialStatus?: WorkspaceStatus | null,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_chat_workspace", {
+		initialStatus: initialStatus ?? null,
 	});
 }
 

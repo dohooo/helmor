@@ -97,6 +97,13 @@ pub fn run() {
             // Build read/write connection pools (must happen after schema).
             db::init_pools()?;
 
+            // Refresh the synthetic chat repo's display name in case the
+            // canonical value moved between releases. No-op for installs
+            // that have never created a chat workspace (no row to update).
+            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
+                tracing::warn!(%error, "Failed to refresh chat repo name");
+            }
+
             tracing::info!(
                 mode = data_dir::data_mode_label(),
                 data = %db_path.display(),
@@ -244,6 +251,7 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_chat_workspace,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
@@ -331,6 +339,7 @@ pub fn run() {
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::list_branches_for_workspace_picker,
             commands::workspace_commands::get_repo_current_branch,
             commands::workspace_commands::create_and_checkout_branch,
             commands::workspace_commands::move_local_workspace_to_worktree,
@@ -362,6 +371,7 @@ pub fn run() {
             commands::workspace_commands::list_workspace_candidate_directories,
             commands::workspace_commands::trigger_workspace_fetch,
             commands::editors::detect_installed_editors,
+            commands::editors::open_file_in_editor,
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,

@@ -233,10 +233,15 @@ function sortGroupsForView(
 	);
 	if (!hasRepoGroups) return sortedGroups;
 
-	const head = sortedGroups.filter((group) => group.id === "pinned");
+	// `chats` rides alongside `pinned` in the head — both buckets sit
+	// outside the sortable middle so sort changes don't shuffle them.
+	const head = sortedGroups.filter(
+		(group) => group.id === "pinned" || group.id === "chats",
+	);
 	const tail = sortedGroups.filter((group) => group.id === "backlog");
 	const middle = sortedGroups.filter(
-		(group) => group.id !== "pinned" && group.id !== "backlog",
+		(group) =>
+			group.id !== "pinned" && group.id !== "chats" && group.id !== "backlog",
 	);
 
 	middle.sort((left, right) =>
@@ -316,6 +321,9 @@ function compareStrings(left: string, right: string): number {
  *   orthogonal to repo (workspaces the user has elevated, and workspaces
  *   queued for later) and are worth preserving as their own buckets in
  *   either grouping mode.
+ * - "chats" also passes through (right after pinned). Chat workspaces
+ *   have no repo, so they can't be folded into a repo bucket — keeping
+ *   the bucket intact in either grouping mode is the only sane shape.
  * - Everything else (in-flight creates, in-progress, in review, done,
  *   canceled) flattens into per-repo buckets keyed by `repoId`. Each repo
  *   group's title is the repository name.
@@ -329,7 +337,7 @@ function compareStrings(left: string, right: string): number {
  *   sparse order shared with status grouping.
  */
 export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
-	const head: WorkspaceGroup[] = []; // pinned
+	const head: WorkspaceGroup[] = []; // pinned, chats
 	const tail: WorkspaceGroup[] = []; // backlog
 	const firstSeen = new Map<string, number>();
 	const bucketOrder = new Map<string, number>();
@@ -340,7 +348,7 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 
 	let seen = 0;
 	for (const group of groups) {
-		if (group.id === "pinned") {
+		if (group.id === "pinned" || group.id === "chats") {
 			head.push(group);
 			continue;
 		}

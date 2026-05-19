@@ -116,15 +116,15 @@ type WorkspaceComposerContainerProps = {
 	repoId?: string | null;
 	disabled: boolean;
 	/** When true, treat the composer as available even if no workspace is
-	 *  selected — the bottom composer in kanban mode uses this so it can
-	 *  collect a prompt before any workspace exists. */
+	 *  selected — the start-surface composer uses this so it can collect
+	 *  a prompt before any workspace exists. */
 	forceAvailable?: boolean;
 	/** Custom placeholder text. When omitted, the composer falls back to
 	 *  the default "Ask to make changes…" copy. */
 	placeholder?: string;
 	/** Override the composer's context key. Without this the key falls
 	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
-	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  The start surface supplies a per-repo key so each repo keeps its
 	 *  own draft. */
 	contextKeyOverride?: string;
 	onStop?: () => void;
@@ -169,10 +169,10 @@ type WorkspaceComposerContainerProps = {
 		followUpBehaviorOverride?: "queue" | "steer";
 		startSubmitMode?: StartSubmitMode;
 		/** Snapshot of the editor's full Lexical state at submit time, so
-		 *  callers that need to round-trip chips/text/images (e.g. the kanban
-		 *  "backlog" handler that copies the draft into a freshly-created
-		 *  session's `sessions.draft_state`) can do so without re-encoding
-		 *  the badge nodes. */
+		 *  callers that need to round-trip chips/text/images (e.g. the
+		 *  start-composer "backlog" handler that copies the draft into a
+		 *  freshly-created session's `sessions.draft_state`) can do so
+		 *  without re-encoding the badge nodes. */
 		editorStateSnapshot?: SerializedEditorState;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
@@ -263,19 +263,19 @@ export const WorkspaceComposerContainer = memo(
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
 		const startSubmitMode: StartSubmitMode =
-			settings.kanbanViewState.createState === "backlog"
+			settings.startSurfacePreferences.createState === "backlog"
 				? "saveForLater"
 				: "startNow";
 		const handleStartSubmitModeChange = useCallback(
 			(mode: StartSubmitMode) => {
 				void updateSettings({
-					kanbanViewState: {
-						...settings.kanbanViewState,
+					startSurfacePreferences: {
+						...settings.startSurfacePreferences,
 						createState: mode === "saveForLater" ? "backlog" : "in-progress",
 					},
 				});
 			},
-			[settings.kanbanViewState, updateSettings],
+			[settings.startSurfacePreferences, updateSettings],
 		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({

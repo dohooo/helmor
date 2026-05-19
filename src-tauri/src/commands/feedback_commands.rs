@@ -6,6 +6,7 @@ use crate::{
     db,
     feedback::{self, github_rest},
     git_watcher,
+    workspace_state::WorkspaceBranchIntent,
     workspace_status::WorkspaceStatus,
     workspaces,
 };
@@ -75,7 +76,12 @@ pub async fn submit_feedback_workspace_and_prompt(
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
         let repo_id = request.repo_id.clone();
         run_blocking(move || {
-            workspaces::prepare_workspace_from_repo_impl(&repo_id, None, WorkspaceStatus::default())
+            workspaces::prepare_workspace_from_repo_impl(
+                &repo_id,
+                None,
+                WorkspaceBranchIntent::default(),
+                WorkspaceStatus::default(),
+            )
         })
         .await?
     };

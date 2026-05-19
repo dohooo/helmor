@@ -537,6 +537,12 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;
 	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
+		// Chat workspaces have no setup / run / archive concept — the
+		// empty state should show only the headline, not pitch scripts
+		// the user can never run from this surface.
+		if (workspace?.mode === "chat") {
+			return [];
+		}
 		if (!selectedSession) {
 			return [];
 		}
@@ -557,7 +563,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			missing.push("archive");
 		}
 		return missing;
-	}, [repoScriptsQuery.data, selectedSession]);
+	}, [repoScriptsQuery.data, selectedSession, workspace?.mode]);
 	const handleInitializeScript = useCallback(
 		(scriptType: WorkspaceScriptType) => {
 			if (!selectedSessionIdForPanel || !onQueuePendingPromptForSession) {

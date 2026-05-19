@@ -271,11 +271,11 @@ export const WorkspaceRowItem = memo(
 			? "bg-yellow-500"
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
-		// Local workspaces don't carry a meaningful per-row branch label
-		// (multiple locals share the repo + a single HEAD), so always
-		// fall back to the auto-titled session title (`row.title`).
+		// Local & Chat workspaces don't carry a meaningful per-row branch
+		// label (locals share the repo's HEAD; chats have no branch at
+		// all), so always fall back to the auto-titled session title.
 		const displayTitle =
-			row.mode === "local"
+			row.mode === "local" || row.mode === "chat"
 				? row.title
 				: row.branch
 					? humanizeBranch(row.branch)
@@ -331,7 +331,14 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
-						) : (
+						) : row.mode ===
+							"chat" ? // Chat rows are bucketed under the dedicated
+						// "Chats" group header (which carries the
+						// MessageCircle glyph) — drawing the same icon on
+						// every row would just be noise. Keep the slot
+						// invisible so unread / status indicators still
+						// have a stable carrier.
+						null : (
 							<GitBranch
 								className={cn(
 									"size-[13px] shrink-0",
@@ -393,7 +400,12 @@ export const WorkspaceRowItem = memo(
 							<HyperText text={displayTitle} className="inline" />
 						</span>
 					);
-					if (hideRepoAvatar) {
+					// Chat workspaces have no real repo, so skip the avatar
+					// slot entirely — the branch icon (MessageCircle in
+					// chat mode) carries the leading visual identity. Falls
+					// through to the same layout used when an outer repo
+					// bucket already shows the avatar.
+					if (hideRepoAvatar || row.mode === "chat") {
 						return (
 							<div className="flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}

@@ -57,6 +57,37 @@ pub fn list_remote_branches(
     git_ops::list_remote_branches(&ctx.root, &ctx.remote)
 }
 
+/// One row for the start-page branch picker.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchPickerEntry {
+    pub name: String,
+    pub has_local: bool,
+    pub has_remote: bool,
+}
+
+/// Merge local + remote branches into `{name, hasLocal, hasRemote}` rows,
+/// sorted by name. Pure local fs reads (no network).
+pub fn list_branch_picker_entries(repo_root: &Path, remote: &str) -> Vec<BranchPickerEntry> {
+    use std::collections::BTreeMap;
+
+    let mut by_name: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+    for name in git_ops::list_local_branches(repo_root).unwrap_or_default() {
+        by_name.entry(name).or_insert((false, false)).0 = true;
+    }
+    for name in git_ops::list_remote_branches(repo_root, remote).unwrap_or_default() {
+        by_name.entry(name).or_insert((false, false)).1 = true;
+    }
+    by_name
+        .into_iter()
+        .map(|(name, (has_local, has_remote))| BranchPickerEntry {
+            name,
+            has_local,
+            has_remote,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateIntendedTargetBranchResponse {

@@ -8,7 +8,6 @@ import {
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -49,12 +48,10 @@ import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import {
+	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_SECTION_TITLE_CLASS,
-	TABS_ANIMATION_MS,
-	TABS_EASING,
-	TABS_EASING_CURVE,
 } from "../layout";
 
 interface GitStatusItem {
@@ -113,8 +110,6 @@ type ActionsSectionProps = {
 	open: boolean;
 	onToggle: () => void;
 	bodyHeight: number;
-	animatePanelToggle?: boolean;
-	isResizing?: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
@@ -167,8 +162,6 @@ export function ActionsSection({
 	open,
 	onToggle,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 	onCommitAction,
 	onReviewAction,
 	currentSessionId,
@@ -180,16 +173,6 @@ export function ActionsSection({
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
 	const [reviewPending, setReviewPending] = useState(false);
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
-	const chevronTransitionMs =
-		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -339,19 +322,18 @@ export function ActionsSection({
 		[workspaceId],
 	);
 	return (
-		<motion.section
+		<section
 			ref={sectionRef}
 			aria-label="Inspector section Actions"
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
-			initial={false}
-			animate={{
-				height: INSPECTOR_SECTION_HEADER_HEIGHT + (open ? bodyHeight : 0),
-			}}
-			transition={panelTransition}
 			style={{
-				willChange: isResizing ? undefined : "height",
+				// 高度走 CSS 变量,拖动期间由 mousemove 直接更新。collapsed 时固定 header 高,
+				// 跳过 calc()。fallback 兜底 layout-effect 写 var 之前那一帧的 mount。
+				height: open
+					? `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px))`
+					: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`,
 			}}
 		>
 			<div
@@ -375,7 +357,7 @@ export function ActionsSection({
 						strokeWidth={1.9}
 						style={{
 							transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-							transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
+							transition: "none",
 						}}
 					/>
 				</Button>
@@ -386,7 +368,9 @@ export function ActionsSection({
 					<ScrollArea
 						aria-label="Actions panel body"
 						className="min-h-0 bg-muted/18 text-[11.5px]"
-						style={{ height: `${bodyHeight}px` }}
+						style={{
+							height: `var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px)`,
+						}}
 					>
 						{showHelpersGroup && (
 							<>
@@ -541,7 +525,7 @@ export function ActionsSection({
 					</ScrollArea>
 				</div>
 			)}
-		</motion.section>
+		</section>
 	);
 }
 

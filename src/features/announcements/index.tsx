@@ -3,6 +3,7 @@ import {
 	ChevronUpIcon,
 	ExternalLinkIcon,
 	PanelRightOpenIcon,
+	PlusIcon,
 	SettingsIcon,
 	XIcon,
 } from "lucide-react";
@@ -38,12 +39,14 @@ type ReleaseAnnouncementToastHostProps = {
 	onOpenChangelog: () => void;
 	onOpenSettings: (section?: SettingsSection) => void;
 	onSetRightSidebarMode: (mode: WorkspaceRightSidebarMode) => void;
+	onOpenStartPage: () => void;
 };
 
 export function ReleaseAnnouncementToastHost({
 	onOpenChangelog,
 	onOpenSettings,
 	onSetRightSidebarMode,
+	onOpenStartPage,
 }: ReleaseAnnouncementToastHostProps) {
 	const shownVersionsRef = useRef<string | null>(null);
 	const [announcement, setAnnouncement] = useState<ReleaseAnnouncement | null>(
@@ -87,6 +90,9 @@ export function ReleaseAnnouncementToastHost({
 				break;
 			case "openSettings":
 				onOpenSettings(action.section);
+				break;
+			case "openStartPage":
+				onOpenStartPage();
 				break;
 		}
 	};
@@ -259,6 +265,8 @@ function ActionIcon({
 			return <PanelRightOpenIcon className={className} />;
 		case "openSettings":
 			return <SettingsIcon className={className} />;
+		case "openStartPage":
+			return <PlusIcon className={className} />;
 	}
 }
 

@@ -14,6 +14,38 @@ type MonacoRuntime = {
 	monaco: MonacoModule;
 };
 
+type TsDiagnosticsDefaults = {
+	setDiagnosticsOptions(options: {
+		noSemanticValidation: boolean;
+		noSyntaxValidation: boolean;
+		noSuggestionDiagnostics: boolean;
+	}): void;
+};
+
+type JsonDiagnosticsDefaults = {
+	setDiagnosticsOptions(options: { validate: boolean }): void;
+};
+
+type ValidationDefaults = {
+	setOptions(options: { validate: boolean }): void;
+};
+
+type MonacoLanguageDefaults = MonacoModule & {
+	languages: MonacoModule["languages"] & {
+		typescript: {
+			typescriptDefaults: TsDiagnosticsDefaults;
+			javascriptDefaults: TsDiagnosticsDefaults;
+		};
+		json: { jsonDefaults: JsonDiagnosticsDefaults };
+		css: {
+			cssDefaults: ValidationDefaults;
+			scssDefaults: ValidationDefaults;
+			lessDefaults: ValidationDefaults;
+		};
+		html: { htmlDefaults: ValidationDefaults };
+	};
+};
+
 type DisposableLike = {
 	dispose(): void;
 };
@@ -23,7 +55,10 @@ type FileEditorController = {
 	dispose(): void;
 	getValue(): string;
 	setValue(value: string): void;
+	setReadOnly(readOnly: boolean): void;
 	revealPosition(line?: number, column?: number): void;
+	/** Move keyboard focus into the editor's hidden textarea. */
+	focus(): void;
 	onDidChangeModelContent(callback: (value: string) => void): DisposableLike;
 	/** Swap the active model. Returns false if no cached model and no content provided. */
 	switchFile(
@@ -42,6 +77,8 @@ type DiffEditorController = {
 		modifiedText: string;
 		inline: boolean;
 	}): void;
+	/** Move keyboard focus into the modified-side textarea. */
+	focus(): void;
 };
 
 let runtimePromise: Promise<MonacoRuntime> | null = null;
@@ -71,6 +108,7 @@ export async function createFileEditor(options: {
 	content: string;
 	line?: number;
 	column?: number;
+	readOnly?: boolean;
 }): Promise<FileEditorController> {
 	const runtime = await ensureRuntime();
 	const { monaco } = runtime;
@@ -87,21 +125,39 @@ export async function createFileEditor(options: {
 	const editor = monaco.editor.create(options.container, {
 		automaticLayout: true,
 		bracketPairColorization: { enabled: true },
+		codeLens: false,
+		colorDecorators: false,
+		contextmenu: false,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
 		fontSize: 13,
+		folding: false,
+		glyphMargin: false,
+		hover: { enabled: false },
+		lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
 		lineHeight: 21,
+		links: false,
 		minimap: { enabled: false },
 		model,
+		occurrencesHighlight: "off",
 		padding: { top: 14, bottom: 24 },
-		renderValidationDecorations: "editable",
+		parameterHints: { enabled: false },
+		quickSuggestions: false,
+		readOnly: Boolean(options.readOnly),
+		readOnlyMessage: { value: "Click Edit to modify this file." },
+		renderValidationDecorations: "off",
 		scrollBeyondLastLine: false,
+		selectionHighlight: false,
 		smoothScrolling: true,
+		suggestOnTriggerCharacters: false,
 		tabSize: 2,
 		theme: themeId(desiredTheme),
 		wordWrap: "on",
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	revealEditorPosition(editor, options.line, options.column);
 
@@ -110,6 +166,7 @@ export async function createFileEditor(options: {
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
 		},
 		getValue() {
@@ -122,8 +179,14 @@ export async function createFileEditor(options: {
 
 			currentModel.setValue(value);
 		},
+		setReadOnly(readOnly: boolean) {
+			editor.updateOptions({ readOnly });
+		},
 		revealPosition(line?: number, column?: number) {
 			revealEditorPosition(editor, line, column);
+		},
+		focus() {
+			editor.focus();
 		},
 		onDidChangeModelContent(callback) {
 			return currentModel.onDidChangeContent(() => {
@@ -188,26 +251,40 @@ export async function createDiffEditor(options: {
 
 	const editor = monaco.editor.createDiffEditor(options.container, {
 		automaticLayout: true,
+		codeLens: false,
+		colorDecorators: false,
+		contextmenu: false,
 		enableSplitViewResizing: true,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
 		fontSize: 13,
+		folding: false,
+		glyphMargin: false,
 		hideUnchangedRegions: {
 			enabled: true,
 			contextLineCount: 4,
 			minimumLineCount: 2,
 			revealLineCount: 3,
 		},
+		hover: { enabled: false },
+		lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
 		lineHeight: 21,
+		links: false,
 		minimap: { enabled: false },
+		occurrencesHighlight: "off",
 		originalEditable: false,
 		padding: { top: 14, bottom: 24 },
+		parameterHints: { enabled: false },
+		quickSuggestions: false,
 		readOnly: true,
+		renderValidationDecorations: "off",
 		renderOverviewRuler: false,
 		renderSideBySide: !options.inline,
 		scrollBeyondLastLine: false,
+		selectionHighlight: false,
 		smoothScrolling: true,
+		suggestOnTriggerCharacters: false,
 		theme: themeId(desiredTheme),
 	});
 
@@ -215,10 +292,14 @@ export async function createDiffEditor(options: {
 		original: originalModel,
 		modified: modifiedModel,
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
 			originalModel.dispose();
 			modifiedModel.dispose();
@@ -231,6 +312,11 @@ export async function createDiffEditor(options: {
 				modifiedModel.setValue(modifiedText);
 			}
 			editor.updateOptions({ renderSideBySide: !inline });
+		},
+		focus() {
+			// Modified side carries the user's edits when they jump to Edit mode,
+			// so it's the more useful focus target than the read-only original.
+			editor.getModifiedEditor().focus();
 		},
 	};
 }
@@ -248,6 +334,59 @@ export function syncVirtualFile(path: string, content: string) {
 	fileContentCache.set(path, content);
 }
 
+function suppressFindWidgetCloseTooltip(
+	container: HTMLElement,
+): DisposableLike {
+	const abortController =
+		typeof AbortController === "undefined" ? null : new AbortController();
+	const patchedElements = new WeakSet<HTMLElement>();
+	const stopHover = (event: Event) => {
+		event.stopImmediatePropagation();
+	};
+
+	const patchHoverTargets = () => {
+		const targets = container.querySelectorAll<HTMLElement>(
+			[
+				".find-widget > .button.codicon-widget-close",
+				".find-widget .codicon-find-selection",
+			].join(","),
+		);
+		for (const target of targets) {
+			target.removeAttribute("title");
+			if (patchedElements.has(target) || !abortController) continue;
+			patchedElements.add(target);
+			target.addEventListener("mouseover", stopHover, {
+				capture: true,
+				signal: abortController.signal,
+			});
+		}
+	};
+
+	patchHoverTargets();
+	if (typeof MutationObserver === "undefined") {
+		return {
+			dispose() {
+				abortController?.abort();
+			},
+		};
+	}
+
+	const observer = new MutationObserver(patchHoverTargets);
+	observer.observe(container, {
+		attributes: true,
+		childList: true,
+		subtree: true,
+		attributeFilter: ["title", "class"],
+	});
+
+	return {
+		dispose() {
+			abortController?.abort();
+			observer.disconnect();
+		},
+	};
+}
+
 async function ensureRuntime(): Promise<MonacoRuntime> {
 	if (!runtimePromise) {
 		runtimePromise = (async () => {
@@ -256,6 +395,7 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 			installMonacoEnvironment();
 			installEditorTheme(monaco);
 			installThemeObserver(monaco);
+			disableLanguageDiagnostics(monaco);
 
 			return { monaco };
 		})();
@@ -288,6 +428,35 @@ function installThemeObserver(monaco: MonacoModule) {
 		attributeFilter: ["class"],
 	});
 	syncTheme();
+}
+
+function disableLanguageDiagnostics(monaco: MonacoModule) {
+	const defaults = monaco as unknown as MonacoLanguageDefaults;
+	defaults.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+		noSemanticValidation: true,
+		noSyntaxValidation: true,
+		noSuggestionDiagnostics: true,
+	});
+	defaults.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+		noSemanticValidation: true,
+		noSyntaxValidation: true,
+		noSuggestionDiagnostics: true,
+	});
+	defaults.languages.json.jsonDefaults.setDiagnosticsOptions({
+		validate: false,
+	});
+	defaults.languages.css.cssDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.css.scssDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.css.lessDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.html.htmlDefaults.setOptions({
+		validate: false,
+	});
 }
 
 function installMonacoEnvironment() {

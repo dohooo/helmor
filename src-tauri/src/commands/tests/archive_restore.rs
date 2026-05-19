@@ -482,7 +482,12 @@ fn start_archive_workspace_syncs_git_fetchers_after_success() {
 
     let archive_manager = app_handle.state::<workspaces::ArchiveJobManager>();
     archive_manager.prepare(&harness.workspace_id).unwrap();
-    workspaces::start_archive_workspace(&app_handle, &harness.workspace_id).unwrap();
+    workspaces::start_archive_workspace(
+        &app_handle,
+        &harness.workspace_id,
+        workspaces::ArchiveOrigin::Manual,
+    )
+    .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {

@@ -10,6 +10,7 @@ import {
 	History,
 	Laptop,
 	Layers,
+	MessageCircle,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -222,177 +223,175 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
 				>
 					{headerLeading}
-					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
-						{(() => {
-							// Avatar always wins when we have a URL AND the
-							// workspace's bound account is still valid (mirrors the
-							// right-side Connect CTA). Otherwise fall back to a
-							// mode-appropriate glyph: Laptop for local, GitBranch
-							// for worktree.
-							const FallbackIcon =
-								workspace?.mode === "local" ? Laptop : GitBranch;
-							const showAvatar =
-								accountProfile?.avatarUrl && !forgeNeedsConnect;
-							const hoverInfo = showAvatar
-								? accountInfoFromForgeAccount(accountProfile)
-								: null;
-							if (!showAvatar || !hoverInfo) {
-								return (
-									<FallbackIcon
-										className={cn(
-											"size-3.5 shrink-0",
-											getBranchToneClassName(branchTone),
-										)}
-										strokeWidth={1.9}
-									/>
-								);
-							}
-							return (
-								<HoverCard openDelay={120} closeDelay={80}>
-									<HoverCardTrigger asChild>
-										<span className="inline-flex">
-											<CachedAvatar
-												className="size-4 shrink-0 cursor-default"
-												src={accountProfile?.avatarUrl}
-												alt={accountLogin ?? ""}
-												fallback={initialsFor(accountDisplayName)}
-												fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
-											/>
-										</span>
-									</HoverCardTrigger>
-									<HoverCardContent
-										side="bottom"
-										align="start"
-										sideOffset={8}
-										className="w-auto max-w-[260px] p-3"
-									>
-										<AccountHoverCardContent account={hoverInfo} />
-									</HoverCardContent>
-								</HoverCard>
-							);
-						})()}
-						{branchRename.editingBranch !== null ? (
-							<Input
-								autoFocus
-								value={branchRename.editingBranch}
-								onChange={(event) =>
-									branchRename.setEditingBranch(event.target.value)
-								}
-								onKeyDown={(event) => {
-									if (event.key === "Enter") {
-										event.preventDefault();
-										void branchRename.commitBranchRename();
-									} else if (event.key === "Escape") {
-										branchRename.cancelBranchRename();
-									}
-								}}
-								onBlur={() => void branchRename.commitBranchRename()}
-								onClick={(event) => event.stopPropagation()}
-								className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+					{workspace?.mode === "chat" ? (
+						<span className="inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+							<MessageCircle
+								className="size-3.5 shrink-0 text-muted-foreground"
+								strokeWidth={1.9}
 							/>
-						) : (
-							<>
-								<HyperText
-									key={workspace?.id}
-									text={workspace?.branch ?? "No branch"}
-									className="truncate"
-								/>
-								{workspace?.branch && workspace.state !== "archived" ? (
-									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
-										<span
-											role="button"
-											aria-label="Rename branch"
-											onClick={branchRename.startBranchRename}
-											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-										>
-											<Pencil className="size-3" strokeWidth={2} />
-										</span>
-										<span
-											role="button"
-											aria-label="Copy branch name"
-											onClick={branchRename.copyBranchName}
-											className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-										>
-											{branchRename.branchCopied ? (
-												<Check
-													className="size-3 text-green-400"
-													strokeWidth={2}
-												/>
-											) : (
-												<Copy className="size-3" strokeWidth={2} />
-											)}
-										</span>
-									</span>
-								) : null}
-							</>
-						)}
-					</span>
-					{workspace?.intendedTargetBranch ? (
+							{/* `workspace.title` is computed server-side by
+							 *  `helpers::display_title`, the same source the
+							 *  sidebar row + hover card use. Keeps the three
+							 *  surfaces visually in sync without rebuilding
+							 *  the precedence rules in TS. */}
+							<span className="min-w-0 truncate">{workspace.title}</span>
+						</span>
+					) : (
 						<>
-							<ArrowRight
-								className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
-								strokeWidth={1.8}
-							/>
-							{workspace.state === "archived" ? (
-								<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
-									{workspace.remote ?? "origin"}/
-									{workspace.intendedTargetBranch}
-								</span>
-							) : (
-								<BranchPicker
-									currentBranch={workspace.intendedTargetBranch ?? ""}
-									displayRemote={workspace.remote ?? "origin"}
-									branches={remoteBranches}
-									loading={loadingBranches}
-									onOpen={() => {
-										void branchesQuery.refetch();
-										void prefetchRemoteRefs({ workspaceId: workspace.id })
-											.then((result) => {
-												if (result.fetched) {
-													void branchesQuery.refetch();
-												}
-											})
-											.catch(() => {});
-									}}
-									onSelect={(branch: string) => {
-										if (branch === workspace.intendedTargetBranch) {
-											return;
-										}
-										const detailKey = helmorQueryKeys.workspaceDetail(
-											workspace.id,
+							<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+								{(() => {
+									// Avatar always wins when we have a URL AND the
+									// workspace's bound account is still valid (mirrors the
+									// right-side Connect CTA). Otherwise fall back to a
+									// mode-appropriate glyph: Laptop for local, GitBranch
+									// for worktree.
+									const FallbackIcon =
+										workspace?.mode === "local" ? Laptop : GitBranch;
+									const showAvatar =
+										accountProfile?.avatarUrl && !forgeNeedsConnect;
+									const hoverInfo = showAvatar
+										? accountInfoFromForgeAccount(accountProfile)
+										: null;
+									if (!showAvatar || !hoverInfo) {
+										return (
+											<FallbackIcon
+												className={cn(
+													"size-3.5 shrink-0",
+													getBranchToneClassName(branchTone),
+												)}
+												strokeWidth={1.9}
+											/>
 										);
-										const previousDetail =
-											queryClient.getQueryData<WorkspaceDetail | null>(
-												detailKey,
-											);
-										if (previousDetail) {
-											queryClient.setQueryData<WorkspaceDetail | null>(
-												detailKey,
-												{
-													...previousDetail,
-													intendedTargetBranch: branch,
-												},
-											);
+									}
+									return (
+										<HoverCard openDelay={120} closeDelay={80}>
+											<HoverCardTrigger asChild>
+												<span className="inline-flex">
+													<CachedAvatar
+														className="size-4 shrink-0 cursor-default"
+														src={accountProfile?.avatarUrl}
+														alt={accountLogin ?? ""}
+														fallback={initialsFor(accountDisplayName)}
+														fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
+													/>
+												</span>
+											</HoverCardTrigger>
+											<HoverCardContent
+												side="bottom"
+												align="start"
+												sideOffset={8}
+												className="w-auto max-w-[260px] p-3"
+											>
+												<AccountHoverCardContent account={hoverInfo} />
+											</HoverCardContent>
+										</HoverCard>
+									);
+								})()}
+								{branchRename.editingBranch !== null ? (
+									<Input
+										autoFocus
+										value={branchRename.editingBranch}
+										onChange={(event) =>
+											branchRename.setEditingBranch(event.target.value)
 										}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") {
+												event.preventDefault();
+												void branchRename.commitBranchRename();
+											} else if (event.key === "Escape") {
+												branchRename.cancelBranchRename();
+											}
+										}}
+										onBlur={() => void branchRename.commitBranchRename()}
+										onClick={(event) => event.stopPropagation()}
+										className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+									/>
+								) : (
+									<>
+										<HyperText
+											key={workspace?.id}
+											text={workspace?.branch ?? "No branch"}
+											className="truncate"
+										/>
+										{workspace?.branch && workspace.state !== "archived" ? (
+											<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
+												<span
+													role="button"
+													aria-label="Rename branch"
+													onClick={branchRename.startBranchRename}
+													className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+												>
+													<Pencil className="size-3" strokeWidth={2} />
+												</span>
+												<span
+													role="button"
+													aria-label="Copy branch name"
+													onClick={branchRename.copyBranchName}
+													className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+												>
+													{branchRename.branchCopied ? (
+														<Check
+															className="size-3 text-green-400"
+															strokeWidth={2}
+														/>
+													) : (
+														<Copy className="size-3" strokeWidth={2} />
+													)}
+												</span>
+											</span>
+										) : null}
+									</>
+								)}
+							</span>
+							{workspace?.intendedTargetBranch ? (
+								<>
+									<ArrowRight
+										className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
+										strokeWidth={1.8}
+									/>
+									{workspace.state === "archived" ? (
+										<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
+											{workspace.remote ?? "origin"}/
+											{workspace.intendedTargetBranch}
+										</span>
+									) : (
+										<BranchPicker
+											currentBranch={workspace.intendedTargetBranch ?? ""}
+											displayRemote={workspace.remote ?? "origin"}
+											branches={remoteBranches}
+											loading={loadingBranches}
+											onOpen={() => {
+												void branchesQuery.refetch();
+												void prefetchRemoteRefs({ workspaceId: workspace.id })
+													.then((result) => {
+														if (result.fetched) {
+															void branchesQuery.refetch();
+														}
+													})
+													.catch(() => {});
+											}}
+											onSelect={(branch: string) => {
+												if (branch === workspace.intendedTargetBranch) {
+													return;
+												}
+												const detailKey = helmorQueryKeys.workspaceDetail(
+													workspace.id,
+												);
+												const previousDetail =
+													queryClient.getQueryData<WorkspaceDetail | null>(
+														detailKey,
+													);
+												if (previousDetail) {
+													queryClient.setQueryData<WorkspaceDetail | null>(
+														detailKey,
+														{
+															...previousDetail,
+															intendedTargetBranch: branch,
+														},
+													);
+												}
 
-										// Invalidate changes so diff section shows loading.
-										if (workspace.rootPath) {
-											void queryClient.invalidateQueries({
-												queryKey: helmorQueryKeys.workspaceChanges(
-													workspace.rootPath,
-												),
-											});
-										}
-
-										void updateIntendedTargetBranch(workspace.id, branch)
-											.then(({ reset }) => {
-												onWorkspaceChanged?.();
-												// Recompute sync status vs. new target now; don't wait for 10s poll.
-												void queryClient.invalidateQueries({
-													queryKey: helmorQueryKeys.workspaceGitActionStatus(
-														workspace.id,
-													),
-												});
+												// Invalidate changes so diff section shows loading.
 												if (workspace.rootPath) {
 													void queryClient.invalidateQueries({
 														queryKey: helmorQueryKeys.workspaceChanges(
@@ -400,40 +399,60 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														),
 													});
 												}
-												if (reset) {
-													pushToast(
-														`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
-														`Switched to ${branch}`,
-														"default",
-													);
-												} else {
-													pushToast(
-														"Target branch updated",
-														`Switched to ${branch}`,
-														"default",
-													);
-												}
-											})
-											.catch((error: unknown) => {
-												if (previousDetail) {
-													queryClient.setQueryData<WorkspaceDetail | null>(
-														detailKey,
-														previousDetail,
-													);
-												}
-												pushToast(
-													error instanceof Error
-														? error.message
-														: String(error),
-													"Branch switch failed",
-													"destructive",
-												);
-											});
-									}}
-								/>
-							)}
+
+												void updateIntendedTargetBranch(workspace.id, branch)
+													.then(({ reset }) => {
+														onWorkspaceChanged?.();
+														// Recompute sync status vs. new target now; don't wait for 10s poll.
+														void queryClient.invalidateQueries({
+															queryKey:
+																helmorQueryKeys.workspaceGitActionStatus(
+																	workspace.id,
+																),
+														});
+														if (workspace.rootPath) {
+															void queryClient.invalidateQueries({
+																queryKey: helmorQueryKeys.workspaceChanges(
+																	workspace.rootPath,
+																),
+															});
+														}
+														if (reset) {
+															pushToast(
+																`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
+																`Switched to ${branch}`,
+																"default",
+															);
+														} else {
+															pushToast(
+																"Target branch updated",
+																`Switched to ${branch}`,
+																"default",
+															);
+														}
+													})
+													.catch((error: unknown) => {
+														if (previousDetail) {
+															queryClient.setQueryData<WorkspaceDetail | null>(
+																detailKey,
+																previousDetail,
+															);
+														}
+														pushToast(
+															error instanceof Error
+																? error.message
+																: String(error),
+															"Branch switch failed",
+															"destructive",
+														);
+													});
+											}}
+										/>
+									)}
+								</>
+							) : null}
 						</>
-					) : null}
+					)}
 				</div>
 				{headerActions ? (
 					<div className="relative z-10 flex shrink-0 items-center gap-1 bg-background pl-1">

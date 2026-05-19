@@ -6,6 +6,7 @@ import {
 	FolderPlus,
 	Globe,
 	LoaderCircle,
+	MessageCircle,
 	Plus,
 } from "lucide-react";
 import {
@@ -217,15 +218,23 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						// Repo mode: same-bucket reorder + drag-to-pin /
 						// drag-to-backlog + the inverse (un-pin / un-backlog) back
 						// to the row's own repo bucket. No cross-repo moves.
+						// Chat rows are quarantined to the Chats bucket — they
+						// can only be reordered inside it.
 						canDragRow: (_row, sourceGroupId) =>
 							sourceGroupId === "pinned" ||
 							sourceGroupId === "backlog" ||
+							sourceGroupId === "chats" ||
 							repoIdFromGroupId(sourceGroupId) !== null,
 						canDropIntoGroup: (
 							sourceGroupId,
 							targetGroupId,
 							{ sourceRepoId },
 						) => {
+							// Chats is its own world: only chat-bucket rows
+							// drop in, and they can't leak elsewhere.
+							if (sourceGroupId === "chats" || targetGroupId === "chats") {
+								return sourceGroupId === "chats" && targetGroupId === "chats";
+							}
 							if (targetGroupId === "pinned") return true;
 							if (targetGroupId === "backlog") return true;
 							const targetRepoId = repoIdFromGroupId(targetGroupId);
@@ -242,12 +251,22 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}
 				: {
 						// Status mode: any lane + pinned (drag to pin / unpin).
+						// Chats sits alongside but isolated: chat rows can
+						// only reorder within "chats", and no other source
+						// can drop into it.
 						canDragRow: (_row, sourceGroupId) =>
 							sourceGroupId === "pinned" ||
+							sourceGroupId === "chats" ||
 							workspaceStatusFromGroupId(sourceGroupId) !== null,
-						canDropIntoGroup: (_sourceGroupId, targetGroupId) =>
-							targetGroupId === "pinned" ||
-							workspaceStatusFromGroupId(targetGroupId) !== null,
+						canDropIntoGroup: (sourceGroupId, targetGroupId) => {
+							if (sourceGroupId === "chats" || targetGroupId === "chats") {
+								return sourceGroupId === "chats" && targetGroupId === "chats";
+							}
+							return (
+								targetGroupId === "pinned" ||
+								workspaceStatusFromGroupId(targetGroupId) !== null
+							);
+						},
 					},
 		[sidebarGrouping],
 	);
@@ -433,6 +452,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			// Skip the group being dragged entirely — its visual lives in
 			// the floating ghost.
 			if (group.id === draggingGroupId) {
+				continue;
+			}
+
+			// The Chats bucket has no kanban semantics — when no chat
+			// workspaces exist, drop the section entirely (header + gap)
+			// so the sidebar isn't littered with an always-empty bucket.
+			// Status / repo buckets keep their empty header because users
+			// rely on them as drop targets for the next drag.
+			if (group.id === "chats" && group.rows.length === 0) {
 				continue;
 			}
 
@@ -729,11 +757,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					? item.group.rows[0]
 					: undefined;
 
+				// The dedicated "chats" bucket has no kanban semantics —
+				// surface it with a MessageCircle glyph that mirrors the
+				// chat-mode UI elsewhere (start-page picker, panel header).
+				const isChatGroup = item.group.id === "chats";
 				const headerLabel = (
 					<span className="flex items-center gap-2">
 						{isArchived ? (
 							<Archive
 								className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
+								strokeWidth={1.9}
+							/>
+						) : isChatGroup ? (
+							<MessageCircle
+								className="size-[14px] shrink-0 text-muted-foreground"
 								strokeWidth={1.9}
 							/>
 						) : isRepoGroup ? (

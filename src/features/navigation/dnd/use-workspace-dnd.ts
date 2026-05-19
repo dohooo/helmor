@@ -15,7 +15,7 @@ import {
 	useDndActiveOverlay,
 } from "./shared";
 
-// Status grouping: kanban lanes + pinned (drag-to-pin).
+// Status grouping: status lanes + pinned (drag-to-pin).
 function isStatusOrPinnedGroup(groupId: string) {
 	return groupId === "pinned" || workspaceStatusFromGroupId(groupId) !== null;
 }

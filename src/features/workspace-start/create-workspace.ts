@@ -5,9 +5,11 @@ import type { ComposerCreatePrepareOutcome } from "@/features/conversation";
 import {
 	type FinalizeWorkspaceResponse,
 	finalizeWorkspaceFromRepo,
+	prepareChatWorkspace,
 	prepareWorkspaceFromRepo,
 	setWorkspaceLinkedDirectories,
 	updateSessionSettings,
+	type WorkspaceBranchIntent,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -28,14 +30,19 @@ export async function createWorkspaceFromStartComposer({
 	repoId,
 	sourceBranch,
 	mode,
+	branchIntent,
 	submitMode,
 	editorStateSnapshot,
 	composerConfig,
 	linkedDirectories,
 }: {
+	/** Ignored in `chat` mode. */
 	repoId: string;
+	/** Ignored in `chat` mode. */
 	sourceBranch: string;
 	mode: WorkspaceMode;
+	/** Defaults to `from_branch` when omitted. */
+	branchIntent?: WorkspaceBranchIntent;
 	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
 	/** StartPage composer picks. Only persisted to the session row on
@@ -56,12 +63,17 @@ export async function createWorkspaceFromStartComposer({
 	// right group and the sidebar never flashes through "In progress"
 	// while finalize runs. Other submit modes default to in-progress.
 	const initialStatus = submitMode === "saveForLater" ? "backlog" : null;
-	const prepared = await prepareWorkspaceFromRepo(
-		repoId,
-		sourceBranch,
-		mode,
-		initialStatus,
-	);
+	// Chat mode has no repo/branch — single-phase create.
+	const prepared =
+		mode === "chat"
+			? await prepareChatWorkspace(initialStatus)
+			: await prepareWorkspaceFromRepo(
+					repoId,
+					sourceBranch,
+					mode,
+					branchIntent ?? null,
+					initialStatus,
+				);
 
 	// Persist pending /add-dir picks before kicking off finalize. The DB
 	// write is fast and the column is just a property of the existing
@@ -72,9 +84,16 @@ export async function createWorkspaceFromStartComposer({
 		]);
 	}
 
+	// Chat workspaces are single-phase — prepare returns a `ready` row, no
+	// finalize needed. Worktree/local workspaces still need finalize.
+	const finalize =
+		mode === "chat"
+			? null
+			: () => finalizeWorkspaceFromRepo(prepared.workspaceId);
+
 	if (submitMode === "saveForLater") {
 		await Promise.all([
-			finalizeWorkspaceFromRepo(prepared.workspaceId),
+			finalize?.() ?? Promise.resolve(),
 			editorStateSnapshot
 				? persistSessionDraft(prepared.initialSessionId, editorStateSnapshot)
 				: Promise.resolve(),
@@ -96,7 +115,7 @@ export async function createWorkspaceFromStartComposer({
 	}
 
 	if (submitMode === "createOnly") {
-		await finalizeWorkspaceFromRepo(prepared.workspaceId);
+		if (finalize) await finalize();
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
@@ -106,7 +125,7 @@ export async function createWorkspaceFromStartComposer({
 	}
 
 	return {
-		finalizePromise: finalizeWorkspaceFromRepo(prepared.workspaceId),
+		finalizePromise: finalize?.(),
 		workspaceId: prepared.workspaceId,
 		sessionId: prepared.initialSessionId,
 		preparedWorkingDirectory: prepared.workingDirectory,

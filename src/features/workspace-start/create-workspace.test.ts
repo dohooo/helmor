@@ -76,6 +76,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"origin/main",
 			"worktree",
 			null,
+			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -113,6 +114,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"repo-1",
 			"origin/dev",
 			"worktree",
+			null,
 			"backlog",
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
@@ -146,6 +148,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			"repo-1",
 			"origin/dev",
 			"worktree",
+			null,
 			null,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(

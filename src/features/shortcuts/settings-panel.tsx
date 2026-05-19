@@ -36,6 +36,7 @@ const GROUPS: ShortcutGroup[] = [
 	"Actions",
 	"System",
 	"Composer",
+	"Editor",
 	"Terminal",
 ];
 const PINNED_SHORTCUT_IDS: ShortcutId[] = ["global.hotkey"];

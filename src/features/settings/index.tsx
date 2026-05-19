@@ -302,7 +302,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									</SettingsRow>
 									<SettingsRow
 										title="Expand terminals on hover"
-										releaseMarker={{ kind: "feature" }}
 										description="Enlarge inspector terminals when the cursor rests over them."
 									>
 										<Switch
@@ -331,6 +330,18 @@ export const SettingsDialog = memo(function SettingsDialog({
 											checked={settings.showUsageStats}
 											onCheckedChange={(checked) =>
 												updateSettings({ showUsageStats: checked })
+											}
+										/>
+									</SettingsRow>
+									<SettingsRow
+										title="Auto-archive on merge"
+										releaseMarker={{ kind: "feature" }}
+										description="When a workspace's linked PR/MR is merged, archive the workspace automatically."
+									>
+										<Switch
+											checked={settings.autoArchiveOnMerge}
+											onCheckedChange={(checked) =>
+												updateSettings({ autoArchiveOnMerge: checked })
 											}
 										/>
 									</SettingsRow>
@@ -428,7 +439,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 												</TooltipProvider>
 											</span>
 										}
-										releaseMarker={{ kind: "feature" }}
 										description="Controls how Claude Code returns thinking content."
 									>
 										<ToggleGroup

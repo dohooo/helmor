@@ -3,8 +3,8 @@
 // Backend inbox queries scope to a single repo via a provider-specific
 // search qualifier — `repo:owner/name` for GitHub, project full path for
 // GitLab. The frontend computes the filter string from a repo's stored
-// remote URL + forge provider so the kanban repo picker drives the inbox
-// to the right slice.
+// remote URL + forge provider so the start-surface repo picker drives
+// the inbox to the right slice.
 
 import type { ForgeProvider, RepositoryCreateOption } from "./api";
 
