@@ -116,6 +116,7 @@ import {
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
 import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
+import { RemoteConnectionBanner } from "./shell/components/remote-connection-banner";
 import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
 import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
 import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
@@ -1450,9 +1451,10 @@ function AppShell({
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
 						<main
 							aria-label="Application shell"
-							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
+							className="relative flex h-screen flex-col overflow-hidden bg-background font-sans text-foreground antialiased"
 						>
-							<div className="relative flex h-full min-h-0 bg-background">
+							<RemoteConnectionBanner />
+							<div className="relative flex h-full min-h-0 flex-1 bg-background">
 								{workspaceViewMode !== "editor" && (
 									<>
 										<ShellSidebarPane

@@ -191,9 +191,27 @@ function handleUiMutation(
 			// The dev runtime-debug panel keys off ["remote-runtimes"];
 			// a state flip invalidates the list + every per-runtime
 			// health query so the chip re-paints with the new colour.
+			// The reconnect banner also reads this list, so refreshing
+			// it covers both surfaces in one invalidation.
 			void queryClient.invalidateQueries({
 				queryKey: ["remote-runtimes"],
 			});
+			return;
+		case "remoteReconnectAttempt":
+			// Phase 25a: the auto-reconnect loop announces each retry
+			// + its outcome. The banner reads the running attempts
+			// count straight from the event payload (cheap), and a
+			// successful attempt also triggers a runtime list refresh
+			// so the workspace agent sessions surface re-fetches and
+			// the chat can pick up any survived turns.
+			if (event.succeeded === true) {
+				void queryClient.invalidateQueries({
+					queryKey: ["remote-runtimes"],
+				});
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.activeStreams,
+				});
+			}
 			return;
 	}
 }
