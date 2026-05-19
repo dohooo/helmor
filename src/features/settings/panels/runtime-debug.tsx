@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Activity,
 	FileText,
 	KeyRound,
 	Link2,
@@ -28,6 +29,7 @@ import {
 	connectLocalRuntime,
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
+	getRemoteRuntimeDiagnostics,
 	getRuntimeHealth,
 	getWorkspaceBranchInfo,
 	getWorkspaceChanges,
@@ -42,6 +44,7 @@ import {
 	openRemoteTerminal,
 	type RemoteAgentSession,
 	type RemoteTerminalListEntry,
+	type RuntimeDiagnostics,
 	type RuntimeEntry,
 	type RuntimeHealth,
 	reconnectRemoteRuntime,
@@ -97,6 +100,7 @@ export function RuntimeDebugPanel() {
 				error={runtimesQuery.error}
 			/>
 			<ConnectSection />
+			<ConnectionDiagnosticsSection entries={entries} />
 			<WorkspaceStatusProbeSection entries={entries} />
 			<WorkspaceInspectorProbeSection entries={entries} />
 			<WorkspaceBindingsSection entries={entries} />
@@ -795,6 +799,262 @@ function ConnectSection() {
 /// store instead of an explicit pick. Maps to `runtimeName=undefined`
 /// in the IPC call so the resolver consults the binding.
 const RUNTIME_AUTO_VALUE = "__auto__";
+
+function ConnectionDiagnosticsSection({
+	entries,
+}: {
+	entries: RuntimeEntry[];
+}) {
+	// Default to the first non-local entry; fall back to "local"
+	// when nothing is registered yet so the empty-state still
+	// renders a usable panel rather than a blank picker.
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	// Default the dropdown to the first remote when one exists; fall
+	// back to `"local"` so the panel still has something to probe.
+	// The runtime registry exposes a `local` entry even when no
+	// SSH connections are configured.
+	const [runtimeName, setRuntimeName] = useState<string>("local");
+
+	useEffect(() => {
+		// On mount the panel may have populated `local` before the
+		// remotes list resolved. Once we know of remotes, prefer
+		// the first remote since that's the runtime an operator is
+		// most likely debugging.
+		if (runtimeName === "local" && remotes[0]) {
+			setRuntimeName(remotes[0].name);
+			return;
+		}
+		// A previously-selected remote vanished (disconnect, rename)
+		// — reset to the first available remote, or fall back to
+		// local. Either way the picker stays valid.
+		if (
+			runtimeName !== "local" &&
+			!remotes.some((e) => e.name === runtimeName)
+		) {
+			setRuntimeName(remotes[0]?.name ?? "local");
+		}
+	}, [remotes, runtimeName]);
+
+	const diagnosticsQuery = useQuery({
+		queryKey: ["remote-runtime-diagnostics", runtimeName],
+		queryFn: () => getRemoteRuntimeDiagnostics(runtimeName),
+		enabled: runtimeName.length > 0,
+		// Diagnostics are point-in-time; the operator hits Refresh
+		// or refocuses the window when they want a fresh sample.
+		// Auto-polling here would pile up extra ping RTTs the
+		// liveness loop already covers.
+		refetchOnWindowFocus: false,
+		staleTime: 10_000,
+	});
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Activity className="size-3.5" strokeWidth={1.8} />}
+				title="Connection diagnostics"
+				description="Pipe telemetry for a connected runtime: protocol handshake values, RPC I/O counters, agent-session count, fresh ping RTT, and the close reason (if the connection went away). The operator's `is my remote OK?` panel."
+			/>
+
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remotes.length === 0 ? (
+					<SettingsNotice tone="info">
+						No remote runtimes connected yet — diagnostics appear here once you
+						connect one in the form above. The local runtime is always
+						available; pick it from the dropdown to probe it.
+					</SettingsNotice>
+				) : null}
+
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center">
+					<Label htmlFor="rt-diag-runtime" className="text-xs">
+						Runtime
+					</Label>
+					<select
+						id="rt-diag-runtime"
+						className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
+						value={runtimeName}
+						onChange={(e) => setRuntimeName(e.currentTarget.value)}
+					>
+						<option value="local">local</option>
+						{remotes.map((entry) => (
+							<option key={entry.name} value={entry.name}>
+								{entry.name}
+							</option>
+						))}
+					</select>
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={!runtimeName || diagnosticsQuery.isFetching}
+						onClick={() => void diagnosticsQuery.refetch()}
+						aria-label="Refresh connection diagnostics"
+					>
+						{diagnosticsQuery.isFetching ? (
+							<>
+								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+								Refreshing…
+							</>
+						) : (
+							<>
+								<RefreshCw className="mr-1.5 size-3.5" />
+								Refresh
+							</>
+						)}
+					</Button>
+				</div>
+
+				{diagnosticsQuery.error ? (
+					<SettingsNotice tone="error">
+						{errorMessage(diagnosticsQuery.error)}
+					</SettingsNotice>
+				) : diagnosticsQuery.isLoading ? (
+					<span className="text-[11px] text-muted-foreground">
+						Probing diagnostics…
+					</span>
+				) : diagnosticsQuery.data ? (
+					<DiagnosticsCard diag={diagnosticsQuery.data} />
+				) : null}
+			</div>
+		</section>
+	);
+}
+
+function DiagnosticsCard({ diag }: { diag: RuntimeDiagnostics }) {
+	const uptimeMs = diag.client ? Date.now() - diag.client.connectedAtMs : null;
+	const stateLabel =
+		diag.state.type === "connected"
+			? "Connected"
+			: diag.state.type === "degraded"
+				? `Degraded — ${diag.state.reason}`
+				: `Disconnected — ${diag.state.reason}`;
+	const stateTone =
+		diag.state.type === "connected"
+			? "ok"
+			: diag.state.type === "degraded"
+				? "warn"
+				: "error";
+
+	return (
+		<div
+			className="flex flex-col gap-2 rounded-md border border-border/30 bg-background/40 p-3"
+			data-testid="connection-diagnostics-card"
+		>
+			<div className="flex items-center gap-2">
+				<span
+					className={cn(
+						"inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium tracking-wide uppercase",
+						stateTone === "ok" &&
+							"border-green-600/40 bg-green-600/10 text-green-300",
+						stateTone === "warn" &&
+							"border-amber-500/40 bg-amber-500/10 text-amber-300",
+						stateTone === "error" &&
+							"border-rose-500/40 bg-rose-500/10 text-rose-300",
+					)}
+					data-testid="diagnostics-state-chip"
+				>
+					{stateLabel}
+				</span>
+				{typeof diag.lastPingMs === "number" ? (
+					<span
+						className="text-[11px] text-muted-foreground"
+						data-testid="diagnostics-ping-ms"
+					>
+						ping {diag.lastPingMs}ms
+					</span>
+				) : (
+					<span
+						className="text-[11px] text-destructive"
+						data-testid="diagnostics-ping-failed"
+					>
+						ping failed
+					</span>
+				)}
+			</div>
+
+			{diag.lastError ? (
+				<SettingsNotice tone="warn">{diag.lastError}</SettingsNotice>
+			) : null}
+
+			<dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] sm:grid-cols-[160px_minmax(0,1fr)]">
+				<dt className="text-muted-foreground">Server</dt>
+				<dd className="truncate font-mono">
+					{diag.health
+						? `${diag.health.hostname} · ${diag.health.version}`
+						: "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Peer</dt>
+				<dd className="truncate font-mono">{diag.client?.peerLabel ?? "—"}</dd>
+
+				<dt className="text-muted-foreground">Protocol</dt>
+				<dd className="truncate font-mono">
+					{diag.client?.protocolVersion ?? "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Connected</dt>
+				<dd className="truncate font-mono">
+					{uptimeMs !== null && uptimeMs >= 0
+						? `${formatDuration(uptimeMs)} ago`
+						: "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Requests / responses</dt>
+				<dd className="truncate font-mono">
+					{diag.client
+						? `${diag.client.requestsSent} / ${diag.client.responsesReceived}`
+						: "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Notifications</dt>
+				<dd className="truncate font-mono">
+					{diag.client?.notificationsReceived ?? "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Decode errors</dt>
+				<dd
+					className={cn(
+						"truncate font-mono",
+						diag.client && diag.client.decodeErrors > 0 && "text-destructive",
+					)}
+				>
+					{diag.client?.decodeErrors ?? "—"}
+				</dd>
+
+				<dt className="text-muted-foreground">Agent sessions</dt>
+				<dd className="truncate font-mono">
+					{typeof diag.agentSessionCount === "number"
+						? diag.agentSessionCount
+						: "—"}
+				</dd>
+
+				{diag.client?.closedReason ? (
+					<>
+						<dt className="text-muted-foreground">Closed</dt>
+						<dd className="truncate font-mono text-destructive">
+							{diag.client.closedReason}
+						</dd>
+					</>
+				) : null}
+			</dl>
+		</div>
+	);
+}
+
+/// Render `ms` as "Xs ago" / "Xm Ys ago" / "Xh Ym ago" depending
+/// on magnitude. Matches the formatting the workspace activity
+/// chips already use so the panel feels consistent.
+function formatDuration(ms: number): string {
+	if (ms < 0) return "just now";
+	const sec = Math.floor(ms / 1000);
+	if (sec < 60) return `${sec}s`;
+	const min = Math.floor(sec / 60);
+	if (min < 60) {
+		const remSec = sec % 60;
+		return `${min}m ${remSec}s`;
+	}
+	const hr = Math.floor(min / 60);
+	const remMin = min % 60;
+	return `${hr}h ${remMin}m`;
+}
 
 function WorkspaceStatusProbeSection({ entries }: { entries: RuntimeEntry[] }) {
 	const [workspaceDir, setWorkspaceDir] = useState("");

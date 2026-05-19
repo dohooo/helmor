@@ -839,6 +839,140 @@ pub async fn attach_remote_agent_session(
     run_blocking(move || attach_remote_agent_session_inner(&registry, name, request_id)).await
 }
 
+/// Aggregated connection diagnostics surfaced by the Runtime
+/// Debug panel's "Connection diagnostics" section. Bundles every
+/// telemetry surface the runtime exposes today:
+///
+/// - `state` — registry's last-known connection lifecycle.
+/// - `health` — server-reported hostname / version (`runtime_health`).
+/// - `client` — RPC pipe I/O counters + close reason. `None` for
+///   the local runtime (no wire to instrument).
+/// - `agentSessionCount` — how many agent turns the daemon is
+///   actively running. Sourced from `agent.list`.
+/// - `lastPingMs` — fresh ping RTT measured inside this call.
+///   Lets the operator answer "how snappy is my pipe right now?"
+///   without waiting for the next liveness tick.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDiagnostics {
+    pub name: String,
+    pub state: RuntimeState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<RuntimeHealth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<crate::remote::RpcClientDiagnostics>,
+    /// `None` when `agent.list` failed or the runtime doesn't
+    /// support it (local runtime). The panel renders this as a
+    /// chip alongside the I/O counters; absence means "we don't
+    /// know", which is different from "zero".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_count: Option<u32>,
+    /// `None` when the fresh ping failed (connection torn down
+    /// between the diagnostics command starting + the ping
+    /// completing). Rendered as a red "ping failed" badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ping_ms: Option<u64>,
+    /// `None` when the runtime exposes no client (local) or the
+    /// ping failed before we could mark a failure. Captures any
+    /// non-fatal error encountered while gathering diagnostics so
+    /// the panel can show a partial snapshot rather than blanking
+    /// out entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+/// Snapshot every diagnostic available for `name`. Best-effort:
+/// the command never bails on a partial signal — a missing health
+/// probe or agent.list still returns the surfaces that succeeded.
+/// Pass `name="local"` to fetch the local runtime's snapshot
+/// (state will always be Connected; `client` will be `None`).
+#[tauri::command]
+pub async fn get_remote_runtime_diagnostics(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<RuntimeDiagnostics> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || get_remote_runtime_diagnostics_inner(&registry, name)).await
+}
+
+fn get_remote_runtime_diagnostics_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+) -> anyhow::Result<RuntimeDiagnostics> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+
+    // Read the registry's lifecycle state up front so we surface
+    // a Disconnected / Tombstoned diagnostic even when the runtime
+    // probe paths bail. `state_of` falls back to Connected for the
+    // built-in local entry.
+    let state = registry.state(&name).unwrap_or(RuntimeState::Connected);
+    let runtime = registry
+        .lookup(Some(&name))
+        .with_context(|| format!("resolve runtime `{name}` for diagnostics"))?;
+
+    let mut diag = RuntimeDiagnostics {
+        name: name.clone(),
+        state,
+        health: None,
+        client: None,
+        agent_session_count: None,
+        last_ping_ms: None,
+        last_error: None,
+    };
+
+    // Per-probe failures land in `last_error` so the panel can
+    // render a partial snapshot. The first probe to fail wins —
+    // subsequent failures are logged but don't overwrite the
+    // surfaced reason.
+    let mut record_err = |err: anyhow::Error, label: &str| {
+        let msg = format!("{label}: {err:#}");
+        tracing::debug!(runtime = %name, error = %msg, "diagnostics probe failed");
+        if diag.last_error.is_none() {
+            diag.last_error = Some(msg);
+        }
+    };
+
+    match runtime.runtime_health() {
+        Ok(h) => diag.health = Some(h),
+        Err(err) => record_err(err, "runtime_health"),
+    }
+
+    diag.client = runtime.client_diagnostics();
+
+    match runtime.agent_list(crate::remote::AgentListParams::default()) {
+        Ok(list) => diag.agent_session_count = Some(list.sessions.len() as u32),
+        Err(err) => {
+            // Local runtime + tombstoned runtimes default-bail on
+            // agent.list; that's not a real failure for the
+            // diagnostics view, just an absence. Suppress the
+            // `last_error` write for the well-known
+            // "only on a connected remote" message.
+            let msg = format!("{err:#}").to_lowercase();
+            if !msg.contains("only supported on a connected remote runtime")
+                && !msg.contains("only on a connected remote")
+            {
+                record_err(err, "agent.list");
+            }
+        }
+    }
+
+    // Fresh ping at the end so the RTT reflects "the connection
+    // right now" (not whatever stale liveness probe the registry
+    // last recorded). Wall-clock timing is good enough — the
+    // 200ms heartbeat tolerance dwarfs any system-time jitter.
+    let ping_start = std::time::Instant::now();
+    match runtime.ping() {
+        Ok(()) => {
+            diag.last_ping_ms = Some(ping_start.elapsed().as_millis() as u64);
+        }
+        Err(err) => record_err(err, "ping"),
+    }
+
+    Ok(diag)
+}
+
 /// Reattach + live event stream. The frontend supplies a Channel
 /// the runtime pushes every matching `agent.event` notification
 /// onto, so the panel can render assistant tokens / tool calls /
@@ -1964,6 +2098,20 @@ mod tests {
         /// instead of registering — lets a test exercise the
         /// "runtime does not stream events" error branch.
         agent_events_disabled: Mutex<bool>,
+        /// Override the stub's RpcClientDiagnostics. `None` means
+        /// `client_diagnostics` returns `None` (mirrors the local
+        /// runtime); `Some(_)` is what the diagnostics command
+        /// surfaces in its `client` field.
+        client_diagnostics_override: Mutex<Option<crate::remote::RpcClientDiagnostics>>,
+        /// When `true`, the stub's `ping` returns Err so the
+        /// diagnostics command's last-ping path can be tested.
+        ping_fails: Mutex<bool>,
+        /// When `true`, `agent_list` bails — exercises the
+        /// "agent.list failure is recorded in last_error" branch.
+        agent_list_fails: Mutex<bool>,
+        /// When `true`, `runtime_health` returns Err — exercises
+        /// the "health failure is recorded in last_error" branch.
+        health_fails: Mutex<bool>,
     }
 
     impl InspectorStubRuntime {
@@ -1996,6 +2144,9 @@ mod tests {
 
     impl RemoteRuntime for InspectorStubRuntime {
         fn runtime_health(&self) -> Result<RuntimeHealth> {
+            if *self.health_fails.lock().unwrap() {
+                bail!("simulated runtime_health failure");
+            }
             Ok(RuntimeHealth {
                 kind: RuntimeKind::Remote {
                     host: self.hostname.into(),
@@ -2018,7 +2169,14 @@ mod tests {
             })
         }
         fn ping(&self) -> Result<()> {
-            Ok(())
+            if *self.ping_fails.lock().unwrap() {
+                bail!("simulated ping failure")
+            } else {
+                Ok(())
+            }
+        }
+        fn client_diagnostics(&self) -> Option<crate::remote::RpcClientDiagnostics> {
+            self.client_diagnostics_override.lock().unwrap().clone()
         }
         fn workspace_file_tree(
             &self,
@@ -2121,6 +2279,9 @@ mod tests {
             _params: crate::remote::AgentListParams,
         ) -> Result<crate::remote::AgentListResult> {
             *self.agent_list_calls.lock().unwrap() += 1;
+            if *self.agent_list_fails.lock().unwrap() {
+                bail!("simulated agent.list failure");
+            }
             Ok(crate::remote::AgentListResult {
                 sessions: self.agent_sessions.lock().unwrap().clone(),
             })
@@ -3081,6 +3242,191 @@ mod tests {
         assert_eq!(events_a[0].event["delta"], "for-A");
         assert_eq!(events_b.len(), 1);
         assert_eq!(events_b[0].event["delta"], "for-B");
+    }
+
+    // ── get_remote_runtime_diagnostics (phase 24j) ────────────────
+
+    fn fake_client_diagnostics() -> crate::remote::RpcClientDiagnostics {
+        crate::remote::RpcClientDiagnostics {
+            peer_label: "ssh:stub.box".into(),
+            server_version: "0.22.1".into(),
+            server_hostname: "stub.box".into(),
+            protocol_version: "0.1.0".into(),
+            connected_at_ms: 1_700_000_000_000,
+            closed_reason: None,
+            requests_sent: 12,
+            responses_received: 11,
+            notifications_received: 4,
+            decode_errors: 0,
+        }
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_rejects_empty_name() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err = get_remote_runtime_diagnostics_inner(&registry, "".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("runtime name must not be empty"));
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_surfaces_health_client_agent_count_and_ping() {
+        // Happy path: every probe succeeds. The aggregated
+        // diagnostics carry health + client + agent_session_count
+        // + a recent ping; last_error stays None.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.client_diagnostics_override.lock().unwrap() = Some(fake_client_diagnostics());
+        *stub.agent_sessions.lock().unwrap() = vec![
+            crate::remote::AgentSessionEntry {
+                request_id: "req-1".into(),
+                helmor_session_id: None,
+                provider: None,
+                workspace_dir: None,
+                started_at_ms: 0,
+                last_event_ms: 0,
+            },
+            crate::remote::AgentSessionEntry {
+                request_id: "req-2".into(),
+                helmor_session_id: None,
+                provider: None,
+                workspace_dir: None,
+                started_at_ms: 0,
+                last_event_ms: 0,
+            },
+        ];
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "stub.box".into()).unwrap();
+
+        assert_eq!(diag.name, "stub.box");
+        let health = diag.health.expect("health snapshot");
+        assert_eq!(health.hostname, "stub.box");
+        let client = diag.client.expect("client diagnostics");
+        assert_eq!(client.peer_label, "ssh:stub.box");
+        assert_eq!(client.requests_sent, 12);
+        assert_eq!(diag.agent_session_count, Some(2));
+        // The ping uses wall-clock duration which can be 0ms on a
+        // very fast machine; we just confirm we recorded a value.
+        assert!(diag.last_ping_ms.is_some());
+        assert!(diag.last_error.is_none());
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_records_ping_failure_in_last_error() {
+        // A failed ping shouldn't bail the whole probe — the panel
+        // still wants to render whatever else succeeded. last_ping_ms
+        // stays None + last_error carries the reason.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.client_diagnostics_override.lock().unwrap() = Some(fake_client_diagnostics());
+        *stub.ping_fails.lock().unwrap() = true;
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "stub.box".into()).unwrap();
+
+        assert!(diag.last_ping_ms.is_none());
+        let err = diag.last_error.expect("last_error populated");
+        assert!(
+            err.contains("ping"),
+            "last_error should mention ping: {err}"
+        );
+        assert!(err.contains("simulated ping failure"));
+        // Other surfaces still flow.
+        assert!(diag.health.is_some());
+        assert!(diag.client.is_some());
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_records_agent_list_failure() {
+        // agent.list failures aren't the default-bail case for the
+        // stub — they're an explicit Err. That should land in
+        // last_error so the panel surfaces the actual issue
+        // (e.g. daemon-side agent state misconfigured).
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_list_fails.lock().unwrap() = true;
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "stub.box".into()).unwrap();
+
+        assert!(diag.agent_session_count.is_none());
+        let err = diag.last_error.expect("last_error populated");
+        assert!(
+            err.contains("agent.list"),
+            "last_error should mention agent.list: {err}"
+        );
+        assert!(err.contains("simulated agent.list failure"));
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_records_health_failure() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.health_fails.lock().unwrap() = true;
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "stub.box".into()).unwrap();
+
+        assert!(diag.health.is_none());
+        let err = diag.last_error.expect("last_error populated");
+        assert!(err.contains("runtime_health"));
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_first_failure_wins_last_error() {
+        // If multiple probes fail, the first one's message stays
+        // in last_error. Order: runtime_health → agent.list → ping.
+        // Health firing first owns last_error.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.health_fails.lock().unwrap() = true;
+        *stub.agent_list_fails.lock().unwrap() = true;
+        *stub.ping_fails.lock().unwrap() = true;
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "stub.box".into()).unwrap();
+
+        let err = diag.last_error.expect("last_error populated");
+        // The first probe to record an error wins. The order is
+        // runtime_health → client (no-op) → agent.list → ping;
+        // we assert the health label is present + the others
+        // didn't overwrite.
+        assert!(
+            err.starts_with("runtime_health:"),
+            "expected runtime_health to claim first failure slot: {err}"
+        );
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_local_runtime_omits_default_bail_in_last_error() {
+        // The local runtime's agent.list bails by default with the
+        // "only on connected remote" message. The diagnostics command
+        // treats that as an absence, NOT a failure, so the panel
+        // doesn't render a red error chip for a perfectly healthy
+        // local entry. Drive this through `name=local` so the
+        // registry's local fallback impl gets hit.
+        let registry = Arc::new(RuntimeRegistry::new());
+
+        let diag = get_remote_runtime_diagnostics_inner(&registry, "local".into()).unwrap();
+
+        // health populates from the LocalRuntime.
+        assert!(diag.health.is_some());
+        // No client wire to instrument.
+        assert!(diag.client.is_none());
+        // agent.list bailed → no count, but the bail is suppressed.
+        assert!(diag.agent_session_count.is_none());
+        // No last_error because we swallowed the "only on remote" bail.
+        assert!(
+            diag.last_error.is_none(),
+            "local runtime should not surface a last_error: {:?}",
+            diag.last_error
+        );
+        // Ping succeeds on the local runtime, so we always have a value.
+        assert!(diag.last_ping_ms.is_some());
+    }
+
+    #[test]
+    fn get_remote_runtime_diagnostics_surfaces_unknown_runtime_as_lookup_error() {
+        // Asking for a runtime that isn't registered fails fast at
+        // the registry lookup; the panel renders the error inline
+        // rather than showing a phantom empty card.
+        let registry = Arc::new(RuntimeRegistry::new());
+        let err = get_remote_runtime_diagnostics_inner(&registry, "ghost.box".into()).unwrap_err();
+        let msg = format!("{err:#}").to_lowercase();
+        assert!(
+            msg.contains("ghost.box") || msg.contains("not"),
+            "expected lookup error for unknown runtime: {msg}"
+        );
     }
 
     #[test]

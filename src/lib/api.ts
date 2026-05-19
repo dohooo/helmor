@@ -722,6 +722,43 @@ export async function getRuntimeHealth(
 	return invoke<RuntimeHealth>("get_runtime_health", { runtimeName });
 }
 
+/// RPC pipe telemetry surfaced to the desktop's Connection
+/// diagnostics panel. Mirrors the Rust `RpcClientDiagnostics`.
+/// `None` for the local runtime (no wire to instrument).
+export type RpcClientDiagnostics = {
+	peerLabel: string;
+	serverVersion: string;
+	serverHostname: string;
+	protocolVersion: string;
+	connectedAtMs: number;
+	closedReason?: string | null;
+	requestsSent: number;
+	responsesReceived: number;
+	notificationsReceived: number;
+	decodeErrors: number;
+};
+
+/// Aggregated connection diagnostics for one runtime. Bundles the
+/// registry's state, the server's health probe, the RPC pipe's
+/// telemetry, the daemon's agent.list count, and a freshly-measured
+/// ping RTT. Per-probe failures collapse into `lastError` so a
+/// single bad signal doesn't blank the rest of the panel.
+export type RuntimeDiagnostics = {
+	name: string;
+	state: RuntimeState;
+	health?: RuntimeHealth | null;
+	client?: RpcClientDiagnostics | null;
+	agentSessionCount?: number | null;
+	lastPingMs?: number | null;
+	lastError?: string | null;
+};
+
+export async function getRemoteRuntimeDiagnostics(
+	name: string,
+): Promise<RuntimeDiagnostics> {
+	return invoke<RuntimeDiagnostics>("get_remote_runtime_diagnostics", { name });
+}
+
 export type WorkspaceStatusResult = {
 	isClean: boolean;
 	changedPaths: string[];

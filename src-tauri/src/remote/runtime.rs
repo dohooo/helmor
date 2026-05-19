@@ -266,6 +266,14 @@ pub trait RemoteRuntime: Send + Sync {
         None
     }
 
+    /// Snapshot RPC-pipe telemetry for this runtime. `None` for
+    /// runtimes that don't have a wire to instrument (the local
+    /// runtime is in-process; tombstoned remotes have no client).
+    /// Drives the desktop's "Connection diagnostics" panel.
+    fn client_diagnostics(&self) -> Option<super::client::RpcClientDiagnostics> {
+        None
+    }
+
     // ── agent.* ops (phase 23a — surface only) ──────────────────
     //
     // Phase 23a defines the wire shapes; the trait defaults bail.
