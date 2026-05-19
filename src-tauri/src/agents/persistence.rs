@@ -76,11 +76,20 @@ pub(super) fn persist_turn_message(
         &turn.content_json,
     )?;
 
+    // ON CONFLICT(id) DO NOTHING makes the insert idempotent. The
+    // regular send path can't double-write a turn (its
+    // `persisted_turn_count` cursor monotonically advances), so this
+    // never matters for it; the reattach path in `streaming::reattach`
+    // re-pushes the daemon's full event log through a fresh accumulator,
+    // which can resurface turns the original sender already persisted.
+    // Letting the second insert be a no-op keeps DB content
+    // deterministic without forcing each writer to coordinate.
     conn.execute(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            ON CONFLICT(id) DO NOTHING
             "#,
         params![msg_id, ctx.helmor_session_id, turn.role, content, now],
     )?;
@@ -523,5 +532,72 @@ mod tests {
             .unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
         assert!(parsed.get("allowedPrompts").is_none());
+    }
+
+    /// Reattach (phase 24n) re-pushes the daemon's full event log
+    /// through a fresh accumulator, so turns the original sender
+    /// already persisted re-surface to `persist_turn_message`. The
+    /// `ON CONFLICT(id) DO NOTHING` clause lets the second insert be
+    /// a no-op so the desktop never trips on a UNIQUE constraint.
+    #[test]
+    fn persist_turn_message_is_idempotent_on_repeat_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        let ctx = test_exchange_context();
+
+        let turn = CollectedTurn {
+            id: "msg-shared-1".into(),
+            role: MessageRole::Assistant,
+            content_json: json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "first" }],
+                },
+            })
+            .to_string(),
+        };
+
+        let first = persist_turn_message(&conn, &ctx, &turn, "claude-opus-4").unwrap();
+        assert_eq!(first, "msg-shared-1");
+
+        // A different `content_json` under the same id reaches us when
+        // the daemon hands the same turn back through a reattach. The
+        // second insert must not panic + must not overwrite the
+        // original row (the desktop trusts the first writer).
+        let same_id_diff_content = CollectedTurn {
+            id: "msg-shared-1".into(),
+            role: MessageRole::Assistant,
+            content_json: json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "second" }],
+                },
+            })
+            .to_string(),
+        };
+        let second = persist_turn_message(&conn, &ctx, &same_id_diff_content, "claude-opus-4")
+            .expect("second insert should succeed silently");
+        assert_eq!(second, "msg-shared-1");
+
+        // Only one row exists, and its content is the first write.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE id = ?1",
+                ["msg-shared-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let stored: String = conn
+            .query_row(
+                "SELECT content FROM session_messages WHERE id = ?1",
+                ["msg-shared-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored.contains("first"));
+        assert!(!stored.contains("second"));
     }
 }

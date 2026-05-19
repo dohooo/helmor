@@ -39,6 +39,9 @@ use uuid::Uuid;
 
 use crate::pipeline::{MessagePipeline, PipelineEmit};
 
+use super::super::{
+    finalize_session_metadata, persist_error_message, persist_turn_message, ExchangeContext,
+};
 use super::active_streams::ActiveStreamHandle;
 use super::transports::SidecarTransport;
 use super::ActiveStreams;
@@ -174,6 +177,27 @@ fn run_reattach_loop<R: Runtime>(
     let started_at = Instant::now();
     let mut event_count: u64 = 0;
 
+    // Phase 24n: persist the reattached turn's messages to the local
+    // DB so a closed-and-reopened desktop sees the right history
+    // instead of an empty thread after a reattach window. The
+    // ExchangeContext mirrors the regular send path's shape; user
+    // message id is `None` because the daemon already owns the user
+    // turn (reattach never inserts a user row — it only mirrors the
+    // assistant + tool-result turns the daemon emits).
+    //
+    // `persist_turn_message` uses `INSERT ... ON CONFLICT(id) DO
+    // NOTHING`, so if this desktop is also the original sender (its
+    // own send loop wrote the early turns before the disconnect) the
+    // reattach loop's re-write of those same turns is a no-op.
+    let persistence_ctx = ExchangeContext {
+        helmor_session_id: helmor_session_id.clone(),
+        model_id: model_id.clone(),
+        model_provider: provider.clone(),
+        user_message_id: String::new(),
+    };
+    let mut persisted_turn_count: usize = 0;
+    let mut persisted_any: bool = false;
+
     'outer: loop {
         let event = match rx.recv_timeout(HEARTBEAT_TIMEOUT) {
             Ok(ev) => ev,
@@ -234,6 +258,15 @@ fn run_reattach_loop<R: Runtime>(
         // produced the bytes.
         let line = serde_json::to_string(&event.raw).unwrap_or_default();
         let emit = pipeline.push_event(&event.raw, &line);
+        // Drain any new turns into the local DB before emitting the
+        // user-facing envelope so the chat reflects "persisted to
+        // local DB on next refresh" semantics.
+        persisted_any |= drain_new_turns_into_db(
+            &mut persisted_turn_count,
+            &pipeline,
+            &persistence_ctx,
+            &request_id_for_loop,
+        );
         match emit {
             PipelineEmit::Full(messages) => {
                 let _ = on_event.send(AgentStreamEvent::Update { messages });
@@ -256,6 +289,14 @@ fn run_reattach_loop<R: Runtime>(
                 let _ = on_event.send(AgentStreamEvent::Update {
                     messages: final_messages,
                 });
+                persisted_any |= drain_new_turns_into_db(
+                    &mut persisted_turn_count,
+                    &pipeline,
+                    &persistence_ctx,
+                    &request_id_for_loop,
+                );
+                let final_persisted =
+                    persisted_any | finalize_status(&persistence_ctx, "idle", &request_id_for_loop);
                 let resolved_model = pipeline.accumulator.resolved_model().to_string();
                 let _ = on_event.send(AgentStreamEvent::Done {
                     provider: provider.clone(),
@@ -263,11 +304,7 @@ fn run_reattach_loop<R: Runtime>(
                     resolved_model,
                     session_id: resolved_session_id.clone(),
                     working_directory: working_dir_str.clone(),
-                    // We don't persist on the desktop side — the
-                    // daemon already wrote whatever it wrote when
-                    // the original send fired. Reporting
-                    // persisted=false makes that explicit.
-                    persisted: false,
+                    persisted: final_persisted,
                 });
                 break 'outer;
             }
@@ -276,6 +313,14 @@ fn run_reattach_loop<R: Runtime>(
                 let _ = on_event.send(AgentStreamEvent::Update {
                     messages: final_messages,
                 });
+                persisted_any |= drain_new_turns_into_db(
+                    &mut persisted_turn_count,
+                    &pipeline,
+                    &persistence_ctx,
+                    &request_id_for_loop,
+                );
+                let final_persisted = persisted_any
+                    | finalize_status(&persistence_ctx, "aborted", &request_id_for_loop);
                 let reason = event
                     .raw
                     .get("reason")
@@ -289,7 +334,7 @@ fn run_reattach_loop<R: Runtime>(
                     resolved_model,
                     session_id: resolved_session_id.clone(),
                     working_directory: working_dir_str.clone(),
-                    persisted: false,
+                    persisted: final_persisted,
                     reason,
                 });
                 break 'outer;
@@ -306,9 +351,13 @@ fn run_reattach_loop<R: Runtime>(
                     .get("internal")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                let error_persisted =
+                    persist_error_into_db(&persistence_ctx, &message, &request_id_for_loop);
+                let final_persisted = error_persisted
+                    | finalize_status(&persistence_ctx, "error", &request_id_for_loop);
                 let _ = on_event.send(AgentStreamEvent::Error {
                     message,
-                    persisted: false,
+                    persisted: final_persisted,
                     internal,
                 });
                 break 'outer;
@@ -327,6 +376,113 @@ fn run_reattach_loop<R: Runtime>(
         event_count,
         "reattach: event loop exited"
     );
+}
+
+/// Persist any new accumulator turns the reattach loop hasn't written
+/// yet. Returns `true` when at least one row was added (used to flip
+/// the terminal envelope's `persisted` flag). Best-effort: a write
+/// failure logs + returns `false` so the user-facing stream still
+/// completes; the next reattach round-trip will re-attempt thanks to
+/// `persist_turn_message`'s `ON CONFLICT DO NOTHING` idempotency.
+fn drain_new_turns_into_db(
+    persisted_turn_count: &mut usize,
+    pipeline: &MessagePipeline,
+    ctx: &ExchangeContext,
+    rid: &str,
+) -> bool {
+    let total = pipeline.accumulator.turns_len();
+    if *persisted_turn_count >= total {
+        return false;
+    }
+    let conn = match crate::models::db::write_conn() {
+        Ok(conn) => conn,
+        Err(err) => {
+            tracing::warn!(
+                rid = %rid,
+                error = %err,
+                "reattach: failed to borrow write conn for turn persistence",
+            );
+            return false;
+        }
+    };
+    let resolved_model = pipeline.accumulator.resolved_model().to_string();
+    let mut wrote_any = false;
+    while *persisted_turn_count < total {
+        let turn = pipeline.accumulator.turn_at(*persisted_turn_count);
+        match persist_turn_message(&conn, ctx, turn, &resolved_model) {
+            Ok(_) => {
+                *persisted_turn_count += 1;
+                wrote_any = true;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    rid = %rid,
+                    turn = *persisted_turn_count,
+                    error = %err,
+                    "reattach: persist_turn_message failed",
+                );
+                break;
+            }
+        }
+    }
+    wrote_any
+}
+
+/// Insert an error row for the reattach turn. Mirrors the regular
+/// send's `persist_error_message` call so the chat thread surfaces
+/// the same row on next render.
+fn persist_error_into_db(ctx: &ExchangeContext, message: &str, rid: &str) -> bool {
+    let conn = match crate::models::db::write_conn() {
+        Ok(conn) => conn,
+        Err(err) => {
+            tracing::warn!(
+                rid = %rid,
+                error = %err,
+                "reattach: failed to borrow write conn for error persistence",
+            );
+            return false;
+        }
+    };
+    match persist_error_message(&conn, ctx, "", message) {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::warn!(
+                rid = %rid,
+                error = %err,
+                "reattach: persist_error_message failed",
+            );
+            false
+        }
+    }
+}
+
+/// Finalize the session row's status / effort / permission mode
+/// fields. Reattach doesn't know the effort or permission mode
+/// (those were pinned by the original sender), so we pass `None`
+/// for both — the existing values stick around.
+fn finalize_status(ctx: &ExchangeContext, status: &str, rid: &str) -> bool {
+    let conn = match crate::models::db::write_conn() {
+        Ok(conn) => conn,
+        Err(err) => {
+            tracing::warn!(
+                rid = %rid,
+                error = %err,
+                "reattach: failed to borrow write conn for finalize",
+            );
+            return false;
+        }
+    };
+    match finalize_session_metadata(&conn, ctx, status, None, None) {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::warn!(
+                rid = %rid,
+                error = %err,
+                "reattach: finalize_session_metadata failed",
+            );
+            false
+        }
+    }
 }
 
 /// Synthesise a fresh `request_id` when the caller doesn't know
