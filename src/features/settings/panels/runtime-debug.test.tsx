@@ -32,6 +32,7 @@ const apiMocks = vi.hoisted(() => ({
 	attachRemoteAgentSession: vi.fn(),
 	reattachRemoteAgentSessionStream: vi.fn(),
 	releaseRemoteAgentStream: vi.fn(),
+	getRemoteRuntimeDiagnostics: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -65,6 +66,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		attachRemoteAgentSession: apiMocks.attachRemoteAgentSession,
 		reattachRemoteAgentSessionStream: apiMocks.reattachRemoteAgentSessionStream,
 		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
+		getRemoteRuntimeDiagnostics: apiMocks.getRemoteRuntimeDiagnostics,
 	};
 });
 
@@ -134,6 +136,23 @@ describe("RuntimeDebugPanel", () => {
 			found: true,
 		});
 		apiMocks.releaseRemoteAgentStream.mockResolvedValue({ released: true });
+		// Default: a minimal diagnostics snapshot that the
+		// Connection diagnostics section can render without
+		// crashing. Individual tests override with richer
+		// shapes when they want to assert on specific fields.
+		apiMocks.getRemoteRuntimeDiagnostics.mockResolvedValue({
+			name: "local",
+			state: { type: "connected" },
+			health: {
+				kind: { type: "local" },
+				hostname: "test-machine",
+				version: "0.0.0-test",
+			},
+			client: null,
+			agentSessionCount: null,
+			lastPingMs: 1,
+			lastError: null,
+		});
 	});
 
 	afterEach(() => {
@@ -1714,6 +1733,154 @@ describe("RuntimeDebugPanel", () => {
 
 		expect(
 			await screen.findByText(/agent\.list failed: connection lost/),
+		).toBeInTheDocument();
+	});
+
+	// ── Connection diagnostics section (phase 24j) ────────────────
+
+	it("connection diagnostics: renders local runtime card with state chip + ping", async () => {
+		// Default empty-runtimes setup → the section's dropdown
+		// defaults to "local", which our default mock resolves
+		// with a healthy snapshot.
+		renderPanel();
+
+		const card = await screen.findByTestId("connection-diagnostics-card");
+		expect(card).toBeInTheDocument();
+		expect(screen.getByTestId("diagnostics-state-chip").textContent).toContain(
+			"Connected",
+		);
+		expect(screen.getByTestId("diagnostics-ping-ms").textContent).toContain(
+			"ping 1ms",
+		);
+	});
+
+	it("connection diagnostics: renders client telemetry counters when remote runtime is picked", async () => {
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.getRemoteRuntimeDiagnostics.mockResolvedValue({
+			name: "dev.box",
+			state: { type: "connected" },
+			health: {
+				kind: { type: "remote", host: "dev.box" },
+				hostname: "dev.box",
+				version: "0.22.1",
+			},
+			client: {
+				peerLabel: "ssh:dev.box",
+				serverVersion: "0.22.1",
+				serverHostname: "dev.box",
+				protocolVersion: "0.1.0",
+				connectedAtMs: Date.now() - 90_000,
+				closedReason: null,
+				requestsSent: 12,
+				responsesReceived: 11,
+				notificationsReceived: 4,
+				decodeErrors: 0,
+			},
+			agentSessionCount: 2,
+			lastPingMs: 24,
+			lastError: null,
+		});
+
+		renderPanel();
+
+		const card = await screen.findByTestId("connection-diagnostics-card");
+		// Telemetry counters render verbatim.
+		expect(card.textContent).toContain("12");
+		expect(card.textContent).toContain("11");
+		expect(card.textContent).toContain("4");
+		expect(card.textContent).toContain("ssh:dev.box");
+		// Agent sessions count surfaces.
+		expect(card.textContent).toMatch(/Agent sessions/);
+		expect(card.textContent).toContain("2");
+	});
+
+	it("connection diagnostics: surfaces ping failure as red badge instead of latency", async () => {
+		apiMocks.getRemoteRuntimeDiagnostics.mockResolvedValue({
+			name: "local",
+			state: { type: "connected" },
+			health: {
+				kind: { type: "local" },
+				hostname: "test-machine",
+				version: "0.0.0-test",
+			},
+			client: null,
+			agentSessionCount: null,
+			lastPingMs: null,
+			lastError: "ping: simulated ping failure",
+		});
+
+		renderPanel();
+
+		expect(
+			await screen.findByTestId("diagnostics-ping-failed"),
+		).toBeInTheDocument();
+		// lastError surfaces as a warn notice.
+		expect(screen.getByText(/simulated ping failure/)).toBeInTheDocument();
+	});
+
+	it("connection diagnostics: shows disconnected state chip when the runtime is offline", async () => {
+		apiMocks.getRemoteRuntimeDiagnostics.mockResolvedValue({
+			name: "dev.box",
+			state: { type: "disconnected", reason: "ssh: connection refused" },
+			health: null,
+			client: null,
+			agentSessionCount: null,
+			lastPingMs: null,
+			lastError: "ping: peer closed",
+		});
+
+		renderPanel();
+
+		const chip = await screen.findByTestId("diagnostics-state-chip");
+		expect(chip.textContent).toMatch(/Disconnected/);
+		expect(chip.textContent).toMatch(/connection refused/);
+	});
+
+	it("connection diagnostics: surfaces the closed_reason when the pipe went away", async () => {
+		// The client snapshot can carry a closedReason even when
+		// the registry still thinks the entry is connected — e.g.
+		// the reader thread tore down mid-call. The panel must
+		// render it in red so the operator sees the failure.
+		apiMocks.getRemoteRuntimeDiagnostics.mockResolvedValue({
+			name: "dev.box",
+			state: { type: "connected" },
+			health: null,
+			client: {
+				peerLabel: "ssh:dev.box",
+				serverVersion: "0.22.1",
+				serverHostname: "dev.box",
+				protocolVersion: "0.1.0",
+				connectedAtMs: Date.now() - 60_000,
+				closedReason: "reader error: peer closed connection",
+				requestsSent: 5,
+				responsesReceived: 4,
+				notificationsReceived: 1,
+				decodeErrors: 0,
+			},
+			agentSessionCount: null,
+			lastPingMs: null,
+			lastError: "ping: connection closed",
+		});
+
+		renderPanel();
+
+		const card = await screen.findByTestId("connection-diagnostics-card");
+		expect(card.textContent).toMatch(/reader error: peer closed connection/);
+	});
+
+	it("connection diagnostics: surfaces RPC failures as a notice instead of blanking the card", async () => {
+		apiMocks.getRemoteRuntimeDiagnostics.mockRejectedValue(
+			new Error("registry: runtime not found"),
+		);
+		renderPanel();
+		expect(
+			await screen.findByText(/registry: runtime not found/),
 		).toBeInTheDocument();
 	});
 });

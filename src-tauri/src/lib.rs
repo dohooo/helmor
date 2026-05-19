@@ -382,6 +382,7 @@ pub fn run() {
             commands::remote_commands::connect_local_runtime,
             commands::remote_commands::connect_remote_runtime,
             commands::remote_commands::disconnect_remote_runtime,
+            commands::remote_commands::get_remote_runtime_diagnostics,
             commands::remote_commands::get_runtime_health,
             commands::remote_commands::get_workspace_branch_info,
             commands::remote_commands::get_workspace_changes,

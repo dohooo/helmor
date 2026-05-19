@@ -46,7 +46,7 @@ pub mod watch;
 pub mod workspace_bindings;
 
 pub use client::NotificationSubscription;
-pub use client::{RemoteSshRuntime, RpcClient};
+pub use client::{RemoteSshRuntime, RpcClient, RpcClientDiagnostics};
 pub use codec::{read_frame, write_frame, FrameError};
 pub use connection::RuntimeConnectionConfig;
 pub use liveness::spawn_liveness_loop;
