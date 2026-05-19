@@ -279,6 +279,7 @@ export async function createDiffEditor(options: {
 		quickSuggestions: false,
 		readOnly: true,
 		renderValidationDecorations: "off",
+		renderIndicators: false,
 		renderOverviewRuler: false,
 		renderSideBySide: !options.inline,
 		scrollBeyondLastLine: false,
