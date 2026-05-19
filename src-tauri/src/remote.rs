@@ -25,6 +25,7 @@
 //! way.
 
 pub mod agent;
+pub mod auto_reconnect;
 pub mod client;
 pub mod codec;
 pub mod connection;
@@ -45,6 +46,7 @@ pub mod transport;
 pub mod watch;
 pub mod workspace_bindings;
 
+pub use auto_reconnect::spawn_auto_reconnect_loop;
 pub use client::NotificationSubscription;
 pub use client::{RemoteSshRuntime, RpcClient, RpcClientDiagnostics};
 pub use codec::{read_frame, write_frame, FrameError};

@@ -219,6 +219,22 @@ pub fn run() {
                 remote::spawn_liveness_loop(app_handle, registry);
             }
 
+            // Phase 25a: auto-reconnect loop. The liveness loop flips
+            // a stubborn remote to Disconnected; this loop then walks
+            // any Disconnected entries with a persisted config and
+            // retries `connect_from_config` with exponential backoff
+            // until the user disconnects or the network heals. The
+            // chat banner subscribes to the matching mutation events
+            // to surface "reconnecting…" to the user.
+            {
+                let app_handle = app.handle().clone();
+                let registry = app
+                    .state::<std::sync::Arc<remote::RuntimeRegistry>>()
+                    .inner()
+                    .clone();
+                remote::spawn_auto_reconnect_loop(app_handle, registry);
+            }
+
             // Restore the persisted remote-runtime list. Each entry
             // either reconnects (lands as Connected) or becomes a
             // tombstone with state=Disconnected so the user can hit

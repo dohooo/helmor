@@ -68,6 +68,20 @@ pub enum UiMutationEvent {
         name: String,
         state: crate::remote::RuntimeState,
     },
+    /// The auto-reconnect loop tried to re-establish a Disconnected
+    /// remote and (succeeded / failed). The desktop's reconnect banner
+    /// uses this to show retry progress without requiring a new
+    /// query — the runtime's RuntimeState (Connected on success,
+    /// Disconnected with the latest reason on failure) is the
+    /// canonical source for what the user can act on.
+    RemoteReconnectAttempt {
+        name: String,
+        attempt: u32,
+        /// `None` while the attempt is in flight; `Some(true)` when the
+        /// last attempt succeeded; `Some(false)` when it failed (the
+        /// runtime entry's RuntimeState carries the failure reason).
+        succeeded: Option<bool>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

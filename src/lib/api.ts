@@ -2327,7 +2327,16 @@ export type UiMutationEvent =
 			permissionMode: string | null;
 	  }
 	| { type: "activeStreamsChanged" }
-	| { type: "runtimeStateChanged"; name: string; state: RuntimeState };
+	| { type: "runtimeStateChanged"; name: string; state: RuntimeState }
+	| {
+			type: "remoteReconnectAttempt";
+			name: string;
+			attempt: number;
+			/** `null` while the attempt is in flight, `true` / `false` on
+			 * resolve. The runtime entry's RuntimeState carries the
+			 * latest failure reason. */
+			succeeded: boolean | null;
+	  };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
