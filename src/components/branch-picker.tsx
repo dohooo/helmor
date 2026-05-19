@@ -55,6 +55,7 @@ export function BranchPickerPopover({
 	align = "start",
 	children,
 	renderFooter,
+	onCloseAutoFocus,
 }: {
 	currentBranch: string;
 	/** Flat branch names. Used when `entries` is not provided. */
@@ -67,6 +68,9 @@ export function BranchPickerPopover({
 	align?: "start" | "center" | "end";
 	children: React.ReactNode;
 	renderFooter?: (helpers: { close: () => void }) => React.ReactNode;
+	/** Forwarded to the underlying popover content. Call `event.preventDefault()`
+	 *  when the trigger is wrapped in a Tooltip — otherwise focus return reopens it. */
+	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const close = () => setOpen(false);
@@ -84,7 +88,11 @@ export function BranchPickerPopover({
 			}}
 		>
 			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<CommandPopoverContent align={align} className="w-[260px]">
+			<CommandPopoverContent
+				align={align}
+				className="w-[260px]"
+				onCloseAutoFocus={onCloseAutoFocus}
+			>
 				<style>{scrollbarStyle}</style>
 				<div className="branch-picker">
 					<CommandInput placeholder="Search branches..." />
