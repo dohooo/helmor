@@ -201,6 +201,7 @@ fn attach_swaps_notifier_so_subsequent_events_flow_to_new_client() {
         .attach(
             AgentAttachParams {
                 request_id: "req-3".into(),
+                since_seq: None,
             },
             Arc::new(CapturingNotifier::default()),
         )
@@ -212,6 +213,7 @@ fn attach_swaps_notifier_so_subsequent_events_flow_to_new_client() {
         .attach(
             AgentAttachParams {
                 request_id: "never-existed".into(),
+                since_seq: None,
             },
             Arc::new(CapturingNotifier::default()),
         )
@@ -625,4 +627,221 @@ fn ensure_running_pushes_stored_cursor_key_on_first_spawn() {
         )
         .unwrap();
     assert!(result.accepted);
+}
+
+// ── Phase 24q-1: event journal + replay-from-seq ─────────────────
+//
+// The four tests below exercise the daemon-side event journal added
+// in phase 24q-1: the reader thread tagging every notification with
+// a `seq`, plus `agent.attach` replaying journaled entries to a
+// reconnecting client.
+//
+// Journal unit tests (ring append, eviction gap signalling, etc.)
+// live alongside `EventJournal` in `super::journal::tests`. These
+// tests cover the end-to-end seam through `RemoteAgentState` so a
+// regression that breaks the reader/attach interaction surfaces
+// here rather than after-the-fact during manual SSH reattach.
+
+#[test]
+fn reader_loop_tags_every_notification_with_a_monotonic_seq() {
+    // The seq starts at 1 and increments per event. This is the
+    // value the desktop will store as its `last_event_seq` and
+    // pass back on the next reattach.
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({ "id": "req-seq", "type": "assistant", "delta": "one" }),
+            json!({ "id": "req-seq", "type": "assistant", "delta": "two" }),
+            json!({ "id": "req-seq", "type": "assistant", "delta": "three" }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner));
+    let notifier = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-seq".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&notifier) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+
+    let captured = wait_for(&notifier, |events| events.len() >= 3);
+    assert_eq!(captured.len(), 3, "expected 3 events, got {captured:?}");
+    let seqs: Vec<u64> = captured
+        .iter()
+        .filter_map(|(_, params)| params.get("seq").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3],
+        "reader must tag each event with a monotonic seq starting at 1",
+    );
+}
+
+#[test]
+fn attach_with_no_since_seq_flushes_full_journal_to_new_notifier() {
+    // Cold-attach contract: a fresh client passes `since_seq=None`
+    // and receives every journaled event in order before the
+    // first live event lands.
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({ "id": "req-cold", "type": "assistant", "delta": "a" }),
+            json!({ "id": "req-cold", "type": "assistant", "delta": "b" }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner));
+    let initial = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-cold".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&initial) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    // Wait until the reader thread has appended both events to
+    // the journal — observing them on the initial notifier proves
+    // the append happened (the reader appends before notifying).
+    wait_for(&initial, |events| events.len() >= 2);
+
+    let replay_target = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-cold".into(),
+                since_seq: None,
+            },
+            Arc::clone(&replay_target) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+
+    assert!(result.found);
+    assert_eq!(result.last_seq, 2);
+    assert_eq!(result.replayed_count, 2);
+    assert_eq!(result.replay_gap, None);
+
+    let replayed = replay_target.captured.lock().unwrap().clone();
+    assert_eq!(
+        replayed.len(),
+        2,
+        "expected 2 replayed events, got {replayed:?}"
+    );
+    let seqs: Vec<u64> = replayed
+        .iter()
+        .filter_map(|(_, params)| params.get("seq").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(seqs, vec![1, 2]);
+    let deltas: Vec<String> = replayed
+        .iter()
+        .filter_map(|(_, params)| {
+            params
+                .get("event")
+                .and_then(|e| e.get("delta"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(deltas, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn attach_with_since_seq_flushes_only_newer_entries() {
+    // Reconnect contract: a client that's already seen seq 1
+    // passes `since_seq=Some(1)` and receives only seq 2 onward.
+    // The flush respects the gap in seqs.
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({ "id": "req-warm", "type": "assistant", "delta": "x" }),
+            json!({ "id": "req-warm", "type": "assistant", "delta": "y" }),
+            json!({ "id": "req-warm", "type": "assistant", "delta": "z" }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner));
+    let initial = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-warm".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&initial) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    wait_for(&initial, |events| events.len() >= 3);
+
+    let replay_target = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-warm".into(),
+                since_seq: Some(1),
+            },
+            Arc::clone(&replay_target) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+
+    assert!(result.found);
+    assert_eq!(result.last_seq, 3);
+    assert_eq!(result.replayed_count, 2, "only seqs 2 and 3 should replay");
+    assert_eq!(result.replay_gap, None);
+
+    let replayed = replay_target.captured.lock().unwrap().clone();
+    let seqs: Vec<u64> = replayed
+        .iter()
+        .filter_map(|(_, params)| params.get("seq").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(seqs, vec![2, 3]);
+}
+
+#[test]
+fn attach_with_caught_up_since_seq_replays_nothing() {
+    // The desktop reattaches having already seen everything the
+    // journal has. The flush should be empty + replay_gap=None +
+    // last_seq carries the daemon's current head so the desktop
+    // can keep its local marker in sync.
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![json!({ "id": "req-caughtup", "type": "assistant", "delta": "only" })],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner));
+    let initial = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-caughtup".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&initial) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    wait_for(&initial, |events| !events.is_empty());
+
+    let replay_target = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-caughtup".into(),
+                since_seq: Some(1),
+            },
+            Arc::clone(&replay_target) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+
+    assert!(result.found);
+    assert_eq!(result.last_seq, 1, "head is still seq 1");
+    assert_eq!(result.replayed_count, 0);
+    assert_eq!(result.replay_gap, None);
+    assert!(
+        replay_target.captured.lock().unwrap().is_empty(),
+        "nothing should have flushed to the new notifier",
+    );
 }

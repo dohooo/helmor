@@ -1080,6 +1080,10 @@ fn reattach_remote_agent_session_stream_inner(
 
     let attach_result = runtime.agent_attach(crate::remote::AgentAttachParams {
         request_id: request_id.clone(),
+        // Phase 24q-1: cold attach for now (`None`). Phase 24q-2
+        // threads the desktop's locally-known `last_event_seq`
+        // through here so a reconnect replays only what was missed.
+        since_seq: None,
     })?;
 
     if !attach_result.found {
@@ -1144,7 +1148,10 @@ fn attach_remote_agent_session_inner(
         bail!("agent.attach is only available on registered remote runtimes (got `{name}`)");
     }
     let runtime = registry.lookup(Some(&name))?;
-    let result = runtime.agent_attach(crate::remote::AgentAttachParams { request_id })?;
+    let result = runtime.agent_attach(crate::remote::AgentAttachParams {
+        request_id,
+        since_seq: None,
+    })?;
     Ok(result.found)
 }
 
@@ -2300,6 +2307,7 @@ mod tests {
             self.agent_attach_calls.lock().unwrap().push(params);
             Ok(crate::remote::AgentAttachResult {
                 found: *self.agent_attach_found.lock().unwrap(),
+                ..Default::default()
             })
         }
         fn subscribe_agent_events(
