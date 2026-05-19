@@ -314,6 +314,10 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 if (typeof HTMLCanvasElement !== "undefined") {
 	Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 		configurable: true,
+		// `src/lib/css-color.ts` resolves CSS values via canvas (gradient
+		// sentinel + getImageData). jsdom doesn't ship a canvas backend, so we
+		// stub the methods it touches with shapes that exercise the same code
+		// paths without crashing.
 		value: vi.fn(() => ({
 			measureText: (text: string) => ({
 				width: text.length * 8,
@@ -334,6 +338,14 @@ if (typeof HTMLCanvasElement !== "undefined") {
 			lineTo: () => {},
 			stroke: () => {},
 			fillText: () => {},
+			createLinearGradient: () => ({
+				addColorStop: () => {},
+			}),
+			getImageData: () => ({
+				data: new Uint8ClampedArray([0, 0, 0, 255]),
+			}),
+			fillStyle: "",
+			globalCompositeOperation: "source-over",
 			font: "",
 			textBaseline: "alphabetic",
 		})),
