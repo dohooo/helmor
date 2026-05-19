@@ -47,6 +47,8 @@ import {
 } from "@/features/shortcuts/use-app-shortcuts";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
+import { useWorkspaceSearchPanel } from "@/features/workspace-search/use-workspace-search-panel";
+import { WorkspaceSearchPanel } from "@/features/workspace-search/workspace-search-panel";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
@@ -731,6 +733,11 @@ function AppShell({
 		runtimeName: selectedWorkspaceDetail?.runtimeName ?? null,
 	});
 
+	// Phase 24h: workspace-wide search panel (Cmd+Shift+S). State
+	// lives here so the global shortcut handler can open it; the
+	// panel component itself owns Esc / backdrop / button close.
+	const workspaceSearchPanel = useWorkspaceSearchPanel();
+
 	const { state: editorSessionState, actions: editorSessionActions } =
 		useEditorSessionController({
 			pushToast: pushWorkspaceToast,
@@ -1150,6 +1157,11 @@ function AppShell({
 			{
 				id: "workspace.filterSidebar" as const,
 				callback: () => publishShellEvent({ type: "open-sidebar-filter" }),
+			},
+			{
+				id: "workspace.search" as const,
+				callback: () => workspaceSearchPanel.open(),
+				enabled: Boolean(workspaceRootPath),
 			},
 			{
 				id: "workspace.previous" as const,
@@ -1797,6 +1809,16 @@ function AppShell({
 							onCommitIndex={(index) => {
 								quickSwitch.selectIndex(index);
 								quickSwitch.commit();
+							}}
+						/>
+						<WorkspaceSearchPanel
+							isOpen={workspaceSearchPanel.isOpen}
+							onClose={workspaceSearchPanel.close}
+							workspaceDir={workspaceRootPath}
+							workspaceId={selectedWorkspaceId}
+							runtimeName={selectedWorkspaceDetail?.runtimeName ?? null}
+							onOpenResult={(relativePath, lineNumber) => {
+								handleOpenFileReference(relativePath, lineNumber);
 							}}
 						/>
 						{closeConfirmDialog}
