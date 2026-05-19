@@ -271,6 +271,104 @@ fn resolve_stream_working_directory(
     resolve_working_directory(request.working_directory.as_deref())
 }
 
+/// Reattach to an in-flight remote turn + stream its events into
+/// the chat. Mirrors `send_agent_message_stream` except no new
+/// prompt fires — the daemon is already running the turn, and
+/// this command just subscribes + pumps events through the same
+/// pipeline + `Channel<AgentStreamEvent>` the regular send uses.
+///
+/// Phase 24i shipped the raw-events surface (dev panel event log);
+/// phase 24l wires the same primitive into the chat UI so a
+/// reattached turn renders as if the desktop had originated it.
+#[tauri::command]
+pub async fn reattach_agent_message_stream(
+    app: AppHandle,
+    sidecar: tauri::State<'_, std::sync::Arc<crate::sidecar::ManagedSidecar>>,
+    request: AgentReattachRequest,
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<AgentReattachResponse> {
+    let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
+    let transport = self::streaming::transports::resolve_transport(
+        &app,
+        sidecar.inner().clone(),
+        Some(&request.helmor_session_id),
+    );
+    if transport.kind() != self::streaming::transports::TransportKind::Remote {
+        return Err(anyhow::anyhow!(
+            "reattach is only supported on remote-bound workspaces \
+             (helmor session `{}` resolves to local)",
+            request.helmor_session_id
+        )
+        .into());
+    }
+
+    // We compute a fallback model name from the request because
+    // the daemon may not have emitted `system.init` yet — the
+    // accumulator needs SOMETHING to fall back on for the
+    // resolved-model field on terminal envelopes. The frontend
+    // hook supplies the chat's last-known model.
+    let fallback_resolved_model = request
+        .fallback_resolved_model
+        .clone()
+        .unwrap_or_else(|| request.model_id.clone());
+
+    self::streaming::reattach::stream_reattach_via_sidecar(
+        self::streaming::reattach::ReattachStreamInput {
+            app,
+            on_event,
+            transport,
+            request_id: request.request_id,
+            helmor_session_id: request.helmor_session_id,
+            workspace_id: request.workspace_id,
+            provider: request.provider,
+            model_id: request.model_id,
+            fallback_resolved_model,
+            working_directory,
+        },
+    );
+
+    Ok(AgentReattachResponse { accepted: true })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReattachRequest {
+    /// Daemon's per-session request id (the same id surfaced by
+    /// `agent.list`). The reattach subscription filters on it.
+    pub request_id: String,
+    /// Helmor session row id. Required so the per-session lock
+    /// + busy badge fire correctly for the reattached turn.
+    pub helmor_session_id: String,
+    /// Workspace id the session belongs to. Used by the active-
+    /// streams handle to drive the workspace's "busy" indicator.
+    /// Optional because anonymous sessions exist in some test
+    /// flows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Provider name (claude / codex / cursor). Mirrors the
+    /// regular send's `request.provider`.
+    pub provider: String,
+    pub model_id: String,
+    /// CWD reported on terminal envelopes. Mirrors the regular
+    /// send's working_directory resolution.
+    pub working_directory: Option<String>,
+    /// Optional initial value for the accumulator's
+    /// resolved-model field. The chat passes whatever it last
+    /// rendered; if absent we fall back to `model_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_resolved_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReattachResponse {
+    /// Always `true` on Ok return — the actual event flow
+    /// happens via the supplied `Channel`, so this response is
+    /// just the IPC ack. A failed resolve / non-remote workspace
+    /// surfaces as the command's Err, not as `accepted=false`.
+    pub accepted: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStopRequest {

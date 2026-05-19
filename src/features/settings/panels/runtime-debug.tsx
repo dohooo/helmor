@@ -69,7 +69,10 @@ import {
 	SettingsNotice,
 	SettingsRow,
 } from "../components/settings-row";
-import { useReattachAgentStream } from "./use-reattach-agent-stream";
+import {
+	useChatReattachStream,
+	useReattachAgentStream,
+} from "./use-reattach-agent-stream";
 
 /// Dev-only debug surface for the remote-runner spike (#453).
 ///
@@ -1878,6 +1881,13 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 	// subscription lifecycle (attach + subscribe + auto-release
 	// on unmount) and surfaces events through `stream.events`.
 	const stream = useReattachAgentStream();
+	// Phase 24l: a parallel chat-cooked stream that runs the
+	// daemon's events through the desktop's MessagePipeline +
+	// emits the same AgentStreamEvent envelope the chat's
+	// useStreaming hook consumes. The panel renders the
+	// trailing Update messages as a chat-style preview so the
+	// operator sees actual assistant text, not raw JSON.
+	const chatStream = useChatReattachStream();
 
 	const handleReattachClick = async (requestId: string) => {
 		// Mirror the prior `attachMutation` UX: a notice on the
@@ -1886,6 +1896,25 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 		await stream.start(runtimeName, requestId);
 		setBusyId(null);
 		void sessionsQuery.refetch();
+	};
+
+	const handleOpenChatPreview = async (session: RemoteAgentSession) => {
+		if (!session.helmorSessionId) {
+			setNotice({
+				tone: "info",
+				text: "This session has no Helmor session id — chat preview needs one to route messages.",
+			});
+			return;
+		}
+		setBusyId(session.requestId);
+		await chatStream.start({
+			requestId: session.requestId,
+			helmorSessionId: session.helmorSessionId,
+			provider: session.provider ?? "claude",
+			modelId: session.provider ?? "claude",
+			workingDirectory: session.workspaceDir ?? undefined,
+		});
+		setBusyId(null);
 	};
 
 	useEffect(() => {
@@ -1992,6 +2021,8 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 									const isStreaming =
 										stream.phase === "streaming" &&
 										stream.currentRequestId === session.requestId;
+									const isChatPreviewActive =
+										chatStream.currentRequestId === session.requestId;
 									const isBusyRow =
 										(busyId === session.requestId || abortMutation.isPending) &&
 										!isStreaming;
@@ -2001,12 +2032,20 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 											session={session}
 											busy={isBusyRow}
 											streaming={isStreaming}
+											chatPreviewActive={isChatPreviewActive}
 											onAbort={() => abortMutation.mutate(session.requestId)}
 											onAttach={() => {
 												if (isStreaming) {
 													void stream.stop();
 												} else {
 													void handleReattachClick(session.requestId);
+												}
+											}}
+											onChatPreview={() => {
+												if (isChatPreviewActive) {
+													void chatStream.stop();
+												} else {
+													void handleOpenChatPreview(session);
 												}
 											}}
 										/>
@@ -2023,11 +2062,162 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 								onClear={stream.clear}
 							/>
 						)}
+
+						{(chatStream.phase === "streaming" ||
+							chatStream.messages !== null ||
+							chatStream.partial !== null ||
+							chatStream.terminalLabel !== null) && (
+							<ChatReattachPreview
+								requestId={chatStream.currentRequestId}
+								phase={chatStream.phase}
+								messages={chatStream.messages}
+								partial={chatStream.partial}
+								terminalLabel={chatStream.terminalLabel}
+								error={chatStream.error}
+								onClear={chatStream.clear}
+							/>
+						)}
 					</>
 				)}
 			</div>
 		</section>
 	);
+}
+
+/// Render the live chat-style preview backed by
+/// `useChatReattachStream`. The trailing Update event carries
+/// `messages` — we display the last few text snippets so the
+/// operator sees what the assistant is producing in real time.
+function ChatReattachPreview({
+	requestId,
+	phase,
+	messages,
+	partial,
+	terminalLabel,
+	error,
+	onClear,
+}: {
+	requestId: string | null;
+	phase: "idle" | "attaching" | "streaming" | "notFound" | "error";
+	messages: ReturnType<typeof useChatReattachStream>["messages"];
+	partial: ReturnType<typeof useChatReattachStream>["partial"];
+	terminalLabel: string | null;
+	error: string | null;
+	onClear: () => void;
+}) {
+	// Project ThreadMessageLike[] down to a tiny shape the panel
+	// can render without pulling in the full chat tree.
+	const rows = useMemo(() => {
+		const collected: Array<{
+			id: string;
+			role: string;
+			text: string;
+		}> = [];
+		const list = messages ?? [];
+		for (const message of list) {
+			const text = extractMessageText(message);
+			if (text.length === 0) continue;
+			collected.push({
+				id: message.id ?? `${collected.length}`,
+				role: typeof message.role === "string" ? message.role : "assistant",
+				text,
+			});
+		}
+		if (partial) {
+			const text = extractMessageText(partial);
+			if (text.length > 0) {
+				collected.push({
+					id: partial.id ?? "partial",
+					role: typeof partial.role === "string" ? partial.role : "assistant",
+					text: `${text} ▌`,
+				});
+			}
+		}
+		return collected;
+	}, [messages, partial]);
+
+	const headerLabel =
+		phase === "streaming"
+			? `Chat preview — ${requestId ?? ""}`
+			: terminalLabel
+				? `Chat preview — ${terminalLabel}`
+				: "Chat preview";
+
+	return (
+		<div
+			className="flex flex-col gap-2 rounded-md border border-border/30 bg-background/40 p-3"
+			data-testid="reattach-chat-preview"
+		>
+			<div className="flex items-center justify-between">
+				<span className="text-[11px] font-medium text-foreground">
+					{headerLabel}
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={rows.length === 0 && terminalLabel === null}
+					onClick={onClear}
+					aria-label="Clear chat preview"
+				>
+					<X className="mr-1.5 size-3.5" />
+					Clear
+				</Button>
+			</div>
+			{error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
+			{rows.length === 0 ? (
+				<span className="text-[11px] text-muted-foreground">
+					Waiting for the daemon to emit the next message…
+				</span>
+			) : (
+				<ul
+					className="flex max-h-[40vh] flex-col gap-1.5 overflow-y-auto text-[12px]"
+					data-testid="reattach-chat-preview-list"
+				>
+					{rows.map((row) => (
+						<li
+							key={row.id}
+							className="flex flex-col gap-0.5"
+							data-testid={`reattach-chat-preview-row-${row.id}`}
+						>
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								{row.role}
+							</span>
+							<span className="whitespace-pre-wrap break-words">
+								{row.text}
+							</span>
+						</li>
+					))}
+				</ul>
+			)}
+		</div>
+	);
+}
+
+/// Best-effort plain-text extractor for a ThreadMessageLike. The
+/// pipeline's full content tree includes tool calls, code blocks,
+/// thinking blocks, etc.; for the panel preview we just pull the
+/// outermost text so the operator can confirm the assistant is
+/// actually generating something. A future slice can swap this
+/// for the chat's real renderer if the preview needs to match.
+function extractMessageText(
+	message: import("@/lib/api").ThreadMessageLike,
+): string {
+	if (!message?.content || !Array.isArray(message.content)) return "";
+	const parts: string[] = [];
+	for (const part of message.content) {
+		if (!part || typeof part !== "object") continue;
+		const obj = part as Record<string, unknown>;
+		if (typeof obj.text === "string") {
+			parts.push(obj.text);
+			continue;
+		}
+		// Nested basic-part shape: { type: "basic", basic: { text: ... } }
+		if (obj.type === "basic" && obj.basic && typeof obj.basic === "object") {
+			const basic = obj.basic as Record<string, unknown>;
+			if (typeof basic.text === "string") parts.push(basic.text);
+		}
+	}
+	return parts.join("\n").trim();
 }
 
 function ReattachEventLog({
@@ -2125,19 +2315,29 @@ function RemoteAgentSessionRow({
 	session,
 	busy,
 	streaming,
+	chatPreviewActive,
 	onAbort,
 	onAttach,
+	onChatPreview,
 }: {
 	session: RemoteAgentSession;
 	busy: boolean;
 	/**
 	 * `true` when this row's stream is currently the one feeding
-	 * the live event log. Re-labels the attach button to "Stop"
+	 * the raw event log. Re-labels the attach button to "Stop"
 	 * so the user can detach without leaving the panel.
 	 */
 	streaming: boolean;
+	/**
+	 * `true` when this row's session is being rendered as a
+	 * chat-style preview (phase 24l). Re-labels the chat-preview
+	 * button to "Stop" so the user can drop the preview without
+	 * waiting for the daemon's terminal event.
+	 */
+	chatPreviewActive: boolean;
 	onAbort: () => void;
 	onAttach: () => void;
+	onChatPreview: () => void;
 }) {
 	const startedAgoMs = Date.now() - session.startedAtMs;
 	const sinceLastMs = Date.now() - session.lastEventMs;
@@ -2146,6 +2346,7 @@ function RemoteAgentSessionRow({
 			className="flex items-center justify-between gap-2 rounded border border-border/30 bg-card/40 px-2 py-1.5"
 			data-testid={`remote-agent-session-${session.requestId}`}
 			data-streaming={streaming ? "true" : undefined}
+			data-chat-preview={chatPreviewActive ? "true" : undefined}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<span className="truncate font-mono text-[11px]">
@@ -2177,6 +2378,34 @@ function RemoteAgentSessionRow({
 					<>
 						<Plug className="mr-1.5 size-3.5" />
 						Reattach
+					</>
+				)}
+			</Button>
+			<Button
+				variant={chatPreviewActive ? "default" : "outline"}
+				size="sm"
+				disabled={busy || !session.helmorSessionId}
+				onClick={onChatPreview}
+				aria-label={
+					chatPreviewActive
+						? `Stop chat preview for ${session.requestId}`
+						: `Open chat preview for ${session.requestId}`
+				}
+				title={
+					session.helmorSessionId
+						? undefined
+						: "Chat preview needs a Helmor session id; this session has none yet."
+				}
+			>
+				{chatPreviewActive ? (
+					<>
+						<X className="mr-1.5 size-3.5" />
+						Stop preview
+					</>
+				) : (
+					<>
+						<Plug2 className="mr-1.5 size-3.5" />
+						Chat preview
 					</>
 				)}
 			</Button>

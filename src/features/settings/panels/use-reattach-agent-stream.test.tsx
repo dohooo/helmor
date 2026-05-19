@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+	AgentReattachResponse,
+	AgentStreamEvent,
 	ReattachAgentStreamResult,
 	ReattachedAgentEvent,
 	ReleaseAgentStreamResult,
@@ -9,6 +11,7 @@ import type {
 const apiMocks = vi.hoisted(() => ({
 	reattachRemoteAgentSessionStream: vi.fn(),
 	releaseRemoteAgentStream: vi.fn(),
+	startAgentReattachStream: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -17,10 +20,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		reattachRemoteAgentSessionStream: apiMocks.reattachRemoteAgentSessionStream,
 		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
+		startAgentReattachStream: apiMocks.startAgentReattachStream,
 	};
 });
 
-import { useReattachAgentStream } from "./use-reattach-agent-stream";
+import {
+	useChatReattachStream,
+	useReattachAgentStream,
+} from "./use-reattach-agent-stream";
 
 describe("useReattachAgentStream", () => {
 	beforeEach(() => {
@@ -198,5 +205,299 @@ describe("useReattachAgentStream", () => {
 		const { unmount } = renderHook(() => useReattachAgentStream());
 		unmount();
 		expect(apiMocks.releaseRemoteAgentStream).not.toHaveBeenCalled();
+	});
+});
+
+describe("useChatReattachStream", () => {
+	const baseArgs = {
+		requestId: "req-chat-1",
+		helmorSessionId: "sess-1",
+		workspaceId: "ws-1",
+		provider: "claude",
+		modelId: "claude-opus-4-7",
+		workingDirectory: "/tmp/cwd",
+		fallbackResolvedModel: "claude-opus-4-7",
+	};
+
+	beforeEach(() => {
+		apiMocks.startAgentReattachStream.mockReset();
+		// Default: resolve immediately, no events delivered.
+		apiMocks.startAgentReattachStream.mockResolvedValue({
+			accepted: true,
+		} satisfies AgentReattachResponse);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("starts in idle phase with no messages or partial", () => {
+		const { result } = renderHook(() => useChatReattachStream());
+		expect(result.current.phase).toBe("idle");
+		expect(result.current.messages).toBeNull();
+		expect(result.current.partial).toBeNull();
+		expect(result.current.terminalLabel).toBeNull();
+		expect(result.current.currentRequestId).toBeNull();
+		expect(result.current.error).toBeNull();
+	});
+
+	it("transitions to streaming on a successful start", async () => {
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		expect(result.current.phase).toBe("streaming");
+		expect(result.current.currentRequestId).toBe("req-chat-1");
+		expect(apiMocks.startAgentReattachStream).toHaveBeenCalledWith(
+			baseArgs,
+			expect.any(Function),
+		);
+	});
+
+	it("populates messages on an `update` event", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		expect(onEvent).not.toBeNull();
+		act(() => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "text", id: "t1", text: "hello" }],
+					},
+				],
+			});
+		});
+		expect(result.current.messages).toHaveLength(1);
+		expect(result.current.partial).toBeNull();
+	});
+
+	it("populates partial on `streamingPartial`, clears on next `update`", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		act(() => {
+			onEvent?.({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", id: "t1", text: "stream..." }],
+				},
+			});
+		});
+		expect(result.current.partial).not.toBeNull();
+		act(() => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "text", id: "t1", text: "stream done" }],
+					},
+				],
+			});
+		});
+		expect(result.current.partial).toBeNull();
+		expect(result.current.messages).toHaveLength(1);
+	});
+
+	it("sets terminalLabel + returns to idle on `done`", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		act(() => {
+			onEvent?.({
+				kind: "done",
+				provider: "claude",
+				modelId: "claude-opus-4-7",
+				resolvedModel: "claude-opus-4-7",
+				sessionId: null,
+				workingDirectory: "/tmp/cwd",
+				persisted: false,
+			});
+		});
+		expect(result.current.terminalLabel).toBe("Turn finished.");
+		expect(result.current.phase).toBe("idle");
+		expect(result.current.currentRequestId).toBeNull();
+	});
+
+	it("includes the reason in terminalLabel on `aborted`", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		act(() => {
+			onEvent?.({
+				kind: "aborted",
+				provider: "claude",
+				modelId: "claude-opus-4-7",
+				resolvedModel: "claude-opus-4-7",
+				sessionId: null,
+				workingDirectory: "/tmp/cwd",
+				persisted: false,
+				reason: "user pressed stop",
+			});
+		});
+		expect(result.current.terminalLabel).toBe("Aborted: user pressed stop.");
+		expect(result.current.phase).toBe("idle");
+	});
+
+	it("sets error + phase=error on `error` event", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		act(() => {
+			onEvent?.({
+				kind: "error",
+				message: "daemon crashed",
+				persisted: false,
+				internal: false,
+			});
+		});
+		expect(result.current.error).toBe("daemon crashed");
+		expect(result.current.terminalLabel).toBe("Error: daemon crashed");
+		expect(result.current.phase).toBe("error");
+		expect(result.current.currentRequestId).toBeNull();
+	});
+
+	it("surfaces error phase when the reattach RPC throws", async () => {
+		apiMocks.startAgentReattachStream.mockRejectedValueOnce(
+			new Error("transport closed"),
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		expect(result.current.phase).toBe("error");
+		expect(result.current.error).toMatch(/transport closed/);
+		expect(result.current.currentRequestId).toBeNull();
+	});
+
+	it("clear() empties messages/partial/terminalLabel/error", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		act(() => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "text", id: "t1", text: "hi" }],
+					},
+				],
+			});
+			onEvent?.({
+				kind: "streamingPartial",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", id: "t1", text: "..." }],
+				},
+			});
+		});
+		expect(result.current.messages).toHaveLength(1);
+		expect(result.current.partial).not.toBeNull();
+		act(() => {
+			result.current.clear();
+		});
+		expect(result.current.messages).toBeNull();
+		expect(result.current.partial).toBeNull();
+		expect(result.current.terminalLabel).toBeNull();
+		expect(result.current.error).toBeNull();
+	});
+
+	it("stop() resets phase to idle and clears currentRequestId", async () => {
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		expect(result.current.phase).toBe("streaming");
+		await act(async () => {
+			await result.current.stop();
+		});
+		expect(result.current.phase).toBe("idle");
+		expect(result.current.currentRequestId).toBeNull();
+	});
+
+	it("ignores events delivered after stop() (request id no longer matches)", async () => {
+		let onEvent: ((event: AgentStreamEvent) => void) | null = null;
+		apiMocks.startAgentReattachStream.mockImplementation(
+			async (_args: typeof baseArgs, cb: (event: AgentStreamEvent) => void) => {
+				onEvent = cb;
+				return { accepted: true };
+			},
+		);
+		const { result } = renderHook(() => useChatReattachStream());
+		await act(async () => {
+			await result.current.start(baseArgs);
+		});
+		await act(async () => {
+			await result.current.stop();
+		});
+		// A late event from the abandoned subscription must not
+		// resurrect state on an idle hook.
+		act(() => {
+			onEvent?.({
+				kind: "update",
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "text", id: "t1", text: "late" }],
+					},
+				],
+			});
+		});
+		expect(result.current.messages).toBeNull();
+		expect(result.current.phase).toBe("idle");
 	});
 });

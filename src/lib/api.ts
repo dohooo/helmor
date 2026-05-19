@@ -3657,6 +3657,54 @@ export async function startAgentMessageStream(
 	await invoke("send_agent_message_stream", { request, onEvent });
 }
 
+/**
+ * Reattach to an in-flight remote agent turn and pipe its events
+ * through the same `AgentStreamEvent` channel a fresh send uses.
+ * Phase 24l: chat UI reuses `useStreaming`'s existing accumulator
+ * by calling this instead of `startAgentMessageStream` when the
+ * desktop knows the session is mid-stream on the remote.
+ *
+ * No new prompt fires — the daemon already accepted one when the
+ * original send went out. The desktop just subscribes + renders
+ * everything the daemon emits going forward.
+ */
+export type AgentReattachRequest = {
+	/** Daemon's per-session request id from `agent.list`. */
+	requestId: string;
+	/** Helmor session row id. */
+	helmorSessionId: string;
+	/** Workspace id. Optional for anonymous-session test flows. */
+	workspaceId?: string;
+	provider: string;
+	modelId: string;
+	/** CWD echoed on terminal envelopes. */
+	workingDirectory?: string;
+	/**
+	 * Initial value for the accumulator's resolved-model field
+	 * — the chat passes its last-known model so the
+	 * `Done` / `Aborted` envelopes look familiar before
+	 * `system.init` lands.
+	 */
+	fallbackResolvedModel?: string;
+};
+
+export type AgentReattachResponse = {
+	accepted: boolean;
+};
+
+export async function startAgentReattachStream(
+	request: AgentReattachRequest,
+	callback: (event: AgentStreamEvent) => void,
+): Promise<AgentReattachResponse> {
+	const { Channel } = await import("@tauri-apps/api/core");
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	return invoke<AgentReattachResponse>("reattach_agent_message_stream", {
+		request,
+		onEvent,
+	});
+}
+
 export async function stopAgentStream(
 	sessionId: string,
 	provider?: string,
