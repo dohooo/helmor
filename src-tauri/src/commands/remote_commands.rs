@@ -29,7 +29,8 @@ use crate::remote::{
         WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
         WorkspaceFileTreeResult, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
         WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-        WorkspaceReadFileParams, WorkspaceStatFileParams, WorkspaceStatusResult,
+        WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
+        WorkspaceStatFileParams, WorkspaceStatusResult,
     },
     persistence, CommandTransport, NotificationSubscription, OwnedTerminals, RemoteRuntime,
     RemoteSshRuntime, RemoteTransport, RpcClient, RuntimeConnectionConfig, RuntimeHealth,
@@ -414,6 +415,59 @@ fn mutate_workspace_file_inner(
         workspace_dir,
         relative_path,
         action,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn search_workspace(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_dir: String,
+    query: String,
+    max_results: Option<u32>,
+    case_insensitive: Option<bool>,
+    fixed_string: Option<bool>,
+    workspace_id: Option<String>,
+    runtime_name: Option<String>,
+) -> CmdResult<WorkspaceSearchResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        search_workspace_inner(
+            &registry,
+            &bindings,
+            workspace_dir,
+            query,
+            max_results,
+            case_insensitive.unwrap_or(false),
+            fixed_string.unwrap_or(false),
+            workspace_id.as_deref(),
+            runtime_name.as_deref(),
+        )
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_workspace_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_dir: String,
+    query: String,
+    max_results: Option<u32>,
+    case_insensitive: bool,
+    fixed_string: bool,
+    workspace_id: Option<&str>,
+    runtime_name: Option<&str>,
+) -> Result<WorkspaceSearchResult> {
+    let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
+    resolved.workspace_search(WorkspaceSearchParams {
+        workspace_dir,
+        query,
+        max_results,
+        case_insensitive,
+        fixed_string,
     })
 }
 
@@ -1677,6 +1731,11 @@ mod tests {
         read_at_ref_calls: Mutex<Vec<WorkspaceReadFileAtRefParams>>,
         stat_calls: Mutex<Vec<WorkspaceStatFileParams>>,
         mutate_calls: Mutex<Vec<WorkspaceMutateFileParams>>,
+        search_calls: Mutex<Vec<WorkspaceSearchParams>>,
+        /// Override the WorkspaceSearchResult returned by the stub so
+        /// tests can assert both the empty-result and full-result
+        /// branches of the search command.
+        search_result: Mutex<Option<WorkspaceSearchResult>>,
         agent_list_calls: Mutex<u32>,
         agent_abort_calls: Mutex<Vec<crate::remote::AgentAbortParams>>,
         agent_attach_calls: Mutex<Vec<crate::remote::AgentAttachParams>>,
@@ -1827,6 +1886,16 @@ mod tests {
                 matches!(params.action, WorkspaceMutateFileAction::Write { .. }).then_some(777_i64);
             self.mutate_calls.lock().unwrap().push(params);
             Ok(WorkspaceMutateFileResult { mtime_ms })
+        }
+        fn workspace_search(&self, params: WorkspaceSearchParams) -> Result<WorkspaceSearchResult> {
+            let response = self
+                .search_result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_default();
+            self.search_calls.lock().unwrap().push(params);
+            Ok(response)
         }
         fn agent_list(
             &self,
@@ -2176,6 +2245,120 @@ mod tests {
         assert!(recorded
             .iter()
             .any(|p| matches!(p.action, WorkspaceMutateFileAction::Unstage)));
+    }
+
+    // ── workspace.search (phase 24e) ──────────────────────────────
+
+    #[test]
+    fn search_workspace_routes_through_workspace_binding_by_default() {
+        // Default path: no explicit runtime_name + a workspace_id
+        // bound to a registered remote → the search must go to the
+        // bound runtime, not the local fallback.
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        search_workspace_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "needle".into(),
+            None,
+            false,
+            false,
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+
+        let calls = stub.search_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].workspace_dir, "/ws");
+        assert_eq!(calls[0].query, "needle");
+    }
+
+    #[test]
+    fn search_workspace_explicit_runtime_name_wins_over_binding() {
+        // Same precedence rule as every other inspector op: an
+        // explicit `runtime_name` overrides the workspace binding.
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        search_workspace_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "q".into(),
+            None,
+            false,
+            false,
+            Some("ws-bound"),
+            Some("stub.box"),
+        )
+        .unwrap();
+
+        assert_eq!(stub.search_calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_workspace_forwards_flags_to_runtime() {
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+
+        search_workspace_inner(
+            &registry,
+            &bindings,
+            "/srv/repo".into(),
+            "TODO".into(),
+            Some(42),
+            true,
+            true,
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+
+        let calls = stub.search_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let p = &calls[0];
+        assert_eq!(p.workspace_dir, "/srv/repo");
+        assert_eq!(p.query, "TODO");
+        assert_eq!(p.max_results, Some(42));
+        assert!(p.case_insensitive);
+        assert!(p.fixed_string);
+    }
+
+    #[test]
+    fn search_workspace_surfaces_runtime_result_to_caller() {
+        // Seed a non-empty response so we verify the matches +
+        // truncated flag flow through verbatim.
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = bindings_with("ws-bound", "stub.box");
+        *stub.search_result.lock().unwrap() = Some(WorkspaceSearchResult {
+            matches: vec![crate::remote::methods::WorkspaceSearchMatch {
+                relative_path: "src/main.rs".into(),
+                line_number: 17,
+                line: "fn main()".into(),
+            }],
+            truncated: true,
+        });
+
+        let result = search_workspace_inner(
+            &registry,
+            &bindings,
+            "/ws".into(),
+            "main".into(),
+            None,
+            false,
+            false,
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+
+        assert!(result.truncated);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].relative_path, "src/main.rs");
+        assert_eq!(result.matches[0].line_number, 17);
     }
 
     // ── remote agent reattach (phase 24d) ─────────────────────────

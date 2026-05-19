@@ -233,6 +233,13 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("workspace.mutateFile is not yet implemented on this runtime")
     }
 
+    fn workspace_search(
+        &self,
+        _params: super::methods::WorkspaceSearchParams,
+    ) -> Result<super::methods::WorkspaceSearchResult> {
+        anyhow::bail!("workspace.search is not yet implemented on this runtime")
+    }
+
     // ── agent.* ops (phase 23a — surface only) ──────────────────
     //
     // Phase 23a defines the wire shapes; the trait defaults bail.
@@ -510,6 +517,32 @@ impl RemoteRuntime for LocalRuntime {
                 Ok(super::methods::WorkspaceMutateFileResult { mtime_ms: None })
             }
         }
+    }
+
+    fn workspace_search(
+        &self,
+        params: super::methods::WorkspaceSearchParams,
+    ) -> Result<super::methods::WorkspaceSearchResult> {
+        let workspace_dir = PathBuf::from(&params.workspace_dir);
+        let results = crate::workspace::files::search_workspace_inner(
+            &workspace_dir,
+            &params.query,
+            params.max_results,
+            params.case_insensitive,
+            params.fixed_string,
+        )?;
+        Ok(super::methods::WorkspaceSearchResult {
+            matches: results
+                .matches
+                .into_iter()
+                .map(|hit| super::methods::WorkspaceSearchMatch {
+                    relative_path: hit.relative_path,
+                    line_number: hit.line_number,
+                    line: hit.line,
+                })
+                .collect(),
+            truncated: results.truncated,
+        })
     }
 }
 

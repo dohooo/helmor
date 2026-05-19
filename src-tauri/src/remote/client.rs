@@ -815,6 +815,14 @@ impl RemoteRuntime for RemoteSshRuntime {
             .call::<super::methods::WorkspaceMutateFileMethod>(params)
     }
 
+    fn workspace_search(
+        &self,
+        params: super::methods::WorkspaceSearchParams,
+    ) -> Result<super::methods::WorkspaceSearchResult> {
+        self.client
+            .call::<super::methods::WorkspaceSearchMethod>(params)
+    }
+
     // ── agent.* delegation (phase 23a — wire-only) ───────────────
     //
     // Until phase 23b lands `RemoteAgentState` on the daemon, the

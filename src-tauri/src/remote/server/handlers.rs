@@ -19,7 +19,8 @@ use crate::remote::methods::{
     WorkspaceBranchInfoResult, WorkspaceChangesParams, WorkspaceChangesResult,
     WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
     WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-    WorkspaceReadFileParams, WorkspaceStatFileParams, WorkspaceStatusParams, WorkspaceStatusResult,
+    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStatFileParams,
+    WorkspaceStatusParams, WorkspaceStatusResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -248,6 +249,18 @@ pub(super) fn handle_workspace_mutate_file(
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("workspace.mutateFile failed: {err:#}"),
+        )
+    })
+}
+
+pub(super) fn handle_workspace_search(
+    ctx: &ServerContext,
+    params: WorkspaceSearchParams,
+) -> Result<WorkspaceSearchResult, JsonRpcError> {
+    ctx.runtime().workspace_search(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.search failed: {err:#}"),
         )
     })
 }

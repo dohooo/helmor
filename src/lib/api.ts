@@ -930,6 +930,58 @@ export async function setRuntimeAgentAuth(
 	});
 }
 
+// ── workspace search (phase 24e) ───────────────────────────────────
+
+/**
+ * One match returned by `workspace.search`. `lineNumber` is
+ * 1-indexed (git grep convention); `line` is the matched line's
+ * text trimmed of trailing newline but with leading whitespace
+ * preserved.
+ */
+export type WorkspaceSearchMatch = {
+	relativePath: string;
+	lineNumber: number;
+	line: string;
+};
+
+export type WorkspaceSearchResult = {
+	matches: WorkspaceSearchMatch[];
+	/** `true` when the server hit `maxResults` and stopped emitting. */
+	truncated: boolean;
+};
+
+/**
+ * Run a workspace-wide text search. Backed by `git grep` on the
+ * runtime's side (local or remote) so gitignore + binary-file
+ * skipping come for free. Honours the workspace's resolved runtime
+ * binding when `workspaceId` is supplied; `runtimeName` overrides
+ * if both are set.
+ *
+ * `query` is a regex unless `fixedString` is `true`. The server
+ * clamps `maxResults` to a hard cap so a runaway request can't
+ * exhaust memory; if `maxResults` is omitted the server picks a
+ * conservative default (200 today).
+ */
+export async function searchWorkspace(args: {
+	workspaceDir: string;
+	query: string;
+	maxResults?: number;
+	caseInsensitive?: boolean;
+	fixedString?: boolean;
+	workspaceId?: string;
+	runtimeName?: string;
+}): Promise<WorkspaceSearchResult> {
+	return invoke<WorkspaceSearchResult>("search_workspace", {
+		workspaceDir: args.workspaceDir,
+		query: args.query,
+		maxResults: args.maxResults ?? null,
+		caseInsensitive: args.caseInsensitive ?? false,
+		fixedString: args.fixedString ?? false,
+		workspaceId: args.workspaceId ?? null,
+		runtimeName: args.runtimeName ?? null,
+	});
+}
+
 // ── remote agent sessions (phase 24d — reattach UX) ────────────────
 
 /**

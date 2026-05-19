@@ -91,6 +91,11 @@ pub enum Method {
     /// the catalogue narrow and adds further actions without
     /// growing the surface area.
     WorkspaceMutateFile,
+    /// Workspace-wide search. Backed by `git grep` so gitignore +
+    /// binary-file skipping come for free; results are paths +
+    /// line numbers + match text the frontend's "Search files"
+    /// panel renders directly.
+    WorkspaceSearch,
     /// Forward an opaque `SidecarRequest` (sendMessage / abort /
     /// resolveUserInput / generateTitle / …) to the daemon's
     /// managed sidecar process. Events flow back as
@@ -139,6 +144,7 @@ impl Method {
             Self::WorkspaceReadFileAtRef => "workspace.readFileAtRef",
             Self::WorkspaceStatFile => "workspace.statFile",
             Self::WorkspaceMutateFile => "workspace.mutateFile",
+            Self::WorkspaceSearch => "workspace.search",
             Self::AgentSend => "agent.send",
             Self::AgentAbort => "agent.abort",
             Self::AgentList => "agent.list",
@@ -183,6 +189,7 @@ impl FromStr for Method {
             "workspace.readFileAtRef" => Ok(Self::WorkspaceReadFileAtRef),
             "workspace.statFile" => Ok(Self::WorkspaceStatFile),
             "workspace.mutateFile" => Ok(Self::WorkspaceMutateFile),
+            "workspace.search" => Ok(Self::WorkspaceSearch),
             "agent.send" => Ok(Self::AgentSend),
             "agent.abort" => Ok(Self::AgentAbort),
             "agent.list" => Ok(Self::AgentList),
@@ -717,6 +724,76 @@ impl RpcMethod for WorkspaceMutateFileMethod {
     type Result = WorkspaceMutateFileResult;
 }
 
+// ── workspace.search (phase 24e) ────────────────────────────────────
+//
+// `git grep` on the daemon side. Honors `.gitignore` for free,
+// surfaces binary-file skipping via `-I`, and stays within the
+// workspace's git boundary so the desktop's "Search Files" panel
+// can't accidentally probe out-of-tree paths.
+//
+// Workspaces that aren't git repos surface the underlying git
+// failure as `HANDLER_FAILED` rather than degrading silently — the
+// operator's expectation is "we're a git-aware tool" and a silent
+// no-result fallback would hide a setup mistake.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchParams {
+    /// Workspace root on the runtime's filesystem.
+    pub workspace_dir: String,
+    /// Search pattern. Passed verbatim to `git grep`. Empty
+    /// strings are rejected — git grep itself errors out on them,
+    /// but the handler bails early with a more legible message.
+    pub query: String,
+    /// Maximum number of matches to return. Server clamps to a
+    /// sensible upper bound (`MAX_SEARCH_RESULTS_HARD_CAP`) so a
+    /// runaway query can't OOM the daemon. `None` defaults to
+    /// `200`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<u32>,
+    /// `git grep -i`. Defaults to `false` (case-sensitive).
+    #[serde(default)]
+    pub case_insensitive: bool,
+    /// `git grep -F`. Treat `query` as a fixed string rather than
+    /// a regex. Defaults to `false` (regex).
+    #[serde(default)]
+    pub fixed_string: bool,
+}
+
+/// One match in a `WorkspaceSearchResult`. Mirrors the shape `git
+/// grep -n` emits, plus the workspace-relative path so the
+/// frontend can drive its "open file" affordance directly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchMatch {
+    /// Path relative to `workspace_dir`. Forward-slashes regardless
+    /// of OS (git emits POSIX paths verbatim).
+    pub relative_path: String,
+    /// 1-indexed line number — same convention `git grep -n` uses.
+    pub line_number: u32,
+    /// The matched line's text. Trimmed of trailing newline but
+    /// not of indentation; the frontend renders it monospaced and
+    /// users expect to see the leading whitespace.
+    pub line: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchResult {
+    pub matches: Vec<WorkspaceSearchMatch>,
+    /// `true` when the server stopped emitting matches at
+    /// `max_results`. The frontend uses this to render "+N more"
+    /// instead of pretending the cap was the total.
+    pub truncated: bool,
+}
+
+pub struct WorkspaceSearchMethod;
+impl RpcMethod for WorkspaceSearchMethod {
+    const NAME: &'static str = "workspace.search";
+    type Params = WorkspaceSearchParams;
+    type Result = WorkspaceSearchResult;
+}
+
 // ── agent.send / agent.abort / agent.list / agent.attach (phase 23a) ──
 //
 // `SidecarRequest` is the existing local-sidecar envelope (id + method
@@ -932,6 +1009,7 @@ mod tests {
             Method::WorkspaceReadFileAtRef,
             Method::WorkspaceStatFile,
             Method::WorkspaceMutateFile,
+            Method::WorkspaceSearch,
             Method::AgentSend,
             Method::AgentAbort,
             Method::AgentList,
@@ -1349,6 +1427,93 @@ mod tests {
         };
         let wire = serde_json::to_string(&after_write).unwrap();
         assert!(wire.contains("\"mtimeMs\":1700000000000"));
+    }
+
+    // ── workspace.search wire shapes (phase 24e) ──────────────────
+
+    #[test]
+    fn workspace_search_params_round_trip_with_camel_case_keys() {
+        let params = WorkspaceSearchParams {
+            workspace_dir: "/srv/repo".into(),
+            query: "TODO".into(),
+            max_results: Some(50),
+            case_insensitive: true,
+            fixed_string: false,
+        };
+        let wire = serde_json::to_string(&params).unwrap();
+        assert!(wire.contains("\"workspaceDir\""));
+        assert!(wire.contains("\"maxResults\":50"));
+        assert!(wire.contains("\"caseInsensitive\":true"));
+        assert!(!wire.contains('_'), "snake_case leaked: {wire}");
+        let restored: WorkspaceSearchParams = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.workspace_dir, "/srv/repo");
+        assert_eq!(restored.query, "TODO");
+        assert_eq!(restored.max_results, Some(50));
+        assert!(restored.case_insensitive);
+        assert!(!restored.fixed_string);
+    }
+
+    #[test]
+    fn workspace_search_params_default_optional_fields() {
+        // A client that omits `maxResults` / `caseInsensitive` /
+        // `fixedString` should decode cleanly with sensible defaults.
+        // Mirrors the JSON the frontend ships from a default-state
+        // search form (just `workspaceDir` + `query`).
+        let raw = r#"{ "workspaceDir": "/r", "query": "foo" }"#;
+        let params: WorkspaceSearchParams = serde_json::from_str(raw).unwrap();
+        assert!(params.max_results.is_none());
+        assert!(!params.case_insensitive);
+        assert!(!params.fixed_string);
+    }
+
+    #[test]
+    fn workspace_search_result_serialises_matches_in_order() {
+        let result = WorkspaceSearchResult {
+            matches: vec![
+                WorkspaceSearchMatch {
+                    relative_path: "src/main.rs".into(),
+                    line_number: 17,
+                    line: "fn main() {".into(),
+                },
+                WorkspaceSearchMatch {
+                    relative_path: "src/lib.rs".into(),
+                    line_number: 4,
+                    line: "use anyhow::Result;".into(),
+                },
+            ],
+            truncated: true,
+        };
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(wire.contains("\"relativePath\":\"src/main.rs\""));
+        assert!(wire.contains("\"lineNumber\":17"));
+        // truncated:true serialises as a key the frontend can branch on.
+        assert!(wire.contains("\"truncated\":true"));
+        // Round-trip preserves order: client-side renders matches in
+        // discovery order; reordering would shuffle the search panel
+        // unpredictably.
+        let restored: WorkspaceSearchResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.matches.len(), 2);
+        assert_eq!(restored.matches[0].relative_path, "src/main.rs");
+        assert_eq!(restored.matches[1].relative_path, "src/lib.rs");
+        assert!(restored.truncated);
+    }
+
+    #[test]
+    fn workspace_search_result_empty_default_round_trips() {
+        let bare = WorkspaceSearchResult::default();
+        let wire = serde_json::to_string(&bare).unwrap();
+        let restored: WorkspaceSearchResult = serde_json::from_str(&wire).unwrap();
+        assert!(restored.matches.is_empty());
+        assert!(!restored.truncated);
+    }
+
+    #[test]
+    fn workspace_search_method_constant_matches_the_catalogue() {
+        // The Method enum's `as_str` and the RpcMethod trait both
+        // claim "workspace.search" — locking them so a future
+        // rename in one place fails the test in the other.
+        assert_eq!(WorkspaceSearchMethod::NAME, "workspace.search");
+        assert_eq!(Method::WorkspaceSearch.as_str(), "workspace.search");
     }
 
     // ── agent.* wire shapes (phase 23a) ───────────────────────────

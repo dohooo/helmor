@@ -1,5 +1,6 @@
 mod changes;
 mod editor;
+mod search;
 mod support;
 mod types;
 
@@ -14,6 +15,7 @@ pub use editor::{
     read_file_at_ref, stat_editor_file, stat_editor_file_inner, write_editor_file,
     write_editor_file_inner,
 };
+pub use search::{search_workspace_inner, SearchHit, SearchResults};
 pub use types::{
     EditorFileListItem, EditorFilePrefetchItem, EditorFileReadResponse, EditorFileStatResponse,
     EditorFileWriteResponse, EditorFilesWithContentResponse,
