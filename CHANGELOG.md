@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.23.1
+
+### Patch Changes
+
+- [#590](https://github.com/dohooo/helmor/pull/590) [`2091313`](https://github.com/dohooo/helmor/commit/20913132dd5a447ab50b8067748c442fab4f9153) Thanks [@natllian](https://github.com/natllian)! - Automatically reclaim disk space from composer-pasted images once their session is deleted, so the paste cache no longer grows unbounded.
+
+- [#582](https://github.com/dohooo/helmor/pull/582) [`a06583d`](https://github.com/dohooo/helmor/commit/a06583d44a27dba4306f0f0a0d7e644ee6dbcd4a) Thanks [@natllian](https://github.com/natllian)! - Fix the feedback dialog opening with a brief window jump on workspace pages.
+
+- [#589](https://github.com/dohooo/helmor/pull/589) [`fbc078c`](https://github.com/dohooo/helmor/commit/fbc078c5c998e4b856e1100db6815e7d9b458773) Thanks [@natllian](https://github.com/natllian)! - Fix the chat visibly scrolling from the top down to the latest message every time the editor view closes.
+
+- [#584](https://github.com/dohooo/helmor/pull/584) [`5970940`](https://github.com/dohooo/helmor/commit/597094048bab567d763628b07bffb2217b43b523) Thanks [@natllian](https://github.com/natllian)! - Add four new color themes (Aubergine, Hoth, Choco Mint, Banana) and rework theme switching to repaint every shell region — editor and terminal included.
+
 ## 0.23.0
 
 ### Minor Changes
