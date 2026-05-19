@@ -759,6 +759,92 @@ export async function getRemoteRuntimeDiagnostics(
 	return invoke<RuntimeDiagnostics>("get_remote_runtime_diagnostics", { name });
 }
 
+// ── remote port forwarding (phase 24k) ─────────────────────────────
+
+/**
+ * One active SSH port forward. The daemon-side OpenSSH master
+ * relays `127.0.0.1:localPort` on the desktop to
+ * `127.0.0.1:remotePort` on the remote — same shape VS Code
+ * Remote-SSH uses for its auto-forwarded ports.
+ */
+export type PortForwardEntry = {
+	runtimeName: string;
+	localPort: number;
+	remotePort: number;
+	/**
+	 * Optional human label — "Vite", "Rails", "Jupyter".
+	 * Surfaces in the panel row so multiple forwards on the
+	 * same runtime stay distinguishable.
+	 */
+	label?: string | null;
+	/**
+	 * Unix epoch ms when the forward started. Reset on every
+	 * boot-time restore so the panel's "started Xs ago" chip
+	 * reflects the current session, not the persisted entry.
+	 */
+	startedAtMs: number;
+};
+
+export type StopPortForwardResult = {
+	/**
+	 * `true` when an entry was actively forwarded and got
+	 * dropped; `false` when no entry matched (the panel ignores
+	 * this; the frontend treats it as success either way).
+	 */
+	stopped: boolean;
+};
+
+/**
+ * Start a TCP port forward from the desktop's
+ * `127.0.0.1:localPort` to the remote's `127.0.0.1:remotePort`.
+ *
+ * Only works against SSH-shaped runtimes — Command transports
+ * (Teleport, Tailscale SSH, kubectl exec) surface an error
+ * pointing the operator at the wrapper's own forwarding tool.
+ */
+export async function startRemotePortForward(args: {
+	runtimeName: string;
+	localPort: number;
+	remotePort: number;
+	label?: string;
+}): Promise<PortForwardEntry> {
+	return invoke<PortForwardEntry>("start_remote_port_forward", {
+		runtimeName: args.runtimeName,
+		localPort: args.localPort,
+		remotePort: args.remotePort,
+		label: args.label ?? null,
+	});
+}
+
+/**
+ * Stop a previously-started forward. Idempotent — stopping an
+ * unknown `(runtime, localPort)` returns `stopped=false` rather
+ * than erroring.
+ */
+export async function stopRemotePortForward(args: {
+	runtimeName: string;
+	localPort: number;
+}): Promise<StopPortForwardResult> {
+	return invoke<StopPortForwardResult>("stop_remote_port_forward", {
+		runtimeName: args.runtimeName,
+		localPort: args.localPort,
+	});
+}
+
+/**
+ * Snapshot every active forward, or just those for one runtime
+ * when `runtimeName` is supplied. The panel uses the per-runtime
+ * variant; an operator-facing "all forwards" surface can use
+ * the no-arg variant later.
+ */
+export async function listRemotePortForwards(
+	runtimeName?: string,
+): Promise<PortForwardEntry[]> {
+	return invoke<PortForwardEntry[]>("list_remote_port_forwards", {
+		runtimeName: runtimeName ?? null,
+	});
+}
+
 export type WorkspaceStatusResult = {
 	isClean: boolean;
 	changedPaths: string[];

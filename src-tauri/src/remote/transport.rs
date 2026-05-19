@@ -300,7 +300,12 @@ pub(crate) fn spawn_command_as_pipe(mut cmd: Command, peer_label: String) -> Res
 /// without multiplexing than refuse to connect at all. The directory
 /// is created lazily on first call; ssh tolerates a missing path until
 /// the master needs to bind.
-fn ssh_control_dir() -> Option<PathBuf> {
+///
+/// `pub(crate)` because the port-forwarding command shells out to the
+/// same `ssh -o ControlPath=... -O forward` invocation the master
+/// uses, and needs the matching control-dir template so `-O forward`
+/// finds the master's socket.
+pub(crate) fn ssh_control_dir() -> Option<PathBuf> {
     let data_dir = crate::data_dir::data_dir().ok()?;
     let dir = data_dir.join("ssh-cm");
     // Best-effort mkdir. If creation fails (read-only mount, weird
