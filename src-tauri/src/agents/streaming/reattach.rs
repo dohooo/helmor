@@ -261,12 +261,14 @@ fn run_reattach_loop<R: Runtime>(
         // Drain any new turns into the local DB before emitting the
         // user-facing envelope so the chat reflects "persisted to
         // local DB on next refresh" semantics.
-        persisted_any |= drain_new_turns_into_db(
+        let wrote = drain_new_turns_into_db(
             &mut persisted_turn_count,
             &pipeline,
             &persistence_ctx,
             &request_id_for_loop,
         );
+        publish_messages_appended_if(&app, wrote, &helmor_session_id);
+        persisted_any |= wrote;
         match emit {
             PipelineEmit::Full(messages) => {
                 let _ = on_event.send(AgentStreamEvent::Update { messages });
@@ -289,12 +291,14 @@ fn run_reattach_loop<R: Runtime>(
                 let _ = on_event.send(AgentStreamEvent::Update {
                     messages: final_messages,
                 });
-                persisted_any |= drain_new_turns_into_db(
+                let wrote = drain_new_turns_into_db(
                     &mut persisted_turn_count,
                     &pipeline,
                     &persistence_ctx,
                     &request_id_for_loop,
                 );
+                publish_messages_appended_if(&app, wrote, &helmor_session_id);
+                persisted_any |= wrote;
                 let final_persisted =
                     persisted_any | finalize_status(&persistence_ctx, "idle", &request_id_for_loop);
                 let resolved_model = pipeline.accumulator.resolved_model().to_string();
@@ -313,12 +317,14 @@ fn run_reattach_loop<R: Runtime>(
                 let _ = on_event.send(AgentStreamEvent::Update {
                     messages: final_messages,
                 });
-                persisted_any |= drain_new_turns_into_db(
+                let wrote = drain_new_turns_into_db(
                     &mut persisted_turn_count,
                     &pipeline,
                     &persistence_ctx,
                     &request_id_for_loop,
                 );
+                publish_messages_appended_if(&app, wrote, &helmor_session_id);
+                persisted_any |= wrote;
                 let final_persisted = persisted_any
                     | finalize_status(&persistence_ctx, "aborted", &request_id_for_loop);
                 let reason = event
@@ -353,6 +359,7 @@ fn run_reattach_loop<R: Runtime>(
                     .unwrap_or(false);
                 let error_persisted =
                     persist_error_into_db(&persistence_ctx, &message, &request_id_for_loop);
+                publish_messages_appended_if(&app, error_persisted, &helmor_session_id);
                 let final_persisted = error_persisted
                     | finalize_status(&persistence_ctx, "error", &request_id_for_loop);
                 let _ = on_event.send(AgentStreamEvent::Error {
@@ -375,6 +382,28 @@ fn run_reattach_loop<R: Runtime>(
         elapsed_ms = started_at.elapsed().as_millis(),
         event_count,
         "reattach: event loop exited"
+    );
+}
+
+/// Broadcast `SessionMessagesAppended` exactly when a persistence
+/// call landed at least one row. Mirrors the codex-goal pattern in
+/// [`crate::agents::streaming::codex_goal`] — invalidate only on
+/// real inserts so an idempotent re-write (24n's
+/// `ON CONFLICT DO NOTHING` path) does not trigger a refetch that
+/// would fight with in-flight streaming.
+fn publish_messages_appended_if<R: Runtime>(
+    app: &AppHandle<R>,
+    appended: bool,
+    helmor_session_id: &str,
+) {
+    if !appended {
+        return;
+    }
+    crate::ui_sync::publish(
+        app,
+        crate::ui_sync::UiMutationEvent::SessionMessagesAppended {
+            session_id: helmor_session_id.to_string(),
+        },
     );
 }
 
@@ -1068,6 +1097,140 @@ mod tests {
             active.len(),
             0,
             "loop must call ActiveStreams::unregister on exit",
+        );
+    }
+
+    /// Build a `Channel<UiMutationEvent>` paired with a captured-events
+    /// Vec. Mirrors `capturing_channel` for the IPC-side stream but
+    /// targets the `UiSyncManager`'s broadcast path so tests can
+    /// assert which invalidations the reattach loop publishes.
+    fn capturing_ui_sync_channel() -> (
+        Channel<crate::ui_sync::UiMutationEvent>,
+        Arc<Mutex<Vec<serde_json::Value>>>,
+    ) {
+        let captured: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::clone(&captured);
+        let channel = Channel::<crate::ui_sync::UiMutationEvent>::new(move |body| {
+            if let InvokeResponseBody::Json(s) = body {
+                let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+                inner.lock().unwrap().push(value);
+            }
+            Ok(())
+        });
+        (channel, captured)
+    }
+
+    #[test]
+    fn publish_messages_appended_if_skips_when_appended_is_false() {
+        // Locks the gate: an idempotent re-write of an existing
+        // session_messages row (the 24n `ON CONFLICT(id) DO NOTHING`
+        // path) returns `false` from the drain helpers. The publish
+        // must not fire, otherwise stale React Query caches refetch
+        // and fight the live `Update` stream — that's the visible
+        // jitter the codex-goal path documents.
+        let app = mock_app_handle();
+        let (ui_chan, ui_captured) = capturing_ui_sync_channel();
+        app.state::<crate::ui_sync::UiSyncManager>()
+            .subscribe("test-gate-false".into(), ui_chan);
+
+        publish_messages_appended_if(&app, false, "hs-gate");
+        assert!(
+            ui_captured.lock().unwrap().is_empty(),
+            "no publish expected when appended=false",
+        );
+    }
+
+    #[test]
+    fn publish_messages_appended_if_fires_with_camel_case_session_id() {
+        // Locks the wire shape: `session_id` must serialize as
+        // `sessionId` so the desktop's invalidation handler can read
+        // `event.sessionId`. Snake_case would silently break the
+        // refetch — exactly the regression the
+        // `struct_variant_fields_serialize_as_camel_case` gate in
+        // `ui_sync::events::tests` exists for, captured here at the
+        // reattach call site.
+        let app = mock_app_handle();
+        let (ui_chan, ui_captured) = capturing_ui_sync_channel();
+        app.state::<crate::ui_sync::UiSyncManager>()
+            .subscribe("test-gate-true".into(), ui_chan);
+
+        publish_messages_appended_if(&app, true, "hs-gate-1");
+
+        let events = ui_captured.lock().unwrap().clone();
+        assert_eq!(
+            events.len(),
+            1,
+            "expected exactly one publish, got {events:?}"
+        );
+        assert_eq!(events[0]["type"], "sessionMessagesAppended");
+        assert_eq!(events[0]["sessionId"], "hs-gate-1");
+    }
+
+    #[test]
+    fn run_loop_does_not_publish_session_messages_appended_when_no_rows_persisted() {
+        // The mock environment has no DB → `drain_new_turns_into_db`
+        // takes its `Err(write_conn)` branch and returns false on
+        // every call. A correct loop publishes `ActiveStreamsChanged`
+        // at entry + exit (lifecycle), but NEVER
+        // `SessionMessagesAppended`, because no row landed. This
+        // pins the 24o gate: the publish must follow the actual
+        // insert, not just the reattach activity.
+        let app = mock_app_handle();
+        let (ui_chan, ui_captured) = capturing_ui_sync_channel();
+        app.state::<crate::ui_sync::UiSyncManager>()
+            .subscribe("test-no-db-publish".into(), ui_chan);
+
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, captured) = capturing_channel();
+
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            let app = app.clone();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    "rid-ui-1".into(),
+                    "hs-ui-1".into(),
+                    Some("ws-ui".into()),
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/ui"),
+                )
+            })
+        };
+        // Let the loop register before we start firing events.
+        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
+
+        transport.fire(
+            "rid-ui-1",
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "Hi" }]
+                }
+            }),
+        );
+        transport.fire("rid-ui-1", serde_json::json!({ "type": "result" }));
+        loop_handle.join().expect("loop should exit on result");
+
+        let ui_events = ui_captured.lock().unwrap().clone();
+        let types: Vec<&str> = ui_events
+            .iter()
+            .filter_map(|v| v.get("type").and_then(Value::as_str))
+            .collect();
+
+        assert!(
+            types.contains(&"activeStreamsChanged"),
+            "expected at least one activeStreamsChanged for lifecycle, got {types:?}",
+        );
+        assert!(
+            !types.contains(&"sessionMessagesAppended"),
+            "no row was inserted in the mock env → no sessionMessagesAppended; got {types:?}",
         );
     }
 
