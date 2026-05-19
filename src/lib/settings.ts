@@ -370,7 +370,7 @@ const VALID_SIDEBAR_SORTS: readonly SidebarSort[] = [
 	"createdAt",
 ];
 
-const VALID_DARK_THEMES: readonly DarkTheme[] = [
+export const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"default",
 	"midnight",
 	"forest",

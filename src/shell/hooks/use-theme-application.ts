@@ -3,14 +3,19 @@
 // the rest of the app picks up the right tokens without each component
 // reaching into settings.
 import { useEffect } from "react";
-import { type DarkTheme, resolveTheme, type ThemeMode } from "@/lib/settings";
+import {
+	type DarkTheme,
+	resolveTheme,
+	type ThemeMode,
+	VALID_DARK_THEMES,
+} from "@/lib/settings";
 
-const DARK_THEME_CLASSES: readonly DarkTheme[] = [
-	"midnight",
-	"forest",
-	"ember",
-	"aurora",
-];
+// Theme class names we need to strip before applying the next one. Source-
+// of-truth is VALID_DARK_THEMES so adding a new preset can't drift; "default"
+// has no class so we exclude it.
+const DARK_THEME_CLASSES: readonly DarkTheme[] = VALID_DARK_THEMES.filter(
+	(t) => t !== "default",
+);
 
 export type ThemeApplicationOptions = {
 	theme: ThemeMode;
