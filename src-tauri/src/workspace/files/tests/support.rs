@@ -110,6 +110,10 @@ impl GitRepoHarness {
         git_ops::run_git(args.iter().copied(), Some(&self.root)).unwrap_or_default()
     }
 
+    pub(super) fn git_in(&self, cwd: &std::path::Path, args: &[&str]) -> String {
+        git_ops::run_git(args.iter().copied(), Some(cwd)).unwrap_or_default()
+    }
+
     pub(super) fn changes(&self) -> Vec<EditorFileListItem> {
         list_workspace_changes(self.path_str()).unwrap()
     }

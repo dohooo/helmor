@@ -180,6 +180,45 @@ fn classification_discard_removes_from_changes() {
     );
 }
 
+#[test]
+fn classification_dirty_submodule_ignores_repo_diff_ignore_setting() {
+    let repo = GitRepoHarness::new();
+    let submodule_source = std::path::Path::new(repo_root(&repo))
+        .parent()
+        .unwrap()
+        .join("submodule-source");
+    std::fs::create_dir_all(&submodule_source).unwrap();
+    repo.git_in(&submodule_source, &["init", "-b", "main"]);
+    repo.git_in(
+        &submodule_source,
+        &["config", "user.email", "test@helmor.test"],
+    );
+    repo.git_in(&submodule_source, &["config", "user.name", "Test"]);
+    std::fs::write(submodule_source.join("nested.txt"), "base\n").unwrap();
+    repo.git_in(&submodule_source, &["add", "."]);
+    repo.git_in(&submodule_source, &["commit", "-m", "init submodule"]);
+
+    let submodule_url = submodule_source.to_str().unwrap();
+    repo.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        submodule_url,
+        "libs/sub",
+    ]);
+    repo.git(&["commit", "-am", "add submodule"]);
+    repo.git(&["config", "diff.ignoreSubmodules", "dirty"]);
+    repo.write_file("libs/sub/nested.txt", "dirty\n");
+
+    let item = repo.find("libs/sub").expect("submodule should appear");
+    assert_eq!(
+        item.unstaged_status.as_deref(),
+        Some("M"),
+        "dirty submodule should surface as an unstaged modification: {item:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Per-area line counts. Each area (committed / staged / unstaged) reports
 // its own insertions/deletions; numbers must NOT be summed across areas.

@@ -82,17 +82,35 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
     ) = std::thread::scope(|s| {
         let h_committed = s.spawn(|| {
             git_ops::run_git(
-                ["diff", "--name-status", target_ref.as_str(), "HEAD"],
+                [
+                    "diff",
+                    "--ignore-submodules=none",
+                    "--name-status",
+                    target_ref.as_str(),
+                    "HEAD",
+                ],
                 Some(workspace_root),
             )
             .unwrap_or_default()
         });
         let h_unstaged = s.spawn(|| {
-            git_ops::run_git(["diff", "--name-status"], Some(workspace_root)).unwrap_or_default()
+            git_ops::run_git(
+                ["diff", "--ignore-submodules=none", "--name-status"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
         });
         let h_staged = s.spawn(|| {
-            git_ops::run_git(["diff", "--name-status", "--cached"], Some(workspace_root))
-                .unwrap_or_default()
+            git_ops::run_git(
+                [
+                    "diff",
+                    "--ignore-submodules=none",
+                    "--name-status",
+                    "--cached",
+                ],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
         });
         let h_untracked = s.spawn(|| {
             git_ops::run_git(
@@ -103,15 +121,25 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         });
         let tr = target_ref.as_str();
         let h_cn = s.spawn(move || {
-            git_ops::run_git(["diff", "--numstat", tr, "HEAD"], Some(workspace_root))
-                .unwrap_or_default()
+            git_ops::run_git(
+                ["diff", "--ignore-submodules=none", "--numstat", tr, "HEAD"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
         });
         let h_sn = s.spawn(|| {
-            git_ops::run_git(["diff", "--numstat", "--cached"], Some(workspace_root))
-                .unwrap_or_default()
+            git_ops::run_git(
+                ["diff", "--ignore-submodules=none", "--numstat", "--cached"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
         });
         let h_un = s.spawn(|| {
-            git_ops::run_git(["diff", "--numstat"], Some(workspace_root)).unwrap_or_default()
+            git_ops::run_git(
+                ["diff", "--ignore-submodules=none", "--numstat"],
+                Some(workspace_root),
+            )
+            .unwrap_or_default()
         });
         (
             h_committed.join().unwrap_or_default(),
