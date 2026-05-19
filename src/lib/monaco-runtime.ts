@@ -279,6 +279,7 @@ export async function createDiffEditor(options: {
 		quickSuggestions: false,
 		readOnly: true,
 		renderValidationDecorations: "off",
+		renderIndicators: false,
 		renderOverviewRuler: false,
 		renderSideBySide: !options.inline,
 		scrollBeyondLastLine: false,
@@ -515,9 +516,9 @@ const SYNTAX_RULES_LIGHT = [
 	{ token: "delimiter", foreground: "5a5857" },
 ];
 
-// Reusable hidden probe — `resolveCssColor` writes a `var(--x)` to its
-// background-color and reads the computed rgb back. Cached across calls so
-// theme rebuild costs ~30 reads, not 30 element churns.
+// Hidden div used to resolve `var(--x)` to a computed background-color
+// string. We can't put `var()` directly into a canvas fillStyle, so we ask
+// the engine to cascade the variable here first.
 let cssColorProbe: HTMLDivElement | null = null;
 function getCssColorProbe(): HTMLDivElement {
 	if (!cssColorProbe) {
@@ -527,6 +528,26 @@ function getCssColorProbe(): HTMLDivElement {
 		document.body.appendChild(cssColorProbe);
 	}
 	return cssColorProbe;
+}
+
+// 2D canvas used to normalize any CSS color (rgb / oklch / oklab / color()
+// / hex) to plain sRGB bytes. WebKit returns `oklch(...)` literals from
+// `getComputedStyle` instead of `rgb(...)`, so a regex on the computed
+// string isn't enough — canvas does the heavy lifting via the engine's
+// color pipeline.
+let cssColorCanvasCtx: CanvasRenderingContext2D | null = null;
+function getCssColorCanvas(): CanvasRenderingContext2D {
+	if (!cssColorCanvasCtx) {
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const ctx = canvas.getContext("2d", { willReadFrequently: true });
+		if (!ctx) {
+			throw new Error("Failed to get 2D context for color resolver");
+		}
+		cssColorCanvasCtx = ctx;
+	}
+	return cssColorCanvasCtx;
 }
 
 function toHexByte(n: number): string {
@@ -544,17 +565,21 @@ function resolveCssColor(varName: string, alphaOverride?: number): string {
 	const probe = getCssColorProbe();
 	probe.style.backgroundColor = `var(${varName})`;
 	const computed = window.getComputedStyle(probe).backgroundColor;
-	const match = computed.match(
-		/rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*(?:,\s*([\d.]+))?\s*\)/,
-	);
-	if (!match) return "#000000";
-	const r = Number.parseFloat(match[1]);
-	const g = Number.parseFloat(match[2]);
-	const b = Number.parseFloat(match[3]);
-	const baseAlpha = match[4] !== undefined ? Number.parseFloat(match[4]) : 1;
+
+	const ctx = getCssColorCanvas();
+	// Reset to a sentinel then assign — if the engine rejects `computed`
+	// (e.g. unknown function), fillStyle stays as the sentinel and we know
+	// resolution failed.
+	ctx.fillStyle = "rgba(0,0,0,0)";
+	ctx.fillStyle = computed;
+	ctx.clearRect(0, 0, 1, 1);
+	ctx.fillRect(0, 0, 1, 1);
+	const data = ctx.getImageData(0, 0, 1, 1).data;
+
+	const baseAlpha = data[3] / 255;
 	const alpha = alphaOverride !== undefined ? alphaOverride : baseAlpha;
 	const aHex = alpha >= 1 ? "" : toHexByte(alpha * 255);
-	return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}${aHex}`;
+	return `#${toHexByte(data[0])}${toHexByte(data[1])}${toHexByte(data[2])}${aHex}`;
 }
 
 function buildHelmorTheme(isDark: boolean) {
