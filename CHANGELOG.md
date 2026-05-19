@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.23.0
+
+### Minor Changes
+
+- [#570](https://github.com/dohooo/helmor/pull/570) [`b042374`](https://github.com/dohooo/helmor/commit/b042374f44ea304b5b1235dc2259572bc2162152) Thanks [@natllian](https://github.com/natllian)! - Add an opt-in General setting to auto-archive a workspace when its linked PR/MR is merged.
+
+- [#568](https://github.com/dohooo/helmor/pull/568) [`217ab7b`](https://github.com/dohooo/helmor/commit/217ab7b73ca986f76829d5a284c6407b7631e39e) Thanks [@dohooo](https://github.com/dohooo)! - Add a feedback button next to Settings that lets you contribute back to Helmor without leaving the app:
+
+  - Send a quick GitHub issue to the Helmor repo with a two-click confirm.
+  - Use "Quick fix" to open a workspace on your local Helmor clone with the feedback drafted as the first prompt, so an agent can start on the change immediately.
+
+- [#577](https://github.com/dohooo/helmor/pull/577) [`4e03c13`](https://github.com/dohooo/helmor/commit/4e03c13b24413252e13e6073f60297e8c8026913) Thanks [@natllian](https://github.com/natllian)! - Add a "Just Chat" mode on the start page for opening throwaway chat workspaces that aren't bound to any repository.
+
+- [#571](https://github.com/dohooo/helmor/pull/571) [`95280a0`](https://github.com/dohooo/helmor/commit/95280a09517cdccd105e88629c2350f08ac952ba) Thanks [@natllian](https://github.com/natllian)! - New workspaces can now reuse an existing branch instead of always forking a new one, and the start page remembers your last picker choices across restarts.
+
+- [#572](https://github.com/dohooo/helmor/pull/572) [`1fb5faa`](https://github.com/dohooo/helmor/commit/1fb5faae9b12119b546fb5457df8f7fdbabc6f28) Thanks [@natllian](https://github.com/natllian)! - Let the workspace editor edit changes inline from the diff view.
+
+### Patch Changes
+
+- [#564](https://github.com/dohooo/helmor/pull/564) [`bfa0ef1`](https://github.com/dohooo/helmor/commit/bfa0ef19212ce535f02532eece918de0ffbd7670) Thanks [@natllian](https://github.com/natllian)! - Add a Confirm step to sidebar archive actions so workspaces are not archived from a single click.
+
+- [#422](https://github.com/dohooo/helmor/pull/422) [`c2189cf`](https://github.com/dohooo/helmor/commit/c2189cf1c163f3fcd16ebfb04796c46f6c76440d) Thanks [@aidxun](https://github.com/aidxun)! - Remove the inspector sidebar's explicit toggle animations so opening and closing its sections feels more direct and easier to maintain.
+
+- [#575](https://github.com/dohooo/helmor/pull/575) [`28f8471`](https://github.com/dohooo/helmor/commit/28f84711421b4e5cae4028333c2bbc35323a9cfe) Thanks [@natllian](https://github.com/natllian)! - Fix laggy dragging of the inspector sidebar's vertical section dividers, especially when resizing the Scripts section with terminal output.
+
+- [#569](https://github.com/dohooo/helmor/pull/569) [`23fe1cb`](https://github.com/dohooo/helmor/commit/23fe1cbfa596a796000e5c42da98faa6fc76abf2) Thanks [@natllian](https://github.com/natllian)! - Keep the Stop and Rerun buttons reachable in the Setup and Run tabs when "Expand terminals on hover" is turned off.
+
+- [#574](https://github.com/dohooo/helmor/pull/574) [`b1207cf`](https://github.com/dohooo/helmor/commit/b1207cfc89f65e75159946102fb98775a632c18c) Thanks [@natllian](https://github.com/natllian)! - Restore window dragging on the Editor view and Start Page top bars.
+
+- [#576](https://github.com/dohooo/helmor/pull/576) [`9047d91`](https://github.com/dohooo/helmor/commit/9047d912a511edcf57f29df444accd3f0dbaf511) Thanks [@natllian](https://github.com/natllian)! - - Remember the worktree/local mode and branch intent per repository so each project keeps its own defaults.
+
+- [#567](https://github.com/dohooo/helmor/pull/567) [`21a742d`](https://github.com/dohooo/helmor/commit/21a742dbbfd024d7ad5e200d257854e6ead558fd) Thanks [@natllian](https://github.com/natllian)! - Make dragging to resize the left sidebar and right inspector feel fluid, even with a long chat thread open.
+
 ## 0.22.1
 
 ### Patch Changes
