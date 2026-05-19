@@ -1100,6 +1100,75 @@ export async function attachRemoteAgentSession(
 	return invoke<boolean>("attach_remote_agent_session", { name, requestId });
 }
 
+/**
+ * One agent event delivered through a reattach stream. Mirrors the
+ * Rust `ReattachedAgentEvent`: the `requestId` echo + the raw
+ * sidecar event JSON.
+ */
+export type ReattachedAgentEvent = {
+	requestId: string;
+	event: unknown;
+};
+
+export type ReattachAgentStreamResult = {
+	/**
+	 * `true` when the daemon found the session and is now streaming
+	 * its events through the supplied Channel. `false` means the
+	 * session expired between the user's click and our attach RPC;
+	 * the Channel is inert and the frontend should hide the
+	 * reattach affordance.
+	 */
+	found: boolean;
+};
+
+export type ReleaseAgentStreamResult = {
+	/**
+	 * `true` when a stream was actively running for the request id
+	 * and got dropped. `false` when nothing was registered — the
+	 * frontend can use this to detect a stale request id after a
+	 * reload race.
+	 */
+	released: boolean;
+};
+
+/**
+ * Reattach + open a live event stream for an in-flight remote
+ * agent turn. The supplied `onEvent` callback fires for every
+ * sidecar event the daemon emits on this session from the moment
+ * of attach onward; the prior history is NOT replayed (the daemon
+ * doesn't buffer).
+ *
+ * Always pair with [`releaseRemoteAgentStream`] to drop the
+ * subscription when the consumer UI unmounts — otherwise the
+ * runtime callback keeps firing into a stale closure.
+ */
+export async function reattachRemoteAgentSessionStream(
+	name: string,
+	requestId: string,
+	onEvent: (event: ReattachedAgentEvent) => void,
+): Promise<ReattachAgentStreamResult> {
+	const channel = new Channel<ReattachedAgentEvent>();
+	channel.onmessage = onEvent;
+	return invoke<ReattachAgentStreamResult>(
+		"reattach_remote_agent_session_stream",
+		{ name, requestId, onEvent: channel },
+	);
+}
+
+/**
+ * Drop the streaming subscription started by
+ * [`reattachRemoteAgentSessionStream`]. Idempotent — releasing
+ * an unknown request id returns `released=false` without erroring.
+ */
+export async function releaseRemoteAgentStream(
+	requestId: string,
+): Promise<ReleaseAgentStreamResult> {
+	return invoke<ReleaseAgentStreamResult>(
+		"release_remote_agent_session_stream",
+		{ requestId },
+	);
+}
+
 // ── remote terminals ────────────────────────────────────────────
 
 /**

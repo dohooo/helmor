@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEntry, RuntimeHealth } from "@/lib/api";
@@ -30,6 +30,8 @@ const apiMocks = vi.hoisted(() => ({
 	listRemoteAgentSessions: vi.fn(),
 	abortRemoteAgentSession: vi.fn(),
 	attachRemoteAgentSession: vi.fn(),
+	reattachRemoteAgentSessionStream: vi.fn(),
+	releaseRemoteAgentStream: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -61,6 +63,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listRemoteAgentSessions: apiMocks.listRemoteAgentSessions,
 		abortRemoteAgentSession: apiMocks.abortRemoteAgentSession,
 		attachRemoteAgentSession: apiMocks.attachRemoteAgentSession,
+		reattachRemoteAgentSessionStream: apiMocks.reattachRemoteAgentSessionStream,
+		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
 	};
 });
 
@@ -124,6 +128,12 @@ describe("RuntimeDebugPanel", () => {
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([]);
 		apiMocks.abortRemoteAgentSession.mockResolvedValue(undefined);
 		apiMocks.attachRemoteAgentSession.mockResolvedValue(true);
+		// Default: every streaming reattach succeeds with `found=true`
+		// — individual tests override for the notFound / error paths.
+		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValue({
+			found: true,
+		});
+		apiMocks.releaseRemoteAgentStream.mockResolvedValue({ released: true });
 	});
 
 	afterEach(() => {
@@ -1542,7 +1552,21 @@ describe("RuntimeDebugPanel", () => {
 		});
 	});
 
-	it("agent sessions section: Reattach surfaces success when the daemon found the session", async () => {
+	it("agent sessions section: Reattach starts a streaming subscription and surfaces the event log", async () => {
+		// Phase 24i: clicking Reattach now opens a live event
+		// stream via reattachRemoteAgentSessionStream. The panel
+		// surfaces a "streaming events for ..." notice + renders
+		// the event log placeholder.
+		let onEvent:
+			| ((event: { requestId: string; event: unknown }) => void)
+			| null = null;
+		apiMocks.reattachRemoteAgentSessionStream.mockImplementation(
+			async (_name: string, _requestId: string, cb: typeof onEvent) => {
+				onEvent = cb;
+				return { found: true };
+			},
+		);
+
 		const user = userEvent.setup();
 		const remoteEntry: RuntimeEntry = {
 			name: "dev.box",
@@ -1561,7 +1585,6 @@ describe("RuntimeDebugPanel", () => {
 				lastEventMs: Date.now() - 200,
 			},
 		]);
-		apiMocks.attachRemoteAgentSession.mockResolvedValue(true);
 
 		renderPanel();
 		await screen.findByText("req-attach-1");
@@ -1570,21 +1593,35 @@ describe("RuntimeDebugPanel", () => {
 		);
 
 		await waitFor(() => {
-			expect(apiMocks.attachRemoteAgentSession).toHaveBeenCalledWith(
+			expect(apiMocks.reattachRemoteAgentSessionStream).toHaveBeenCalledWith(
 				"dev.box",
 				"req-attach-1",
+				expect.any(Function),
 			);
 		});
-		expect(
-			await screen.findByText(/Attached to req-attach-1/),
-		).toBeInTheDocument();
+		// Live event log mounts as soon as streaming begins.
+		expect(await screen.findByTestId("reattach-event-log")).toBeInTheDocument();
+
+		// Fire a synthesised event through the captured callback;
+		// the log gains a row + the notice reports the count.
+		expect(onEvent).not.toBeNull();
+		await act(async () => {
+			onEvent?.({
+				requestId: "req-attach-1",
+				event: { type: "assistant", delta: "hello world" },
+			});
+		});
+		const logList = await screen.findByTestId("reattach-event-log-list");
+		expect(logList.textContent).toContain("hello world");
 	});
 
-	it("agent sessions section: Reattach surfaces an info notice when the daemon reports the session ended", async () => {
-		// Race between list + attach: the session expired in the
-		// gap. The runtime returns `found=false`; the UI should NOT
-		// show an error toast (this isn't a failure) but should tell
-		// the operator the daemon no longer knows about the session.
+	it("agent sessions section: streaming Reattach surfaces an info notice when the daemon reports the session ended", async () => {
+		// found=false on the streaming RPC means the daemon lost
+		// the session between list + attach. UI shows "Session
+		// has ended" + does NOT mount the event log.
+		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValueOnce({
+			found: false,
+		});
 		const user = userEvent.setup();
 		const remoteEntry: RuntimeEntry = {
 			name: "dev.box",
@@ -1603,7 +1640,6 @@ describe("RuntimeDebugPanel", () => {
 				lastEventMs: Date.now() - 50_000,
 			},
 		]);
-		apiMocks.attachRemoteAgentSession.mockResolvedValue(false);
 
 		renderPanel();
 		await screen.findByText("req-stale");
@@ -1611,9 +1647,51 @@ describe("RuntimeDebugPanel", () => {
 			screen.getByRole("button", { name: /Reattach to req-stale/ }),
 		);
 
-		expect(
-			await screen.findByText(/Session req-stale has ended/),
-		).toBeInTheDocument();
+		expect(await screen.findByText(/Session has ended/i)).toBeInTheDocument();
+		// No event log mounts on the notFound path.
+		expect(screen.queryByTestId("reattach-event-log")).toBeNull();
+	});
+
+	it("agent sessions section: stop button on a streaming row releases the subscription", async () => {
+		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValue({
+			found: true,
+		});
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-streaming",
+				helmorSessionId: null,
+				provider: "claude",
+				workspaceDir: "/srv/demo",
+				startedAtMs: Date.now() - 10_000,
+				lastEventMs: Date.now() - 200,
+			},
+		]);
+
+		renderPanel();
+		await screen.findByText("req-streaming");
+		await user.click(
+			screen.getByRole("button", { name: /Reattach to req-streaming/ }),
+		);
+		// The button's label flips to "Stop streaming ..." while
+		// the stream is live.
+		const stopButton = await screen.findByRole("button", {
+			name: /Stop streaming req-streaming/,
+		});
+		await user.click(stopButton);
+
+		await waitFor(() => {
+			expect(apiMocks.releaseRemoteAgentStream).toHaveBeenCalledWith(
+				"req-streaming",
+			);
+		});
 	});
 
 	it("agent sessions section: surfaces runtime errors instead of swallowing them", async () => {
