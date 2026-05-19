@@ -210,7 +210,10 @@ function EditorFileTabs({
 	onOpenSearch: () => void;
 }) {
 	return (
-		<div className="flex h-full min-w-0 flex-1 items-stretch overflow-hidden">
+		<div
+			data-tauri-drag-region
+			className="flex h-full min-w-0 flex-1 items-stretch overflow-hidden"
+		>
 			<div className="scrollbar-none h-full min-w-0 overflow-x-auto">
 				<Tabs
 					value={activeTabId}
@@ -1062,11 +1065,15 @@ export function WorkspaceEditorSurface({
 		>
 			<div
 				className={cn("flex h-9 items-center", EDITOR_CHROME_BACKGROUND_CLASS)}
+				data-tauri-drag-region
 			>
 				{/* Traffic-light inset. macOS: left; Windows / Linux: right. */}
 				<TrafficLightSpacer side="left" width={86} />
 
-				<div className="flex min-w-0 flex-1 items-center">
+				<div
+					data-tauri-drag-region
+					className="flex min-w-0 flex-1 items-center"
+				>
 					<EditorFileTabs
 						tabs={fileTabs}
 						activeTabId={activeTabId}

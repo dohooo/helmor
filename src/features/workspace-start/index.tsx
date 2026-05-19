@@ -184,7 +184,10 @@ export function WorkspaceStartPage({
 				>
 					<div className="min-h-0 overflow-hidden">
 						<div className="relative flex h-full min-h-[320px] flex-col overflow-hidden bg-background">
-							<div className="flex h-8 shrink-0 items-center justify-between gap-3 border-border/60 border-b px-3">
+							<div
+								className="relative z-20 flex h-8 shrink-0 items-center justify-between gap-3 border-border/60 border-b px-3"
+								data-tauri-drag-region
+							>
 								{showWindowSafeTop ? (
 									<TrafficLightSpacer
 										side="left"
@@ -192,7 +195,10 @@ export function WorkspaceStartPage({
 									/>
 								) : null}
 								{previewCard ? (
-									<h2 className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-[13px] font-medium leading-5 text-foreground">
+									<h2
+										data-tauri-drag-region
+										className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-[13px] font-medium leading-5 text-foreground"
+									>
 										<span className="min-w-0 truncate">
 											{previewCard.title}
 										</span>
@@ -201,7 +207,7 @@ export function WorkspaceStartPage({
 										</span>
 									</h2>
 								) : (
-									<div className="min-w-0 flex-1" />
+									<div data-tauri-drag-region className="min-w-0 flex-1" />
 								)}
 								<Button
 									type="button"
