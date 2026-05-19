@@ -18,6 +18,7 @@ mod cleanup;
 pub(crate) mod codex_goal;
 pub(crate) mod context_usage;
 mod params;
+mod plan_review;
 mod session_id;
 mod state;
 pub(super) mod transports;
@@ -42,9 +43,9 @@ use serde_json::{json, Value};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::pipeline::types::{
-    ExtendedMessagePart, MessagePart, MessageRole, PlanAllowedPrompt, ThreadMessageLike,
-};
+use crate::pipeline::types::ThreadMessageLike;
+
+use plan_review::build_exit_plan_review_message;
 
 use super::{
     finalize_session_metadata, persist_error_message, persist_exit_plan_message,
@@ -1137,53 +1138,4 @@ pub(super) fn stream_via_sidecar(
     });
 
     Ok(())
-}
-
-fn build_exit_plan_review_message(
-    id: Option<String>,
-    created_at: Option<String>,
-    tool_use_id: &str,
-    tool_name: &str,
-    tool_input: &Value,
-) -> ThreadMessageLike {
-    let plan = tool_input
-        .get("plan")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let plan_file_path = tool_input
-        .get("planFilePath")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let allowed_prompts = tool_input
-        .get("allowedPrompts")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    let tool = entry.get("tool").and_then(Value::as_str)?;
-                    let prompt = entry.get("prompt").and_then(Value::as_str)?;
-                    Some(PlanAllowedPrompt {
-                        tool: tool.to_string(),
-                        prompt: prompt.to_string(),
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    ThreadMessageLike {
-        role: MessageRole::Assistant,
-        id,
-        created_at,
-        content: vec![ExtendedMessagePart::Basic(MessagePart::PlanReview {
-            tool_use_id: tool_use_id.to_string(),
-            tool_name: tool_name.to_string(),
-            plan,
-            plan_file_path,
-            allowed_prompts,
-        })],
-        status: None,
-        streaming: None,
-    }
 }
