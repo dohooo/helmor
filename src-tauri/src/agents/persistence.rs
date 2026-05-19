@@ -60,13 +60,17 @@ pub(super) fn persist_user_message(
 
 /// Persist a single intermediate turn (assistant message or user tool
 /// result). Called each time the accumulator produces a complete turn
-/// during streaming. Returns the DB message ID.
+/// during streaming. Returns the DB message ID plus a flag indicating
+/// whether the row was actually inserted (false on the
+/// `ON CONFLICT(id) DO NOTHING` idempotent no-op path — load-bearing
+/// for the reattach loop's UI-sync gate: a refetch fired on a no-op
+/// re-write would fight in-flight streaming).
 pub(super) fn persist_turn_message(
     conn: &Connection,
     ctx: &ExchangeContext,
     turn: &CollectedTurn,
     _resolved_model: &str,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let now = current_timestamp_string()?;
     // Use the pre-assigned ID from the turn so streaming and historical
     // message IDs are the same UUID.
@@ -84,7 +88,7 @@ pub(super) fn persist_turn_message(
     // which can resurface turns the original sender already persisted.
     // Letting the second insert be a no-op keeps DB content
     // deterministic without forcing each writer to coordinate.
-    conn.execute(
+    let rows_changed = conn.execute(
         r#"
             INSERT INTO session_messages (
               id, session_id, role, content, created_at, sent_at
@@ -93,7 +97,7 @@ pub(super) fn persist_turn_message(
             "#,
         params![msg_id, ctx.helmor_session_id, turn.role, content, now],
     )?;
-    Ok(msg_id)
+    Ok((msg_id, rows_changed == 1))
 }
 
 pub(super) fn persist_error_message(
@@ -558,13 +562,17 @@ mod tests {
             .to_string(),
         };
 
-        let first = persist_turn_message(&conn, &ctx, &turn, "claude-opus-4").unwrap();
-        assert_eq!(first, "msg-shared-1");
+        let (first_id, first_inserted) =
+            persist_turn_message(&conn, &ctx, &turn, "claude-opus-4").unwrap();
+        assert_eq!(first_id, "msg-shared-1");
+        assert!(first_inserted, "first call must report inserted=true");
 
         // A different `content_json` under the same id reaches us when
         // the daemon hands the same turn back through a reattach. The
         // second insert must not panic + must not overwrite the
-        // original row (the desktop trusts the first writer).
+        // original row (the desktop trusts the first writer). The
+        // `inserted` flag must report `false` so reattach's UI sync
+        // gate knows not to publish.
         let same_id_diff_content = CollectedTurn {
             id: "msg-shared-1".into(),
             role: MessageRole::Assistant,
@@ -577,9 +585,14 @@ mod tests {
             })
             .to_string(),
         };
-        let second = persist_turn_message(&conn, &ctx, &same_id_diff_content, "claude-opus-4")
-            .expect("second insert should succeed silently");
-        assert_eq!(second, "msg-shared-1");
+        let (second_id, second_inserted) =
+            persist_turn_message(&conn, &ctx, &same_id_diff_content, "claude-opus-4")
+                .expect("second insert should succeed silently");
+        assert_eq!(second_id, "msg-shared-1");
+        assert!(
+            !second_inserted,
+            "second call must report inserted=false (ON CONFLICT DO NOTHING)",
+        );
 
         // Only one row exists, and its content is the first write.
         let count: i64 = conn
