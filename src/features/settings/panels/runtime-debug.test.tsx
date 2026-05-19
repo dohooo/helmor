@@ -27,6 +27,9 @@ const apiMocks = vi.hoisted(() => ({
 	listRemoteTerminals: vi.fn(),
 	listOwnedTerminals: vi.fn(),
 	attachRemoteTerminal: vi.fn(),
+	listRemoteAgentSessions: vi.fn(),
+	abortRemoteAgentSession: vi.fn(),
+	attachRemoteAgentSession: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -55,6 +58,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listRemoteTerminals: apiMocks.listRemoteTerminals,
 		listOwnedTerminals: apiMocks.listOwnedTerminals,
 		attachRemoteTerminal: apiMocks.attachRemoteTerminal,
+		listRemoteAgentSessions: apiMocks.listRemoteAgentSessions,
+		abortRemoteAgentSession: apiMocks.abortRemoteAgentSession,
+		attachRemoteAgentSession: apiMocks.attachRemoteAgentSession,
 	};
 });
 
@@ -112,6 +118,12 @@ describe("RuntimeDebugPanel", () => {
 		// override when they want to exercise the UI.
 		apiMocks.listRemoteTerminals.mockResolvedValue([]);
 		apiMocks.listOwnedTerminals.mockResolvedValue([]);
+		// Remote agent sessions: default to empty list so the
+		// section renders its empty-state without surprising the
+		// other tests.
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([]);
+		apiMocks.abortRemoteAgentSession.mockResolvedValue(undefined);
+		apiMocks.attachRemoteAgentSession.mockResolvedValue(true);
 	});
 
 	afterEach(() => {
@@ -1418,6 +1430,213 @@ describe("RuntimeDebugPanel", () => {
 				screen.getByText(/HELMOR_SIDECAR_PATH not set/),
 			).toBeInTheDocument();
 		});
+	});
+
+	// ── Remote agent sessions section (phase 24d) ──────────────────
+
+	it("agent sessions section: shows hint when no remote runtimes are registered", async () => {
+		// Only the built-in `local` entry — the section should refuse
+		// to render its session list and instead show an actionable
+		// hint pointing the operator at the Connect form.
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY]);
+
+		renderPanel();
+
+		// The hint copy is unique to this section so the regex
+		// disambiguates it from the auth section's empty state.
+		expect(
+			await screen.findByText(
+				/No remote runtimes connected yet — agent sessions appear here/i,
+			),
+		).toBeInTheDocument();
+		// The runtime picker for THIS section must not appear when
+		// no remote runtimes exist — confirms the empty-state branch
+		// renders instead of an empty <select>.
+		expect(document.getElementById("rt-sessions-runtime")).toBeNull();
+	});
+
+	it("agent sessions section: renders the daemon's session list with provider + workspace", async () => {
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-running-1",
+				helmorSessionId: "hs-7",
+				provider: "claude",
+				workspaceDir: "/srv/repos/demo",
+				startedAtMs: Date.now() - 5_000,
+				lastEventMs: Date.now() - 1_000,
+			},
+		]);
+
+		renderPanel();
+
+		// The request id renders verbatim — the operator uses it to
+		// correlate against the daemon's log lines.
+		expect(await screen.findByText("req-running-1")).toBeInTheDocument();
+		// Provider + workspace dir surface in the descriptive line.
+		const row = screen.getByTestId("remote-agent-session-req-running-1");
+		expect(row.textContent).toContain("claude");
+		expect(row.textContent).toContain("/srv/repos/demo");
+		// Both action buttons are wired up.
+		expect(
+			screen.getByRole("button", { name: /Reattach to req-running-1/ }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /Abort req-running-1/ }),
+		).toBeInTheDocument();
+	});
+
+	it("agent sessions section: Abort button calls the runtime then refreshes the listing", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-abort-me",
+				helmorSessionId: null,
+				provider: "codex",
+				workspaceDir: "/repo",
+				startedAtMs: Date.now() - 10_000,
+				lastEventMs: Date.now() - 500,
+			},
+		]);
+
+		renderPanel();
+		await screen.findByText("req-abort-me");
+
+		const baselineListCalls =
+			apiMocks.listRemoteAgentSessions.mock.calls.length;
+		await user.click(
+			screen.getByRole("button", { name: /Abort req-abort-me/ }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.abortRemoteAgentSession).toHaveBeenCalledWith(
+				"dev.box",
+				"req-abort-me",
+			);
+		});
+		// Success notice surfaces so the operator knows the abort
+		// took effect on the daemon.
+		expect(
+			await screen.findByText(/Abort sent to req-abort-me/),
+		).toBeInTheDocument();
+		// And the listing refetches after the mutation so a stale
+		// "still running" row doesn't linger after the daemon tears
+		// the session down.
+		await waitFor(() => {
+			expect(
+				apiMocks.listRemoteAgentSessions.mock.calls.length,
+			).toBeGreaterThan(baselineListCalls);
+		});
+	});
+
+	it("agent sessions section: Reattach surfaces success when the daemon found the session", async () => {
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-attach-1",
+				helmorSessionId: "hs-x",
+				provider: "claude",
+				workspaceDir: "/srv/demo",
+				startedAtMs: Date.now() - 30_000,
+				lastEventMs: Date.now() - 200,
+			},
+		]);
+		apiMocks.attachRemoteAgentSession.mockResolvedValue(true);
+
+		renderPanel();
+		await screen.findByText("req-attach-1");
+		await user.click(
+			screen.getByRole("button", { name: /Reattach to req-attach-1/ }),
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.attachRemoteAgentSession).toHaveBeenCalledWith(
+				"dev.box",
+				"req-attach-1",
+			);
+		});
+		expect(
+			await screen.findByText(/Attached to req-attach-1/),
+		).toBeInTheDocument();
+	});
+
+	it("agent sessions section: Reattach surfaces an info notice when the daemon reports the session ended", async () => {
+		// Race between list + attach: the session expired in the
+		// gap. The runtime returns `found=false`; the UI should NOT
+		// show an error toast (this isn't a failure) but should tell
+		// the operator the daemon no longer knows about the session.
+		const user = userEvent.setup();
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-stale",
+				helmorSessionId: null,
+				provider: null,
+				workspaceDir: null,
+				startedAtMs: Date.now() - 60_000,
+				lastEventMs: Date.now() - 50_000,
+			},
+		]);
+		apiMocks.attachRemoteAgentSession.mockResolvedValue(false);
+
+		renderPanel();
+		await screen.findByText("req-stale");
+		await user.click(
+			screen.getByRole("button", { name: /Reattach to req-stale/ }),
+		);
+
+		expect(
+			await screen.findByText(/Session req-stale has ended/),
+		).toBeInTheDocument();
+	});
+
+	it("agent sessions section: surfaces runtime errors instead of swallowing them", async () => {
+		// When `agent.list` blows up — e.g. the runtime got disconnected
+		// since the last refresh — the React Query error must surface
+		// as a notice rather than rendering a stale empty list (which
+		// would hide the failure).
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockRejectedValue(
+			new Error("agent.list failed: connection lost"),
+		);
+
+		renderPanel();
+
+		expect(
+			await screen.findByText(/agent\.list failed: connection lost/),
+		).toBeInTheDocument();
 	});
 });
 

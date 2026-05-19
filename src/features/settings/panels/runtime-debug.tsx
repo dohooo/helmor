@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
+	abortRemoteAgentSession,
+	attachRemoteAgentSession,
 	attachRemoteTerminal,
 	clearWorkspaceRuntimeBinding,
 	closeRemoteTerminal,
@@ -29,11 +31,13 @@ import {
 	getWorkspaceFileTree,
 	getWorkspaceStatus,
 	listOwnedTerminals,
+	listRemoteAgentSessions,
 	listRemoteRuntimes,
 	listRemoteTerminals,
 	listSshHosts,
 	listWorkspaceRuntimeBindings,
 	openRemoteTerminal,
+	type RemoteAgentSession,
 	type RemoteTerminalListEntry,
 	type RuntimeEntry,
 	type RuntimeHealth,
@@ -93,6 +97,7 @@ export function RuntimeDebugPanel() {
 			<WorkspaceInspectorProbeSection entries={entries} />
 			<WorkspaceBindingsSection entries={entries} />
 			<SetAgentAuthSection entries={entries} />
+			<RemoteAgentSessionsSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
 	);
@@ -1548,6 +1553,238 @@ function ReattachList({
 			)}
 		</div>
 	);
+}
+
+// ── Remote agent sessions (phase 24d — reattach UX) ───────────────
+
+function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	const [runtimeName, setRuntimeName] = useState<string>("");
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [notice, setNotice] = useState<{
+		tone: "info" | "error" | "ok";
+		text: string;
+	} | null>(null);
+
+	// Keep the runtime selection valid as the registry list shifts —
+	// same pattern as SetAgentAuthSection above.
+	useEffect(() => {
+		if (!runtimeName && remotes[0]) {
+			setRuntimeName(remotes[0].name);
+			return;
+		}
+		if (runtimeName && !remotes.some((e) => e.name === runtimeName)) {
+			setRuntimeName(remotes[0]?.name ?? "");
+		}
+	}, [remotes, runtimeName]);
+
+	const sessionsQuery = useQuery({
+		queryKey: ["remote-agent-sessions", runtimeName],
+		queryFn: () => listRemoteAgentSessions(runtimeName),
+		enabled: runtimeName.length > 0,
+		refetchOnWindowFocus: false,
+	});
+
+	const abortMutation = useMutation({
+		mutationFn: async (requestId: string) => {
+			await abortRemoteAgentSession(runtimeName, requestId);
+		},
+		onMutate: (requestId) => setBusyId(requestId),
+		onSettled: () => {
+			setBusyId(null);
+			void sessionsQuery.refetch();
+		},
+		onSuccess: (_data, requestId) => {
+			setNotice({
+				tone: "ok",
+				text: `Abort sent to ${requestId}. Daemon will tear down the session shortly.`,
+			});
+		},
+		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
+	});
+
+	const attachMutation = useMutation({
+		mutationFn: async (requestId: string) => {
+			const found = await attachRemoteAgentSession(runtimeName, requestId);
+			return { requestId, found };
+		},
+		onMutate: (requestId: string) => setBusyId(requestId),
+		onSettled: () => {
+			setBusyId(null);
+			void sessionsQuery.refetch();
+		},
+		onSuccess: ({ requestId, found }) => {
+			if (found) {
+				setNotice({
+					tone: "ok",
+					text: `Attached to ${requestId}. Events flow to this desktop until the session ends.`,
+				});
+			} else {
+				setNotice({
+					tone: "info",
+					text: `Session ${requestId} has ended — the daemon no longer tracks it.`,
+				});
+			}
+		},
+		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
+	});
+
+	const sessions = sessionsQuery.data ?? [];
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Plug2 className="size-3.5" strokeWidth={1.8} />}
+				title="Remote agent sessions"
+				description="Inspect in-flight agent turns on a connected remote runtime. Use Abort to stop an orphaned session; Reattach to pump events back to this desktop's notification subscriber."
+			/>
+
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remotes.length === 0 ? (
+					<SettingsNotice tone="info">
+						No remote runtimes connected yet — agent sessions appear here once
+						you connect one in the form above.
+					</SettingsNotice>
+				) : (
+					<>
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center">
+							<Label htmlFor="rt-sessions-runtime" className="text-xs">
+								Runtime
+							</Label>
+							<select
+								id="rt-sessions-runtime"
+								className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
+								value={runtimeName}
+								onChange={(e) => setRuntimeName(e.currentTarget.value)}
+							>
+								{remotes.map((entry) => (
+									<option key={entry.name} value={entry.name}>
+										{entry.name}
+									</option>
+								))}
+							</select>
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={!runtimeName || sessionsQuery.isFetching}
+								onClick={() => void sessionsQuery.refetch()}
+								aria-label="Refresh remote agent sessions"
+							>
+								{sessionsQuery.isFetching ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Refreshing…
+									</>
+								) : (
+									<>
+										<RefreshCw className="mr-1.5 size-3.5" />
+										Refresh
+									</>
+								)}
+							</Button>
+						</div>
+
+						{notice && (
+							<SettingsNotice tone={notice.tone}>{notice.text}</SettingsNotice>
+						)}
+
+						{sessionsQuery.error ? (
+							<SettingsNotice tone="error">
+								{errorMessage(sessionsQuery.error)}
+							</SettingsNotice>
+						) : sessionsQuery.isLoading ? (
+							<span className="text-[11px] text-muted-foreground">
+								Listing agent sessions…
+							</span>
+						) : sessions.length === 0 ? (
+							<span className="text-[11px] text-muted-foreground">
+								No active agent sessions on this runtime.
+							</span>
+						) : (
+							<ul className="flex flex-col gap-1">
+								{sessions.map((session) => (
+									<RemoteAgentSessionRow
+										key={session.requestId}
+										session={session}
+										busy={
+											busyId === session.requestId ||
+											abortMutation.isPending ||
+											attachMutation.isPending
+										}
+										onAbort={() => abortMutation.mutate(session.requestId)}
+										onAttach={() => attachMutation.mutate(session.requestId)}
+									/>
+								))}
+							</ul>
+						)}
+					</>
+				)}
+			</div>
+		</section>
+	);
+}
+
+function RemoteAgentSessionRow({
+	session,
+	busy,
+	onAbort,
+	onAttach,
+}: {
+	session: RemoteAgentSession;
+	busy: boolean;
+	onAbort: () => void;
+	onAttach: () => void;
+}) {
+	const startedAgoMs = Date.now() - session.startedAtMs;
+	const sinceLastMs = Date.now() - session.lastEventMs;
+	return (
+		<li
+			className="flex items-center justify-between gap-2 rounded border border-border/30 bg-card/40 px-2 py-1.5"
+			data-testid={`remote-agent-session-${session.requestId}`}
+		>
+			<div className="flex min-w-0 flex-1 flex-col">
+				<span className="truncate font-mono text-[11px]">
+					{session.requestId}
+				</span>
+				<span className="truncate text-[10px] text-muted-foreground">
+					{session.provider ?? "no provider"} ·{" "}
+					{session.workspaceDir ?? "no workspace dir"} · started{" "}
+					{formatAgo(startedAgoMs)} · last event {formatAgo(sinceLastMs)}
+				</span>
+			</div>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={busy}
+				onClick={onAttach}
+				aria-label={`Reattach to ${session.requestId}`}
+			>
+				<Plug className="mr-1.5 size-3.5" />
+				Reattach
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={busy}
+				onClick={onAbort}
+				aria-label={`Abort ${session.requestId}`}
+			>
+				<X className="mr-1.5 size-3.5" />
+				Abort
+			</Button>
+		</li>
+	);
+}
+
+function formatAgo(ms: number): string {
+	if (ms < 0) return "just now";
+	if (ms < 1000) return "just now";
+	const sec = Math.floor(ms / 1000);
+	if (sec < 60) return `${sec}s ago`;
+	const min = Math.floor(sec / 60);
+	if (min < 60) return `${min}m ago`;
+	const hr = Math.floor(min / 60);
+	return `${hr}h ago`;
 }
 
 function RemoteTerminalSection({ entries }: { entries: RuntimeEntry[] }) {

@@ -643,6 +643,116 @@ pub async fn set_runtime_agent_auth(
     .await
 }
 
+/// Snapshot the daemon's active agent sessions on `name`. The
+/// returned list is whatever the remote's `agent.list` knows about —
+/// including orphaned sessions left over from a desktop that crashed
+/// mid-stream. Drives the reattach UX (phase 24d): the desktop shows
+/// the user "the remote thinks turn X is still running" and offers an
+/// abort / attach affordance.
+///
+/// Refuses the built-in `local` runtime: the local sidecar is owned
+/// by the desktop's `ManagedSidecar` and tracks its in-flight turns
+/// through `ActiveStreams`. There's no daemon-side `agent.list` to
+/// call there.
+#[tauri::command]
+pub async fn list_remote_agent_sessions(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<Vec<crate::remote::AgentSessionEntry>> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || list_remote_agent_sessions_inner(&registry, name)).await
+}
+
+fn list_remote_agent_sessions_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+) -> anyhow::Result<Vec<crate::remote::AgentSessionEntry>> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("agent.list is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    let result = runtime.agent_list(crate::remote::AgentListParams::default())?;
+    Ok(result.sessions)
+}
+
+/// Forward an abort to the daemon's per-session sidecar. Used by the
+/// reattach UX to stop an orphaned remote turn the user no longer
+/// wants. The remote sidecar emits a terminating `aborted` event that
+/// the daemon broadcasts to any attached client; if no client is
+/// attached the event is dropped (and the session removed) by the
+/// daemon's per-session map.
+#[tauri::command]
+pub async fn abort_remote_agent_session(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+    request_id: String,
+) -> CmdResult<()> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || abort_remote_agent_session_inner(&registry, name, request_id)).await
+}
+
+fn abort_remote_agent_session_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+    request_id: String,
+) -> anyhow::Result<()> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if request_id.trim().is_empty() {
+        bail!("request_id must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("agent.abort is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    let _ = runtime.agent_abort(crate::remote::AgentAbortParams { request_id })?;
+    Ok(())
+}
+
+/// Reattach the desktop's notification subscriber to an existing
+/// remote agent session. Returns `true` when the daemon swapped the
+/// per-session notifier; `false` when the session expired or never
+/// existed on the daemon (the desktop should drop any tentative
+/// local subscription).
+///
+/// Pure RPC pass-through today — the desktop-side glue that pumps
+/// the post-attach event stream back into the chat pipeline is a
+/// follow-on slice. Surfacing the result here gives the operator a
+/// "does the remote remember this turn?" probe + lets the UI show a
+/// stale-session toast when the answer is no.
+#[tauri::command]
+pub async fn attach_remote_agent_session(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+    request_id: String,
+) -> CmdResult<bool> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || attach_remote_agent_session_inner(&registry, name, request_id)).await
+}
+
+fn attach_remote_agent_session_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+    request_id: String,
+) -> anyhow::Result<bool> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if request_id.trim().is_empty() {
+        bail!("request_id must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("agent.attach is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    let result = runtime.agent_attach(crate::remote::AgentAttachParams { request_id })?;
+    Ok(result.found)
+}
+
 /// Snapshot the registry's current configs and write them to
 /// `<data_dir>/remote_runtimes.json`. Best-effort — failures log
 /// without rolling back the mutation that triggered the save.
@@ -1567,6 +1677,15 @@ mod tests {
         read_at_ref_calls: Mutex<Vec<WorkspaceReadFileAtRefParams>>,
         stat_calls: Mutex<Vec<WorkspaceStatFileParams>>,
         mutate_calls: Mutex<Vec<WorkspaceMutateFileParams>>,
+        agent_list_calls: Mutex<u32>,
+        agent_abort_calls: Mutex<Vec<crate::remote::AgentAbortParams>>,
+        agent_attach_calls: Mutex<Vec<crate::remote::AgentAttachParams>>,
+        /// Sessions the stub reports in `agent_list`. Tests seed this
+        /// before driving the command so the response is deterministic.
+        agent_sessions: Mutex<Vec<crate::remote::AgentSessionEntry>>,
+        /// Override the `attach` return value so tests can exercise
+        /// both the found / not-found branches.
+        agent_attach_found: Mutex<bool>,
     }
 
     impl InspectorStubRuntime {
@@ -1708,6 +1827,31 @@ mod tests {
                 matches!(params.action, WorkspaceMutateFileAction::Write { .. }).then_some(777_i64);
             self.mutate_calls.lock().unwrap().push(params);
             Ok(WorkspaceMutateFileResult { mtime_ms })
+        }
+        fn agent_list(
+            &self,
+            _params: crate::remote::AgentListParams,
+        ) -> Result<crate::remote::AgentListResult> {
+            *self.agent_list_calls.lock().unwrap() += 1;
+            Ok(crate::remote::AgentListResult {
+                sessions: self.agent_sessions.lock().unwrap().clone(),
+            })
+        }
+        fn agent_abort(
+            &self,
+            params: crate::remote::AgentAbortParams,
+        ) -> Result<crate::remote::methods::AgentAbortResult> {
+            self.agent_abort_calls.lock().unwrap().push(params);
+            Ok(crate::remote::methods::AgentAbortResult::default())
+        }
+        fn agent_attach(
+            &self,
+            params: crate::remote::AgentAttachParams,
+        ) -> Result<crate::remote::AgentAttachResult> {
+            self.agent_attach_calls.lock().unwrap().push(params);
+            Ok(crate::remote::AgentAttachResult {
+                found: *self.agent_attach_found.lock().unwrap(),
+            })
         }
     }
 
@@ -2032,6 +2176,161 @@ mod tests {
         assert!(recorded
             .iter()
             .any(|p| matches!(p.action, WorkspaceMutateFileAction::Unstage)));
+    }
+
+    // ── remote agent reattach (phase 24d) ─────────────────────────
+
+    #[test]
+    fn list_remote_agent_sessions_rejects_empty_name() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err = list_remote_agent_sessions_inner(&registry, "".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("runtime name must not be empty"));
+        let err = list_remote_agent_sessions_inner(&registry, "   ".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("runtime name must not be empty"));
+    }
+
+    #[test]
+    fn list_remote_agent_sessions_refuses_local_runtime_by_name() {
+        // The local sidecar has no daemon-side agent.list — refuse
+        // explicitly rather than passing through to the trait default
+        // (which would bail with a generic "only on connected remote"
+        // message). Operator gets the actionable hint.
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err =
+            list_remote_agent_sessions_inner(&registry, LOCAL_RUNTIME_NAME.into()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("only available on registered remote runtimes"));
+        assert!(msg.contains(LOCAL_RUNTIME_NAME));
+    }
+
+    #[test]
+    fn list_remote_agent_sessions_returns_runtime_sessions() {
+        let (registry, stub) = registry_with_inspector_stub();
+        // Seed two scripted sessions on the stub. The command should
+        // surface them in trait-order (no sorting/dedup at this layer).
+        let session_a = crate::remote::AgentSessionEntry {
+            request_id: "req-A".into(),
+            helmor_session_id: Some("hs-1".into()),
+            provider: Some("claude".into()),
+            workspace_dir: Some("/srv/repos/demo".into()),
+            started_at_ms: 1_000,
+            last_event_ms: 1_500,
+        };
+        let session_b = crate::remote::AgentSessionEntry {
+            request_id: "req-B".into(),
+            helmor_session_id: None,
+            provider: None,
+            workspace_dir: None,
+            started_at_ms: 2_000,
+            last_event_ms: 2_000,
+        };
+        *stub.agent_sessions.lock().unwrap() = vec![session_a.clone(), session_b.clone()];
+
+        let sessions = list_remote_agent_sessions_inner(&registry, "stub.box".into()).unwrap();
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].request_id, "req-A");
+        assert_eq!(sessions[0].helmor_session_id.as_deref(), Some("hs-1"));
+        assert_eq!(sessions[0].provider.as_deref(), Some("claude"));
+        assert_eq!(sessions[1].request_id, "req-B");
+        assert!(sessions[1].helmor_session_id.is_none());
+        assert_eq!(*stub.agent_list_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn list_remote_agent_sessions_surfaces_runtime_error_to_caller() {
+        // The registry's `lookup` of an unregistered name fails with
+        // a wrapped error. The command must propagate rather than
+        // panicking or silently returning an empty list (which would
+        // hide a configuration bug).
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err = list_remote_agent_sessions_inner(&registry, "not.registered".into()).unwrap_err();
+        assert!(
+            format!("{err:#}").to_lowercase().contains("not")
+                || format!("{err:#}").contains("registered"),
+            "lookup error should surface: {err:#}"
+        );
+    }
+
+    #[test]
+    fn abort_remote_agent_session_validates_request_id() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err =
+            abort_remote_agent_session_inner(&registry, "stub.box".into(), "".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("request_id must not be empty"));
+        let err = abort_remote_agent_session_inner(&registry, "stub.box".into(), "   ".into())
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("request_id must not be empty"));
+    }
+
+    #[test]
+    fn abort_remote_agent_session_refuses_local_runtime_by_name() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let err =
+            abort_remote_agent_session_inner(&registry, LOCAL_RUNTIME_NAME.into(), "req-1".into())
+                .unwrap_err();
+        assert!(format!("{err:#}").contains("only available on registered remote runtimes"));
+    }
+
+    #[test]
+    fn abort_remote_agent_session_forwards_request_id_to_runtime() {
+        let (registry, stub) = registry_with_inspector_stub();
+        abort_remote_agent_session_inner(&registry, "stub.box".into(), "req-abort-1".into())
+            .unwrap();
+        let calls = stub.agent_abort_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].request_id, "req-abort-1");
+    }
+
+    #[test]
+    fn attach_remote_agent_session_validates_inputs() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        // Empty name.
+        let err =
+            attach_remote_agent_session_inner(&registry, "".into(), "req-1".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("runtime name must not be empty"));
+        // Empty request_id.
+        let err =
+            attach_remote_agent_session_inner(&registry, "stub.box".into(), "".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("request_id must not be empty"));
+        // Local runtime.
+        let err =
+            attach_remote_agent_session_inner(&registry, LOCAL_RUNTIME_NAME.into(), "req-1".into())
+                .unwrap_err();
+        assert!(format!("{err:#}").contains("only available on registered remote runtimes"));
+    }
+
+    #[test]
+    fn attach_remote_agent_session_reports_found_when_runtime_reports_found() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+
+        let found =
+            attach_remote_agent_session_inner(&registry, "stub.box".into(), "req-attach-1".into())
+                .unwrap();
+
+        assert!(found);
+        let calls = stub.agent_attach_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].request_id, "req-attach-1");
+    }
+
+    #[test]
+    fn attach_remote_agent_session_reports_false_when_runtime_does_not_find_session() {
+        // When the daemon-side session has expired between list +
+        // attach, the runtime reports `found=false`. The command
+        // surfaces that bool without converting it into an error —
+        // the desktop UI uses it to show a "session has ended"
+        // toast and clear the reattach affordance.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = false;
+
+        let found =
+            attach_remote_agent_session_inner(&registry, "stub.box".into(), "req-stale".into())
+                .unwrap();
+
+        assert!(!found);
+        assert_eq!(stub.agent_attach_calls.lock().unwrap().len(), 1);
     }
 
     #[test]

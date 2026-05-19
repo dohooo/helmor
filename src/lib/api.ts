@@ -930,6 +930,67 @@ export async function setRuntimeAgentAuth(
 	});
 }
 
+// ── remote agent sessions (phase 24d — reattach UX) ────────────────
+
+/**
+ * One row from `agent.list` on a connected remote runtime. Mirrors
+ * `AgentSessionEntry` in the Rust backend; populated lazily by the
+ * daemon as the sidecar emits `system.init` (so `provider` and
+ * `workspaceDir` may be `null` for a freshly-accepted send that
+ * hasn't yet seen the first event).
+ */
+export type RemoteAgentSession = {
+	requestId: string;
+	helmorSessionId: string | null;
+	provider: string | null;
+	workspaceDir: string | null;
+	startedAtMs: number;
+	lastEventMs: number;
+};
+
+/**
+ * Snapshot the daemon's active agent sessions on a connected remote
+ * runtime. Drives the reattach UX (visibility into orphaned remote
+ * turns + manual abort affordance).
+ *
+ * Refuses the built-in `"local"` runtime — there's no daemon-side
+ * agent.list to call; local in-flight turns are tracked through
+ * `ActiveStreams` instead.
+ */
+export async function listRemoteAgentSessions(
+	name: string,
+): Promise<RemoteAgentSession[]> {
+	return invoke<RemoteAgentSession[]>("list_remote_agent_sessions", { name });
+}
+
+/**
+ * Abort an in-flight remote agent session by request id. The remote
+ * sidecar emits a terminating `aborted` event that the daemon
+ * broadcasts to any attached client; if no client is attached the
+ * event is dropped (and the session removed) by the daemon's
+ * per-session map.
+ */
+export async function abortRemoteAgentSession(
+	name: string,
+	requestId: string,
+): Promise<void> {
+	return invoke<void>("abort_remote_agent_session", { name, requestId });
+}
+
+/**
+ * Reattach the desktop's notification subscriber to an existing
+ * remote agent session. Returns `true` when the daemon swapped the
+ * per-session notifier; `false` when the session expired or never
+ * existed on the daemon (the desktop should drop any tentative
+ * local subscription).
+ */
+export async function attachRemoteAgentSession(
+	name: string,
+	requestId: string,
+): Promise<boolean> {
+	return invoke<boolean>("attach_remote_agent_session", { name, requestId });
+}
+
 // ── remote terminals ────────────────────────────────────────────
 
 /**

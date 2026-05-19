@@ -50,8 +50,9 @@ pub use codec::{read_frame, write_frame, FrameError};
 pub use connection::RuntimeConnectionConfig;
 pub use liveness::spawn_liveness_loop;
 pub use methods::{
-    AgentSetAuthParams, AgentSetAuthResult, Method, RpcMethod, WorkspaceStatusMethod,
-    WorkspaceStatusParams, WorkspaceStatusResult,
+    AgentAbortParams, AgentAttachParams, AgentAttachResult, AgentListParams, AgentListResult,
+    AgentSessionEntry, AgentSetAuthParams, AgentSetAuthResult, Method, RpcMethod,
+    WorkspaceStatusMethod, WorkspaceStatusParams, WorkspaceStatusResult,
 };
 pub use owned_terminals::{OwnedTerminalEntry, OwnedTerminals};
 pub use protocol::{
