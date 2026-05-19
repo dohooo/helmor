@@ -246,6 +246,43 @@ describe("CodexAppServerManager", () => {
 		);
 	});
 
+	test("forwards effort through codex collaboration mode settings", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-effort-collab-mode",
+			{
+				sessionId: "session-effort",
+				prompt: "hello",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: "bypassPermissions",
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const turnStart = serverState.requests.find(
+			(request) => request.method === "turn/start",
+		);
+
+		expect(turnStart?.params).toEqual(
+			expect.objectContaining({
+				effort: "high",
+				collaborationMode: {
+					mode: "default",
+					settings: {
+						model: "gpt-5.4",
+						reasoning_effort: "high",
+					},
+				},
+			}),
+		);
+	});
+
 	test("plan mode with additionalDirectories sets sandboxPolicy writableRoots including cwd", async () => {
 		const manager = new CodexAppServerManager();
 		gitAccessState.directories = ["/git/worktree-meta", "/git/common"];
@@ -259,7 +296,7 @@ describe("CodexAppServerManager", () => {
 				cwd: "/tmp/workspace",
 				resume: undefined,
 				permissionMode: "plan",
-				effortLevel: "medium",
+				effortLevel: "xhigh",
 				fastMode: false,
 				images: [],
 				// Include cwd explicitly to verify dedupe, and a duplicate
@@ -275,6 +312,14 @@ describe("CodexAppServerManager", () => {
 
 		expect(turnStart?.params).toEqual(
 			expect.objectContaining({
+				effort: "xhigh",
+				collaborationMode: {
+					mode: "plan",
+					settings: {
+						model: "gpt-5.4",
+						reasoning_effort: "xhigh",
+					},
+				},
 				sandboxPolicy: {
 					type: "workspaceWrite",
 					writableRoots: [
