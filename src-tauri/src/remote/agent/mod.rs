@@ -36,6 +36,7 @@
 //!   stream so the bridge surface can be exercised without spawning
 //!   a real `helmor-sidecar` binary.
 
+mod journal;
 mod secrets;
 mod spawner;
 
@@ -46,6 +47,8 @@ pub mod mock;
 mod tests;
 
 pub use spawner::{AgentSpawner, BinaryAgentSpawner, SidecarPipe};
+
+use journal::EventJournal;
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -175,6 +178,7 @@ impl RemoteAgentState {
             workspace_dir: Mutex::new(workspace_dir),
             started_at_ms: now,
             last_event_ms: Mutex::new(now),
+            journal: Mutex::new(EventJournal::default()),
         };
         self.sessions
             .lock()
@@ -277,9 +281,30 @@ impl RemoteAgentState {
         AgentListResult { sessions: entries }
     }
 
-    /// Swap the notifier on an existing session. `found=false` when
-    /// the request id has no live session — the daemon never knew
-    /// about it, or it ended before the client reattached.
+    /// Swap the notifier on an existing session and replay any
+    /// journal entries the caller missed.
+    ///
+    /// `found=false` when the request id has no live session — the
+    /// daemon never knew about it, or it ended before the client
+    /// reattached.
+    ///
+    /// **Phase 24q-1 contract**: the sessions HashMap lock is held
+    /// across notifier swap → journal snapshot → flush. The reader
+    /// thread blocks on the same lock for its own append path, so
+    /// the sequence is deterministic:
+    ///
+    /// 1. Live events with `seq ≤ snapshot_head` reach the OLD
+    ///    notifier (already delivered before attach).
+    /// 2. Flushed entries (`since_seq < seq ≤ snapshot_head`) reach
+    ///    the new notifier in order via this call.
+    /// 3. Live events with `seq > snapshot_head` reach the NEW
+    ///    notifier as the reader thread emits them after the
+    ///    sessions lock releases.
+    ///
+    /// Holding the HashMap lock during flush blocks reader threads
+    /// for OTHER sessions too. The flush is bounded by the
+    /// journal's capacity (1024 entries today), so the stall is
+    /// short — fine for reattach which is rare.
     pub fn attach(
         &self,
         params: AgentAttachParams,
@@ -288,14 +313,59 @@ impl RemoteAgentState {
         let sessions = self.sessions.lock().expect("agent sessions mutex poisoned");
         let session = match sessions.get(&params.request_id) {
             Some(s) => s,
-            None => return Ok(AgentAttachResult { found: false }),
+            None => return Ok(AgentAttachResult::default()),
         };
-        let mut current = session
-            .notifier
+
+        // Swap notifier first so the reader thread's NEXT append
+        // routes to the new client. The journal snapshot below
+        // covers everything up to the head the journal has right
+        // now; events emitted after this point land via the new
+        // notifier (and into the journal for any FUTURE reattach
+        // off this same session).
+        {
+            let mut current = session
+                .notifier
+                .lock()
+                .expect("session notifier mutex poisoned");
+            *current = Arc::clone(&notifier);
+        }
+
+        // Snapshot the journal under the same sessions lock so the
+        // reader thread can't append between our swap and our
+        // snapshot — out-of-order delivery to the new client is the
+        // alternative.
+        let snapshot = session
+            .journal
             .lock()
-            .expect("session notifier mutex poisoned");
-        *current = notifier;
-        Ok(AgentAttachResult { found: true })
+            .expect("session journal mutex poisoned")
+            .replay_since(params.since_seq);
+
+        let entries = snapshot.entries;
+        let replayed_count = entries.len() as u64;
+        let request_id = params.request_id.clone();
+
+        // Flush the snapshot to the new notifier BEFORE releasing
+        // the sessions lock. Holding the lock through flush
+        // preserves ordering vs. the reader thread; the snapshot
+        // contents are fixed in memory at this point, so the only
+        // work is calling `notifier.notify` per entry.
+        for entry in entries {
+            notifier.notify(
+                AGENT_EVENT_METHOD,
+                json!({
+                    "requestId": request_id,
+                    "event": entry.payload,
+                    "seq": entry.seq,
+                }),
+            );
+        }
+
+        Ok(AgentAttachResult {
+            found: true,
+            last_seq: snapshot.head_seq,
+            replayed_count,
+            replay_gap: snapshot.replay_gap,
+        })
     }
 
     /// Persist an SDK API key (or clear it) and hot-push the change
@@ -479,6 +549,12 @@ struct ActiveAgentSession {
     workspace_dir: Mutex<Option<String>>,
     started_at_ms: i64,
     last_event_ms: Mutex<i64>,
+    /// Phase 24q-1: bounded ring of recent sidecar events. Read by
+    /// `agent.attach` to replay missed events to a reconnecting
+    /// client (see [`journal`] for capacity + eviction semantics).
+    /// Held behind `Mutex` rather than `RwLock` because every reader
+    /// loop iteration appends (write-heavy access).
+    journal: Mutex<EventJournal>,
 }
 
 fn spawn_reader_thread(
@@ -543,7 +619,7 @@ fn reader_loop(
             _ => continue,
         };
 
-        let (notifier, completed) = {
+        let (notifier, completed, seq) = {
             let mut sessions_guard = sessions.lock().expect("agent sessions mutex poisoned");
             let Some(session) = sessions_guard.get_mut(&id) else {
                 continue;
@@ -575,6 +651,19 @@ fn reader_loop(
                 .lock()
                 .expect("session field mutex poisoned") = now_ms();
 
+            // Phase 24q-1: append to the journal BEFORE reading the
+            // notifier. Holds the sessions HashMap lock for the
+            // append so an `agent.attach` racing in can't observe
+            // a notifier swap that's older than its journal
+            // snapshot — the attach handler holds the same lock
+            // through its swap+snapshot+flush sequence (see
+            // `RemoteAgentState::attach`).
+            let seq = session
+                .journal
+                .lock()
+                .expect("session journal mutex poisoned")
+                .append(value.clone());
+
             let notifier = session
                 .notifier
                 .lock()
@@ -589,7 +678,7 @@ fn reader_loop(
                 value.get("type").and_then(Value::as_str),
                 Some("result") | Some("end")
             );
-            (notifier, completed)
+            (notifier, completed, seq)
         };
 
         notifier.notify(
@@ -597,6 +686,12 @@ fn reader_loop(
             json!({
                 "requestId": id,
                 "event": value,
+                // Phase 24q-1 wire shape: the seq lets a desktop
+                // track its high-water-mark per session so a future
+                // reattach can ask for `since_seq`. Additive
+                // backward-compatible field; older clients ignore
+                // it.
+                "seq": seq,
             }),
         );
 

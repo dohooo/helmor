@@ -1006,10 +1006,22 @@ impl RpcMethod for AgentListMethod {
     type Result = AgentListResult;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentAttachParams {
     pub request_id: String,
+    /// Phase 24q-1: the highest event `seq` the calling client has
+    /// already observed for this session. The daemon flushes
+    /// journal entries with `seq > since_seq` through the new
+    /// notifier before going live, so a reconnecting client catches
+    /// up to the live tail without missing events.
+    ///
+    /// `None` is the cold-attach case — the client has no history
+    /// and wants the daemon's full ring. `Some(0)` is the explicit
+    /// "I have nothing" form (semantically equivalent to `None`
+    /// today, distinguished for telemetry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1020,6 +1032,29 @@ pub struct AgentAttachResult {
     /// never existed on this daemon — the client should drop its
     /// local subscription rather than wait indefinitely.
     pub found: bool,
+    /// Phase 24q-1: highest seq the daemon's journal has observed
+    /// for this session. The client stores this as its new
+    /// `since_seq` for any future reattach. `0` when the journal
+    /// is empty (a session that was just created and hasn't emitted
+    /// anything yet, or when `found=false`).
+    #[serde(default)]
+    pub last_seq: u64,
+    /// Phase 24q-1: number of journal entries the daemon flushed to
+    /// the new notifier as part of this attach. `0` on a cold
+    /// attach to an empty session, on a re-attach with `since_seq
+    /// == last_seq`, or on `found=false`.
+    #[serde(default)]
+    pub replayed_count: u64,
+    /// Phase 24q-1: when the caller's `since_seq` is older than the
+    /// oldest entry still in the ring (eviction), the daemon cannot
+    /// satisfy the full replay. This field carries the earliest
+    /// seq the journal can still deliver. The client treats this
+    /// as "I missed some events; fall back to a full local-DB
+    /// reload" or accepts the partial replay and continues. `None`
+    /// when the replay was complete (or when there was nothing to
+    /// replay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_gap: Option<u64>,
 }
 
 pub struct AgentAttachMethod;
@@ -1758,8 +1793,76 @@ mod tests {
 
     #[test]
     fn agent_attach_result_carries_found_flag() {
-        let wire = serde_json::to_value(AgentAttachResult { found: true }).unwrap();
+        let wire = serde_json::to_value(AgentAttachResult {
+            found: true,
+            ..Default::default()
+        })
+        .unwrap();
         assert_eq!(wire["found"], true);
+    }
+
+    #[test]
+    fn agent_attach_result_serializes_phase_24q1_fields_in_camel_case() {
+        // Locks the 24q-1 wire shape: `lastSeq`, `replayedCount`,
+        // `replayGap` (omitted when None). Snake_case would break
+        // the desktop's typed deserializer.
+        let wire = serde_json::to_value(AgentAttachResult {
+            found: true,
+            last_seq: 42,
+            replayed_count: 7,
+            replay_gap: Some(3),
+        })
+        .unwrap();
+        assert_eq!(wire["lastSeq"], 42);
+        assert_eq!(wire["replayedCount"], 7);
+        assert_eq!(wire["replayGap"], 3);
+        assert!(wire.get("last_seq").is_none(), "snake_case leaked");
+    }
+
+    #[test]
+    fn agent_attach_result_omits_replay_gap_when_none() {
+        // The desktop checks `if (result.replayGap !== undefined)`;
+        // serializing `null` would force a different branch. Make
+        // sure absent gaps stay absent on the wire.
+        let wire = serde_json::to_value(AgentAttachResult {
+            found: true,
+            last_seq: 5,
+            replayed_count: 0,
+            replay_gap: None,
+        })
+        .unwrap();
+        assert!(
+            wire.get("replayGap").is_none(),
+            "replayGap should be absent, got {wire:?}",
+        );
+    }
+
+    #[test]
+    fn agent_attach_params_omits_since_seq_when_none() {
+        // Cold attach should not put `sinceSeq: null` on the wire —
+        // omit it so the daemon's `#[serde(default)]` does the right
+        // thing and old daemons that don't know about the field
+        // don't choke.
+        let wire = serde_json::to_value(AgentAttachParams {
+            request_id: "rid".into(),
+            since_seq: None,
+        })
+        .unwrap();
+        assert_eq!(wire["requestId"], "rid");
+        assert!(
+            wire.get("sinceSeq").is_none(),
+            "sinceSeq should be absent on cold attach, got {wire:?}",
+        );
+    }
+
+    #[test]
+    fn agent_attach_params_includes_since_seq_when_set() {
+        let wire = serde_json::to_value(AgentAttachParams {
+            request_id: "rid".into(),
+            since_seq: Some(42),
+        })
+        .unwrap();
+        assert_eq!(wire["sinceSeq"], 42);
     }
 
     #[test]
