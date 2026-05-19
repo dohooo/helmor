@@ -6,7 +6,7 @@ line_count: 1
 control_events:
   - kind: userInputRequest
     message: Codex needs your input.
-    model_id: model-id
+    modelId: model-id
     payload:
       kind: form
       schema:
@@ -25,12 +25,12 @@ control_events:
         required:
           - approval
         type: object
-    permission_mode: default
+    permissionMode: default
     provider: codex
-    resolved_model: test-model
-    session_id: provider-session-1
+    resolvedModel: test-model
+    sessionId: provider-session-1
     source: Codex
     userInputId: user-input-1
-    working_directory: /tmp/helmor
+    workingDirectory: /tmp/helmor
 final_messages: []
 dropped_event_types: []

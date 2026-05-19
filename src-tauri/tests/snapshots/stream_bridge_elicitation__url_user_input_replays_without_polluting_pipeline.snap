@@ -6,17 +6,17 @@ line_count: 3
 control_events:
   - kind: userInputRequest
     message: Finish sign-in in the browser.
-    model_id: opus-1m
+    modelId: opus-1m
     payload:
       kind: url
       url: "https://example.com/authorize"
-    permission_mode: ~
+    permissionMode: ~
     provider: claude
-    resolved_model: claude-opus-4-20250514
-    session_id: provider-session-1
+    resolvedModel: claude-opus-4-20250514
+    sessionId: provider-session-1
     source: auth-server
     userInputId: user-input-url-1
-    working_directory: /tmp/helmor
+    workingDirectory: /tmp/helmor
 final_messages:
   - role: assistant
     id: msg-1

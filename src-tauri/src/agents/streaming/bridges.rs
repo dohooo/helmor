@@ -299,19 +299,19 @@ mod tests {
             @r#"
         kind: userInputRequest
         message: Claude is asking for your input.
-        model_id: opus-1m
+        modelId: opus-1m
         payload:
           kind: ask-user-question
           questions:
             - options: []
               question: Pick one
-        permission_mode: default
+        permissionMode: default
         provider: claude
-        resolved_model: claude-opus-4-20250514
-        session_id: provider-session-1
+        resolvedModel: claude-opus-4-20250514
+        sessionId: provider-session-1
         source: Claude
         userInputId: tool-1
-        working_directory: /tmp/helmor
+        workingDirectory: /tmp/helmor
         "#
         );
     }
@@ -369,12 +369,12 @@ mod tests {
             serde_json::to_value(&event).unwrap(),
             @r#"
         kind: done
-        model_id: opus-1m
+        modelId: opus-1m
         persisted: true
         provider: claude
-        resolved_model: claude-opus-4-20250514
-        session_id: provider-session-1
-        working_directory: /tmp/helmor
+        resolvedModel: claude-opus-4-20250514
+        sessionId: provider-session-1
+        workingDirectory: /tmp/helmor
         "#
         );
     }
@@ -395,13 +395,13 @@ mod tests {
             serde_json::to_value(&event).unwrap(),
             @r#"
         kind: aborted
-        model_id: opus-1m
+        modelId: opus-1m
         persisted: true
         provider: claude
         reason: user_requested
-        resolved_model: claude-opus-4-20250514
-        session_id: provider-session-1
-        working_directory: /tmp/helmor
+        resolvedModel: claude-opus-4-20250514
+        sessionId: provider-session-1
+        workingDirectory: /tmp/helmor
         "#
         );
     }
