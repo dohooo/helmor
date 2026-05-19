@@ -1,12 +1,13 @@
 ---
 source: tests/stream_bridge_elicitation.rs
+assertion_line: 127
 expression: snapshot
 ---
 line_count: 5
 control_events:
   - kind: userInputRequest
     message: Need structured input
-    model_id: opus-1m
+    modelId: opus-1m
     payload:
       kind: form
       schema:
@@ -21,13 +22,13 @@ control_events:
           - name
           - approved
         type: object
-    permission_mode: ~
+    permissionMode: ~
     provider: claude
-    resolved_model: claude-opus-4-20250514
-    session_id: provider-session-1
+    resolvedModel: claude-opus-4-20250514
+    sessionId: provider-session-1
     source: design-server
     userInputId: user-input-form-1
-    working_directory: /tmp/helmor
+    workingDirectory: /tmp/helmor
 final_messages:
   - role: assistant
     id: msg-1
