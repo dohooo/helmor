@@ -84,6 +84,9 @@ pub fn run() {
             commands::remote_commands::RemoteTerminalSubscriptions::new(),
         ))
         .manage(std::sync::Arc::new(
+            commands::remote_commands::RemoteAgentStreamSubscriptions::new(),
+        ))
+        .manage(std::sync::Arc::new(
             commands::workspace_watch::WorkspaceFileWatchManager::new(),
         ))
         .setup(|app| {
@@ -392,6 +395,8 @@ pub fn run() {
             commands::remote_commands::clear_workspace_runtime_binding,
             commands::remote_commands::abort_remote_agent_session,
             commands::remote_commands::attach_remote_agent_session,
+            commands::remote_commands::reattach_remote_agent_session_stream,
+            commands::remote_commands::release_remote_agent_session_stream,
             commands::remote_commands::close_remote_terminal,
             commands::remote_commands::list_owned_terminals,
             commands::remote_commands::list_remote_agent_sessions,

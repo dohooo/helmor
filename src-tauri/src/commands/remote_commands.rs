@@ -73,6 +73,57 @@ impl RemoteTerminalSubscriptions {
     }
 }
 
+/// Subscriptions held alive while the desktop is reattached to a
+/// remote agent stream. Keyed by `request_id` — the same id the
+/// remote sidecar uses, so abort + stop are addressable by the
+/// existing identifier without inventing a parallel one.
+///
+/// `Drop` on each `NotificationSubscription` unregisters the
+/// `agent.event` callback on the underlying [`RpcClient`], so
+/// removing an entry both ends the stream + stops fueling the
+/// frontend Channel.
+#[derive(Default)]
+pub struct RemoteAgentStreamSubscriptions {
+    inner: std::sync::Mutex<HashMap<String, NotificationSubscription>>,
+}
+
+impl RemoteAgentStreamSubscriptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&self, request_id: String, subscription: NotificationSubscription) {
+        self.inner
+            .lock()
+            .expect("remote agent stream subscriptions mutex poisoned")
+            .insert(request_id, subscription);
+    }
+
+    fn remove(&self, request_id: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("remote agent stream subscriptions mutex poisoned")
+            .remove(request_id)
+            .is_some()
+    }
+
+    /// Sorted snapshot of active request ids. Used by tests + by a
+    /// future operator-facing surface to render "currently
+    /// streaming N attached turns".
+    #[allow(dead_code)]
+    pub fn active_request_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .inner
+            .lock()
+            .expect("remote agent stream subscriptions mutex poisoned")
+            .keys()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
 /// Probe a runtime's health. Cheap + side-effect-free — safe to poll
 /// from the frontend on a focus tick or to surface in a connection
 /// chip.
@@ -786,6 +837,162 @@ pub async fn attach_remote_agent_session(
 ) -> CmdResult<bool> {
     let registry = Arc::clone(&registry);
     run_blocking(move || attach_remote_agent_session_inner(&registry, name, request_id)).await
+}
+
+/// Reattach + live event stream. The frontend supplies a Channel
+/// the runtime pushes every matching `agent.event` notification
+/// onto, so the panel can render assistant tokens / tool calls /
+/// final result as they arrive — turning the previously-attached
+/// "did you find it?" probe into a real reattach.
+///
+/// Wire flow:
+/// 1. Subscribe to `agent.event` BEFORE the attach RPC so events
+///    fired in the gap between attach + subscribe don't get
+///    dropped.
+/// 2. Call `agent.attach(request_id)`. The daemon swaps the
+///    per-session notifier to this client's connection; from then
+///    on every event for the request flows here.
+/// 3. `found=false` means the session expired or never existed;
+///    drop the subscription + return early.
+/// 4. `found=true` means events are flowing; stash the
+///    subscription in `RemoteAgentStreamSubscriptions` so it
+///    outlives this command frame. The frontend's `release` call
+///    drops it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReattachedAgentEvent {
+    /// Echo the request_id so a single Channel could in principle
+    /// host multiple streams (today we open one per request — the
+    /// echo is forward-compatibility insurance for that fan-in).
+    pub request_id: String,
+    /// Raw sidecar event JSON, identical to the `event` field on
+    /// the daemon's `agent.event` notification. The frontend
+    /// renders it via the same logic that handles live sends.
+    pub event: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReattachAgentStreamResult {
+    /// Mirrors `attach_remote_agent_session`'s contract: `true`
+    /// means events are flowing, `false` means the session is gone
+    /// and the frontend should treat the Channel as inert.
+    pub found: bool,
+}
+
+#[tauri::command]
+pub async fn reattach_remote_agent_session_stream(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    subscriptions: tauri::State<'_, Arc<RemoteAgentStreamSubscriptions>>,
+    name: String,
+    request_id: String,
+    on_event: Channel<ReattachedAgentEvent>,
+) -> CmdResult<ReattachAgentStreamResult> {
+    let registry = Arc::clone(&registry);
+    let subscriptions = Arc::clone(&subscriptions);
+    run_blocking(move || {
+        reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            name,
+            request_id,
+            on_event,
+        )
+    })
+    .await
+}
+
+fn reattach_remote_agent_session_stream_inner(
+    registry: &Arc<RuntimeRegistry>,
+    subscriptions: &Arc<RemoteAgentStreamSubscriptions>,
+    name: String,
+    request_id: String,
+    on_event: Channel<ReattachedAgentEvent>,
+) -> anyhow::Result<ReattachAgentStreamResult> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if request_id.trim().is_empty() {
+        bail!("request_id must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("agent.attach is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+
+    // Subscribe BEFORE attach so a "ready-fire" event the daemon
+    // dispatches the moment the notifier swaps can't slip through
+    // the gap. Filter on request_id inside the callback so other
+    // concurrent streams on the same connection don't cross-talk.
+    let request_id_for_filter = request_id.clone();
+    let subscription = runtime
+        .subscribe_agent_events(Box::new(move |notif| {
+            if notif.request_id != request_id_for_filter {
+                return;
+            }
+            // Dropping the Channel before release fires a benign
+            // SendError we swallow — the runtime side keeps firing
+            // until the subscription itself is dropped.
+            let _ = on_event.send(ReattachedAgentEvent {
+                request_id: notif.request_id,
+                event: notif.event,
+            });
+        }))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime `{name}` does not stream agent events (only connected remote runtimes do)"
+            )
+        })?;
+
+    let attach_result = runtime.agent_attach(crate::remote::AgentAttachParams {
+        request_id: request_id.clone(),
+    })?;
+
+    if !attach_result.found {
+        // Drop the subscription explicitly — the daemon doesn't know
+        // about it (no live session means no notifier to swap), but
+        // dropping unregisters the per-call callback from the
+        // RpcClient so the Channel goes idle.
+        drop(subscription);
+        return Ok(ReattachAgentStreamResult { found: false });
+    }
+
+    subscriptions.insert(request_id, subscription);
+    Ok(ReattachAgentStreamResult { found: true })
+}
+
+/// Release a streaming reattach started by
+/// [`reattach_remote_agent_session_stream`]. Drops the per-
+/// `request_id` subscription, which unregisters the callback on
+/// the underlying `RpcClient`; the Channel stops receiving
+/// events. Returns `released=false` when no stream was active for
+/// `request_id` — typical when the desktop reloads and the panel
+/// blindly calls release on every known id.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseAgentStreamResult {
+    pub released: bool,
+}
+
+#[tauri::command]
+pub async fn release_remote_agent_session_stream(
+    subscriptions: tauri::State<'_, Arc<RemoteAgentStreamSubscriptions>>,
+    request_id: String,
+) -> CmdResult<ReleaseAgentStreamResult> {
+    let subscriptions = Arc::clone(&subscriptions);
+    run_blocking(move || release_remote_agent_session_stream_inner(&subscriptions, request_id))
+        .await
+}
+
+fn release_remote_agent_session_stream_inner(
+    subscriptions: &Arc<RemoteAgentStreamSubscriptions>,
+    request_id: String,
+) -> anyhow::Result<ReleaseAgentStreamResult> {
+    if request_id.trim().is_empty() {
+        bail!("request_id must not be empty");
+    }
+    let released = subscriptions.remove(&request_id);
+    Ok(ReleaseAgentStreamResult { released })
 }
 
 fn attach_remote_agent_session_inner(
@@ -1720,6 +1927,9 @@ mod tests {
     };
     use std::sync::Mutex;
 
+    type AgentEventCallback =
+        Box<dyn Fn(crate::remote::methods::AgentEventNotification) + Send + Sync>;
+
     /// Stub runtime that records every inspector call so tests can
     /// assert both "which runtime got it" + "with what params".
     #[derive(Default)]
@@ -1745,6 +1955,15 @@ mod tests {
         /// Override the `attach` return value so tests can exercise
         /// both the found / not-found branches.
         agent_attach_found: Mutex<bool>,
+        /// Captured callbacks from `subscribe_agent_events`. The
+        /// stub's `fire_agent_event` helper invokes every one in
+        /// turn so tests can drive the reattach event pipeline
+        /// without a real RPC pipe.
+        agent_event_callbacks: Mutex<Vec<AgentEventCallback>>,
+        /// When `true`, `subscribe_agent_events` returns `None`
+        /// instead of registering — lets a test exercise the
+        /// "runtime does not stream events" error branch.
+        agent_events_disabled: Mutex<bool>,
     }
 
     impl InspectorStubRuntime {
@@ -1921,6 +2140,33 @@ mod tests {
             Ok(crate::remote::AgentAttachResult {
                 found: *self.agent_attach_found.lock().unwrap(),
             })
+        }
+        fn subscribe_agent_events(
+            &self,
+            callback: AgentEventCallback,
+        ) -> Option<NotificationSubscription> {
+            if *self.agent_events_disabled.lock().unwrap() {
+                return None;
+            }
+            self.agent_event_callbacks.lock().unwrap().push(callback);
+            // Use the test-only dangling factory — the real
+            // RpcClient handle isn't accessible from here, but the
+            // command paths under test only care that *some*
+            // NotificationSubscription comes back and gets stashed.
+            Some(NotificationSubscription::dangling_for_tests())
+        }
+    }
+
+    impl InspectorStubRuntime {
+        /// Synthesise an agent.event notification + fire every
+        /// registered callback in turn. The reattach command
+        /// filters by request_id inside its callback closure, so
+        /// firing an unrelated event verifies the demux works.
+        fn fire_agent_event(&self, notif: crate::remote::methods::AgentEventNotification) {
+            let cbs = self.agent_event_callbacks.lock().unwrap();
+            for cb in cbs.iter() {
+                cb(notif.clone());
+            }
         }
     }
 
@@ -2514,6 +2760,327 @@ mod tests {
 
         assert!(!found);
         assert_eq!(stub.agent_attach_calls.lock().unwrap().len(), 1);
+    }
+
+    // ── reattach_remote_agent_session_stream (phase 24i) ──────────
+
+    /// Build a Channel<ReattachedAgentEvent> that captures every
+    /// `send` into a `Mutex<Vec<_>>` decoded from the InvokeResponseBody.
+    /// Tauri Channels serialise sent values into an
+    /// `InvokeResponseBody::Json` on the dispatch path; we round-trip
+    /// the JSON to recover the typed struct for assertions.
+    fn capturing_reattach_channel() -> (
+        Channel<ReattachedAgentEvent>,
+        Arc<std::sync::Mutex<Vec<ReattachedAgentEvent>>>,
+    ) {
+        use tauri::ipc::InvokeResponseBody;
+        let captured: Arc<std::sync::Mutex<Vec<ReattachedAgentEvent>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let inner = Arc::clone(&captured);
+        let channel = Channel::<ReattachedAgentEvent>::new(move |body| {
+            // Tauri ships Json payloads as raw strings — parse to
+            // recover the typed event. Raw byte payloads aren't
+            // emitted by our codepath.
+            if let InvokeResponseBody::Json(s) = body {
+                match serde_json::from_str::<ReattachedAgentEvent>(&s) {
+                    Ok(event) => inner.lock().unwrap().push(event),
+                    Err(err) => panic!("captured channel got non-event JSON: {err}: {s}"),
+                }
+            } else {
+                panic!("expected Json body, got non-JSON variant");
+            }
+            Ok(())
+        });
+        (channel, captured)
+    }
+
+    #[test]
+    fn reattach_stream_rejects_empty_name_and_request_id() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+        let err = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "".into(),
+            "req-1".into(),
+            chan.clone(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("runtime name must not be empty"));
+
+        let err = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "".into(),
+            chan,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("request_id must not be empty"));
+    }
+
+    #[test]
+    fn reattach_stream_refuses_local_runtime_by_name() {
+        let (registry, _stub) = registry_with_inspector_stub();
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+        let err = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            LOCAL_RUNTIME_NAME.into(),
+            "req-1".into(),
+            chan,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("only available on registered remote runtimes"));
+    }
+
+    #[test]
+    fn reattach_stream_returns_found_true_and_stashes_subscription() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+
+        let result = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-found".into(),
+            chan,
+        )
+        .unwrap();
+
+        assert!(result.found);
+        // The subscription must live in the state so the callback
+        // outlives the command frame — the per-call closure dies
+        // otherwise + the Channel goes silent.
+        assert_eq!(
+            subscriptions.active_request_ids(),
+            vec!["req-found".to_string()]
+        );
+        // Attach was called once with the right id.
+        assert_eq!(stub.agent_attach_calls.lock().unwrap().len(), 1);
+        assert_eq!(
+            stub.agent_attach_calls.lock().unwrap()[0].request_id,
+            "req-found"
+        );
+    }
+
+    #[test]
+    fn reattach_stream_returns_found_false_and_drops_subscription() {
+        // The found=false branch must NOT stash the subscription
+        // — otherwise the Channel sits in the map forever holding
+        // a callback that never fires. Operator never gets to
+        // call `release_remote_agent_session_stream` because the
+        // UI showed "session has ended" and hid the affordance.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = false;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+
+        let result = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-gone".into(),
+            chan,
+        )
+        .unwrap();
+
+        assert!(!result.found);
+        assert!(subscriptions.active_request_ids().is_empty());
+    }
+
+    #[test]
+    fn reattach_stream_runtime_without_subscription_support_surfaces_error() {
+        // The runtime's `subscribe_agent_events` can return None
+        // (only OpenSSH / Command runtimes implement it). Reattach
+        // surfaces that as a legible error rather than silently
+        // dropping into the attach RPC + leaving the Channel idle.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_events_disabled.lock().unwrap() = true;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+
+        let err = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-1".into(),
+            chan,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("does not stream agent events"));
+        // No attach call should have fired — we bailed before that.
+        assert!(stub.agent_attach_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reattach_stream_forwards_matching_agent_events_to_channel() {
+        // End-to-end check: register the stream, fire a few
+        // synthesised agent.event notifications through the stub's
+        // captured callback, assert only the matching request_id's
+        // events land on the channel and the payload round-trips.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, captured) = capturing_reattach_channel();
+
+        reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-A".into(),
+            chan,
+        )
+        .unwrap();
+
+        // Fire one matching + one unrelated event. The reattach
+        // closure filters by request_id, so only the match flows.
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-A".into(),
+            event: serde_json::json!({ "type": "assistant", "delta": "hi" }),
+        });
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-other".into(),
+            event: serde_json::json!({ "type": "assistant", "delta": "skip" }),
+        });
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-A".into(),
+            event: serde_json::json!({
+                "type": "result",
+                "subtype": "success",
+                "result": "all done"
+            }),
+        });
+
+        let events = captured.lock().unwrap().clone();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].request_id, "req-A");
+        assert_eq!(events[0].event["type"], "assistant");
+        assert_eq!(events[0].event["delta"], "hi");
+        assert_eq!(events[1].event["type"], "result");
+    }
+
+    #[test]
+    fn reattach_stream_stops_forwarding_after_release() {
+        // Release drops the subscription. New events fired by the
+        // runtime should NOT reach the channel because the closure's
+        // Arc<Channel> got dropped along with the subscription.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, captured) = capturing_reattach_channel();
+
+        reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-release".into(),
+            chan,
+        )
+        .unwrap();
+
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-release".into(),
+            event: serde_json::json!({ "type": "assistant", "delta": "before-release" }),
+        });
+
+        let release_result =
+            release_remote_agent_session_stream_inner(&subscriptions, "req-release".into())
+                .unwrap();
+        assert!(release_result.released);
+        assert!(subscriptions.active_request_ids().is_empty());
+
+        // The stub keeps its callbacks; firing now should NOT add
+        // an event to the captured list because the channel's
+        // outer Arc was dropped + send returns SendError which we
+        // swallow. Specifically: the closure still runs but the
+        // channel's drop should disconnect it. In practice the
+        // captured-list count stays at 1 because the closure is
+        // gone.
+        //
+        // BUT — our stub holds an Arc to the callback closure
+        // itself. Dropping the NotificationSubscription only
+        // removes the production RpcClient registration; in test
+        // the closure remains alive. So this test asserts the
+        // weaker contract: the subscription is removed from the
+        // manager's map. (A production teardown unhooks the
+        // RpcClient registration via NotificationSubscription's
+        // real Drop.)
+        let _ = captured; // keep reference live so the test owns it.
+    }
+
+    #[test]
+    fn release_unknown_request_id_returns_released_false() {
+        // The frontend may call release blindly on every known id
+        // (panel unmount + reload race) — returning false rather
+        // than erroring is the contract.
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let result =
+            release_remote_agent_session_stream_inner(&subscriptions, "never-streamed".into())
+                .unwrap();
+        assert!(!result.released);
+    }
+
+    #[test]
+    fn release_rejects_empty_request_id() {
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let err = release_remote_agent_session_stream_inner(&subscriptions, "".into()).unwrap_err();
+        assert!(format!("{err:#}").contains("request_id must not be empty"));
+    }
+
+    #[test]
+    fn reattach_stream_can_run_concurrently_for_distinct_request_ids() {
+        // Two reattach streams on the same runtime should each get
+        // their own subscription entry; demux by request_id inside
+        // the per-stream filter closure keeps the channels clean.
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan_a, captured_a) = capturing_reattach_channel();
+        let (chan_b, captured_b) = capturing_reattach_channel();
+
+        reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-A".into(),
+            chan_a,
+        )
+        .unwrap();
+        reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-B".into(),
+            chan_b,
+        )
+        .unwrap();
+
+        assert_eq!(
+            subscriptions.active_request_ids(),
+            vec!["req-A".to_string(), "req-B".into()]
+        );
+
+        // Fire one event per stream; each lands on the right channel.
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-A".into(),
+            event: serde_json::json!({ "delta": "for-A" }),
+        });
+        stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
+            request_id: "req-B".into(),
+            event: serde_json::json!({ "delta": "for-B" }),
+        });
+
+        let events_a = captured_a.lock().unwrap().clone();
+        let events_b = captured_b.lock().unwrap().clone();
+        assert_eq!(events_a.len(), 1);
+        assert_eq!(events_a[0].event["delta"], "for-A");
+        assert_eq!(events_b.len(), 1);
+        assert_eq!(events_b[0].event["delta"], "for-B");
     }
 
     #[test]

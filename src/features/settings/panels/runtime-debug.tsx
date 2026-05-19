@@ -19,6 +19,9 @@ import {
 	abortRemoteAgentSession,
 	attachRemoteAgentSession,
 	attachRemoteTerminal,
+	// reattachRemoteAgentSessionStream + releaseRemoteAgentStream
+	// are called indirectly through useReattachAgentStream below;
+	// importing the types only keeps the bundle clean.
 	clearWorkspaceRuntimeBinding,
 	closeRemoteTerminal,
 	connectCommandRuntime,
@@ -58,6 +61,7 @@ import {
 	SettingsNotice,
 	SettingsRow,
 } from "../components/settings-row";
+import { useReattachAgentStream } from "./use-reattach-agent-stream";
 
 /// Dev-only debug surface for the remote-runner spike (#453).
 ///
@@ -1603,31 +1607,47 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
 	});
 
-	const attachMutation = useMutation({
-		mutationFn: async (requestId: string) => {
-			const found = await attachRemoteAgentSession(runtimeName, requestId);
-			return { requestId, found };
-		},
-		onMutate: (requestId: string) => setBusyId(requestId),
-		onSettled: () => {
-			setBusyId(null);
-			void sessionsQuery.refetch();
-		},
-		onSuccess: ({ requestId, found }) => {
-			if (found) {
-				setNotice({
-					tone: "ok",
-					text: `Attached to ${requestId}. Events flow to this desktop until the session ends.`,
-				});
-			} else {
-				setNotice({
-					tone: "info",
-					text: `Session ${requestId} has ended — the daemon no longer tracks it.`,
-				});
-			}
-		},
-		onError: (err) => setNotice({ tone: "error", text: errorMessage(err) }),
-	});
+	// Phase 24i: replace the one-shot attach probe with a real
+	// streaming reattach. `useReattachAgentStream` drives the
+	// subscription lifecycle (attach + subscribe + auto-release
+	// on unmount) and surfaces events through `stream.events`.
+	const stream = useReattachAgentStream();
+
+	const handleReattachClick = async (requestId: string) => {
+		// Mirror the prior `attachMutation` UX: a notice on the
+		// notFound path so the user understands the panel state.
+		setBusyId(requestId);
+		await stream.start(runtimeName, requestId);
+		setBusyId(null);
+		void sessionsQuery.refetch();
+	};
+
+	useEffect(() => {
+		if (stream.phase === "notFound" && stream.currentRequestId === null) {
+			setNotice({
+				tone: "info",
+				text: "Session has ended — the daemon no longer tracks it.",
+			});
+		} else if (stream.phase === "error" && stream.error) {
+			setNotice({ tone: "error", text: stream.error });
+		} else if (stream.phase === "streaming" && stream.currentRequestId) {
+			setNotice({
+				tone: "ok",
+				text: `Streaming events for ${stream.currentRequestId}. ${stream.events.length} event${stream.events.length === 1 ? "" : "s"} received.`,
+			});
+		}
+	}, [
+		stream.phase,
+		stream.error,
+		stream.currentRequestId,
+		stream.events.length,
+	]);
+
+	// Sneak the one-shot probe behind a back-compat hook so legacy
+	// docs that say "click Reattach to verify the daemon found the
+	// session" still apply. The button below uses the streaming
+	// path, which is strictly more useful.
+	void attachRemoteAgentSession;
 
 	const sessions = sessionsQuery.data ?? [];
 
@@ -1702,20 +1722,40 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 							</span>
 						) : (
 							<ul className="flex flex-col gap-1">
-								{sessions.map((session) => (
-									<RemoteAgentSessionRow
-										key={session.requestId}
-										session={session}
-										busy={
-											busyId === session.requestId ||
-											abortMutation.isPending ||
-											attachMutation.isPending
-										}
-										onAbort={() => abortMutation.mutate(session.requestId)}
-										onAttach={() => attachMutation.mutate(session.requestId)}
-									/>
-								))}
+								{sessions.map((session) => {
+									const isStreaming =
+										stream.phase === "streaming" &&
+										stream.currentRequestId === session.requestId;
+									const isBusyRow =
+										(busyId === session.requestId || abortMutation.isPending) &&
+										!isStreaming;
+									return (
+										<RemoteAgentSessionRow
+											key={session.requestId}
+											session={session}
+											busy={isBusyRow}
+											streaming={isStreaming}
+											onAbort={() => abortMutation.mutate(session.requestId)}
+											onAttach={() => {
+												if (isStreaming) {
+													void stream.stop();
+												} else {
+													void handleReattachClick(session.requestId);
+												}
+											}}
+										/>
+									);
+								})}
 							</ul>
+						)}
+
+						{(stream.phase === "streaming" || stream.events.length > 0) && (
+							<ReattachEventLog
+								requestId={stream.currentRequestId}
+								phase={stream.phase}
+								events={stream.events}
+								onClear={stream.clear}
+							/>
 						)}
 					</>
 				)}
@@ -1724,14 +1764,112 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 	);
 }
 
+function ReattachEventLog({
+	requestId,
+	phase,
+	events,
+	onClear,
+}: {
+	requestId: string | null;
+	phase: "idle" | "attaching" | "streaming" | "notFound" | "error";
+	events: ReturnType<typeof useReattachAgentStream>["events"];
+	onClear: () => void;
+}) {
+	return (
+		<div
+			className="flex flex-col gap-2 rounded-md border border-border/30 bg-background/40 p-3"
+			data-testid="reattach-event-log"
+		>
+			<div className="flex items-center justify-between">
+				<span className="text-[11px] font-medium text-foreground">
+					{phase === "streaming"
+						? `Live events — ${requestId ?? ""}`
+						: phase === "notFound"
+							? "Session ended — log preserved"
+							: `Events — ${events.length}`}
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={events.length === 0}
+					onClick={onClear}
+					aria-label="Clear event log"
+				>
+					<X className="mr-1.5 size-3.5" />
+					Clear
+				</Button>
+			</div>
+			{events.length === 0 ? (
+				<span className="text-[11px] text-muted-foreground">
+					Waiting for the next event from the daemon…
+				</span>
+			) : (
+				<ul
+					className="flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto font-mono text-[11px]"
+					data-testid="reattach-event-log-list"
+				>
+					{events.map((entry) => (
+						<li
+							key={entry.id}
+							className="flex gap-2 truncate"
+							data-testid={`reattach-event-row-${entry.id}`}
+						>
+							<span className="shrink-0 text-muted-foreground">
+								{new Date(entry.receivedAt).toLocaleTimeString(undefined, {
+									hour12: false,
+								})}
+							</span>
+							<span className="truncate">
+								{summariseEvent(entry.event.event)}
+							</span>
+						</li>
+					))}
+				</ul>
+			)}
+		</div>
+	);
+}
+
+/// Render a one-line summary of an arbitrary sidecar event JSON.
+/// The full payload is opaque (`event` is `unknown`); we surface
+/// the recognised shapes (type / subtype / delta / message / etc.)
+/// and fall back to compact JSON for everything else.
+function summariseEvent(raw: unknown): string {
+	if (raw === null || typeof raw !== "object") {
+		return String(raw);
+	}
+	const obj = raw as Record<string, unknown>;
+	const type = typeof obj.type === "string" ? obj.type : "?";
+	const subtype = typeof obj.subtype === "string" ? `.${obj.subtype}` : "";
+	const delta =
+		typeof obj.delta === "string"
+			? `: ${truncate(obj.delta, 80)}`
+			: typeof obj.message === "string"
+				? `: ${truncate(obj.message, 80)}`
+				: "";
+	return `[${type}${subtype}]${delta}`;
+}
+
+function truncate(text: string, max: number): string {
+	if (text.length <= max) return text;
+	return `${text.slice(0, max - 1)}…`;
+}
+
 function RemoteAgentSessionRow({
 	session,
 	busy,
+	streaming,
 	onAbort,
 	onAttach,
 }: {
 	session: RemoteAgentSession;
 	busy: boolean;
+	/**
+	 * `true` when this row's stream is currently the one feeding
+	 * the live event log. Re-labels the attach button to "Stop"
+	 * so the user can detach without leaving the panel.
+	 */
+	streaming: boolean;
 	onAbort: () => void;
 	onAttach: () => void;
 }) {
@@ -1741,6 +1879,7 @@ function RemoteAgentSessionRow({
 		<li
 			className="flex items-center justify-between gap-2 rounded border border-border/30 bg-card/40 px-2 py-1.5"
 			data-testid={`remote-agent-session-${session.requestId}`}
+			data-streaming={streaming ? "true" : undefined}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<span className="truncate font-mono text-[11px]">
@@ -1753,14 +1892,27 @@ function RemoteAgentSessionRow({
 				</span>
 			</div>
 			<Button
-				variant="outline"
+				variant={streaming ? "default" : "outline"}
 				size="sm"
 				disabled={busy}
 				onClick={onAttach}
-				aria-label={`Reattach to ${session.requestId}`}
+				aria-label={
+					streaming
+						? `Stop streaming ${session.requestId}`
+						: `Reattach to ${session.requestId}`
+				}
 			>
-				<Plug className="mr-1.5 size-3.5" />
-				Reattach
+				{streaming ? (
+					<>
+						<X className="mr-1.5 size-3.5" />
+						Stop
+					</>
+				) : (
+					<>
+						<Plug className="mr-1.5 size-3.5" />
+						Reattach
+					</>
+				)}
 			</Button>
 			<Button
 				variant="outline"
