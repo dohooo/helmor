@@ -12,6 +12,7 @@ pub(crate) mod system_commands;
 pub(crate) mod terminal_commands;
 pub(crate) mod updater_commands;
 pub(crate) mod workspace_commands;
+pub(crate) mod workspace_watch;
 
 pub use system_commands::DataInfo;
 

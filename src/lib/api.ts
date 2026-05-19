@@ -930,6 +930,63 @@ export async function setRuntimeAgentAuth(
 	});
 }
 
+// ── workspace file watcher (phase 24g) ─────────────────────────────
+
+export type WorkspaceFileWatchKind = "local" | "remote";
+
+export type StartWorkspaceWatchResult = {
+	workspaceId: string;
+	/**
+	 * `"local"` when the watcher runs in this desktop process,
+	 * `"remote"` when it runs on the bound `helmor-server` daemon.
+	 * Drives the runtime-chip rendering on the watcher status UI.
+	 */
+	kind: WorkspaceFileWatchKind;
+};
+
+export type StopWorkspaceWatchResult = {
+	/** `false` when no watcher was active for the workspace id. */
+	stopped: boolean;
+};
+
+/**
+ * Start watching `workspace_dir` for file changes and invalidate
+ * the workspace's `workspaceChanges` / `workspaceFileTree` /
+ * `workspaceGitActionStatus` React Query keys on every debounced
+ * batch. Re-starting on an already-watched workspace replaces the
+ * old watcher rather than erroring, so a workspace-open hook can
+ * call this unconditionally on mount.
+ *
+ * `runtimeName=null` or `"local"` runs an in-process FileWatcher.
+ * Any other name resolves through the runtime registry and
+ * dispatches `workspace.startWatch` over the wire.
+ */
+export async function startWorkspaceWatch(args: {
+	workspaceId: string;
+	workspaceDir: string;
+	runtimeName?: string | null;
+}): Promise<StartWorkspaceWatchResult> {
+	return invoke<StartWorkspaceWatchResult>("start_workspace_watch", {
+		workspaceId: args.workspaceId,
+		workspaceDir: args.workspaceDir,
+		runtimeName: args.runtimeName ?? null,
+	});
+}
+
+/**
+ * Stop the watcher for `workspace_id`. Returns `stopped=false`
+ * when no watcher was registered — typical when a workspace
+ * unmounts before its watcher fully spun up; the desktop hook
+ * just logs and moves on.
+ */
+export async function stopWorkspaceWatch(
+	workspaceId: string,
+): Promise<StopWorkspaceWatchResult> {
+	return invoke<StopWorkspaceWatchResult>("stop_workspace_watch", {
+		workspaceId,
+	});
+}
+
 // ── workspace search (phase 24e) ───────────────────────────────────
 
 /**
