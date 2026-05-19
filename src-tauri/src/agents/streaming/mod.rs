@@ -19,6 +19,7 @@ pub(crate) mod codex_goal;
 pub(crate) mod context_usage;
 mod params;
 mod plan_review;
+pub(crate) mod reattach;
 mod session_id;
 mod state;
 pub(super) mod transports;

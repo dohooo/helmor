@@ -375,6 +375,7 @@ pub fn run() {
             agents::list_agent_model_sections,
             agents::list_cursor_models,
             agents::send_agent_message_stream,
+            agents::reattach_agent_message_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
             agents::steer_agent_stream,
