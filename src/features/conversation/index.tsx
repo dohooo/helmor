@@ -26,6 +26,7 @@ import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
 } from "./hooks/use-streaming";
+import { useWorkspaceRemoteReattach } from "./hooks/use-workspace-remote-reattach";
 
 export type { ComposerSubmitPayload } from "./hooks/use-streaming";
 
@@ -82,6 +83,12 @@ type WorkspaceConversationContainerProps = {
 	 *  `activeStreamsQuery`. Survives this container's unmount/remount,
 	 *  so follow-up routing/drain stays correct across start ↔ chat. */
 	activeStreams: readonly ActiveStreamSummary[];
+	/** Phase 24m: remote-runtime binding for the displayed workspace.
+	 *  `null` for local workspaces; the actual registered runtime name
+	 *  otherwise. Drives the auto-reattach hook that follows live
+	 *  remote turns when the user opens (or returns to) a workspace
+	 *  whose daemon is still streaming. */
+	runtimeName?: string | null;
 	busySessionIds?: Set<string>;
 	stoppableSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
@@ -167,6 +174,7 @@ export const WorkspaceConversationContainer = memo(
 		onResolveDisplayedSession,
 		onInteractionSessionsChange,
 		activeStreams,
+		runtimeName = null,
 		busySessionIds,
 		stoppableSessionIds,
 		interactionRequiredSessionIds,
@@ -264,6 +272,27 @@ export const WorkspaceConversationContainer = memo(
 		const queueItems = displayedSessionId
 			? (queuesBySessionId.get(displayedSessionId) ?? EMPTY_QUEUE)
 			: EMPTY_QUEUE;
+
+		// Phase 24m: if the displayed workspace is remote-bound and the
+		// daemon is mid-stream on the displayed session, auto-attach so
+		// the chat follows the live turn. The hook is a no-op for local
+		// workspaces and bails when the composer-driven streaming
+		// pipeline already owns this session.
+		const localBusyOwnsSession =
+			displayedSessionId !== null &&
+			(localBusySessionIds?.has(displayedSessionId) ?? false);
+		// Provider / model fall back to the matched daemon session's
+		// values inside the hook — we don't have a confident binding
+		// here yet, and the daemon's pipeline is the canonical source.
+		const remoteReattach = useWorkspaceRemoteReattach({
+			sessionId: displayedSessionId,
+			workspaceId: displayedWorkspaceId,
+			runtimeName,
+			provider: null,
+			modelId: displayedSelectedModelId,
+			workingDirectory: workspaceRootPath ?? null,
+			isAlreadyStreaming: localBusyOwnsSession,
+		});
 
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
@@ -488,6 +517,9 @@ export const WorkspaceConversationContainer = memo(
 				}}
 			>
 				{composerOnly ? null : (
+					<RemoteReattachStatusChip state={remoteReattach} />
+				)}
+				{composerOnly ? null : (
 					<WorkspacePanelContainer
 						selectedWorkspaceId={selectedWorkspaceId}
 						displayedWorkspaceId={displayedWorkspaceId}
@@ -578,3 +610,36 @@ export const WorkspaceConversationContainer = memo(
 		);
 	},
 );
+
+/**
+ * Inline status chip surfaced above the chat panel when phase 24m's
+ * remote auto-reattach is actively following a live remote turn.
+ * Renders nothing when the hook is idle / errored — the chat itself
+ * is the canonical surface; this is a small confirmation marker so
+ * the user knows the desktop reconnected to a turn they didn't
+ * personally start in this window.
+ */
+function RemoteReattachStatusChip({
+	state,
+}: {
+	state: ReturnType<typeof useWorkspaceRemoteReattach>;
+}) {
+	if (!state.isReattaching && !state.terminalLabel) return null;
+	const label = state.isReattaching
+		? `Following live remote turn (${state.currentRequestId?.slice(0, 8) ?? "—"})`
+		: state.terminalLabel;
+	return (
+		<div
+			data-testid="remote-reattach-status-chip"
+			className="flex items-center gap-2 border-b border-amber-700/20 bg-amber-500/5 px-4 py-1 text-[11px] text-muted-foreground"
+		>
+			<span
+				aria-hidden
+				className={`size-1.5 rounded-full ${
+					state.isReattaching ? "animate-pulse bg-amber-400" : "bg-emerald-400"
+				}`}
+			/>
+			<span className="truncate">{label}</span>
+		</div>
+	);
+}

@@ -1616,6 +1616,9 @@ function AppShell({
 													displayedWorkspaceId={displayedWorkspaceId}
 													selectedSessionId={selectedSessionId}
 													displayedSessionId={displayedSessionId}
+													runtimeName={
+														selectedWorkspaceDetail?.runtimeName ?? null
+													}
 													repoId={
 														selectedWorkspaceDetailQuery.data?.repoId ?? null
 													}
