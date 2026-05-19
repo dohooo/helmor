@@ -1,12 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-import {
-	type AgentModelSection,
-	submitFeedbackWorkspaceAndPrompt,
-} from "@/lib/api";
+import type {
+	ComposerSubmitPayload,
+	PendingCreatedWorkspaceSubmit,
+} from "@/features/conversation";
+import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
+import type { AgentModelOption, AgentModelSection } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { AppSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 type Deps = {
@@ -15,23 +18,26 @@ type Deps = {
 	selectWorkspace: (workspaceId: string | null) => void;
 	selectSession: (sessionId: string | null) => void;
 	setViewMode: (mode: "conversation" | "start" | "editor") => void;
+	setPendingCreatedWorkspaceSubmit: (
+		updater:
+			| PendingCreatedWorkspaceSubmit
+			| null
+			| ((
+					prev: PendingCreatedWorkspaceSubmit | null,
+			  ) => PendingCreatedWorkspaceSubmit | null),
+	) => void;
 	pushToast: (message: string, title: string) => void;
 };
 
 /**
- * Returns a function that hands off the feedback dialog's "Send to agent"
- * click to a single backend IPC. The Rust command
- * `submit_feedback_workspace_and_prompt` prepares the workspace, finalises
- * the worktree, and spawns the agent stream — all atomically — then
- * returns the workspace + session IDs. The frontend just selects them and
- * switches view; there's no `pendingCreatedWorkspaceSubmit` queue or
- * race between selection and finalize.
- *
- * Trade-off: the first turn doesn't render live token deltas (no
- * frontend-owned `Channel` exists yet — the conversation surface hasn't
- * mounted). Once the surface mounts on the new workspace it re-fetches
- * from DB and listens to `ActiveStreamsChanged` for refetches. Subsequent
- * turns use the normal composer flow with full live streaming.
+ * Submits the feedback dialog's "Send to agent" through the SAME pipeline
+ * as the start page: prepare → queue pending submit → switch view → await
+ * finalize → flip finalized. The conversation effect picks the pending
+ * submit up once the surface mounts and dispatches it via
+ * `handleComposerSubmit` — that gives the first turn a frontend-owned
+ * `Channel` so live token streaming works, and ties selection to the same
+ * optimistic marker the start page uses (so selection isn't clobbered by
+ * sidebar reconciles or `ActiveStreamsChanged` interleaves).
  */
 export function useFeedbackSubmit(deps: Deps) {
 	const {
@@ -40,6 +46,7 @@ export function useFeedbackSubmit(deps: Deps) {
 		selectWorkspace,
 		selectSession,
 		setViewMode,
+		setPendingCreatedWorkspaceSubmit,
 		pushToast,
 	} = deps;
 
@@ -53,7 +60,7 @@ export function useFeedbackSubmit(deps: Deps) {
 			const preferred = appSettings.defaultModelId
 				? allModels.find((m) => m.id === appSettings.defaultModelId)
 				: undefined;
-			const model = preferred ?? allModels[0];
+			const model: AgentModelOption | undefined = preferred ?? allModels[0];
 			if (!model) {
 				pushToast(
 					"Pick a default model in Settings first.",
@@ -62,19 +69,101 @@ export function useFeedbackSubmit(deps: Deps) {
 				return;
 			}
 
+			const payload: ComposerSubmitPayload = {
+				prompt: input.prompt,
+				imagePaths: [],
+				filePaths: [],
+				customTags: [],
+				model,
+				workingDirectory: null,
+				effortLevel: appSettings.defaultEffort ?? "high",
+				permissionMode: "default",
+				fastMode: appSettings.defaultFastMode ?? false,
+			};
+
 			try {
-				const result = await submitFeedbackWorkspaceAndPrompt({
+				// Empty sourceBranch → backend falls back to repo default
+				// branch. Feedback flow doesn't surface a branch picker.
+				const created = await createWorkspaceFromStartComposer({
 					repoId: input.repoId,
-					prompt: input.prompt,
-					provider: model.provider,
-					modelId: model.id,
-					effortLevel: appSettings.defaultEffort ?? "high",
-					fastMode: appSettings.defaultFastMode ?? false,
-					permissionMode: "default",
+					sourceBranch: "",
+					mode: "worktree",
+					branchIntent: "from_branch",
+					submitMode: "startNow",
+					composerConfig: {
+						modelId: model.id,
+						effortLevel: payload.effortLevel,
+						permissionMode: payload.permissionMode,
+						fastMode: payload.fastMode,
+					},
 				});
-				selectWorkspace(result.workspaceId);
-				selectSession(result.sessionId);
-				setViewMode("conversation");
+
+				// Invalidate the sidebar list BEFORE switching selection.
+				// Navigation's auto-select effect uses `groupsQuery.isFetching`
+				// as the signal to wait for the new workspace to land — if
+				// we skip this, the fresh workspace isn't in `groups`,
+				// isFetching is false, and the effect falls back to
+				// `findInitialWorkspaceId(groups)` which returns the
+				// pinned workspace, clobbering our selection. Matches
+				// startSurface controller ordering.
+				requestSidebarReconcile(queryClient);
+
+				const pendingId = crypto.randomUUID();
+				setPendingCreatedWorkspaceSubmit({
+					id: pendingId,
+					workspaceId: created.workspaceId,
+					sessionId: created.sessionId,
+					payload: {
+						...payload,
+						workingDirectory:
+							created.preparedWorkingDirectory ?? payload.workingDirectory,
+					},
+					finalized: false,
+				});
+				// Defer the view switch to the next frame so the dialog
+				// tear-down doesn't compete with the conversation commit.
+				requestAnimationFrame(() => {
+					selectWorkspace(created.workspaceId);
+					selectSession(created.sessionId);
+					setViewMode("conversation");
+				});
+
+				let finalizedWorkingDirectory = created.preparedWorkingDirectory;
+				if (created.finalizePromise) {
+					try {
+						const finalized = await created.finalizePromise;
+						finalizedWorkingDirectory = finalized.workingDirectory;
+					} catch (error) {
+						setPendingCreatedWorkspaceSubmit((current) =>
+							current?.id === pendingId ? null : current,
+						);
+						pushToast(
+							describeUnknownError(error, "Workspace setup failed."),
+							"Workspace setup failed",
+						);
+						requestSidebarReconcile(queryClient);
+						return;
+					}
+				}
+
+				// Flip finalized → conversation effect dispatches the queued
+				// submit through `handleComposerSubmit`, opening a
+				// frontend-owned channel for live token streaming.
+				setPendingCreatedWorkspaceSubmit((current) =>
+					current?.id === pendingId
+						? {
+								...current,
+								payload: {
+									...current.payload,
+									workingDirectory:
+										finalizedWorkingDirectory ??
+										current.payload.workingDirectory,
+								},
+								finalized: true,
+							}
+						: current,
+				);
+				requestSidebarReconcile(queryClient);
 			} catch (error) {
 				pushToast(
 					describeUnknownError(error, "Failed to send feedback to agent."),
@@ -91,6 +180,7 @@ export function useFeedbackSubmit(deps: Deps) {
 			selectSession,
 			selectWorkspace,
 			setViewMode,
+			setPendingCreatedWorkspaceSubmit,
 		],
 	);
 }

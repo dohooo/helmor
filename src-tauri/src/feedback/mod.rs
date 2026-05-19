@@ -93,9 +93,12 @@ pub fn find_existing_helmor_repo() -> Result<Option<ExistingHelmorRepo>> {
     for row in rows {
         let (id, name, root_path, remote_url) = row?;
         let remote_match = remote_url.as_deref().is_some_and(matches_helmor_remote);
-        let pkg_match = root_path
-            .as_deref()
-            .is_some_and(matches_helmor_package_json);
+        // Short-circuit the package.json read — every repo would otherwise
+        // pay a disk I/O even after the remote already matched.
+        let pkg_match = !remote_match
+            && root_path
+                .as_deref()
+                .is_some_and(matches_helmor_package_json);
         if remote_match || pkg_match {
             return Ok(Some(ExistingHelmorRepo {
                 repo_id: id,

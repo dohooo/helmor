@@ -1,7 +1,11 @@
 {
 	"items": [
 		{
-			"text": "Pick \"Just Chat\" on the start page to open a workspace without binding it to a repo."
+			"text": "Pick \"Just Chat\" on the start page to open a workspace without binding it to a repo.",
+			"action": {
+				"label": "Open Start",
+				"value": { "type": "openStartPage" }
+			}
 		}
 	]
 }

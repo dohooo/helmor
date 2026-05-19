@@ -136,7 +136,7 @@ export function ShellSidebarPane({
 						</TooltipContent>
 					</Tooltip>
 				</div>
-				<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+				<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
 					<SettingsButton
 						onClick={onOpenSettings}
 						shortcut={getShortcut(appSettings.shortcuts, "settings.open")}

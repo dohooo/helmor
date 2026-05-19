@@ -12,6 +12,9 @@ import { HELMOR_UPSTREAM_SLUG } from "./constants";
 type StepInputProps = {
 	input: string;
 	existing: ExistingHelmorRepo | null;
+	/** False until `findExistingHelmorRepo` has resolved. Gates Quick fix
+	 *  so a fast user can't bypass the "reuse local repo" optimization. */
+	existingLoaded: boolean;
 	githubConnected: boolean;
 	/** True after the first "Create issue" click — show the confirm UI. */
 	confirming: boolean;
@@ -27,6 +30,7 @@ type StepInputProps = {
 export function StepInput({
 	input,
 	existing,
+	existingLoaded,
 	githubConnected,
 	confirming,
 	sending,
@@ -36,7 +40,11 @@ export function StepInput({
 	onQuickFix,
 	onOpenSettings,
 }: StepInputProps) {
-	const canSubmit = input.trim().length > 0 && githubConnected;
+	const hasInput = input.trim().length > 0;
+	const canCreateIssue = hasInput && githubConnected;
+	// Quick fix additionally waits for the existing-repo lookup so it
+	// can take the reuse-local-repo branch when applicable.
+	const canQuickFix = canCreateIssue && existingLoaded;
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -95,13 +103,17 @@ export function StepInput({
 								variant="outline"
 								size="sm"
 								onClick={onCreateIssue}
-								disabled={!canSubmit}
+								disabled={!canCreateIssue}
 							>
 								Create issue
 							</Button>
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button size="sm" onClick={onQuickFix} disabled={!canSubmit}>
+									<Button
+										size="sm"
+										onClick={onQuickFix}
+										disabled={!canQuickFix}
+									>
 										Quick fix
 									</Button>
 								</TooltipTrigger>

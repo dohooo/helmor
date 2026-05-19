@@ -12,8 +12,8 @@ import {
 	createHelmorIssue,
 	type ExistingHelmorRepo,
 	findExistingHelmorRepo,
-	listForgeAccounts,
 } from "@/lib/api";
+import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
 import { splitIssueTitleAndBody } from "./helpers";
@@ -39,11 +39,22 @@ export function FeedbackDialog({
 	onSubmitPrompt,
 }: FeedbackDialogProps) {
 	const [state, dispatch] = useFeedbackState();
-	// Existing-repo hint and github connection state. The parent conditionally
-	// mounts this dialog, so a fresh open always re-fetches — that's fine,
-	// findExistingHelmorRepo hits local SQLite and resolves in ~50ms.
+	// Existing-repo hint: local-only (SQLite + package.json), so a fresh
+	// re-fetch on every open is fine. GitHub connection state comes from
+	// the shared `useForgeAccountsAll` cache so we don't pay the
+	// `gh api /user` round-trip every time the dialog opens.
 	const [existing, setExisting] = useState<ExistingHelmorRepo | null>(null);
-	const [githubConnected, setGithubConnected] = useState(false);
+	// `existingLoaded` gates Quick fix: clicking it before the lookup
+	// settles would force the fork+clone path even when a local helmor
+	// repo already exists. The lookup hits local SQLite + package.json,
+	// usually ~50ms, but a fast typer can outrun it.
+	const [existingLoaded, setExistingLoaded] = useState(false);
+	const accountsQuery = useForgeAccountsAll();
+	const githubConnected =
+		accountsQuery.data?.some(
+			(account) =>
+				account.provider === "github" && account.host === "github.com",
+		) ?? false;
 	// Two-click confirmation for issue creation.
 	const [confirming, setConfirming] = useState(false);
 	const [sending, setSending] = useState(false);
@@ -51,18 +62,10 @@ export function FeedbackDialog({
 	useEffect(() => {
 		let cancelled = false;
 		void (async () => {
-			const [e, accounts] = await Promise.all([
-				findExistingHelmorRepo().catch(() => null),
-				listForgeAccounts([]).catch(() => []),
-			]);
+			const e = await findExistingHelmorRepo().catch(() => null);
 			if (cancelled) return;
 			setExisting(e);
-			setGithubConnected(
-				accounts.some(
-					(account) =>
-						account.provider === "github" && account.host === "github.com",
-				),
-			);
+			setExistingLoaded(true);
 		})();
 		return () => {
 			cancelled = true;
@@ -135,6 +138,7 @@ export function FeedbackDialog({
 					<StepInput
 						input={state.step.input}
 						existing={existing}
+						existingLoaded={existingLoaded}
 						githubConnected={githubConnected}
 						confirming={confirming}
 						sending={sending}

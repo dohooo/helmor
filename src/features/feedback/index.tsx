@@ -1,4 +1,4 @@
-import { MessageSquare } from "lucide-react";
+import { MessageSquareWarning } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +19,7 @@ export function FeedbackButton({ onClick }: { onClick: () => void }) {
 					onClick={onClick}
 					className="text-muted-foreground hover:text-foreground"
 				>
-					<MessageSquare className="size-[15px]" strokeWidth={1.8} />
+					<MessageSquareWarning className="size-[15px]" strokeWidth={1.8} />
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent

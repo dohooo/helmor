@@ -889,6 +889,7 @@ function AppShell({
 		selectWorkspace: handleSelectWorkspace,
 		selectSession: handleSelectSession,
 		setViewMode: selectionActions.setViewMode,
+		setPendingCreatedWorkspaceSubmit,
 		pushToast: pushWorkspaceToast,
 	});
 

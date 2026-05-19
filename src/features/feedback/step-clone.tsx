@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label";
 import { cloneRepositoryFromUrl, forkHelmorUpstream } from "@/lib/api";
 import { describeUnknownError } from "@/lib/workspace-helpers";
 
+import { HELMOR_UPSTREAM_SLUG } from "./constants";
+
 type ClonePhase = "idle" | "forking" | "picking" | "cloning";
 
 type StepCloneProps = {
@@ -106,7 +108,7 @@ export function StepClone({
 							strokeWidth={2.1}
 						/>
 						<span className="text-muted-foreground">
-							Forking Dohoo/helmor to your GitHub account…
+							Forking {HELMOR_UPSTREAM_SLUG} to your GitHub account…
 						</span>
 					</>
 				) : forkedCloneUrl ? (

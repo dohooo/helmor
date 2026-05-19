@@ -30,7 +30,6 @@ vi.mock("@/lib/api", async () => {
 	const actual = await vi.importActual<typeof api>("@/lib/api");
 	return {
 		...actual,
-		listForgeAccounts: vi.fn(),
 		findExistingHelmorRepo: vi.fn(),
 		createHelmorIssue: vi.fn(),
 		forkHelmorUpstream: vi.fn(),
@@ -41,7 +40,32 @@ vi.mock("@/lib/api", async () => {
 	};
 });
 
+const useForgeAccountsAllMock = vi.fn();
+vi.mock("@/lib/use-forge-accounts", () => ({
+	useForgeAccountsAll: () => useForgeAccountsAllMock(),
+}));
+
 const mockedApi = vi.mocked(api);
+
+function setGithubConnected(connected: boolean) {
+	useForgeAccountsAllMock.mockReturnValue({
+		data: connected
+			? [
+					{
+						provider: "github",
+						host: "github.com",
+						login: "tester",
+						name: null,
+						avatarUrl: null,
+						email: null,
+						active: true,
+					},
+				]
+			: [],
+		isFetched: true,
+		isSuccess: true,
+	});
+}
 
 function renderDialog() {
 	const onOpenChange = vi.fn();
@@ -71,17 +95,7 @@ afterEach(() => {
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	mockedApi.listForgeAccounts.mockResolvedValue([
-		{
-			provider: "github",
-			host: "github.com",
-			login: "tester",
-			name: null,
-			avatarUrl: null,
-			email: null,
-			active: true,
-		},
-	]);
+	setGithubConnected(true);
 	mockedApi.findExistingHelmorRepo.mockResolvedValue(null);
 });
 
@@ -109,7 +123,7 @@ describe("FeedbackDialog — input step", () => {
 	});
 
 	it("gates both actions when GitHub isn't connected", async () => {
-		mockedApi.listForgeAccounts.mockResolvedValue([]);
+		setGithubConnected(false);
 
 		const { user } = renderDialog();
 

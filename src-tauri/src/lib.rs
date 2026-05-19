@@ -384,7 +384,6 @@ pub fn run() {
             commands::feedback_commands::fork_helmor_upstream,
             commands::feedback_commands::create_helmor_issue,
             commands::feedback_commands::find_existing_helmor_repo,
-            commands::feedback_commands::submit_feedback_workspace_and_prompt,
             commands::system_commands::save_pasted_image,
             commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,
