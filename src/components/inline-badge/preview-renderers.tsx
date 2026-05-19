@@ -54,8 +54,9 @@ function EditableTextPreview({
 	const draftRef = useRef(draft);
 	draftRef.current = draft;
 
-	// 外部 commit（onBlur 触发 lexical 更新）回流后,把本地 draft 同步成最新值。
-	// 编辑过程中不会触发,因为按键只更新本地 state,不动 lexical。
+	// Re-sync the local draft once an external commit (lexical update from
+	// onBlur) flows back in. Doesn't fire mid-edit because keystrokes only
+	// touch local state, not lexical.
 	useEffect(() => {
 		setDraft(payload.text);
 	}, [payload.text]);
@@ -70,7 +71,7 @@ function EditableTextPreview({
 				onChange={(e) => setDraft(e.target.value)}
 				onFocus={editHandlers.onEditFocus}
 				onBlur={() => editHandlers.onEditBlur(draftRef.current)}
-				// 阻止冒泡到外层 Lexical 编辑器
+				// Stop events from bubbling to the outer Lexical editor
 				onKeyDown={(e) => e.stopPropagation()}
 				onKeyUp={(e) => e.stopPropagation()}
 				onPointerDown={(e) => e.stopPropagation()}

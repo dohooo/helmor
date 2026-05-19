@@ -177,7 +177,7 @@ export class CustomTagBadgeNode extends DecoratorNode<ReactNode> {
 		};
 	}
 
-	// 仅支持 text 类型预览的就地编辑：同步刷新 submitText / label / preview.text
+	// In-place edit (text previews only): keep submitText / label / preview.text in sync.
 	setText(nextText: string): void {
 		const current = this.__preview;
 		if (!current || current.kind !== "text") return;

@@ -329,8 +329,9 @@ export function ActionsSection({
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
 			style={{
-				// 高度走 CSS 变量,拖动期间由 mousemove 直接更新。collapsed 时固定 header 高,
-				// 跳过 calc()。fallback 兜底 layout-effect 写 var 之前那一帧的 mount。
+				// Height via CSS var, written by mousemove during drag. Collapsed
+				// state pins to the header height (skips calc); fallback covers
+				// the mount frame before the layout effect writes the var.
 				height: open
 					? `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px))`
 					: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`,

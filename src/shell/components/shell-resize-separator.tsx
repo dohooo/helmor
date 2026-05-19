@@ -26,7 +26,7 @@ export function ShellResizeSeparator({
 	onMouseDown,
 	onKeyDown,
 }: Props) {
-	// 位置同样由 CSS variable 驱动,拖动时跟着面板宽度实时移动,无 React 重渲染。
+	// Position also CSS-var driven so the handle follows the pane during drag without React renders.
 	const containerStyle: CSSProperties =
 		side === "sidebar"
 			? {

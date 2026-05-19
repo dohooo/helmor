@@ -351,7 +351,12 @@ export function WorkspaceStartPage({
 												/>
 											</TooltipContent>
 										</Tooltip>
-										<DropdownMenuContent align="center" className="min-w-56">
+										{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
+										<DropdownMenuContent
+											align="center"
+											className="min-w-56"
+											onCloseAutoFocus={(event) => event.preventDefault()}
+										>
 											{repositories.map((repository) => (
 												<DropdownMenuItem
 													key={repository.id}
@@ -500,7 +505,12 @@ export function WorkspaceStartPage({
 									Select where to run the task
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="start" className="w-fit min-w-36">
+							{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
+							<DropdownMenuContent
+								align="start"
+								className="w-fit min-w-36"
+								onCloseAutoFocus={(event) => event.preventDefault()}
+							>
 								<DropdownMenuItem
 									onClick={() => onModeChange("local")}
 									className="gap-2 pr-3"
@@ -571,7 +581,12 @@ export function WorkspaceStartPage({
 											: "Fork a fresh branch off the picked base"}
 									</TooltipContent>
 								</Tooltip>
-								<DropdownMenuContent align="start" className="w-72">
+								{/* Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection. */}
+								<DropdownMenuContent
+									align="start"
+									className="w-72"
+									onCloseAutoFocus={(event) => event.preventDefault()}
+								>
 									<DropdownMenuItem
 										onClick={() => onBranchIntentChange("from_branch")}
 										className="flex-col items-start gap-1 pr-3"
@@ -615,6 +630,8 @@ export function WorkspaceStartPage({
 										loading={branchesLoading}
 										onOpen={onOpenBranchPicker}
 										onSelect={onSelectBranch}
+										// Skip focus return so the wrapping Tooltip doesn't re-open via onFocus after selection.
+										onCloseAutoFocus={(event) => event.preventDefault()}
 										renderFooter={
 											mode === "local" && onCreateAndCheckoutBranch
 												? ({ close }) => (

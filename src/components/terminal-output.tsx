@@ -185,6 +185,25 @@ export function suspendTerminalFit(): () => void {
 	};
 }
 
+// Buffer xterm writes during heavy animations — each chunk's render RAF
+// otherwise competes with the drag's RAF.
+let terminalWriteSuspendCount = 0;
+const terminalWriteFlushListeners = new Set<() => void>();
+
+/** Buffer xterm writes across every mounted TerminalOutput. Idempotent release. */
+export function suspendTerminalWrites(): () => void {
+	terminalWriteSuspendCount++;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		terminalWriteSuspendCount--;
+		if (terminalWriteSuspendCount === 0) {
+			for (const listener of terminalWriteFlushListeners) listener();
+		}
+	};
+}
+
 /** Read --terminal-* and --foreground CSS variables and build an xterm ITheme. */
 function resolveTerminalTheme(): ITheme {
 	const s = getComputedStyle(document.documentElement);
@@ -394,6 +413,17 @@ function TerminalOutputImpl({
 		const refitListener = () => runFit();
 		terminalRefitListeners.add(refitListener);
 
+		// Per-instance buffer for writes deferred via `suspendTerminalWrites`.
+		// Flushed in one xterm.write so ANSI escapes stay contiguous.
+		const suspendedWrites: string[] = [];
+		const flushSuspendedWrites = () => {
+			if (suspendedWrites.length === 0) return;
+			const joined = suspendedWrites.join("");
+			suspendedWrites.length = 0;
+			terminal.write(joined);
+		};
+		terminalWriteFlushListeners.add(flushSuspendedWrites);
+
 		// Re-resolve CSS variables when app light/dark mode changes.
 		const themeObserver = new MutationObserver(() => {
 			terminal.options.theme = resolveTerminalTheme();
@@ -408,9 +438,18 @@ function TerminalOutputImpl({
 
 		if (terminalRef) {
 			(terminalRef as React.MutableRefObject<TerminalHandle | null>).current = {
-				write: (data: string) => terminal.write(data),
+				write: (data: string) => {
+					if (terminalWriteSuspendCount > 0) {
+						suspendedWrites.push(data);
+						return;
+					}
+					terminal.write(data);
+				},
 				// Scrollback wipe only — `reset()` here would race with replay.
-				clear: () => terminal.clear(),
+				clear: () => {
+					suspendedWrites.length = 0;
+					terminal.clear();
+				},
 				dispose: () => terminal.dispose(),
 				refit: () => runFit(),
 				focus: () => terminal.focus(),
@@ -428,6 +467,7 @@ function TerminalOutputImpl({
 			themeObserver.disconnect();
 			resizeObserver.disconnect();
 			terminalRefitListeners.delete(refitListener);
+			terminalWriteFlushListeners.delete(flushSuspendedWrites);
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;

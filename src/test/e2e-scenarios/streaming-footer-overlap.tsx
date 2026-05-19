@@ -77,7 +77,7 @@ function buildMessages(visibleTools: number): ThreadMessageLike[] {
 				{
 					type: "text",
 					id: "streaming-text",
-					text: "我已经拿到关键证据了：丢了。",
+					text: "Got the smoking-gun evidence: it's gone.",
 				},
 				makeCollapsedGroup(visibleTools),
 			],

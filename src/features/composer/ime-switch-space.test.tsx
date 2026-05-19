@@ -317,7 +317,7 @@ describe("WorkspaceComposer — IME switch mid-composition leaves segmentation s
 	// The cheap fix is `data.replace(/\s+/g, '')` — but applied
 	// unconditionally that nukes legitimate spaces in any compositionend
 	// payload, including normal CJK candidates that *do* contain a real
-	// space (mixed-script commits like "你好 world" are valid). This test
+	// space (mixed-script commits like "<CJK> world" are valid). This test
 	// pins down the conditional shape of the fix: only strip when the
 	// committed `data` is pure printable ASCII (which is the IME-segmented
 	// pinyin / wubi / zhuyin / cangjie buffer signature — those engines
@@ -333,8 +333,8 @@ describe("WorkspaceComposer — IME switch mid-composition leaves segmentation s
 		const editor = await screen.findByLabelText("Workspace input");
 		editor.focus();
 
-		// Realistic mixed-script commit — IME confirmed the candidate
-		// "你好 world" (CJK + intentional space + Latin), the space here
+		// Realistic mixed-script commit — IME confirmed a CJK candidate
+		// followed by an intentional space and Latin text; the space here
 		// is NOT IME segmentation, it is what the user wanted.
 		simulateImeSwitchCommit(editor, "你好 world");
 

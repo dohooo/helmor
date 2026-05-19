@@ -279,9 +279,13 @@ export function ChangesSection({
 			aria-label="Inspector section Git"
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
 			style={{
-				// 拖动期间 var() 由 mousemove 直接更新,完全跳过 React。fallback 兜底
-				// 首次 mount 时 layout-effect 还没把 var 写到容器上的那一帧。
+				// Height var written by mousemove directly; fallback covers the first
+				// mount frame before the layout effect runs.
 				height: `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_CHANGES_BODY_VAR}, ${bodyHeight}px))`,
+				// Full containment isolates the file-list reflow (rows + Radix triggers
+				// + truncate spans) from the rest of the page during inspector drag.
+				// Section already has overflow-hidden, so `paint` doesn't change clipping.
+				contain: "layout style paint",
 			}}
 		>
 			<GitSectionHeader

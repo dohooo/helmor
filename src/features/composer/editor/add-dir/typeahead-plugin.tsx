@@ -13,7 +13,7 @@
  *
  * Backspace at the leading edge of the post-pill text (or immediately
  * after the pill when no text has been typed) deletes the pill in one
- * keystroke — matches the user's decision to "一次删掉" the pill.
+ * keystroke — matches the user's "delete in one shot" expectation.
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
