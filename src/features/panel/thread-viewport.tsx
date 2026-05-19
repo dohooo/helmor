@@ -287,6 +287,51 @@ function ChatThread({
 		void scrollToBottom("instant");
 	}, [scrollToBottom, sessionId, usePlainThread]);
 
+	// Editor close path: when chat container's `hidden` class is removed,
+	// snap to bottom and pin for ~20 frames so the virtualized list's
+	// progressive content growth doesn't show as a long smooth scroll. A
+	// brief flash of top messages before the pin catches up is the accepted
+	// tradeoff for not breaking streaming animations.
+	useEffect(() => {
+		if (typeof MutationObserver === "undefined") {
+			return;
+		}
+		const scrollParent = scrollParentRef.current;
+		const chatContainer = scrollParent?.closest('[data-focus-scope="chat"]');
+		if (!chatContainer || !scrollParent) {
+			return;
+		}
+		let wasHidden = chatContainer.classList.contains("hidden");
+		let rafId: number | null = null;
+		const observer = new MutationObserver(() => {
+			const isHidden = chatContainer.classList.contains("hidden");
+			if (wasHidden && !isHidden) {
+				void scrollToBottom("instant");
+				let frames = 20;
+				const pin = () => {
+					scrollParent.scrollTop = scrollParent.scrollHeight;
+					if (frames-- > 0) {
+						rafId = requestAnimationFrame(pin);
+					} else {
+						rafId = null;
+					}
+				};
+				pin();
+			}
+			wasHidden = isHidden;
+		});
+		observer.observe(chatContainer, {
+			attributes: true,
+			attributeFilter: ["class"],
+		});
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) {
+				cancelAnimationFrame(rafId);
+			}
+		};
+	}, [scrollToBottom]);
+
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => {
 			let previousAssistantMessage: RenderedMessage | null = null;
