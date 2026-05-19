@@ -806,6 +806,19 @@ pub fn allocate_chat_workspace_dir() -> Result<(String, PathBuf)> {
     bail!("Unable to allocate a chat workspace directory under {date_dir:?}")
 }
 
+fn lookup_repo_name(connection: &rusqlite::Connection, repo_id: &str) -> Result<Option<String>> {
+    let mut stmt = connection
+        .prepare("SELECT name FROM repos WHERE id = ?1")
+        .context("Failed to prepare repo name lookup")?;
+    let mut rows = stmt
+        .query_map([repo_id], |row| row.get::<_, String>(0))
+        .context("Failed to query repo name")?;
+    match rows.next() {
+        Some(name) => Ok(Some(name?)),
+        None => Ok(None),
+    }
+}
+
 pub fn allocate_directory_name_with_conn(
     connection: &rusqlite::Connection,
     repo_id: &str,
@@ -824,10 +837,28 @@ pub fn allocate_directory_name_with_conn(
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read existing workspace names")?;
 
-    let used = names
+    let mut used = names
         .into_iter()
         .map(|value| value.to_ascii_lowercase())
         .collect::<std::collections::HashSet<_>>();
+
+    // Also exclude any directory names that already exist on disk under the
+    // repo's workspace root. Orphan dirs (DB row gone but folder still on
+    // disk) would otherwise cause `prepare → finalize` to fail later with a
+    // "target already exists" error.
+    if let Some(repo_name) = lookup_repo_name(connection, repo_id)? {
+        if let Ok(workspaces_root) = crate::data_dir::workspace_dir(&repo_name, "") {
+            if let Ok(entries) = std::fs::read_dir(&workspaces_root) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        if let Some(name) = entry.file_name().to_str() {
+                            used.insert(name.to_ascii_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Collect available names (not yet used) and pick one randomly
     let available: Vec<&&str> = WORKSPACE_NAMES
@@ -1517,5 +1548,100 @@ mod tests {
             name, "mercury",
             "Names are per-repo, so r1 can still use 'mercury'"
         );
+    }
+
+    /// `prepare → finalize` would otherwise fail with "target already exists"
+    /// when a previous workspace's worktree got orphaned (DB row gone, dir
+    /// still on disk). The allocator filters those out so the picked name's
+    /// path is always fresh.
+    #[test]
+    fn allocate_skips_orphan_directories_on_disk() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", temp.path());
+
+        let (conn, _db_dir) = test_db();
+        // Squat *every* base name with a real directory under
+        // `<data>/workspaces/test-repo/`. No DB rows exist, so without the
+        // on-disk dedupe the allocator would happily pick any of them.
+        let workspaces_root = temp.path().join("workspaces").join("test-repo");
+        std::fs::create_dir_all(&workspaces_root).unwrap();
+        for name in WORKSPACE_NAMES {
+            std::fs::create_dir_all(workspaces_root.join(name)).unwrap();
+        }
+
+        let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        // All base names taken on disk → must fall back to `-v2`.
+        assert!(
+            allocated.ends_with("-v2"),
+            "Expected -v2 suffix when every base name is squatted by an orphan dir, got: {allocated}"
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// Regression guard for the on-disk dedupe: a single orphan directory
+    /// must not be pickable. Asserts that across many attempts, the
+    /// squatted name is never returned.
+    #[test]
+    fn allocate_never_returns_an_orphan_directory_name() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", temp.path());
+
+        let (conn, _db_dir) = test_db();
+        let workspaces_root = temp.path().join("workspaces").join("test-repo");
+        std::fs::create_dir_all(&workspaces_root).unwrap();
+        let squatted = WORKSPACE_NAMES.first().copied().unwrap();
+        std::fs::create_dir_all(workspaces_root.join(squatted)).unwrap();
+
+        for _ in 0..50 {
+            let name = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+            assert_ne!(
+                name, squatted,
+                "Allocator must not return a name whose directory already exists on disk"
+            );
+        }
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    /// Plain files (not directories) under the workspace root are NOT
+    /// treated as squatters — they live alongside worktrees (e.g. a
+    /// stray `.DS_Store`) without blocking name allocation. Documents
+    /// the contract that `cleanup_after_worktree_failure` test relies on.
+    #[test]
+    fn allocate_ignores_plain_files_under_workspace_root() {
+        let _guard = crate::data_dir::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", temp.path());
+
+        let (conn, _db_dir) = test_db();
+        let workspaces_root = temp.path().join("workspaces").join("test-repo");
+        std::fs::create_dir_all(&workspaces_root).unwrap();
+        // Squat every base name with a *file* (not a directory) — these
+        // must NOT be filtered out by the on-disk dedupe.
+        for name in WORKSPACE_NAMES {
+            std::fs::write(workspaces_root.join(name), "stale").unwrap();
+        }
+
+        let allocated = allocate_directory_name_with_conn(&conn, "r1").unwrap();
+        // Files don't block — allocator picks a base name (no -v2).
+        assert!(
+            !allocated.ends_with("-v2"),
+            "Files under workspace root should not trigger -v2 fallback, got: {allocated}"
+        );
+        assert!(
+            WORKSPACE_NAMES.contains(&allocated.as_str()),
+            "Allocated name should still be from WORKSPACE_NAMES: {allocated}"
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
     }
 }

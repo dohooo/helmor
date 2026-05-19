@@ -3366,6 +3366,42 @@ export async function resizeTerminal(
 
 export { DEFAULT_WORKSPACE_GROUPS };
 
+// ---------------------------------------------------------------------------
+// Feedback / "Quick fix" contribution flow
+// ---------------------------------------------------------------------------
+
+export type ForkResult = {
+	owner: string;
+	repo: string;
+	cloneUrl: string;
+	htmlUrl: string;
+};
+
+export type ExistingHelmorRepo = {
+	repoId: string;
+	repoName: string;
+};
+
+export async function forkHelmorUpstream(): Promise<ForkResult> {
+	return invoke<ForkResult>("fork_helmor_upstream");
+}
+
+export type IssueResult = {
+	url: string;
+	number: number;
+};
+
+export async function createHelmorIssue(
+	title: string,
+	body: string,
+): Promise<IssueResult> {
+	return invoke<IssueResult>("create_helmor_issue", { title, body });
+}
+
+export async function findExistingHelmorRepo(): Promise<ExistingHelmorRepo | null> {
+	return invoke<ExistingHelmorRepo | null>("find_existing_helmor_repo");
+}
+
 function describeInvokeError(error: unknown, fallback: string): string {
 	return extractError(error, fallback).message;
 }

@@ -3,8 +3,8 @@ import {
 	ChevronUpIcon,
 	ExternalLinkIcon,
 	PanelRightOpenIcon,
-	PlusIcon,
 	SettingsIcon,
+	SquarePenIcon,
 	XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -266,7 +266,7 @@ function ActionIcon({
 		case "openSettings":
 			return <SettingsIcon className={className} />;
 		case "openStartPage":
-			return <PlusIcon className={className} />;
+			return <SquarePenIcon className={className} />;
 	}
 }
 

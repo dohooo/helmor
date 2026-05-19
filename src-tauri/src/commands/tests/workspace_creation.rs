@@ -745,10 +745,14 @@ fn create_workspace_from_repo_cleans_up_after_worktree_failure() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
+    // Squat each star-name slot with a *file* (not a directory). The
+    // allocator's on-disk dedupe only filters out directories, so it still
+    // picks a star name, then finalize's `workspace_dir.exists()` guard
+    // trips and the combined create path's cleanup runs.
     for name in helpers::WORKSPACE_NAMES {
-        let dir = harness.workspace_dir(name);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("keep.txt"), "keep").unwrap();
+        let path = harness.workspace_dir(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "squat").unwrap();
     }
 
     let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
