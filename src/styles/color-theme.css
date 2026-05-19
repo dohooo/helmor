@@ -111,14 +111,17 @@
 
 	/* Editor content — surfaces derive from theme Base so the editor picks
 	   up a gentle tint from the active preset (Aubergine reads purplish,
-	   Forest greenish, etc). Foreground / gutter-fg / cursor / selection
-	   keep stable oklch values (mostly warm gray equivalents of the
-	   pre-refactor hex set) so syntax reads the same across every theme. */
-	--editor-content-bg: var(--bg-base);
+	   Forest greenish, etc). Background sits one elevation above panel
+	   (--bg-surface) so the editor feels like a card floating on the
+	   chat area, matching VS Code / GitHub dark hierarchy and softening
+	   the fg/bg contrast against bright syntax tokens. Foreground / gutter-fg
+	   / cursor / selection keep stable oklch values (warm gray equivalents
+	   of the pre-refactor hex set) so syntax reads the same everywhere. */
+	--editor-content-bg: var(--bg-surface);
 	--editor-content-fg: oklch(0.19 0.003 56); /* #1a1918 */
-	--editor-gutter-bg: var(--bg-base);
+	--editor-gutter-bg: var(--bg-surface);
 	--editor-gutter-fg: oklch(0.69 0.005 70); /* #a4a19d */
-	--editor-line-active-bg: var(--bg-surface);
+	--editor-line-active-bg: var(--bg-elevated);
 	--editor-selection-bg: oklch(0.86 0.04 247); /* #c9d9ef */
 	--editor-cursor: var(--editor-content-fg);
 
@@ -349,11 +352,11 @@
 	--editor-chrome-bg: var(--bg-surface);
 	--editor-tab-active-bg: var(--bg-base);
 
-	--editor-content-bg: var(--bg-base);
+	--editor-content-bg: var(--bg-surface);
 	--editor-content-fg: oklch(0.978 0.002 95); /* #FAF9F6 */
-	--editor-gutter-bg: var(--bg-base);
+	--editor-gutter-bg: var(--bg-surface);
 	--editor-gutter-fg: oklch(0.6 0.003 56); /* #868584 */
-	--editor-line-active-bg: var(--bg-surface);
+	--editor-line-active-bg: var(--bg-elevated);
 	--editor-selection-bg: oklch(0.336 0.002 56); /* #353534 */
 	--editor-cursor: var(--editor-content-fg);
 
