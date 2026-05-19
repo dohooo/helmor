@@ -109,16 +109,16 @@
 	--editor-chrome-bg: var(--bg-surface);
 	--editor-tab-active-bg: var(--bg-base);
 
-	/* Editor content (LOCKED — drives Monaco theme; only light/dark).
-	   Values are oklch equivalents of the original hardcoded hex set so
-	   the editor matches its pre-refactor look. Slight warm chroma
-	   (hue ~70-90, c ~0.003-0.005) avoids the "dead cold gray" feel a
-	   chroma-zero gray gives. */
-	--editor-content-bg: oklch(1 0 0); /* #FFFFFF */
+	/* Editor content — surfaces derive from theme Base so the editor picks
+	   up a gentle tint from the active preset (Aubergine reads purplish,
+	   Forest greenish, etc). Foreground / gutter-fg / cursor / selection
+	   keep stable oklch values (mostly warm gray equivalents of the
+	   pre-refactor hex set) so syntax reads the same across every theme. */
+	--editor-content-bg: var(--bg-base);
 	--editor-content-fg: oklch(0.19 0.003 56); /* #1a1918 */
-	--editor-gutter-bg: oklch(1 0 0);
+	--editor-gutter-bg: var(--bg-base);
 	--editor-gutter-fg: oklch(0.69 0.005 70); /* #a4a19d */
-	--editor-line-active-bg: oklch(0.96 0.003 80); /* #f4f3f1 */
+	--editor-line-active-bg: var(--bg-surface);
 	--editor-selection-bg: oklch(0.86 0.04 247); /* #c9d9ef */
 	--editor-cursor: var(--editor-content-fg);
 
@@ -349,11 +349,11 @@
 	--editor-chrome-bg: var(--bg-surface);
 	--editor-tab-active-bg: var(--bg-base);
 
-	--editor-content-bg: oklch(0.17 0.003 56); /* #161514 */
+	--editor-content-bg: var(--bg-base);
 	--editor-content-fg: oklch(0.978 0.002 95); /* #FAF9F6 */
-	--editor-gutter-bg: oklch(0.17 0.003 56);
+	--editor-gutter-bg: var(--bg-base);
 	--editor-gutter-fg: oklch(0.6 0.003 56); /* #868584 */
-	--editor-line-active-bg: oklch(0.213 0.003 56); /* #1f1e1d */
+	--editor-line-active-bg: var(--bg-surface);
 	--editor-selection-bg: oklch(0.336 0.002 56); /* #353534 */
 	--editor-cursor: var(--editor-content-fg);
 
