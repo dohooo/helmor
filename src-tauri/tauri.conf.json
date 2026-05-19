@@ -28,6 +28,8 @@
 				"title": "Helmor",
 				"width": 1300,
 				"height": 810,
+				"minWidth": 900,
+				"minHeight": 600,
 				"titleBarStyle": "Overlay",
 				"trafficLightPosition": {
 					"x": 12,

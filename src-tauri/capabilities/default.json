@@ -12,6 +12,7 @@
 		"deep-link:default",
 		"dialog:default",
 		"notification:default",
-		"opener:default"
+		"opener:default",
+		"window-state:default"
 	]
 }
