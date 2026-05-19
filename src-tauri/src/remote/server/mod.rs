@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use super::agent::RemoteAgentState;
 use super::runtime::{LocalRuntime, RemoteRuntime};
 use super::terminal::RemoteTerminalState;
+use super::watch::RemoteWatchState;
 
 /// Per-connection state. Created when the binary boots, threaded
 /// through every dispatch. Today it carries the post-`initialize`
@@ -71,6 +72,11 @@ pub struct ServerContext {
     /// shared registry. In single-connection mode (used by tests
     /// and the legacy proxy entry point) the state is per-context.
     agent_state: Arc<RemoteAgentState>,
+    /// Live workspace file watchers keyed by `watch_id`.
+    /// Per-context (per-connection) — watch ids are client-scoped,
+    /// so a reconnecting client starts with an empty registry and
+    /// re-issues `workspace.startWatch` for whatever it cares about.
+    watch_state: Arc<RemoteWatchState>,
 }
 
 impl ServerContext {
@@ -88,6 +94,7 @@ impl ServerContext {
             agent_state: Arc::new(RemoteAgentState::disabled(
                 "agent runtime not configured for this context",
             )),
+            watch_state: Arc::new(RemoteWatchState::new()),
         }
     }
 
@@ -108,6 +115,7 @@ impl ServerContext {
             agent_state: Arc::new(RemoteAgentState::disabled(
                 "agent runtime not configured for this context",
             )),
+            watch_state: Arc::new(RemoteWatchState::new()),
         }
     }
 
@@ -156,6 +164,14 @@ impl ServerContext {
     /// reconnect.
     pub fn agent_state(&self) -> &Arc<RemoteAgentState> {
         &self.agent_state
+    }
+
+    /// Per-context workspace watcher registry. Handlers reach this
+    /// for `workspace.startWatch` / `workspace.stopWatch`. The
+    /// registry is per-connection — a reconnecting client starts
+    /// with an empty set and re-issues watches as needed.
+    pub fn watch_state(&self) -> &Arc<RemoteWatchState> {
+        &self.watch_state
     }
 
     /// Server binary version — surfaced in `initialize` responses.

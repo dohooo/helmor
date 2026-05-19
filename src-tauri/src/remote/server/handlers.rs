@@ -19,8 +19,10 @@ use crate::remote::methods::{
     WorkspaceBranchInfoResult, WorkspaceChangesParams, WorkspaceChangesResult,
     WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
     WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStatFileParams,
-    WorkspaceStatusParams, WorkspaceStatusResult,
+    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
+    WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
+    WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
+    WorkspaceStopWatchResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -261,6 +263,32 @@ pub(super) fn handle_workspace_search(
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("workspace.search failed: {err:#}"),
+        )
+    })
+}
+
+pub(super) fn handle_workspace_start_watch(
+    ctx: &ServerContext,
+    params: WorkspaceStartWatchParams,
+) -> Result<WorkspaceStartWatchResult, JsonRpcError> {
+    ctx.watch_state()
+        .start_watch(params, Arc::clone(ctx.notifier()))
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.startWatch failed: {err:#}"),
+            )
+        })
+}
+
+pub(super) fn handle_workspace_stop_watch(
+    ctx: &ServerContext,
+    params: WorkspaceStopWatchParams,
+) -> Result<WorkspaceStopWatchResult, JsonRpcError> {
+    ctx.watch_state().stop_watch(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.stopWatch failed: {err:#}"),
         )
     })
 }

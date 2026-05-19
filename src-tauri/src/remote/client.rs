@@ -401,6 +401,36 @@ impl RpcClient {
             }
         })
     }
+
+    /// Subscribe to `workspace.fileEvent` notifications. Same RAII
+    /// contract as the terminal / agent subscribers: hold the
+    /// returned handle for as long as you want events to flow. The
+    /// callback fires for every debounced batch the daemon's
+    /// [`super::watch::RemoteWatchState`] emits; the consumer
+    /// filters by `watch_id` to demux across concurrent watchers
+    /// on the same connection.
+    pub fn subscribe_workspace_file_events<F>(&self, callback: F) -> NotificationSubscription
+    where
+        F: Fn(super::methods::WorkspaceFileEventNotification) + Send + Sync + 'static,
+    {
+        let callback = Arc::new(callback);
+        self.subscribe_notifications(move |req: JsonRpcRequest| {
+            if req.method != super::methods::WORKSPACE_FILE_EVENT_METHOD {
+                return;
+            }
+            match serde_json::from_value::<super::methods::WorkspaceFileEventNotification>(
+                req.params,
+            ) {
+                Ok(event) => callback(event),
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        "client: received malformed workspace.fileEvent payload; dropping"
+                    );
+                }
+            }
+        })
+    }
 }
 
 impl Drop for RpcClient {
@@ -821,6 +851,29 @@ impl RemoteRuntime for RemoteSshRuntime {
     ) -> Result<super::methods::WorkspaceSearchResult> {
         self.client
             .call::<super::methods::WorkspaceSearchMethod>(params)
+    }
+
+    fn workspace_start_watch(
+        &self,
+        params: super::methods::WorkspaceStartWatchParams,
+    ) -> Result<super::methods::WorkspaceStartWatchResult> {
+        self.client
+            .call::<super::methods::WorkspaceStartWatchMethod>(params)
+    }
+
+    fn workspace_stop_watch(
+        &self,
+        params: super::methods::WorkspaceStopWatchParams,
+    ) -> Result<super::methods::WorkspaceStopWatchResult> {
+        self.client
+            .call::<super::methods::WorkspaceStopWatchMethod>(params)
+    }
+
+    fn subscribe_workspace_file_events(
+        &self,
+        callback: Box<dyn Fn(super::methods::WorkspaceFileEventNotification) + Send + Sync>,
+    ) -> Option<super::client::NotificationSubscription> {
+        Some(self.client.subscribe_workspace_file_events(callback))
     }
 
     // ── agent.* delegation (phase 23a — wire-only) ───────────────
@@ -1557,6 +1610,72 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_millis(100))
                 .is_err(),
             "malformed agent.event payloads must be dropped, not panicked",
+        );
+    }
+
+    #[test]
+    fn subscribe_workspace_file_events_decodes_only_workspace_file_event_notifications() {
+        // Same contract as the agent.event subscriber: a typed
+        // `Fn(WorkspaceFileEventNotification)` callback fires only
+        // for the matching method, unrelated traffic and malformed
+        // payloads are dropped without panicking.
+        let client = split_loopback(None).unwrap();
+        let (captured_tx, captured_rx) =
+            mpsc::channel::<super::super::methods::WorkspaceFileEventNotification>();
+        let _subscription = client.subscribe_workspace_file_events(move |notif| {
+            let _ = captured_tx.send(notif);
+        });
+
+        let subscribers: Vec<Arc<dyn Fn(JsonRpcRequest) + Send + Sync>> = {
+            let guard = client.state.subscribers.lock().unwrap();
+            guard.iter().map(|s| s.callback.clone()).collect()
+        };
+        assert_eq!(subscribers.len(), 1);
+        let cb = &subscribers[0];
+
+        // 1. Correct method + payload → callback fires with decoded changes.
+        cb(JsonRpcRequest::new(
+            "workspace.fileEvent",
+            serde_json::json!({
+                "watchId": "w-1",
+                "changes": [
+                    { "path": "src/main.rs", "kind": "modified" },
+                    { "path": "Cargo.lock", "kind": "added" },
+                ],
+            }),
+            JsonRpcId::Null,
+        ));
+        let notif = captured_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .expect("callback should fire on valid workspace.fileEvent");
+        assert_eq!(notif.watch_id, "w-1");
+        assert_eq!(notif.changes.len(), 2);
+        assert_eq!(notif.changes[0].path, "src/main.rs");
+
+        // 2. Unrelated method → callback does NOT fire.
+        cb(JsonRpcRequest::new(
+            "agent.event",
+            serde_json::json!({ "requestId": "r", "event": {} }),
+            JsonRpcId::Null,
+        ));
+        assert!(
+            captured_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "non-workspace.fileEvent notifications must not fire the callback"
+        );
+
+        // 3. Malformed payload → silent drop (e.g. missing watchId).
+        cb(JsonRpcRequest::new(
+            "workspace.fileEvent",
+            serde_json::json!({ "changes": [] }),
+            JsonRpcId::Null,
+        ));
+        assert!(
+            captured_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "malformed workspace.fileEvent payloads must be dropped, not panicked",
         );
     }
 }

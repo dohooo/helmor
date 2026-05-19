@@ -240,6 +240,32 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("workspace.search is not yet implemented on this runtime")
     }
 
+    fn workspace_start_watch(
+        &self,
+        _params: super::methods::WorkspaceStartWatchParams,
+    ) -> Result<super::methods::WorkspaceStartWatchResult> {
+        anyhow::bail!("workspace.startWatch is only supported on a connected remote runtime")
+    }
+
+    fn workspace_stop_watch(
+        &self,
+        _params: super::methods::WorkspaceStopWatchParams,
+    ) -> Result<super::methods::WorkspaceStopWatchResult> {
+        anyhow::bail!("workspace.stopWatch is only supported on a connected remote runtime")
+    }
+
+    /// Subscribe to `workspace.fileEvent` notifications coming back
+    /// from a started watcher. Default `None` mirrors the agent /
+    /// terminal subscribers: local + tombstoned runtimes don't run
+    /// the wire (a local workspace uses [`FileWatcher`] directly).
+    /// Only [`super::client::RemoteSshRuntime`] overrides.
+    fn subscribe_workspace_file_events(
+        &self,
+        _callback: Box<dyn Fn(super::methods::WorkspaceFileEventNotification) + Send + Sync>,
+    ) -> Option<super::client::NotificationSubscription> {
+        None
+    }
+
     // ── agent.* ops (phase 23a — surface only) ──────────────────
     //
     // Phase 23a defines the wire shapes; the trait defaults bail.

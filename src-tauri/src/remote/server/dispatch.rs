@@ -17,7 +17,8 @@ use crate::remote::methods::{
     TerminalListMethod, TerminalOpenMethod, TerminalResizeMethod, TerminalWriteMethod,
     WorkspaceBranchInfoMethod, WorkspaceChangesMethod, WorkspaceFileTreeMethod,
     WorkspaceMutateFileMethod, WorkspaceReadFileAtRefMethod, WorkspaceReadFileMethod,
-    WorkspaceSearchMethod, WorkspaceStatFileMethod, WorkspaceStatusMethod,
+    WorkspaceSearchMethod, WorkspaceStartWatchMethod, WorkspaceStatFileMethod,
+    WorkspaceStatusMethod, WorkspaceStopWatchMethod,
 };
 use crate::remote::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
@@ -29,8 +30,8 @@ use super::handlers::{
     handle_terminal_close, handle_terminal_list, handle_terminal_open, handle_terminal_resize,
     handle_terminal_write, handle_workspace_branch_info, handle_workspace_changes,
     handle_workspace_file_tree, handle_workspace_mutate_file, handle_workspace_read_file,
-    handle_workspace_read_file_at_ref, handle_workspace_search, handle_workspace_stat_file,
-    handle_workspace_status,
+    handle_workspace_read_file_at_ref, handle_workspace_search, handle_workspace_start_watch,
+    handle_workspace_stat_file, handle_workspace_status, handle_workspace_stop_watch,
 };
 use super::ServerContext;
 
@@ -115,6 +116,14 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         }
         Method::WorkspaceSearch => handle::<WorkspaceSearchMethod, _>(req.params, |params| {
             handle_workspace_search(ctx, params)
+        }),
+        Method::WorkspaceStartWatch => {
+            handle::<WorkspaceStartWatchMethod, _>(req.params, |params| {
+                handle_workspace_start_watch(ctx, params)
+            })
+        }
+        Method::WorkspaceStopWatch => handle::<WorkspaceStopWatchMethod, _>(req.params, |params| {
+            handle_workspace_stop_watch(ctx, params)
         }),
         Method::AgentSend => {
             handle::<AgentSendMethod, _>(req.params, |params| handle_agent_send(ctx, params))

@@ -42,6 +42,7 @@ pub mod server;
 pub mod ssh_config;
 pub mod terminal;
 pub mod transport;
+pub mod watch;
 pub mod workspace_bindings;
 
 pub use client::NotificationSubscription;
@@ -63,6 +64,7 @@ pub use runtime::{local_runtime, LocalRuntime, RemoteRuntime, RuntimeHealth, Run
 pub use server::{dispatch_request, NoopNotifier, Notifier, ServerContext, StdoutNotifier};
 pub use terminal::RemoteTerminalState;
 pub use transport::{CommandTransport, OpenSshTransport, RemoteTransport, TransportPipe};
+pub use watch::RemoteWatchState;
 pub use workspace_bindings::{WorkspaceRuntimeBinding, WorkspaceRuntimeBindings};
 
 #[cfg(test)]
