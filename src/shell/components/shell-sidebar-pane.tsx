@@ -70,6 +70,7 @@ export function ShellSidebarPane({
 			aria-hidden={collapsed}
 			aria-label="Workspace sidebar"
 			data-helmor-sidebar-root
+			data-shell-pane="sidebar"
 			className={cn(
 				"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
 				resizing
@@ -77,7 +78,8 @@ export function ShellSidebarPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			// Width driven by CSS var (use-panels.ts writes it on drag) — no React render.
+			// Width driven by a CSS var written on THIS element (not documentElement)
+			// during drag — keeps style invalidation inside the pane subtree.
 			style={{
 				width: collapsed ? 0 : `var(--shell-sidebar-width, ${width}px)`,
 			}}

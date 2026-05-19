@@ -50,22 +50,31 @@ function setResizingActive(active: boolean) {
 	}
 }
 
+// Writing custom properties on `documentElement` forces a document-wide style
+// invalidation pass on every change. With Monaco's ~2900 cached CSS rules in
+// the document after the editor has been opened once, that per-frame work
+// blows past the budget on drag (60ms+/frame). Writing the var on the pane +
+// separator subtrees instead confines invalidation to those subtrees — combined
+// with `contain: layout style` on the pane, the rest of the shell stays cold.
 function writeWidthVar(target: ResizeTarget, width: number) {
 	if (typeof document === "undefined") return;
 	const varName =
 		target === "sidebar" ? SIDEBAR_WIDTH_VAR : INSPECTOR_WIDTH_VAR;
-	document.documentElement.style.setProperty(varName, `${width}px`);
+	const value = `${width}px`;
+	const pane = document.querySelector<HTMLElement>(
+		`[data-shell-pane="${target}"]`,
+	);
+	const separator = document.querySelector<HTMLElement>(
+		`[data-shell-resize="${target}"]`,
+	);
+	pane?.style.setProperty(varName, value);
+	separator?.style.setProperty(varName, value);
 }
 
-// Seed the CSS vars at module load so the DOM has a width before React's
-// first render — avoids a one-frame 0-width flash.
-if (typeof document !== "undefined") {
-	writeWidthVar("sidebar", getInitialSidebarWidth());
-	writeWidthVar(
-		"inspector",
-		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
-	);
-}
+// No module-load seed: each pane / separator falls back to React state via
+// `var(--shell-x-width, ${width}px)`, and `useState(getInitialSidebarWidth)`
+// initializes state from localStorage before the first render, so the fallback
+// already shows the correct width on the first paint.
 
 export function useShellPanels() {
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
@@ -122,14 +131,29 @@ export function useShellPanels() {
 
 		setResizingActive(true);
 
+		// Cache pane + separator refs once so the 60Hz flush doesn't re-querySelector.
+		const targetPane = document.querySelector<HTMLElement>(
+			`[data-shell-pane="${resizeState.target}"]`,
+		);
+		const targetSeparator = document.querySelector<HTMLElement>(
+			`[data-shell-resize="${resizeState.target}"]`,
+		);
+		const varName =
+			resizeState.target === "sidebar"
+				? SIDEBAR_WIDTH_VAR
+				: INSPECTOR_WIDTH_VAR;
+
 		let pendingWidth: number | null = null;
 		let rafId: number | null = null;
 
-		// Drag-time path: only writes the CSS var, never touches React.
+		// Drag-time path: only writes the CSS var on the pane + separator
+		// subtrees, never touches React or documentElement.
 		const flushVar = () => {
 			rafId = null;
 			if (pendingWidth === null) return;
-			writeWidthVar(resizeState.target, pendingWidth);
+			const value = `${pendingWidth}px`;
+			targetPane?.style.setProperty(varName, value);
+			targetSeparator?.style.setProperty(varName, value);
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {

@@ -24,8 +24,15 @@ const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
 const SIDEBAR_WIDTH_VAR = "--shell-sidebar-width";
 const INSPECTOR_WIDTH_VAR = "--shell-inspector-width";
 
+// `use-panels.ts` writes the width vars on the pane element itself (not
+// documentElement) so the resize-driven style invalidation stays inside the
+// pane subtree — see comments in use-panels.ts for the why.
 function getShellWidthVar(name: string): string {
-	return document.documentElement.style.getPropertyValue(name);
+	const target = name === SIDEBAR_WIDTH_VAR ? "sidebar" : "inspector";
+	const pane = document.querySelector(
+		`[data-shell-pane="${target}"]`,
+	) as HTMLElement | null;
+	return pane?.style.getPropertyValue(name) ?? "";
 }
 
 describe("App", () => {

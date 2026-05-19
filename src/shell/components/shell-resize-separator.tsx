@@ -58,6 +58,7 @@ export function ShellResizeSeparator({
 			aria-valuemin={MIN_SIDEBAR_WIDTH}
 			aria-valuemax={MAX_SIDEBAR_WIDTH}
 			aria-valuenow={width}
+			data-shell-resize={side}
 			onMouseDown={onMouseDown}
 			onKeyDown={onKeyDown}
 			className={cn(

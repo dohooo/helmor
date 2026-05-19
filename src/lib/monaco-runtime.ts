@@ -168,6 +168,9 @@ export async function createFileEditor(options: {
 		dispose() {
 			findWidgetTooltipPatch.dispose();
 			editor.dispose();
+			// editor.dispose() does NOT release the bound model — leaking it
+			// keeps the file text + tokenization state alive across opens.
+			currentModel.dispose();
 		},
 		getValue() {
 			return currentModel.getValue();

@@ -1538,6 +1538,10 @@ function AppShell({
 								<section
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+									// Mirror the inspector's containment: keep style/layout invalidation
+									// from sidebar/inspector resize out of the workspace subtree (which
+									// owns Monaco's ~2900 cached CSS rules after the editor opens once).
+									style={{ contain: "layout style" }}
 								>
 									{workspaceViewMode !== "editor" && (
 										<div

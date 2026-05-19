@@ -111,6 +111,7 @@ export function ShellInspectorPane({
 		<aside
 			aria-hidden={collapsed}
 			aria-label="Inspector sidebar"
+			data-shell-pane="inspector"
 			className={cn(
 				"relative h-full shrink-0 overflow-hidden bg-inspector has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
 				resizing
@@ -118,11 +119,11 @@ export function ShellInspectorPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			// Width driven by CSS var (use-panels.ts writes it on drag) — no React render.
-			// `contain: layout style` isolates the inspector's inner layout from the
-			// outer shell. Without it, dragging the inspector's ~4000 elements costs
-			// ~52ms/frame; with it, ~33ms. Skip `paint` so the tabs hover-zoom can
-			// still overflow the aside (`has-[[data-tabs-zoomed=true]]:overflow-visible`).
+			// Width driven by a CSS var written on THIS element (not documentElement)
+			// during drag — keeps style invalidation inside the pane subtree.
+			// `contain: layout style` further isolates the inspector's inner layout
+			// (~4000 elements) from the outer shell. Skip `paint` so the tabs
+			// hover-zoom can still overflow (`has-[[data-tabs-zoomed=true]]:overflow-visible`).
 			style={{
 				contain: "layout style",
 				width: collapsed ? 0 : `var(--shell-inspector-width, ${width}px)`,
