@@ -1,70 +1,202 @@
+/* =============================================================================
+   Helmor Theme System — Three-layer token architecture
+   =============================================================================
+   Layer 1: Base       — atomic semantic tokens (surfaces, text, borders,
+                          accent, status). Shared by every region.
+   Layer 2: Region     — per-area chrome tokens (titlebar, sidebar, panel,
+                          inspector, composer, editor, terminal, statusbar,
+                          settings). Default to Base values; theme presets
+                          override Region tokens to differentiate areas.
+   Layer 3: Components — minimal aliases for high-frequency primitives
+                          (buttons, inputs). Most components should consume
+                          Region tokens directly.
+
+   Locked surfaces (NOT themable):
+     • panel-message-*, panel-code-*           — chat content
+     • editor-content-*, editor-gutter-*       — Monaco code surface
+     • terminal-{background,foreground,*}, ANSI palette
+     • chart-*, subagent-*, workspace-*        — status palette
+     These follow light/dark only so readability is stable across themes.
+
+   Shadcn/ui interface layer:
+     The classic --background/--foreground/--card/--sidebar/... names are
+     shadcn's ecosystem protocol. They are intentionally kept as a public
+     view of the Base layer — shadcn components and copy-pasted shadcn
+     examples target these names, and they auto-track Base via var().
+     Not a shim; a separate layer with a clear job. New Helmor code should
+     reach for Region tokens; shadcn primitives stay on the protocol names.
+   ========================================================================== */
+
 :root {
 	color-scheme: light;
 
-	/* Official shadcn/ui radix-nova neutral theme */
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
+	/* ── Layer 1 · Base ─────────────────────────────────────────────────────── */
+	/* Surfaces (4 elevation levels) */
+	--bg-base: oklch(1 0 0);
+	--bg-surface: oklch(0.985 0 0);
+	--bg-elevated: oklch(0.97 0 0);
+	--bg-overlay: oklch(1 0 0);
+
+	/* Foreground (4 weights) */
+	--fg-default: oklch(0.145 0 0);
+	--fg-muted: oklch(0.556 0 0);
+	--fg-subtle: oklch(0.708 0 0);
+	--fg-disabled: oklch(0.78 0 0);
+	--fg-on-accent: oklch(0.985 0 0);
+
+	/* Borders + focus ring */
+	--border-default: oklch(0.922 0 0);
+	--border-subtle: oklch(0.955 0 0);
+	--border-strong: oklch(0.85 0 0);
+	--ring-default: oklch(0.708 0 0);
+
+	/* Accent (brand / interactive) */
+	--accent-default: oklch(0.205 0 0);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.27 0 0);
+	--accent-muted: oklch(0.97 0 0);
+	--accent-muted-fg: oklch(0.205 0 0);
+
+	/* Status (semantic, not theme-overridable) */
+	--status-success: oklch(0.55 0.15 145);
+	--status-success-fg: oklch(0.985 0 0);
+	--status-warning: oklch(0.78 0.15 75);
+	--status-warning-fg: oklch(0.145 0 0);
+	--status-danger: oklch(0.577 0.245 27.325);
+	--status-danger-fg: oklch(0.985 0 0);
+	--status-info: oklch(0.55 0.15 250);
+	--status-info-fg: oklch(0.985 0 0);
+
+	/* ── Layer 2 · Region ───────────────────────────────────────────────────── */
+	/* Region tokens are intentionally bg-heavy: themes differentiate chrome
+	   by background, not by text/border (those follow Base globally — making
+	   them region-specific would break reading rhythm across panes). The
+	   exceptions are sidebar's foreground set, which gets explicit tokens
+	   because Slack-style themes do invert sidebar fg on dark surfaces. */
+
+	/* Titlebar (top chrome / macOS overlay) */
+	--titlebar-bg: var(--bg-surface);
+
+	/* Sidebar (left navigation, workspace groups) */
+	--sidebar-bg: var(--bg-surface);
+	--sidebar-fg: var(--fg-default);
+	--sidebar-fg-muted: var(--fg-muted);
+	--sidebar-section-header-fg: var(--fg-muted);
+	--sidebar-border-color: var(--border-default);
+	--sidebar-item-hover-bg: var(--bg-elevated);
+	--sidebar-item-active-bg: oklch(0.94 0 0);
+	--sidebar-item-active-fg: var(--fg-default);
+
+	/* Panel (middle, chat thread chrome) */
+	--panel-bg: var(--bg-base);
+	--panel-header-bg: var(--bg-base);
+
+	/* Panel content (LOCKED — not themable, only light/dark) */
+	--panel-message-user-bg: oklch(0.97 0 0);
+	--panel-message-assistant-bg: var(--bg-base);
+	--panel-message-assistant-fg: rgb(44, 40, 38);
+	--panel-code-bg: oklch(0.97 0 0);
+
+	/* Inspector (right column: actions, changes) */
+	--inspector-bg: var(--bg-surface);
+	--inspector-section-header-bg: var(--bg-elevated);
+	--inspector-row-hover-bg: var(--bg-elevated);
+
+	/* Composer (Lexical input) */
+	--composer-bg: var(--bg-base);
+
+	/* Editor (Monaco shell — chrome tabs/breadcrumb) */
+	--editor-chrome-bg: var(--bg-surface);
+	--editor-tab-active-bg: var(--bg-base);
+
+	/* Editor content (LOCKED — drives Monaco theme; only light/dark) */
+	--editor-content-bg: oklch(1 0 0);
+	--editor-content-fg: var(--fg-default);
+	--editor-gutter-bg: oklch(1 0 0);
+	--editor-gutter-fg: oklch(0.7 0 0);
+	--editor-line-active-bg: oklch(0.97 0 0);
+	--editor-selection-bg: oklch(0.87 0.03 250);
+	--editor-cursor: var(--fg-default);
+
+	/* Terminal (xterm.js) — chrome themable, ANSI palette locked below */
+	--terminal-chrome-bg: var(--sidebar-bg);
+
+	/* Statusbar (bottom commit bar / status indicators) */
+	--statusbar-bg: var(--bg-surface);
+
+	/* Settings (modal: left nav + content) */
+	--settings-nav-bg: var(--sidebar-bg);
+	--settings-nav-item-hover-bg: var(--sidebar-item-hover-bg);
+	--settings-nav-item-active-bg: var(--sidebar-item-active-bg);
+	--settings-content-bg: var(--bg-base);
+
+	/* Badge / presence (small inline indicators) */
+	--badge-bg: var(--status-danger);
+	--badge-fg: var(--status-danger-fg);
+	--presence-online: oklch(0.6 0.15 155);
+	--presence-away: oklch(0.78 0.15 75);
+
+	/* ── Layer 3 · Component aliases (minimal) ──────────────────────────────── */
+	--btn-primary-bg: var(--accent-default);
+	--btn-primary-fg: var(--accent-fg);
+	--btn-primary-hover-bg: var(--accent-hover);
+	--btn-secondary-bg: var(--accent-muted);
+	--btn-secondary-fg: var(--accent-muted-fg);
+	--btn-secondary-hover-bg: var(--bg-elevated);
+	--btn-ghost-hover-bg: var(--bg-elevated);
+	--input-bg: var(--bg-base);
+	--input-border: var(--border-default);
+	--input-focus-ring: var(--ring-default);
+
+	/* ── Shadcn/ui interface layer ─────────────────────────────────────────────
+	   Public view of Base for shadcn primitives (third-party + copy-paste
+	   examples target these names). Forwards via var() so Base changes
+	   propagate automatically. Not a shim — a separate, intentional layer. */
+	--background: var(--bg-base);
+	--foreground: var(--fg-default);
+	--card: var(--bg-base);
+	--card-foreground: var(--fg-default);
+	--popover: var(--bg-overlay);
+	--popover-foreground: var(--fg-default);
+	--primary: var(--accent-default);
+	--primary-foreground: var(--accent-fg);
+	--secondary: var(--accent-muted);
+	--secondary-foreground: var(--accent-muted-fg);
+	--muted: var(--accent-muted);
+	--muted-foreground: var(--fg-muted);
+	--accent: var(--accent-muted);
+	--accent-foreground: var(--accent-muted-fg);
+	--destructive: var(--status-danger);
+	--border: var(--border-default);
+	--input: var(--border-default);
+	--ring: var(--ring-default);
+	--sidebar: var(--sidebar-bg);
+	--sidebar-foreground: var(--sidebar-fg);
+	--sidebar-primary: var(--accent-default);
+	--sidebar-primary-foreground: var(--accent-fg);
+	--sidebar-accent: var(--sidebar-item-hover-bg);
+	--sidebar-accent-foreground: var(--sidebar-fg);
+	--sidebar-border: var(--sidebar-border-color);
+	--sidebar-ring: var(--ring-default);
 	--conversation-body-foreground: rgb(44, 40, 38);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
+
+	/* ── Status palette (NOT themable — light/dark only) ────────────────────── */
+	/* Chart palette */
 	--chart-1: oklch(0.646 0.222 41.116);
 	--chart-2: oklch(0.6 0.118 184.704);
 	--chart-3: oklch(0.398 0.07 227.392);
 	--chart-4: oklch(0.828 0.189 84.429);
 	--chart-5: oklch(0.769 0.188 70.08);
-	/* Sub-agent identity palette — soft, distinguishable hues for the
-	   "Created <Agent>" labels. Sized at L≈58% / C≈0.10 to read well on
-	   light surfaces without clashing with destructive red. Mirrored in
-	   `.dark` at L≈75% for dark surfaces. */
+
+	/* Sub-agent palette (L≈55% light / L≈75% dark) */
 	--subagent-1: oklch(0.55 0.1 220);
 	--subagent-2: oklch(0.55 0.1 165);
 	--subagent-3: oklch(0.58 0.11 80);
 	--subagent-4: oklch(0.55 0.1 320);
 	--subagent-5: oklch(0.55 0.1 280);
 	--subagent-6: oklch(0.55 0.09 195);
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--workspace-sidebar-selected-bg: color-mix(
-		in oklch,
-		var(--sidebar-accent) 98.5%,
-		var(--sidebar-foreground) 1.5%
-	);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
-	--workspace-sidebar-status-done: color-mix(
-		in srgb,
-		var(--workspace-pr-merged-accent) 72%,
-		white
-	);
-	--workspace-sidebar-status-review: #a09040;
-	--workspace-sidebar-status-progress: #508a5a;
-	--workspace-sidebar-status-backlog: #848f92;
-	--workspace-sidebar-status-canceled: #a86868;
-	--workspace-sidebar-status-neutral: #5b686b;
-	--workspace-sidebar-branch: #718687;
-	--workspace-branch-status-working: var(--workspace-pr-open-accent);
-	--workspace-branch-status-open: var(--workspace-sidebar-status-review);
-	--workspace-branch-status-merged: var(--workspace-pr-merged-accent);
-	--workspace-branch-status-closed: var(--destructive);
-	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
+
+	/* Workspace / PR status palette */
 	--workspace-pr-merged-accent: #8957e5;
 	--workspace-pr-merged-link: color-mix(
 		in srgb,
@@ -100,14 +232,36 @@
 		var(--workspace-pr-closed-accent) 35%,
 		transparent
 	);
+	--workspace-sidebar-status-done: color-mix(
+		in srgb,
+		var(--workspace-pr-merged-accent) 72%,
+		white
+	);
+	--workspace-sidebar-status-review: #a09040;
+	--workspace-sidebar-status-progress: #508a5a;
+	--workspace-sidebar-status-backlog: #848f92;
+	--workspace-sidebar-status-canceled: #a86868;
+	--workspace-sidebar-status-neutral: #5b686b;
+	--workspace-sidebar-branch: #718687;
+	--workspace-sidebar-selected-bg: color-mix(
+		in oklch,
+		var(--sidebar-item-hover-bg) 98.5%,
+		var(--sidebar-fg) 1.5%
+	);
+	--workspace-branch-status-working: var(--workspace-pr-open-accent);
+	--workspace-branch-status-open: var(--workspace-sidebar-status-review);
+	--workspace-branch-status-merged: var(--workspace-pr-merged-accent);
+	--workspace-branch-status-closed: var(--status-danger);
+	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
 	--plan: #48968c;
-	/* Terminal (xterm.js) — reuses app tokens where possible */
-	--terminal-background: var(--sidebar);
-	--terminal-foreground: var(--foreground);
-	--terminal-cursor: var(--foreground);
+
+	/* Terminal ANSI palette (LOCKED) */
+	--terminal-background: var(--terminal-chrome-bg);
+	--terminal-foreground: var(--terminal-chrome-fg);
+	--terminal-cursor: var(--fg-default);
 	--terminal-selection: oklch(0.87 0.03 250);
 	--terminal-black: oklch(0.26 0 0);
-	--terminal-red: var(--destructive);
+	--terminal-red: var(--status-danger);
 	--terminal-green: oklch(0.5 0.15 155);
 	--terminal-yellow: oklch(0.53 0.14 75);
 	--terminal-blue: oklch(0.5 0.16 255);
@@ -122,59 +276,152 @@
 	--terminal-bright-magenta: oklch(0.57 0.15 310);
 	--terminal-bright-cyan: oklch(0.55 0.09 192);
 	--terminal-bright-white: oklch(0.95 0 0);
+
+	/* Geometry */
 	--radius: 0.625rem;
 }
 
 .dark {
 	color-scheme: dark;
 
-	/* Official shadcn/ui radix-nova neutral theme */
-	--background: oklch(0.165 0 0);
-	--foreground: oklch(0.985 0 0);
-	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 10%);
+	/* ── Layer 1 · Base ─────────────────────────────────────────────────────── */
+	--bg-base: oklch(0.165 0 0);
+	--bg-surface: oklch(0.205 0 0);
+	--bg-elevated: oklch(0.245 0 0);
+	--bg-overlay: oklch(0.205 0 0);
+
+	--fg-default: oklch(0.985 0 0);
+	--fg-muted: oklch(0.708 0 0);
+	--fg-subtle: oklch(0.556 0 0);
+	--fg-disabled: oklch(0.4 0 0);
+	--fg-on-accent: oklch(0.205 0 0);
+
+	--border-default: oklch(1 0 0 / 10%);
+	--border-subtle: oklch(1 0 0 / 6%);
+	--border-strong: oklch(1 0 0 / 18%);
+	--ring-default: oklch(0.556 0 0);
+
+	--accent-default: oklch(0.922 0 0);
+	--accent-fg: oklch(0.205 0 0);
+	--accent-hover: oklch(0.86 0 0);
+	--accent-muted: oklch(0.269 0 0);
+	--accent-muted-fg: oklch(0.985 0 0);
+
+	--status-success: oklch(0.7 0.14 145);
+	--status-success-fg: oklch(0.145 0 0);
+	--status-warning: oklch(0.82 0.13 75);
+	--status-warning-fg: oklch(0.145 0 0);
+	--status-danger: oklch(0.704 0.191 22.216);
+	--status-danger-fg: oklch(0.145 0 0);
+	--status-info: oklch(0.72 0.13 250);
+	--status-info-fg: oklch(0.145 0 0);
+
+	/* ── Layer 2 · Region (see :root for design notes) ──────────────────────── */
+	--titlebar-bg: var(--bg-surface);
+
+	--sidebar-bg: var(--bg-surface);
+	--sidebar-fg: var(--fg-default);
+	--sidebar-fg-muted: var(--fg-muted);
+	--sidebar-section-header-fg: var(--fg-muted);
+	--sidebar-border-color: var(--border-default);
+	--sidebar-item-hover-bg: var(--bg-elevated);
+	--sidebar-item-active-bg: oklch(0.285 0 0);
+	--sidebar-item-active-fg: var(--fg-default);
+
+	--panel-bg: var(--bg-base);
+	--panel-header-bg: var(--bg-base);
+
+	--panel-message-user-bg: oklch(0.225 0 0);
+	--panel-message-assistant-bg: var(--bg-base);
+	--panel-message-assistant-fg: rgb(234, 232, 230);
+	--panel-code-bg: oklch(0.21 0 0);
+
+	--inspector-bg: var(--bg-surface);
+	--inspector-section-header-bg: var(--bg-elevated);
+	--inspector-row-hover-bg: var(--bg-elevated);
+
+	--composer-bg: var(--bg-base);
+
+	--editor-chrome-bg: var(--bg-surface);
+	--editor-tab-active-bg: var(--bg-base);
+
+	--editor-content-bg: oklch(0.165 0 0);
+	--editor-content-fg: var(--fg-default);
+	--editor-gutter-bg: oklch(0.165 0 0);
+	--editor-gutter-fg: oklch(0.5 0 0);
+	--editor-line-active-bg: oklch(0.21 0 0);
+	--editor-selection-bg: oklch(0.35 0.03 250);
+	--editor-cursor: var(--fg-default);
+
+	--terminal-chrome-bg: var(--sidebar-bg);
+
+	--statusbar-bg: var(--bg-surface);
+
+	--settings-nav-bg: var(--sidebar-bg);
+	--settings-nav-item-hover-bg: var(--sidebar-item-hover-bg);
+	--settings-nav-item-active-bg: var(--sidebar-item-active-bg);
+	--settings-content-bg: var(--bg-base);
+
+	--badge-bg: var(--status-danger);
+	--badge-fg: oklch(0.985 0 0);
+	--presence-online: oklch(0.72 0.14 155);
+	--presence-away: oklch(0.82 0.13 75);
+
+	/* ── Layer 3 · Component aliases ────────────────────────────────────────── */
+	--btn-primary-bg: var(--accent-default);
+	--btn-primary-fg: var(--accent-fg);
+	--btn-primary-hover-bg: var(--accent-hover);
+	--btn-secondary-bg: var(--accent-muted);
+	--btn-secondary-fg: var(--accent-muted-fg);
+	--btn-secondary-hover-bg: var(--bg-elevated);
+	--btn-ghost-hover-bg: var(--bg-elevated);
+	--input-bg: var(--bg-base);
+	--input-border: var(--border-default);
+	--input-focus-ring: var(--ring-default);
+
+	/* ── Shadcn/ui interface layer (dark re-binding) ──────────────────────── */
+	--background: var(--bg-base);
+	--foreground: var(--fg-default);
+	--card: var(--bg-surface);
+	--card-foreground: var(--fg-default);
+	--popover: var(--bg-overlay);
+	--popover-foreground: var(--fg-default);
+	--primary: var(--accent-default);
+	--primary-foreground: var(--accent-fg);
+	--secondary: var(--accent-muted);
+	--secondary-foreground: var(--accent-muted-fg);
+	--muted: var(--accent-muted);
+	--muted-foreground: var(--fg-muted);
+	--accent: var(--accent-muted);
+	--accent-foreground: var(--accent-muted-fg);
+	--destructive: var(--status-danger);
+	--border: var(--border-default);
 	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
+	--ring: var(--ring-default);
+	--sidebar: var(--sidebar-bg);
+	--sidebar-foreground: var(--sidebar-fg);
+	--sidebar-primary: oklch(0.488 0.243 264.376);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: var(--sidebar-item-hover-bg);
+	--sidebar-accent-foreground: var(--sidebar-fg);
+	--sidebar-border: var(--sidebar-border-color);
+	--sidebar-ring: var(--ring-default);
+	--conversation-body-foreground: rgb(234, 232, 230);
+
+	/* ── Status palette (dark variant) ──────────────────────────────────────── */
 	--chart-1: oklch(0.488 0.243 264.376);
 	--chart-2: oklch(0.696 0.17 162.48);
 	--chart-3: oklch(0.769 0.188 70.08);
 	--chart-4: oklch(0.627 0.265 303.9);
 	--chart-5: oklch(0.645 0.246 16.439);
-	/* Sub-agent identity palette — see `:root` for design notes. Lifted to
-	   L≈75% so colors stay visible against the dark background while still
-	   reading as soft, not neon. */
+
 	--subagent-1: oklch(0.74 0.1 220);
 	--subagent-2: oklch(0.74 0.1 165);
 	--subagent-3: oklch(0.78 0.1 80);
 	--subagent-4: oklch(0.74 0.1 320);
 	--subagent-5: oklch(0.74 0.1 280);
 	--subagent-6: oklch(0.76 0.09 195);
-	--sidebar: oklch(0.205 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.269 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--workspace-sidebar-selected-bg: color-mix(
-		in oklch,
-		var(--sidebar-accent) 98.5%,
-		var(--sidebar-foreground) 1.5%
-	);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
+
 	--workspace-sidebar-status-done: color-mix(
 		in srgb,
 		var(--workspace-pr-merged-accent) 82%,
@@ -186,48 +433,8 @@
 	--workspace-sidebar-status-canceled: #ee9b9b;
 	--workspace-sidebar-status-neutral: #afaeac;
 	--workspace-sidebar-branch: #b09a84;
-	--workspace-branch-status-working: var(--workspace-pr-open-accent);
-	--workspace-branch-status-open: var(--workspace-sidebar-status-review);
-	--workspace-branch-status-merged: var(--workspace-pr-merged-accent);
-	--workspace-branch-status-closed: var(--destructive);
-	--workspace-branch-status-inactive: var(--workspace-sidebar-status-neutral);
-	--workspace-pr-merged-accent: #8957e5;
-	--workspace-pr-merged-link: color-mix(
-		in srgb,
-		var(--workspace-pr-merged-accent) 95%,
-		transparent
-	);
-	--workspace-pr-merged-header-bg: color-mix(
-		in srgb,
-		var(--workspace-pr-merged-accent) 35%,
-		transparent
-	);
-	--workspace-pr-open-accent: #238636;
-	--workspace-pr-open-header-bg: color-mix(
-		in srgb,
-		var(--workspace-pr-open-accent) 35%,
-		transparent
-	);
-	--workspace-pr-conflicts-accent: rgb(210, 153, 34);
-	--workspace-pr-conflicts-header-bg: color-mix(
-		in srgb,
-		var(--workspace-pr-conflicts-accent) 35%,
-		transparent
-	);
-	--workspace-pr-checks-running-accent: #bf8700;
-	--workspace-pr-checks-running-header-bg: color-mix(
-		in srgb,
-		var(--workspace-pr-checks-running-accent) 35%,
-		transparent
-	);
-	--workspace-pr-closed-accent: #da3633;
-	--workspace-pr-closed-header-bg: color-mix(
-		in srgb,
-		var(--workspace-pr-closed-accent) 35%,
-		transparent
-	);
-	--plan: #48968c;
-	/* Terminal (xterm.js) — only overrides that differ from :root */
+
+	/* Terminal ANSI palette (dark variant) */
 	--terminal-selection: oklch(0.35 0.03 250);
 	--terminal-black: oklch(0.21 0 0);
 	--terminal-green: oklch(0.72 0.14 155);
@@ -246,274 +453,332 @@
 	--terminal-bright-white: oklch(0.985 0 0);
 }
 
-/* ── Midnight (light) ─────────────────────────────────────────────────────────
-   Blue-tinted white surfaces with cool blue accents.
-   ──────────────────────────────────────────────────────────────────────────── */
+/* =============================================================================
+   Theme presets — override Region tokens (chrome) only.
+   Locked surfaces (panel-message-*, editor-content-*, terminal-*) inherit
+   from :root/.dark and stay readable across themes.
+
+   Each preset has light + dark variants. The Base layer is gently tinted
+   first so all Region tokens that derive from Base pick up the hue
+   automatically; specific overrides handle areas that need a stronger pull.
+   ========================================================================== */
+
+/* ── Midnight (cool blue) ──────────────────────────────────────────────────── */
 .theme-midnight:not(.dark) {
 	color-scheme: light;
-	--background: oklch(0.97 0.01 260);
-	--foreground: oklch(0.145 0 0);
-	--conversation-body-foreground: rgb(44, 40, 38);
-	--card: oklch(0.99 0.004 260);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(0.99 0.004 260);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.22 0.02 260);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.935 0.014 260);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.935 0.014 260);
-	--muted-foreground: oklch(0.5 0.025 258);
-	--accent: oklch(0.935 0.014 260);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0.016 258);
-	--input: oklch(0.875 0.016 258);
-	--ring: oklch(0.5 0.14 255);
-	--sidebar: oklch(0.95 0.013 260);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.45 0.18 255);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.915 0.018 260);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.875 0.016 258);
-	--sidebar-ring: oklch(0.5 0.14 255);
+	--bg-base: oklch(0.97 0.01 260);
+	--bg-surface: oklch(0.945 0.013 260);
+	--bg-elevated: oklch(0.915 0.018 260);
+	--bg-overlay: oklch(0.99 0.004 260);
+	--accent-default: oklch(0.45 0.18 255);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.5 0.18 255);
+	--accent-muted: oklch(0.935 0.014 260);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.875 0.016 258);
+	--border-subtle: oklch(0.92 0.014 258);
+	--border-strong: oklch(0.8 0.018 258);
+	--ring-default: oklch(0.5 0.14 255);
+	--sidebar-item-active-bg: oklch(0.895 0.022 258);
+	--titlebar-bg: oklch(0.945 0.013 260);
+	--statusbar-bg: oklch(0.945 0.013 260);
+	--editor-chrome-bg: oklch(0.945 0.013 260);
 }
 
-/* ── Midnight (dark) ──────────────────────────────────────────────────────────
-   Deep blue-black surfaces with cool blue accents.
-   ──────────────────────────────────────────────────────────────────────────── */
 .dark.theme-midnight {
 	color-scheme: dark;
-	--background: oklch(0.135 0.022 260);
-	--foreground: oklch(0.985 0 0);
-	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.175 0.025 260);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.175 0.025 260);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.78 0.09 250);
-	--primary-foreground: oklch(0.135 0.022 260);
-	--secondary: oklch(0.245 0.022 260);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.245 0.022 260);
-	--muted-foreground: oklch(0.66 0.04 255);
-	--accent: oklch(0.245 0.022 260);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 9%);
-	--input: oklch(1 0 0 / 13%);
-	--ring: oklch(0.55 0.08 252);
-	--sidebar: oklch(0.17 0.024 260);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.58 0.16 255);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.245 0.022 260);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 9%);
-	--sidebar-ring: oklch(0.55 0.08 252);
+	--bg-base: oklch(0.135 0.022 260);
+	--bg-surface: oklch(0.17 0.024 260);
+	--bg-elevated: oklch(0.21 0.022 260);
+	--bg-overlay: oklch(0.175 0.025 260);
+	--accent-default: oklch(0.58 0.16 255);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.66 0.16 255);
+	--accent-muted: oklch(0.245 0.022 260);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 9%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 16%);
+	--ring-default: oklch(0.55 0.08 252);
+	--sidebar-item-active-bg: oklch(0.25 0.026 258);
+	--titlebar-bg: oklch(0.17 0.024 260);
+	--statusbar-bg: oklch(0.17 0.024 260);
+	--editor-chrome-bg: oklch(0.17 0.024 260);
 }
 
-/* ── Forest (light) ───────────────────────────────────────────────────────────
-   Green-tinted white surfaces with emerald accents.
-   ──────────────────────────────────────────────────────────────────────────── */
+/* ── Forest (emerald green) ────────────────────────────────────────────────── */
 .theme-forest:not(.dark) {
 	color-scheme: light;
-	--background: oklch(0.97 0.008 158);
-	--foreground: oklch(0.145 0 0);
-	--conversation-body-foreground: rgb(44, 40, 38);
-	--card: oklch(0.99 0.004 158);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(0.99 0.004 158);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.22 0.018 158);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.935 0.012 158);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.935 0.012 158);
-	--muted-foreground: oklch(0.5 0.022 155);
-	--accent: oklch(0.935 0.012 158);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0.014 155);
-	--input: oklch(0.875 0.014 155);
-	--ring: oklch(0.48 0.13 148);
-	--sidebar: oklch(0.95 0.011 158);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.42 0.16 148);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.915 0.015 158);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.875 0.014 155);
-	--sidebar-ring: oklch(0.48 0.13 148);
+	--bg-base: oklch(0.97 0.008 158);
+	--bg-surface: oklch(0.945 0.011 158);
+	--bg-elevated: oklch(0.915 0.014 158);
+	--bg-overlay: oklch(0.99 0.004 158);
+	--accent-default: oklch(0.42 0.16 148);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.48 0.16 148);
+	--accent-muted: oklch(0.935 0.012 158);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.875 0.014 155);
+	--border-subtle: oklch(0.92 0.012 155);
+	--border-strong: oklch(0.8 0.016 155);
+	--ring-default: oklch(0.48 0.13 148);
+	--sidebar-item-active-bg: oklch(0.895 0.018 158);
+	--titlebar-bg: oklch(0.945 0.011 158);
+	--statusbar-bg: oklch(0.945 0.011 158);
+	--editor-chrome-bg: oklch(0.945 0.011 158);
 }
 
-/* ── Forest (dark) ────────────────────────────────────────────────────────────
-   Dark surfaces with deep green undertones and emerald accents.
-   ──────────────────────────────────────────────────────────────────────────── */
 .dark.theme-forest {
 	color-scheme: dark;
-	--background: oklch(0.145 0.016 158);
-	--foreground: oklch(0.985 0 0);
-	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.185 0.018 158);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.185 0.018 158);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.82 0.09 148);
-	--primary-foreground: oklch(0.145 0.016 158);
-	--secondary: oklch(0.25 0.016 158);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.25 0.016 158);
-	--muted-foreground: oklch(0.67 0.04 155);
-	--accent: oklch(0.25 0.016 158);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 9%);
-	--input: oklch(1 0 0 / 13%);
-	--ring: oklch(0.54 0.08 150);
-	--sidebar: oklch(0.178 0.018 158);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.58 0.14 148);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.25 0.016 158);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 9%);
-	--sidebar-ring: oklch(0.54 0.08 150);
+	--bg-base: oklch(0.145 0.016 158);
+	--bg-surface: oklch(0.178 0.018 158);
+	--bg-elevated: oklch(0.22 0.018 158);
+	--bg-overlay: oklch(0.185 0.018 158);
+	--accent-default: oklch(0.58 0.14 148);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.66 0.14 148);
+	--accent-muted: oklch(0.25 0.016 158);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 9%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 16%);
+	--ring-default: oklch(0.54 0.08 150);
+	--sidebar-item-active-bg: oklch(0.255 0.02 158);
+	--titlebar-bg: oklch(0.178 0.018 158);
+	--statusbar-bg: oklch(0.178 0.018 158);
+	--editor-chrome-bg: oklch(0.178 0.018 158);
 }
 
-/* ── Ember (light) ────────────────────────────────────────────────────────────
-   Warm amber-tinted white surfaces with orange/gold accents.
-   ──────────────────────────────────────────────────────────────────────────── */
+/* ── Ember (warm amber) ────────────────────────────────────────────────────── */
 .theme-ember:not(.dark) {
 	color-scheme: light;
-	--background: oklch(0.97 0.008 65);
-	--foreground: oklch(0.145 0 0);
-	--conversation-body-foreground: rgb(44, 40, 38);
-	--card: oklch(0.99 0.005 65);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(0.99 0.005 65);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.22 0.015 55);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.94 0.013 65);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.94 0.013 65);
-	--muted-foreground: oklch(0.5 0.022 60);
-	--accent: oklch(0.94 0.013 65);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0.015 60);
-	--input: oklch(0.875 0.015 60);
-	--ring: oklch(0.52 0.14 53);
-	--sidebar: oklch(0.95 0.012 65);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.48 0.16 48);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.92 0.016 65);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.875 0.015 60);
-	--sidebar-ring: oklch(0.52 0.14 53);
+	--bg-base: oklch(0.97 0.008 65);
+	--bg-surface: oklch(0.945 0.012 65);
+	--bg-elevated: oklch(0.92 0.016 65);
+	--bg-overlay: oklch(0.99 0.005 65);
+	--accent-default: oklch(0.48 0.16 48);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.55 0.16 48);
+	--accent-muted: oklch(0.94 0.013 65);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.875 0.015 60);
+	--border-subtle: oklch(0.92 0.012 60);
+	--border-strong: oklch(0.8 0.016 60);
+	--ring-default: oklch(0.52 0.14 53);
+	--sidebar-item-active-bg: oklch(0.895 0.02 60);
+	--titlebar-bg: oklch(0.945 0.012 65);
+	--statusbar-bg: oklch(0.945 0.012 65);
+	--editor-chrome-bg: oklch(0.945 0.012 65);
 }
 
-/* ── Ember (dark) ─────────────────────────────────────────────────────────────
-   Warm amber-tinted surfaces with orange/gold accents.
-   ──────────────────────────────────────────────────────────────────────────── */
 .dark.theme-ember {
 	color-scheme: dark;
-	--background: oklch(0.15 0.012 48);
-	--foreground: oklch(0.985 0 0);
-	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.192 0.016 48);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.192 0.016 48);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.84 0.1 65);
-	--primary-foreground: oklch(0.15 0.012 48);
-	--secondary: oklch(0.252 0.014 48);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.252 0.014 48);
-	--muted-foreground: oklch(0.67 0.04 60);
-	--accent: oklch(0.252 0.014 48);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 9%);
-	--input: oklch(1 0 0 / 13%);
-	--ring: oklch(0.55 0.1 58);
-	--sidebar: oklch(0.184 0.015 48);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.64 0.16 53);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.252 0.014 48);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 9%);
-	--sidebar-ring: oklch(0.55 0.1 58);
+	--bg-base: oklch(0.15 0.012 48);
+	--bg-surface: oklch(0.184 0.015 48);
+	--bg-elevated: oklch(0.225 0.016 48);
+	--bg-overlay: oklch(0.192 0.016 48);
+	--accent-default: oklch(0.64 0.16 53);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.7 0.16 53);
+	--accent-muted: oklch(0.252 0.014 48);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 9%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 16%);
+	--ring-default: oklch(0.55 0.1 58);
+	--sidebar-item-active-bg: oklch(0.26 0.018 48);
+	--titlebar-bg: oklch(0.184 0.015 48);
+	--statusbar-bg: oklch(0.184 0.015 48);
+	--editor-chrome-bg: oklch(0.184 0.015 48);
 }
 
-/* ── Aurora (light) ───────────────────────────────────────────────────────────
-   Violet-tinted white surfaces with purple accents.
-   ──────────────────────────────────────────────────────────────────────────── */
+/* ── Aurora (violet) ───────────────────────────────────────────────────────── */
 .theme-aurora:not(.dark) {
 	color-scheme: light;
-	--background: oklch(0.97 0.01 292);
-	--foreground: oklch(0.145 0 0);
-	--conversation-body-foreground: rgb(44, 40, 38);
-	--card: oklch(0.99 0.005 292);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(0.99 0.005 292);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.22 0.022 292);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.935 0.016 292);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.935 0.016 292);
-	--muted-foreground: oklch(0.5 0.026 288);
-	--accent: oklch(0.935 0.016 292);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0.018 288);
-	--input: oklch(0.875 0.018 288);
-	--ring: oklch(0.5 0.15 284);
-	--sidebar: oklch(0.95 0.014 292);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.46 0.18 284);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.915 0.018 292);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.875 0.018 288);
-	--sidebar-ring: oklch(0.5 0.15 284);
+	--bg-base: oklch(0.97 0.01 292);
+	--bg-surface: oklch(0.945 0.014 292);
+	--bg-elevated: oklch(0.915 0.018 292);
+	--bg-overlay: oklch(0.99 0.005 292);
+	--accent-default: oklch(0.46 0.18 284);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.52 0.18 284);
+	--accent-muted: oklch(0.935 0.016 292);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.875 0.018 288);
+	--border-subtle: oklch(0.92 0.016 288);
+	--border-strong: oklch(0.8 0.02 288);
+	--ring-default: oklch(0.5 0.15 284);
+	--sidebar-item-active-bg: oklch(0.895 0.022 290);
+	--titlebar-bg: oklch(0.945 0.014 292);
+	--statusbar-bg: oklch(0.945 0.014 292);
+	--editor-chrome-bg: oklch(0.945 0.014 292);
 }
 
-/* ── Aurora (dark) ────────────────────────────────────────────────────────────
-   Mauve/violet-tinted surfaces with purple accents.
-   ──────────────────────────────────────────────────────────────────────────── */
 .dark.theme-aurora {
 	color-scheme: dark;
-	--background: oklch(0.14 0.018 292);
-	--foreground: oklch(0.985 0 0);
-	--conversation-body-foreground: rgb(234, 232, 230);
-	--card: oklch(0.18 0.022 292);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.18 0.022 292);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.82 0.09 292);
-	--primary-foreground: oklch(0.14 0.018 292);
-	--secondary: oklch(0.248 0.02 292);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.248 0.02 292);
-	--muted-foreground: oklch(0.67 0.04 288);
-	--accent: oklch(0.248 0.02 292);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 9%);
-	--input: oklch(1 0 0 / 13%);
-	--ring: oklch(0.54 0.09 288);
-	--sidebar: oklch(0.172 0.022 292);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.6 0.17 284);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.248 0.02 292);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 9%);
-	--sidebar-ring: oklch(0.54 0.09 288);
+	--bg-base: oklch(0.14 0.018 292);
+	--bg-surface: oklch(0.172 0.022 292);
+	--bg-elevated: oklch(0.215 0.022 292);
+	--bg-overlay: oklch(0.18 0.022 292);
+	--accent-default: oklch(0.6 0.17 284);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.66 0.17 284);
+	--accent-muted: oklch(0.248 0.02 292);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 9%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 16%);
+	--ring-default: oklch(0.54 0.09 288);
+	--sidebar-item-active-bg: oklch(0.255 0.026 292);
+	--titlebar-bg: oklch(0.172 0.022 292);
+	--statusbar-bg: oklch(0.172 0.022 292);
+	--editor-chrome-bg: oklch(0.172 0.022 292);
+}
+
+/* ── Aubergine (Slack classic — deep purple) ──────────────────────────────── */
+.theme-aubergine:not(.dark) {
+	color-scheme: light;
+	--bg-base: oklch(0.965 0.01 320);
+	--bg-surface: oklch(0.94 0.013 320);
+	--bg-elevated: oklch(0.91 0.018 320);
+	--bg-overlay: oklch(0.985 0.005 320);
+	--accent-default: oklch(0.45 0.18 295);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.52 0.18 295);
+	--accent-muted: oklch(0.93 0.014 320);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.875 0.016 320);
+	--border-subtle: oklch(0.92 0.013 320);
+	--border-strong: oklch(0.8 0.02 320);
+	--ring-default: oklch(0.5 0.16 295);
+	--sidebar-item-active-bg: oklch(0.89 0.022 320);
+}
+
+.dark.theme-aubergine {
+	color-scheme: dark;
+	--bg-base: oklch(0.155 0.025 320);
+	--bg-surface: oklch(0.185 0.028 320);
+	--bg-elevated: oklch(0.225 0.028 320);
+	--bg-overlay: oklch(0.19 0.028 320);
+	--accent-default: oklch(0.65 0.18 295);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.72 0.18 295);
+	--accent-muted: oklch(0.255 0.024 320);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 10%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 18%);
+	--ring-default: oklch(0.6 0.14 295);
+	--sidebar-item-active-bg: oklch(0.265 0.03 320);
+}
+
+/* ── Hoth (Slack classic — cool minimal) ──────────────────────────────────── */
+.theme-hoth:not(.dark) {
+	color-scheme: light;
+	--bg-base: oklch(0.99 0.002 230);
+	--bg-surface: oklch(0.97 0.004 230);
+	--bg-elevated: oklch(0.945 0.006 230);
+	--bg-overlay: oklch(1 0.002 230);
+	--accent-default: oklch(0.55 0.13 235);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.62 0.13 235);
+	--accent-muted: oklch(0.945 0.006 230);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.9 0.005 230);
+	--border-subtle: oklch(0.94 0.003 230);
+	--border-strong: oklch(0.82 0.007 230);
+	--ring-default: oklch(0.6 0.12 235);
+	--sidebar-item-active-bg: oklch(0.92 0.008 230);
+}
+
+.dark.theme-hoth {
+	color-scheme: dark;
+	--bg-base: oklch(0.18 0.004 230);
+	--bg-surface: oklch(0.215 0.005 230);
+	--bg-elevated: oklch(0.255 0.007 230);
+	--bg-overlay: oklch(0.22 0.005 230);
+	--accent-default: oklch(0.7 0.13 235);
+	--accent-fg: oklch(0.16 0 0);
+	--accent-hover: oklch(0.76 0.13 235);
+	--accent-muted: oklch(0.28 0.006 230);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 10%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 18%);
+	--ring-default: oklch(0.65 0.12 235);
+	--sidebar-item-active-bg: oklch(0.3 0.008 230);
+}
+
+/* ── Choco Mint (Slack classic — warm brown + mint accent) ────────────────── */
+.theme-choco-mint:not(.dark) {
+	color-scheme: light;
+	--bg-base: oklch(0.96 0.012 65);
+	--bg-surface: oklch(0.93 0.016 65);
+	--bg-elevated: oklch(0.9 0.02 65);
+	--bg-overlay: oklch(0.98 0.008 65);
+	--accent-default: oklch(0.5 0.13 175);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.56 0.13 175);
+	--accent-muted: oklch(0.92 0.014 65);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.87 0.016 65);
+	--border-subtle: oklch(0.92 0.012 65);
+	--border-strong: oklch(0.78 0.02 65);
+	--ring-default: oklch(0.52 0.12 175);
+	--sidebar-item-active-bg: oklch(0.885 0.022 65);
+}
+
+.dark.theme-choco-mint {
+	color-scheme: dark;
+	--bg-base: oklch(0.165 0.012 50);
+	--bg-surface: oklch(0.21 0.015 50);
+	--bg-elevated: oklch(0.255 0.018 50);
+	--bg-overlay: oklch(0.22 0.015 50);
+	--accent-default: oklch(0.7 0.12 175);
+	--accent-fg: oklch(0.16 0 0);
+	--accent-hover: oklch(0.76 0.12 175);
+	--accent-muted: oklch(0.275 0.014 50);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 10%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 18%);
+	--ring-default: oklch(0.65 0.11 175);
+	--sidebar-item-active-bg: oklch(0.3 0.02 50);
+}
+
+/* ── Banana (Slack classic — sunshine yellow + magenta) ───────────────────── */
+.theme-banana:not(.dark) {
+	color-scheme: light;
+	--bg-base: oklch(0.98 0.015 90);
+	--bg-surface: oklch(0.95 0.025 90);
+	--bg-elevated: oklch(0.925 0.035 90);
+	--bg-overlay: oklch(0.99 0.01 90);
+	--accent-default: oklch(0.45 0.18 330);
+	--accent-fg: oklch(0.985 0 0);
+	--accent-hover: oklch(0.52 0.18 330);
+	--accent-muted: oklch(0.94 0.028 90);
+	--accent-muted-fg: oklch(0.205 0 0);
+	--border-default: oklch(0.88 0.03 90);
+	--border-subtle: oklch(0.92 0.022 90);
+	--border-strong: oklch(0.8 0.035 90);
+	--ring-default: oklch(0.5 0.16 330);
+	--sidebar-item-active-bg: oklch(0.9 0.04 90);
+}
+
+.dark.theme-banana {
+	color-scheme: dark;
+	--bg-base: oklch(0.165 0.02 75);
+	--bg-surface: oklch(0.21 0.025 75);
+	--bg-elevated: oklch(0.255 0.028 75);
+	--bg-overlay: oklch(0.22 0.025 75);
+	--accent-default: oklch(0.78 0.14 70);
+	--accent-fg: oklch(0.16 0 0);
+	--accent-hover: oklch(0.84 0.14 70);
+	--accent-muted: oklch(0.27 0.024 75);
+	--accent-muted-fg: oklch(0.985 0 0);
+	--border-default: oklch(1 0 0 / 10%);
+	--border-subtle: oklch(1 0 0 / 5%);
+	--border-strong: oklch(1 0 0 / 18%);
+	--ring-default: oklch(0.72 0.13 70);
+	--sidebar-item-active-bg: oklch(0.3 0.03 75);
 }

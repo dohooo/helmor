@@ -50,14 +50,14 @@ const SEGMENT_CLASS = [
 	"h-5 gap-1 rounded-[5px] px-1.5 py-0 text-[10.5px] font-normal tracking-tight",
 	"border-transparent bg-transparent text-muted-foreground/70 shadow-none",
 	"hover:bg-transparent hover:text-foreground",
-	"data-active:bg-foreground/[0.10] data-active:text-foreground data-active:border-transparent data-active:shadow-none",
-	"aria-selected:bg-foreground/[0.10] aria-selected:text-foreground aria-selected:border-transparent aria-selected:shadow-none",
-	"dark:data-active:bg-foreground/[0.10] dark:data-active:border-transparent",
-	"dark:aria-selected:bg-foreground/[0.10] dark:aria-selected:border-transparent",
+	"data-active:bg-editor-tab-active data-active:text-foreground data-active:border-transparent data-active:shadow-none",
+	"aria-selected:bg-editor-tab-active aria-selected:text-foreground aria-selected:border-transparent aria-selected:shadow-none",
+	"dark:data-active:bg-editor-tab-active dark:data-active:border-transparent",
+	"dark:aria-selected:bg-editor-tab-active dark:aria-selected:border-transparent",
 	"[&_svg:not([class*='size-'])]:size-2.5",
 ].join(" ");
 
-const EDITOR_CHROME_BACKGROUND_CLASS = "bg-foreground/[0.055]";
+const EDITOR_CHROME_BACKGROUND_CLASS = "bg-editor-chrome";
 
 type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
@@ -190,7 +190,7 @@ function EditorPathBreadcrumb({
 function EditorShortcutHint({ hotkey }: { hotkey: string | null }) {
 	if (!hotkey) return null;
 	return (
-		<span className="ml-0.5 inline-flex h-4 items-center rounded-[3px] bg-foreground/[0.08] px-1 text-[10.5px] font-medium leading-none text-muted-foreground/80">
+		<span className="ml-0.5 inline-flex h-4 items-center rounded-[3px] bg-muted/60 px-1 text-[10.5px] font-medium leading-none text-muted-foreground/80">
 			<InlineShortcutDisplay hotkey={hotkey} />
 		</span>
 	);

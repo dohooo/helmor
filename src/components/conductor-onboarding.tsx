@@ -725,8 +725,7 @@ export function ConductorOnboarding({
 												damping: 20,
 												delay: 0.28,
 											}}
-											className="absolute -right-2 -top-2 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full text-background"
-											style={{ backgroundColor: "#1F883D" }}
+											className="absolute -right-2 -top-2 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full bg-status-success text-background"
 										>
 											<Check className="size-3" strokeWidth={3} />
 										</motion.div>

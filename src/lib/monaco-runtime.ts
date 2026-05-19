@@ -404,9 +404,9 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 	return runtimePromise;
 }
 
-// Sync Monaco's theme with the app's `dark` class on <html>. Avoids having
-// callers import this module just to push a theme update, which would pull
-// Monaco's runtime into the critical path on every theme change.
+// Sync Monaco theme with `<html>` class changes. Re-defines both themes on
+// every class mutation — light/dark toggle AND preset theme switch both flip
+// CSS variables, so the editor `colors` map must be recomputed.
 function installThemeObserver(monaco: MonacoModule) {
 	if (
 		typeof document === "undefined" ||
@@ -416,9 +416,7 @@ function installThemeObserver(monaco: MonacoModule) {
 	}
 	const syncTheme = () => {
 		const nextTheme = detectInitialTheme();
-		if (nextTheme === desiredTheme) {
-			return;
-		}
+		defineHelmorThemes(monaco);
 		desiredTheme = nextTheme;
 		monaco.editor.setTheme(themeId(nextTheme));
 	};
@@ -427,7 +425,6 @@ function installThemeObserver(monaco: MonacoModule) {
 		attributes: true,
 		attributeFilter: ["class"],
 	});
-	syncTheme();
 }
 
 function disableLanguageDiagnostics(monaco: MonacoModule) {
@@ -493,107 +490,172 @@ function installMonacoEnvironment() {
 	};
 }
 
+// Syntax highlighting rules — kept hard-coded so code colors stay stable
+// across the active app theme. (Locked, per the theme-system design.) Only
+// the editor chrome (background, gutter, widgets, scrollbar, diff) follows
+// CSS variables.
+const SYNTAX_RULES_DARK = [
+	{ token: "comment", foreground: "868584" },
+	{ token: "string", foreground: "c9b18f" },
+	{ token: "keyword", foreground: "c5a3a8" },
+	{ token: "number", foreground: "c6b48a" },
+	{ token: "regexp", foreground: "9ea693" },
+	{ token: "type.identifier", foreground: "a9b0c6" },
+	{ token: "identifier", foreground: "faf9f6" },
+	{ token: "delimiter", foreground: "afaeac" },
+];
+const SYNTAX_RULES_LIGHT = [
+	{ token: "comment", foreground: "7a7775" },
+	{ token: "string", foreground: "8a6b3d" },
+	{ token: "keyword", foreground: "8a3d51" },
+	{ token: "number", foreground: "8a6e2f" },
+	{ token: "regexp", foreground: "5a6b3d" },
+	{ token: "type.identifier", foreground: "3d4d75" },
+	{ token: "identifier", foreground: "1a1918" },
+	{ token: "delimiter", foreground: "5a5857" },
+];
+
+// Reusable hidden probe — `resolveCssColor` writes a `var(--x)` to its
+// background-color and reads the computed rgb back. Cached across calls so
+// theme rebuild costs ~30 reads, not 30 element churns.
+let cssColorProbe: HTMLDivElement | null = null;
+function getCssColorProbe(): HTMLDivElement {
+	if (!cssColorProbe) {
+		cssColorProbe = document.createElement("div");
+		cssColorProbe.style.cssText =
+			"position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;";
+		document.body.appendChild(cssColorProbe);
+	}
+	return cssColorProbe;
+}
+
+function toHexByte(n: number): string {
+	return Math.max(0, Math.min(255, Math.round(n)))
+		.toString(16)
+		.padStart(2, "0");
+}
+
+/**
+ * Resolve a CSS variable to a hex Monaco accepts.
+ * `alphaOverride` (0–1) lets callers stamp a custom transparency without
+ * defining a new --var (useful for soft overlays like inactive selection).
+ */
+function resolveCssColor(varName: string, alphaOverride?: number): string {
+	const probe = getCssColorProbe();
+	probe.style.backgroundColor = `var(${varName})`;
+	const computed = window.getComputedStyle(probe).backgroundColor;
+	const match = computed.match(
+		/rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*(?:,\s*([\d.]+))?\s*\)/,
+	);
+	if (!match) return "#000000";
+	const r = Number.parseFloat(match[1]);
+	const g = Number.parseFloat(match[2]);
+	const b = Number.parseFloat(match[3]);
+	const baseAlpha = match[4] !== undefined ? Number.parseFloat(match[4]) : 1;
+	const alpha = alphaOverride !== undefined ? alphaOverride : baseAlpha;
+	const aHex = alpha >= 1 ? "" : toHexByte(alpha * 255);
+	return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}${aHex}`;
+}
+
+function buildHelmorTheme(isDark: boolean) {
+	const editorBg = resolveCssColor("--editor-content-bg");
+	const editorFg = resolveCssColor("--editor-content-fg");
+	const lineActive = resolveCssColor("--editor-line-active-bg");
+	const selection = resolveCssColor("--editor-selection-bg");
+	const cursor = resolveCssColor("--editor-cursor");
+	const gutterBg = resolveCssColor("--editor-gutter-bg");
+	const gutterFg = resolveCssColor("--editor-gutter-fg");
+	const widgetBg = resolveCssColor("--bg-overlay");
+	const widgetBorder = resolveCssColor("--border-default");
+	const scrollbarBase = resolveCssColor("--fg-default", 0.15);
+	const scrollbarHover = resolveCssColor("--fg-default", 0.25);
+	const scrollbarActive = resolveCssColor("--fg-default", 0.35);
+	const indentGuide = resolveCssColor("--border-subtle");
+	const indentGuideActive = resolveCssColor("--border-strong");
+	// Diff colors come from the workspace status palette — semantic and locked,
+	// so they match the sidebar PR badges across every theme. Alpha is layered
+	// on top to dim them into editor-overlay use.
+	const diffInsertLine = resolveCssColor("--workspace-pr-open-accent", 0.09);
+	const diffInsertText = resolveCssColor(
+		"--workspace-pr-open-accent",
+		isDark ? 0.25 : 0.2,
+	);
+	const diffRemoveLine = resolveCssColor("--workspace-pr-closed-accent", 0.09);
+	const diffRemoveText = resolveCssColor(
+		"--workspace-pr-closed-accent",
+		isDark ? 0.25 : 0.2,
+	);
+	const diffGutterInsert = resolveCssColor("--workspace-pr-open-accent", 0.15);
+	const diffGutterRemove = resolveCssColor(
+		"--workspace-pr-closed-accent",
+		0.15,
+	);
+	const diffOverviewInsert = resolveCssColor("--workspace-pr-open-accent", 0.6);
+	const diffOverviewRemove = resolveCssColor(
+		"--workspace-pr-closed-accent",
+		0.6,
+	);
+	const diffDiagonal = resolveCssColor("--fg-default", isDark ? 0.03 : 0.04);
+
+	return {
+		base: (isDark ? "vs-dark" : "vs") as "vs" | "vs-dark",
+		inherit: true,
+		rules: isDark ? SYNTAX_RULES_DARK : SYNTAX_RULES_LIGHT,
+		colors: {
+			"editor.background": editorBg,
+			"editor.foreground": editorFg,
+			"editor.lineHighlightBackground": lineActive,
+			"editor.lineHighlightBorder": "#00000000",
+			"editor.selectionBackground": selection,
+			"editor.inactiveSelectionBackground": resolveCssColor(
+				"--editor-selection-bg",
+				0.5,
+			),
+			"editor.wordHighlightBackground": resolveCssColor(
+				"--editor-selection-bg",
+				0.4,
+			),
+			"editor.wordHighlightStrongBackground": resolveCssColor(
+				"--editor-selection-bg",
+				0.55,
+			),
+			"editorCursor.foreground": cursor,
+			"editorWhitespace.foreground": resolveCssColor("--fg-disabled"),
+			"editorIndentGuide.background1": indentGuide,
+			"editorIndentGuide.activeBackground1": indentGuideActive,
+			"editorLineNumber.foreground": gutterFg,
+			"editorLineNumber.activeForeground": editorFg,
+			"editorGutter.background": gutterBg,
+			"editorWidget.background": widgetBg,
+			"editorWidget.border": widgetBorder,
+			"editorSuggestWidget.background": widgetBg,
+			"editorSuggestWidget.border": widgetBorder,
+			"editorHoverWidget.background": widgetBg,
+			"editorHoverWidget.border": widgetBorder,
+			"scrollbarSlider.background": scrollbarBase,
+			"scrollbarSlider.hoverBackground": scrollbarHover,
+			"scrollbarSlider.activeBackground": scrollbarActive,
+			"minimap.background": editorBg,
+			"diffEditor.insertedLineBackground": diffInsertLine,
+			"diffEditor.insertedTextBackground": diffInsertText,
+			"diffEditor.removedLineBackground": diffRemoveLine,
+			"diffEditor.removedTextBackground": diffRemoveText,
+			"diffEditorGutter.insertedLineBackground": diffGutterInsert,
+			"diffEditorGutter.removedLineBackground": diffGutterRemove,
+			"diffEditorOverview.insertedForeground": diffOverviewInsert,
+			"diffEditorOverview.removedForeground": diffOverviewRemove,
+			"diffEditor.diagonalFill": diffDiagonal,
+		},
+	};
+}
+
+function defineHelmorThemes(monaco: MonacoModule) {
+	monaco.editor.defineTheme("helmor-editor-dark", buildHelmorTheme(true));
+	monaco.editor.defineTheme("helmor-editor-light", buildHelmorTheme(false));
+}
+
 function installEditorTheme(monaco: MonacoModule) {
-	monaco.editor.defineTheme("helmor-editor-dark", {
-		base: "vs-dark",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "868584" },
-			{ token: "string", foreground: "c9b18f" },
-			{ token: "keyword", foreground: "c5a3a8" },
-			{ token: "number", foreground: "c6b48a" },
-			{ token: "regexp", foreground: "9ea693" },
-			{ token: "type.identifier", foreground: "a9b0c6" },
-			{ token: "identifier", foreground: "faf9f6" },
-			{ token: "delimiter", foreground: "afaeac" },
-		],
-		colors: {
-			"editor.background": "#161514",
-			"editor.foreground": "#FAF9F6",
-			"editor.lineHighlightBackground": "#1f1e1d",
-			"editor.lineHighlightBorder": "#00000000",
-			"editor.selectionBackground": "#353534",
-			"editor.inactiveSelectionBackground": "#2a2928",
-			"editor.wordHighlightBackground": "#35353488",
-			"editor.wordHighlightStrongBackground": "#45454588",
-			"editorCursor.foreground": "#FAF9F6",
-			"editorWhitespace.foreground": "#595755",
-			"editorIndentGuide.background1": "#2b2a29",
-			"editorIndentGuide.activeBackground1": "#4b4946",
-			"editorLineNumber.foreground": "#868584",
-			"editorLineNumber.activeForeground": "#FAF9F6",
-			"editorGutter.background": "#161514",
-			"editorWidget.background": "#1e1d1c",
-			"editorWidget.border": "#343332",
-			"editorSuggestWidget.background": "#1e1d1c",
-			"editorSuggestWidget.border": "#343332",
-			"editorHoverWidget.background": "#1e1d1c",
-			"editorHoverWidget.border": "#343332",
-			"scrollbarSlider.background": "#faf9f626",
-			"scrollbarSlider.hoverBackground": "#faf9f640",
-			"scrollbarSlider.activeBackground": "#faf9f655",
-			"minimap.background": "#161514",
-			"diffEditor.insertedLineBackground": "#2ea04318",
-			"diffEditor.insertedTextBackground": "#2ea04340",
-			"diffEditor.removedLineBackground": "#da363318",
-			"diffEditor.removedTextBackground": "#da363340",
-			"diffEditorGutter.insertedLineBackground": "#2ea04326",
-			"diffEditorGutter.removedLineBackground": "#da363326",
-			"diffEditorOverview.insertedForeground": "#2ea04399",
-			"diffEditorOverview.removedForeground": "#da363399",
-			"diffEditor.diagonalFill": "#faf9f608",
-		},
-	});
-	monaco.editor.defineTheme("helmor-editor-light", {
-		base: "vs",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "7a7775" },
-			{ token: "string", foreground: "8a6b3d" },
-			{ token: "keyword", foreground: "8a3d51" },
-			{ token: "number", foreground: "8a6e2f" },
-			{ token: "regexp", foreground: "5a6b3d" },
-			{ token: "type.identifier", foreground: "3d4d75" },
-			{ token: "identifier", foreground: "1a1918" },
-			{ token: "delimiter", foreground: "5a5857" },
-		],
-		colors: {
-			"editor.background": "#FFFFFF",
-			"editor.foreground": "#1a1918",
-			"editor.lineHighlightBackground": "#f4f3f1",
-			"editor.lineHighlightBorder": "#00000000",
-			"editor.selectionBackground": "#c9d9ef",
-			"editor.inactiveSelectionBackground": "#dde3ec",
-			"editor.wordHighlightBackground": "#c9d9ef88",
-			"editor.wordHighlightStrongBackground": "#a8c1e288",
-			"editorCursor.foreground": "#1a1918",
-			"editorWhitespace.foreground": "#c7c5c2",
-			"editorIndentGuide.background1": "#eceae6",
-			"editorIndentGuide.activeBackground1": "#c7c5c2",
-			"editorLineNumber.foreground": "#a4a19d",
-			"editorLineNumber.activeForeground": "#1a1918",
-			"editorGutter.background": "#FFFFFF",
-			"editorWidget.background": "#f8f7f5",
-			"editorWidget.border": "#e4e2de",
-			"editorSuggestWidget.background": "#f8f7f5",
-			"editorSuggestWidget.border": "#e4e2de",
-			"editorHoverWidget.background": "#f8f7f5",
-			"editorHoverWidget.border": "#e4e2de",
-			"scrollbarSlider.background": "#1a191826",
-			"scrollbarSlider.hoverBackground": "#1a191840",
-			"scrollbarSlider.activeBackground": "#1a191855",
-			"minimap.background": "#FFFFFF",
-			"diffEditor.insertedLineBackground": "#2ea04318",
-			"diffEditor.insertedTextBackground": "#2ea04333",
-			"diffEditor.removedLineBackground": "#da363318",
-			"diffEditor.removedTextBackground": "#da363333",
-			"diffEditorGutter.insertedLineBackground": "#2ea04326",
-			"diffEditorGutter.removedLineBackground": "#da363326",
-			"diffEditorOverview.insertedForeground": "#2ea04399",
-			"diffEditorOverview.removedForeground": "#da363399",
-			"diffEditor.diagonalFill": "#1a19180a",
-		},
-	});
+	defineHelmorThemes(monaco);
 	monaco.editor.setTheme(themeId(desiredTheme));
 }
 

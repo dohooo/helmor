@@ -81,7 +81,7 @@ describe("App", () => {
 		expect(shell).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
-		expect(inspector).toHaveClass("bg-sidebar");
+		expect(inspector).toHaveClass("bg-inspector");
 		expect(inspector).toHaveClass("overflow-hidden");
 		// Width driven by CSS var — assert on the documentElement var, not inline style.
 		expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("336px");

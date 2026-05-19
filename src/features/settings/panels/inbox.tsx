@@ -585,7 +585,7 @@ function ProviderTabs({
 	onChange: (value: ContextProviderTab) => void;
 }) {
 	return (
-		<div className="grid grid-cols-5 gap-1 rounded-lg border border-border/60 bg-background/40 p-1">
+		<div className="grid grid-cols-5 gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
 			{PROVIDER_TABS.map((tab) => (
 				<button
 					key={tab.id}
@@ -621,10 +621,10 @@ function ProviderComingSoon({
 					/>
 					<span className="text-[13px] font-medium">Coming Soon</span>
 				</div>
-				<div className="my-7 flex items-center gap-2 px-2 text-muted-foreground/20">
-					<div className="h-px flex-1 bg-current opacity-60" />
-					<div className="size-0.5 rounded-full bg-current opacity-80" />
-					<div className="h-px flex-1 bg-current opacity-60" />
+				<div className="my-7 flex items-center gap-2 px-2">
+					<div className="h-px flex-1 bg-border" />
+					<div className="size-0.5 rounded-full bg-border" />
+					<div className="h-px flex-1 bg-border" />
 				</div>
 				<ul className="mx-auto list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
 					{COMING_SOON_COPY[provider].map((line) => (

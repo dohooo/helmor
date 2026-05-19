@@ -118,7 +118,7 @@ function SidebarRepoFilterPicker({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-8 w-full justify-between rounded-md border-border/70 bg-background/40 px-2 text-[13px] font-normal"
+					className="h-8 w-full justify-between rounded-md border-border/70 bg-muted/30 px-2 text-[13px] font-normal"
 				>
 					<span className="truncate">{label}</span>
 					<ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />

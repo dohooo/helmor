@@ -461,7 +461,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 			>
 				<div
 					className={cn(
-						"grid w-full border border-border/60 bg-background/40",
+						"grid w-full border border-border/60 bg-muted/30",
 						providerTabsCompact
 							? "gap-0.5 rounded-md p-0.5"
 							: "gap-1 rounded-lg p-1",
@@ -661,10 +661,10 @@ export const InboxSidebar = memo(function InboxSidebar({
 									/>
 									<span className="text-[13px] font-medium">Coming Soon</span>
 								</div>
-								<div className="my-7 flex items-center gap-2 px-2 text-muted-foreground/20">
-									<div className="h-px flex-1 bg-current opacity-60" />
-									<div className="size-0.5 rounded-full bg-current opacity-80" />
-									<div className="h-px flex-1 bg-current opacity-60" />
+								<div className="my-7 flex items-center gap-2 px-2">
+									<div className="h-px flex-1 bg-border" />
+									<div className="size-0.5 rounded-full bg-border" />
+									<div className="h-px flex-1 bg-border" />
 								</div>
 								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
 									{COMING_SOON_COPY[selectedSource as ExternalFilterId].map(

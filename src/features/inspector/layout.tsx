@@ -139,7 +139,7 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 }
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
+	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-inspector-section-header px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
 	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
@@ -309,10 +309,8 @@ export function InspectorTabsSection({
 				onMouseEnter={handleContainerMouseEnter}
 				onMouseLeave={handleContainerMouseLeave}
 				className={cn(
-					// `bg-sidebar` is the safety floor — it guarantees the zoomed
-					// area never shows through to the content underneath even if
-					// the inner section somehow doesn't cover the full box.
-					"absolute right-0 bottom-0 flex flex-col bg-sidebar",
+					// Safety floor for the zoomed area — matches the inspector chrome.
+					"absolute right-0 bottom-0 flex flex-col bg-inspector",
 					// Lift the zoomed container above the inspector resize separator
 					// (z-30), the inspector width handle (z-30), and the rest of the
 					// sidebar so it's the top-most layer in the app shell. Tied to
@@ -369,9 +367,9 @@ export function InspectorTabsSection({
 					// Run output spawns a terminal instead of a chat session.
 					data-focus-scope="terminal"
 					className={cn(
-						"relative flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
+						"relative flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-inspector",
 						// Draw the top edge line on the section itself so it paints
-						// above the section's `bg-sidebar` and scales with the
+						// above the section's `bg-inspector` and scales with the
 						// container as it grows. Tied to `isZoomPresented` so the
 						// border stays drawn for the whole collapse animation too.
 						isZoomPresented && "border-t border-t-border/60",
@@ -632,7 +630,7 @@ export function InspectorTabsSection({
 								aria-label="Inspector tabs body"
 								onMouseEnter={handleBodyMouseEnter}
 								onMouseDown={handleBodyMouseDown}
-								className="relative flex min-h-0 flex-1 flex-col bg-sidebar"
+								className="relative flex min-h-0 flex-1 flex-col bg-inspector"
 							>
 								<TabsZoomContext.Provider
 									value={{ isZoomPresented, isHoverExpanded }}

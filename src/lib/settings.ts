@@ -4,7 +4,16 @@ import type { WorkspaceBranchIntent, WorkspaceMode } from "./api";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
+export type DarkTheme =
+	| "default"
+	| "midnight"
+	| "forest"
+	| "ember"
+	| "aurora"
+	| "aubergine"
+	| "hoth"
+	| "choco-mint"
+	| "banana";
 
 /** Behavior when submitting a message while the agent is still responding.
  *  - `steer`: inject into the active turn (provider-native mid-turn steer).
@@ -367,6 +376,10 @@ const VALID_DARK_THEMES: readonly DarkTheme[] = [
 	"forest",
 	"ember",
 	"aurora",
+	"aubergine",
+	"hoth",
+	"choco-mint",
+	"banana",
 ];
 
 // Synchronous theme read for flash-free splash boot. The full settings
