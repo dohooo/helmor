@@ -74,8 +74,8 @@ export const Reasoning = memo(
 		// the same regardless of whether the user was watching when the
 		// stream ended — previously a transition-only `setIsOpen(false)`
 		// effect collapsed live observers but left switched-away viewers
-		// with an expanded block, which both surprises users (per their
-		// "thinking 输出完之后自动收起" expectation) and inflates
+		// with an expanded block, which both surprises users (the expected
+		// behavior is "collapse thinking once output finishes") and inflates
 		// `totalRowsHeight` against the layout estimator.
 		const resolvedDefaultOpen = hasContent
 			? (defaultOpen ?? lifecycle === "streaming")

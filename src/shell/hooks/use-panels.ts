@@ -7,6 +7,10 @@ import {
 	useState,
 } from "react";
 import {
+	suspendTerminalFit,
+	suspendTerminalWrites,
+} from "@/components/terminal-output";
+import {
 	clampSidebarWidth,
 	getInitialSidebarWidth,
 	INSPECTOR_WIDTH_STORAGE_KEY,
@@ -25,8 +29,8 @@ type ResizeState = {
 export const SIDEBAR_WIDTH_VAR = "--shell-sidebar-width";
 export const INSPECTOR_WIDTH_VAR = "--shell-inspector-width";
 
-// Module-level resize state store. 故意不放进 React state——订阅它的组件不应该
-// 因为拖动开始/结束而重渲染,只在拖动结束时通过 listener 主动 flush 一次。
+// Module-level resize state store. Kept out of React state so subscribers
+// don't re-render on drag start/end — they only flush via the listener.
 type ResizeListener = (active: boolean) => void;
 const resizeListeners = new Set<ResizeListener>();
 let resizingActive = false;
@@ -57,8 +61,8 @@ function writeWidthVar(target: ResizeTarget, width: number) {
 	document.documentElement.style.setProperty(varName, `${width}px`);
 }
 
-// 模块加载时立刻把初始宽度写到 CSS variable,这样 React 首次 render 前 DOM 就有值,
-// 不会出现一帧的 0 宽度闪烁。
+// Seed the CSS vars at module load so the DOM has a width before React's
+// first render — avoids a one-frame 0-width flash.
 if (typeof document !== "undefined") {
 	writeWidthVar("sidebar", getInitialSidebarWidth());
 	writeWidthVar(
@@ -75,9 +79,10 @@ export function useShellPanels() {
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
 
-	// React state -> CSS variable 同步。仅在非拖动场景下生效(键盘步进、初始
-	// 载入、mouseup 后的 commit)。拖动期间 CSS variable 由 mousemove 直接写,
-	// React state 此时是 stale 的,但 setProperty(同值)是 no-op。
+	// React state → CSS var sync. Only fires for non-drag cases (keyboard
+	// step, initial mount, mouseup commit). During drag, mousemove writes
+	// the var directly and React state is stale — but setProperty with the
+	// same value is a no-op.
 	useLayoutEffect(() => {
 		writeWidthVar("sidebar", sidebarWidth);
 	}, [sidebarWidth]);
@@ -120,11 +125,15 @@ export function useShellPanels() {
 		}
 
 		setResizingActive(true);
+		// Pause xterm fit + writes so a live run script doesn't thrash the
+		// main thread mid-drag. Released on mouseup.
+		const releaseFitSuspend = suspendTerminalFit();
+		const releaseWriteSuspend = suspendTerminalWrites();
 
 		let pendingWidth: number | null = null;
 		let rafId: number | null = null;
 
-		// 拖动期间只写 CSS variable, 完全不进 React 渲染路径。
+		// Drag-time path: only writes the CSS var, never touches React.
 		const flushVar = () => {
 			rafId = null;
 			if (pendingWidth === null) return;
@@ -149,8 +158,8 @@ export function useShellPanels() {
 				rafId = null;
 			}
 			flushVar();
-			// 把 CSS variable 最终值 commit 回 React state,
-			// 用于持久化 + 触发依赖宽度的非拖动场景(比如设置面板里显示当前宽度)。
+			// Commit the final CSS var value back to React state for
+			// persistence and any width-dependent non-drag consumers.
 			const finalWidth = pendingWidth;
 			if (finalWidth !== null) {
 				if (resizeState.target === "sidebar") {
@@ -176,6 +185,8 @@ export function useShellPanels() {
 				window.cancelAnimationFrame(rafId);
 			}
 			setResizingActive(false);
+			releaseFitSuspend();
+			releaseWriteSuspend();
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);

@@ -118,9 +118,13 @@ export function ShellInspectorPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			// 宽度由 CSS variable 驱动(use-panels.ts 拖动时直接 setProperty),
-			// 这样拖动期间 React 不需要重渲染就能更新视觉宽度。
+			// Width driven by CSS var (use-panels.ts writes it on drag) — no React render.
+			// `contain: layout style` isolates the inspector's inner layout from the
+			// outer shell. Without it, dragging the inspector's ~4000 elements costs
+			// ~52ms/frame; with it, ~33ms. Skip `paint` so the tabs hover-zoom can
+			// still overflow the aside (`has-[[data-tabs-zoomed=true]]:overflow-visible`).
 			style={{
+				contain: "layout style",
 				width: collapsed ? 0 : `var(--shell-inspector-width, ${width}px)`,
 			}}
 		>

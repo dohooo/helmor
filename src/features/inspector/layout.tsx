@@ -46,8 +46,8 @@ export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 
 // CSS variables written on the inspector container by `useWorkspaceInspectorSidebar`.
-// 拖动期间 mousemove 直接更新这些变量,不进 React 渲染路径 —— 和 shell/use-panels.ts
-// 里水平拖动的实现策略保持一致,把每帧 setState 的代价归零。
+// Vars written directly by mousemove during drag — same strategy as
+// shell/use-panels.ts horizontal drag, skipping React per frame.
 export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
 export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
 export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
@@ -295,9 +295,9 @@ export function InspectorTabsSection({
 				!isZoomPresented && "overflow-hidden",
 			)}
 			style={{
-				// 高度走 CSS 变量,拖动期间由 useWorkspaceInspectorSidebar 的 mousemove
-				// 直接 setProperty 更新,跳过 React 渲染。collapsed 状态固定 header 高,
-				// 确保父级 flex column 的占位稳定。
+				// Height via CSS var, written by useWorkspaceInspectorSidebar's
+				// mousemove during drag — skips React renders. Collapsed state pins
+				// to the header height to keep the parent flex column stable.
 				height: open
 					? `calc(${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px + var(${INSPECTOR_TABS_BODY_VAR}, ${bodyHeight}px))`
 					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,

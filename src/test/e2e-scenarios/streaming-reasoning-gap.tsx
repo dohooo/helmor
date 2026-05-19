@@ -23,7 +23,7 @@ import type {
 // Scenario walks one reasoning at a time:
 //   step 0..N-1   reasoning N is streaming, 0..N-1 are just-finished
 //   final tool    a tool_use is appended after the last reasoning, mirroring
-//                 the user's "突然多了一个工具调用" trigger
+//                 the "a tool call suddenly appears" trigger reported by users
 
 const SESSION_ID = "e2e-streaming-reasoning-gap";
 const HISTORY_COUNT = 16;

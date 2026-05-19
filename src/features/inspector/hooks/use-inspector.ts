@@ -8,7 +8,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { suspendTerminalFit } from "@/components/terminal-output";
+import {
+	suspendTerminalFit,
+	suspendTerminalWrites,
+} from "@/components/terminal-output";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
@@ -229,10 +232,10 @@ export function useWorkspaceInspectorSidebar({
 		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
 	);
 
-	// 拖动期间 mousemove 直接写 CSS 变量,React state 是 stale 的;mouseup 才 commit
-	// 回来。这个 layout effect 负责非拖动场景(toggle、键盘步进、初始 mount)的
-	// React state → CSS 变量同步。拖动期间用 isResizingRef gate 掉,防止 stale
-	// state 在拖动中途被 effect 写回去把 mousemove 的实时值盖掉。
+	// During drag, mousemove writes the CSS vars directly and React state
+	// stays stale until mouseup commits. This effect only handles non-drag
+	// cases (toggle, keyboard step, initial mount); the isResizingRef gate
+	// prevents stale state from clobbering the live mousemove values mid-drag.
 	const isResizingRef = useRef(false);
 	useLayoutEffect(() => {
 		if (isResizingRef.current) return;
@@ -420,10 +423,10 @@ export function useWorkspaceInspectorSidebar({
 		}
 
 		isResizingRef.current = true;
-		// 拖动期间挂起所有已挂载 xterm 的 FitAddon —— 否则容器 ResizeObserver 会
-		// 每帧把 5000 行 scrollback 重新 reflow,在拖 scripts section 时尤其卡。
-		// 拖动结束 release,FitAddon 自己会做一次最终 fit。
+		// Pause xterm fit + writes so a live run script doesn't thrash the
+		// main thread mid-drag. Released on mouseup.
 		const releaseFitSuspend = suspendTerminalFit();
+		const releaseWriteSuspend = suspendTerminalWrites();
 
 		const captured = resizeState;
 		const container = containerRef.current;
@@ -463,8 +466,8 @@ export function useWorkspaceInspectorSidebar({
 				);
 			}
 
-			// 直接算出 derived sizes 并写 CSS 变量 —— 不进 setState、不进 React
-			// 渲染路径。三个 section 通过 var(--inspector-X-body-height) 读取。
+			// Derive sizes and write CSS vars directly — no setState, no React
+			// render. The three sections read via var(--inspector-X-body-height).
 			const sizes = deriveSizes({
 				bodyBudget: captured.bodyBudget,
 				actionsOpen: captured.actionsOpen,
@@ -488,8 +491,8 @@ export function useWorkspaceInspectorSidebar({
 				animationFrameId = null;
 			}
 			flush();
-			// Commit 最终值回 React state:触发 localStorage 持久化 + 让外部消费者
-			// (如设置面板里显示当前高度)拿到最新数值。同值 setState 是 no-op。
+			// Commit the final value back to React state for localStorage
+			// persistence and any external consumers. Same-value setState is a no-op.
 			isResizingRef.current = false;
 			if (captured.target === RESIZE_TARGET_ACTIONS) {
 				if (lastStoredChanges !== captured.initialChangesBody) {
@@ -517,6 +520,7 @@ export function useWorkspaceInspectorSidebar({
 			}
 			isResizingRef.current = false;
 			releaseFitSuspend();
+			releaseWriteSuspend();
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);

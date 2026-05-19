@@ -74,7 +74,8 @@ export function ActiveThreadViewport({
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
 	const pendingBucketRef = useRef<number | null>(null);
-	// 估算用 32px 粒度的宽度,拖动时只在跨越 bucket 边界才让 estimator/measureHeights 缓存失效。
+	// 32px buckets so estimator/measureHeights caches only invalidate when
+	// the drag crosses a bucket boundary.
 	const paneWidth = widthBucket * 32;
 
 	useLayoutEffect(() => {
@@ -93,9 +94,10 @@ export function ActiveThreadViewport({
 		const computeBucket = (width: number) =>
 			width > 0 ? Math.max(1, Math.round(width / 32)) : 0;
 
-		// 拖动期间 stack 的 clientWidth 通过 CSS variable 实时变化,RO 会按 60Hz fire,
-		// 但我们不希望每帧都进 React 渲染——视觉上文字换行已由浏览器 reflow 处理。
-		// 只记 pending,等 onShellResize(false) 触发再 flush。
+		// During drag the stack's clientWidth changes per frame via CSS var,
+		// so the RO fires at 60Hz — but we don't want a React render each
+		// time (text wrapping is already handled by the browser reflow).
+		// Buffer to pending and flush when onShellResize(false) fires.
 		const updateWidthBucket = () => {
 			const width = stack.clientWidth;
 			const next = computeBucket(width);
@@ -539,10 +541,11 @@ function ProgressiveConversationViewport({
 		setStreamingRowEl(node);
 	}, []);
 
-	// Reset 只跟 sessionId 走。原来用 layoutCacheKey(含 widthBucket)做触发器会让
-	// 拖动结束跨越 32px 边界时清空 measuredHeights,造成可见行高度跳变 + 全量
-	// 重测量。同一 session 的 message 引用不变,DOM reflow 后 ResizeObserver 会
-	// 自然反馈新高度,无需手动 reset。
+	// Reset only on sessionId change. Triggering on layoutCacheKey (which
+	// included widthBucket) used to clear measuredHeights whenever a drag
+	// crossed a 32px bound, causing visible row-height jumps and a full
+	// remeasure. Within a session the message refs are stable, so the
+	// ResizeObserver naturally reports new heights after the DOM reflows.
 	const [lastSessionId, setLastSessionId] = useState(sessionId);
 	if (lastSessionId !== sessionId) {
 		setLastSessionId(sessionId);
@@ -653,6 +656,13 @@ function ProgressiveConversationViewport({
 			observer?.disconnect();
 		};
 	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
+
+	// Flush row heights deferred during shell resize once the drag ends.
+	useEffect(() => {
+		return onShellResize((active) => {
+			if (!active) flushDeferredMeasuredHeights();
+		});
+	}, [flushDeferredMeasuredHeights]);
 
 	useEscapeBottomLock({ scrollParent, stopScroll, hasUserScrolledRef });
 
@@ -863,7 +873,14 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
-			if (isTauri && hasUserScrolledRef.current && isUserScrollingRef.current) {
+			// Defer during shell resize too: each visible row's RO fires per frame
+			// as the main pane width changes, and committing all of them would
+			// thrash React. Same buffered path as user-scrolling.
+			if (
+				isTauri &&
+				((hasUserScrolledRef.current && isUserScrollingRef.current) ||
+					isShellResizing())
+			) {
 				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
 				return;
 			}

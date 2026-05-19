@@ -83,7 +83,7 @@ describe("App", () => {
 		expect(sidebar).toHaveClass("overflow-hidden");
 		expect(inspector).toHaveClass("bg-sidebar");
 		expect(inspector).toHaveClass("overflow-hidden");
-		// 宽度由 CSS variable 驱动,验证 documentElement 上的 variable 值。
+		// Width driven by CSS var — assert on the documentElement var, not inline style.
 		expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("336px");
 		expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("336px");
 		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
@@ -111,7 +111,7 @@ describe("App", () => {
 		).toBeInTheDocument();
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
-		// 位置由 CSS variable 驱动,inline style 表达成 calc(var(...) - X)。
+		// Position driven by CSS var; inline style is expressed as calc(var(...) - X).
 		expect(inspectorResizeHandle).toHaveStyle({ width: "20px" });
 		expect(inspectorResizeHandle.style.right).toBe(
 			`calc(var(--shell-inspector-width, 336px) - 20px)`,
@@ -234,9 +234,10 @@ describe("App", () => {
 
 		fireEvent.mouseMove(window, { clientX: 360 });
 
-		// 拖动期间宽度通过 CSS variable 实时驱动(避免 React 重渲染),
-		// 所以验证 documentElement 上的 variable 值,而不是元素 inline width。
-		// 注意:拖动期间 aria-valuenow 不会更新(separator 没重渲染),mouseup 才会同步。
+		// During drag, width is driven via the CSS var (to avoid React renders),
+		// so assert on the documentElement var rather than inline width.
+		// Note: aria-valuenow doesn't update mid-drag (the separator doesn't
+		// re-render) — it syncs on mouseup.
 		await waitFor(() => {
 			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("360px");
 		});
@@ -290,7 +291,7 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		// 宽度通过 CSS variable 暴露;React state 同步在 mount 后立即把它写入。
+		// Width is exposed via the CSS var; the React state sync writes it immediately after mount.
 		await waitFor(() => {
 			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("404px");
 			expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("388px");
