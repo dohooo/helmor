@@ -46,8 +46,13 @@ export async function createWorkspaceFromStartComposer({
 	branchIntent?: WorkspaceBranchIntent;
 	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
-	/** StartPage composer picks. Only persisted to the session row on
-	 *  saveForLater; startNow consumes them via the submit payload. */
+	/** StartPage composer picks. Persisted to the session row in all submit
+	 *  modes so the row reflects the user's choice from the moment the
+	 *  workspace exists — independent of whether/when the first turn runs.
+	 *  Without this, switching away to start-page (which unmounts the
+	 *  conversation container and drops its in-memory composer caches) and
+	 *  coming back snaps the chips back to settings defaults on any session
+	 *  whose first turn hasn't yet finalised. */
 	composerConfig?: {
 		modelId?: string;
 		effortLevel?: string;
@@ -96,20 +101,26 @@ export async function createWorkspaceFromStartComposer({
 			? null
 			: () => finalizeWorkspaceFromRepo(prepared.workspaceId);
 
+	// Single source of truth for the composer-pick persist. Awaited in every
+	// submit mode — the write is one UPDATE and finishes long before the
+	// user can switch surfaces, so it's not worth the complexity of racing
+	// it against finalize.
+	const persistComposerConfig = composerConfig
+		? updateSessionSettings(prepared.initialSessionId, {
+				model: composerConfig.modelId,
+				effortLevel: composerConfig.effortLevel,
+				permissionMode: composerConfig.permissionMode,
+				fastMode: composerConfig.fastMode,
+			})
+		: Promise.resolve();
+
 	if (submitMode === "saveForLater") {
 		await Promise.all([
 			finalize?.() ?? Promise.resolve(),
 			editorStateSnapshot
 				? persistSessionDraft(prepared.initialSessionId, editorStateSnapshot)
 				: Promise.resolve(),
-			composerConfig
-				? updateSessionSettings(prepared.initialSessionId, {
-						model: composerConfig.modelId,
-						effortLevel: composerConfig.effortLevel,
-						permissionMode: composerConfig.permissionMode,
-						fastMode: composerConfig.fastMode,
-					})
-				: Promise.resolve(),
+			persistComposerConfig,
 		]);
 		return {
 			outcome: { shouldStream: false },
@@ -120,7 +131,10 @@ export async function createWorkspaceFromStartComposer({
 	}
 
 	if (submitMode === "createOnly") {
-		if (finalize) await finalize();
+		await Promise.all([
+			finalize?.() ?? Promise.resolve(),
+			persistComposerConfig,
+		]);
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
@@ -129,6 +143,11 @@ export async function createWorkspaceFromStartComposer({
 		};
 	}
 
+	// startNow: don't block the surface swap on finalize, but do await the
+	// (very fast) settings write so by the time conversation mounts and
+	// reads `sessions.effort_level / model / permission_mode / fast_mode`
+	// the row already reflects the user's pick.
+	await persistComposerConfig;
 	return {
 		finalizePromise: finalize?.(),
 		workspaceId: prepared.workspaceId,

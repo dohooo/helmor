@@ -777,6 +777,16 @@ export function getComposerContextKey(
 	return "global";
 }
 
+/** Reverse of `getComposerContextKey` for the `session:*` form. Returns null
+ *  for `workspace:*` / `start:*` / `global` — those have no session row to
+ *  persist composer picks against. */
+export function parseSessionIdFromContextKey(
+	contextKey: string,
+): string | null {
+	const prefix = "session:";
+	return contextKey.startsWith(prefix) ? contextKey.slice(prefix.length) : null;
+}
+
 export function inferDefaultModelId(
 	session: Pick<
 		WorkspaceSessionSummary,
