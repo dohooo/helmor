@@ -264,7 +264,7 @@
 
 	/* Terminal ANSI palette (LOCKED) */
 	--terminal-background: var(--terminal-chrome-bg);
-	--terminal-foreground: var(--terminal-chrome-fg);
+	--terminal-foreground: var(--sidebar-fg);
 	--terminal-cursor: var(--fg-default);
 	--terminal-selection: oklch(0.87 0.03 250);
 	--terminal-black: oklch(0.26 0 0);

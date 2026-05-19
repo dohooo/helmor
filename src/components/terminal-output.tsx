@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
+import { resolveCssColor } from "@/lib/css-color";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
@@ -204,42 +205,14 @@ export function suspendTerminalWrites(): () => void {
 	};
 }
 
-/**
- * Read --terminal-* and --foreground CSS variables and build an xterm ITheme.
- *
- * CSS custom properties return raw token strings from getComputedStyle (e.g.
- * "oklch(0.145 0 0)"), but xterm.js only reliably parses #hex / rgb() / rgba().
- * We force the browser to resolve each value to rgb() by writing it into a real
- * CSS color property on a temporary element, then reading back the computed
- * result.
- */
 function resolveTerminalTheme(): ITheme {
-	const s = getComputedStyle(document.documentElement);
+	const v = (suffix: string) => resolveCssColor(`var(--terminal-${suffix})`);
+	const mix = (pct: number) =>
+		resolveCssColor(
+			`color-mix(in oklch, var(--foreground) ${pct}%, transparent)`,
+		);
 
-	// Probe element: setting its `color` property forces the browser to
-	// serialise any CSS color value (oklch, color-mix, etc.) as rgb()/rgba().
-	const probe = document.createElement("div");
-	probe.style.display = "none";
-	document.body.appendChild(probe);
-
-	const v = (suffix: string) => {
-		const raw = s.getPropertyValue(`--terminal-${suffix}`).trim();
-		// Reset before each assignment so an invalid/empty value doesn't
-		// silently carry over the previous successful color.
-		probe.style.color = "";
-		probe.style.color = raw;
-		return getComputedStyle(probe).color;
-	};
-
-	// Match the app's global scrollbar colors (foreground @ 18%/30%/40%).
-	// color-mix() is also not understood by xterm, so resolve it the same way.
-	const fg = s.getPropertyValue("--foreground").trim();
-	const mix = (pct: number) => {
-		probe.style.color = `color-mix(in oklch, ${fg} ${pct}%, transparent)`;
-		return getComputedStyle(probe).color;
-	};
-
-	const theme: ITheme = {
+	return {
 		background: v("background"),
 		foreground: v("foreground"),
 		cursor: v("cursor"),
@@ -264,9 +237,6 @@ function resolveTerminalTheme(): ITheme {
 		brightCyan: v("bright-cyan"),
 		brightWhite: v("bright-white"),
 	};
-
-	probe.remove();
-	return theme;
 }
 
 function resolveTerminalFontFamily(
