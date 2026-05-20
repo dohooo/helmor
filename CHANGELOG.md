@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.23.4
+
+### Patch Changes
+
+- [#610](https://github.com/dohooo/helmor/pull/610) [`9d3c72b`](https://github.com/dohooo/helmor/commit/9d3c72be40c64375d03a6690a86b2e2a247ea044) Thanks [@natllian](https://github.com/natllian)! - Fix the unread dot on chat rows in the sidebar overlapping the last character of long titles by moving it to the start of the row.
+
+- [#613](https://github.com/dohooo/helmor/pull/613) [`44f17b4`](https://github.com/dohooo/helmor/commit/44f17b4773382b1d287a2dbec7f7fe43161160bb) Thanks [@natllian](https://github.com/natllian)! - Add ArrowUp / ArrowDown history recall in the composer — at the first or last line of the input, the arrow keys step through previously-sent prompts for the current session, just like bash or zsh.
+
+- [#608](https://github.com/dohooo/helmor/pull/608) [`129c24a`](https://github.com/dohooo/helmor/commit/129c24a4c5ca6133ac999995f81b218df723724d) Thanks [@natllian](https://github.com/natllian)! - Remember a separate color theme for light and dark mode, so switching between them no longer resets your accent palette.
+
+- [#615](https://github.com/dohooo/helmor/pull/615) [`9fc32da`](https://github.com/dohooo/helmor/commit/9fc32dadad35b816b033d45e3f52e6b68ef8a7fb) Thanks [@natllian](https://github.com/natllian)! - Fix the +/- line counters in the inspector's change list replaying their roll-in animation every time you switch workspace.
+
+- [#614](https://github.com/dohooo/helmor/pull/614) [`5863ca5`](https://github.com/dohooo/helmor/commit/5863ca582775cd0f7861c54523a6e73040a9386f) Thanks [@natllian](https://github.com/natllian)! - Fix onboarding misreporting Claude or Codex as signed-out, and the login terminal failing with "command not found", on machines that don't have the agent CLIs on PATH — Helmor now uses the bundled binaries it ships with.
+
+- [#616](https://github.com/dohooo/helmor/pull/616) [`e5c8dc2`](https://github.com/dohooo/helmor/commit/e5c8dc2df732c2c3a85bc98afda60519c4267d6f) Thanks [@natllian](https://github.com/natllian)! - Reduce input latency in the embedded terminal so fast typing no longer feels laggy or drops characters on lower-spec hardware.
+
+- [#618](https://github.com/dohooo/helmor/pull/618) [`4726702`](https://github.com/dohooo/helmor/commit/472670251f7ea5758edd68eb1d7a2683395c2fcc) Thanks [@natllian](https://github.com/natllian)! - - Land on the start page after finishing onboarding so users can chat immediately even before adding their first repository.
+
+- [#612](https://github.com/dohooo/helmor/pull/612) [`395eae1`](https://github.com/dohooo/helmor/commit/395eae198c2c195f18a5eface56147a735890069) Thanks [@natllian](https://github.com/natllian)! - Unify font sizes across menus, sidebar, inspector, composer, and other chrome so the app reads on a single semantic typographic scale instead of mixed ad-hoc pixel values.
+
 ## 0.23.3
 
 ### Patch Changes
