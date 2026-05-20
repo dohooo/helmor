@@ -1040,6 +1040,14 @@ impl RemoteRuntime for RemoteSshRuntime {
         self.client
             .call::<super::methods::DaemonTailLogMethod>(params)
     }
+
+    fn runtime_metrics(
+        &self,
+        params: super::methods::RuntimeMetricsParams,
+    ) -> Result<super::methods::RuntimeMetricsResult> {
+        self.client
+            .call::<super::methods::RuntimeMetricsMethod>(params)
+    }
 }
 
 #[cfg(test)]

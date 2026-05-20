@@ -136,6 +136,9 @@ pub enum Method {
     /// lines from `$HOME/.helmor/server/daemon.log` and returns
     /// them so an operator can debug without an extra SSH session.
     DaemonTailLog,
+    /// Track E2: per-method RPC counters + latency percentiles.
+    /// Empty params — the daemon snapshots its registry.
+    RuntimeMetrics,
 }
 
 impl Method {
@@ -166,6 +169,7 @@ impl Method {
             Self::AgentAttach => "agent.attach",
             Self::AgentSetAuth => "agent.setAuth",
             Self::DaemonTailLog => "daemon.tailLog",
+            Self::RuntimeMetrics => "runtime.metrics",
         }
     }
 }
@@ -214,6 +218,7 @@ impl FromStr for Method {
             "agent.attach" => Ok(Self::AgentAttach),
             "agent.setAuth" => Ok(Self::AgentSetAuth),
             "daemon.tailLog" => Ok(Self::DaemonTailLog),
+            "runtime.metrics" => Ok(Self::RuntimeMetrics),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -334,6 +339,39 @@ impl RpcMethod for DaemonTailLogMethod {
     const NAME: &'static str = "daemon.tailLog";
     type Params = DaemonTailLogParams;
     type Result = DaemonTailLogResult;
+}
+
+// ── runtime.metrics (Track E2) ────────────────────────────────────
+
+/// Track E2: per-method RPC counters + latency percentiles. Empty
+/// params — the daemon snapshots its full registry each call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeMetricsParams {}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeMetricsResult {
+    /// One entry per method recorded since daemon startup. Sorted
+    /// by descending call count.
+    pub methods: Vec<super::server::metrics::MethodMetricsSnapshot>,
+    /// Daemon uptime in seconds at the moment of snapshot. Useful for
+    /// rate calculations (calls per second) on the frontend.
+    pub uptime_secs: u64,
+    /// Track E4: epoch-millis timestamps of recent daemon startups
+    /// (within the last 5 minutes). Empty when the daemon has been
+    /// up for >5 min with no respawns. The frontend triggers a
+    /// "crashed N times in 5 min" warning when this exceeds a
+    /// threshold.
+    #[serde(default)]
+    pub recent_starts_ms: Vec<i64>,
+}
+
+pub struct RuntimeMetricsMethod;
+impl RpcMethod for RuntimeMetricsMethod {
+    const NAME: &'static str = "runtime.metrics";
+    type Params = RuntimeMetricsParams;
+    type Result = RuntimeMetricsResult;
 }
 
 // ── workspace.status ──────────────────────────────────────────────

@@ -346,6 +346,16 @@ pub trait RemoteRuntime: Send + Sync {
     ) -> Result<super::methods::DaemonTailLogResult> {
         anyhow::bail!("daemon.tailLog is only supported on a connected remote runtime")
     }
+
+    /// Track E2: snapshot the daemon's RPC metrics registry.
+    /// Local-only — there's no daemon RPC pipe to instrument on
+    /// the local runtime.
+    fn runtime_metrics(
+        &self,
+        _params: super::methods::RuntimeMetricsParams,
+    ) -> Result<super::methods::RuntimeMetricsResult> {
+        anyhow::bail!("runtime.metrics is only supported on a connected remote runtime")
+    }
 }
 
 /// The default runtime — does the work in-process. Every existing

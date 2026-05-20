@@ -1243,6 +1243,41 @@ export async function tailRemoteDaemonLog(
 }
 
 /**
+ * Per-method RPC metric (Track E2). One entry per method recorded
+ * since daemon startup.
+ */
+export type MethodMetricsSnapshot = {
+	method: string;
+	count: number;
+	errorCount: number;
+	p50Ms: number;
+	p99Ms: number;
+	lastSampleMs?: number | null;
+};
+
+/**
+ * Result of {@link getRemoteRuntimeMetrics}. Carries the per-method
+ * RPC counters/latency (Track E2) + recent daemon startup timestamps
+ * (Track E4) so the desktop can show "crashed N times in 5 min"
+ * warnings.
+ */
+export type RuntimeMetricsResult = {
+	methods: MethodMetricsSnapshot[];
+	uptimeSecs: number;
+	recentStartsMs: number[];
+};
+
+/**
+ * Track E2 + E4: snapshot the remote daemon's RPC metrics + recent
+ * restart history.
+ */
+export async function getRemoteRuntimeMetrics(
+	name: string,
+): Promise<RuntimeMetricsResult> {
+	return invoke<RuntimeMetricsResult>("get_remote_runtime_metrics", { name });
+}
+
+/**
  * Abort an in-flight remote agent session by request id. The remote
  * sidecar emits a terminating `aborted` event that the daemon
  * broadcasts to any attached client; if no client is attached the

@@ -811,6 +811,30 @@ fn tail_remote_daemon_log_inner(
     runtime.daemon_tail_log(crate::remote::methods::DaemonTailLogParams { max_lines })
 }
 
+/// Track E2: snapshot the remote daemon's per-method RPC metrics.
+#[tauri::command]
+pub async fn get_remote_runtime_metrics(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<crate::remote::methods::RuntimeMetricsResult> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || get_remote_runtime_metrics_inner(&registry, name)).await
+}
+
+fn get_remote_runtime_metrics_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+) -> anyhow::Result<crate::remote::methods::RuntimeMetricsResult> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("runtime.metrics is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    runtime.runtime_metrics(crate::remote::methods::RuntimeMetricsParams::default())
+}
+
 /// Forward an abort to the daemon's per-session sidecar. Used by the
 /// reattach UX to stop an orphaned remote turn the user no longer
 /// wants. The remote sidecar emits a terminating `aborted` event that
