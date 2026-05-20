@@ -149,6 +149,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	onMoveWorkspaceInSidebar,
 	onMoveRepositoryInSidebar,
 	onSetWorkspaceStatus,
+	onMoveToRuntime,
+	availableRuntimes,
 	archivingWorkspaceIds,
 	markingUnreadWorkspaceId,
 	restoringWorkspaceId,
@@ -202,6 +204,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		beforeRepoId: string | null,
 	) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	/**
+	 * Track F1: forward the row's "Move to runtime" submenu choice to
+	 * the container. `null` clears the binding (workspace runs on the
+	 * local sidecar again); a runtime name pins it.
+	 */
+	onMoveToRuntime?: (workspaceId: string, runtimeName: string | null) => void;
+	/** Registered runtime names surfaced as Move-to choices. */
+	availableRuntimes?: ReadonlyArray<{ name: string }>;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -886,6 +896,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onOpenInFinder={onOpenInFinder}
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
+						onMoveToRuntime={onMoveToRuntime}
+						availableRuntimes={availableRuntimes}
 						groupId={item.groupId}
 						onDragPointerDown={
 							dragReorderEnabled ? startDragGesture : undefined
@@ -926,6 +938,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			onMoveWorkspaceInSidebar,
 			onMoveRepositoryInSidebar,
 			onSetWorkspaceStatus,
+			onMoveToRuntime,
+			availableRuntimes,
 			startDragGesture,
 			startRepoDragGesture,
 			isAnyDragging,
