@@ -132,6 +132,10 @@ pub enum Method {
     /// Keys never persist on the desktop side — phase 23d's
     /// design intent is "auth lives remote-only".
     AgentSetAuth,
+    /// Track E1: trailing log tail. Reads up to `max_lines`
+    /// lines from `$HOME/.helmor/server/daemon.log` and returns
+    /// them so an operator can debug without an extra SSH session.
+    DaemonTailLog,
 }
 
 impl Method {
@@ -161,6 +165,7 @@ impl Method {
             Self::AgentList => "agent.list",
             Self::AgentAttach => "agent.attach",
             Self::AgentSetAuth => "agent.setAuth",
+            Self::DaemonTailLog => "daemon.tailLog",
         }
     }
 }
@@ -208,6 +213,7 @@ impl FromStr for Method {
             "agent.list" => Ok(Self::AgentList),
             "agent.attach" => Ok(Self::AgentAttach),
             "agent.setAuth" => Ok(Self::AgentSetAuth),
+            "daemon.tailLog" => Ok(Self::DaemonTailLog),
             _ => Err(UnknownMethod(value.to_string())),
         }
     }
@@ -290,6 +296,44 @@ impl RpcMethod for PingMethod {
     const NAME: &'static str = "ping";
     type Params = PingParams;
     type Result = PingResult;
+}
+
+// ── daemon.tailLog (Track E) ──────────────────────────────────────
+
+/// Track E1: read the last N lines of the daemon's log file.
+/// Surfaced in the runtime-debug panel so an operator can diagnose
+/// without `ssh <host> tail -f ~/.helmor/server/daemon.log`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonTailLogParams {
+    /// How many trailing lines to return. The server clamps to a
+    /// hard maximum of 1000 to keep frame size bounded; a request
+    /// of 0 returns no lines (used to probe whether log tailing is
+    /// supported by this daemon version).
+    pub max_lines: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonTailLogResult {
+    /// Path the daemon read from. Surfaced so the UI can render
+    /// "tailing $HOME/.helmor/server/daemon.log" as a sub-caption.
+    pub log_path: String,
+    /// Trailing lines (oldest first, newest last) up to `max_lines`.
+    /// Newlines stripped.
+    pub lines: Vec<String>,
+    /// `true` when the file has more content than was returned —
+    /// the UI shows a "tail truncated" caption so the operator knows
+    /// they're not seeing the whole log.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+pub struct DaemonTailLogMethod;
+impl RpcMethod for DaemonTailLogMethod {
+    const NAME: &'static str = "daemon.tailLog";
+    type Params = DaemonTailLogParams;
+    type Result = DaemonTailLogResult;
 }
 
 // ── workspace.status ──────────────────────────────────────────────

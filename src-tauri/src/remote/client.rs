@@ -1032,6 +1032,14 @@ impl RemoteRuntime for RemoteSshRuntime {
     ) -> Option<NotificationSubscription> {
         Some(self.client.subscribe_agent_events(callback))
     }
+
+    fn daemon_tail_log(
+        &self,
+        params: super::methods::DaemonTailLogParams,
+    ) -> Result<super::methods::DaemonTailLogResult> {
+        self.client
+            .call::<super::methods::DaemonTailLogMethod>(params)
+    }
 }
 
 #[cfg(test)]

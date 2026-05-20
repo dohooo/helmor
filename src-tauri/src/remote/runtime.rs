@@ -335,6 +335,17 @@ pub trait RemoteRuntime: Send + Sync {
     ) -> Option<super::client::NotificationSubscription> {
         None
     }
+
+    /// Track E1: read the daemon's trailing log lines. Only the
+    /// remote runtime has a daemon log to tail; the local runtime
+    /// bails so the dev-panel surface can distinguish "this runtime
+    /// has no log" from "the log is empty".
+    fn daemon_tail_log(
+        &self,
+        _params: super::methods::DaemonTailLogParams,
+    ) -> Result<super::methods::DaemonTailLogResult> {
+        anyhow::bail!("daemon.tailLog is only supported on a connected remote runtime")
+    }
 }
 
 /// The default runtime — does the work in-process. Every existing
