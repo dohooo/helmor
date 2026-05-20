@@ -75,6 +75,101 @@ const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 			supportsFastMode: true,
 		},
 	],
+	// Static fallback — the dynamic fetch via Copilot API is the real
+	// source of truth. This list covers picker-enabled models as of
+	// May 2026 so the picker has something to show before the first fetch.
+	copilot: [
+		{
+			id: "claude-opus-4.7",
+			label: "Claude Opus 4.7",
+			cliModel: "claude-opus-4.7",
+			effortLevels: ["medium"],
+		},
+		{
+			id: "claude-sonnet-4.6",
+			label: "Claude Sonnet 4.6",
+			cliModel: "claude-sonnet-4.6",
+			effortLevels: ["low", "medium", "high"],
+		},
+		{
+			id: "claude-sonnet-4.5",
+			label: "Claude Sonnet 4.5",
+			cliModel: "claude-sonnet-4.5",
+			effortLevels: [],
+		},
+		{
+			id: "claude-opus-4.5",
+			label: "Claude Opus 4.5",
+			cliModel: "claude-opus-4.5",
+			effortLevels: [],
+		},
+		{
+			id: "claude-haiku-4.5",
+			label: "Claude Haiku 4.5",
+			cliModel: "claude-haiku-4.5",
+			effortLevels: [],
+		},
+		{
+			id: "gemini-2.5-pro",
+			label: "Gemini 2.5 Pro",
+			cliModel: "gemini-2.5-pro",
+			effortLevels: [],
+		},
+		{
+			id: "gpt-5.5",
+			label: "GPT-5.5",
+			cliModel: "gpt-5.5",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5.4",
+			label: "GPT-5.4",
+			cliModel: "gpt-5.4",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5.4-mini",
+			label: "GPT-5.4 mini",
+			cliModel: "gpt-5.4-mini",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5.3-codex",
+			label: "GPT-5.3-Codex",
+			cliModel: "gpt-5.3-codex",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5.2-codex",
+			label: "GPT-5.2-Codex",
+			cliModel: "gpt-5.2-codex",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5.2",
+			label: "GPT-5.2",
+			cliModel: "gpt-5.2",
+			effortLevels: ["low", "medium", "high", "xhigh"],
+		},
+		{
+			id: "gpt-5-mini",
+			label: "GPT-5 mini",
+			cliModel: "gpt-5-mini",
+			effortLevels: ["low", "medium", "high"],
+		},
+		{
+			id: "gpt-4.1",
+			label: "GPT-4.1",
+			cliModel: "gpt-4.1",
+			effortLevels: [],
+		},
+		{
+			id: "gpt-4o",
+			label: "GPT-4o",
+			cliModel: "gpt-4o",
+			effortLevels: [],
+		},
+	],
 	// Static fallback only — `CursorSessionManager.listModels` hits the live
 	// `Cursor.models.list` API for the full set with up-to-date capability
 	// metadata. This list is what shows when the API key isn't configured

@@ -123,7 +123,7 @@ export type DataInfo = {
 	archiveRoot: string;
 };
 
-export type AgentProvider = "claude" | "codex" | "cursor";
+export type AgentProvider = "claude" | "codex" | "cursor" | "copilot";
 
 export type AgentModelOption = {
 	id: string;
@@ -789,12 +789,13 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
-export type AgentLoginProvider = "claude" | "codex" | "cursor";
+export type AgentLoginProvider = "claude" | "codex" | "cursor" | "copilot";
 
 export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	copilot: boolean;
 	codexProvider?: string | null;
 	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
@@ -1009,6 +1010,36 @@ export async function listCursorModels(
 			describeInvokeError(error, "Unable to list Cursor models."),
 		);
 	}
+}
+
+export type CopilotModelEntry = {
+	id: string;
+	label: string;
+	effortLevels: string[];
+};
+
+export async function listCopilotModels(): Promise<CopilotModelEntry[]> {
+	try {
+		return await invoke<CopilotModelEntry[]>("list_copilot_models");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list Copilot models."),
+		);
+	}
+}
+
+export type CopilotAccountInfo = {
+	login: string;
+	name: string | null;
+	avatarUrl: string | null;
+};
+
+export async function getCopilotAccountInfo(): Promise<CopilotAccountInfo | null> {
+	return invoke<CopilotAccountInfo | null>("get_copilot_account_info");
+}
+
+export async function copilotLogout(): Promise<void> {
+	await invoke("copilot_logout");
 }
 
 // ---------------------------------------------------------------------------

@@ -17,9 +17,8 @@ import { cn } from "@/lib/utils";
 const providerLabels: Record<AgentLoginProvider, string> = {
 	claude: "Claude Code",
 	codex: "Codex",
-	// Cursor never reaches the login terminal — kept here only to
-	// satisfy the exhaustive Record type.
 	cursor: "Cursor",
+	copilot: "Copilot",
 };
 
 export function OnboardingTerminalPreview({

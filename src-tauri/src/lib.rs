@@ -225,6 +225,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
+            agents::list_copilot_models,
             agents::list_cursor_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
@@ -250,6 +251,8 @@ pub fn run() {
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::system_commands::get_cli_status,
+            commands::system_commands::get_copilot_account_info,
+            commands::system_commands::copilot_logout,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
             commands::system_commands::get_helmor_skills_status,

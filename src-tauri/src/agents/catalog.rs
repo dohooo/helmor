@@ -56,6 +56,7 @@ fn model_sections_for_inputs(
         .extend(custom_provider_options(custom));
     let mut sections = vec![claude_section];
     sections.push(codex_section());
+    sections.push(copilot_section());
     sections.push(cursor_section_from_prefs(cursor_prefs));
 
     sections
@@ -97,6 +98,47 @@ fn codex_section() -> AgentModelSection {
             codex_model("gpt-5.3-codex", "GPT-5.3-Codex"),
             codex_model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"),
             codex_model("gpt-5.2", "GPT-5.2"),
+        ],
+    }
+}
+
+fn copilot_section() -> AgentModelSection {
+    AgentModelSection {
+        id: "copilot".to_string(),
+        label: "Copilot".to_string(),
+        status: AgentModelSectionStatus::Ready,
+        options: vec![
+            copilot_model_with_effort("claude-opus-4.7", "Claude Opus 4.7", &["medium"]),
+            copilot_model_with_effort(
+                "claude-sonnet-4.6",
+                "Claude Sonnet 4.6",
+                &["low", "medium", "high"],
+            ),
+            copilot_model_with_effort("claude-sonnet-4.5", "Claude Sonnet 4.5", &[]),
+            copilot_model_with_effort("claude-opus-4.5", "Claude Opus 4.5", &[]),
+            copilot_model_with_effort("claude-haiku-4.5", "Claude Haiku 4.5", &[]),
+            copilot_model_with_effort("gemini-2.5-pro", "Gemini 2.5 Pro", &[]),
+            copilot_model_with_effort("gpt-5.5", "GPT-5.5", &["low", "medium", "high", "xhigh"]),
+            copilot_model_with_effort("gpt-5.4", "GPT-5.4", &["low", "medium", "high", "xhigh"]),
+            copilot_model_with_effort(
+                "gpt-5.4-mini",
+                "GPT-5.4 mini",
+                &["low", "medium", "high", "xhigh"],
+            ),
+            copilot_model_with_effort(
+                "gpt-5.3-codex",
+                "GPT-5.3-Codex",
+                &["low", "medium", "high", "xhigh"],
+            ),
+            copilot_model_with_effort(
+                "gpt-5.2-codex",
+                "GPT-5.2-Codex",
+                &["low", "medium", "high", "xhigh"],
+            ),
+            copilot_model_with_effort("gpt-5.2", "GPT-5.2", &["low", "medium", "high", "xhigh"]),
+            copilot_model_with_effort("gpt-5-mini", "GPT-5 mini", &["low", "medium", "high"]),
+            copilot_model_with_effort("gpt-4.1", "GPT-4.1", &[]),
+            copilot_model_with_effort("gpt-4o", "GPT-4o", &[]),
         ],
     }
 }
@@ -322,6 +364,39 @@ fn codex_model(id: &str, label: &str) -> AgentModelOption {
     }
 }
 
+#[allow(dead_code)]
+fn copilot_model(wire_id: &str, label: &str) -> AgentModelOption {
+    copilot_model_with_effort(wire_id, label, &["low", "medium", "high", "xhigh"])
+}
+
+fn copilot_model_with_effort(
+    wire_id: &str,
+    label: &str,
+    effort_levels: &[&str],
+) -> AgentModelOption {
+    AgentModelOption {
+        id: namespaced_copilot_id(wire_id),
+        provider: "copilot".to_string(),
+        label: label.to_string(),
+        cli_model: wire_id.to_string(),
+        provider_key: None,
+        effort_levels: effort_levels
+            .iter()
+            .map(|level| level.to_string())
+            .collect(),
+        supports_fast_mode: false,
+        supports_context_usage: false,
+    }
+}
+
+fn namespaced_copilot_id(wire_id: &str) -> String {
+    if wire_id.starts_with("copilot-") {
+        wire_id.to_string()
+    } else {
+        format!("copilot-{wire_id}")
+    }
+}
+
 /// Build a Cursor option. Cursor wire ids collide with claude/codex
 /// (e.g. `default` = Claude Opus), so Helmor `id` is namespaced
 /// `cursor-<wire>`; `cli_model` keeps the bare wire id for `agent.send`.
@@ -395,16 +470,23 @@ pub fn resolve_model(model_id: &str, provider_hint: Option<&str>) -> ResolvedMod
         Some("cursor") => "cursor",
         Some("codex") => "codex",
         Some("claude") => "claude",
+        Some("copilot") => "copilot",
+        _ if model_id.starts_with("copilot-") => "copilot",
         _ if model_id.starts_with("cursor-") => "cursor",
         _ if model_id.starts_with("composer-") => "cursor",
         _ if model_id.starts_with("gpt-") => "codex",
         _ => "claude",
     };
 
-    // Strip `cursor-` for SDK; `composer-*` had no prefix.
+    // Strip namespace prefix for SDK; bare wire id is what the CLI expects.
     let cli_model = if provider == "cursor" {
         model_id
             .strip_prefix("cursor-")
+            .unwrap_or(model_id)
+            .to_string()
+    } else if provider == "copilot" {
+        model_id
+            .strip_prefix("copilot-")
             .unwrap_or(model_id)
             .to_string()
     } else {
@@ -430,7 +512,7 @@ mod tests {
         // `None` cursor_prefs → cursor section degrades to just Auto.
         let sections = model_sections_for_inputs(Vec::new(), None);
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].status, AgentModelSectionStatus::Ready);
         assert_eq!(
@@ -468,17 +550,40 @@ mod tests {
             .iter()
             .all(|model| model.supports_fast_mode));
 
-        assert_eq!(sections[2].id, "cursor");
+        assert_eq!(sections[2].id, "copilot");
         assert_eq!(sections[2].status, AgentModelSectionStatus::Ready);
-        // Without an `app.cursor_provider` row in the test DB, the Cursor
-        // section degrades to the hard fallback: a single Auto entry.
-        // Helmor id is the namespaced `cursor-default`; cli_model is the
-        // bare `default` Cursor's SDK expects.
-        let auto = &sections[2].options[0];
+        assert_eq!(
+            sections[2]
+                .options
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "copilot-claude-opus-4.7",
+                "copilot-claude-sonnet-4.6",
+                "copilot-claude-sonnet-4.5",
+                "copilot-claude-opus-4.5",
+                "copilot-claude-haiku-4.5",
+                "copilot-gemini-2.5-pro",
+                "copilot-gpt-5.5",
+                "copilot-gpt-5.4",
+                "copilot-gpt-5.4-mini",
+                "copilot-gpt-5.3-codex",
+                "copilot-gpt-5.2-codex",
+                "copilot-gpt-5.2",
+                "copilot-gpt-5-mini",
+                "copilot-gpt-4.1",
+                "copilot-gpt-4o",
+            ]
+        );
+
+        assert_eq!(sections[3].id, "cursor");
+        assert_eq!(sections[3].status, AgentModelSectionStatus::Ready);
+        let auto = &sections[3].options[0];
         assert_eq!(auto.id, "cursor-default");
         assert_eq!(auto.cli_model, "default");
         assert_eq!(auto.provider, "cursor");
-        assert_eq!(sections[2].options.len(), 1);
+        assert_eq!(sections[3].options.len(), 1);
     }
 
     #[test]
@@ -495,7 +600,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].id, "claude");
         assert_eq!(sections[0].label, "Claude Code");
         assert_eq!(

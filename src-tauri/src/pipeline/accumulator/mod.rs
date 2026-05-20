@@ -10,6 +10,7 @@
 //!   collection helpers used by both submodules.
 
 mod codex;
+mod copilot;
 mod cursor;
 mod streaming;
 
@@ -150,6 +151,10 @@ pub struct StreamAccumulator {
     // ── Cursor state ─────────────────────────────────────────────────
     /// Per-run cursor state; see `cursor.rs`.
     cursor_state: cursor::CursorRunState,
+
+    // ── Copilot state ───────────────────────────────────────────────
+    /// Per-run copilot state; see `copilot.rs`.
+    pub(super) copilot_state: copilot::CopilotRunState,
 
     // ── Coverage guard ───────────────────────────────────────────────
     /// Top-level event types that fell through `push_event`'s match
@@ -310,6 +315,7 @@ impl StreamAccumulator {
             codex_partial_idx: None,
             codex_turn_started_at: None,
             cursor_state: cursor::new_run_state(),
+            copilot_state: copilot::new_run_state(),
             dropped_event_types: Vec::new(),
         }
     }
@@ -491,6 +497,16 @@ impl StreamAccumulator {
             Some("cursor/assistant") => cursor::handle_assistant_delta(self, value),
             Some("cursor/tool_call_start") => cursor::handle_tool_call_start(self, value),
             Some("cursor/tool_call_end") => cursor::handle_tool_call_end(self, value),
+
+            // ── Copilot ACP events (namespaced by sidecar manager) ───
+            Some("copilot/session_init") => PushOutcome::NoOp,
+            Some("copilot/status") => copilot::handle_status(self, value),
+            Some("copilot/thinking") => copilot::handle_thinking(self, value),
+            Some("copilot/assistant") => copilot::handle_assistant_delta(self, value),
+            Some("copilot/tool_call_start") => copilot::handle_tool_call_start(self, value),
+            Some("copilot/tool_call_end") => copilot::handle_tool_call_end(self, value),
+            Some("copilot/tool_call_update") => copilot::handle_tool_call_update(self, value),
+            Some("copilot/plan") => PushOutcome::NoOp,
 
             // ── Codex informational notifications (no render) ────────
             Some("thread/status/changed")

@@ -47,6 +47,7 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    pub copilot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -394,6 +395,7 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
             codex_provider: None,
             codex_auth_method: None,
         },
@@ -534,6 +536,7 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
             claude: claude_login_ready(),
             codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
             codex_provider: None,
             codex_auth_method: None,
         };
@@ -665,6 +668,7 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
             claude: claude_login_ready(),
             codex: codex.ready,
             cursor: cursor_login_ready(),
+            copilot: copilot_login_ready(),
             codex_provider: codex.provider,
             codex_auth_method: codex.auth_method.map(str::to_string),
         })
@@ -801,10 +805,97 @@ fn env_var_is_present(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn copilot_login_ready() -> bool {
+    match std::process::Command::new("copilot")
+        .args(["auth", "status"])
+        .output()
+    {
+        Ok(output) if output.status.success() => true,
+        Ok(_) => {
+            // Fall back to `gh auth status` since Copilot uses GitHub auth.
+            match std::process::Command::new("gh")
+                .args(["auth", "status"])
+                .output()
+            {
+                Ok(gh_output) => gh_output.status.success(),
+                Err(_) => false,
+            }
+        }
+        Err(_) => {
+            tracing::debug!("Copilot CLI not found, checking gh auth");
+            match std::process::Command::new("gh")
+                .args(["auth", "status"])
+                .output()
+            {
+                Ok(gh_output) => gh_output.status.success(),
+                Err(_) => false,
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotAccountInfo {
+    pub login: String,
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_copilot_account_info() -> CmdResult<Option<CopilotAccountInfo>> {
+    run_blocking(|| {
+        let output = std::process::Command::new("gh")
+            .args(["api", "user", "--jq", ".login,.name,.avatar_url"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = stdout.trim().lines().collect();
+                if lines.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(CopilotAccountInfo {
+                    login: lines.first().unwrap_or(&"").to_string(),
+                    name: lines
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                    avatar_url: lines
+                        .get(2)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                }))
+            }
+            _ => Ok(None),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn copilot_logout() -> CmdResult<()> {
+    run_blocking(|| {
+        let output = std::process::Command::new("copilot")
+            .args(["auth", "logout"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => Ok(()),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                anyhow::bail!("copilot auth logout failed: {}", stderr.trim())
+            }
+            Err(e) => anyhow::bail!("Failed to run copilot auth logout: {e}"),
+        }
+    })
+    .await
+}
+
 fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
     match provider {
         "claude" => Ok("claude auth login"),
         "codex" => Ok("codex login"),
+        "copilot" => Ok("copilot auth login"),
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     }
 }

@@ -230,6 +230,13 @@ pub async fn list_cursor_models(
 }
 
 #[tauri::command]
+pub async fn list_copilot_models(
+    sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
+) -> CmdResult<Vec<queries::CopilotModelEntry>> {
+    queries::fetch_copilot_models(sidecar.inner())
+}
+
+#[tauri::command]
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,

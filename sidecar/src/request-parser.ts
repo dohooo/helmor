@@ -83,7 +83,12 @@ export function optionalObject(
 }
 
 export function parseProvider(value: unknown): Provider {
-	if (value === "claude" || value === "codex" || value === "cursor")
+	if (
+		value === "claude" ||
+		value === "codex" ||
+		value === "cursor" ||
+		value === "copilot"
+	)
 		return value;
 	throw new Error(`unknown provider: ${String(value)}`);
 }

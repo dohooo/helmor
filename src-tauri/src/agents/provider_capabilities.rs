@@ -117,6 +117,17 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
             requires_api_key: true,
             permission_modes: vec![PermissionMode::Default],
         },
+        "copilot" => ProviderCapabilities {
+            provider: "copilot".into(),
+            display_name: "Copilot".into(),
+            supports_plan_mode: true,
+            supports_active_goal: false,
+            supports_context_usage: false,
+            supports_steer: false,
+            supports_slash_commands: true,
+            requires_api_key: false,
+            permission_modes: vec![PermissionMode::Default, PermissionMode::BypassPermissions],
+        },
         // Default arm covers "claude" and anything we haven't onboarded
         // yet — keeping the safe defaults equal to Claude's behaviour
         // means an unknown id never accidentally disables the
@@ -143,7 +154,7 @@ pub fn capabilities_for_provider(provider: &str) -> ProviderCapabilities {
 /// Convenience: list every provider Helmor ships today. Frontends use
 /// this to render the capability table in settings (eventually), and
 /// tests use it to assert there are no holes in the matrix.
-pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor"];
+pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "cursor", "copilot"];
 
 #[cfg(test)]
 mod tests {
@@ -233,12 +244,27 @@ mod tests {
     }
 
     #[test]
-    fn unknown_provider_falls_back_to_claude_defaults() {
-        // Forward-compat: a future provider id (e.g. "copilot") that
-        // lands without a matrix update must not break composer UX —
-        // we default to Claude's feature surface, which is the
-        // broadest, until the matrix is updated.
+    fn copilot_capabilities() {
         let caps = capabilities_for_provider("copilot");
+        assert_eq!(caps.provider, "copilot");
+        assert!(caps.supports_plan_mode, "Copilot ACP emits plan updates");
+        assert!(!caps.supports_active_goal);
+        assert!(
+            !caps.supports_context_usage,
+            "Copilot ACP doesn't expose token usage yet"
+        );
+        assert!(!caps.supports_steer);
+        assert!(caps.supports_slash_commands);
+        assert!(!caps.requires_api_key, "Copilot uses GitHub auth via CLI");
+        assert_eq!(
+            caps.permission_modes,
+            vec![PermissionMode::Default, PermissionMode::BypassPermissions]
+        );
+    }
+
+    #[test]
+    fn unknown_provider_falls_back_to_claude_defaults() {
+        let caps = capabilities_for_provider("pi");
         let claude = capabilities_for_provider("claude");
         assert_eq!(caps.provider, claude.provider);
         assert_eq!(caps.supports_plan_mode, claude.supports_plan_mode);
