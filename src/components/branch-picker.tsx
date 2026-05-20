@@ -98,7 +98,7 @@ export function BranchPickerPopover({
 					<CommandInput placeholder="Search branches..." />
 					<CommandList className="max-h-52 px-1" style={{ marginRight: -3 }}>
 						{loading && names.length === 0 ? (
-							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-muted-foreground">
+							<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
 								<LoaderCircle
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
@@ -116,7 +116,7 @@ export function BranchPickerPopover({
 									onSelect(name);
 									setOpen(false);
 								}}
-								className="gap-2 rounded-lg text-[12px]"
+								className="gap-2 rounded-lg text-small"
 							>
 								<GitBranch
 									className="size-3.5 shrink-0 text-muted-foreground"

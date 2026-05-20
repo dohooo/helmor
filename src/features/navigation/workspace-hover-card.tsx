@@ -84,7 +84,7 @@ function CompactStat({
 			aria-label={label}
 		>
 			<Icon className="size-2.5 shrink-0" strokeWidth={2.2} />
-			<span className="text-[10px] tabular-nums leading-none">{value}</span>
+			<span className="text-micro tabular-nums leading-none">{value}</span>
 		</span>
 	);
 }
@@ -342,7 +342,7 @@ function StreamingElapsed({
 
 	return (
 		<span
-			className="mt-0.5 shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/80"
+			className="mt-0.5 shrink-0 font-mono text-micro tabular-nums text-muted-foreground/80"
 			title={`Running for ${formatElapsed(elapsed)}`}
 			aria-label={`Running for ${formatElapsed(elapsed)}`}
 		>
@@ -416,7 +416,7 @@ function LiveSessionPreview({
 
 	if (blocks.length === 0) {
 		return (
-			<span className="text-[11px] italic text-muted-foreground/70">
+			<span className="text-mini italic text-muted-foreground/70">
 				Thinking…
 			</span>
 		);
@@ -428,11 +428,11 @@ function LiveSessionPreview({
 	return (
 		<div
 			className={cn(
-				"flex max-h-32 flex-col-reverse gap-1.5 overflow-hidden text-[11px] leading-[1.4]",
+				"flex max-h-32 flex-col-reverse gap-1.5 overflow-hidden text-mini leading-[1.4]",
 				// Compact streamdown prose so default rhythm fits the small pane.
 				"[&_p]:my-0 [&_pre]:my-1 [&_pre]:max-h-20 [&_pre]:overflow-hidden",
-				"[&_ul]:my-1 [&_ol]:my-1 [&_h1]:text-[12px] [&_h2]:text-[12px] [&_h3]:text-[12px]",
-				"[&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_code]:text-[10px]",
+				"[&_ul]:my-1 [&_ol]:my-1 [&_h1]:text-small [&_h2]:text-small [&_h3]:text-small",
+				"[&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_code]:text-micro",
 			)}
 			style={{
 				maskImage: "linear-gradient(to top, black 88%, transparent 100%)",
@@ -444,7 +444,7 @@ function LiveSessionPreview({
 					return (
 						<div
 							key={block.key}
-							className="flex items-baseline gap-1 font-mono text-[10px] text-muted-foreground"
+							className="flex items-baseline gap-1 font-mono text-micro text-muted-foreground"
 						>
 							<span className="text-muted-foreground/50">›</span>
 							<span className="truncate">{block.label}</span>
@@ -654,7 +654,7 @@ export function WorkspaceHoverCard({
 								}
 							/>
 							{subtitle ? (
-								<span className="truncate text-[11px] text-muted-foreground">
+								<span className="truncate text-mini text-muted-foreground">
 									{subtitle}
 								</span>
 							) : null}
@@ -682,7 +682,7 @@ export function WorkspaceHoverCard({
 						{isSending ? (
 							<HelmorThinkingIndicator size={14} className="mt-0.5 shrink-0" />
 						) : null}
-						<div className="min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground line-clamp-2">
+						<div className="min-w-0 flex-1 text-body font-semibold leading-snug text-foreground line-clamp-2">
 							{title}
 						</div>
 						{isSending ? (
@@ -702,14 +702,14 @@ export function WorkspaceHoverCard({
 
 					{/* PR title (only when it isn't already the main title). */}
 					{trimmedPrTitle && trimmedPrTitle !== title ? (
-						<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+						<div className="flex items-center gap-1.5 text-mini text-muted-foreground">
 							<GitPullRequest className="size-3 shrink-0" strokeWidth={1.8} />
 							<span className="truncate">{trimmedPrTitle}</span>
 						</div>
 					) : null}
 
 					{/* Footer: session count on the left, last-activity timestamp on the right. */}
-					<div className="flex items-center justify-between gap-2 pt-1 text-[11px] text-muted-foreground/80">
+					<div className="flex items-center justify-between gap-2 pt-1 text-mini text-muted-foreground/80">
 						<div className="flex items-center gap-2.5">
 							{sessionCount > 0 ? (
 								<span className="tabular-nums">

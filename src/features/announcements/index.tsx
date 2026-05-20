@@ -140,7 +140,7 @@ function ReleaseAnnouncementToast({
 						autoplay={false}
 						className="shrink-0 opacity-90"
 					/>
-					<div className="truncate text-[13px] font-semibold leading-none text-foreground">
+					<div className="truncate text-ui font-semibold leading-none text-foreground">
 						New in v{announcement.version}
 					</div>
 				</div>
@@ -226,7 +226,7 @@ function ReleaseAnnouncementListItem({
 	const action = item.action;
 
 	return (
-		<li className="grid grid-cols-[18px_1fr] gap-[2px] text-[12px] leading-relaxed text-muted-foreground">
+		<li className="grid grid-cols-[18px_1fr] gap-[2px] text-small leading-relaxed text-muted-foreground">
 			<span
 				className="leading-relaxed text-muted-foreground/70"
 				aria-hidden="true"
@@ -238,7 +238,7 @@ function ReleaseAnnouncementListItem({
 				{action ? (
 					<button
 						type="button"
-						className="ml-1.5 inline cursor-interactive align-baseline text-[12px] leading-[inherit] font-semibold text-foreground hover:underline"
+						className="ml-1.5 inline cursor-interactive align-baseline text-small leading-[inherit] font-semibold text-foreground hover:underline"
 						onClick={() => onRunAction(action.value)}
 					>
 						<ActionIcon

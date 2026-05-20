@@ -149,7 +149,7 @@ function ColorThemePicker({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-8 w-[180px] justify-between gap-2 px-2 text-[13px] font-normal"
+					className="h-8 w-[180px] justify-between gap-2 px-2 text-ui font-normal"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						<ThemeSwatch option={current} isLight={isLight} size={16} />
@@ -176,7 +176,7 @@ function ColorThemePicker({
 									setOpen(false);
 								}}
 								className={cn(
-									"flex h-8 cursor-interactive items-center justify-between gap-2 rounded-md px-2 text-[13px] text-foreground transition-colors hover:bg-accent",
+									"flex h-8 cursor-interactive items-center justify-between gap-2 rounded-md px-2 text-ui text-foreground transition-colors hover:bg-accent",
 									selected && "bg-accent/60",
 								)}
 							>
@@ -276,7 +276,7 @@ export function AppearancePanel({
 						<ToggleGroupItem
 							key={value}
 							value={value}
-							className="gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+							className="gap-1.5 rounded-lg px-3 py-1.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 						>
 							<Icon className="size-3.5" strokeWidth={1.8} />
 							{label}

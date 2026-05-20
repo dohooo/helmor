@@ -85,7 +85,7 @@ export function WorkspaceHeaderActions({
 						<TooltipContent
 							side="bottom"
 							sideOffset={4}
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>{`Open in ${preferredEditor.name}`}</span>
 							{openPreferredEditorShortcut ? (
@@ -180,7 +180,7 @@ export function WorkspaceHeaderActions({
 						</TooltipTrigger>
 						<TooltipContent
 							side="bottom"
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>
 								{inspectorCollapsed

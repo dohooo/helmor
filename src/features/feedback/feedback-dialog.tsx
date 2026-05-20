@@ -135,7 +135,7 @@ export function FeedbackDialog({
 				}}
 			>
 				<DialogHeader>
-					<DialogTitle className="text-[13px] font-medium tracking-[-0.01em]">
+					<DialogTitle className="text-ui font-medium tracking-[-0.01em]">
 						{state.step.kind === "input"
 							? "Send feedback"
 							: "Contribute to Helmor"}

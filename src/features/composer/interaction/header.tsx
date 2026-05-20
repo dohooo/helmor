@@ -45,7 +45,7 @@ export function InteractionHeader({
 				/>
 				<h3
 					className={cn(
-						"min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground",
+						"min-w-0 flex-1 text-body font-semibold leading-snug text-foreground",
 						truncateTitle && "truncate",
 					)}
 				>
@@ -54,7 +54,7 @@ export function InteractionHeader({
 				{trailing}
 			</div>
 			{description ? (
-				<p className="pl-6 text-xs text-muted-foreground">{description}</p>
+				<p className="pl-6 text-small text-muted-foreground">{description}</p>
 			) : null}
 		</div>
 	);

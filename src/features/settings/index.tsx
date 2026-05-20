@@ -253,7 +253,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 																	className="size-4 shrink-0 rounded"
 																/>
 															) : (
-																<span className="flex size-4 shrink-0 items-center justify-center rounded bg-muted text-[8px] font-semibold uppercase text-muted-foreground">
+																<span className="flex size-4 shrink-0 items-center justify-center rounded bg-muted text-nano font-semibold uppercase text-muted-foreground">
 																	{repo.repoInitials?.slice(0, 2)}
 																</span>
 															)}
@@ -273,13 +273,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 					<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 						{/* Header */}
 						<div className="flex items-baseline gap-3 border-b border-border/40 px-8 py-4">
-							<DialogTitle className="text-[15px] font-semibold text-foreground">
+							<DialogTitle className="text-title font-semibold text-foreground">
 								{activeRepo
 									? activeRepo.name
 									: titleSectionLabel(activeSection, repositories)}
 							</DialogTitle>
 							{!activeRepo && SECTION_TITLE_CAPTIONS[activeSection] ? (
-								<span className="truncate text-[12px] text-muted-foreground/70">
+								<span className="truncate text-small text-muted-foreground/70">
 									{SECTION_TITLE_CAPTIONS[activeSection]}
 								</span>
 							) : null}
@@ -385,14 +385,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 											<ToggleGroupItem
 												value="queue"
 												aria-label="Queue"
-												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Queue
 											</ToggleGroupItem>
 											<ToggleGroupItem
 												value="steer"
 												aria-label="Steer"
-												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Steer
 											</ToggleGroupItem>
@@ -457,14 +457,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 											<ToggleGroupItem
 												value="summarized"
 												aria-label="Summarized"
-												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Summarized
 											</ToggleGroupItem>
 											<ToggleGroupItem
 												value="omitted"
 												aria-label="Omitted"
-												className="h-7 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+												className="h-7 rounded-md px-2.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 											>
 												Omitted
 											</ToggleGroupItem>
@@ -688,7 +688,7 @@ function ModelSettingRow({
 				<DropdownMenu>
 					<DropdownMenuTrigger
 						className={cn(
-							"flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+							"flex h-8 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-ui text-foreground hover:bg-muted/50",
 							"min-w-0 flex-1 gap-1.5",
 						)}
 					>
@@ -729,7 +729,7 @@ function ModelSettingRow({
 					<DropdownMenuTrigger
 						disabled={!supportsEffort}
 						className={cn(
-							"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px]",
+							"flex h-8 items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-ui",
 							"shrink-0 gap-1.5",
 							supportsEffort
 								? "cursor-interactive text-foreground hover:bg-muted/50"
@@ -753,15 +753,15 @@ function ModelSettingRow({
 				</DropdownMenu>
 				<div
 					className={cn(
-						"flex h-8 cursor-interactive items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+						"flex h-8 cursor-interactive items-center rounded-lg border border-border/50 bg-muted/30 px-3 text-ui text-foreground hover:bg-muted/50",
 						"shrink-0 gap-2",
 					)}
 				>
 					<span
 						className={
 							supportsFastMode
-								? "text-[13px] text-foreground"
-								: "text-[13px] text-muted-foreground"
+								? "text-ui text-foreground"
+								: "text-ui text-muted-foreground"
 						}
 					>
 						Fast mode
@@ -800,7 +800,7 @@ export function SettingsButton({
 			<TooltipContent
 				side="top"
 				sideOffset={4}
-				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 			>
 				<span className="leading-none">Settings</span>
 				{shortcut ? (

@@ -177,7 +177,7 @@ export function StreamingReasoningGapScenario() {
 
 	return (
 		<div className="flex h-screen flex-col bg-background text-foreground">
-			<div className="flex items-center gap-3 border-b border-border/50 px-4 py-2 text-xs">
+			<div className="flex items-center gap-3 border-b border-border/50 px-4 py-2 text-small">
 				<span className="font-medium">Streaming Reasoning Gap</span>
 				<span className="text-muted-foreground">
 					step <span data-testid="step-index">{stepIndex}</span> /{" "}

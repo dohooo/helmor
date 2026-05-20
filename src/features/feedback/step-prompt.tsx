@@ -38,7 +38,7 @@ export function StepPrompt({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<p className="text-[12px] leading-snug text-muted-foreground">
+			<p className="text-small leading-snug text-muted-foreground">
 				Tweak this if you want — it's what the agent starts with.
 				{existing ? " Reusing your local helmor repo." : null}
 			</p>
@@ -47,7 +47,7 @@ export function StepPrompt({
 				value={draftPrompt}
 				onChange={(event) => onEditPrompt(event.target.value)}
 				rows={10}
-				className="text-[12px] leading-relaxed"
+				className="text-small leading-relaxed"
 			/>
 
 			<div className="flex items-center justify-end">

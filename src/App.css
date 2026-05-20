@@ -821,6 +821,16 @@ body {
 	--color-presence-online: var(--presence-online);
 	--color-presence-away: var(--presence-away);
 
+	/* Typography scale — exposes color-theme.css tokens as Tailwind utilities. */
+	--text-nano: var(--text-nano);
+	--text-micro: var(--text-micro);
+	--text-mini: var(--text-mini);
+	--text-small: var(--text-small);
+	--text-ui: var(--text-ui);
+	--text-body: var(--text-body);
+	--text-title: var(--text-title);
+	--text-heading: var(--text-heading);
+
 	/* ── Geometry ──────────────────────────────────────────────────────── */
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);

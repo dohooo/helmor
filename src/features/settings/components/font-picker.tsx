@@ -48,10 +48,7 @@ export function FontPicker({
 			}}
 			placeholder={effectivePlaceholder}
 			aria-label={ariaLabel}
-			className={cn(
-				"h-7 w-48 px-2 py-0 font-mono text-[10px] md:text-[10px]",
-				className,
-			)}
+			className={cn("h-7 w-48 px-2 py-0 font-mono text-micro", className)}
 			spellCheck={false}
 		/>
 	);

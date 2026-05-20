@@ -102,7 +102,7 @@ export function CodexGoalBanner({
 		<div
 			data-testid="codex-goal-banner"
 			className={cn(
-				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-xs",
+				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-small",
 				hasQueueBelow
 					? "mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
 					: "mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
@@ -113,18 +113,18 @@ export function CodexGoalBanner({
 				strokeWidth={1.8}
 				aria-hidden
 			/>
-			<span className="truncate text-[12px] font-medium tracking-[0.01em] text-foreground">
+			<span className="truncate text-small font-medium tracking-[0.01em] text-foreground">
 				{goal.objective}
 			</span>
 			<span
 				className={cn(
-					"shrink-0 text-[11px] uppercase tracking-wider",
+					"shrink-0 text-mini uppercase tracking-wider",
 					STATUS_TONE[goal.status],
 				)}
 			>
 				{STATUS_LABEL[goal.status]}
 			</span>
-			<span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+			<span className="shrink-0 text-mini tabular-nums text-muted-foreground/70">
 				Used: {budget ? `${used} / ${budget}` : used}
 			</span>
 			<div className="ml-auto flex shrink-0 items-center gap-1">
@@ -136,7 +136,7 @@ export function CodexGoalBanner({
 						aria-label="Resume goal"
 						disabled={isPending}
 						onClick={onResume}
-						className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+						className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 					>
 						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
 						<span>Resume</span>
@@ -149,7 +149,7 @@ export function CodexGoalBanner({
 					aria-label="Clear goal"
 					disabled={isPending}
 					onClick={() => clearMutation.mutate()}
-					className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+					className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 				>
 					<X className="size-[13px] shrink-0" strokeWidth={1.8} />
 					<span>Clear</span>

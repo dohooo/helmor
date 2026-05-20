@@ -315,7 +315,7 @@ export function GitSectionHeader({
 											<GithubBrandIcon size={12} />
 										)}
 									</span>
-									<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-[13px] font-light">
+									<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-ui font-light">
 										{isMergeRequest ? "!" : "#"}
 										{changeRequest.number}
 									</span>
@@ -335,7 +335,7 @@ export function GitSectionHeader({
 								<TooltipTrigger asChild>{button}</TooltipTrigger>
 								<TooltipContent
 									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-small leading-tight"
 								>
 									<span className="truncate">{openLabel}</span>
 									{openChangeRequestShortcut ? (
@@ -402,7 +402,7 @@ export function GitSectionHeader({
 								{commitShortcut ? (
 									<TooltipContent
 										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 									>
 										<span>
 											{getCommitButtonLabel(

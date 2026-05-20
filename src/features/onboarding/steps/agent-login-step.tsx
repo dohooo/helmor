@@ -89,7 +89,7 @@ export function AgentLoginStep({
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
 						Log in to your agents
 					</h2>
-					<p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
+					<p className="mt-3 max-w-xl text-body leading-6 text-muted-foreground">
 						Helmor uses your local Claude Code and Codex login sessions. You can
 						log in now, or continue and log in later.
 					</p>
@@ -116,11 +116,11 @@ export function AgentLoginStep({
 											<Icon className="size-4" />
 										</div>
 										<div className="flex min-w-0 flex-1 items-baseline gap-2">
-											<span className="truncate text-[13px] font-medium leading-none text-foreground">
+											<span className="truncate text-ui font-medium leading-none text-foreground">
 												{label}
 											</span>
 											<span
-												className={`truncate text-[11px] leading-none ${subLabelTone}`}
+												className={`truncate text-mini leading-none ${subLabelTone}`}
 											>
 												{subLabel}
 											</span>
@@ -155,7 +155,7 @@ export function AgentLoginStep({
 							variant="ghost"
 							size="lg"
 							onClick={onBack}
-							className="h-10 gap-2 px-4 text-[0.95rem]"
+							className="h-10 gap-2 px-4 text-title"
 						>
 							<ArrowLeft data-icon="inline-start" className="size-4" />
 							Back
@@ -164,7 +164,7 @@ export function AgentLoginStep({
 							type="button"
 							size="lg"
 							onClick={onNext}
-							className="h-10 gap-2 px-4 text-[0.95rem]"
+							className="h-10 gap-2 px-4 text-title"
 						>
 							Next
 							<ArrowRight data-icon="inline-end" className="size-4" />

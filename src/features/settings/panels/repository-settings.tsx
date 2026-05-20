@@ -129,10 +129,10 @@ export function RepositorySettingsPanel({
 			<ForgeAccountHeader repo={repo} workspaceId={workspaceId} />
 
 			<div className="py-5">
-				<div className="text-[13px] font-medium leading-snug text-foreground">
+				<div className="text-ui font-medium leading-snug text-foreground">
 					Remote origin
 				</div>
-				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				<div className="mt-1 text-small leading-snug text-muted-foreground">
 					Where should we push, pull, and create PRs?
 				</div>
 				<div className="mt-3">
@@ -143,7 +143,7 @@ export function RepositorySettingsPanel({
 							if (next) fetchRemotes();
 						}}
 					>
-						<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong">
+						<PopoverTrigger className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong">
 							<span className="truncate">{currentRemote}</span>
 							<ChevronDown
 								className="size-3 shrink-0 text-app-muted"
@@ -159,7 +159,7 @@ export function RepositorySettingsPanel({
 											key={remote}
 											value={remote}
 											onSelect={() => handleRemoteSelect(remote)}
-											className="flex items-center justify-between gap-2 px-1.5 py-1 text-[12px]"
+											className="flex items-center justify-between gap-2 px-1.5 py-1 text-small"
 										>
 											<span
 												className={cn(
@@ -179,19 +179,19 @@ export function RepositorySettingsPanel({
 						</PopoverContent>
 					</Popover>
 					{remoteError && (
-						<p className="mt-2 text-[12px] text-red-400/90">{remoteError}</p>
+						<p className="mt-2 text-small text-red-400/90">{remoteError}</p>
 					)}
 					{remoteNotice && (
-						<p className="mt-2 text-[12px] text-amber-400/90">{remoteNotice}</p>
+						<p className="mt-2 text-small text-amber-400/90">{remoteNotice}</p>
 					)}
 				</div>
 			</div>
 
 			<div className="py-5">
-				<div className="text-[13px] font-medium leading-snug text-foreground">
+				<div className="text-ui font-medium leading-snug text-foreground">
 					Branch new workspaces from
 				</div>
-				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				<div className="mt-1 text-small leading-snug text-muted-foreground">
 					Each workspace is an isolated copy of your codebase.
 				</div>
 				<div className="mt-3">
@@ -204,7 +204,7 @@ export function RepositorySettingsPanel({
 					>
 						<button
 							type="button"
-							className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-[13px] font-medium text-app-foreground transition-colors hover:border-app-border-strong"
+							className="inline-flex cursor-interactive items-center gap-1 rounded-lg border border-app-border/40 bg-app-base/30 px-3 py-2 text-ui font-medium text-app-foreground transition-colors hover:border-app-border-strong"
 						>
 							<GitBranch
 								className="size-3.5 text-app-foreground-soft"
@@ -219,7 +219,7 @@ export function RepositorySettingsPanel({
 							/>
 						</button>
 					</BranchPickerPopover>
-					{error && <p className="mt-2 text-[12px] text-red-400/90">{error}</p>}
+					{error && <p className="mt-2 text-small text-red-400/90">{error}</p>}
 				</div>
 			</div>
 
@@ -304,11 +304,11 @@ function ForgeAccountHeader({
 		return (
 			<div className="flex items-center gap-3 py-5">
 				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+					<div className="flex items-center gap-1.5 text-ui font-medium text-foreground">
 						{providerIcon}
 						<span>{providerLabel} not connected</span>
 					</div>
-					<div className="mt-0.5 text-[12px] text-muted-foreground">
+					<div className="mt-0.5 text-small text-muted-foreground">
 						Connect a {providerLabel} account to enable the {providerLabel}{" "}
 						workflow for this repo.
 					</div>
@@ -330,18 +330,18 @@ function ForgeAccountHeader({
 				src={account?.avatarUrl}
 				alt={effectiveLogin}
 				fallback={initialsFor(displayName)}
-				fallbackClassName="bg-muted text-[15px] font-semibold uppercase text-muted-foreground"
+				fallbackClassName="bg-muted text-title font-semibold uppercase text-muted-foreground"
 			/>
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-1.5">
-					<span className="truncate text-[13px] font-semibold text-foreground">
+					<span className="truncate text-ui font-semibold text-foreground">
 						{displayName}
 					</span>
-					<span className="truncate text-[12px] text-muted-foreground">
+					<span className="truncate text-small text-muted-foreground">
 						@{effectiveLogin}
 					</span>
 				</div>
-				<div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+				<div className="mt-0.5 flex items-center gap-1 text-mini text-muted-foreground">
 					{providerIcon}
 					<span className="truncate">{providerLabel}</span>
 				</div>

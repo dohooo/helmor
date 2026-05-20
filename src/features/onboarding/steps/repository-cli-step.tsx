@@ -422,7 +422,7 @@ export function RepositoryCliStep({
 				<h2 className="max-w-none text-4xl font-semibold leading-[1.02] tracking-normal text-foreground whitespace-nowrap">
 					Connect accounts
 				</h2>
-				<p className="mt-4 max-w-md text-[12.5px] leading-5 text-muted-foreground">
+				<p className="mt-4 max-w-md text-small leading-5 text-muted-foreground">
 					Each repo uses one of your accounts. Add now or skip — existing logins
 					are picked up automatically. All accounts live in your local gh/glab
 					CLI.
@@ -486,7 +486,7 @@ export function RepositoryCliStep({
 						variant="ghost"
 						size="lg"
 						onClick={onBack}
-						className="h-9 gap-2 px-4 text-[0.95rem]"
+						className="h-9 gap-2 px-4 text-title"
 					>
 						<ArrowLeft data-icon="inline-start" className="size-4" />
 						Back
@@ -495,7 +495,7 @@ export function RepositoryCliStep({
 						type="button"
 						size="lg"
 						onClick={onNext}
-						className="h-9 gap-2 px-4 text-[0.95rem]"
+						className="h-9 gap-2 px-4 text-title"
 					>
 						Next
 						<ArrowRight data-icon="inline-end" className="size-4" />
@@ -594,7 +594,7 @@ function AccountListPanel({
 				{compact ? (
 					<CompactAccountStack rows={rows} addingAccount={addingAccount} />
 				) : rows.length === 0 ? (
-					<div className="flex items-center justify-center px-2 py-4 text-[12px] text-muted-foreground">
+					<div className="flex items-center justify-center px-2 py-4 text-small text-muted-foreground">
 						{loading
 							? "Checking for connected accounts…"
 							: "No accounts connected yet."}
@@ -735,7 +735,7 @@ function PickerButton({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"flex h-full cursor-interactive items-center justify-center gap-2 rounded-lg border text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring/60",
+				"flex h-full cursor-interactive items-center justify-center gap-2 rounded-lg border text-small font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring/60",
 				muted
 					? "border-border/40 bg-card/40 text-muted-foreground hover:border-border/70 hover:bg-card/70 hover:text-foreground"
 					: "border-border/55 bg-card/80 text-foreground hover:bg-card focus-visible:bg-card",
@@ -777,12 +777,12 @@ function CompactAccountStack({
 				{addingLabel ? (
 					<>
 						<Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-						<span className="text-[12px] text-muted-foreground">
+						<span className="text-small text-muted-foreground">
 							{addingLabel}
 						</span>
 					</>
 				) : (
-					<span className="text-[12px] text-muted-foreground">
+					<span className="text-small text-muted-foreground">
 						No accounts connected yet.
 					</span>
 				)}
@@ -807,14 +807,14 @@ function CompactAccountStack({
 					))}
 					{overflow > 0 ? (
 						<div
-							className="flex size-7 items-center justify-center rounded-full border-2 border-card bg-muted text-[10px] font-semibold text-muted-foreground"
+							className="flex size-7 items-center justify-center rounded-full border-2 border-card bg-muted text-micro font-semibold text-muted-foreground"
 							title={`${overflow} more account${overflow === 1 ? "" : "s"}`}
 						>
 							+{overflow}
 						</div>
 					) : null}
 				</div>
-				<span className="truncate text-[12px] text-muted-foreground">
+				<span className="truncate text-small text-muted-foreground">
 					{addingLabel ?? `${rows.length} connected`}
 				</span>
 			</div>
@@ -863,7 +863,7 @@ function StackedAccountAvatar({
 								initialsFor(displayName)
 							)
 						}
-						fallbackClassName="bg-muted text-[10px] font-semibold uppercase text-muted-foreground"
+						fallbackClassName="bg-muted text-micro font-semibold uppercase text-muted-foreground"
 					/>
 				</span>
 			</HoverCardTrigger>
@@ -905,18 +905,18 @@ function AccountRow({
 				src={account?.avatarUrl}
 				alt={row.login}
 				fallback={initialsFor(displayName)}
-				fallbackClassName="bg-muted text-[12px] font-semibold uppercase text-muted-foreground"
+				fallbackClassName="bg-muted text-small font-semibold uppercase text-muted-foreground"
 			/>
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-1.5">
-					<span className="truncate text-[12.5px] font-medium text-foreground">
+					<span className="truncate text-small font-medium text-foreground">
 						{displayName}
 					</span>
-					<span className="truncate text-[11px] text-muted-foreground">
+					<span className="truncate text-mini text-muted-foreground">
 						@{row.login}
 					</span>
 				</div>
-				<div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-muted-foreground">
+				<div className="mt-0.5 flex items-center gap-1 text-micro text-muted-foreground">
 					{providerIcon}
 					<span className="truncate">
 						{row.provider === "gitlab" ? `GitLab · ${row.host}` : "GitHub"}
@@ -1023,10 +1023,10 @@ function GitlabHostSlot({
 					>
 						<X className="size-3.5" strokeWidth={2.4} />
 					</button>
-					<div className="text-sm font-medium text-foreground">
+					<div className="text-body font-medium text-foreground">
 						GitLab domain
 					</div>
-					<p className="mt-1 text-xs leading-5 text-muted-foreground">
+					<p className="mt-1 text-small leading-5 text-muted-foreground">
 						Use gitlab.com or your self-hosted GitLab domain.
 					</p>
 					<form

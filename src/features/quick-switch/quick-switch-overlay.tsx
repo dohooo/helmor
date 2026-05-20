@@ -134,7 +134,7 @@ function QuickSwitchCard({
 					repoInitials={row.repoInitials}
 					repoName={row.repoName}
 					className="size-4 rounded-[5px]"
-					fallbackClassName="text-[7px]"
+					fallbackClassName="text-nano"
 					fallbackIcon={
 						row.mode === "chat" ? (
 							<MessageCircle className="size-[10px]" strokeWidth={1.9} />
@@ -142,7 +142,7 @@ function QuickSwitchCard({
 					}
 				/>
 				<span
-					className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-tight text-foreground"
+					className="min-w-0 flex-1 truncate text-ui font-semibold leading-tight text-foreground"
 					title={title}
 				>
 					{title}
@@ -158,7 +158,7 @@ function QuickSwitchCard({
 			</div>
 
 			{subtitle ? (
-				<div className="flex min-w-0 shrink-0 items-center gap-1 text-[10.5px] text-muted-foreground/90">
+				<div className="flex min-w-0 shrink-0 items-center gap-1 text-micro text-muted-foreground/90">
 					{branch ? (
 						<GitBranch className="size-2.5 shrink-0" strokeWidth={2.2} />
 					) : null}
@@ -171,7 +171,7 @@ function QuickSwitchCard({
 			{/* Always mount: fixes card height regardless of preview content. */}
 			<div
 				data-testid="quick-switch-preview"
-				className="flex min-h-0 flex-1 flex-col-reverse gap-1 overflow-hidden text-[10.5px] leading-[1.4]"
+				className="flex min-h-0 flex-1 flex-col-reverse gap-1 overflow-hidden text-micro leading-[1.4]"
 				style={
 					hasBlocks
 						? {
@@ -189,7 +189,7 @@ function QuickSwitchCard({
 								return (
 									<div
 										key={block.key}
-										className="flex items-baseline gap-1 truncate font-mono text-[10px] text-muted-foreground/85"
+										className="flex items-baseline gap-1 truncate font-mono text-micro text-muted-foreground/85"
 									>
 										<span className="text-muted-foreground/50">›</span>
 										<span className="truncate">{block.label}</span>

@@ -118,7 +118,7 @@ function SidebarRepoFilterPicker({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-8 w-full justify-between rounded-md border-border/70 bg-muted/30 px-2 text-[13px] font-normal"
+					className="h-8 w-full justify-between rounded-md border-border/70 bg-muted/30 px-2 text-ui font-normal"
 				>
 					<span className="truncate">{label}</span>
 					<ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -197,7 +197,7 @@ export function SidebarViewPopover({
 				<TooltipContent
 					side="top"
 					sideOffset={4}
-					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 				>
 					<span>Filter and sort</span>
 					{shortcut ? (
@@ -210,7 +210,7 @@ export function SidebarViewPopover({
 			</Tooltip>
 			<PopoverContent align="start" className="w-[260px] gap-2 p-2">
 				<div className="grid gap-1 px-1">
-					<div className="text-[12px] font-medium text-muted-foreground">
+					<div className="text-mini font-medium text-muted-foreground">
 						Repository
 					</div>
 					<SidebarRepoFilterPicker
@@ -220,7 +220,7 @@ export function SidebarViewPopover({
 					/>
 				</div>
 				<div className="h-px bg-border/60" />
-				<div className="px-1 text-[12px] font-medium text-muted-foreground">
+				<div className="px-1 text-mini font-medium text-muted-foreground">
 					Group by
 				</div>
 				<div className="grid gap-0.5">
@@ -236,7 +236,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-ui hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() =>
 									onGroupingChange?.(option.value as SidebarGrouping)
 								}
@@ -251,7 +251,7 @@ export function SidebarViewPopover({
 					})}
 				</div>
 				<div className="h-px bg-border/60" />
-				<div className="px-1 text-[12px] font-medium text-muted-foreground">
+				<div className="px-1 text-mini font-medium text-muted-foreground">
 					Sort by
 				</div>
 				<div className="grid gap-0.5">
@@ -264,7 +264,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-[13px] hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-ui hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() => onSortChange?.(option.value)}
 							>
 								<Icon className="size-3.5 shrink-0 text-muted-foreground" />

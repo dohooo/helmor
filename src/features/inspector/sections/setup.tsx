@@ -185,7 +185,7 @@ export function SetupTab({
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="text-small shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
@@ -201,16 +201,16 @@ export function SetupTab({
 				</>
 			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] font-medium text-muted-foreground">
+					<p className="text-ui font-medium text-muted-foreground">
 						No setup script configured
 					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Add a setup script in repository settings to run it here.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
@@ -224,13 +224,13 @@ export function SetupTab({
 						className="size-8 text-[var(--workspace-pr-open-accent)]"
 						strokeWidth={1.75}
 					/>
-					<p className="text-[13px] font-medium text-muted-foreground">
+					<p className="text-ui font-medium text-muted-foreground">
 						Setup completed
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={handleRun}
 					>
 						<RotateCcw className="size-3" strokeWidth={2} />
@@ -239,16 +239,16 @@ export function SetupTab({
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
+					<p className="text-ui text-muted-foreground">
 						No setup script output
 					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Setup script output will appear here after running setup.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={handleRun}
 					>
 						<Play className="size-3" strokeWidth={2} />

@@ -111,16 +111,16 @@ export function StreamingFooterOverlapScenario() {
 	return (
 		<div className="flex h-screen flex-col bg-background text-foreground">
 			<div className="border-b border-border/50 px-4 py-3">
-				<h1 className="text-sm font-medium">
+				<h1 className="text-body font-medium">
 					Streaming Footer Overlap Scenario
 				</h1>
-				<p className="text-xs text-muted-foreground">
+				<p className="text-small text-muted-foreground">
 					Virtualized thread + expanding collapsed tool group + active footer
 				</p>
 			</div>
 			<div className="flex min-h-0 flex-1">
 				<div className="flex min-h-0 flex-1 flex-col">
-					<div className="flex items-center gap-2 border-b border-border/40 px-4 py-2 text-xs text-muted-foreground">
+					<div className="flex items-center gap-2 border-b border-border/40 px-4 py-2 text-small text-muted-foreground">
 						<span data-testid="visible-tool-count">{visibleTools}</span>
 						<span>visible tools</span>
 					</div>

@@ -394,7 +394,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		);
 	}, []);
 	const composerToolbarTriggerClassName =
-		"cursor-interactive rounded-[9px] px-1 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
+		"cursor-interactive rounded-[9px] px-1 py-0.5 text-ui font-medium transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50";
 	// Shared gate for Send and Steer — the only difference is whether a
 	// stream is currently running. When sending, ⌘Enter / Enter still
 	// fires `handleSubmit`; the use-streaming hook dispatches to the
@@ -724,13 +724,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Workspace input"
 										aria-multiline
 										className={cn(
-											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-foreground outline-none",
+											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
 											showFocusHint && "pr-28",
 										)}
 									/>
 								}
 								placeholder={
-									<div className="pointer-events-none absolute left-0 top-0 text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground/70">
+									<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
 										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
 											: (placeholder ??
@@ -740,7 +740,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								ErrorBoundary={LexicalErrorBoundary}
 							/>
 							{showFocusHint && focusShortcut ? (
-								<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-[13px] leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
+								<div className="pointer-events-none absolute right-0 top-0 hidden h-5 items-center gap-1 text-ui leading-5 tracking-[-0.01em] text-muted-foreground/70 sm:flex">
 									<InlineShortcutDisplay hotkey={focusShortcut} />
 									<span>to focus</span>
 								</div>
@@ -797,7 +797,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					</LexicalComposer>
 
 					{sendError ? (
-						<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
+						<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
 							{sendError}
 						</div>
 					) : null}
@@ -805,7 +805,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					<div className="mt-2.5 flex items-end justify-between gap-3">
 						<div className="flex flex-wrap items-center gap-2">
 							{modelsLoading ? (
-								<ShimmerText className="px-1 py-0.5 text-[13px] text-muted-foreground">
+								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
 									Loading models…
 								</ShimmerText>
 							) : (
@@ -980,7 +980,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																</span>
 															</div>
 															{level === effectiveEffort ? (
-																<span className="text-[11px] text-foreground">
+																<span className="text-mini text-foreground">
 																	✓
 																</span>
 															) : null}
@@ -995,7 +995,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											aria-label="Plan mode"
 											disabled={toolbarDisabled}
 											className={cn(
-												`gap-1 px-1.5 text-[11px] ${composerToolbarTriggerClassName}`,
+												`gap-1 px-1.5 text-mini ${composerToolbarTriggerClassName}`,
 												permissionMode === "plan"
 													? "text-plan hover:text-plan"
 													: "text-muted-foreground/70 hover:text-muted-foreground/70",
@@ -1039,7 +1039,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 											<TooltipContent
 												side="top"
 												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 											>
 												<span>Add context</span>
 												{toggleContextPanelShortcut ? (
@@ -1080,7 +1080,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Request Changes"
 										onClick={handlePlanRequestChanges}
 										disabled={disabled || !hasContent}
-										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none text-muted-foreground hover:text-foreground"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none text-muted-foreground hover:text-foreground"
 									>
 										<MessageSquareMore className="size-3.5" strokeWidth={1.8} />
 										Request Changes
@@ -1091,7 +1091,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Implement"
 										onClick={handlePlanImplement}
 										disabled={disabled}
-										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-[12px] transition-none"
+										className="my-0.5 h-7 cursor-interactive gap-1 rounded-lg px-2 text-small transition-none"
 									>
 										<Check className="size-3.5" strokeWidth={2} />
 										Implement
@@ -1201,7 +1201,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			)}
 
 			{sendError && hasPendingUserInput ? (
-				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[12px] text-muted-foreground">
+				<div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-small text-muted-foreground">
 					{sendError}
 				</div>
 			) : null}

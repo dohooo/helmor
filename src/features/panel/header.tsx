@@ -220,7 +220,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div
 					data-tauri-drag-region
-					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
+					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-small"
 				>
 					{headerLeading}
 					{workspace?.mode === "chat" ? (
@@ -272,7 +272,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														src={accountProfile?.avatarUrl}
 														alt={accountLogin ?? ""}
 														fallback={initialsFor(accountDisplayName)}
-														fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
+														fallbackClassName="bg-muted text-nano font-semibold uppercase text-muted-foreground"
 													/>
 												</span>
 											</HoverCardTrigger>
@@ -304,7 +304,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 										}}
 										onBlur={() => void branchRename.commitBranchRename()}
 										onClick={(event) => event.stopPropagation()}
-										className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+										className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-small font-medium text-foreground"
 									/>
 								) : (
 									<>
@@ -472,7 +472,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
 					>
 						{loadingWorkspace ? (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-small text-muted-foreground">
 								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
 								Loading
 							</div>
@@ -509,7 +509,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														event.stopPropagation();
 														onCloseContextPreview?.();
 													}}
-													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-ui text-muted-foreground data-[state=active]:text-foreground"
 												>
 													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
 														<Layers className="size-3.5" strokeWidth={1.8} />
@@ -537,7 +537,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<TooltipContent
 												side="bottom"
 												sideOffset={4}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+												className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 											>
 												<span>{contextPreviewCard.title}</span>
 											</TooltipContent>
@@ -570,7 +570,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														onFocus={() => {
 															onPrefetchSession?.(session.id);
 														}}
-														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-ui text-muted-foreground data-[state=active]:text-foreground"
 													>
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
@@ -603,7 +603,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																		void sessionActions.commitRename()
 																	}
 																	onClick={(event) => event.stopPropagation()}
-																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-[13px] font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
+																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-ui font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
 																/>
 															) : (
 																<span
@@ -667,7 +667,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												<TooltipContent
 													side="bottom"
 													sideOffset={4}
-													className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+													className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 												>
 													<span>{displaySessionTitle(session)}</span>
 												</TooltipContent>
@@ -677,7 +677,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								</TabsList>
 							</Tabs>
 						) : (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-small text-muted-foreground">
 								<AlertCircle className="size-3" strokeWidth={1.8} />
 								No sessions
 							</div>
@@ -700,7 +700,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipContent
 						side="bottom"
 						sideOffset={4}
-						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 					>
 						<span>New session</span>
 						{newSessionShortcut ? (
@@ -737,7 +737,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							hiddenHistory.hiddenSessions.map((session) => (
 								<Tooltip key={session.id}>
 									<TooltipTrigger asChild>
-										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
+										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-small text-muted-foreground hover:bg-accent/60">
 											<div className="flex min-w-0 items-center gap-1.5">
 												<SessionProviderIcon
 													agentType={session.agentType}
@@ -774,14 +774,14 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									<TooltipContent
 										side="left"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 									>
 										<span>{displaySessionTitle(session)}</span>
 									</TooltipContent>
 								</Tooltip>
 							))
 						) : (
-							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+							<div className="px-2.5 py-1.5 text-mini text-muted-foreground">
 								No hidden sessions
 							</div>
 						)}
@@ -861,7 +861,7 @@ function BranchPicker({
 				type="button"
 				variant="ghost"
 				size="xs"
-				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground hover:text-foreground"
 			>
 				<span className="block min-w-0 truncate">
 					{displayRemote}/{currentBranch}

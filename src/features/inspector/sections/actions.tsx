@@ -368,7 +368,7 @@ export function ActionsSection({
 				<div className="min-h-0">
 					<ScrollArea
 						aria-label="Actions panel body"
-						className="min-h-0 bg-muted/18 text-[11.5px]"
+						className="min-h-0 bg-muted/18 text-mini"
 						style={{
 							height: `var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px)`,
 						}}
@@ -376,7 +376,7 @@ export function ActionsSection({
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Helpers
 									</span>
 								</div>
@@ -394,7 +394,7 @@ export function ActionsSection({
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
 											aria-label={reviewPending ? "Reviewing" : undefined}
-											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
 												{reviewPending ? (
@@ -412,7 +412,7 @@ export function ActionsSection({
 							</>
 						)}
 						<div className="px-2.5 pb-1 pt-2">
-							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+							<span className="text-micro font-medium tracking-wide text-muted-foreground">
 								Git
 							</span>
 						</div>
@@ -448,7 +448,7 @@ export function ActionsSection({
 												}
 												void onCommitAction?.(action.mode!);
 											}}
-											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
 											disabled={
 												action.kind === "commit" ? actionDisabled : syncPending
 											}
@@ -478,7 +478,7 @@ export function ActionsSection({
 						{reviewRows.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Review
 									</span>
 								</div>
@@ -497,7 +497,7 @@ export function ActionsSection({
 						{sortedDeployments.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Deployments
 									</span>
 								</div>
@@ -510,7 +510,7 @@ export function ActionsSection({
 						{sortedChecks.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Checks
 									</span>
 								</div>
@@ -760,7 +760,7 @@ function ActionStatusRow({
 					{item.name}
 				</span>
 				{item.duration && (
-					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+					<span className="shrink-0 text-micro text-muted-foreground">
 						{item.duration}
 					</span>
 				)}

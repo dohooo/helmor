@@ -31,7 +31,7 @@ export function SessionTabUI({
 		<div
 			data-state={selected ? "active" : "inactive"}
 			className={cn(
-				"group/tab relative inline-flex h-[1.85rem] w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none items-center justify-start gap-1.5 overflow-hidden rounded-md px-2 pr-5 text-[13px] text-muted-foreground",
+				"group/tab relative inline-flex h-[1.85rem] w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none items-center justify-start gap-1.5 overflow-hidden rounded-md px-2 pr-5 text-ui text-muted-foreground",
 				selected && "bg-muted text-foreground",
 			)}
 		>

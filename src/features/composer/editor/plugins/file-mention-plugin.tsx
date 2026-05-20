@@ -234,7 +234,7 @@ export function FileMentionPlugin({
 												onMouseEnter={() => setHighlightedIndex(index)}
 												onPointerDown={(event) => event.preventDefault()}
 												className={cn(
-													"min-w-0 rounded-lg px-2.5 py-2 text-[13px]",
+													"min-w-0 rounded-lg px-2.5 py-2 text-ui",
 													isSelected && "bg-muted text-foreground",
 												)}
 											>
@@ -246,7 +246,7 @@ export function FileMentionPlugin({
 													{file.name}
 												</span>
 												<span
-													className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-muted-foreground"
+													className="min-w-0 flex-1 truncate whitespace-nowrap text-small text-muted-foreground"
 													title={file.path}
 												>
 													{directory}

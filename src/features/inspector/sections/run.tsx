@@ -278,7 +278,7 @@ export function RunTab({
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="text-small shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
@@ -307,28 +307,26 @@ export function RunTab({
 					<Button
 						variant="outline"
 						size="sm"
-						className="gap-1.5 text-[12px]"
+						className="gap-1.5 text-small"
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
 						Add run script
 					</Button>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Run tests or a development server to test changes in this workspace.
 					</p>
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
-						No run script output
-					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-ui text-muted-foreground">No run script output</p>
+					<p className="text-small text-muted-foreground/70">
 						Run script output will appear here after running.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-2 text-[12px]"
+						className="mt-1 gap-2 text-small"
 						onClick={handleRun}
 					>
 						<Play className="size-3" strokeWidth={2} />

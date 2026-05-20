@@ -378,15 +378,15 @@ function WorkspaceRow({
 					draggable={false}
 				/>
 			) : (
-				<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[10px] font-bold text-accent-foreground/75">
+				<div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-micro font-bold text-accent-foreground/75">
 					{initials}
 				</div>
 			)}
 			<div className="min-w-0 flex-1">
-				<div className="truncate text-[12px] font-medium text-foreground">
+				<div className="truncate text-small font-medium text-foreground">
 					{label}
 				</div>
-				<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+				<div className="flex items-center gap-1.5 text-micro text-muted-foreground">
 					{workspace.branch && (
 						<>
 							<GitBranch className="size-2.5 shrink-0" strokeWidth={2} />
@@ -664,7 +664,7 @@ export function ConductorOnboarding({
 										))}
 								{(isLoadingWorkspaces || overflow > 0) && (
 									<p
-										className="px-3 py-0.5 text-[11px] text-primary text-right"
+										className="px-3 py-0.5 text-mini text-primary text-right"
 										style={{
 											opacity:
 												isLoadingWorkspaces || phase === "importing" ? 0 : 0.4,
@@ -776,7 +776,7 @@ export function ConductorOnboarding({
 											/>
 										))}
 										{overflow > 0 && (
-											<p className="px-3 py-0.5 text-[11px] text-primary text-right opacity-40">
+											<p className="px-3 py-0.5 text-mini text-primary text-right opacity-40">
 												+{overflow} more
 											</p>
 										)}
@@ -792,7 +792,7 @@ export function ConductorOnboarding({
 											<p className="text-base font-semibold text-foreground">
 												Welcome to Helmor
 											</p>
-											<p className="mt-0.5 text-sm text-muted-foreground">
+											<p className="mt-0.5 text-body text-muted-foreground">
 												{importedCount}{" "}
 												{importedCount === 1 ? "workspace" : "workspaces"} ready
 											</p>
@@ -800,7 +800,7 @@ export function ConductorOnboarding({
 										<Button
 											type="button"
 											onClick={onComplete}
-											className="h-10 px-7 text-sm font-semibold"
+											className="h-10 px-7 text-body font-semibold"
 										>
 											Get started
 										</Button>
@@ -822,7 +822,7 @@ export function ConductorOnboarding({
 								initial={{ opacity: 0 }}
 								animate={{ opacity: 1 }}
 								exit={{ opacity: 0 }}
-								className="text-[12px] text-destructive"
+								className="text-small text-destructive"
 							>
 								{importError}
 							</motion.p>
@@ -841,7 +841,7 @@ export function ConductorOnboarding({
 									type="button"
 									onClick={() => void handleImport()}
 									disabled={isLoadingWorkspaces}
-									className="group relative h-11 gap-2 overflow-hidden px-7 text-sm font-semibold tracking-[0.01em] disabled:opacity-40"
+									className="group relative h-11 gap-2 overflow-hidden px-7 text-body font-semibold tracking-[0.01em] disabled:opacity-40"
 								>
 									<div
 										className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/15 to-transparent transition-transform duration-700 group-hover:translate-x-full"
@@ -860,7 +860,7 @@ export function ConductorOnboarding({
 									<button
 										type="button"
 										onClick={onComplete}
-										className="text-[11px] text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
+										className="text-mini text-muted-foreground transition-colors hover:text-foreground cursor-interactive"
 									>
 										Skip for now
 									</button>
@@ -895,7 +895,7 @@ export function ConductorOnboarding({
 								initial={{ opacity: 0 }}
 								animate={{ opacity: 1 }}
 								exit={{ opacity: 0 }}
-								className="flex items-center gap-2 text-sm text-muted-foreground"
+								className="flex items-center gap-2 text-body text-muted-foreground"
 							>
 								<motion.span
 									className="inline-block size-4 rounded-full border-2 border-border border-t-foreground"

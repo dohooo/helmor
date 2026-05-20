@@ -537,7 +537,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 								onChange={handleSearchChange}
 								placeholder="Search"
 								aria-label={`Search ${activeForgeLabels.providerName} contexts`}
-								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/70"
+								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-mini text-foreground outline-none placeholder:text-muted-foreground/70"
 							/>
 							{searchQuery ? (
 								<button
@@ -591,7 +591,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 												<DropdownMenuRadioItem
 													key={entry.kind}
 													value={entry.kind}
-													className="gap-2 text-[11px]"
+													className="gap-2 text-mini"
 												>
 													{source ? (
 														<SourceIcon
@@ -613,7 +613,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<DropdownMenuTrigger asChild>
 								<button
 									type="button"
-									className="inline-flex h-7 shrink-0 cursor-interactive items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+									className="inline-flex h-7 shrink-0 cursor-interactive items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-mini font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
 								>
 									<span>{activeStateFilter.label}</span>
 									<ChevronDown className="size-3" strokeWidth={2} />
@@ -630,7 +630,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 										<DropdownMenuRadioItem
 											key={filter.id}
 											value={filter.id}
-											className="text-[11px]"
+											className="text-mini"
 										>
 											{filter.label}
 										</DropdownMenuRadioItem>
@@ -659,14 +659,14 @@ export const InboxSidebar = memo(function InboxSidebar({
 										className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 										strokeWidth={2}
 									/>
-									<span className="text-[13px] font-medium">Coming Soon</span>
+									<span className="text-ui font-medium">Coming Soon</span>
 								</div>
 								<div className="my-7 flex items-center gap-2 px-2">
 									<div className="h-px flex-1 bg-border" />
 									<div className="size-0.5 rounded-full bg-border" />
 									<div className="h-px flex-1 bg-border" />
 								</div>
-								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
+								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-mini leading-4 marker:text-muted-foreground/35">
 									{COMING_SOON_COPY[selectedSource as ExternalFilterId].map(
 										(line) => (
 											<li key={line}>{line}</li>
@@ -749,7 +749,7 @@ function InboxLoadingState() {
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-			<div className="text-[12px] leading-5">Loading items…</div>
+			<div className="text-small leading-5">Loading items…</div>
 		</div>
 	);
 }
@@ -765,10 +765,8 @@ function InboxErrorState({
 		error instanceof Error ? error.message : "Couldn't load context items.";
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
-			<div className="text-[13px] font-medium text-foreground">
-				Couldn't load
-			</div>
-			<div className="text-[12px] leading-5 text-muted-foreground">
+			<div className="text-ui font-medium text-foreground">Couldn't load</div>
+			<div className="text-small leading-5 text-muted-foreground">
 				{message}
 			</div>
 			<Button
@@ -776,7 +774,7 @@ function InboxErrorState({
 				variant="ghost"
 				size="sm"
 				onClick={onRetry}
-				className="mt-1 cursor-interactive text-[12px]"
+				className="mt-1 cursor-interactive text-small"
 			>
 				Try again
 			</Button>
@@ -886,7 +884,7 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"mt-1 flex cursor-interactive items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-[11px] text-muted-foreground/80 transition-colors",
+				"mt-1 flex cursor-interactive items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-mini text-muted-foreground/80 transition-colors",
 				"hover:bg-accent/40 hover:text-foreground",
 			)}
 		>
@@ -917,7 +915,7 @@ function ConnectForgeState({
 					<GitlabBrandIcon size={16} />
 				)}
 			</div>
-			<div className="text-[13px] font-medium text-foreground">
+			<div className="text-ui font-medium text-foreground">
 				{labels.connectAction}
 			</div>
 			<Button
@@ -952,10 +950,10 @@ function KindDisabledState({
 			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
 				<SlidersHorizontal className="size-4" strokeWidth={2} />
 			</div>
-			<div className="text-[13px] font-medium text-foreground">
+			<div className="text-ui font-medium text-foreground">
 				{plural} are off
 			</div>
-			<div className="text-[12px] leading-5 text-muted-foreground">
+			<div className="text-small leading-5 text-muted-foreground">
 				Turn {lower} back on in Contexts settings.
 			</div>
 			<Button
@@ -963,7 +961,7 @@ function KindDisabledState({
 				variant="ghost"
 				size="sm"
 				onClick={onConfigure}
-				className="mt-1 cursor-interactive gap-1.5 text-[12px]"
+				className="mt-1 cursor-interactive gap-1.5 text-small"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure
@@ -986,7 +984,7 @@ function NoItemsState({
 	const title = repoFilter ? `No ${lower} in ${repoFilter}` : `No ${lower} yet`;
 	return (
 		<div className="mt-8 flex flex-col items-center gap-1 px-6 text-center">
-			<div className="text-[12px] leading-5 text-muted-foreground/80">
+			<div className="text-small leading-5 text-muted-foreground/80">
 				{title}
 			</div>
 		</div>

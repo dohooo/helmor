@@ -30,6 +30,30 @@
 :root {
 	color-scheme: light;
 
+	/* ── Typography scale ──────────────────────────────────────────────────────
+	   Pick by role, not px. Half-pixel sizes round down to the nearest token.
+
+	     --text-nano     9px   — counter badges, avatar fallback initials
+	     --text-micro    10px  — tiny chips, status pills
+	     --text-mini     11px  — section labels, metadata
+	     --text-small    12px  — secondary text, tool details
+	     --text-ui       13px  — UI baseline: menus, buttons, form controls
+	     --text-body     14px  — primary content: sidebar rows, message text
+	     --text-title    15px  — card / section titles
+	     --text-heading  18px  — dialog / page headings
+
+	   Off-scale `text-[…]` is allowed only for:
+	     • 0.9em           — streamdown table cells (zoom-aware relative scale)
+	     • 24px / 2.625rem — decorative oversize (workspace-start, onboarding hero) */
+	--text-nano: 9px;
+	--text-micro: 10px;
+	--text-mini: 11px;
+	--text-small: 12px;
+	--text-ui: 13px;
+	--text-body: 14px;
+	--text-title: 15px;
+	--text-heading: 18px;
+
 	/* ── Layer 1 · Base ─────────────────────────────────────────────────────── */
 	/* Surfaces (4 elevation levels) */
 	--bg-base: oklch(1 0 0);

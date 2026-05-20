@@ -100,7 +100,7 @@ export function StepClone({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="flex items-start gap-2 text-[12px] leading-snug">
+			<div className="flex items-start gap-2 text-small leading-snug">
 				{phase === "forking" ? (
 					<>
 						<LoaderCircle
@@ -126,7 +126,7 @@ export function StepClone({
 				<div className="flex flex-col gap-1">
 					<Label
 						htmlFor="feedback-clone-location"
-						className="text-[12px] font-medium tracking-[-0.01em]"
+						className="text-small font-medium tracking-[-0.01em]"
 					>
 						Clone location
 					</Label>
@@ -137,7 +137,7 @@ export function StepClone({
 							value={cloneDirectory ?? ""}
 							readOnly
 							placeholder="Choose a folder…"
-							className="h-7 text-[13px] md:text-[13px]"
+							className="h-7 text-ui"
 						/>
 						<Button
 							type="button"
@@ -156,7 +156,7 @@ export function StepClone({
 			) : null}
 
 			{error ? (
-				<p role="alert" className="text-[12px] leading-snug text-destructive">
+				<p role="alert" className="text-small leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}

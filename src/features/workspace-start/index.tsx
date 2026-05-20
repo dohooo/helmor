@@ -199,7 +199,7 @@ export function WorkspaceStartPage({
 								{previewCard ? (
 									<h2
 										data-tauri-drag-region
-										className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-[13px] font-medium leading-5 text-foreground"
+										className="flex h-full min-w-0 flex-1 translate-y-[2px] items-center text-ui font-medium leading-5 text-foreground"
 									>
 										<span className="min-w-0 truncate">
 											{previewCard.title}
@@ -319,7 +319,7 @@ export function WorkspaceStartPage({
 																		"rounded-md transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
 																		"size-6",
 																	)}
-																	fallbackClassName="text-[9px]"
+																	fallbackClassName="text-nano"
 																/>
 																<span className="min-w-0 truncate">
 																	{selectedRepository.name}
@@ -343,7 +343,7 @@ export function WorkspaceStartPage({
 											<TooltipContent
 												side="top"
 												sideOffset={4}
-												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+												className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 											>
 												<span>Switch repository</span>
 												<InlineShortcutDisplay
@@ -370,7 +370,7 @@ export function WorkspaceStartPage({
 														repoName={repository.name}
 														title={repository.name}
 														className="size-5 rounded-md"
-														fallbackClassName="text-[8px]"
+														fallbackClassName="text-nano"
 													/>
 													<span className="min-w-0 flex-1 truncate">
 														{repository.name}
@@ -409,7 +409,7 @@ export function WorkspaceStartPage({
 									<button
 										type="button"
 										disabled={repositories.length === 0}
-										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{selectedRepository ? (
 											<>
@@ -419,7 +419,7 @@ export function WorkspaceStartPage({
 													repoName={selectedRepository.name}
 													title={selectedRepository.name}
 													className="size-4 rounded-md"
-													fallbackClassName="text-[7px]"
+													fallbackClassName="text-nano"
 												/>
 												<span className="min-w-0 truncate">
 													{selectedRepository.name}
@@ -447,7 +447,7 @@ export function WorkspaceStartPage({
 												repoName={repository.name}
 												title={repository.name}
 												className="size-5 rounded-md"
-												fallbackClassName="text-[8px]"
+												fallbackClassName="text-nano"
 											/>
 											<span className="min-w-0 flex-1 truncate">
 												{repository.name}
@@ -466,7 +466,7 @@ export function WorkspaceStartPage({
 											// Chat mode is always enabled (no repo needed);
 											// other modes require a selected repository.
 											disabled={mode !== "chat" && !selectedRepository}
-											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											{mode === "local" ? (
 												<Laptop
@@ -501,7 +501,7 @@ export function WorkspaceStartPage({
 								<TooltipContent
 									side="top"
 									sideOffset={4}
-									className="rounded-md px-2 text-[12px] leading-none"
+									className="rounded-md px-2 text-small leading-none"
 								>
 									Select where to run the task
 								</TooltipContent>
@@ -547,7 +547,7 @@ export function WorkspaceStartPage({
 											<button
 												type="button"
 												disabled={!selectedRepository}
-												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												{branchIntent === "use_branch" ? (
 													<GitMerge
@@ -575,7 +575,7 @@ export function WorkspaceStartPage({
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="rounded-md px-2 text-[12px] leading-none"
+										className="rounded-md px-2 text-small leading-none"
 									>
 										{branchIntent === "use_branch"
 											? "Check out the picked branch directly."
@@ -599,7 +599,7 @@ export function WorkspaceStartPage({
 											<GitBranchPlus className="size-3.5" strokeWidth={1.8} />
 											<span>Branch off</span>
 										</div>
-										<span className="pl-[1.375rem] text-[11px] text-muted-foreground">
+										<span className="pl-[1.375rem] text-mini text-muted-foreground">
 											Fork a fresh branch off the picked base.
 										</span>
 									</DropdownMenuItem>
@@ -614,7 +614,7 @@ export function WorkspaceStartPage({
 											<GitMerge className="size-3.5" strokeWidth={1.8} />
 											<span>Reuse</span>
 										</div>
-										<span className="pl-[1.375rem] text-[11px] text-muted-foreground">
+										<span className="pl-[1.375rem] text-mini text-muted-foreground">
 											Check out the picked branch directly.
 										</span>
 									</DropdownMenuItem>
@@ -638,7 +638,7 @@ export function WorkspaceStartPage({
 												? ({ close }) => (
 														<button
 															type="button"
-															className="flex w-full cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+															className="flex w-full cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-small text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 															onClick={() => {
 																close();
 																setCreateBranchOpen(true);
@@ -655,7 +655,7 @@ export function WorkspaceStartPage({
 											<button
 												type="button"
 												disabled={!selectedRepository}
-												className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+												className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												<GitBranch
 													className="size-3.5 shrink-0"
@@ -679,7 +679,7 @@ export function WorkspaceStartPage({
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="rounded-md px-2 text-[12px] leading-none"
+										className="rounded-md px-2 text-small leading-none"
 									>
 										{mode === "local"
 											? "Switch branch"

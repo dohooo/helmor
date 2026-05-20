@@ -83,7 +83,7 @@ export function KbdKey({ name, className }: KbdKeyProps) {
 		<kbd
 			data-slot="kbd"
 			className={cn(
-				"inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-[2px] border border-white/25 px-0.5 text-[9px] font-medium leading-none text-white/70",
+				"inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-[2px] border border-white/25 px-0.5 text-micro font-medium leading-none text-white/70",
 				className,
 			)}
 		>

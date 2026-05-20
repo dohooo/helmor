@@ -47,7 +47,7 @@ import { describeUnknownError } from "@/lib/workspace-helpers";
 // Hover only changes text color (no bg) — otherwise hover-on-inactive sits next
 // to active-bg and the boundary blurs. Active is the ONLY trigger with a bg.
 const SEGMENT_CLASS = [
-	"h-5 gap-1 rounded-[5px] px-1.5 py-0 text-[10.5px] font-normal tracking-tight",
+	"h-5 gap-1 rounded-[5px] px-1.5 py-0 text-micro font-normal tracking-tight",
 	"border-transparent bg-transparent text-muted-foreground/70 shadow-none",
 	"hover:bg-transparent hover:text-foreground",
 	"data-active:bg-editor-tab-active data-active:text-foreground data-active:border-transparent data-active:shadow-none",
@@ -144,7 +144,7 @@ function EditorPathBreadcrumb({
 	};
 
 	return (
-		<div className="group/path flex min-w-0 items-center overflow-hidden text-[13px] font-medium tracking-normal">
+		<div className="group/path flex min-w-0 items-center overflow-hidden text-ui font-medium tracking-normal">
 			{segments.map((segment, index) => {
 				return (
 					<span
@@ -190,7 +190,7 @@ function EditorPathBreadcrumb({
 function EditorShortcutHint({ hotkey }: { hotkey: string | null }) {
 	if (!hotkey) return null;
 	return (
-		<span className="ml-0.5 inline-flex h-4 items-center rounded-[3px] bg-muted/60 px-1 text-[10.5px] font-medium leading-none text-muted-foreground/80">
+		<span className="ml-0.5 inline-flex h-4 items-center rounded-[3px] bg-muted/60 px-1 text-micro font-medium leading-none text-muted-foreground/80">
 			<InlineShortcutDisplay hotkey={hotkey} />
 		</span>
 	);
@@ -234,7 +234,7 @@ function EditorFileTabs({
 									key={tab.id}
 									value={tab.id}
 									className={cn(
-										"group/tab relative h-full w-auto min-w-[7rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden rounded-none border-0 bg-transparent px-3 text-[13px] text-muted-foreground shadow-none data-active:bg-background data-active:text-foreground data-active:shadow-none aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-none dark:data-active:border-transparent dark:data-active:bg-background dark:aria-selected:border-transparent dark:aria-selected:bg-background",
+										"group/tab relative h-full w-auto min-w-[7rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden rounded-none border-0 bg-transparent px-3 text-ui text-muted-foreground shadow-none data-active:bg-background data-active:text-foreground data-active:shadow-none aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-none dark:data-active:border-transparent dark:data-active:bg-background dark:aria-selected:border-transparent dark:aria-selected:bg-background",
 										active ? "font-medium" : undefined,
 									)}
 								>
@@ -374,12 +374,12 @@ function FileSearchOverlay({
 							}
 						}}
 						placeholder="Search files"
-						className="h-full min-w-0 flex-1 bg-transparent text-[14px] font-medium text-foreground outline-none placeholder:text-muted-foreground/55"
+						className="h-full min-w-0 flex-1 bg-transparent text-body font-medium text-foreground outline-none placeholder:text-muted-foreground/55"
 					/>
 				</div>
 				<div className="max-h-80 overflow-y-auto px-1.5 py-2 scroll-py-2">
 					{statusText ? (
-						<div className="px-3 py-8 text-center text-[13px] text-muted-foreground">
+						<div className="px-3 py-8 text-center text-ui text-muted-foreground">
 							{statusText}
 						</div>
 					) : (
@@ -391,7 +391,7 @@ function FileSearchOverlay({
 								onPointerMove={() => onSelectedIndexChange(index)}
 								onClick={() => onOpen(file)}
 								className={cn(
-									"flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[13px]",
+									"flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-ui",
 									index === selectedIndex
 										? "bg-accent text-accent-foreground"
 										: "text-muted-foreground",
@@ -1222,7 +1222,7 @@ export function WorkspaceEditorSurface({
 						aria-label="Markdown preview"
 						className="absolute inset-0 overflow-y-auto bg-background"
 					>
-						<div className="conversation-markdown mx-auto max-w-3xl break-words px-8 py-6 text-[13px] leading-6 text-foreground">
+						<div className="conversation-markdown mx-auto max-w-3xl break-words px-8 py-6 text-ui leading-6 text-foreground">
 							<Suspense
 								fallback={
 									<pre className="whitespace-pre-wrap break-words font-mono text-muted-foreground">
@@ -1252,9 +1252,7 @@ export function WorkspaceEditorSurface({
 }
 
 function SurfaceMessage({ message }: { message: string }) {
-	return (
-		<p className="text-[13px] leading-5 text-muted-foreground">{message}</p>
-	);
+	return <p className="text-ui leading-5 text-muted-foreground">{message}</p>;
 }
 
 function disposeControllers({

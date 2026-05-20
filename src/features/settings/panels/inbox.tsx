@@ -405,10 +405,10 @@ export function InboxSettingsPanel({
 							<GitlabBrandIcon size={18} />
 						)}
 					</div>
-					<div className="text-[13px] font-medium text-foreground">
+					<div className="text-ui font-medium text-foreground">
 						Connect a {activeForgeLabels?.providerName} account
 					</div>
-					<div className="max-w-[360px] text-[12px] leading-5 text-muted-foreground">
+					<div className="max-w-[360px] text-small leading-5 text-muted-foreground">
 						You need at least one {activeForgeLabels?.providerName} account
 						before Contexts can pull{" "}
 						{joinSingularsAsList(
@@ -566,7 +566,7 @@ export function InboxSettingsPanel({
 							) : null}
 						</div>
 					) : (
-						<div className="py-8 text-center text-[12px] text-muted-foreground">
+						<div className="py-8 text-center text-small text-muted-foreground">
 							Add or connect a {activeForgeLabels?.providerName} repository
 							before configuring Contexts.
 						</div>
@@ -593,7 +593,7 @@ function ProviderTabs({
 					aria-pressed={value === tab.id}
 					onClick={() => onChange(tab.id)}
 					className={cn(
-						"flex h-8 cursor-interactive items-center justify-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-[background-color,color,box-shadow]",
+						"flex h-8 cursor-interactive items-center justify-center gap-1.5 rounded-md px-2 text-small font-medium text-muted-foreground transition-[background-color,color,box-shadow]",
 						"hover:bg-accent/60 hover:text-foreground",
 						value === tab.id && "bg-accent text-foreground shadow-xs",
 					)}
@@ -619,14 +619,14 @@ function ProviderComingSoon({
 						className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 						strokeWidth={2}
 					/>
-					<span className="text-[13px] font-medium">Coming Soon</span>
+					<span className="text-ui font-medium">Coming Soon</span>
 				</div>
 				<div className="my-7 flex items-center gap-2 px-2">
 					<div className="h-px flex-1 bg-border" />
 					<div className="size-0.5 rounded-full bg-border" />
 					<div className="h-px flex-1 bg-border" />
 				</div>
-				<ul className="mx-auto list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
+				<ul className="mx-auto list-disc space-y-3 pl-4 text-left text-pretty text-mini leading-4 marker:text-muted-foreground/35">
 					{COMING_SOON_COPY[provider].map((line) => (
 						<li key={line}>{line}</li>
 					))}

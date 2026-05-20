@@ -141,10 +141,10 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 export const INSPECTOR_SECTION_HEADER_CLASS =
 	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-inspector-section-header px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
-	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+	"text-ui leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
 
 /** Zoom state published to tab bodies (e.g. corner Stop/Rerun button). */
 type TabsZoomState = {
@@ -494,7 +494,7 @@ export function InspectorTabsSection({
 														// stable on mask toggle). `transform-gpu` keeps it
 														// on its own compositing layer.
 														className={cn(
-															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-small font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
 															isActive && "text-foreground",
 														)}
 														onClick={() => handleTabClick(instance.id)}
@@ -591,7 +591,7 @@ export function InspectorTabsSection({
 									</TooltipTrigger>
 									<TooltipContent
 										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 									>
 										<span>New terminal</span>
 										{newTerminalShortcut ? (

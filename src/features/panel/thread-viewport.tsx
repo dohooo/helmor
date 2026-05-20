@@ -1195,7 +1195,7 @@ function LoadEarlierBanner({
 				size="sm"
 				disabled={loading}
 				onClick={onClick}
-				className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+				className="h-7 gap-1.5 px-2.5 text-small text-muted-foreground hover:text-foreground"
 			>
 				{loading ? (
 					<Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
@@ -1241,7 +1241,7 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 	return (
 		<div
 			data-testid="streaming-footer"
-			className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground"
+			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
 			{display}

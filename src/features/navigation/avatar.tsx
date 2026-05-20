@@ -98,7 +98,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 				<span
 					data-slot="avatar-fallback"
 					className={cn(
-						"grid size-full place-items-center bg-muted text-center text-[7px] font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
+						"grid size-full place-items-center bg-muted text-center text-nano font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
 						fallbackClassName,
 						"rounded-full",
 					)}

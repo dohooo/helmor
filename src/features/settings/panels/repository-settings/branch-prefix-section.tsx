@@ -122,10 +122,10 @@ export function BranchPrefixSection({
 		<div className="py-5">
 			<div className="flex items-start justify-between gap-4">
 				<div className="min-w-0 flex-1">
-					<div className="text-[13px] font-medium leading-snug text-foreground">
+					<div className="text-ui font-medium leading-snug text-foreground">
 						Branch prefix
 					</div>
-					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+					<div className="mt-1 text-small leading-snug text-muted-foreground">
 						Prefix added to branch names when creating new workspaces in this
 						repo.
 					</div>
@@ -164,7 +164,7 @@ export function BranchPrefixSection({
 						aria-hidden={!customActive}
 						tabIndex={customActive ? 0 : -1}
 						className={cn(
-							"h-7 w-48 bg-muted/30 text-[13px] text-foreground placeholder:text-muted-foreground/50",
+							"h-7 w-48 bg-muted/30 text-ui text-foreground placeholder:text-muted-foreground/50",
 							!customActive && "invisible pointer-events-none",
 						)}
 					/>
@@ -192,7 +192,7 @@ function BranchPrefixPreview({
 	return (
 		<div
 			className={cn(
-				"shrink-0 text-[12px] leading-snug text-muted-foreground",
+				"shrink-0 text-small leading-snug text-muted-foreground",
 				hidden && "invisible",
 			)}
 			aria-hidden={hidden}

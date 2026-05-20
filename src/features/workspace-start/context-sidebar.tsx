@@ -51,7 +51,7 @@ export function WorkspaceStartContextSidebar({
 			style={{ contain: "layout paint style" }}
 		>
 			<div className="flex h-8 shrink-0 items-center border-border/60 border-b bg-muted/30 px-3">
-				<h2 className="text-[13px] font-medium leading-8 tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-ui font-medium leading-8 tracking-[-0.01em] text-muted-foreground">
 					Contexts
 				</h2>
 			</div>

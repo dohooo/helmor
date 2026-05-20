@@ -179,7 +179,7 @@ export function InlineBadge({
 	const badge = (
 		<span
 			className={cn(
-				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-[14px] leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
+				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-body leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
 				nonSelectable && "select-none",
 				nonSelectable && !canPreview && "cursor-default",
 				canPreview && "cursor-interactive",

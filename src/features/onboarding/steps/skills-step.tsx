@@ -130,11 +130,11 @@ export function SkillsStep({
 							<span className="size-2 rounded-full bg-muted-foreground/35" />
 							<span className="size-2 rounded-full bg-muted-foreground/25" />
 							<span className="size-2 rounded-full bg-muted-foreground/20" />
-							<span className="ml-2 text-[10px] font-medium text-muted-foreground">
+							<span className="ml-2 text-micro font-medium text-muted-foreground">
 								helmor --help
 							</span>
 						</div>
-						<div className="h-[calc(100%-2rem)] overflow-hidden px-4 py-3 font-mono text-[9.5px] leading-[13px] text-muted-foreground group-hover:overflow-y-auto">
+						<div className="h-[calc(100%-2rem)] overflow-hidden px-4 py-3 font-mono text-nano leading-[13px] text-muted-foreground group-hover:overflow-y-auto">
 							<pre className="whitespace-pre-wrap break-words font-mono">
 								<span className="text-foreground">$ helmor --help</span>
 								{`
@@ -176,7 +176,7 @@ Options:
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
 						Power up Helmor
 					</h2>
-					<p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
+					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
 						Install the CLI and skills so Helmor can split work, run agents,
 						call tools, and carry context across your workspaces.
 					</p>
@@ -211,7 +211,7 @@ Options:
 						variant="ghost"
 						size="lg"
 						onClick={onBack}
-						className="h-11 gap-2 px-4 text-[0.95rem]"
+						className="h-11 gap-2 px-4 text-title"
 					>
 						<ArrowLeft data-icon="inline-start" className="size-4" />
 						Back
@@ -221,7 +221,7 @@ Options:
 						size="lg"
 						onClick={onNext}
 						disabled={isRoutingImport}
-						className="h-11 gap-2 px-4 text-[0.95rem]"
+						className="h-11 gap-2 px-4 text-title"
 					>
 						Next
 						<ArrowRight data-icon="inline-end" className="size-4" />

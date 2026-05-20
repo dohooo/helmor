@@ -37,7 +37,7 @@ function ProviderIcon({ provider }: { provider: MockSession["provider"] }) {
  */
 function MockReasoningRow({ label }: { label: string }) {
 	return (
-		<div className="group/reasoning inline-flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground">
+		<div className="group/reasoning inline-flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground">
 			<Brain className="size-3 shrink-0" strokeWidth={1.8} />
 			<span>{label}</span>
 			<ChevronRight
@@ -61,8 +61,8 @@ function MockTodoList({
 }) {
 	const completed = items.filter((item) => item.done).length;
 	return (
-		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-border/40 bg-accent/35 px-3 py-2 text-[13px] leading-6 text-muted-foreground">
-			<div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+		<div className="my-1 flex flex-col gap-0.5 rounded-md border border-border/40 bg-accent/35 px-3 py-2 text-ui leading-6 text-muted-foreground">
+			<div className="mb-0.5 flex items-center gap-1.5 text-mini text-muted-foreground">
 				<ClipboardList className="size-3" strokeWidth={1.8} />
 				<span>
 					Plan - {completed}/{items.length} done
@@ -203,7 +203,7 @@ export function MockConversation({
 							<>
 								<span
 									className={cn(
-										"flex items-center gap-1.5 rounded-[9px] px-1 py-0.5 text-[13px] font-medium",
+										"flex items-center gap-1.5 rounded-[9px] px-1 py-0.5 text-ui font-medium",
 										providerSpotlight
 											? "relative z-40 isolate bg-sidebar text-foreground"
 											: "text-muted-foreground",
@@ -213,13 +213,13 @@ export function MockConversation({
 									Opus 4.7M
 									<ChevronDown className="size-3 opacity-40" />
 								</span>
-								<span className="flex items-center gap-1 rounded-[9px] px-1 py-0.5 text-[13px] font-medium text-muted-foreground">
+								<span className="flex items-center gap-1 rounded-[9px] px-1 py-0.5 text-ui font-medium text-muted-foreground">
 									<Zap className="size-[13px] opacity-55" />
 								</span>
-								<span className="rounded-[9px] px-1 py-0.5 text-[13px] font-medium effort-max-text">
+								<span className="rounded-[9px] px-1 py-0.5 text-ui font-medium effort-max-text">
 									High
 								</span>
-								<span className="flex items-center gap-1 rounded-[9px] px-1.5 py-0.5 text-[11px] font-medium text-plan">
+								<span className="flex items-center gap-1 rounded-[9px] px-1.5 py-0.5 text-mini font-medium text-plan">
 									<ClipboardList className="size-[13px]" />
 									Plan
 								</span>

@@ -108,7 +108,7 @@ export function CursorApiKeyAction({
 				onChange={(event) => setDraft(event.target.value)}
 				placeholder="API key"
 				disabled={isValidating}
-				className="h-8 w-[180px] border-border/50 bg-muted/20 text-[12px]"
+				className="h-8 w-[180px] border-border/50 bg-muted/20 text-small"
 			/>
 			{isValidating ? (
 				<Button

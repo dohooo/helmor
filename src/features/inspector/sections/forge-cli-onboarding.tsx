@@ -100,16 +100,16 @@ function ForgeDetectionTooltipBody({
 	const host = detection.host ?? "this host";
 	return (
 		<div className="space-y-1.5">
-			<div className="text-[11px] font-medium leading-snug">
+			<div className="text-mini font-medium leading-snug">
 				Detected {providerName} at {host}
 			</div>
-			<div className="space-y-0.5 text-[10.5px] leading-snug opacity-90">
+			<div className="space-y-0.5 text-micro leading-snug opacity-90">
 				{FORGE_AUTH_TOOLTIP_LINES.map((line) => (
 					<div key={line}>{line}</div>
 				))}
 			</div>
 			{detection.detectionSignals.length > 0 && (
-				<div className="space-y-0.5 border-t border-background/20 pt-1.5 text-[10.5px] leading-snug opacity-90">
+				<div className="space-y-0.5 border-t border-background/20 pt-1.5 text-micro leading-snug opacity-90">
 					<div className="font-medium">Why we think so:</div>
 					<ul className="list-disc space-y-0.5 pl-3.5">
 						{detection.detectionSignals.map((signal) => (

@@ -90,7 +90,7 @@ export function ScopeMultiSelect<T extends string>({
 							<Badge
 								key={option.value}
 								variant="outline"
-								className="h-6 gap-1 rounded-md pr-1 text-[11px]"
+								className="h-6 gap-1 rounded-md pr-1 text-mini"
 								onClick={(event) => event.stopPropagation()}
 							>
 								{option.label}
@@ -187,7 +187,7 @@ export function LabelMultiSelect({
 								<Badge
 									key={label}
 									variant="outline"
-									className="h-6 gap-1 rounded-md pr-1 text-[11px]"
+									className="h-6 gap-1 rounded-md pr-1 text-mini"
 									onClick={(event) => event.stopPropagation()}
 								>
 									<LabelColorDot color={optionMap.get(label)?.color} />
@@ -207,7 +207,7 @@ export function LabelMultiSelect({
 								</Badge>
 							))
 						) : (
-							<span className="px-1 text-[12px] text-muted-foreground">
+							<span className="px-1 text-small text-muted-foreground">
 								{loading ? "Loading labels" : "Select labels"}
 							</span>
 						)}
@@ -275,7 +275,7 @@ export function SettingsSelect<T extends string>({
 				<Button
 					type="button"
 					variant="outline"
-					className="h-9 w-[180px] cursor-interactive justify-between gap-2 px-3 text-[13px]"
+					className="h-9 w-[180px] cursor-interactive justify-between gap-2 px-3 text-ui"
 				>
 					<span className="truncate">{selected.label}</span>
 					<ChevronDown
@@ -292,7 +292,7 @@ export function SettingsSelect<T extends string>({
 					<DropdownMenuItem
 						key={option.value}
 						onSelect={() => onChange(option.value)}
-						className="cursor-interactive text-[13px]"
+						className="cursor-interactive text-ui"
 					>
 						{option.label}
 					</DropdownMenuItem>
@@ -323,7 +323,7 @@ export function RepoPicker({
 					type="button"
 					variant="outline"
 					disabled={repositories.length === 0}
-					className="h-10 w-[280px] cursor-interactive justify-between gap-2 px-3 text-[13px]"
+					className="h-10 w-[280px] cursor-interactive justify-between gap-2 px-3 text-ui"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						{selected ? (
@@ -349,7 +349,7 @@ export function RepoPicker({
 					<DropdownMenuItem
 						key={entry.repoFilter}
 						onSelect={() => onSelect(entry.repoFilter)}
-						className="cursor-interactive gap-2 text-[13px]"
+						className="cursor-interactive gap-2 text-ui"
 					>
 						<RepoAvatar repo={entry.repository} />
 						<span className="min-w-0 flex-1 truncate">
@@ -372,7 +372,7 @@ function RepoAvatar({ repo }: { repo: RepositoryCreateOption }) {
 			alt={repo.name}
 			fallback={repo.repoInitials ?? initialsFor(repo.name)}
 			className="size-5 shrink-0 rounded-md"
-			fallbackClassName="rounded-md text-[10px]"
+			fallbackClassName="rounded-md text-micro"
 		/>
 	);
 }

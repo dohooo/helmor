@@ -788,7 +788,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				);
 
 				const headerClassName = cn(
-					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
 				);
 
 				// Repo header: no chevron/badge, but the header still toggles
@@ -851,7 +851,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 									>
 										New workspace in {item.group.label}
 									</TooltipContent>
@@ -879,7 +879,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
 								<Badge
 									variant="secondary"
-									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano leading-none transition-opacity group-hover/trigger:opacity-0"
 								>
 									{item.group.rows.length}
 								</Badge>
@@ -995,7 +995,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="mt-1 flex items-center justify-between px-3">
-				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
 
@@ -1049,7 +1049,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<TooltipContent
 								side="top"
 								sideOffset={4}
-								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
 								<span>Add repository</span>
 								{addRepositoryShortcut ? (
@@ -1111,7 +1111,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<TooltipContent
 							side="top"
 							sideOffset={4}
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>Create new workspace</span>
 							{newWorkspaceShortcut ? (

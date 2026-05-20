@@ -85,7 +85,7 @@ function QueueRow({
 						strokeWidth={1.8}
 						aria-hidden
 					/>
-					<div className="flex min-w-0 items-center gap-0 overflow-hidden whitespace-nowrap text-[12px] font-medium tracking-[0.01em] text-foreground">
+					<div className="flex min-w-0 items-center gap-0 overflow-hidden whitespace-nowrap text-small font-medium tracking-[0.01em] text-foreground">
 						{parts.map((part, idx) => {
 							if (isTextPart(part)) {
 								return (
@@ -118,7 +118,7 @@ function QueueRow({
 						size="sm"
 						disabled={disabled}
 						onClick={onSteer}
-						className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+						className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 					>
 						<CornerDownLeft
 							className="size-[13px] shrink-0"
@@ -143,7 +143,7 @@ function QueueRow({
 						<TooltipContent
 							side="top"
 							sideOffset={4}
-							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+							className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 						>
 							<span>Remove from queue</span>
 						</TooltipContent>

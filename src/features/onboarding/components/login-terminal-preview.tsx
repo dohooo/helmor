@@ -88,7 +88,7 @@ export function OnboardingTerminalPreview({
 					)}
 					<span className="size-2.5 rounded-full bg-muted-foreground/25" />
 					<span className="size-2.5 rounded-full bg-muted-foreground/20" />
-					<span className="ml-2 text-xs font-medium text-muted-foreground">
+					<span className="ml-2 text-small font-medium text-muted-foreground">
 						{title}
 					</span>
 				</div>

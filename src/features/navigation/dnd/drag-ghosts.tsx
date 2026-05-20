@@ -79,7 +79,7 @@ export function RepoDragGhost({
 				width: dragState.width,
 			}}
 		>
-			<div className="flex w-full select-none items-center gap-2 rounded-lg px-2 py-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+			<div className="flex w-full select-none items-center gap-2 rounded-lg px-2 py-1 text-ui font-semibold tracking-[-0.01em] text-foreground">
 				<WorkspaceAvatar
 					repoIconSrc={repoIconSrc ?? undefined}
 					repoInitials={repoInitials}

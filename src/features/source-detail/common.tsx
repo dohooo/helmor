@@ -44,7 +44,7 @@ export function GitHubDetailPage({
 		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto px-4 [contain:content] [scrollbar-gutter:stable]">
 			<header className="shrink-0 py-1.5">
 				<div className="flex min-w-0 items-center justify-between gap-4">
-					<div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+					<div className="flex min-w-0 flex-wrap items-center gap-2 text-ui text-muted-foreground">
 						{card.state ? <StatePill state={card.state} /> : null}
 						<span className="font-medium text-foreground/80">
 							{reference.repo}
@@ -174,7 +174,7 @@ function DetailLoadingState() {
 
 function DetailErrorState({ error }: { error: Error }) {
 	return (
-		<div className="text-center text-[13px] text-muted-foreground">
+		<div className="text-center text-ui text-muted-foreground">
 			{error.message}
 		</div>
 	);
@@ -182,7 +182,7 @@ function DetailErrorState({ error }: { error: Error }) {
 
 function MarkdownBody({ body }: { body: string }) {
 	return (
-		<div className="conversation-markdown max-w-3xl break-words text-[13px] leading-6 text-foreground after:block after:h-24 after:content-['']">
+		<div className="conversation-markdown max-w-3xl break-words text-ui leading-6 text-foreground after:block after:h-24 after:content-['']">
 			<Suspense fallback={<MarkdownFallback body={body} />}>
 				<LazyStreamdown className="conversation-streamdown" mode="static">
 					{body}
@@ -208,7 +208,7 @@ export function StatePill({
 	return (
 		<span
 			className={cn(
-				"inline-flex h-6 shrink-0 items-center rounded-full border border-current/25 px-2.5 text-[12px] font-semibold leading-none",
+				"inline-flex h-6 shrink-0 items-center rounded-full border border-current/25 px-2.5 text-small font-semibold leading-none",
 				STATE_TONE_CLASS[state.tone],
 			)}
 		>

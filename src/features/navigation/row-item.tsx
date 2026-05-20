@@ -58,7 +58,7 @@ import {
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-interactive",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-ui cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -491,7 +491,7 @@ export const WorkspaceRowItem = memo(
 										"size-5 rounded-md p-0",
 										!isArchiveConfirmVisible && "text-muted-foreground",
 										isArchiveConfirmVisible &&
-											"h-5 w-auto min-w-11 px-1.5 text-[11px] font-medium leading-none transition-colors duration-100 hover:bg-destructive/10 hover:text-destructive active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-destructive/20",
+											"h-5 w-auto min-w-11 px-1.5 text-mini font-medium leading-none transition-colors duration-100 hover:bg-destructive/10 hover:text-destructive active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-destructive/20",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
 											: isArchiveConfirmVisible
@@ -515,7 +515,7 @@ export const WorkspaceRowItem = memo(
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 									>
 										<span>{actionLabel}</span>
 									</TooltipContent>

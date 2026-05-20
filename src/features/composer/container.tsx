@@ -961,7 +961,7 @@ export const WorkspaceComposerContainer = memo(
 							sending ? (
 								<ShimmerText
 									durationMs={1900}
-									className="truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground"
+									className="truncate text-small font-medium tracking-[0.02em] text-muted-foreground"
 								>
 									Working...
 								</ShimmerText>
@@ -972,7 +972,7 @@ export const WorkspaceComposerContainer = memo(
 										strokeWidth={1.8}
 										aria-hidden="true"
 									/>
-									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
+									<span className="truncate text-small font-medium tracking-[0.01em] text-muted-foreground">
 										{autoCloseHelpText}
 									</span>
 								</>

@@ -135,7 +135,7 @@ function MessageStatusBadge({ reason }: { reason?: string }) {
 	return (
 		<div
 			className={cn(
-				"mt-1 inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
+				"mt-1 inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-mini font-medium",
 				meta.tone,
 			)}
 		>

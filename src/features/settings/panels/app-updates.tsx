@@ -67,7 +67,7 @@ function DownloadProgressBar({ status }: { status: AppUpdateStatus }) {
 					<div className="h-full w-1/3 animate-pulse bg-foreground/50" />
 				)}
 			</div>
-			<div className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+			<div className="mt-1 text-mini tabular-nums text-muted-foreground">
 				{hasTotal
 					? `${formatBytes(downloaded)} / ${formatBytes(total)} · ${percent}%`
 					: formatBytes(downloaded)}

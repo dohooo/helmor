@@ -57,14 +57,14 @@ export function StepInput({
 				disabled={sending}
 				className="field-sizing-fixed min-h-32"
 			/>
-			<div className="min-h-4 text-xs text-muted-foreground">
+			<div className="min-h-4 text-small text-muted-foreground">
 				{!githubConnected ? (
 					<>
 						Connect GitHub in{" "}
 						<Button
 							variant="link"
 							size="xs"
-							className="h-auto p-0 text-xs"
+							className="h-auto p-0 text-small"
 							onClick={onOpenSettings}
 						>
 							Settings
@@ -76,7 +76,7 @@ export function StepInput({
 				) : null}
 			</div>
 			<div className="mt-1 flex items-center justify-between gap-3">
-				<p className="text-xs text-muted-foreground">
+				<p className="text-small text-muted-foreground">
 					{confirming
 						? `This will open an issue in ${HELMOR_UPSTREAM_SLUG}. Confirm?`
 						: null}
