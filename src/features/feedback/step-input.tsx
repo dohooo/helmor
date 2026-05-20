@@ -55,7 +55,7 @@ export function StepInput({
 				placeholder="Describe a bug, suggest an improvement, or ask a question."
 				aria-label="Feedback"
 				disabled={sending}
-				className="min-h-32"
+				className="field-sizing-fixed min-h-32"
 			/>
 			<div className="min-h-4 text-xs text-muted-foreground">
 				{!githubConnected ? (
