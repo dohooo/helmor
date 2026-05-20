@@ -68,6 +68,14 @@ path = "src/bin/helmor-cli.rs"
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
 
+# Upstream F1: minimal headless server binary. Reads framed JSON-RPC
+# requests from stdin, writes responses to stdout. Out-of-scope for
+# this slice: SSH transport, agent bridge, terminals, workspace ops.
+# Each lands as its own follow-up PR per the upstream roadmap.
+[[bin]]
+name = "helmor-server"
+path = "src/bin/helmor-server.rs"
+
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"
