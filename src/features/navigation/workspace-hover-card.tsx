@@ -9,7 +9,14 @@ import {
 	type LucideIcon,
 	MessageCircle,
 } from "lucide-react";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import {
 	LazyStreamdown,
@@ -472,6 +479,18 @@ function LiveSessionPreview({
 const HOVER_CARD_DIVIDER_GAP = 8;
 const HOVER_CARD_DEFAULT_SIDE_OFFSET = 10;
 
+function rectContainsPoint(
+	rect: DOMRect,
+	point: { x: number; y: number },
+): boolean {
+	return (
+		point.x >= rect.left &&
+		point.x <= rect.right &&
+		point.y >= rect.top &&
+		point.y <= rect.bottom
+	);
+}
+
 export function WorkspaceHoverCard({
 	row,
 	isSending,
@@ -484,6 +503,51 @@ export function WorkspaceHoverCard({
 	// Measured on open so the card's left edge snaps to the sidebar divider.
 	const [sideOffset, setSideOffset] = useState(HOVER_CARD_DEFAULT_SIDE_OFFSET);
 	const [open, setOpen] = useState(false);
+	// Ref on the inner wrapper of HoverCardContent, used both to read the
+	// rendered content rect and to attach a ResizeObserver for the layout-
+	// shrink watchdog below.
+	const contentWrapRef = useRef<HTMLDivElement>(null);
+	// Last known cursor position while the card is open. Browsers don't
+	// dispatch pointermove when only layout changes, so we use this together
+	// with a ResizeObserver to detect "card shrank out from under the cursor"
+	// (most commonly: streaming ends → LiveSessionPreview unmounts).
+	const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+	useEffect(() => {
+		if (!open) return;
+		const onMove = (event: PointerEvent) => {
+			lastPointerRef.current = { x: event.clientX, y: event.clientY };
+		};
+		window.addEventListener("pointermove", onMove, { passive: true });
+		return () => window.removeEventListener("pointermove", onMove);
+	}, [open]);
+	useEffect(() => {
+		if (!open) return;
+		const wrap = contentWrapRef.current;
+		if (!wrap) return;
+		const contentEl = wrap.closest<HTMLElement>(
+			'[data-slot="hover-card-content"]',
+		);
+		if (!contentEl) return;
+		const observer = new ResizeObserver(() => {
+			const pos = lastPointerRef.current;
+			if (!pos) return;
+			const triggerEl = document.querySelector<HTMLElement>(
+				`[data-workspace-row-id="${row.id}"]`,
+			);
+			const inContent = rectContainsPoint(
+				contentEl.getBoundingClientRect(),
+				pos,
+			);
+			const inTrigger = triggerEl
+				? rectContainsPoint(triggerEl.getBoundingClientRect(), pos)
+				: false;
+			if (!inContent && !inTrigger) {
+				setOpen(false);
+			}
+		});
+		observer.observe(contentEl);
+		return () => observer.disconnect();
+	}, [open, row.id]);
 	useEffect(() => {
 		const closeDuringDrag = () => {
 			if (
@@ -573,7 +637,7 @@ export function WorkspaceHoverCard({
 				sideOffset={sideOffset}
 				className="w-72 p-3"
 			>
-				<div className="flex flex-col gap-2.5">
+				<div ref={contentWrapRef} className="flex flex-col gap-2.5">
 					{/* Header: repo › branch | git status + status dot. */}
 					<div className="flex items-start justify-between gap-2">
 						<div className="flex min-w-0 items-center gap-2">
