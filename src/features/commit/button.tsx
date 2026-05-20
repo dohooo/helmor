@@ -11,6 +11,10 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	type MergeBlockedReason,
+	mergeBlockedShortLabel,
+} from "@/lib/commit-button-logic";
 import { cn } from "@/lib/utils";
 
 export type CommitButtonState = "idle" | "busy" | "done" | "error" | "disabled";
@@ -42,6 +46,8 @@ interface WorkspaceCommitButtonProps {
 	errorDurationMs?: number;
 	menuItems?: WorkspaceCommitAction[];
 	changeRequestName?: string;
+	/** Drives the idle label when `mode === "merge-blocked"`. */
+	mergeBlockedReason?: MergeBlockedReason | null;
 	className?: string;
 	onCommit?: () => void | Promise<void>;
 	onStateChange?: (nextState: CommitButtonState) => void;
@@ -120,6 +126,7 @@ export function getCommitButtonLabel(
 	mode: WorkspaceCommitButtonMode,
 	state: CommitButtonState,
 	changeRequestName: string,
+	mergeBlockedReason?: MergeBlockedReason | null,
 ): string {
 	if (mode === "create-pr") {
 		switch (state) {
@@ -146,6 +153,14 @@ export function getCommitButtonLabel(
 			case "disabled":
 				return `Open ${changeRequestName}`;
 		}
+	}
+	// Busy/done/error keep the generic "Merging…" / "Merged" / "Retry".
+	if (
+		mode === "merge-blocked" &&
+		mergeBlockedReason &&
+		(state === "idle" || state === "disabled")
+	) {
+		return mergeBlockedShortLabel(mergeBlockedReason);
 	}
 	return STATIC_STATE_LABELS[mode][state];
 }
@@ -296,6 +311,7 @@ export function WorkspaceCommitButton({
 	errorDurationMs = 1200,
 	menuItems,
 	changeRequestName = "PR",
+	mergeBlockedReason = null,
 	className,
 	onCommit,
 	onStateChange,
@@ -374,7 +390,13 @@ export function WorkspaceCommitButton({
 		mode !== "closed" &&
 		resolvedMenuItems.length > 0;
 	const mainText =
-		mainLabel ?? getCommitButtonLabel(mode, currentState, changeRequestName);
+		mainLabel ??
+		getCommitButtonLabel(
+			mode,
+			currentState,
+			changeRequestName,
+			mergeBlockedReason,
+		);
 	const mainIcon = getModeIcon(mode);
 	const optionsAriaLabel =
 		mode === "commit-and-push"

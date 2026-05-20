@@ -48,7 +48,9 @@ const NOT_GREEN_CHECK_STATUSES = new Set<CheckStatus>([
 	"running",
 	"failure",
 ]);
-const BLOCKED_MERGE_STATE_STATUSES = new Set([
+export type MergeBlockedReason = "BEHIND" | "BLOCKED" | "DRAFT" | "UNSTABLE";
+
+const BLOCKED_MERGE_STATE_STATUSES = new Set<MergeBlockedReason>([
 	"BEHIND",
 	"BLOCKED",
 	"DRAFT",
@@ -73,11 +75,46 @@ export function hasNonPassingForgeChecks(
 	return hasCheckStatus(forgeActionStatus, NOT_GREEN_CHECK_STATUSES);
 }
 
+export function getMergeBlockedReason(
+	forgeActionStatus: ForgeActionStatus | null | undefined,
+): MergeBlockedReason | null {
+	const state = forgeActionStatus?.mergeStateStatus;
+	if (!state) return null;
+	return BLOCKED_MERGE_STATE_STATUSES.has(state as MergeBlockedReason)
+		? (state as MergeBlockedReason)
+		: null;
+}
+
 export function hasBlockedMergeState(
 	forgeActionStatus: ForgeActionStatus | null | undefined,
 ): boolean {
-	const state = forgeActionStatus?.mergeStateStatus;
-	return state ? BLOCKED_MERGE_STATE_STATUSES.has(state) : false;
+	return getMergeBlockedReason(forgeActionStatus) !== null;
+}
+
+export function mergeBlockedShortLabel(reason: MergeBlockedReason): string {
+	switch (reason) {
+		case "BEHIND":
+			return "Behind Base";
+		case "BLOCKED":
+			return "Merge Blocked";
+		case "DRAFT":
+			return "Draft PR";
+		case "UNSTABLE":
+			return "Unstable";
+	}
+}
+
+export function mergeBlockedDetailText(reason: MergeBlockedReason): string {
+	switch (reason) {
+		case "BEHIND":
+			return "This branch is behind the base branch. Try anyway?";
+		case "BLOCKED":
+			return "Branch protection is blocking this merge. Likely a missing review, unresolved conversation, or required check. Try anyway?";
+		case "DRAFT":
+			return "This pull request is still a draft. Try anyway?";
+		case "UNSTABLE":
+			return "Non-required checks are failing. Try anyway?";
+	}
 }
 
 /**

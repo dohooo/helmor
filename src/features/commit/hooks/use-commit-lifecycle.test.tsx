@@ -891,7 +891,7 @@ describe("useWorkspaceCommitLifecycle", () => {
 		const dialog = getConfirmDialogProps(result.current.mergeConfirmDialogNode);
 		expect(dialog.title).toBe("Try blocked merge?");
 		expect(dialog.description).toBe(
-			"GitHub says this merge is blocked. Try anyway?",
+			"Branch protection is blocking this merge. Likely a missing review, unresolved conversation, or required check. Try anyway?",
 		);
 		expect(dialog.confirmLabel).toBe("Try anyway");
 

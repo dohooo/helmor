@@ -20,8 +20,9 @@ import {
 import {
 	deriveCommitButtonMode,
 	deriveCommitButtonState,
-	hasBlockedMergeState,
+	getMergeBlockedReason,
 	hasNonPassingForgeChecks,
+	mergeBlockedDetailText,
 } from "@/lib/commit-button-logic";
 import {
 	buildCommitButtonPrompt,
@@ -290,10 +291,13 @@ export function useWorkspaceCommitLifecycle({
 							return;
 						}
 					}
-					if (!checksHaveNotPassed && hasBlockedMergeState(currentStatus)) {
+					const blockedReason = checksHaveNotPassed
+						? null
+						: getMergeBlockedReason(currentStatus);
+					if (blockedReason) {
 						const confirmed = await requestMergeConfirmation({
 							title: "Try blocked merge?",
-							description: "GitHub says this merge is blocked. Try anyway?",
+							description: mergeBlockedDetailText(blockedReason),
 							confirmLabel: "Try anyway",
 						});
 						if (!confirmed) {

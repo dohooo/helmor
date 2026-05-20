@@ -21,6 +21,7 @@ import type {
 	ForgeActionStatus,
 	ForgeDetection,
 } from "@/lib/api";
+import type { MergeBlockedReason } from "@/lib/commit-button-logic";
 import { useSettings } from "@/lib/settings";
 import { useMinDisplayDuration } from "@/lib/use-min-display-duration";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,8 @@ export type GitSectionHeaderProps = {
 	commitButtonMode: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
+	/** Forwarded to the commit button when `commitButtonMode === "merge-blocked"`. */
+	mergeBlockedReason?: MergeBlockedReason | null;
 	hasChanges?: boolean;
 	/**
 	 * Whether change request data is currently being (re)fetched. Drives the
@@ -100,6 +103,7 @@ export function GitSectionHeader({
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
+	mergeBlockedReason = null,
 	hasChanges = false,
 	isRefreshing = false,
 	changeRequestName = "PR",
@@ -389,6 +393,7 @@ export function GitSectionHeader({
 											mode={commitButtonMode}
 											state={commitButtonState}
 											changeRequestName={changeRequestName}
+											mergeBlockedReason={mergeBlockedReason}
 											className="self-center rounded-md"
 											onCommit={onCommit}
 										/>
@@ -404,6 +409,7 @@ export function GitSectionHeader({
 												commitButtonMode,
 												"idle",
 												changeRequestName,
+												mergeBlockedReason,
 											)}
 										</span>
 										<InlineShortcutDisplay

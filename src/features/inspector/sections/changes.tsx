@@ -56,6 +56,7 @@ import {
 	openFileInEditor,
 	revealPathInFinder,
 } from "@/lib/api";
+import { getMergeBlockedReason } from "@/lib/commit-button-logic";
 import {
 	type ActiveEditorTarget,
 	type DiffOpenOptions,
@@ -304,6 +305,7 @@ export function ChangesSection({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest}
+				mergeBlockedReason={getMergeBlockedReason(forgeStatusQuery.data)}
 				changeRequestName={changeRequestName}
 				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
 				forgeDetection={forgeDetection}
