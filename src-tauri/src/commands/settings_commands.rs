@@ -28,34 +28,198 @@ static CODEX_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE
 /// by `commands::voice_tools`) carry per-tool specifics; this prompt
 /// only covers cross-cutting behavior.
 const VOICE_AGENT_INSTRUCTIONS: &str = r#"# Role
-You are Helmor's voice operator. Prefer actions over narration. Use tools for app work; speak only the short user-facing result.
+You are Helmor's voice operator. Prefer actions over narration. Use tools for every task; speak only the short user-facing result.
 
 # Language and style
-- Reply entirely in the user's language. Keep repo/workspace names as-is.
+- Reply entirely in the user's language. Keep repo / workspace / tool names as-is.
 - Be terse: one short sentence, no opener, no "let me know".
 - Never read UUIDs, hashes, file paths, raw JSON, markdown, or URLs aloud.
-- If audio is silence/background/not addressed to you, call `wait_for_user`.
+- If audio is silence / background / not addressed to you, call `wait_for_user`.
+- User says they are done, says bye, or asks to stop -> short goodbye, then `end_session`.
+- Visual refs ("look at this", "this error", "check this") -> `capture_screen` once; default `window`, `screen` only if asked.
 
-# Routing
-1. New work request without a workspace anchor -> `create_workspace_and_send`. If repo is unclear, `list_repos` first. If user asks for variants/方案/A-B in one repo -> `create_workspace_variants`.
-2. Anchored workspace request -> `send_prompt`. "Current" means the most recently created/selected workspace.
-3. Ship actions -> `run_workspace_action`: commit/push, create PR/MR, merge, pull latest, fix CI/errors, resolve conflicts.
-4. Setup/run script -> `run_workspace_script`.
-5. Status/read queries -> `list_workspaces`, `show_workspace`, `list_sessions`, `search_sessions`, `get_session_messages`, `list_context_items`, `get_context_item_detail`.
-6. Stop/cancel a running agent session -> `stop_session`.
-7. "Look at this/screen/error/PR" -> `capture_screen` once. After the image arrives, either act with the right tool or ask one short clarifying question.
-8. Switching view only -> `select_workspace`.
-9. User says they are done/bye/不用了/没事了 -> speak a short goodbye, then call `end_session`.
+# Tool model
+Use Helmor native tools directly for local app/workspace/repo/session work. Use Executor meta-tools only for external MCP sources (GitHub, Sentry, Linear, etc.):
+- `search_mcp_tools` finds external tool paths; `describe_mcp_tool` gets parameters; `call_mcp_tool` invokes with required `arguments`; `approve_mcp_call` resumes paused approvals.
+- On `completed`, summarize briefly. On `paused`, say what needs approval and wait.
+- Never search or call Executor tools in the `helmor` namespace. Helmor's own app commands are native tools.
+
+# Operating policy
+- Think first. Prefer 1-2 cheap read-only probes over asking for missing details.
+- Use narrow searches with small limits. If a filtered namespace search is empty, retry once unfiltered.
+- After search, read tool name/description. Before calling an external tool, use `describe_mcp_tool` unless this turn already has the exact input schema.
+- `call_mcp_tool.arguments` is always required. Match `describe_mcp_tool.inputTypeScript`; do not call external tools with `{}`.
+- After any missing-parameter/schema/validation error from `call_mcp_tool`, your next tool call for the same external task must be `describe_mcp_tool`.
+- Read-only queries (list / show / search) don't need confirmation.
+- For write / destructive / external side effects, state exactly what will happen and wait for explicit yes.
+- If a tool fails or rate-limits, say the plain cause and stop.
+- For local tool failures on the same user task: make at most 3 tool attempts total. After the first failed local tool call, your next tool call MUST be `describe_local_tools` for the failed or likely replacement tool. If the third attempt fails, stop and explain the cause briefly.
+
+# Helmor local context
+Helmor is the user's local workspace manager. Do not use Executor for Helmor-native work:
+- Read tools: `list_repos`, `list_workspaces`, `show_workspace`, `list_sessions`, `search_sessions`, `get_session_messages`.
+- Action tools: `create_workspace`, `create_workspace_and_send`, `create_workspace_variants`, `send_prompt`, `set_workspace_status`, `archive_workspace`, `permanently_delete_workspace`, `run_workspace_action`, `run_workspace_script`, `stop_session`, `select_workspace`.
+- Helper tool: `describe_local_tools`. If a local tool name clearly matches the user intent, call that local tool directly; do not call `describe_local_tools` first.
+- Use `describe_local_tools` only when local arguments/tool choice are unclear, or after a local tool fails.
+- For vague repo/workspace names ("Helmor", "helmer", "kale", "this repo", "this workspace"), probe locally first with `list_repos` or `list_workspaces`; ask only if multiple plausible matches remain.
+- GitHub repo remotes parse as owner/repo: `git@github.com:owner/repo.git`, `https://github.com/owner/repo.git`, or `https://github.com/owner/repo`.
+- Example: "count PRs for Helmor" -> `list_repos`, infer the GitHub repo slug, then use Executor GitHub tools.
+- Example: "check Sentry errors for this workspace" -> `list_workspaces` or `show_workspace`, then use Executor Sentry tools.
+- Example: "make the current workspace fix tests" -> `list_workspaces`, then `send_prompt`.
+- Ask only if local probes return multiple plausible matches with no clear winner.
+- For external systems, search by intent. If namespace is unknown, search unfiltered with the system name.
+- Do not repeatedly search the same thing in one turn.
 
 # Safety
-- Destructive delete requires confirmation first; then call `permanently_delete_workspace` with `confirmed=true`.
-- Moving a workspace to `canceled` requires confirmation first.
-- Archive is reversible; no confirmation.
+- For destructive/external side effects, require explicit confirmation even if Executor did not pause.
 - If a tool fails, say the human-readable cause and stop.
-
-# Tool uncertainty
-Tool descriptions are intentionally compact. If you are unsure which tool or argument shape to use, call `describe_voice_tools` for the relevant tool names, then continue. Do not guess unknown IDs; get them from list tools.
+- Never invent `tool_path` values. Never invent arguments for a tool you
+  haven't searched in this session.
 "#;
+
+fn voice_agent_instructions_with_current_time() -> String {
+    let now = chrono::Local::now();
+    let current_context = match current_helmor_context() {
+        Ok(Some(context)) => format!("\n\n{}", context.to_instruction_block()),
+        Ok(None) => String::new(),
+        Err(error) => {
+            tracing::warn!(
+                target: "helmor_lib::voice_session",
+                "failed to build current Helmor context: {error:#}"
+            );
+            String::new()
+        }
+    };
+    format!(
+        "# Time\n- Now: {}.\n- Resolve relative dates from Now.{}\
+        \n\n{}",
+        now.format("%Y-%m-%d %H:%M:%S %:z"),
+        current_context,
+        VOICE_AGENT_INSTRUCTIONS
+    )
+}
+
+#[derive(Debug, Default)]
+struct CurrentHelmorContext {
+    repository_slug: Option<String>,
+    workspace_ref: Option<String>,
+    active_session: Option<String>,
+}
+
+impl CurrentHelmorContext {
+    fn to_instruction_block(&self) -> String {
+        let mut lines = vec!["# Helmor context".to_string()];
+        if let Some(slug) = &self.repository_slug {
+            lines.push(format!("- Repo slug: {slug}"));
+        }
+        if let Some(workspace_ref) = &self.workspace_ref {
+            lines.push(format!("- Workspace ref: {workspace_ref}"));
+        }
+        if let Some(active_session) = &self.active_session {
+            lines.push(format!("- Active session: {active_session}"));
+        }
+        lines.push("- Prefer this for current, this, here, latest, or it.".to_string());
+        lines.join("\n")
+    }
+}
+
+fn current_helmor_context() -> anyhow::Result<Option<CurrentHelmorContext>> {
+    let Some(workspace_id) = settings::load_setting_value("app.last_workspace_id")? else {
+        return Ok(None);
+    };
+    let Some(workspace) = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
+    else {
+        return Ok(None);
+    };
+
+    let repository_slug = crate::forge::accounts::forge_target_from(
+        workspace.forge_provider.as_deref(),
+        workspace.remote_url.as_deref(),
+    )
+    .map(|target| {
+        format!(
+            "{}:{}/{}",
+            target.provider.as_storage_str(),
+            target.owner,
+            target.name
+        )
+    });
+    let workspace_ref = clean_context_value(workspace.branch.as_deref())
+        .or_else(|| clean_context_value(Some(&workspace.directory_name)))
+        .or_else(|| clean_context_value(Some(&workspace.id)));
+    let active_session = current_active_session_for_context(
+        &workspace.id,
+        workspace.active_session_id.as_deref(),
+        workspace.active_session_title.as_deref(),
+    )?;
+
+    let context = CurrentHelmorContext {
+        repository_slug,
+        workspace_ref,
+        active_session,
+    };
+    if context.repository_slug.is_none()
+        && context.workspace_ref.is_none()
+        && context.active_session.is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(context))
+}
+
+fn current_active_session_for_context(
+    workspace_id: &str,
+    fallback_session_id: Option<&str>,
+    fallback_title: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let last_session_id = settings::load_setting_value("app.last_session_id")?;
+    let selected_session = match last_session_id.as_deref() {
+        Some(session_id) => load_session_context_label(workspace_id, session_id)?,
+        None => None,
+    };
+    if selected_session.is_some() {
+        return Ok(selected_session);
+    }
+    Ok(format_session_context_label(
+        fallback_session_id,
+        fallback_title,
+    ))
+}
+
+fn load_session_context_label(
+    workspace_id: &str,
+    session_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let conn = db::read_conn()?;
+    let mut stmt =
+        conn.prepare("SELECT title FROM sessions WHERE id = ?1 AND workspace_id = ?2 LIMIT 1")?;
+    let mut rows = stmt.query(rusqlite::params![session_id, workspace_id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    let title: Option<String> = row.get(0)?;
+    Ok(format_session_context_label(
+        Some(session_id),
+        title.as_deref(),
+    ))
+}
+
+fn format_session_context_label(session_id: Option<&str>, title: Option<&str>) -> Option<String> {
+    match (clean_context_value(title), clean_context_value(session_id)) {
+        (Some(title), Some(id)) => Some(format!("{title} [{id}]")),
+        (Some(title), None) => Some(title),
+        (None, Some(id)) => Some(id),
+        (None, None) => None,
+    }
+}
+
+fn clean_context_value(value: Option<&str>) -> Option<String> {
+    let value = value?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.chars().take(96).collect())
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +308,7 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .context("build OpenAI Realtime HTTP client")?;
+        let instructions = voice_agent_instructions_with_current_time();
         let tools = super::voice_agent::build_tools_array();
         let tool_size_summaries = summarize_tool_payload_sizes(&tools);
         let tool_size_summaries_json =
@@ -154,7 +319,7 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
         tracing::info!(
             target: "helmor_lib::voice_session",
             tools_count = tools.len(),
-            instructions_chars = VOICE_AGENT_INSTRUCTIONS.chars().count(),
+            instructions_chars = instructions.chars().count(),
             tools_json_bytes,
             largest_tools = %tool_size_summaries_json,
             "assembled session payload"
@@ -167,26 +332,24 @@ pub async fn create_openai_realtime_client_secret() -> CmdResult<OpenAiRealtimeC
             "session": {
                 "type": "realtime",
                 "model": "gpt-realtime-2",
-                "instructions": VOICE_AGENT_INSTRUCTIONS,
-                // Per the gpt-realtime-2 prompting guide and our research
-                // notes, production voice agents should start at `low` --
-                // higher effort adds 1-2 s to time-to-first-audio. Bump
-                // only if multi-step request quality suffers.
-                "reasoning": { "effort": "low" },
+                "instructions": instructions,
+                // Medium gives the realtime voice agent enough planning
+                // depth for multi-step tool routing while avoiding the
+                // latency / TPM pressure of high.
+                "reasoning": { "effort": "medium" },
+                // Default is `inf`, which lets gpt-realtime-2 reserve up
+                // to its 32k max output budget for a response. Voice-mode
+                // replies and tool arguments should be tiny, so cap this
+                // hard to avoid burning most of the TPM bucket per turn.
+                "max_output_tokens": 512,
                 "output_modalities": ["audio"],
                 // Multi-tool sessions accumulate context fast. retention_ratio
-                // 0.8 drops the bottom 20% of items when we approach the
-                // window cap, preserving prompt-cache hits on the system
-                // prompt + tool definitions.
-                //
-                // Note: `max_response_output_tokens` is documented in the
-                // Azure mirror but rejected as an unknown parameter by the
-                // GA OpenAI API as of 2026-05-11. Omitted until we confirm
-                // the correct field name; the model's internal limits and
-                // the terse prompt are enough to keep responses short.
+                // 0.7 drops the oldest 30% of conversation items once the
+                // window cap is reached, reducing repeated truncations in
+                // long sessions without changing the tool surface.
                 "truncation": {
                     "type": "retention_ratio",
-                    "retention_ratio": 0.8
+                    "retention_ratio": 0.7
                 },
                 "audio": {
                     "input": {
@@ -374,19 +537,21 @@ mod tests {
 
     #[test]
     fn realtime_session_static_payload_stays_compact() {
+        let instructions = voice_agent_instructions_with_current_time();
+        let instructions_chars = instructions.chars().count();
         let tools = super::super::voice_agent::build_tools_array();
         let tools_json_bytes = serde_json::to_vec(&tools).unwrap().len();
         let body = serde_json::json!({
             "session": {
-                "instructions": VOICE_AGENT_INSTRUCTIONS,
+                "instructions": instructions,
                 "tools": tools,
             }
         });
         let body_json_bytes = serde_json::to_vec(&body).unwrap().len();
 
         assert!(
-            VOICE_AGENT_INSTRUCTIONS.chars().count() < 4_000,
-            "voice instructions grew too large"
+            instructions_chars < 4_500,
+            "voice instructions grew too large: {instructions_chars} chars"
         );
         assert!(
             tools_json_bytes < 10_000,

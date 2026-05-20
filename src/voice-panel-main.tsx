@@ -1,7 +1,7 @@
 import "./App.css";
 import "./voice-panel.css";
 import { listen } from "@tauri-apps/api/event";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { voiceDiag } from "@/features/voice-mode/voice-diag";
 import { VoiceModeBar } from "@/features/voice-mode/voice-mode-bar";
@@ -28,6 +28,7 @@ function diag(event: string, data?: Record<string, unknown>) {
 
 function VoicePanelApp() {
 	const [voiceState, setVoiceState] = useState<VoicePanelState>(INACTIVE_STATE);
+	const lastLoggedVoiceStateRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		diag("mount");
@@ -56,14 +57,23 @@ function VoicePanelApp() {
 		let cancelled = false;
 		let unlisten: (() => void) | undefined;
 		void listen<VoicePanelState>(VOICE_STATE_EVENT, (event) => {
-			diag("voice-state", {
+			const logKey = JSON.stringify({
 				active: event.payload.active,
 				phase: event.payload.phase,
 				label: event.payload.label ?? null,
 				tone: event.payload.tone ?? null,
-				documentHasFocus: document.hasFocus(),
-				visibilityState: document.visibilityState,
 			});
+			if (logKey !== lastLoggedVoiceStateRef.current) {
+				lastLoggedVoiceStateRef.current = logKey;
+				diag("voice-state", {
+					active: event.payload.active,
+					phase: event.payload.phase,
+					label: event.payload.label ?? null,
+					tone: event.payload.tone ?? null,
+					documentHasFocus: document.hasFocus(),
+					visibilityState: document.visibilityState,
+				});
+			}
 			setVoiceState(event.payload);
 		}).then((stop) => {
 			if (cancelled) {

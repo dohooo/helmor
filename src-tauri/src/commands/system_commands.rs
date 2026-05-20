@@ -1173,7 +1173,17 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     };
     sidecar.shutdown(cooperative, escalation);
 
-    // 4. Done — terminate the process.
+    // 4. Stop the Executor daemon (SIGTERM → 5s → SIGKILL). Independent of
+    //    the sidecar — it owns its own bunx-started child process group.
+    tracing::info!(
+        target: "executor::lifecycle",
+        "request_quit: stopping executor (step 4)"
+    );
+    app.state::<crate::executor_studio::ManagedExecutor>()
+        .shutdown();
+
+    // 5. Done — terminate the process.
+    tracing::info!(force, "request_quit: calling app.exit(0)");
     app.exit(0);
 }
 

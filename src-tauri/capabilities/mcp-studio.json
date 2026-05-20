@@ -1,0 +1,11 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "mcp-studio",
+	"description": "Capability for the MCP Studio webview window. Loads the executor daemon's HTTP UI (http://127.0.0.1:<port>) so the user can manage MCP sources, secrets, and tools graphically.",
+	"windows": ["mcp-studio"],
+	"permissions": [
+		"core:default",
+		"core:event:default",
+		"core:window:allow-start-dragging"
+	]
+}

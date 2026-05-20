@@ -537,6 +537,30 @@ pub fn create_session(
     Ok(CreateSessionResponse { session_id })
 }
 
+pub fn update_session_settings(
+    session_id: &str,
+    model: Option<&str>,
+    effort_level: Option<&str>,
+    permission_mode: Option<&str>,
+    fast_mode: Option<bool>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    connection
+        .execute(
+            r#"
+            UPDATE sessions SET
+              model = COALESCE(?2, model),
+              effort_level = COALESCE(?3, effort_level),
+              permission_mode = COALESCE(?4, permission_mode),
+              fast_mode = COALESCE(?5, fast_mode)
+            WHERE id = ?1
+            "#,
+            rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode],
+        )
+        .context("Failed to update session settings")?;
+    Ok(())
+}
+
 /// Read the `model` column from a session row.
 pub fn get_session_model(session_id: &str) -> Result<Option<String>> {
     let conn = db::read_conn()?;

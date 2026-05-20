@@ -22,9 +22,19 @@ function diag(event: string, data?: Record<string, unknown>) {
  *  sync with the `ToolKind` enum in
  *  `src-tauri/src/commands/voice_agent.rs::ToolKind` — the
  *  `tool_name_set_matches_frontend_contract` Rust test will flag any
- *  drift between the two lists at build time. */
+ *  drift between the two lists at build time.
+ *
+ *  Executor meta tools handle external MCP sources. Helmor native
+ *  tools run directly in-process through Rust typed handlers.
+ */
 type ToolName =
-	| "describe_voice_tools"
+	| "search_mcp_tools"
+	| "describe_mcp_tool"
+	| "call_mcp_tool"
+	| "approve_mcp_call"
+	| "wait_for_user"
+	| "end_session"
+	| "describe_local_tools"
 	| "list_workspaces"
 	| "show_workspace"
 	| "create_workspace"
@@ -41,16 +51,52 @@ type ToolName =
 	| "stop_session"
 	| "send_prompt"
 	| "list_repos"
-	| "list_context_items"
-	| "get_context_item_detail"
 	| "select_workspace"
-	| "capture_screen"
-	| "wait_for_user"
-	| "end_session";
+	| "capture_screen";
 
 /** Re-export of the Rust-side mutation kind enum. Kept as a TS type
  *  alias rather than its own union so they can't drift independently. */
 export type AgentMutationKind = VoiceToolMutationKind;
+
+const MIN_RESPONSE_CREATE_REMAINING_TOKENS = 5_000;
+const MAX_RATE_LIMIT_WAIT_MS = 15_000;
+
+function sleep(ms: number) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type TokenBudget = {
+	remaining: number;
+	resetAtMs: number;
+	resetSeconds: number;
+};
+
+function readTokenBudget(event: RealtimeServerEvent): TokenBudget | null {
+	const limits = event.rate_limits;
+	if (!Array.isArray(limits)) {
+		return null;
+	}
+	const tokenLimit = limits.find((limit) => {
+		return (
+			limit != null &&
+			typeof limit === "object" &&
+			(limit as Record<string, unknown>).name === "tokens"
+		);
+	}) as Record<string, unknown> | undefined;
+	if (!tokenLimit) {
+		return null;
+	}
+	const remaining = tokenLimit.remaining;
+	const resetSeconds = tokenLimit.reset_seconds;
+	if (typeof remaining !== "number" || typeof resetSeconds !== "number") {
+		return null;
+	}
+	return {
+		remaining,
+		resetAtMs: Date.now() + resetSeconds * 1000,
+		resetSeconds,
+	};
+}
 
 /** Tracked per call_id as deltas stream in. */
 type PendingCall = {
@@ -116,15 +162,35 @@ export type ToolDispatcher = {
 export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 	const pendingByCallId = new Map<string, PendingCall>();
 	const callsByResponseId = new Map<string, string[]>();
+	let tokenBudget: TokenBudget | null = null;
+	let disposed = false;
 
 	function reset() {
+		disposed = true;
 		pendingByCallId.clear();
 		callsByResponseId.clear();
+		tokenBudget = null;
+	}
+
+	function responseCreateDelayMs() {
+		if (
+			!tokenBudget ||
+			tokenBudget.remaining >= MIN_RESPONSE_CREATE_REMAINING_TOKENS
+		) {
+			return 0;
+		}
+		return Math.min(
+			Math.max(0, tokenBudget.resetAtMs - Date.now()) + 500,
+			MAX_RATE_LIMIT_WAIT_MS,
+		);
 	}
 
 	function handleEvent(event: RealtimeServerEvent) {
 		const eventType = event.type;
 		if (!eventType) return;
+		if (eventType === "rate_limits.updated") {
+			tokenBudget = readTokenBudget(event) ?? tokenBudget;
+		}
 
 		// Targeted server-side echo. We *don't* echo every event type
 		// (transcript deltas alone fire ~30 times per second and would
@@ -260,7 +326,7 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// Fire-and-forget — execution races forward off the event
 			// loop. Errors are caught inside `executeCalls` so a single
 			// bad tool can't abort the whole response.
-			void executeCalls(calls, opts);
+			void executeCalls(calls, opts, responseCreateDelayMs, () => disposed);
 			return;
 		}
 	}
@@ -271,7 +337,12 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 /** Run every function_call collected from one `response.done`, in
  *  parallel, then submit outputs + a single `response.create` to nudge
  *  the model into speaking the answer. */
-async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
+async function executeCalls(
+	calls: PendingCall[],
+	opts: DispatcherOptions,
+	getResponseCreateDelayMs?: () => number,
+	isDisposed?: () => boolean,
+) {
 	for (const c of calls) {
 		console.log(
 			"[helmor voice] tool call →",
@@ -289,16 +360,18 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 		});
 	}
 	const results = await Promise.all(calls.map((c) => runCall(c)));
+	if (isDisposed?.()) {
+		diag("tool-results-discarded", {
+			callCount: calls.length,
+			reason: "dispatcher-reset",
+		});
+		return;
+	}
 	for (const r of results) {
-		console.log("[helmor voice] tool call ←", r.callId, r.output.slice(0, 200));
-		// Slim summary — log the truncated output (matches the
-		// console line) plus the `image` envelope side-channel
-		// presence, which is the bit operators are usually grepping
-		// for when triaging `capture_screen`. Keep the data_url out
-		// of the log; the Rust side already records its byte count.
+		console.log("[helmor voice] tool call ←", r.callId, r.output);
 		diag("tool-call-end", {
 			callId: r.callId,
-			outputPreview: r.output.slice(0, 200),
+			output: r.output,
 			hasImage: r.image != null,
 			imageMeta: r.image
 				? { width: r.image.width, height: r.image.height }
@@ -380,6 +453,18 @@ async function executeCalls(calls: PendingCall[], opts: DispatcherOptions) {
 	// nudge whenever any call in this batch ended the session.
 	const isEndSessionBatch = results.some((r) => r.endSession);
 	if (!isEndSessionBatch) {
+		const delayMs = getResponseCreateDelayMs?.() ?? 0;
+		if (delayMs > 0) {
+			diag("response-create-delayed", {
+				delayMs,
+				reason: "token-rate-limit",
+			});
+			await sleep(delayMs);
+		}
+		if (isDisposed?.()) {
+			diag("response-create-skipped", { reason: "dispatcher-reset" });
+			return;
+		}
 		diag("response-create", {
 			callCount: results.length,
 			imageCount: results.filter((r) => r.image != null).length,

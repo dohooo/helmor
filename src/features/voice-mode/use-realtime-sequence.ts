@@ -10,6 +10,7 @@ import {
 import {
 	type AgentMutationKind,
 	createToolDispatcher,
+	type ToolDispatcher,
 } from "./tool-dispatcher";
 import { useAudioLevel } from "./use-audio-level";
 import { voiceDiag } from "./voice-diag";
@@ -276,6 +277,7 @@ export function useRealtimeSequence(
 
 		let cancelled = false;
 		let session: RealtimeVoiceSession | null = null;
+		let dispatcher: ToolDispatcher | null = null;
 
 		const handleEvent = (event: RealtimeServerEvent) => {
 			const eventType = event.type;
@@ -538,7 +540,7 @@ export function useRealtimeSequence(
 				// Wire the agent tool dispatcher first so it sees every
 				// function-call delta before our UI handler reacts. Both
 				// run for every event -- they're observers, not consumers.
-				const dispatcher = createToolDispatcher({
+				const nextDispatcher = createToolDispatcher({
 					send: next.send,
 					onMutation: invalidateCaches,
 					// Route through refs so the dispatcher always sees
@@ -555,7 +557,8 @@ export function useRealtimeSequence(
 						dispatchActionRef.current?.(workspaceId, actionKind);
 					},
 				});
-				next.onEvent((event) => dispatcher.handleEvent(event));
+				dispatcher = nextDispatcher;
+				next.onEvent((event) => nextDispatcher.handleEvent(event));
 				next.onEvent(handleEvent);
 				// Optimistic ready signal: by the time this `.then` runs,
 				// `setRemoteDescription(answer)` has resolved — the WebRTC
@@ -588,6 +591,8 @@ export function useRealtimeSequence(
 				clearTimeout(pendingTransitionRef.current);
 				pendingTransitionRef.current = null;
 			}
+			dispatcher?.reset();
+			dispatcher = null;
 			clearLingerTimer();
 			transcriptBufferRef.current = "";
 			session?.stop();
@@ -658,10 +663,6 @@ function humanToolStatus(name: string): string {
 			return "Sending to agent";
 		case "list_repos":
 			return "Listing repos";
-		case "list_context_items":
-			return "Fetching contexts";
-		case "get_context_item_detail":
-			return "Reading context";
 		case "capture_screen":
 			return "Reading screen";
 		default:

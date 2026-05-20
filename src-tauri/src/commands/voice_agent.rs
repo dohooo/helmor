@@ -23,16 +23,17 @@
 //! build if you forget step 2 or 3 after adding step 1.
 
 use anyhow::{Context, Result};
+#[cfg(test)]
 use clap::CommandFactory;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+use tauri::Manager;
+
+#[cfg(test)]
 use crate::cli::Cli;
-use crate::forge::{
-    accounts::forge_target_from, forge_backend_for, ForgeProvider, InboxItemDetail, InboxKind,
-    InboxPage, InboxSource,
-};
+use crate::executor_studio::{client::ResumeAction, ManagedExecutor};
 use crate::models;
 use crate::pipeline::types::{HistoricalRecord, MessageRole};
 use crate::service;
@@ -64,9 +65,27 @@ pub enum MutationKind {
 /// and [`run`] enforce that every variant has both a declaration (for
 /// the OpenAI session payload + frontend dispatch) and a handler (for
 /// in-process execution).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
-    DescribeVoiceTools,
+    // ─── Executor-routed meta tools ─────────────────────────────────
+    // External systems (GitHub, Sentry, Linear, ...) go through
+    // Executor's QuickJS sandbox via `POST /api/executions`.
+    SearchMcpTools,
+    DescribeMcpTool,
+    CallMcpTool,
+    ApproveMcpCall,
+    // ─── Front-end-only short-circuit signals ────────────────────────
+    // These never round-trip to Rust — `tool-dispatcher.ts` matches the
+    // name and handles the UX (stay silent / tear down voice mode). The
+    // `run()` arms below still ack with `{ok: true}` as a safety net.
+    WaitForUser,
+    EndSession,
+    // ─── Helmor native typed tools ──────────────────────────────────
+    // Internal app/workspace operations run directly in-process. Do not
+    // route these through Executor; the typed Rust handlers below call
+    // the same service/model code as the rest of Helmor.
+    DescribeLocalTools,
     ListWorkspaces,
     ShowWorkspace,
     CreateWorkspace,
@@ -83,12 +102,8 @@ pub enum ToolKind {
     StopSession,
     SendPrompt,
     ListRepos,
-    ListContextItems,
-    GetContextItemDetail,
     SelectWorkspace,
     CaptureScreen,
-    WaitForUser,
-    EndSession,
 }
 
 /// Tool declaration metadata. The JSON Schema in `parameters` is the
@@ -98,9 +113,11 @@ pub enum ToolKind {
 pub struct ToolMetadata {
     pub name: &'static str,
     pub parameters: Value,
+    #[allow(dead_code)]
     pub cli_path: Option<&'static [&'static str]>,
     pub invalidates: &'static [MutationKind],
     /// Voice-context preamble prepended to the clap help body.
+    #[allow(dead_code)]
     pub use_when: &'static str,
 }
 
@@ -205,8 +222,19 @@ impl ToolKind {
     /// Every variant, in OpenAI-payload presentation order. Kept as a
     /// `const` so iteration in `build_tools_array` and the unit tests
     /// is allocation-free.
+    ///
+    /// The voice agent sees both:
+    ///   * Executor meta tools for external MCP sources.
+    ///   * Helmor native typed tools for in-process app/workspace work.
+    ///
     pub const ALL: &'static [ToolKind] = &[
-        Self::DescribeVoiceTools,
+        Self::SearchMcpTools,
+        Self::DescribeMcpTool,
+        Self::CallMcpTool,
+        Self::ApproveMcpCall,
+        Self::WaitForUser,
+        Self::EndSession,
+        Self::DescribeLocalTools,
         Self::ListWorkspaces,
         Self::ShowWorkspace,
         Self::CreateWorkspace,
@@ -223,12 +251,8 @@ impl ToolKind {
         Self::StopSession,
         Self::SendPrompt,
         Self::ListRepos,
-        Self::ListContextItems,
-        Self::GetContextItemDetail,
         Self::SelectWorkspace,
         Self::CaptureScreen,
-        Self::WaitForUser,
-        Self::EndSession,
     ];
 
     /// Match a tool name (from the model's function-call event) to a
@@ -243,8 +267,126 @@ impl ToolKind {
 
     pub fn metadata(self) -> ToolMetadata {
         match self {
-            Self::DescribeVoiceTools => ToolMetadata {
-                name: "describe_voice_tools",
+            Self::SearchMcpTools => ToolMetadata {
+                name: "search_mcp_tools",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural-language description of what you want to do in an external system. Use narrow queries."
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Optional external source filter to scope the search (e.g. 'github', 'sentry', 'linear')."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "How many matches to return (default 5, max 12).",
+                            "minimum": 1,
+                            "maximum": 12
+                        }
+                    },
+                    "required": ["query"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: the user mentions any external system (GitHub, Linear, \
+                           Stripe, ...). For Helmor local workspaces / sessions / repos, \
+                           use native tools instead. Always call this BEFORE call_mcp_tool — it \
+                           returns ranked tool paths (e.g. `github.issues.list`) you then \
+                           hand to call_mcp_tool. Prefer specific queries and limit 3-5 to keep results small. Returns \
+                           { status, structured: { result: { items: [{path, name, description, \
+                           score}, ...] } } }. If items is empty, retry once unfiltered if a \
+                           namespace was used; otherwise the source may not be configured.",
+            },
+            Self::DescribeMcpTool => ToolMetadata {
+                name: "describe_mcp_tool",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "tool_path": {
+                            "type": "string",
+                            "description": "Dot-separated tool path from search_mcp_tools, e.g. 'githubcopilot_mcp.list_pull_requests'."
+                        }
+                    },
+                    "required": ["tool_path"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: you have a tool_path from search_mcp_tools but do not \
+                           know its exact required arguments, or call_mcp_tool returned a \
+                           missing-parameter/schema error. Returns Executor's compact \
+                           argument schema for that tool; then retry call_mcp_tool with \
+                           matching JSON arguments. For GitHub repo tools, combine this \
+                           with Helmor repo data by parsing owner/repo from SSH remotes \
+                           like `git@github.com:owner/repo.git` or HTTPS remotes like \
+                           `https://github.com/owner/repo.git`.",
+            },
+            Self::CallMcpTool => ToolMetadata {
+                name: "call_mcp_tool",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "tool_path": {
+                            "type": "string",
+                            "description": "Dot-separated tool path from search_mcp_tools, e.g. 'github.issues.list'."
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "Required. Arguments matching the tool's input schema from describe_mcp_tool. Do not call external tools with empty {} arguments."
+                        }
+                    },
+                    "required": ["tool_path", "arguments"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: you have a tool_path from a recent search_mcp_tools call \
+                           and arguments matching describe_mcp_tool's inputTypeScript. \
+                           Never omit arguments; search_mcp_tools only finds paths and \
+                           does not provide the input contract. Returns the raw ExecuteResponse: \
+                           { status: 'completed' | 'paused', text, structured, isError? }. \
+                           - If status is 'completed', read the `text` or `structured` field \
+                             back to the user concisely; if `isError` is true, explain the \
+                             error in plain words. \
+                           - If status is 'paused', `structured.executionId` + \
+                             `structured.interaction.message` are present — user approval is \
+                             needed. Tell the user EXACTLY what you're about to do in one \
+                             short sentence, wait for an explicit yes / no, then call \
+                             approve_mcp_call with the executionId and matching action.",
+            },
+            Self::ApproveMcpCall => ToolMetadata {
+                name: "approve_mcp_call",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "execution_id": {
+                            "type": "string",
+                            "description": "executionId from a paused call_mcp_tool response."
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["accept", "decline", "cancel"],
+                            "description": "'accept' = proceed, 'decline' = user said no, 'cancel' = abort."
+                        },
+                        "content": {
+                            "type": "object",
+                            "description": "Optional form payload — fill from `interaction.requestedSchema` when the elicitation kind is 'form'."
+                        }
+                    },
+                    "required": ["execution_id", "action"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "USE WHEN: the previous call_mcp_tool returned status='paused'. The \
+                           user must have explicitly confirmed in this turn (a verbal 'yes' / \
+                           'go ahead' / 'do it' for accept, 'no' / 'don't' for decline). NEVER \
+                           call this without an explicit human confirmation in the immediately \
+                           preceding turn. Returns the resumed result in the same shape as \
+                           call_mcp_tool — can pause again on multi-step elicitations.",
+            },
+            Self::DescribeLocalTools => ToolMetadata {
+                name: "describe_local_tools",
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -257,10 +399,9 @@ impl ToolKind {
                 }),
                 cli_path: None,
                 invalidates: &[],
-                use_when: "Get detailed argument and behavior help for voice tools. \
-                           Use when compact tool descriptions are not enough. Pass up to \
-                           three tool names for detailed help; omit tools for a compact \
-                           catalog.",
+                use_when: "Get compact argument and behavior help for Helmor local tools. \
+                           Use only when local tool choice/arguments are unclear, or after \
+                           a local tool failed. Pass up to three tool names.",
             },
             Self::ListWorkspaces => ToolMetadata {
                 name: "list_workspaces",
@@ -881,98 +1022,6 @@ impl ToolKind {
                            中文 sample: 'helmor、dosu、ts-to-zod。' \
                            Preamble (only if noticeably slow): EN 'one sec.' / 中 '稍等'.",
             },
-            Self::ListContextItems => ToolMetadata {
-                name: "list_context_items",
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Repo name or UUID. Required. Use list_repos if \
-                                            the user names a repo that doesn't match exactly."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["issues", "prs", "discussions"],
-                            "description": "Which context kind to fetch. `prs` covers PRs \
-                                            (GitHub) and MRs (GitLab). `discussions` is \
-                                            GitHub-only. Default `issues`."
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max items 1-20. Default 5 — keep small so the \
-                                            spoken reply stays manageable."
-                        }
-                    },
-                    "required": ["repo"]
-                }),
-                cli_path: None,
-                invalidates: &[],
-                use_when: "USE WHEN: user asks 'show/list issues|PRs|MRs in <repo>', \
-                           'what's open in helmor', 'any open MRs in <repo>', 'read me the \
-                           top issues for <repo>'. Returns the same items the Contexts \
-                           sidebar shows — GitHub issues/PRs/discussions or GitLab \
-                           issues/MRs depending on the repo's bound forge. Reply shape: \
-                           count + first item title, ask before reading more. Match the \
-                           user's spoken language. \
-                           EN sample: 'three open issues, top one is login redirect bug.' \
-                           中文 sample: '三个 open issue,最上面是登录跳转那个。' \
-                           Preamble (network fetch, ~300-800ms): EN 'one sec.' / 中 '稍等'. \
-                           Repo / issue titles stay in their original form (proper nouns).",
-            },
-            Self::GetContextItemDetail => ToolMetadata {
-                name: "get_context_item_detail",
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Repo name or UUID — same shape as list_context_items."
-                        },
-                        "source": {
-                            "type": "string",
-                            "enum": ["issue", "pr", "discussion"],
-                            "description": "Item kind. `pr` covers PRs (GitHub) and MRs \
-                                            (GitLab); `discussion` is GitHub-only."
-                        },
-                        "external_id": {
-                            "type": "string",
-                            "description": "Item identifier from list_context_items' \
-                                            `externalId` field. NEVER ask the user to read \
-                                            this — pull it from a prior \
-                                            list_context_items result."
-                        },
-                        "body_offset": {
-                            "type": "integer",
-                            "description": "Char index in the body to start reading. \
-                                            Default 0. Use this to read the next chunk \
-                                            when bodyHasMore is true on a previous call."
-                        },
-                        "body_limit": {
-                            "type": "integer",
-                            "description": "How many body chars to return (1-4000). \
-                                            Default 1600 — enough to summarize most \
-                                            issues / PRs."
-                        }
-                    },
-                    "required": ["repo", "source", "external_id"]
-                }),
-                cli_path: None,
-                invalidates: &[],
-                use_when: "USE WHEN: user asks 'read that issue / PR', 'what does it say', \
-                           'tell me more about the login one', 'summarize it'. Pre-req: \
-                           a prior list_context_items call gave you the `externalId` — \
-                           never invent IDs or ask the user to read them. Returns \
-                           metadata (title / state / author / dates / url) plus a slice \
-                           of `body` controlled by body_offset / body_limit. Defaults \
-                           cover full body for ~95% of items; if `bodyHasMore` is true \
-                           AND the user wants more, call again with \
-                           `body_offset = previous bodyOffset + bodyLength`. \
-                           Reply shape: spoken summary in the user's language, not raw \
-                           markdown. Don't read URLs, code blocks, or dashes aloud — \
-                           summarize. Preamble (network fetch ~500-1000ms): \
-                           EN 'one sec.' / 中 '稍等'.",
-            },
             Self::SelectWorkspace => ToolMetadata {
                 name: "select_workspace",
                 parameters: json!({
@@ -1089,7 +1138,19 @@ impl ToolKind {
 
     fn run(self, args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
         match self {
-            Self::DescribeVoiceTools => describe_voice_tools(args),
+            // Meta tools are async (they hit Executor's HTTP API) and are
+            // dispatched in `run_voice_tool` *before* the sync handler
+            // path. If we land here it means the dispatcher missed —
+            // surface an explicit error rather than silently acking.
+            Self::SearchMcpTools
+            | Self::DescribeMcpTool
+            | Self::CallMcpTool
+            | Self::ApproveMcpCall => {
+                anyhow::bail!(
+                    "internal: meta tool routed through sync handler (expected async path)"
+                )
+            }
+            Self::DescribeLocalTools => describe_local_tools(args),
             Self::ListWorkspaces => list_workspaces(args, ctx),
             Self::ShowWorkspace => show_workspace(args, ctx),
             Self::CreateWorkspace => create_workspace(args),
@@ -1106,8 +1167,6 @@ impl ToolKind {
             Self::StopSession => stop_session(args, ctx),
             Self::SendPrompt => send_prompt(args, ctx),
             Self::ListRepos => list_repos(args),
-            Self::ListContextItems => list_context_items(args),
-            Self::GetContextItemDetail => get_context_item_detail(args),
             Self::SelectWorkspace => select_workspace(args),
             Self::CaptureScreen => capture_screen(args),
             // Both `wait_for_user` and `end_session` are dispatcher-side
@@ -1260,7 +1319,7 @@ fn effective_session_status_matches(
     session_status_matches(status, wanted)
 }
 
-fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
+fn describe_local_tools(args: Value) -> Result<VoiceToolResult> {
     const MAX_DETAILED_TOOLS: usize = 3;
 
     let requested = args
@@ -1278,20 +1337,32 @@ fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
         .unwrap_or_default();
 
     if requested.is_empty() {
-        let catalog = ToolKind::ALL
-            .iter()
-            .map(|kind| {
-                let meta = kind.metadata();
-                json!({
-                    "name": meta.name,
-                    "summary": realtime_description(*kind),
-                })
-            })
-            .collect::<Vec<_>>();
         return Ok(VoiceToolResult {
             data: json!({
-                "tools": catalog,
-                "note": "Pass tools:[name] for detailed help on up to three tools."
+                "readContext": [
+                    "list_repos",
+                    "list_workspaces",
+                    "show_workspace",
+                    "list_sessions",
+                    "search_sessions",
+                    "get_session_messages"
+                ],
+                "actions": [
+                    "create_workspace",
+                    "create_workspace_and_send",
+                    "create_workspace_variants",
+                    "send_prompt",
+                    "set_workspace_status",
+                    "archive_workspace",
+                    "permanently_delete_workspace",
+                    "run_workspace_action",
+                    "run_workspace_script",
+                    "stop_session",
+                    "select_workspace",
+                    "capture_screen"
+                ],
+                "helpers": ["describe_local_tools", "wait_for_user", "end_session"],
+                "note": "Pass tools:[name] for compact help on up to three local tools."
             }),
             ..Default::default()
         });
@@ -1304,20 +1375,105 @@ fn describe_voice_tools(args: Value) -> Result<VoiceToolResult> {
             unknown.push(name.to_string());
             continue;
         };
-        let meta = kind.metadata();
-        tools.push(json!({
-            "name": meta.name,
-            "summary": realtime_description(kind),
-            "details": format_description(&meta),
-            "parameters": meta.parameters,
-            "cliHelp": meta.cli_path.map(subcommand_help),
-        }));
+        if !is_local_tool(kind) {
+            unknown.push(name.to_string());
+            continue;
+        }
+        tools.push(compact_local_tool_help(kind));
     }
 
     Ok(VoiceToolResult {
         data: json!({ "tools": tools, "unknown": unknown }),
         ..Default::default()
     })
+}
+
+fn is_local_tool(kind: ToolKind) -> bool {
+    !matches!(
+        kind,
+        ToolKind::SearchMcpTools
+            | ToolKind::DescribeMcpTool
+            | ToolKind::CallMcpTool
+            | ToolKind::ApproveMcpCall
+    )
+}
+
+fn compact_local_tool_help(kind: ToolKind) -> Value {
+    let meta = kind.metadata();
+    json!({
+        "name": meta.name,
+        "summary": realtime_description(kind),
+        "required": schema_required_args(&meta.parameters),
+        "optional": schema_optional_args(&meta.parameters),
+        "confirm": local_confirmation_policy(kind),
+        "result": local_result_effect(kind),
+    })
+}
+
+fn schema_required_args(parameters: &Value) -> Vec<String> {
+    parameters
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn schema_optional_args(parameters: &Value) -> Vec<String> {
+    let required = schema_required_args(parameters);
+    let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    properties
+        .keys()
+        .filter(|key| !required.iter().any(|name| name == *key))
+        .cloned()
+        .collect()
+}
+
+fn local_confirmation_policy(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::PermanentlyDeleteWorkspace => "required",
+        ToolKind::SetWorkspaceStatus => "required when setting status to canceled",
+        ToolKind::RunWorkspaceAction => "required for external/destructive actions",
+        ToolKind::StopSession => "required unless the user clearly asked to stop it",
+        ToolKind::ArchiveWorkspace => "not required",
+        ToolKind::SearchMcpTools
+        | ToolKind::DescribeMcpTool
+        | ToolKind::CallMcpTool
+        | ToolKind::ApproveMcpCall => "not local",
+        _ => "not required",
+    }
+}
+
+fn local_result_effect(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::CreateWorkspace => "creates a workspace and navigates Helmor to it",
+        ToolKind::CreateWorkspaceAndSend => {
+            "creates a workspace, sends the prompt to its agent, and navigates Helmor to it"
+        }
+        ToolKind::CreateWorkspaceVariants => {
+            "creates multiple workspaces, sends one prompt per variant, and navigates Helmor to the first"
+        }
+        ToolKind::SendPrompt => "sends a prompt to a workspace agent and navigates Helmor to it",
+        ToolKind::SetWorkspaceStatus => "updates workspace status",
+        ToolKind::ArchiveWorkspace => "archives a workspace",
+        ToolKind::PermanentlyDeleteWorkspace => "permanently deletes a workspace",
+        ToolKind::RunWorkspaceAction => "runs or dispatches a workspace action",
+        ToolKind::RunWorkspaceScript => "starts a configured workspace script",
+        ToolKind::StopSession => "stops a running session",
+        ToolKind::SelectWorkspace => "switches the visible Helmor workspace",
+        ToolKind::CaptureScreen => "captures the focused window or screen and returns an image reference",
+        ToolKind::WaitForUser => "stays silent",
+        ToolKind::EndSession => "ends voice mode after a short goodbye",
+        ToolKind::DescribeLocalTools => "returns compact help for local tools",
+        _ => "returns data for the requested local query",
+    }
 }
 
 fn list_workspaces(args: Value, ctx: &VoiceToolContext) -> Result<VoiceToolResult> {
@@ -2210,6 +2366,19 @@ fn voice_dispatch_to_agent(
         Some(value) => Some(value),
         None => session_effort_level(&session_id)?.or_else(default_voice_effort_level),
     };
+    crate::models::sessions::update_session_settings(
+        &session_id,
+        Some(model.id.as_str()),
+        effort_level.as_deref(),
+        permission_mode.as_deref(),
+        None,
+    )?;
+    crate::ui_sync::publish(
+        &ctx.app,
+        crate::ui_sync::UiMutationEvent::SessionListChanged {
+            workspace_id: workspace_id.to_string(),
+        },
+    );
 
     let cwd = detail
         .root_path
@@ -2728,207 +2897,6 @@ fn list_repos(args: Value) -> Result<VoiceToolResult> {
     })
 }
 
-fn list_context_items(args: Value) -> Result<VoiceToolResult> {
-    const DEFAULT_CONTEXT_LIMIT: usize = 5;
-    const MAX_CONTEXT_LIMIT: usize = 20;
-
-    let repo_ref = args
-        .get("repo")
-        .and_then(Value::as_str)
-        .context("list_context_items: missing required `repo` argument")?;
-    let kind_str = args.get("kind").and_then(Value::as_str).unwrap_or("issues");
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|n| (n as usize).clamp(1, MAX_CONTEXT_LIMIT))
-        .unwrap_or(DEFAULT_CONTEXT_LIMIT);
-
-    let kind = match kind_str.to_ascii_lowercase().as_str() {
-        "issues" | "issue" => InboxKind::Issues,
-        "prs" | "pr" | "pulls" | "pull" | "mrs" | "mr" => InboxKind::Prs,
-        "discussions" | "discussion" => InboxKind::Discussions,
-        other => anyhow::bail!("list_context_items: unknown kind `{other}`"),
-    };
-
-    // Resolve the repo → forge target (provider, host, owner, name).
-    // We need the `remote_url` field which `RepositoryRecord` doesn't
-    // carry — go through `list_repositories()` (the same loader the
-    // sidebar uses) so we agree with the UI on what "this repo's forge"
-    // means.
-    let repo_id = service::resolve_repo_ref(repo_ref)?;
-    let record = models::repos::list_repositories()?
-        .into_iter()
-        .find(|r| r.id == repo_id)
-        .with_context(|| format!("list_context_items: repo `{repo_ref}` not found"))?;
-    let target = forge_target_from(
-        record.forge_provider.as_deref(),
-        record.remote_url.as_deref(),
-    )
-    .with_context(|| {
-        format!(
-            "list_context_items: repo `{}` has no resolvable forge (provider/remote missing)",
-            record.name
-        )
-    })?;
-
-    // GitLab doesn't have Discussions — guard early so the model gets a
-    // clear error instead of a `bail!` from the backend router.
-    if matches!(kind, InboxKind::Discussions) && !matches!(target.provider, ForgeProvider::Github) {
-        anyhow::bail!(
-            "list_context_items: discussions are GitHub-only (repo `{}` is on {})",
-            record.name,
-            target.provider.as_storage_str(),
-        );
-    }
-
-    let login = record
-        .forge_login
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .with_context(|| {
-            format!(
-                "list_context_items: repo `{}` has no forge account bound — \
-                 ask the user to connect from Settings → Repository",
-                record.name
-            )
-        })?;
-
-    let backend = forge_backend_for(target.provider).with_context(|| {
-        format!(
-            "list_context_items: no backend for provider {}",
-            target.provider.as_storage_str(),
-        )
-    })?;
-
-    let repo_filter = format!("{}/{}", target.owner, target.name);
-    let host = Some(target.host.as_str());
-
-    let page = match kind {
-        InboxKind::Issues => {
-            backend.list_inbox_issues(login, host, None, limit, Some(&repo_filter), None)?
-        }
-        InboxKind::Prs => {
-            backend.list_inbox_prs(login, host, None, limit, Some(&repo_filter), None)?
-        }
-        InboxKind::Discussions => {
-            backend.list_inbox_discussions(login, host, None, limit, Some(&repo_filter), None)?
-        }
-    };
-
-    Ok(VoiceToolResult {
-        data: compact_inbox_page(page),
-        ..Default::default()
-    })
-}
-
-fn get_context_item_detail(args: Value) -> Result<VoiceToolResult> {
-    /// Default body window — covers the full body for the vast majority
-    /// of real-world issues / PRs (median is well under 500 chars).
-    const DEFAULT_BODY_LIMIT: usize = 1600;
-    /// Hard upper bound. Past this, we'd be dumping a small book into
-    /// the realtime context for no spoken-output benefit; the agent
-    /// should paginate via `body_offset` instead.
-    const MAX_BODY_LIMIT: usize = 4000;
-
-    let repo_ref = args
-        .get("repo")
-        .and_then(Value::as_str)
-        .context("get_context_item_detail: missing required `repo` argument")?;
-    let source_str = args
-        .get("source")
-        .and_then(Value::as_str)
-        .context("get_context_item_detail: missing required `source` argument")?;
-    let external_id = args
-        .get("external_id")
-        .and_then(Value::as_str)
-        .context("get_context_item_detail: missing required `external_id` argument")?;
-    let body_offset = args
-        .get("body_offset")
-        .and_then(Value::as_u64)
-        .map(|n| n as usize)
-        .unwrap_or(0);
-    let body_limit = args
-        .get("body_limit")
-        .and_then(Value::as_u64)
-        .map(|n| (n as usize).clamp(1, MAX_BODY_LIMIT))
-        .unwrap_or(DEFAULT_BODY_LIMIT);
-
-    // Same resolution path as list_context_items so a repo's forge target
-    // is interpreted identically across both tools.
-    let repo_id = service::resolve_repo_ref(repo_ref)?;
-    let record = models::repos::list_repositories()?
-        .into_iter()
-        .find(|r| r.id == repo_id)
-        .with_context(|| format!("get_context_item_detail: repo `{repo_ref}` not found"))?;
-    let target = forge_target_from(
-        record.forge_provider.as_deref(),
-        record.remote_url.as_deref(),
-    )
-    .with_context(|| {
-        format!(
-            "get_context_item_detail: repo `{}` has no resolvable forge (provider/remote missing)",
-            record.name
-        )
-    })?;
-
-    let source = parse_inbox_source(source_str, target.provider)?;
-
-    let login = record
-        .forge_login
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .with_context(|| {
-            format!(
-                "get_context_item_detail: repo `{}` has no forge account bound — \
-                 ask the user to connect from Settings → Repository",
-                record.name
-            )
-        })?;
-
-    let backend = forge_backend_for(target.provider).with_context(|| {
-        format!(
-            "get_context_item_detail: no backend for provider {}",
-            target.provider.as_storage_str(),
-        )
-    })?;
-
-    let detail = backend
-        .get_inbox_item_detail(login, Some(target.host.as_str()), source, external_id)?
-        .with_context(|| {
-            format!(
-                "get_context_item_detail: no {} item `{external_id}` in `{}/{}`",
-                source_str, target.owner, target.name,
-            )
-        })?;
-
-    let data = slice_detail_body(&detail, body_offset, body_limit)?;
-
-    Ok(VoiceToolResult {
-        data,
-        ..Default::default()
-    })
-}
-
-/// Voice-friendly mapping from the agent's plain "issue" / "pr" /
-/// "discussion" surface vocabulary onto the provider-specific
-/// `InboxSource` enum. Both PR and MR map to `pr` so the agent doesn't
-/// branch on forge in its own head.
-fn parse_inbox_source(s: &str, provider: ForgeProvider) -> Result<InboxSource> {
-    match (s.trim().to_ascii_lowercase().as_str(), provider) {
-        ("issue" | "issues", ForgeProvider::Github) => Ok(InboxSource::GithubIssue),
-        ("issue" | "issues", ForgeProvider::Gitlab) => Ok(InboxSource::GitlabIssue),
-        ("pr" | "prs" | "pull" | "pulls", ForgeProvider::Github) => Ok(InboxSource::GithubPr),
-        ("pr" | "prs" | "mr" | "mrs", ForgeProvider::Gitlab) => Ok(InboxSource::GitlabMr),
-        ("discussion" | "discussions", ForgeProvider::Github) => Ok(InboxSource::GithubDiscussion),
-        ("discussion" | "discussions", ForgeProvider::Gitlab) => {
-            anyhow::bail!("get_context_item_detail: discussions are GitHub-only")
-        }
-        (other, _) => anyhow::bail!("get_context_item_detail: unknown source `{other}`"),
-    }
-}
-
 fn compact_workspace_like_value(mut value: Value) -> Value {
     let Some(obj) = value.as_object_mut() else {
         return value;
@@ -2962,72 +2930,6 @@ fn compact_workspace_like_value(mut value: Value) -> Value {
             "message_count",
         ],
     ))
-}
-
-fn compact_inbox_page(page: InboxPage) -> Value {
-    let returned = page.items.len();
-    let items = page
-        .items
-        .into_iter()
-        .map(|item| {
-            json!({
-                "id": item.id,
-                "source": item.source,
-                "externalId": item.external_id,
-                "externalUrl": item.external_url,
-                "title": item.title,
-                "state": item.state.map(|state| state.label),
-                "lastActivityAt": item.last_activity_at,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    json!({
-        "items": items,
-        "returned": returned,
-        "nextCursor": page.next_cursor,
-        "hasMore": page.next_cursor.is_some(),
-    })
-}
-
-/// Serialize an `InboxItemDetail` and replace its `body` field with a
-/// char-bounded slice plus pagination metadata. Each detail variant
-/// (`GithubIssueDetail`, `GitlabMergeRequestDetail`, …) carries a
-/// `body: Option<String>` field, so we patch the JSON shape in one
-/// place rather than matching every variant by hand.
-///
-/// `bodyOffset` / `bodyLength` / `bodyTotal` / `bodyHasMore` let the
-/// agent decide whether to fetch a follow-up window — no truncation
-/// "loses" the rest of the body, it's still reachable via a second
-/// call with `body_offset = previous bodyOffset + bodyLength`.
-fn slice_detail_body(detail: &InboxItemDetail, offset: usize, limit: usize) -> Result<Value> {
-    let mut value = serde_json::to_value(detail)?;
-    let data = value
-        .get_mut("data")
-        .and_then(Value::as_object_mut)
-        .context("slice_detail_body: `data` object missing — InboxItemDetail shape changed?")?;
-
-    let full_body = data
-        .get("body")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_default();
-    let total = full_body.chars().count();
-    let safe_offset = offset.min(total);
-    let take = limit.min(total.saturating_sub(safe_offset));
-    let slice: String = full_body.chars().skip(safe_offset).take(take).collect();
-    let returned = slice.chars().count();
-
-    data.insert("body".to_owned(), Value::String(slice));
-    data.insert("bodyOffset".to_owned(), json!(safe_offset));
-    data.insert("bodyLength".to_owned(), json!(returned));
-    data.insert("bodyTotal".to_owned(), json!(total));
-    data.insert(
-        "bodyHasMore".to_owned(),
-        Value::Bool(safe_offset + returned < total),
-    );
-
-    Ok(value)
 }
 
 fn select_workspace(args: Value) -> Result<VoiceToolResult> {
@@ -3147,11 +3049,12 @@ fn capture_screen(args: Value) -> Result<VoiceToolResult> {
 
 // ---------------------------------------------------------------------------
 // Description rendering. The Realtime session gets compact tool
-// summaries; detailed help is available on demand via
-// `describe_voice_tools`. This keeps the static session prefix small
+// summaries; compact local help is available on demand via
+// `describe_local_tools`. This keeps the static session prefix small
 // enough that one short utterance does not burn a large chunk of TPM.
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn subcommand_help(path: &[&str]) -> String {
     let mut cmd = Cli::command();
     let mut walked: Vec<&str> = Vec::with_capacity(path.len());
@@ -3172,14 +3075,22 @@ fn subcommand_help(path: &[&str]) -> String {
     cmd.render_long_help().to_string()
 }
 
-fn format_description(meta: &ToolMetadata) -> String {
-    meta.use_when.to_string()
-}
-
 fn realtime_description(kind: ToolKind) -> &'static str {
     match kind {
-        ToolKind::DescribeVoiceTools => {
-            "Get detailed help for tool names when the compact docs are not enough."
+        ToolKind::SearchMcpTools => {
+            "Find tools (GitHub / Linear / Helmor commands / any MCP source) by intent. Call this BEFORE call_mcp_tool. Returns ranked paths + descriptions."
+        }
+        ToolKind::DescribeMcpTool => {
+            "Get the input schema for a searched MCP tool path before calling it, especially after missing-parameter errors."
+        }
+        ToolKind::CallMcpTool => {
+            "Invoke a tool by its dot-path (from search_mcp_tools) with JSON arguments. May return status='paused' when user approval is needed."
+        }
+        ToolKind::ApproveMcpCall => {
+            "Resume a paused execution with action=accept|decline|cancel after the user explicitly confirmed."
+        }
+        ToolKind::DescribeLocalTools => {
+            "Get compact help for Helmor local tool names when arguments or tool choice are unclear."
         }
         ToolKind::ListWorkspaces => {
             "List workspaces; optional status/repo/archive/session-status filters."
@@ -3207,8 +3118,6 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         ToolKind::StopSession => "Stop/cancel a running agent session.",
         ToolKind::SendPrompt => "Send a prompt to a workspace agent; optionally attach screenshots.",
         ToolKind::ListRepos => "List registered repos; use before repo-dependent actions if unsure.",
-        ToolKind::ListContextItems => "List repo issues, PRs/MRs, or discussions.",
-        ToolKind::GetContextItemDetail => "Fetch one issue/PR/discussion body by id from list_context_items.",
         ToolKind::SelectWorkspace => "Switch Helmor UI to a workspace without modifying data.",
         ToolKind::CaptureScreen => "Capture focused window by default; use screen only when asked.",
         ToolKind::WaitForUser => "Stay silent for background audio or non-addressed speech.",
@@ -3257,6 +3166,583 @@ pub fn build_tools_array() -> Vec<Value> {
 }
 
 // ---------------------------------------------------------------------------
+// Meta-tool handlers (async — talk to Executor's HTTP API)
+// ---------------------------------------------------------------------------
+
+/// Build the JS snippet that runs inside Executor's QuickJS sandbox to
+/// call a tool by dot-path. The path and arguments come from the LLM, so
+/// we JSON-serialize both into the source: the sandbox sees them as
+/// values (string + object), never as parsed code — no code injection
+/// is possible even if the model emits adversarial characters.
+fn build_call_mcp_code(tool_path: &str, arguments: &Value) -> Result<String> {
+    let path_json = serde_json::to_string(tool_path).context("encode tool_path")?;
+    let args_json = serde_json::to_string(arguments).context("encode arguments")?;
+    // The reduce step is the canonical idiom for "follow a dot-path on
+    // an object". Deep-proxy supports arbitrary string keys, so
+    // "github-mcp.list-issues" works the same way as "github.issues.list".
+    Ok(format!(
+        "const path = {path_json}; \
+         const args = {args_json}; \
+         const fn = path.split('.').reduce((o, k) => o[k], tools); \
+         return await fn(args);"
+    ))
+}
+
+/// Build the JS snippet that runs `tools.search(...)` inside the sandbox.
+fn build_search_mcp_code(query: &str, namespace: Option<&str>, limit: u64) -> String {
+    let mut search_args = serde_json::json!({ "query": query, "limit": limit });
+    if let Some(ns) = namespace {
+        search_args["namespace"] = serde_json::Value::String(ns.to_string());
+    }
+    format!("return await tools.search({});", search_args)
+}
+
+/// Build the JS snippet that asks Executor for a real tool's compact
+/// argument schema.
+fn build_describe_mcp_code(tool_path: &str) -> Result<String> {
+    let path_json = serde_json::to_string(tool_path).context("encode tool_path")?;
+    Ok(format!(
+        "return await tools.describe.tool({{ path: {path_json} }});"
+    ))
+}
+
+fn ok_envelope(data: Value) -> VoiceToolEnvelope {
+    VoiceToolEnvelope {
+        ok: true,
+        data,
+        error: None,
+        invalidates: Vec::new(),
+        navigate_to_workspace_id: None,
+        dispatch_workspace_action: None,
+        image: None,
+    }
+}
+
+fn err_envelope(message: String) -> VoiceToolEnvelope {
+    VoiceToolEnvelope {
+        ok: false,
+        data: Value::Null,
+        error: Some(message),
+        invalidates: Vec::new(),
+        navigate_to_workspace_id: None,
+        dispatch_workspace_action: None,
+        image: None,
+    }
+}
+
+async fn run_search_mcp_tools(app: &tauri::AppHandle, args: Value) -> VoiceToolEnvelope {
+    let Some(query) = args.get("query").and_then(Value::as_str) else {
+        return err_envelope("search_mcp_tools requires `query` (string)".into());
+    };
+    let namespace = args
+        .get("namespace")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(5)
+        .clamp(1, 12);
+
+    let Some(client) = app.state::<ManagedExecutor>().client() else {
+        return err_envelope("Executor is not running. Try Settings → MCP → Restart.".into());
+    };
+    let code = build_search_mcp_code(query, namespace, limit);
+    match client.execute(&code).await {
+        Ok(value) => ok_envelope(value),
+        Err(e) => err_envelope(format!("{e:#}")),
+    }
+}
+
+async fn run_describe_mcp_tool(app: &tauri::AppHandle, args: Value) -> VoiceToolEnvelope {
+    let Some(tool_path) = args.get("tool_path").and_then(Value::as_str) else {
+        return err_envelope("describe_mcp_tool requires `tool_path` (string)".into());
+    };
+
+    let helmor_fallback = local_helmor_tool_description(tool_path);
+    let Some(client) = app.state::<ManagedExecutor>().client() else {
+        return match helmor_fallback {
+            Some(value) => ok_envelope(compact_describe_mcp_result(serde_json::json!({
+                "isError": false,
+                "status": "completed",
+                "structured": { "result": value, "status": "completed" },
+                "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
+            }))),
+            None => err_envelope("Executor is not running. Try Settings → MCP → Restart.".into()),
+        };
+    };
+    let code = match build_describe_mcp_code(tool_path) {
+        Ok(c) => c,
+        Err(e) => return err_envelope(format!("encode describe_mcp_tool code: {e:#}")),
+    };
+    match client.execute(&code).await {
+        Ok(value) => {
+            if describe_result_has_schema(&value) {
+                ok_envelope(compact_describe_mcp_result(value))
+            } else if let Some(fallback) = helmor_fallback {
+                ok_envelope(compact_describe_mcp_result(merge_describe_fallback(
+                    value, fallback,
+                )))
+            } else {
+                ok_envelope(value)
+            }
+        }
+        Err(e) => err_envelope(format!("{e:#}")),
+    }
+}
+
+async fn run_call_mcp_tool(app: &tauri::AppHandle, args: Value) -> VoiceToolEnvelope {
+    let Some(tool_path) = args.get("tool_path").and_then(Value::as_str) else {
+        return err_envelope("call_mcp_tool requires `tool_path` (string)".into());
+    };
+    let arguments = match call_mcp_arguments_arg(&args) {
+        Ok(arguments) => arguments,
+        Err(message) => return err_envelope(message),
+    };
+    if let Some(message) = external_empty_arguments_message(tool_path, arguments) {
+        return ok_envelope(mcp_tool_argument_error_payload(message));
+    }
+    if let Some(message) = local_helmor_missing_required_args(tool_path, arguments) {
+        return ok_envelope(mcp_tool_argument_error_payload(message));
+    }
+
+    let Some(client) = app.state::<ManagedExecutor>().client() else {
+        return err_envelope("Executor is not running. Try Settings → MCP → Restart.".into());
+    };
+    let code = match build_call_mcp_code(tool_path, arguments) {
+        Ok(c) => c,
+        Err(e) => return err_envelope(format!("encode call_mcp_tool code: {e:#}")),
+    };
+    match client.execute(&code).await {
+        Ok(value) => ok_envelope(value),
+        Err(e) => err_envelope(format!("{e:#}")),
+    }
+}
+
+fn call_mcp_arguments_arg(args: &Value) -> std::result::Result<&Value, String> {
+    let Some(arguments) = args.get("arguments") else {
+        return Err(
+            "call_mcp_tool requires `arguments` (object). Call describe_mcp_tool for the tool_path, read inputTypeScript, then retry with matching arguments."
+                .to_string(),
+        );
+    };
+    if !arguments.is_object() {
+        return Err(format!(
+            "call_mcp_tool `arguments` must be an object, got {}",
+            arguments
+        ));
+    }
+    Ok(arguments)
+}
+
+fn external_empty_arguments_message(tool_path: &str, arguments: &Value) -> Option<String> {
+    if local_helmor_tool_name(tool_path).is_some() {
+        return None;
+    }
+    let is_empty = arguments.as_object().is_some_and(serde_json::Map::is_empty);
+    if !is_empty {
+        return None;
+    }
+    Some(format!(
+        "External tool `{tool_path}` was called with empty arguments. search_mcp_tools only returns candidate paths, not input parameters. Call describe_mcp_tool with this tool_path, read inputTypeScript, then retry call_mcp_tool with matching arguments."
+    ))
+}
+
+fn mcp_tool_argument_error_payload(message: String) -> Value {
+    serde_json::json!({
+        "isError": true,
+        "status": "completed",
+        "structured": {
+            "result": {
+                "content": [{ "type": "text", "text": message }],
+                "isError": true
+            },
+            "status": "completed"
+        },
+        "text": message
+    })
+}
+
+fn local_helmor_tool_name(tool_path: &str) -> Option<&str> {
+    tool_path.strip_prefix("helmor.")
+}
+
+fn local_helmor_tool_description(tool_path: &str) -> Option<Value> {
+    let tool_name = local_helmor_tool_name(tool_path)?;
+    crate::mcp::tool_catalog()
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+        .map(|tool| {
+            let input_schema = tool.get("inputSchema").cloned().unwrap_or_else(
+                || serde_json::json!({ "type": "object", "properties": {}, "required": [] }),
+            );
+            serde_json::json!({
+                "path": tool_path,
+                "name": tool_name,
+                "description": tool.get("description").cloned().unwrap_or(Value::Null),
+                "inputSchema": input_schema,
+            })
+        })
+}
+
+fn describe_result_has_schema(value: &Value) -> bool {
+    value
+        .pointer("/structured/result/inputTypeScript")
+        .is_some_and(|schema| schema.as_str().is_some_and(|text| !text.trim().is_empty()))
+        || value.pointer("/structured/result/inputSchema").is_some()
+        || value.pointer("/inputTypeScript").is_some()
+        || value.pointer("/inputSchema").is_some()
+}
+
+fn compact_describe_mcp_result(mut value: Value) -> Value {
+    let compact = if let Some(result) = value.pointer("/structured/result") {
+        compact_describe_result_object(result)
+    } else {
+        compact_describe_result_object(&value)
+    };
+
+    if value.pointer("/structured/result").is_some() {
+        value["structured"]["result"] = compact.clone();
+        value["structured"]["status"] = Value::String("completed".to_string());
+        value["structured"]["logs"] = value
+            .pointer("/structured/logs")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        value["text"] = Value::String(
+            serde_json::to_string_pretty(&compact).unwrap_or_else(|_| compact.to_string()),
+        );
+        value
+    } else {
+        json!({
+            "isError": false,
+            "status": "completed",
+            "structured": {
+                "logs": [],
+                "result": compact,
+                "status": "completed",
+            },
+            "text": serde_json::to_string_pretty(&compact).unwrap_or_else(|_| compact.to_string()),
+        })
+    }
+}
+
+fn compact_describe_result_object(result: &Value) -> Value {
+    let path = result.get("path").and_then(Value::as_str);
+    let name = result.get("name").and_then(Value::as_str);
+    let description = result
+        .get("description")
+        .and_then(Value::as_str)
+        .map(|text| truncate_chars(text.trim(), 600))
+        .filter(|text| !text.is_empty());
+    let params = describe_parameter_list(result);
+    let mut compact = serde_json::Map::new();
+
+    if let Some(path) = path {
+        compact.insert("path".to_string(), Value::String(path.to_string()));
+    }
+    if let Some(name) = name {
+        compact.insert("name".to_string(), Value::String(name.to_string()));
+    }
+    if let Some(description) = description {
+        compact.insert("description".to_string(), Value::String(description));
+    }
+    compact.insert(
+        "input".to_string(),
+        json!({
+            "parameters": params,
+        }),
+    );
+    if let Some(input_type_script) = result.get("inputTypeScript").and_then(Value::as_str) {
+        compact.insert(
+            "inputTypeScript".to_string(),
+            Value::String(truncate_chars(
+                compact_input_type_script(input_type_script).trim(),
+                1200,
+            )),
+        );
+    }
+    Value::Object(compact)
+}
+
+fn describe_parameter_list(result: &Value) -> Vec<Value> {
+    if let Some(input_schema) = result.get("inputSchema") {
+        let schema_params = parameters_from_input_schema(input_schema);
+        if !schema_params.is_empty() {
+            return schema_params;
+        }
+    }
+    result
+        .get("inputTypeScript")
+        .and_then(Value::as_str)
+        .map(parameters_from_input_type_script)
+        .unwrap_or_default()
+}
+
+fn parameters_from_input_schema(input_schema: &Value) -> Vec<Value> {
+    let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let required = input_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    properties
+        .iter()
+        .map(|(name, schema)| {
+            let type_name = schema_type_name(schema);
+            let description = schema
+                .get("description")
+                .and_then(Value::as_str)
+                .map(|text| truncate_chars(text.trim(), 240))
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| {
+                    if required.contains(name.as_str()) {
+                        "Required parameter.".to_string()
+                    } else {
+                        "Optional parameter.".to_string()
+                    }
+                });
+            json!({
+                "name": name,
+                "required": required.contains(name.as_str()),
+                "type": type_name,
+                "description": description,
+            })
+        })
+        .collect()
+}
+
+fn schema_type_name(schema: &Value) -> String {
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let rendered = values
+            .iter()
+            .filter_map(|value| match value {
+                Value::String(text) => Some(format!("{text:?}")),
+                Value::Number(number) => Some(number.to_string()),
+                Value::Bool(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .take(8)
+            .collect::<Vec<_>>();
+        if !rendered.is_empty() {
+            return rendered.join(" | ");
+        }
+    }
+    match schema.get("type") {
+        Some(Value::String(text)) => text.to_string(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn compact_input_type_script(input_type_script: &str) -> String {
+    parameters_from_input_type_script(input_type_script)
+        .into_iter()
+        .filter_map(|param| {
+            let name = param.get("name")?.as_str()?;
+            let optional = if param
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                ""
+            } else {
+                "?"
+            };
+            let type_name = param.get("type")?.as_str()?;
+            Some(format!("{name}{optional}: {type_name}"))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn parameters_from_input_type_script(input_type_script: &str) -> Vec<Value> {
+    let shape = input_type_script.trim();
+    let body = shape
+        .strip_prefix('{')
+        .and_then(|text| text.strip_suffix('}'))
+        .unwrap_or(shape)
+        .trim();
+
+    split_top_level_fields(body)
+        .into_iter()
+        .filter_map(|field| {
+            let (name_part, type_part) = split_top_level_once(field, ':')?;
+            let name_part = name_part.trim().trim_matches('"').trim_matches('\'');
+            if name_part.is_empty() {
+                return None;
+            }
+            let (name, required) = if let Some(name) = name_part.strip_suffix('?') {
+                (name.trim(), false)
+            } else {
+                (name_part, true)
+            };
+            let type_name = truncate_chars(type_part.trim(), 240);
+            Some(json!({
+                "name": name,
+                "required": required,
+                "type": type_name,
+                "description": if required { "Required parameter." } else { "Optional parameter." },
+            }))
+        })
+        .collect()
+}
+
+fn split_top_level_fields(input: &str) -> Vec<&str> {
+    split_top_level(input, ';')
+        .into_iter()
+        .flat_map(|field| split_top_level(field, ','))
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .collect()
+}
+
+fn split_top_level(input: &str, separator: char) -> Vec<&str> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if let Some(quote_ch) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote_ch {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' | '`' => quote = Some(ch),
+            '{' | '(' | '[' => depth += 1,
+            '}' | ')' | ']' => depth -= 1,
+            _ if ch == separator && depth == 0 => {
+                fields.push(&input[start..idx]);
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    fields.push(&input[start..]);
+    fields
+}
+
+fn split_top_level_once(input: &str, separator: char) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if let Some(quote_ch) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote_ch {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' | '`' => quote = Some(ch),
+            '{' | '(' | '[' => depth += 1,
+            '}' | ')' | ']' => depth -= 1,
+            _ if ch == separator && depth == 0 => {
+                return Some((&input[..idx], &input[idx + ch.len_utf8()..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn merge_describe_fallback(mut value: Value, fallback: Value) -> Value {
+    if let Some(result) = value
+        .pointer_mut("/structured/result")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(description) = fallback.get("description") {
+            result
+                .entry("description".to_string())
+                .or_insert_with(|| description.clone());
+        }
+        if let Some(input_schema) = fallback.get("inputSchema") {
+            result.insert("inputSchema".to_string(), input_schema.clone());
+        }
+    } else {
+        value["structured"] = serde_json::json!({
+            "logs": [],
+            "result": fallback,
+            "status": "completed"
+        });
+    }
+    let text = serde_json::to_string_pretty(&value["structured"]["result"])
+        .unwrap_or_else(|_| value["structured"]["result"].to_string());
+    value["text"] = Value::String(text);
+    value
+}
+
+fn local_helmor_missing_required_args(tool_path: &str, arguments: &Value) -> Option<String> {
+    let description = local_helmor_tool_description(tool_path)?;
+    let required = description
+        .pointer("/inputSchema/required")
+        .and_then(Value::as_array)?;
+    let args = arguments.as_object()?;
+    let missing: Vec<&str> = required
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|name| !args.contains_key(*name))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} requires arguments: {}",
+        tool_path,
+        missing.join(", ")
+    ))
+}
+
+async fn run_approve_mcp_call(app: &tauri::AppHandle, args: Value) -> VoiceToolEnvelope {
+    let Some(execution_id) = args.get("execution_id").and_then(Value::as_str) else {
+        return err_envelope("approve_mcp_call requires `execution_id` (string)".into());
+    };
+    let Some(action_raw) = args.get("action").and_then(Value::as_str) else {
+        return err_envelope(
+            "approve_mcp_call requires `action` ('accept'|'decline'|'cancel')".into(),
+        );
+    };
+    let Some(action) = ResumeAction::parse(action_raw) else {
+        return err_envelope(format!(
+            "approve_mcp_call `action` must be accept|decline|cancel, got '{action_raw}'"
+        ));
+    };
+    let content = args.get("content");
+
+    let Some(client) = app.state::<ManagedExecutor>().client() else {
+        return err_envelope("Executor is not running. Try Settings → MCP → Restart.".into());
+    };
+    match client.resume(execution_id, action, content).await {
+        Ok(value) => ok_envelope(value),
+        Err(e) => err_envelope(format!("{e:#}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tauri command
 // ---------------------------------------------------------------------------
 
@@ -3285,6 +3771,37 @@ pub async fn run_voice_tool(
             image: None,
         });
     };
+
+    // Meta tools dispatch on the async path — they await ExecutorClient
+    // HTTP calls directly. The sync `run_blocking` branch below is the
+    // legacy path for typed handlers, which is currently dormant (all 23
+    // typed variants are absent from `ToolKind::ALL`).
+    let envelope_opt = match kind {
+        ToolKind::SearchMcpTools => Some(run_search_mcp_tools(&app, args.clone()).await),
+        ToolKind::DescribeMcpTool => Some(run_describe_mcp_tool(&app, args.clone()).await),
+        ToolKind::CallMcpTool => Some(run_call_mcp_tool(&app, args.clone()).await),
+        ToolKind::ApproveMcpCall => Some(run_approve_mcp_call(&app, args.clone()).await),
+        _ => None,
+    };
+    if let Some(envelope) = envelope_opt {
+        // Show what the model will actually see as the function_call_output.
+        // Truncated so big tool results (e.g. GitHub list_issues) don't
+        // flood the log; 1000 chars is enough to read the key fields.
+        let data_preview = match serde_json::to_string(&envelope.data) {
+            Ok(s) if s.len() > 1000 => format!("{}… ({} bytes total)", &s[..1000], s.len()),
+            Ok(s) => s,
+            Err(_) => "<unserializable>".to_string(),
+        };
+        tracing::info!(
+            tool = kind.metadata().name,
+            elapsed_ms = invocation_start.elapsed().as_millis() as u64,
+            ok = envelope.ok,
+            error = ?envelope.error,
+            data_preview = %data_preview,
+            "voice agent meta-tool completed"
+        );
+        return Ok(envelope);
+    }
 
     let invalidates = kind.metadata().invalidates.to_vec();
     // Snapshot `scripts_manager` out of the borrowed `State` so the
@@ -3369,7 +3886,7 @@ mod tests {
 
     /// Every tool that claims a clap path must resolve to a real
     /// subcommand. A typo in `cli_path` would silently degrade the
-    /// on-demand `describe_voice_tools` help surface — this test catches
+    /// on-demand `describe_local_tools` help surface — this test catches
     /// that at build time.
     #[test]
     fn every_tool_with_cli_path_resolves() {
@@ -3408,28 +3925,32 @@ mod tests {
     /// name set here flags renames before they hit the dispatcher.
     #[test]
     fn tool_name_set_matches_frontend_contract() {
+        // The frontend's `ToolName` union in `tool-dispatcher.ts` MUST
+        // mirror this set exactly — any drift will be caught here.
         let mut names: Vec<&'static str> =
             ToolKind::ALL.iter().map(|k| k.metadata().name).collect();
         names.sort();
         assert_eq!(
             names,
             vec![
+                "approve_mcp_call",
                 "archive_workspace",
+                "call_mcp_tool",
                 "capture_screen",
                 "create_workspace",
                 "create_workspace_and_send",
                 "create_workspace_variants",
-                "describe_voice_tools",
+                "describe_local_tools",
+                "describe_mcp_tool",
                 "end_session",
-                "get_context_item_detail",
                 "get_session_messages",
-                "list_context_items",
                 "list_repos",
                 "list_sessions",
                 "list_workspaces",
                 "permanently_delete_workspace",
                 "run_workspace_action",
                 "run_workspace_script",
+                "search_mcp_tools",
                 "search_sessions",
                 "select_workspace",
                 "send_prompt",
@@ -3439,5 +3960,187 @@ mod tests {
                 "wait_for_user",
             ]
         );
+    }
+
+    #[test]
+    fn call_mcp_tool_schema_requires_arguments() {
+        let metadata = ToolKind::CallMcpTool.metadata();
+        let required = metadata
+            .parameters
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("call_mcp_tool has required array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(required.contains(&"tool_path"));
+        assert!(required.contains(&"arguments"));
+    }
+
+    #[test]
+    fn call_mcp_tool_rejects_missing_arguments_before_executor() {
+        let err = call_mcp_arguments_arg(&json!({
+            "tool_path": "github_v3_rest_api.search.issuesAndPullRequests"
+        }))
+        .unwrap_err();
+        assert!(err.contains("requires `arguments`"));
+        assert!(err.contains("describe_mcp_tool"));
+    }
+
+    #[test]
+    fn external_empty_arguments_points_model_to_describe() {
+        let message = external_empty_arguments_message(
+            "github_v3_rest_api.search.issuesAndPullRequests",
+            &json!({}),
+        )
+        .expect("external empty args should be blocked");
+        assert!(message.contains("empty arguments"));
+        assert!(message.contains("describe_mcp_tool"));
+        assert!(message.contains("inputTypeScript"));
+    }
+
+    #[test]
+    fn local_helmor_empty_arguments_are_not_blocked_by_external_guard() {
+        assert!(external_empty_arguments_message("helmor.helmor_data_info", &json!({})).is_none());
+    }
+
+    #[test]
+    fn compact_describe_mcp_result_strips_type_definitions_and_summarizes_params() {
+        let raw = json!({
+            "isError": false,
+            "status": "completed",
+            "structured": {
+                "logs": [],
+                "status": "completed",
+                "result": {
+                    "path": "github_v3_rest_api.search.issuesAndPullRequests",
+                    "name": "search.issuesAndPullRequests",
+                    "description": "Searches issues and pull requests across GitHub repositories.",
+                    "inputTypeScript": "{ q: string; sort?: \"comments\" | \"created\" | \"updated\"; per_page?: number; page?: number }",
+                    "outputTypeScript": "{ total_count: number; items: issue[] }",
+                    "typeScriptDefinitions": {
+                        "issue": "x".repeat(80_000)
+                    }
+                }
+            },
+            "text": "large raw output"
+        });
+
+        let compact = compact_describe_mcp_result(raw);
+        let serialized = serde_json::to_string(&compact).unwrap();
+        assert!(!serialized.contains("typeScriptDefinitions"));
+        assert!(!serialized.contains("outputTypeScript"));
+        assert!(serialized.len() < 3_000, "{serialized}");
+
+        let params = compact
+            .pointer("/structured/result/input/parameters")
+            .and_then(Value::as_array)
+            .expect("compact parameters");
+        assert_eq!(params[0]["name"], "q");
+        assert_eq!(params[0]["required"], true);
+        assert_eq!(params[0]["type"], "string");
+        assert_eq!(params[1]["name"], "sort");
+        assert_eq!(params[1]["required"], false);
+        assert_eq!(
+            params[1]["type"],
+            "\"comments\" | \"created\" | \"updated\""
+        );
+    }
+
+    #[test]
+    fn compact_describe_mcp_result_uses_input_schema_descriptions() {
+        let raw = json!({
+            "path": "helmor.select_workspace",
+            "name": "select_workspace",
+            "description": "Select a workspace.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["workspace_id"],
+                "properties": {
+                    "workspace_id": {
+                        "type": "string",
+                        "description": "Workspace id to select."
+                    },
+                    "open": {
+                        "type": "boolean",
+                        "description": "Open the workspace after selecting."
+                    }
+                }
+            }
+        });
+
+        let compact = compact_describe_mcp_result(raw);
+        let params = compact
+            .pointer("/structured/result/input/parameters")
+            .and_then(Value::as_array)
+            .expect("compact parameters");
+        assert_eq!(params[0]["name"], "open");
+        assert_eq!(params[0]["required"], false);
+        assert_eq!(
+            params[0]["description"],
+            "Open the workspace after selecting."
+        );
+        assert_eq!(params[1]["name"], "workspace_id");
+        assert_eq!(params[1]["required"], true);
+        assert_eq!(params[1]["description"], "Workspace id to select.");
+    }
+
+    /// `tool_path` from the model can contain arbitrary characters.
+    /// Verify the code generator JSON-encodes the path so the sandbox
+    /// only sees a string literal — never code.
+    #[test]
+    fn call_mcp_code_template_is_injection_safe() {
+        let hostile_path = "github'); throw new Error('pwned"; // contains ', ), ;
+        let hostile_args = json!({"key": "value with \"quote\" and ');"});
+        let code = build_call_mcp_code(hostile_path, &hostile_args).unwrap();
+        // Path is wrapped in JSON-encoded string literal — the raw
+        // single quote / paren / semicolon become escape sequences
+        // inside the literal, never break out of it.
+        assert!(
+            code.contains("const path = \"github'); throw new Error('pwned\""),
+            "path must be JSON-encoded as a string literal: {code}"
+        );
+        // The hostile sequence does NOT appear at top level (not split
+        // outside the string literal) — we test by confirming there's
+        // exactly one occurrence of the substring and that it's after
+        // the `const path = ` JSON token.
+        let throw_idx = code
+            .find("throw new Error")
+            .expect("substring present once");
+        let path_marker = code.find("const path = ").unwrap();
+        assert!(
+            throw_idx > path_marker,
+            "throw occurs inside the JSON string literal, not as standalone code"
+        );
+        // args object should be JSON-encoded as well
+        assert!(
+            code.contains("\"key\""),
+            "args must be JSON-encoded: {code}"
+        );
+    }
+
+    #[test]
+    fn call_mcp_code_template_basic_shape() {
+        let code = build_call_mcp_code("github.issues.list", &json!({"owner": "vercel"})).unwrap();
+        assert!(code.contains("\"github.issues.list\""));
+        assert!(code.contains("\"owner\":\"vercel\""));
+        assert!(code.contains(".reduce((o, k) => o[k], tools)"));
+        assert!(code.contains("return await fn(args);"));
+    }
+
+    #[test]
+    fn search_mcp_code_template_with_namespace() {
+        let code = build_search_mcp_code("list issues", Some("github"), 5);
+        assert!(code.contains("\"query\":\"list issues\""));
+        assert!(code.contains("\"namespace\":\"github\""));
+        assert!(code.contains("\"limit\":5"));
+    }
+
+    #[test]
+    fn search_mcp_code_template_no_namespace() {
+        let code = build_search_mcp_code("workspaces", None, 12);
+        assert!(code.contains("\"query\":\"workspaces\""));
+        assert!(!code.contains("\"namespace\""));
+        assert!(code.contains("\"limit\":12"));
     }
 }
