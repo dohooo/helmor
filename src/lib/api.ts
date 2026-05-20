@@ -1171,6 +1171,16 @@ export async function searchWorkspace(args: {
  * `workspaceDir` may be `null` for a freshly-accepted send that
  * hasn't yet seen the first event).
  */
+/**
+ * Phase 24t: lifecycle phase of the session. `live` = sidecar
+ * process still running; `endedReplayOnly` = the on-disk journal
+ * survives but the sidecar is gone (daemon restart, terminal
+ * event already fired, etc.). Auto-reattach skips
+ * `endedReplayOnly` rows — only explicit operator action
+ * (e.g. the dev panel) should attach to one.
+ */
+export type AgentSessionState = "live" | "endedReplayOnly";
+
 export type RemoteAgentSession = {
 	requestId: string;
 	helmorSessionId: string | null;
@@ -1178,6 +1188,12 @@ export type RemoteAgentSession = {
 	workspaceDir: string | null;
 	startedAtMs: number;
 	lastEventMs: number;
+	/**
+	 * Defaults to `"live"` for pre-24t daemons that don't emit the
+	 * field — the desktop's `serde(default)` mirror keeps the older
+	 * wire shape backward-compatible.
+	 */
+	state: AgentSessionState;
 };
 
 /**
@@ -3761,6 +3777,25 @@ export type AgentReattachRequest = {
 
 export type AgentReattachResponse = {
 	accepted: boolean;
+	/**
+	 * Phase 24r: daemon's high-water-mark seq for this session at
+	 * attach time. Stash for diagnostics + a future reattach can pass
+	 * it back as `since_seq` without a DB lookup.
+	 */
+	lastSeq: number;
+	/**
+	 * Phase 24r: number of journal entries the daemon will flush
+	 * through the event stream as part of the replay. Drives the
+	 * "rebuilding history N/M" workspace chip.
+	 */
+	replayedCount: number;
+	/**
+	 * Phase 24r: earliest seq the daemon's ring can still deliver
+	 * when the desktop's `since_seq` predated the oldest entry.
+	 * Non-null means the cold replay is partial; the chat surfaces a
+	 * "history unavailable" banner and continues live.
+	 */
+	replayGap?: number | null;
 };
 
 export async function startAgentReattachStream(

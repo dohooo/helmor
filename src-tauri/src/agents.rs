@@ -321,11 +321,39 @@ pub async fn reattach_agent_message_stream(
         .clone()
         .unwrap_or_else(|| request.model_id.clone());
 
+    // Phase 24r: subscribe BEFORE attach so the daemon's journal
+    // flush (the first events fired against the freshly-swapped
+    // notifier) reaches us. Compute `since_seq` from the local DB:
+    //   - cold attach (no local rows) → `Some(0)`, full replay.
+    //   - warm attach (some rows)     → `MAX(last_event_seq)`, gap
+    //     fill only.
+    let event_rx = transport.subscribe(&request.request_id);
+    let since_seq = compute_attach_since_seq(&request.helmor_session_id);
+    let attach_result = transport
+        .agent_attach(crate::remote::AgentAttachParams {
+            request_id: request.request_id.clone(),
+            since_seq,
+        })
+        .inspect_err(|_| {
+            // Drop the subscription explicitly so the per-id slot
+            // doesn't leak when the daemon hand-off fails.
+            transport.unsubscribe(&request.request_id);
+        })?;
+    if !attach_result.found {
+        transport.unsubscribe(&request.request_id);
+        return Err(anyhow::anyhow!(
+            "remote daemon does not recognise request_id `{}` — the session likely ended",
+            request.request_id
+        )
+        .into());
+    }
+
     self::streaming::reattach::stream_reattach_via_sidecar(
         self::streaming::reattach::ReattachStreamInput {
             app,
             on_event,
             transport,
+            event_rx,
             request_id: request.request_id,
             helmor_session_id: request.helmor_session_id,
             workspace_id: request.workspace_id,
@@ -336,7 +364,41 @@ pub async fn reattach_agent_message_stream(
         },
     );
 
-    Ok(AgentReattachResponse { accepted: true })
+    Ok(AgentReattachResponse {
+        accepted: true,
+        last_seq: attach_result.last_seq,
+        replayed_count: attach_result.replayed_count,
+        replay_gap: attach_result.replay_gap,
+    })
+}
+
+/// Phase 24r: pick the `since_seq` to send on `agent.attach`.
+/// Cold attach (no local rows) → `Some(0)` so the daemon flushes
+/// the full journal; warm attach → `MAX(last_event_seq)`. Both DB
+/// failures fall back to a cold attach: better to over-replay (the
+/// `ON CONFLICT(id) DO NOTHING` clause absorbs duplicates) than to
+/// silently start mid-conversation.
+fn compute_attach_since_seq(helmor_session_id: &str) -> Option<u64> {
+    let read_result = crate::models::db::read(|conn| {
+        let has_rows = self::persistence::has_local_rows_for_session(conn, helmor_session_id)?;
+        if !has_rows {
+            return Ok((false, None));
+        }
+        let max = self::persistence::max_event_seq_for_session(conn, helmor_session_id)?;
+        Ok((true, max))
+    });
+    match read_result {
+        Ok((false, _)) => Some(0),
+        Ok((true, max)) => max,
+        Err(err) => {
+            tracing::debug!(
+                helmor_session_id = %helmor_session_id,
+                error = %format!("{err:#}"),
+                "compute_attach_since_seq: DB read failed; defaulting to cold replay"
+            );
+            Some(0)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -376,6 +438,24 @@ pub struct AgentReattachResponse {
     /// just the IPC ack. A failed resolve / non-remote workspace
     /// surfaces as the command's Err, not as `accepted=false`.
     pub accepted: bool,
+    /// Phase 24r: daemon's high-water-mark seq at attach time.
+    /// The frontend stashes this for diagnostics + a future
+    /// reconnect can pass it back as `since_seq`.
+    #[serde(default)]
+    pub last_seq: u64,
+    /// Phase 24r: number of journal entries the daemon is about
+    /// to flush through the event stream as part of the replay.
+    /// Drives the workspace header chip's "rebuilding N/M events"
+    /// progress affordance.
+    #[serde(default)]
+    pub replayed_count: u64,
+    /// Phase 24r: earliest seq the daemon's ring can still
+    /// deliver when the desktop's `since_seq` predated the oldest
+    /// entry. `Some` means the cold replay is a partial catch-up;
+    /// the chat header shows a "history unavailable; new turns
+    /// will appear here" banner and continues live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_gap: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1155,5 +1235,65 @@ mod tests {
         assert_eq!(messages[3].role, PipelineRole::Assistant);
 
         std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    // ── compute_attach_since_seq (phase 24r) ──────────────────────
+
+    /// Phase 24r: cold-attach gate. A session with no local rows
+    /// must receive `Some(0)` so the daemon flushes its full
+    /// journal; a session with rows but no journal data falls
+    /// back to `None` from `MAX(...)`; a session with journal data
+    /// returns its high-water-mark.
+    #[test]
+    fn compute_attach_since_seq_selects_cold_warm_paths() {
+        use crate::testkit::TestEnv;
+        let env = TestEnv::new("compute-attach-since-seq");
+        let conn = env.db_connection();
+        // Seed the FK chain so session_messages inserts are legal.
+        conn.execute(
+            "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES ('r1', 'demo', NULL, 'main', '/tmp/demo')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, display_order) VALUES ('w1', 'r1', 'demo', 'ready', 'in-progress', 'main', 100)",
+            [],
+        ).unwrap();
+        // Three sessions: cold (no rows), warm-legacy (rows but
+        // NULL seq), warm-modern (rows with seq).
+        for id in ["hs-cold", "hs-warm-legacy", "hs-warm-modern"] {
+            conn.execute(
+                "INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode) VALUES (?1, 'w1', 't', 'claude', 'idle', 'opus', 'default')",
+                [id],
+            )
+            .unwrap();
+        }
+        // warm-legacy: row with NULL last_event_seq (local-only path).
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, last_event_seq) VALUES ('m1', 'hs-warm-legacy', 'assistant', '{}', NULL)",
+            [],
+        ).unwrap();
+        // warm-modern: rows with explicit seqs.
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, last_event_seq) VALUES ('m2', 'hs-warm-modern', 'assistant', '{}', 12)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, last_event_seq) VALUES ('m3', 'hs-warm-modern', 'assistant', '{}', 42)",
+            [],
+        ).unwrap();
+
+        // Cold session: fetch full journal.
+        assert_eq!(compute_attach_since_seq("hs-cold"), Some(0));
+        // Warm-legacy: rows exist but no journal data → None means
+        // "I don't have a since to ask for; daemon may interpret as
+        // cold attach but the existence of rows means we shouldn't
+        // ask for since=0 either (would double-write the local
+        // prefix). See compute_attach_since_seq comment + 24q-1
+        // helper contract.
+        assert_eq!(compute_attach_since_seq("hs-warm-legacy"), None);
+        // Warm-modern: high-water-mark.
+        assert_eq!(compute_attach_since_seq("hs-warm-modern"), Some(42));
+        // Unknown session → cold (no local rows for that id).
+        assert_eq!(compute_attach_since_seq("hs-unknown"), Some(0));
     }
 }

@@ -180,6 +180,32 @@ pub(crate) fn max_event_seq_for_session(
     Ok(max.and_then(|n| u64::try_from(n).ok()))
 }
 
+/// Phase 24r: cold-attach gate. `false` when the desktop has any
+/// persisted row for this session (warm reattach — let the caller
+/// use `MAX(last_event_seq)` to set `since_seq`); `true` when the
+/// session has no local rows at all (cold attach — caller passes
+/// `since_seq=Some(0)` so the daemon flushes the entire journal).
+///
+/// Why a separate query from `max_event_seq_for_session`: a session
+/// can have local rows whose `last_event_seq` is all NULL (legacy /
+/// local-only rows). The MAX query reports `None` for that, which
+/// would falsely look like "cold attach" if we collapsed the two
+/// checks. The dedicated existence query distinguishes "no rows" from
+/// "rows present but no journal data".
+pub(crate) fn has_local_rows_for_session(
+    conn: &Connection,
+    helmor_session_id: &str,
+) -> Result<bool> {
+    // `EXISTS(...)` returns 0 / 1 so the row always materialises;
+    // no QueryReturnedNoRows risk.
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM session_messages WHERE session_id = ?1)",
+        [helmor_session_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
 pub(super) fn persist_exit_plan_message(
     conn: &Connection,
     ctx: &ExchangeContext,
@@ -694,6 +720,30 @@ mod tests {
         insert_seq_row(&conn, "row-b", "session-1", None);
         let max = max_event_seq_for_session(&conn, "session-1").unwrap();
         assert_eq!(max, None);
+    }
+
+    #[test]
+    fn has_local_rows_for_session_distinguishes_empty_vs_legacy_rows() {
+        // Phase 24r cold-attach gate. Legacy rows (last_event_seq
+        // NULL) MUST register as "has local rows" so the caller
+        // doesn't ask the daemon to flush a journal on top of the
+        // local-only content — otherwise we'd double-insert turns
+        // the local sidecar already persisted.
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        // Empty session — cold.
+        assert!(!has_local_rows_for_session(&conn, "session-empty").unwrap());
+
+        // Legacy row (NULL seq) — still counts as "has rows".
+        insert_seq_row(&conn, "row-1", "session-legacy", None);
+        assert!(has_local_rows_for_session(&conn, "session-legacy").unwrap());
+
+        // Modern row — counts.
+        insert_seq_row(&conn, "row-2", "session-modern", Some(5));
+        assert!(has_local_rows_for_session(&conn, "session-modern").unwrap());
+
+        // Sibling session must not leak.
+        assert!(!has_local_rows_for_session(&conn, "session-other").unwrap());
     }
 
     #[test]

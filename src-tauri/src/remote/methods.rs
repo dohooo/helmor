@@ -962,6 +962,25 @@ impl RpcMethod for AgentAbortMethod {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentListParams {}
 
+/// Lifecycle state of an agent session as surfaced by `agent.list`.
+/// Phase 24t introduces the `EndedReplayOnly` variant so a desktop
+/// can distinguish "live, still streaming" sessions from sessions
+/// whose sidecar process has ended (the journal lives on disk only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSessionState {
+    /// Sidecar process is alive; events are still flowing.
+    #[default]
+    Live,
+    /// Sidecar process is gone (session ended cleanly, or the daemon
+    /// restarted mid-session). The on-disk journal is still available
+    /// for replay via `agent.attach`. The desktop's auto-reattach
+    /// hook should skip these — only an explicit operator action
+    /// (e.g. the dev panel's "browse history") should trigger an
+    /// attach to a replay-only session.
+    EndedReplayOnly,
+}
+
 /// Per-session metadata in the `agent.list` response. Carries the
 /// bits a reconnecting client needs to decide whether to reattach.
 /// Empty `helmor_session_id` / `provider` / `workspace_dir` fields
@@ -992,6 +1011,12 @@ pub struct AgentSessionEntry {
     /// forwarded for this session. Lets a reconnecting client tell a
     /// dormant session from one mid-stream.
     pub last_event_ms: i64,
+    /// Phase 24t: lifecycle phase of this session. Defaults to
+    /// `Live` so older daemons (no 24t durability) don't need to
+    /// produce the field. Pre-24t clients see the same JSON either
+    /// way.
+    #[serde(default)]
+    pub state: AgentSessionState,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1775,6 +1800,7 @@ mod tests {
             workspace_dir: None,
             started_at_ms: 1_700_000_000_000,
             last_event_ms: 1_700_000_000_500,
+            state: AgentSessionState::Live,
         };
         let wire = serde_json::to_value(&entry).unwrap();
         assert_eq!(wire["requestId"], "req-3");
@@ -1783,6 +1809,9 @@ mod tests {
         assert!(wire.get("helmorSessionId").is_none(), "wire: {wire}");
         assert!(wire.get("provider").is_none(), "wire: {wire}");
         assert!(wire.get("workspaceDir").is_none(), "wire: {wire}");
+        // Phase 24t: state defaults to Live + always serializes
+        // (no skip_serializing_if), so older clients see the field.
+        assert_eq!(wire["state"], "live");
     }
 
     #[test]
@@ -1794,6 +1823,7 @@ mod tests {
             workspace_dir: Some("/srv/repos/demo".into()),
             started_at_ms: 1,
             last_event_ms: 2,
+            state: AgentSessionState::EndedReplayOnly,
         };
         let wire = serde_json::to_string(&entry).unwrap();
         let restored: AgentSessionEntry = serde_json::from_str(&wire).unwrap();

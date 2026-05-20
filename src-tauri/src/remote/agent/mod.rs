@@ -37,6 +37,7 @@
 //!   a real `helmor-sidecar` binary.
 
 mod journal;
+mod journal_store;
 mod secrets;
 mod spawner;
 
@@ -46,6 +47,7 @@ pub mod mock;
 #[cfg(test)]
 mod tests;
 
+pub use journal_store::JOURNAL_SUBDIR;
 pub use spawner::{AgentSpawner, BinaryAgentSpawner, SidecarPipe};
 
 use journal::EventJournal;
@@ -80,6 +82,13 @@ pub struct RemoteAgentState {
     spawner: Arc<dyn AgentSpawner>,
     sidecar: Mutex<Option<RunningSidecar>>,
     sessions: Arc<Mutex<HashMap<String, ActiveAgentSession>>>,
+    /// Phase 24t: sessions whose journals exist on disk but whose
+    /// sidecar process is gone (either because the original session
+    /// ended cleanly OR because the daemon restarted mid-session).
+    /// `agent.list` merges these in as `state: "endedReplayOnly"` and
+    /// `agent.attach` flushes the on-disk journal through the new
+    /// notifier so a desktop can browse / rebuild the conversation.
+    ended_sessions: Arc<Mutex<HashMap<String, EndedAgentSession>>>,
     /// Set when the spawner returned an explicit "not configured"
     /// (e.g. env var missing). Distinct from "sidecar crashed" —
     /// the former is a static configuration error and the toast
@@ -90,6 +99,11 @@ pub struct RemoteAgentState {
     /// `None` disables persistence — tests use this to drive the
     /// in-memory flow without touching the filesystem.
     secrets_path: Option<PathBuf>,
+    /// Phase 24t: directory holding per-session journal files. When
+    /// `None`, disk persistence is disabled (tests that don't care
+    /// about durability). Production wires this to
+    /// `$HOME/.helmor/server/journals/`.
+    journal_dir: Option<PathBuf>,
 }
 
 impl RemoteAgentState {
@@ -98,8 +112,10 @@ impl RemoteAgentState {
             spawner,
             sidecar: Mutex::new(None),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            ended_sessions: Arc::new(Mutex::new(HashMap::new())),
             spawn_disabled_reason: None,
             secrets_path: default_secrets_path(),
+            journal_dir: None,
         }
     }
 
@@ -108,6 +124,69 @@ impl RemoteAgentState {
     /// `default_secrets_path()`.
     pub fn with_secrets_path(mut self, path: Option<PathBuf>) -> Self {
         self.secrets_path = path;
+        self
+    }
+
+    /// Phase 24t: wire the journal directory. Calling this enables
+    /// per-session disk-backed journals, scans the directory for
+    /// any existing JSONL files (surfacing them as
+    /// `endedReplayOnly` sessions), and sweeps files older than
+    /// the retention window (default 24h, overridable via
+    /// `HELMOR_JOURNAL_RETENTION_HOURS`). Tests that need a real
+    /// FS path use this; tests that don't care about durability
+    /// leave it unset.
+    pub fn with_journal_dir(mut self, dir: PathBuf) -> Self {
+        // Best-effort sweep — failures get logged but don't block
+        // daemon startup.
+        match journal_store::sweep_expired_journals(&dir, journal_store::retention_from_env()) {
+            Ok(removed) if removed > 0 => {
+                tracing::info!(
+                    journal_dir = %dir.display(),
+                    removed,
+                    "journal: swept expired files on startup"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    journal_dir = %dir.display(),
+                    error = %format!("{err:#}"),
+                    "journal: sweep failed; continuing without retention cleanup",
+                );
+            }
+        }
+        // Recover any surviving journals as ended sessions.
+        match journal_store::scan_journal_dir(&dir) {
+            Ok(recovered) => {
+                let mut ended = self
+                    .ended_sessions
+                    .lock()
+                    .expect("ended sessions mutex poisoned");
+                for r in recovered {
+                    ended.insert(
+                        r.request_id.clone(),
+                        EndedAgentSession {
+                            request_id: r.request_id,
+                            helmor_session_id: r.helmor_session_id,
+                            provider: r.provider,
+                            workspace_dir: r.workspace_dir,
+                            started_at_ms: r.started_at_ms,
+                            last_event_ms: r.last_event_ms,
+                            last_seq: r.last_seq,
+                            path: r.path,
+                        },
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    journal_dir = %dir.display(),
+                    error = %format!("{err:#}"),
+                    "journal: scan failed; ended sessions list will be empty",
+                );
+            }
+        }
+        self.journal_dir = Some(dir);
         self
     }
 
@@ -128,12 +207,14 @@ impl RemoteAgentState {
             spawner: Arc::new(NeverSpawner),
             sidecar: Mutex::new(None),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            ended_sessions: Arc::new(Mutex::new(HashMap::new())),
             spawn_disabled_reason: Some(reason.into()),
             // Disabled state never reaches the spawn path that would
             // push secrets to the sidecar; the secrets file still
             // gets written on `set_auth` so a later daemon restart
             // (after the env var is set) picks them up.
             secrets_path: default_secrets_path(),
+            journal_dir: None,
         }
     }
 
@@ -170,6 +251,27 @@ impl RemoteAgentState {
             .and_then(Value::as_str)
             .map(str::to_string);
         let now = now_ms();
+        // Phase 24t: wire a disk writer for this session's journal
+        // when the daemon is configured with a journal dir. Failure
+        // to open the file logs + falls back to in-memory-only mode
+        // — losing durability is better than rejecting the send.
+        let journal = match self.journal_dir.as_ref() {
+            Some(dir) => {
+                let path = dir.join(format!("{}.jsonl", params.request_id));
+                match journal_store::JournalDiskWriter::open(path) {
+                    Ok(writer) => EventJournal::default().with_disk_writer(writer),
+                    Err(err) => {
+                        tracing::warn!(
+                            rid = %params.request_id,
+                            error = %format!("{err:#}"),
+                            "journal: failed to open disk file; using in-memory only",
+                        );
+                        EventJournal::default()
+                    }
+                }
+            }
+            None => EventJournal::default(),
+        };
         let session = ActiveAgentSession {
             request_id: params.request_id.clone(),
             notifier: Arc::new(Mutex::new(notifier)),
@@ -178,8 +280,16 @@ impl RemoteAgentState {
             workspace_dir: Mutex::new(workspace_dir),
             started_at_ms: now,
             last_event_ms: Mutex::new(now),
-            journal: Mutex::new(EventJournal::default()),
+            journal: Mutex::new(journal),
         };
+        // Phase 24t: re-sending a request_id that exists in the ended
+        // map (e.g. daemon restarted, desktop is re-sending the same
+        // logical session) takes over — drop the ended entry so
+        // agent.list doesn't double-count.
+        self.ended_sessions
+            .lock()
+            .expect("ended sessions mutex poisoned")
+            .remove(&params.request_id);
         self.sessions
             .lock()
             .expect("agent sessions mutex poisoned")
@@ -247,36 +357,60 @@ impl RemoteAgentState {
         Ok(AgentAbortResult::default())
     }
 
-    /// Snapshot every active session as an `AgentListResult`. Stable
-    /// order: most recently started first.
+    /// Snapshot every session — live + (24t) ended-replay-only — as
+    /// an `AgentListResult`. Stable order: most recently started
+    /// first across both groups.
     pub fn list(&self) -> AgentListResult {
-        let sessions = self.sessions.lock().expect("agent sessions mutex poisoned");
-        let mut entries: Vec<AgentSessionEntry> = sessions
-            .values()
-            .map(|s| AgentSessionEntry {
-                request_id: s.request_id.clone(),
-                helmor_session_id: s
-                    .helmor_session_id
-                    .lock()
-                    .expect("session field mutex poisoned")
-                    .clone(),
-                provider: s
-                    .provider
-                    .lock()
-                    .expect("session field mutex poisoned")
-                    .clone(),
-                workspace_dir: s
-                    .workspace_dir
-                    .lock()
-                    .expect("session field mutex poisoned")
-                    .clone(),
-                started_at_ms: s.started_at_ms,
-                last_event_ms: *s
-                    .last_event_ms
-                    .lock()
-                    .expect("session field mutex poisoned"),
-            })
-            .collect();
+        let mut entries: Vec<AgentSessionEntry> = {
+            let sessions = self.sessions.lock().expect("agent sessions mutex poisoned");
+            sessions
+                .values()
+                .map(|s| AgentSessionEntry {
+                    request_id: s.request_id.clone(),
+                    helmor_session_id: s
+                        .helmor_session_id
+                        .lock()
+                        .expect("session field mutex poisoned")
+                        .clone(),
+                    provider: s
+                        .provider
+                        .lock()
+                        .expect("session field mutex poisoned")
+                        .clone(),
+                    workspace_dir: s
+                        .workspace_dir
+                        .lock()
+                        .expect("session field mutex poisoned")
+                        .clone(),
+                    started_at_ms: s.started_at_ms,
+                    last_event_ms: *s
+                        .last_event_ms
+                        .lock()
+                        .expect("session field mutex poisoned"),
+                    state: super::methods::AgentSessionState::Live,
+                })
+                .collect()
+        };
+        // Phase 24t: merge in ended-replay-only sessions. The map's
+        // entries get stable order from the same `started_at_ms`
+        // sort below; tagging them `EndedReplayOnly` is what tells
+        // the desktop's auto-attach hook to skip them.
+        let ended = self
+            .ended_sessions
+            .lock()
+            .expect("ended sessions mutex poisoned");
+        for e in ended.values() {
+            entries.push(AgentSessionEntry {
+                request_id: e.request_id.clone(),
+                helmor_session_id: e.helmor_session_id.clone(),
+                provider: e.provider.clone(),
+                workspace_dir: e.workspace_dir.clone(),
+                started_at_ms: e.started_at_ms,
+                last_event_ms: e.last_event_ms,
+                state: super::methods::AgentSessionState::EndedReplayOnly,
+            });
+        }
+        drop(ended);
         entries.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms));
         AgentListResult { sessions: entries }
     }
@@ -310,46 +444,89 @@ impl RemoteAgentState {
         params: AgentAttachParams,
         notifier: Arc<dyn Notifier>,
     ) -> Result<AgentAttachResult> {
+        // Live path: session is in the active map. Swap the
+        // notifier + flush journal snapshot under the sessions lock.
         let sessions = self.sessions.lock().expect("agent sessions mutex poisoned");
-        let session = match sessions.get(&params.request_id) {
-            Some(s) => s,
-            None => return Ok(AgentAttachResult::default()),
-        };
+        if let Some(session) = sessions.get(&params.request_id) {
+            // Swap notifier first so the reader thread's NEXT append
+            // routes to the new client. The journal snapshot below
+            // covers everything up to the head the journal has right
+            // now; events emitted after this point land via the new
+            // notifier (and into the journal for any FUTURE reattach
+            // off this same session).
+            {
+                let mut current = session
+                    .notifier
+                    .lock()
+                    .expect("session notifier mutex poisoned");
+                *current = Arc::clone(&notifier);
+            }
 
-        // Swap notifier first so the reader thread's NEXT append
-        // routes to the new client. The journal snapshot below
-        // covers everything up to the head the journal has right
-        // now; events emitted after this point land via the new
-        // notifier (and into the journal for any FUTURE reattach
-        // off this same session).
-        {
-            let mut current = session
-                .notifier
+            // Snapshot the journal under the same sessions lock so the
+            // reader thread can't append between our swap and our
+            // snapshot — out-of-order delivery to the new client is the
+            // alternative.
+            let snapshot = session
+                .journal
                 .lock()
-                .expect("session notifier mutex poisoned");
-            *current = Arc::clone(&notifier);
+                .expect("session journal mutex poisoned")
+                .replay_since(params.since_seq);
+
+            let entries = snapshot.entries;
+            let replayed_count = entries.len() as u64;
+            let request_id = params.request_id.clone();
+            for entry in entries {
+                notifier.notify(
+                    AGENT_EVENT_METHOD,
+                    json!({
+                        "requestId": request_id,
+                        "event": entry.payload,
+                        "seq": entry.seq,
+                    }),
+                );
+            }
+
+            return Ok(AgentAttachResult {
+                found: true,
+                last_seq: snapshot.head_seq,
+                replayed_count,
+                replay_gap: snapshot.replay_gap,
+            });
         }
+        drop(sessions);
 
-        // Snapshot the journal under the same sessions lock so the
-        // reader thread can't append between our swap and our
-        // snapshot — out-of-order delivery to the new client is the
-        // alternative.
-        let snapshot = session
-            .journal
-            .lock()
-            .expect("session journal mutex poisoned")
-            .replay_since(params.since_seq);
-
-        let entries = snapshot.entries;
-        let replayed_count = entries.len() as u64;
+        // Phase 24t: replay-only path. The original sidecar process
+        // is gone, but the on-disk journal survives. Read the file +
+        // flush entries newer than `since_seq` through the supplied
+        // notifier. No notifier swap (there's no future event to
+        // route); the desktop sees the full replay terminated by the
+        // original `result`/`end` event the journal already holds.
+        let ended_path = {
+            let ended = self
+                .ended_sessions
+                .lock()
+                .expect("ended sessions mutex poisoned");
+            ended.get(&params.request_id).map(|e| e.path.clone())
+        };
+        let Some(path) = ended_path else {
+            return Ok(AgentAttachResult::default());
+        };
+        let entries = journal_store::read_journal_entries(&path)
+            .with_context(|| format!("replay from on-disk journal {}", path.display()))?;
+        let head_seq = entries.last().map(|e| e.seq).unwrap_or(0);
+        let cutoff = params.since_seq.unwrap_or(0);
+        // Detect a replay gap by checking whether the file's first
+        // surviving entry is past the caller's expected next seq. On
+        // disk we never evict, so the only way to hit this is if
+        // the daemon was started with a partially-truncated journal.
+        let replay_gap = entries
+            .first()
+            .filter(|first| first.seq > cutoff.saturating_add(1) && cutoff > 0)
+            .map(|first| first.seq);
+        let to_flush: Vec<_> = entries.into_iter().filter(|e| e.seq > cutoff).collect();
+        let replayed_count = to_flush.len() as u64;
         let request_id = params.request_id.clone();
-
-        // Flush the snapshot to the new notifier BEFORE releasing
-        // the sessions lock. Holding the lock through flush
-        // preserves ordering vs. the reader thread; the snapshot
-        // contents are fixed in memory at this point, so the only
-        // work is calling `notifier.notify` per entry.
-        for entry in entries {
+        for entry in to_flush {
             notifier.notify(
                 AGENT_EVENT_METHOD,
                 json!({
@@ -359,12 +536,11 @@ impl RemoteAgentState {
                 }),
             );
         }
-
         Ok(AgentAttachResult {
             found: true,
-            last_seq: snapshot.head_seq,
+            last_seq: head_seq,
             replayed_count,
-            replay_gap: snapshot.replay_gap,
+            replay_gap,
         })
     }
 
@@ -481,6 +657,7 @@ impl RemoteAgentState {
         let reader = spawn_reader_thread(
             spawned.stdout,
             Arc::clone(&self.sessions),
+            Arc::clone(&self.ended_sessions),
             Arc::clone(&stop),
             spawned.label.clone(),
         );
@@ -537,6 +714,26 @@ struct RunningSidecar {
     stop: Arc<AtomicBool>,
 }
 
+/// Phase 24t: lightweight session entry rebuilt from an on-disk
+/// journal whose original sidecar process is gone. Holds just enough
+/// metadata for `agent.list` to surface the session + for
+/// `agent.attach` to flush the journal file through the new notifier.
+struct EndedAgentSession {
+    request_id: String,
+    helmor_session_id: Option<String>,
+    provider: Option<String>,
+    workspace_dir: Option<String>,
+    started_at_ms: i64,
+    last_event_ms: i64,
+    /// Phase 24t: high-water-mark seq the daemon issued for this
+    /// session, captured at the time it transitioned to ended. The
+    /// attach handler reads seqs back from the on-disk file, so this
+    /// is purely diagnostic — kept for log lines + future telemetry.
+    #[allow(dead_code)]
+    last_seq: u64,
+    path: PathBuf,
+}
+
 struct ActiveAgentSession {
     request_id: String,
     /// Per-session notifier slot. `agent.attach` replaces this so
@@ -560,18 +757,20 @@ struct ActiveAgentSession {
 fn spawn_reader_thread(
     stdout: Box<dyn BufRead + Send>,
     sessions: Arc<Mutex<HashMap<String, ActiveAgentSession>>>,
+    ended_sessions: Arc<Mutex<HashMap<String, EndedAgentSession>>>,
     stop: Arc<AtomicBool>,
     label: String,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name(format!("helmor-agent-reader[{label}]"))
-        .spawn(move || reader_loop(stdout, sessions, stop, label))
+        .spawn(move || reader_loop(stdout, sessions, ended_sessions, stop, label))
         .expect("failed to spawn agent reader thread")
 }
 
 fn reader_loop(
     mut stdout: Box<dyn BufRead + Send>,
     sessions: Arc<Mutex<HashMap<String, ActiveAgentSession>>>,
+    ended_sessions: Arc<Mutex<HashMap<String, EndedAgentSession>>>,
     stop: Arc<AtomicBool>,
     label: String,
 ) {
@@ -696,12 +895,48 @@ fn reader_loop(
         );
 
         if completed {
-            sessions
+            // Phase 24t: instead of dropping the session outright,
+            // pluck out the metadata + journal path so we can surface
+            // it through `agent.list` as `endedReplayOnly` and serve
+            // future cold attaches from the on-disk file.
+            let removed = sessions
                 .lock()
                 .expect("agent sessions mutex poisoned")
                 .remove(&id);
+            if let Some(active) = removed {
+                if let Some(ended) = build_ended_from_active(active) {
+                    ended_sessions
+                        .lock()
+                        .expect("ended sessions mutex poisoned")
+                        .insert(id.clone(), ended);
+                }
+            }
         }
     }
+}
+
+/// Phase 24t: drain the metadata + disk-writer path out of an
+/// `ActiveAgentSession` so the entry can move into the
+/// `ended_sessions` map. Returns `None` when the journal has no disk
+/// mirror — there's nothing to flush from, so a future
+/// `agent.attach` couldn't serve the replay anyway.
+fn build_ended_from_active(active: ActiveAgentSession) -> Option<EndedAgentSession> {
+    let helmor_session_id = active.helmor_session_id.into_inner().ok().flatten();
+    let provider = active.provider.into_inner().ok().flatten();
+    let workspace_dir = active.workspace_dir.into_inner().ok().flatten();
+    let last_event_ms = active.last_event_ms.into_inner().ok().unwrap_or(0);
+    let journal = active.journal.into_inner().ok()?;
+    let (last_seq, path) = journal.into_disk_path_and_head()?;
+    Some(EndedAgentSession {
+        request_id: active.request_id,
+        helmor_session_id,
+        provider,
+        workspace_dir,
+        started_at_ms: active.started_at_ms,
+        last_event_ms,
+        last_seq,
+        path,
+    })
 }
 
 fn now_ms() -> i64 {

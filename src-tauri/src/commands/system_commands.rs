@@ -672,25 +672,19 @@ pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     .await
 }
 
-/// Cursor "ready" = non-empty `app.cursor_provider.apiKey`.
+/// Cursor "ready" = has a non-empty API key in the platform vault
+/// (or, on non-vault hosts, the legacy SQLite field). Goes through
+/// the keychain wrapper so the lookup matches what the sidecar
+/// actually loads on spawn.
 fn cursor_login_ready() -> bool {
-    let raw = match crate::models::settings::load_setting_value("app.cursor_provider") {
-        Ok(Some(value)) => value,
-        Ok(None) => return false,
-        Err(error) => {
-            tracing::debug!("Failed to read app.cursor_provider: {error}");
-            return false;
+    match crate::keychain::read_cursor_api_key() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            tracing::debug!("Failed to read cursor api key for login probe: {err}");
+            false
         }
-    };
-    serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("apiKey")
-                .and_then(serde_json::Value::as_str)
-                .map(|key| !key.trim().is_empty())
-        })
-        .unwrap_or(false)
+    }
 }
 
 fn claude_login_ready() -> bool {

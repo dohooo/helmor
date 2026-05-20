@@ -2921,6 +2921,7 @@ mod tests {
             workspace_dir: Some("/srv/repos/demo".into()),
             started_at_ms: 1_000,
             last_event_ms: 1_500,
+            state: crate::remote::methods::AgentSessionState::Live,
         };
         let session_b = crate::remote::AgentSessionEntry {
             request_id: "req-B".into(),
@@ -2929,6 +2930,7 @@ mod tests {
             workspace_dir: None,
             started_at_ms: 2_000,
             last_event_ms: 2_000,
+            state: crate::remote::methods::AgentSessionState::Live,
         };
         *stub.agent_sessions.lock().unwrap() = vec![session_a.clone(), session_b.clone()];
 
@@ -3585,6 +3587,7 @@ mod tests {
                 workspace_dir: None,
                 started_at_ms: 0,
                 last_event_ms: 0,
+                state: crate::remote::methods::AgentSessionState::Live,
             },
             crate::remote::AgentSessionEntry {
                 request_id: "req-2".into(),
@@ -3593,6 +3596,7 @@ mod tests {
                 workspace_dir: None,
                 started_at_ms: 0,
                 last_event_ms: 0,
+                state: crate::remote::methods::AgentSessionState::Live,
             },
         ];
 

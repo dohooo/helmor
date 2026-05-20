@@ -1,0 +1,198 @@
+name: Publish helmor-server
+
+# Cross-platform release pipeline for the remote daemon binary.
+#
+# Fired by:
+#   - Tag push of `helmor-server-v*` (e.g. `helmor-server-v0.22.1`).
+#   - Manual `workflow_dispatch` for one-off builds against a branch.
+#
+# Each matrix entry compiles `helmor-server` for one (os, arch) pair,
+# strips it, packages it into a `helmor-server-<version>-<target>.tar.gz`
+# tarball, and uploads it as a release artifact. A trailing `aggregate`
+# job collects all tarballs and produces a single `SHA256SUMS` file so
+# the auto-install path (`src-tauri/src/remote/install.rs`) can verify
+# downloads.
+#
+# `helmor-server` is a separate release from the desktop app (managed by
+# `publish.yml`) because:
+#   - The desktop bundles macOS-only; the daemon targets Linux + macOS.
+#   - Daemon releases are far more frequent (protocol bumps + RPC method
+#     additions) than desktop releases.
+#   - Operators install one daemon binary per remote host; the desktop
+#     auto-install path needs a stable per-arch URL independent of the
+#     desktop's own release cadence.
+
+on:
+  push:
+    tags:
+      - "helmor-server-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string to stamp into the artifact name (e.g. 0.22.1)"
+        required: true
+        default: "0.0.0-dev"
+
+concurrency:
+  group: publish-helmor-server-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux remotes: the default deployment target. x64 covers the
+          # vast majority of cloud VMs; arm64 covers AWS Graviton + the
+          # newer "ampere" / "axion" instance families.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            cross: true
+          # macOS remotes: developer pairing flows (run agents on a
+          # workstation, edit from a laptop). darwin-arm64 first, x86
+          # secondary.
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            cross: false
+          - target: x86_64-apple-darwin
+            runner: macos-15
+            cross: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            # Tag form: helmor-server-v0.22.1 → 0.22.1
+            version="${GITHUB_REF_NAME#helmor-server-v}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building helmor-server ${version} for ${{ matrix.target }}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (Linux arm64 only)
+        if: matrix.cross
+        run: cargo install --locked cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        working-directory: src-tauri
+        run: cargo build --release --bin helmor-server --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        working-directory: src-tauri
+        # `cross` runs the build inside a per-target container with the
+        # right linker, so we don't need to install a cross-toolchain on
+        # the runner directly.
+        run: cross build --release --bin helmor-server --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        id: stage
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          dist="dist/helmor-server"
+          mkdir -p "${dist}"
+          src="src-tauri/target/${target}/release/helmor-server"
+          test -x "${src}" || { echo "missing binary at ${src}"; exit 1; }
+          # Strip symbols to keep the tarball small. macOS uses BSD strip
+          # which doesn't accept --strip-unneeded; the unconditional form
+          # works on both.
+          strip "${src}"
+          tarball="helmor-server-${version}-${target}.tar.gz"
+          # Tar from the parent dir so the archive layout is
+          # `helmor-server-<version>-<target>/helmor-server` — the
+          # install script's path expectation.
+          stage_dir="helmor-server-${version}-${target}"
+          mkdir -p "${dist}/${stage_dir}"
+          cp "${src}" "${dist}/${stage_dir}/helmor-server"
+          (cd "${dist}" && tar czf "${tarball}" "${stage_dir}")
+          # Per-tarball checksum file — the aggregate step concatenates
+          # these into the canonical SHA256SUMS.
+          (cd "${dist}" && shasum -a 256 "${tarball}" > "${tarball}.sha256")
+          echo "tarball_path=${dist}/${tarball}" >> "$GITHUB_OUTPUT"
+          echo "sum_path=${dist}/${tarball}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # One artifact per matrix entry — `aggregate` downloads them
+          # all and produces the consolidated release.
+          name: helmor-server-${{ matrix.target }}
+          path: |
+            ${{ steps.stage.outputs.tarball_path }}
+            ${{ steps.stage.outputs.sum_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    name: Aggregate + Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Only publish when we have a real tag — workflow_dispatch builds
+    # leave the artifacts attached to the workflow run for inspection
+    # but don't mint a release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/helmor-server-v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: helmor-server-*
+          merge-multiple: true
+
+      - name: Build consolidated SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          # One canonical SHA256SUMS file the install.rs path downloads
+          # alongside the tarball. Sorted for reproducibility.
+          rm -f SHA256SUMS
+          # Each per-target .sha256 file is `<hash>  <tarball>`. Merge.
+          cat *.tar.gz.sha256 | sort > SHA256SUMS
+          # Drop the per-target intermediate files so the release only
+          # carries the tarballs + the merged SHA256SUMS.
+          rm -f *.tar.gz.sha256
+          ls -lah
+
+      - name: Create / update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The tag is `helmor-server-v<version>`; the release name
+          # mirrors it. Body autogenerates from commits between tags.
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

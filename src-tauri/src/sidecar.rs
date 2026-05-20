@@ -97,14 +97,24 @@ fn resolve_bundled_agent_paths() -> BundledAgentPaths {
         .unwrap_or_default()
 }
 
-/// Read Cursor API key from `app.cursor_provider`. None on missing/empty.
+/// Read Cursor API key. Track G moves the key into the macOS
+/// Keychain on platforms that support it; the legacy SQLite path
+/// stays as the fallback for non-macOS hosts + as the migration
+/// source for users upgrading from a release that wrote the key in
+/// plaintext. `None` on missing / empty / backend failure (the
+/// sidecar then runs unauthenticated, same as before).
 pub fn load_cursor_api_key() -> Option<String> {
-    let raw = crate::models::settings::load_setting_value("app.cursor_provider")
-        .ok()
-        .flatten()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let key = parsed.get("apiKey")?.as_str()?.trim();
-    (!key.is_empty()).then(|| key.to_string())
+    match crate::keychain::read_cursor_api_key() {
+        Ok(Some(key)) => Some(key),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "load_cursor_api_key: keychain read failed; treating as missing"
+            );
+            None
+        }
+    }
 }
 
 fn resolve_bundled_agent_paths_for_exe(exe: &std::path::Path) -> Option<BundledAgentPaths> {

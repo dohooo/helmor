@@ -28,7 +28,7 @@
 //!   initial intent.
 
 use std::path::PathBuf;
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,7 @@ use super::active_streams::ActiveStreamHandle;
 use super::transports::SidecarTransport;
 use super::ActiveStreams;
 use super::AgentStreamEvent;
+use crate::sidecar::SidecarEvent;
 
 /// Wall-clock guard. Same 45-second window the regular event loop
 /// uses, applied to the reattach receive — if the daemon stops
@@ -60,6 +61,11 @@ pub struct ReattachStreamInput<R: Runtime = tauri::Wry> {
     pub app: AppHandle<R>,
     pub on_event: Channel<AgentStreamEvent>,
     pub transport: Arc<dyn SidecarTransport>,
+    /// Phase 24r: the caller subscribes before issuing
+    /// `agent.attach` so the daemon's journal flush can't slip
+    /// through the gap between attach + subscribe. Hand the
+    /// resulting receiver to the loop instead of re-subscribing.
+    pub event_rx: mpsc::Receiver<SidecarEvent>,
     /// The daemon's session id — the same id the desktop would
     /// have stored locally if it had originated the send.
     pub request_id: String,
@@ -88,6 +94,7 @@ pub(crate) fn stream_reattach_via_sidecar<R: Runtime>(input: ReattachStreamInput
         app,
         on_event,
         transport,
+        event_rx,
         request_id,
         helmor_session_id,
         workspace_id,
@@ -102,6 +109,7 @@ pub(crate) fn stream_reattach_via_sidecar<R: Runtime>(input: ReattachStreamInput
             app,
             on_event,
             transport,
+            event_rx,
             request_id,
             helmor_session_id,
             workspace_id,
@@ -118,6 +126,7 @@ fn run_reattach_loop<R: Runtime>(
     app: AppHandle<R>,
     on_event: Channel<AgentStreamEvent>,
     transport: Arc<dyn SidecarTransport>,
+    rx: mpsc::Receiver<SidecarEvent>,
     request_id: String,
     helmor_session_id: String,
     workspace_id: Option<String>,
@@ -151,6 +160,10 @@ fn run_reattach_loop<R: Runtime>(
     };
     let registered = active_streams_state.try_register_for_session(handle);
     if !registered {
+        // Caller already subscribed before handing the rx in
+        // (24r). Release the per-id subscription so the daemon
+        // stops fanning events we won't process.
+        transport.unsubscribe(&request_id);
         let message = "Another send is already running for this session — \
                        reattach is disabled while it completes."
             .to_string();
@@ -163,7 +176,6 @@ fn run_reattach_loop<R: Runtime>(
     }
     crate::ui_sync::publish(&app, crate::ui_sync::UiMutationEvent::ActiveStreamsChanged);
 
-    let rx = transport.subscribe(&request_id);
     let working_dir_str = working_directory.display().to_string();
 
     let request_id_for_loop = request_id.clone();
@@ -180,10 +192,17 @@ fn run_reattach_loop<R: Runtime>(
     // Phase 24n: persist the reattached turn's messages to the local
     // DB so a closed-and-reopened desktop sees the right history
     // instead of an empty thread after a reattach window. The
-    // ExchangeContext mirrors the regular send path's shape; user
-    // message id is `None` because the daemon already owns the user
-    // turn (reattach never inserts a user row — it only mirrors the
-    // assistant + tool-result turns the daemon emits).
+    // ExchangeContext mirrors the regular send path's shape;
+    // `user_message_id` is left blank because reattach mints the
+    // user-turn id inside the accumulator at `user_prompt` time
+    // (24s) rather than carrying it from a desktop-side send.
+    //
+    // Phase 24s: the daemon's journal includes `user_prompt` events,
+    // so when the cold-replay (24r) flushes the journal, the
+    // accumulator emits a `MessageRole::User` turn and
+    // `drain_new_turns_into_db` persists it like any other turn.
+    // A desktop attaching to a session it never sent sees the
+    // original prompt at the top of the thread.
     //
     // `persist_turn_message` uses `INSERT ... ON CONFLICT(id) DO
     // NOTHING`, so if this desktop is also the original sender (its
@@ -628,34 +647,6 @@ mod tests {
         }
     }
 
-    /// Block until `ManualTransport::subscribe` has registered the
-    /// given `request_id`, then return. Used by the real-DB tests
-    /// where firing events before subscription would silently drop
-    /// them and leave the loop sitting in its 45s heartbeat
-    /// timeout, masking the actual outcome.
-    fn wait_for_subscription(
-        transport: &ManualTransport,
-        request_id: &str,
-        timeout: Duration,
-    ) -> bool {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let subscribed = transport
-                .senders
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(rid, _)| rid == request_id);
-            if subscribed {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
     /// Build a `Channel<AgentStreamEvent>` that captures every
     /// emitted payload into a `Mutex<Vec<_>>` decoded back into
     /// the typed enum.
@@ -923,6 +914,7 @@ mod tests {
     /// `pred`. Returns the final snapshot either way; tests assert
     /// on the result so a timeout produces a legible failure rather
     /// than a hang.
+    #[allow(dead_code)]
     fn wait_for_events(
         captured: &Arc<Mutex<Vec<Value>>>,
         timeout: Duration,
@@ -954,6 +946,9 @@ mod tests {
 
         // Run the loop on a worker so the test thread can fire
         // events into the transport while it spins.
+        // Phase 24r: caller subscribes before the spawn so the
+        // daemon's journal flush can't race past us.
+        let rx = transport_dyn.subscribe("rid-loop-1");
         let loop_handle = {
             let transport = transport_dyn.clone();
             std::thread::spawn(move || {
@@ -961,6 +956,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-loop-1".into(),
                     "hs-loop-1".into(),
                     Some("ws-1".into()),
@@ -971,10 +967,6 @@ mod tests {
                 )
             })
         };
-
-        // Give the loop a moment to register its subscription —
-        // ManualTransport::fire is a no-op for non-matching rids.
-        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
 
         transport.fire(
             "rid-loop-1",
@@ -1055,6 +1047,7 @@ mod tests {
         let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
         let (chan, captured) = capturing_channel();
 
+        let rx = transport_dyn.subscribe("rid-abort-1");
         let loop_handle = {
             let transport = transport_dyn.clone();
             std::thread::spawn(move || {
@@ -1062,6 +1055,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-abort-1".into(),
                     "hs-abort-1".into(),
                     None,
@@ -1072,7 +1066,6 @@ mod tests {
                 )
             })
         };
-        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
 
         transport.fire(
             "rid-abort-1",
@@ -1103,6 +1096,7 @@ mod tests {
         let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
         let (chan, captured) = capturing_channel();
 
+        let rx = transport_dyn.subscribe("rid-err-1");
         let loop_handle = {
             let transport = transport_dyn.clone();
             std::thread::spawn(move || {
@@ -1110,6 +1104,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-err-1".into(),
                     "hs-err-1".into(),
                     None,
@@ -1120,7 +1115,6 @@ mod tests {
                 )
             })
         };
-        let _ = wait_for_events(&captured, Duration::from_millis(100), |_| false);
 
         transport.fire(
             "rid-err-1",
@@ -1152,6 +1146,7 @@ mod tests {
         let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
         let (chan, _captured) = capturing_channel();
 
+        let rx = transport_dyn.subscribe("rid-unsub-1");
         let loop_handle = {
             let transport = transport_dyn.clone();
             std::thread::spawn(move || {
@@ -1159,6 +1154,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-unsub-1".into(),
                     "hs-unsub-1".into(),
                     None,
@@ -1169,8 +1165,7 @@ mod tests {
                 )
             })
         };
-        // Sub registered → fire terminal → join.
-        std::thread::sleep(Duration::from_millis(20));
+        // Sub already registered above → fire terminal → join.
         transport.fire("rid-unsub-1", serde_json::json!({ "type": "result" }));
         loop_handle.join().expect("loop should exit");
 
@@ -1291,6 +1286,9 @@ mod tests {
             .state::<ActiveStreams>()
             .try_register_for_session(competing));
 
+        // Phase 24r: caller subscribes upfront. The loop unsubscribes
+        // when it bails — assertion below verifies that contract.
+        let rx = transport_dyn.subscribe("rid-blocked");
         let loop_handle = {
             let transport = transport_dyn.clone();
             std::thread::spawn(move || {
@@ -1298,6 +1296,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-blocked".into(),
                     "hs-busy".into(),
                     None,
@@ -1319,11 +1318,14 @@ mod tests {
             msg.contains("Another send is already running"),
             "error message should mention the lock; got {msg:?}",
         );
-        // The blocked loop never even subscribed.
+        // The blocked loop must release the caller-owned subscription
+        // on its way out so the daemon stops fanning events for this
+        // request_id.
         let unsubscribed = transport.unsubscribed.lock().unwrap().clone();
-        assert!(
-            unsubscribed.is_empty(),
-            "blocked loop must not subscribe → no unsubscribe call; saw {unsubscribed:?}",
+        assert_eq!(
+            unsubscribed,
+            vec!["rid-blocked".to_string()],
+            "blocked loop must unsubscribe on bail; saw {unsubscribed:?}",
         );
     }
 
@@ -1391,6 +1393,7 @@ mod tests {
         let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
         let (chan, captured) = capturing_channel();
 
+        let rx = transport_dyn.subscribe("rid-real-db-1");
         let loop_handle = {
             let transport = transport_dyn.clone();
             let app = app.clone();
@@ -1400,6 +1403,7 @@ mod tests {
                     app,
                     chan,
                     transport,
+                    rx,
                     "rid-real-db-1".into(),
                     helmor_session_id,
                     Some("ws-real-db".into()),
@@ -1410,10 +1414,6 @@ mod tests {
                 )
             })
         };
-        assert!(
-            wait_for_subscription(&transport, "rid-real-db-1", Duration::from_secs(2)),
-            "loop never subscribed to the transport — events would be dropped",
-        );
 
         transport.fire(
             "rid-real-db-1",
@@ -1475,6 +1475,120 @@ mod tests {
         assert!(
             appended_count >= 1,
             "expected at least one sessionMessagesAppended for {helmor_session_id}, got {ui_events:?}",
+        );
+    }
+
+    /// Phase 24s: the daemon's journal includes `user_prompt`
+    /// events for the original send. A cold-attach (24r) replay
+    /// flushes the full journal, so the desktop sees the original
+    /// user prompt at the top of the thread — even when it never
+    /// sent the prompt itself. The accumulator emits a
+    /// `MessageRole::User` turn for `user_prompt`, and
+    /// `drain_new_turns_into_db` persists it like any other turn.
+    ///
+    /// This test drives a `user_prompt` → assistant → result
+    /// sequence through the real-DB loop and asserts both rows
+    /// land in the right order.
+    #[test]
+    fn run_loop_with_real_db_persists_user_prompt_from_replay() {
+        let _env = TestEnv::new("reattach-real-db-user-prompt");
+        let helmor_session_id = "hs-real-db-user-1";
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            seed_session(&conn, helmor_session_id);
+        }
+
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, _captured) = capturing_channel();
+
+        let rx = transport_dyn.subscribe("rid-user-1");
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            let app = app.clone();
+            let helmor_session_id = helmor_session_id.to_string();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    rx,
+                    "rid-user-1".into(),
+                    helmor_session_id,
+                    Some("ws-user".into()),
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/user"),
+                )
+            })
+        };
+
+        // Mirror what the daemon would flush on cold attach:
+        // first the user prompt the original sender issued, then
+        // the assistant's response, then the terminal `result`.
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "user_prompt",
+                "text": "rebuild the index please",
+            }),
+        );
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "Rebuilt." }]
+                }
+            }),
+        );
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "result",
+                "session_id": "sdk-session-user-1",
+            }),
+        );
+        loop_handle.join().expect("loop should exit on result");
+
+        // Both rows landed, in the right order, with the right
+        // roles. `ORDER BY created_at, rowid` mirrors the chat-
+        // thread read path's ordering.
+        let conn = crate::models::db::write_conn().unwrap();
+        let rows: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT role, content FROM session_messages \
+                 WHERE session_id = ?1 ORDER BY created_at, rowid",
+            )
+            .unwrap()
+            .query_map([helmor_session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "expected user + assistant rows for the replayed turn; got {rows:?}",
+        );
+        assert_eq!(rows[0].0, "user", "first row must be the user prompt");
+        assert!(
+            rows[0].1.contains("rebuild the index please"),
+            "user row should carry the prompt text; got {:?}",
+            rows[0].1,
+        );
+        assert_eq!(
+            rows[1].0, "assistant",
+            "second row must be the assistant reply",
+        );
+        assert!(
+            rows[1].1.contains("Rebuilt."),
+            "assistant row should carry the reply; got {:?}",
+            rows[1].1,
         );
     }
 

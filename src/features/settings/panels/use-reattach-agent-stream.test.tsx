@@ -257,6 +257,9 @@ describe("useChatReattachStream", () => {
 		// Default: resolve immediately, no events delivered.
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies AgentReattachResponse);
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 	});

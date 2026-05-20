@@ -163,6 +163,9 @@ describe("RuntimeDebugPanel", () => {
 		// they can drive scripted AgentStreamEvents through it.
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies AgentReattachResponse);
 		// Default: a minimal diagnostics snapshot that the
 		// Connection diagnostics section can render without
@@ -1567,6 +1570,38 @@ describe("RuntimeDebugPanel", () => {
 		).toBeInTheDocument();
 	});
 
+	it("agent sessions section: ended-replay-only sessions render an 'ended' badge", async () => {
+		// Phase 24t: agent.list now surfaces sessions whose sidecar
+		// process is gone but whose on-disk journal survives. The row
+		// gets a small "ended" badge so an operator can tell them
+		// apart from live sessions.
+		const remoteEntry: RuntimeEntry = {
+			name: "dev.box",
+			isLocal: false,
+			state: { type: "connected" },
+		};
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY, remoteEntry]);
+		apiMocks.getRuntimeHealth.mockResolvedValue(REMOTE_HEALTH);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([
+			{
+				requestId: "req-ended-1",
+				helmorSessionId: "hs-ended",
+				provider: "claude",
+				workspaceDir: "/srv/repos/demo",
+				startedAtMs: Date.now() - 600_000,
+				lastEventMs: Date.now() - 300_000,
+				state: "endedReplayOnly",
+			},
+		]);
+
+		renderPanel();
+
+		expect(await screen.findByText("req-ended-1")).toBeInTheDocument();
+		expect(
+			screen.getByTestId("remote-agent-session-ended-badge"),
+		).toBeInTheDocument();
+	});
+
 	it("agent sessions section: Abort button calls the runtime then refreshes the listing", async () => {
 		const user = userEvent.setup();
 		const remoteEntry: RuntimeEntry = {
@@ -1815,7 +1850,12 @@ describe("RuntimeDebugPanel", () => {
 			) => {
 				capturedRequest = request;
 				onEvent = cb;
-				return { accepted: true } satisfies AgentReattachResponse;
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				} satisfies AgentReattachResponse;
 			},
 		);
 
@@ -1925,7 +1965,12 @@ describe("RuntimeDebugPanel", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true } satisfies AgentReattachResponse;
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				} satisfies AgentReattachResponse;
 			},
 		);
 

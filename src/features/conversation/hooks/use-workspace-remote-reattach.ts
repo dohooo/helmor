@@ -44,6 +44,7 @@ import {
 	sessionThreadCacheKey,
 	shareMessages,
 } from "@/lib/session-thread-cache";
+import { useRuntimeReconnectEpoch } from "@/shell/hooks/use-runtime-reconnect-epoch";
 
 export type WorkspaceRemoteReattachState = {
 	/** `true` while the desktop is actively following a live remote
@@ -57,6 +58,19 @@ export type WorkspaceRemoteReattachState = {
 	terminalLabel: string | null;
 	/** Last error message from the reattach loop or attach RPC. */
 	error: string | null;
+	/**
+	 * Phase 24r: total journal entries the daemon is flushing on
+	 * this attach. `null` until the attach RPC resolves. The chip
+	 * renders "Rebuilding history (N events)" when `> 0`.
+	 */
+	replayedCount: number | null;
+	/**
+	 * Phase 24r: earliest seq the daemon's ring can still deliver
+	 * when our `since_seq` predated the oldest entry. `null` means
+	 * the cold replay was clean; a value means partial replay — the
+	 * chip surfaces a "history unavailable" banner.
+	 */
+	replayGap: number | null;
 };
 
 const IDLE_STATE: WorkspaceRemoteReattachState = {
@@ -64,6 +78,8 @@ const IDLE_STATE: WorkspaceRemoteReattachState = {
 	currentRequestId: null,
 	terminalLabel: null,
 	error: null,
+	replayedCount: null,
+	replayGap: null,
 };
 
 export function useWorkspaceRemoteReattach({
@@ -88,6 +104,14 @@ export function useWorkspaceRemoteReattach({
 }): WorkspaceRemoteReattachState {
 	const queryClient = useQueryClient();
 	const [state, setState] = useState<WorkspaceRemoteReattachState>(IDLE_STATE);
+
+	// Track C (resilience): when the runtime auto-reconnects after a
+	// drop, the daemon's surviving session is back online + the
+	// journal can flush whatever the desktop missed. Threading this
+	// counter through the discovery effect's deps re-runs the
+	// listRemoteAgentSessions → startAgentReattachStream flow on
+	// each successful reconnect so the chat resumes automatically.
+	const reconnectEpoch = useRuntimeReconnectEpoch(runtimeName);
 
 	// Capture the latest "do we still own this attach" answer in a ref
 	// so the async callback can short-circuit when the user has
@@ -132,8 +156,16 @@ export function useWorkspaceRemoteReattach({
 			// workspace's current session. The daemon mints the request
 			// id; the desktop side keeps its helmor session id stable
 			// across reconnects.
+			// Phase 24t: skip `endedReplayOnly` rows on the auto-attach
+			// path — those are sessions whose sidecar process is gone
+			// (daemon restarted, original session terminated cleanly).
+			// The desktop's local DB already holds the conversation;
+			// no need to flush the on-disk journal again. Only the dev
+			// panel's explicit "browse history" action attaches to
+			// these.
 			const match = sessions.find(
-				(entry) => entry.helmorSessionId === sessionId,
+				(entry) =>
+					entry.helmorSessionId === sessionId && entry.state === "live",
 			);
 			if (!match) {
 				setState(IDLE_STATE);
@@ -154,10 +186,12 @@ export function useWorkspaceRemoteReattach({
 				currentRequestId: match.requestId,
 				terminalLabel: null,
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 
 			try {
-				await startAgentReattachStream(
+				const response = await startAgentReattachStream(
 					{
 						requestId: match.requestId,
 						helmorSessionId: sessionId,
@@ -179,6 +213,20 @@ export function useWorkspaceRemoteReattach({
 						});
 					},
 				);
+				if (disposed) return;
+				if (activeRequestIdRef.current !== match.requestId) return;
+				// Phase 24r: stash the daemon's replay diagnostics so the
+				// header chip can render "rebuilding N events" + the gap
+				// banner. The streaming loop is already running; the
+				// response carries these alongside `accepted=true`.
+				setState({
+					isReattaching: true,
+					currentRequestId: match.requestId,
+					terminalLabel: null,
+					error: null,
+					replayedCount: response.replayedCount,
+					replayGap: response.replayGap ?? null,
+				});
 			} catch (err) {
 				if (disposed) return;
 				if (activeRequestIdRef.current !== match.requestId) return;
@@ -187,6 +235,8 @@ export function useWorkspaceRemoteReattach({
 					currentRequestId: null,
 					terminalLabel: null,
 					error: errorMessage(err),
+					replayedCount: null,
+					replayGap: null,
 				});
 				activeRequestIdRef.current = null;
 			}
@@ -209,6 +259,9 @@ export function useWorkspaceRemoteReattach({
 		workingDirectory,
 		isAlreadyStreaming,
 		queryClient,
+		// Track C: re-discover live sessions on every successful
+		// reconnect so the chat resumes after an SSH drop.
+		reconnectEpoch,
 	]);
 
 	return state;
@@ -237,6 +290,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 				currentRequestId: null,
 				terminalLabel: "Caught up.",
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;
@@ -248,6 +303,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 					? `Remote aborted: ${event.reason}.`
 					: "Remote aborted.",
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;
@@ -257,6 +314,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 				currentRequestId: null,
 				terminalLabel: null,
 				error: event.message,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;

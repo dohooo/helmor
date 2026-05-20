@@ -9,6 +9,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod keychain;
 pub mod logging;
 pub mod mcp;
 pub mod models;

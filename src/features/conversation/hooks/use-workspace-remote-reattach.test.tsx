@@ -13,6 +13,7 @@ import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 const apiMocks = vi.hoisted(() => ({
 	listRemoteAgentSessions: vi.fn(),
 	startAgentReattachStream: vi.fn(),
+	subscribeUiMutations: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		listRemoteAgentSessions: apiMocks.listRemoteAgentSessions,
 		startAgentReattachStream: apiMocks.startAgentReattachStream,
+		subscribeUiMutations: apiMocks.subscribeUiMutations,
 	};
 });
 
@@ -52,14 +54,33 @@ const LIVE_SESSION: RemoteAgentSession = {
 	workspaceDir: "/srv/demo",
 	startedAtMs: Date.now() - 5_000,
 	lastEventMs: Date.now() - 100,
+	state: "live",
+};
+
+const ENDED_SESSION: RemoteAgentSession = {
+	requestId: REQUEST_ID,
+	helmorSessionId: SESSION_ID,
+	provider: "claude",
+	workspaceDir: "/srv/demo",
+	startedAtMs: Date.now() - 60_000,
+	lastEventMs: Date.now() - 30_000,
+	state: "endedReplayOnly",
 };
 
 describe("useWorkspaceRemoteReattach", () => {
 	beforeEach(() => {
 		apiMocks.listRemoteAgentSessions.mockReset();
 		apiMocks.startAgentReattachStream.mockReset();
+		apiMocks.subscribeUiMutations.mockReset();
+		// Default: the reconnect-epoch subscription resolves to a
+		// no-op listener. Tests that need to drive synthetic events
+		// override this with `buildReconnectSub()`.
+		apiMocks.subscribeUiMutations.mockResolvedValue(() => {});
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies AgentReattachResponse);
 	});
 
@@ -151,6 +172,122 @@ describe("useWorkspaceRemoteReattach", () => {
 		expect(result.current.isReattaching).toBe(true);
 	});
 
+	it("surfaces daemon replay diagnostics (replayedCount + replayGap) on the hook state", async () => {
+		// Phase 24r: after the attach RPC resolves, the hook stashes
+		// the daemon-reported replay diagnostics so the workspace
+		// chip can render "Rebuilding history (N events)" + the gap
+		// banner when applicable.
+		apiMocks.startAgentReattachStream.mockResolvedValueOnce({
+			accepted: true,
+			lastSeq: 99,
+			replayedCount: 7,
+			replayGap: 50,
+		} satisfies AgentReattachResponse);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
+		const { wrapper } = withQueryClient();
+		const { result } = renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => {
+			expect(result.current.replayedCount).toBe(7);
+		});
+		expect(result.current.replayGap).toBe(50);
+		// Still reattaching — the streaming loop is alive even
+		// though the response has resolved.
+		expect(result.current.isReattaching).toBe(true);
+		expect(result.current.currentRequestId).toBe(REQUEST_ID);
+	});
+
+	it("re-discovers + re-attaches on a successful runtime reconnect (Track C)", async () => {
+		// Bridge a manual listener so the test can fire synthetic
+		// `remoteReconnectAttempt { succeeded: true }` events.
+		let listener:
+			| ((event: import("@/lib/api").UiMutationEvent) => void)
+			| null = null;
+		apiMocks.subscribeUiMutations.mockImplementation(async (cb) => {
+			listener = cb;
+			return () => {
+				listener = null;
+			};
+		});
+
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
+		const { wrapper } = withQueryClient();
+		renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.startAgentReattachStream).toHaveBeenCalledTimes(1);
+		});
+
+		// Simulate the auto-reconnect loop's success event for this
+		// runtime. The hook's discovery effect should re-fire,
+		// driving a second `startAgentReattachStream` call.
+		await waitFor(() => expect(listener).not.toBeNull());
+		await act(async () => {
+			listener?.({
+				type: "remoteReconnectAttempt",
+				name: RUNTIME,
+				attempt: 2,
+				succeeded: true,
+			});
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.startAgentReattachStream).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	it("skips endedReplayOnly sessions on the auto-attach path", async () => {
+		// Phase 24t: the on-disk journal survives daemon restart, so
+		// agent.list returns the past session as `endedReplayOnly`.
+		// Auto-reattach must NOT fire — the desktop's local DB already
+		// has the conversation; replaying the on-disk journal again
+		// would just duplicate work + send a misleading "Caught up"
+		// when the live tail isn't coming.
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([ENDED_SESSION]);
+		const { wrapper } = withQueryClient();
+		const { result } = renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => {
+			expect(apiMocks.listRemoteAgentSessions).toHaveBeenCalled();
+		});
+		expect(apiMocks.startAgentReattachStream).not.toHaveBeenCalled();
+		expect(result.current.isReattaching).toBe(false);
+	});
+
 	it("does not fire reattach when no live session matches this helmor session", async () => {
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([
 			{
@@ -187,7 +324,12 @@ describe("useWorkspaceRemoteReattach", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true };
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				};
 			},
 		);
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
@@ -251,7 +393,12 @@ describe("useWorkspaceRemoteReattach", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true };
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				};
 			},
 		);
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
