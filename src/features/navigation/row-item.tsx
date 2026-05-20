@@ -331,14 +331,25 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
-						) : row.mode ===
-							"chat" ? // Chat rows are bucketed under the dedicated
-						// "Chats" group header (which carries the
-						// MessageCircle glyph) — drawing the same icon on
-						// every row would just be noise. Keep the slot
-						// invisible so unread / status indicators still
-						// have a stable carrier.
-						null : (
+						) : row.mode === "chat" ? (
+							// Chat rows are bucketed under the dedicated
+							// "Chats" group header (which carries the
+							// MessageCircle glyph) — drawing the same icon on
+							// every row would just be noise. When the row
+							// carries an unread / interaction-required signal,
+							// the leading slot becomes a small status dot
+							// instead — a trailing dot can overlap long titles
+							// since chat titles run flush to the right edge.
+							showStatusDot && !hideRepoAvatar ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"size-1.5 shrink-0 rounded-full",
+										statusDotClassName,
+									)}
+								/>
+							) : null
+						) : (
 							<GitBranch
 								className={cn(
 									"size-[13px] shrink-0",
@@ -434,30 +445,6 @@ export const WorkspaceRowItem = memo(
 						</div>
 					);
 				})()}
-
-				{/* Chat rows have no branch icon / avatar to carry the unread or
-				 * interaction-required dot, so park it absolute-positioned over
-				 * the archive icon slot. On hover/focus it fades out and the
-				 * actions cluster fades in, so the archive icon visually
-				 * replaces it without any layout shift. */}
-				{row.mode === "chat" && showStatusDot && !hideRepoAvatar ? (
-					<span
-						aria-hidden="false"
-						className={cn(
-							"pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5",
-							hasActionHandler &&
-								"group-hover/row:hidden group-focus-within/row:hidden",
-							isBusy && "hidden",
-						)}
-					>
-						<span className="flex size-5 items-center justify-center">
-							<span
-								aria-label={statusDotLabel ?? undefined}
-								className={cn("size-1.5 rounded-full", statusDotClassName)}
-							/>
-						</span>
-					</span>
-				) : null}
 
 				{hasActionHandler ? (
 					<span
