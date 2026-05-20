@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.23.3
+
+### Patch Changes
+
+- [#601](https://github.com/dohooo/helmor/pull/601) [`d7228c7`](https://github.com/dohooo/helmor/commit/d7228c73fff2cace18d724e1b5e838f4b6e463e4) Thanks [@natllian](https://github.com/natllian)! - Stop dropping in-flight AskUserQuestion prompts when you switch to the Start Page mid-stream.
+
+- [#603](https://github.com/dohooo/helmor/pull/603) [`c5d658a`](https://github.com/dohooo/helmor/commit/c5d658a2c8bf2efa0e87082de074b5d487c38e15) Thanks [@natllian](https://github.com/natllian)! - Fix two sidebar unread-indicator gaps:
+
+  - Chat rows now show the unread / interaction-required dot (hidden on hover so the archive icon can take its place); previously the dot had no carrier on chat entries and was silently dropped.
+  - Background-completed sessions stay marked unread on every follow-up turn instead of only the first one — read-state was keying off the provider's resume token (non-null from the second turn onward), so subsequent completions no-op'd against the DB.
+
+- [#602](https://github.com/dohooo/helmor/pull/602) [`afb8680`](https://github.com/dohooo/helmor/commit/afb868047169d50aa7bfe6df807bf91279496621) Thanks [@natllian](https://github.com/natllian)! - Fix a `WorkspaceBroken` error logged on every git-status poll for chat workspaces, which have no git binding.
+
+- [#607](https://github.com/dohooo/helmor/pull/607) [`aa1f32a`](https://github.com/dohooo/helmor/commit/aa1f32a1993447e6be2b8bb52093c61984d9bea4) Thanks [@natllian](https://github.com/natllian)! - Fix the composer jumping to the bottom when you click into it, and not following the caret when you arrow up past the visible area.
+
+- [#599](https://github.com/dohooo/helmor/pull/599) [`1f78c48`](https://github.com/dohooo/helmor/commit/1f78c485d4c17539a93dc65cfd68f87eac9b458e) Thanks [@dohooo](https://github.com/dohooo)! - Fix a horizontal scrollbar appearing in the Send Feedback dialog textarea so the placeholder wraps within the dialog width.
+
+- [#606](https://github.com/dohooo/helmor/pull/606) [`95d5485`](https://github.com/dohooo/helmor/commit/95d54853282f8cd9238f252d68fcaf0b895fa722) Thanks [@natllian](https://github.com/natllian)! - Fix sidebar workspace hover cards sometimes getting stuck on screen after a streaming session finishes, until the cursor was moved again.
+
+- [#604](https://github.com/dohooo/helmor/pull/604) [`357a572`](https://github.com/dohooo/helmor/commit/357a5728ffa6c7189fd4f06e97e3bb5a6ef56f03) Thanks [@natllian](https://github.com/natllian)! - Fix Shift+Tab on the workspace-start page so cycling repositories no longer also toggles Just Chat or plan mode.
+
+- [#605](https://github.com/dohooo/helmor/pull/605) [`bc8cbe0`](https://github.com/dohooo/helmor/commit/bc8cbe093b3b86b9a2bf03a9c3752fd39d464a0d) Thanks [@natllian](https://github.com/natllian)! - Surface the specific reason a merge is blocked (behind base, draft PR, branch protection, or unstable checks) on the commit button and confirm dialog, for both GitHub and GitLab.
+
 ## 0.23.2
 
 ### Patch Changes
