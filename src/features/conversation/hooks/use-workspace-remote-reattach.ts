@@ -44,6 +44,7 @@ import {
 	sessionThreadCacheKey,
 	shareMessages,
 } from "@/lib/session-thread-cache";
+import { useRuntimeReconnectEpoch } from "@/shell/hooks/use-runtime-reconnect-epoch";
 
 export type WorkspaceRemoteReattachState = {
 	/** `true` while the desktop is actively following a live remote
@@ -103,6 +104,14 @@ export function useWorkspaceRemoteReattach({
 }): WorkspaceRemoteReattachState {
 	const queryClient = useQueryClient();
 	const [state, setState] = useState<WorkspaceRemoteReattachState>(IDLE_STATE);
+
+	// Track C (resilience): when the runtime auto-reconnects after a
+	// drop, the daemon's surviving session is back online + the
+	// journal can flush whatever the desktop missed. Threading this
+	// counter through the discovery effect's deps re-runs the
+	// listRemoteAgentSessions → startAgentReattachStream flow on
+	// each successful reconnect so the chat resumes automatically.
+	const reconnectEpoch = useRuntimeReconnectEpoch(runtimeName);
 
 	// Capture the latest "do we still own this attach" answer in a ref
 	// so the async callback can short-circuit when the user has
@@ -250,6 +259,9 @@ export function useWorkspaceRemoteReattach({
 		workingDirectory,
 		isAlreadyStreaming,
 		queryClient,
+		// Track C: re-discover live sessions on every successful
+		// reconnect so the chat resumes after an SSH drop.
+		reconnectEpoch,
 	]);
 
 	return state;

@@ -13,6 +13,7 @@ import { sessionThreadCacheKey } from "@/lib/session-thread-cache";
 const apiMocks = vi.hoisted(() => ({
 	listRemoteAgentSessions: vi.fn(),
 	startAgentReattachStream: vi.fn(),
+	subscribeUiMutations: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		listRemoteAgentSessions: apiMocks.listRemoteAgentSessions,
 		startAgentReattachStream: apiMocks.startAgentReattachStream,
+		subscribeUiMutations: apiMocks.subscribeUiMutations,
 	};
 });
 
@@ -69,6 +71,11 @@ describe("useWorkspaceRemoteReattach", () => {
 	beforeEach(() => {
 		apiMocks.listRemoteAgentSessions.mockReset();
 		apiMocks.startAgentReattachStream.mockReset();
+		apiMocks.subscribeUiMutations.mockReset();
+		// Default: the reconnect-epoch subscription resolves to a
+		// no-op listener. Tests that need to drive synthetic events
+		// override this with `buildReconnectSub()`.
+		apiMocks.subscribeUiMutations.mockResolvedValue(() => {});
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
 			lastSeq: 0,
@@ -199,6 +206,57 @@ describe("useWorkspaceRemoteReattach", () => {
 		// though the response has resolved.
 		expect(result.current.isReattaching).toBe(true);
 		expect(result.current.currentRequestId).toBe(REQUEST_ID);
+	});
+
+	it("re-discovers + re-attaches on a successful runtime reconnect (Track C)", async () => {
+		// Bridge a manual listener so the test can fire synthetic
+		// `remoteReconnectAttempt { succeeded: true }` events.
+		let listener:
+			| ((event: import("@/lib/api").UiMutationEvent) => void)
+			| null = null;
+		apiMocks.subscribeUiMutations.mockImplementation(async (cb) => {
+			listener = cb;
+			return () => {
+				listener = null;
+			};
+		});
+
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
+		const { wrapper } = withQueryClient();
+		renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(apiMocks.startAgentReattachStream).toHaveBeenCalledTimes(1);
+		});
+
+		// Simulate the auto-reconnect loop's success event for this
+		// runtime. The hook's discovery effect should re-fire,
+		// driving a second `startAgentReattachStream` call.
+		await waitFor(() => expect(listener).not.toBeNull());
+		await act(async () => {
+			listener?.({
+				type: "remoteReconnectAttempt",
+				name: RUNTIME,
+				attempt: 2,
+				succeeded: true,
+			});
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.startAgentReattachStream).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	it("skips endedReplayOnly sessions on the auto-attach path", async () => {
