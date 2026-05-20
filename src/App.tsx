@@ -51,6 +51,7 @@ import { useWorkspaceSearchPanel } from "@/features/workspace-search/use-workspa
 import { WorkspaceSearchPanel } from "@/features/workspace-search/workspace-search-panel";
 import { WorkspaceStartPage } from "@/features/workspace-start";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
+import { useOnlineReconnectKick } from "@/shell/hooks/use-online-reconnect-kick";
 import { useShellPanels } from "@/shell/hooks/use-panels";
 import { usePullLatest } from "@/shell/hooks/use-pull-latest";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
@@ -1367,6 +1368,13 @@ function AppShell({
 		processPendingCliSends: pendingQueueActions.processPendingCliSends,
 		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
 	});
+
+	// Track C6: fire an immediate reconnect attempt for every
+	// non-Connected remote runtime when the OS reports the network
+	// is back. The auto-reconnect loop runs independently on a 5s
+	// cadence; this collapses the wait when the user e.g. moves
+	// between Wi-Fi networks.
+	useOnlineReconnectKick();
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
 	// its own onCloseRequested listener.  No need for a separate hook here.
