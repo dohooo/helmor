@@ -42,6 +42,7 @@ import {
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { readSessionThread } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,10 @@ import {
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
+import {
+	extractInputHistoryFromThread,
+	type InputHistoryEntry,
+} from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
@@ -270,6 +275,15 @@ export const WorkspaceComposerContainer = memo(
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
+		// Per-session input recall list. Resolved lazily from the live
+		// thread cache on every ArrowUp/Down — the plugin doesn't subscribe,
+		// so cache mutations between key presses are picked up automatically
+		// without re-rendering the composer.
+		const getInputHistory = useCallback((): readonly InputHistoryEntry[] => {
+			if (!displayedSessionId) return [];
+			const thread = readSessionThread(queryClient, displayedSessionId);
+			return extractInputHistoryFromThread(thread);
+		}, [displayedSessionId, queryClient]);
 		const startSubmitMode: StartSubmitMode =
 			settings.startSurfacePreferences.createState === "backlog"
 				? "saveForLater"
@@ -1100,6 +1114,7 @@ export const WorkspaceComposerContainer = memo(
 						startSubmitMode={startSubmitMode}
 						onStartSubmitModeChange={handleStartSubmitModeChange}
 						focusScope={focusScope}
+						getInputHistory={getInputHistory}
 					/>
 				</div>
 			</div>

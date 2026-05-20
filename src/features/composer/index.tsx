@@ -74,6 +74,7 @@ import { EditablePlugin } from "./editor/plugins/editable-plugin";
 import { EditorRefPlugin } from "./editor/plugins/editor-ref-plugin";
 import { FileMentionPlugin } from "./editor/plugins/file-mention-plugin";
 import { HasContentPlugin } from "./editor/plugins/has-content-plugin";
+import { HistoryRecallPlugin } from "./editor/plugins/history-recall-plugin";
 import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
@@ -81,6 +82,7 @@ import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
+import type { InputHistoryEntry } from "./input-history";
 import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
@@ -200,6 +202,10 @@ type WorkspaceComposerProps = {
 	 *  composer root and gates surface-only hotkeys (e.g. plan-mode toggle
 	 *  fires only inside `workspace-composer`, never on the start surface). */
 	focusScope?: "start-composer" | "workspace-composer";
+	/** Lazy getter for the per-session input recall list, most-recent
+	 *  first. Called by `HistoryRecallPlugin` on each ArrowUp/Down so the
+	 *  composer doesn't have to re-render when the thread cache changes. */
+	getInputHistory?: () => readonly InputHistoryEntry[];
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -282,6 +288,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	startSubmitMode = "startNow",
 	onStartSubmitModeChange,
 	focusScope = "workspace-composer",
+	getInputHistory,
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -792,6 +799,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							restoreCustomTags={restoreCustomTags}
 							restoreNonce={restoreNonce}
 						/>
+						{getInputHistory ? (
+							<HistoryRecallPlugin
+								getHistory={getInputHistory}
+								scopeKey={contextKey}
+							/>
+						) : null}
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
 					</LexicalComposer>

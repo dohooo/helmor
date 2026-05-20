@@ -1,0 +1,7 @@
+{
+	"items": [
+		{
+			"text": "Press ArrowUp / ArrowDown in the composer to step through previously-sent prompts for the current session — like bash or zsh."
+		}
+	]
+}
