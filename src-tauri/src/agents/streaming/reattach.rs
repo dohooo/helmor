@@ -192,10 +192,17 @@ fn run_reattach_loop<R: Runtime>(
     // Phase 24n: persist the reattached turn's messages to the local
     // DB so a closed-and-reopened desktop sees the right history
     // instead of an empty thread after a reattach window. The
-    // ExchangeContext mirrors the regular send path's shape; user
-    // message id is `None` because the daemon already owns the user
-    // turn (reattach never inserts a user row — it only mirrors the
-    // assistant + tool-result turns the daemon emits).
+    // ExchangeContext mirrors the regular send path's shape;
+    // `user_message_id` is left blank because reattach mints the
+    // user-turn id inside the accumulator at `user_prompt` time
+    // (24s) rather than carrying it from a desktop-side send.
+    //
+    // Phase 24s: the daemon's journal includes `user_prompt` events,
+    // so when the cold-replay (24r) flushes the journal, the
+    // accumulator emits a `MessageRole::User` turn and
+    // `drain_new_turns_into_db` persists it like any other turn.
+    // A desktop attaching to a session it never sent sees the
+    // original prompt at the top of the thread.
     //
     // `persist_turn_message` uses `INSERT ... ON CONFLICT(id) DO
     // NOTHING`, so if this desktop is also the original sender (its
@@ -1468,6 +1475,120 @@ mod tests {
         assert!(
             appended_count >= 1,
             "expected at least one sessionMessagesAppended for {helmor_session_id}, got {ui_events:?}",
+        );
+    }
+
+    /// Phase 24s: the daemon's journal includes `user_prompt`
+    /// events for the original send. A cold-attach (24r) replay
+    /// flushes the full journal, so the desktop sees the original
+    /// user prompt at the top of the thread — even when it never
+    /// sent the prompt itself. The accumulator emits a
+    /// `MessageRole::User` turn for `user_prompt`, and
+    /// `drain_new_turns_into_db` persists it like any other turn.
+    ///
+    /// This test drives a `user_prompt` → assistant → result
+    /// sequence through the real-DB loop and asserts both rows
+    /// land in the right order.
+    #[test]
+    fn run_loop_with_real_db_persists_user_prompt_from_replay() {
+        let _env = TestEnv::new("reattach-real-db-user-prompt");
+        let helmor_session_id = "hs-real-db-user-1";
+        {
+            let conn = crate::models::db::write_conn().unwrap();
+            seed_session(&conn, helmor_session_id);
+        }
+
+        let app = mock_app_handle();
+        let transport = Arc::new(ManualTransport::default());
+        let transport_dyn: Arc<dyn SidecarTransport> = transport.clone();
+        let (chan, _captured) = capturing_channel();
+
+        let rx = transport_dyn.subscribe("rid-user-1");
+        let loop_handle = {
+            let transport = transport_dyn.clone();
+            let app = app.clone();
+            let helmor_session_id = helmor_session_id.to_string();
+            std::thread::spawn(move || {
+                run_reattach_loop(
+                    app,
+                    chan,
+                    transport,
+                    rx,
+                    "rid-user-1".into(),
+                    helmor_session_id,
+                    Some("ws-user".into()),
+                    "claude".into(),
+                    "claude-opus-4".into(),
+                    "claude-opus-4".into(),
+                    PathBuf::from("/tmp/user"),
+                )
+            })
+        };
+
+        // Mirror what the daemon would flush on cold attach:
+        // first the user prompt the original sender issued, then
+        // the assistant's response, then the terminal `result`.
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "user_prompt",
+                "text": "rebuild the index please",
+            }),
+        );
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "Rebuilt." }]
+                }
+            }),
+        );
+        transport.fire(
+            "rid-user-1",
+            serde_json::json!({
+                "type": "result",
+                "session_id": "sdk-session-user-1",
+            }),
+        );
+        loop_handle.join().expect("loop should exit on result");
+
+        // Both rows landed, in the right order, with the right
+        // roles. `ORDER BY created_at, rowid` mirrors the chat-
+        // thread read path's ordering.
+        let conn = crate::models::db::write_conn().unwrap();
+        let rows: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT role, content FROM session_messages \
+                 WHERE session_id = ?1 ORDER BY created_at, rowid",
+            )
+            .unwrap()
+            .query_map([helmor_session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "expected user + assistant rows for the replayed turn; got {rows:?}",
+        );
+        assert_eq!(rows[0].0, "user", "first row must be the user prompt");
+        assert!(
+            rows[0].1.contains("rebuild the index please"),
+            "user row should carry the prompt text; got {:?}",
+            rows[0].1,
+        );
+        assert_eq!(
+            rows[1].0, "assistant",
+            "second row must be the assistant reply",
+        );
+        assert!(
+            rows[1].1.contains("Rebuilt."),
+            "assistant row should carry the reply; got {:?}",
+            rows[1].1,
         );
     }
 
