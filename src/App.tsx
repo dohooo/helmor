@@ -191,11 +191,16 @@ function MainApp() {
 	const completeOnboarding = useCallback(() => {
 		setSplashMounted(true);
 		setSplashVisible(true);
+		// Land on the start page; even without a repo the user can chat.
 		setAppSettings((previous) => ({
 			...(previous ?? DEFAULT_SETTINGS),
 			onboardingCompleted: true,
+			lastSurface: "workspace-start",
 		}));
-		void saveSettings({ onboardingCompleted: true });
+		void saveSettings({
+			onboardingCompleted: true,
+			lastSurface: "workspace-start",
+		});
 
 		requestAnimationFrame(() => {
 			requestAnimationFrame(hideSplashAfterBoot);
@@ -1645,7 +1650,9 @@ function AppShell({
 														onOpenFileReference={handleOpenFileReference}
 														composerOnly
 														composerWrapperClassName="w-full"
-														composerForceAvailable={Boolean(startRepository)}
+														composerForceAvailable={
+															Boolean(startRepository) || startMode === "chat"
+														}
 														composerContextKeyOverride={startComposerContextKey}
 														composerPlaceholder="Describe what you want to build"
 														composerCreateContext={startCreateContext}

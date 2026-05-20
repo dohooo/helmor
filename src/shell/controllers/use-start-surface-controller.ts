@@ -147,7 +147,9 @@ export function useStartSurfaceController(
 		startRepositoryId,
 		START_SURFACE_MODE_FALLBACK,
 	);
-	const startMode: WorkspaceMode = prefs.chatModeActive ? "chat" : repoWorkMode;
+	// No repos → lock to chat (worktree/local can't run without one).
+	const startMode: WorkspaceMode =
+		repositories.length === 0 || prefs.chatModeActive ? "chat" : repoWorkMode;
 	const startBranchIntent = readRepoPreference(
 		prefs.branchIntentByRepoId,
 		startRepositoryId,
