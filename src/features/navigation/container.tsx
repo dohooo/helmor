@@ -1,5 +1,12 @@
-import { memo } from "react";
-import { openWorkspaceInFinder } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { memo, useMemo } from "react";
+import { toast } from "sonner";
+import {
+	clearWorkspaceRuntimeBinding,
+	listRemoteRuntimes,
+	openWorkspaceInFinder,
+	setWorkspaceRuntimeBinding,
+} from "@/lib/api";
 import { extractError } from "@/lib/errors";
 import { useWorkspacesSidebarController } from "./hooks/use-controller";
 import { WorkspacesSidebar } from "./index";
@@ -80,6 +87,52 @@ export const WorkspacesSidebarContainer = memo(
 			pushWorkspaceToast,
 		});
 
+		// Track F1: list runtimes so the row's "Move to runtime"
+		// submenu has choices to render. Refetches on focus so a
+		// connect/disconnect from settings flows into the menu
+		// without a manual refresh.
+		const queryClient = useQueryClient();
+		const runtimesQuery = useQuery({
+			queryKey: ["remote-runtimes"],
+			queryFn: listRemoteRuntimes,
+			refetchOnWindowFocus: true,
+		});
+		const availableRuntimes = useMemo(
+			() => (runtimesQuery.data ?? []).map((entry) => ({ name: entry.name })),
+			[runtimesQuery.data],
+		);
+		const moveToRuntime = useMutation({
+			mutationFn: async ({
+				workspaceId,
+				runtimeName,
+			}: {
+				workspaceId: string;
+				runtimeName: string | null;
+			}) => {
+				if (runtimeName === null || runtimeName === "local") {
+					await clearWorkspaceRuntimeBinding(workspaceId);
+					return { workspaceId, runtimeName: null };
+				}
+				await setWorkspaceRuntimeBinding(workspaceId, runtimeName);
+				return { workspaceId, runtimeName };
+			},
+			onSuccess: ({ runtimeName }) => {
+				toast.success(
+					runtimeName === null
+						? "Moved to local runtime"
+						: `Moved to ${runtimeName}`,
+				);
+				void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+				void queryClient.invalidateQueries({
+					queryKey: ["workspace-runtime-bindings"],
+				});
+			},
+			onError: (err) => {
+				const { message } = extractError(err, "Failed to move workspace");
+				toast.error(message);
+			},
+		});
+
 		return (
 			<WorkspacesSidebar
 				groups={groups}
@@ -149,6 +202,10 @@ export const WorkspacesSidebarContainer = memo(
 				onSetWorkspaceStatus={(workspaceId, status) => {
 					void handleSetWorkspaceStatus(workspaceId, status);
 				}}
+				onMoveToRuntime={(workspaceId, runtimeName) =>
+					moveToRuntime.mutate({ workspaceId, runtimeName })
+				}
+				availableRuntimes={availableRuntimes}
 			/>
 		);
 	},
