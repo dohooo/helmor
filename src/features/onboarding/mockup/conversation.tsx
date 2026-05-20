@@ -6,7 +6,7 @@ import {
 	Wrench,
 	Zap,
 } from "lucide-react";
-import { ClaudeIcon, OpenAIIcon } from "@/components/icons";
+import { ClaudeIcon, GitHubCopilotIcon, OpenAIIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { type MockMessage, type MockSession, mockConversation } from "./data";
 import { AssistantTextUI } from "./ui/assistant-text.ui";
@@ -25,7 +25,12 @@ import { UserMessageBubbleUI } from "./ui/user-message-bubble.ui";
 import { WorkingIndicatorUI } from "./ui/working-indicator.ui";
 
 function ProviderIcon({ provider }: { provider: MockSession["provider"] }) {
-	const Icon = provider === "codex" ? OpenAIIcon : ClaudeIcon;
+	const Icon =
+		provider === "codex"
+			? OpenAIIcon
+			: provider === "copilot"
+				? GitHubCopilotIcon
+				: ClaudeIcon;
 	return <Icon className="size-3.5 shrink-0" />;
 }
 

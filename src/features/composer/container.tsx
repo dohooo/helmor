@@ -641,7 +641,9 @@ export const WorkspaceComposerContainer = memo(
 		// cursor sessions as claude — the Rust cache then served cached
 		// claude skills back to the cursor popup. Keep cursor explicit.
 		const slashProvider: AgentProvider =
-			provider === "codex" || provider === "cursor" ? provider : "claude";
+			provider === "codex" || provider === "cursor" || provider === "copilot"
+				? provider
+				: "claude";
 		// Prefer the repoId from a real workspace; on the start page there's no
 		// workspace yet, so fall back to the caller-supplied repoId hint.
 		const effectiveRepoId =
@@ -1044,7 +1046,9 @@ export const WorkspaceComposerContainer = memo(
 								? "codex"
 								: effectiveModel?.provider === "cursor"
 									? "cursor"
-									: "claude"
+									: effectiveModel?.provider === "copilot"
+										? "copilot"
+										: "claude"
 						}
 						focusShortcut={focusShortcut}
 						togglePlanShortcut={togglePlanShortcut}
