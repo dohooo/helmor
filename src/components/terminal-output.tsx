@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
 import { resolveCssColor } from "@/lib/css-color";
@@ -305,6 +306,25 @@ function TerminalOutputImpl({
 		terminal.loadAddon(fit);
 		terminal.open(container);
 
+		// GPU renderer — drops per-frame cost on low-spec laptops. DOM
+		// renderer does an O(visible_cells) layout/paint per write; WebGL
+		// blits from a glyph atlas. `contextlost` fires on GPU reset /
+		// long sleep / driver crash; we dispose and let xterm fall back
+		// to the built-in DOM renderer automatically.
+		let webgl: WebglAddon | null = null;
+		try {
+			const addon = new WebglAddon();
+			addon.onContextLoss(() => {
+				addon.dispose();
+				webgl = null;
+			});
+			terminal.loadAddon(addon);
+			webgl = addon;
+		} catch {
+			// WebGL unavailable (headless / very old GPU). DOM renderer stays.
+			webgl = null;
+		}
+
 		// Translate macOS Cmd combos to readline control codes.
 		terminal.attachCustomKeyEventHandler((event) => {
 			if (event.type !== "keydown") return true;
@@ -465,6 +485,7 @@ function TerminalOutputImpl({
 			resizeObserver.disconnect();
 			terminalRefitListeners.delete(refitListener);
 			terminalWriteFlushListeners.delete(flushSuspendedWrites);
+			webgl?.dispose();
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;
