@@ -28,10 +28,12 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { WorkspaceAvatar } from "@/features/navigation/avatar";
+import { getShortcut } from "@/features/shortcuts/registry";
 import {
 	InlineShortcutDisplay,
 	ShortcutDisplay,
 } from "@/features/shortcuts/shortcut-display";
+import { useAppShortcuts } from "@/features/shortcuts/use-app-shortcuts";
 import { SourceDetailView } from "@/features/source-detail";
 import type {
 	BranchPickerEntry,
@@ -40,12 +42,12 @@ import type {
 	WorkspaceMode,
 } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { CreateBranchDialog } from "./create-branch-dialog";
 
 const PREVIEW_TRAFFIC_LIGHT_SPACER_WIDTH = 52;
-const SWITCH_REPOSITORY_SHORTCUT = "Shift+Tab";
 
 function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
 	if (!repo) return "";
@@ -118,6 +120,12 @@ export function WorkspaceStartPage({
 			// footer) — treat as local: no `origin/` prefix in the pill.
 			"local";
 
+	const { settings } = useSettings();
+	const cycleRepositoryShortcut = getShortcut(
+		settings.shortcuts,
+		"startSurface.cycleRepository",
+	);
+
 	const selectNextRepository = useCallback(() => {
 		if (repositories.length === 0) {
 			return;
@@ -132,28 +140,21 @@ export function WorkspaceStartPage({
 		onSelectRepository(repositories[nextIndex]);
 	}, [onSelectRepository, repositories, selectedRepository]);
 
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Tab" || !event.shiftKey || event.defaultPrevented) {
-				return;
-			}
-
-			const activeElement = document.activeElement;
-			if (!(activeElement instanceof HTMLElement)) {
-				return;
-			}
-
-			if (!activeElement.closest('[aria-label="Workspace composer"]')) {
-				return;
-			}
-
-			event.preventDefault();
-			selectNextRepository();
-		};
-
-		window.addEventListener("keydown", handleKeyDown, true);
-		return () => window.removeEventListener("keydown", handleKeyDown, true);
-	}, [selectNextRepository]);
+	// Cycle-repository goes through the central shortcuts registry. Its
+	// `start-composer` scope is a sibling of `workspace-composer`, so the
+	// Shift+Tab plan-mode toggle that lives on the workspace composer does
+	// NOT fire on the start surface (the start surface composer carries
+	// `data-focus-scope="start-composer"`).
+	useAppShortcuts({
+		overrides: settings.shortcuts,
+		handlers: [
+			{
+				id: "startSurface.cycleRepository",
+				callback: selectNextRepository,
+				enabled: repositories.length > 1,
+			},
+		],
+	});
 
 	useEffect(() => {
 		if (!previewCard || !onClosePreview) {
@@ -346,7 +347,7 @@ export function WorkspaceStartPage({
 											>
 												<span>Switch repository</span>
 												<InlineShortcutDisplay
-													hotkey={SWITCH_REPOSITORY_SHORTCUT}
+													hotkey={cycleRepositoryShortcut}
 													className="text-background/60"
 												/>
 											</TooltipContent>

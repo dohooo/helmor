@@ -13,15 +13,23 @@ const KNOWN_SCOPES: ReadonlySet<ShortcutScope> = new Set([
 	"composer",
 	"terminal",
 	"editor",
+	"start-composer",
+	"workspace-composer",
 ]);
 
 // Scope inheritance: when a leaf scope is active, every parent scope is also
 // considered active. The composer is a sibling of the chat panel in the DOM
 // (not a descendant), but semantically it IS chat — so chat-bound shortcuts
 // (Cmd+T, Cmd+W, session navigation) must keep firing while typing.
+//
+// `start-composer` / `workspace-composer` are the surface-specific siblings of
+// `composer`; both inherit composer (so model picker / follow-up keep working
+// in both places) but stay distinct so surface-only shortcuts can opt in.
 const SCOPE_PARENTS: Partial<Record<ShortcutScope, readonly ShortcutScope[]>> =
 	{
 		composer: ["chat"],
+		"start-composer": ["composer"],
+		"workspace-composer": ["composer"],
 	};
 
 export const DEFAULT_FOCUS_SCOPE: ShortcutScope = "chat";

@@ -61,6 +61,45 @@ describe("settings", () => {
 			sourceBranchByRepoId: { "repo-1": "release/next" },
 			modeByRepoId: { "repo-1": "local" },
 			branchIntentByRepoId: { "repo-1": "use_branch" },
+			chatModeActive: false,
+		});
+	});
+
+	it("migrates legacy chat entries in modeByRepoId into chatModeActive", async () => {
+		invokeMock.mockResolvedValue({
+			"app.start_surface_preferences": JSON.stringify({
+				repoId: "repo-1",
+				modeByRepoId: {
+					"repo-1": "chat",
+					"repo-2": "worktree",
+				},
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		// chat must be stripped from the repo record (it's no longer
+		// repo-bound), and the top-level toggle must capture the user's
+		// last intent so re-entering the start surface is unsurprising.
+		expect(settings.startSurfacePreferences.modeByRepoId).toEqual({
+			"repo-2": "worktree",
+		});
+		expect(settings.startSurfacePreferences.chatModeActive).toBe(true);
+	});
+
+	it("respects an explicit chatModeActive when present", async () => {
+		invokeMock.mockResolvedValue({
+			"app.start_surface_preferences": JSON.stringify({
+				repoId: "repo-1",
+				modeByRepoId: { "repo-1": "worktree" },
+				chatModeActive: true,
+			}),
+		});
+
+		const settings = await loadSettings();
+		expect(settings.startSurfacePreferences.chatModeActive).toBe(true);
+		expect(settings.startSurfacePreferences.modeByRepoId).toEqual({
+			"repo-1": "worktree",
 		});
 	});
 
@@ -121,6 +160,7 @@ describe("settings", () => {
 			sourceBranchByRepoId: { "repo-1": "main" },
 			modeByRepoId: { "repo-1": "local" },
 			branchIntentByRepoId: { "repo-1": "use_branch" },
+			chatModeActive: false,
 		});
 
 		const writeCall = invokeMock.mock.calls.find(

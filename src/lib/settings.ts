@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
-import type { WorkspaceBranchIntent, WorkspaceMode } from "./api";
+import type { WorkspaceBranchIntent } from "./api";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -160,6 +160,10 @@ export const DEFAULT_INBOX_REPO_CONFIG: InboxRepoSourceConfig = {
 	prLabels: "",
 };
 
+/** Per-repo work mode on the start surface. `chat` is a top-level toggle
+ *  (`chatModeActive`) because it doesn't belong to any repo. */
+export type StartSurfaceWorkMode = "worktree" | "local";
+
 /** Persisted preferences for the workspace-start surface. */
 export type StartSurfacePreferences = {
 	/** Composer submit-mode: immediate dispatch or saved draft. */
@@ -167,8 +171,10 @@ export type StartSurfacePreferences = {
 	/** Last selected repository. */
 	repoId: string | null;
 	sourceBranchByRepoId: Record<string, string>;
-	modeByRepoId: Record<string, WorkspaceMode>;
+	modeByRepoId: Record<string, StartSurfaceWorkMode>;
 	branchIntentByRepoId: Record<string, WorkspaceBranchIntent>;
+	/** Top-level "Just chat" toggle. Independent of the selected repo. */
+	chatModeActive: boolean;
 };
 
 export type AppSettings = {
@@ -254,10 +260,11 @@ export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	sourceBranchByRepoId: {},
 	modeByRepoId: {},
 	branchIntentByRepoId: {},
+	chatModeActive: false,
 };
 
 /** Fallbacks for repos without a per-repo entry. */
-export const START_SURFACE_MODE_FALLBACK: WorkspaceMode = "worktree";
+export const START_SURFACE_MODE_FALLBACK: StartSurfaceWorkMode = "worktree";
 export const START_SURFACE_BRANCH_INTENT_FALLBACK: WorkspaceBranchIntent =
 	"from_branch";
 
@@ -761,23 +768,36 @@ function parseStartSurfacePreferences(
 		const o = parsed as Partial<StartSurfacePreferences> & {
 			mode?: unknown;
 			branchIntent?: unknown;
+			chatModeActive?: unknown;
 		};
 		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
-		const modeByRepoId = parseEnumRecord(o.modeByRepoId, [
+		// Legacy `modeByRepoId` may still contain "chat" entries from before
+		// chat was promoted to a top-level toggle. Capture them so the user
+		// doesn't lose the "I was in Just Chat last session" state, then
+		// strip them out — modeByRepoId now only carries repo-bound modes.
+		const rawModeByRepoId = parseEnumRecord(o.modeByRepoId, [
 			"worktree",
 			"local",
 			"chat",
 		] as const);
+		const modeByRepoId: Record<string, StartSurfaceWorkMode> = {};
+		let migratedFromLegacyChat = false;
+		for (const [key, value] of Object.entries(rawModeByRepoId)) {
+			if (value === "chat") {
+				migratedFromLegacyChat = true;
+				continue;
+			}
+			modeByRepoId[key] = value;
+		}
 		const branchIntentByRepoId = parseEnumRecord(o.branchIntentByRepoId, [
 			"from_branch",
 			"use_branch",
 		] as const);
 		if (repoId && !modeByRepoId[repoId]) {
 			const legacyMode =
-				o.mode === "worktree" || o.mode === "local" || o.mode === "chat"
-					? o.mode
-					: null;
+				o.mode === "worktree" || o.mode === "local" ? o.mode : null;
 			if (legacyMode) modeByRepoId[repoId] = legacyMode;
+			if (o.mode === "chat") migratedFromLegacyChat = true;
 		}
 		if (repoId && !branchIntentByRepoId[repoId]) {
 			const legacyBranchIntent =
@@ -786,6 +806,10 @@ function parseStartSurfacePreferences(
 					: null;
 			if (legacyBranchIntent) branchIntentByRepoId[repoId] = legacyBranchIntent;
 		}
+		const chatModeActive =
+			typeof o.chatModeActive === "boolean"
+				? o.chatModeActive
+				: migratedFromLegacyChat;
 		return {
 			createState:
 				o.createState === "backlog" || o.createState === "in-progress"
@@ -795,6 +819,7 @@ function parseStartSurfacePreferences(
 			sourceBranchByRepoId: parseStringRecord(o.sourceBranchByRepoId),
 			modeByRepoId,
 			branchIntentByRepoId,
+			chatModeActive,
 		};
 	} catch {
 		return DEFAULT_START_SURFACE_PREFERENCES;

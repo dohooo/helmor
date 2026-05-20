@@ -263,9 +263,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		title: "Toggle plan mode",
 		group: "Composer",
 		defaultHotkey: "Shift+Tab",
-		// composer-only: don't let Shift+Tab steal default a11y focus traversal
-		// from the inspector / message list.
-		scopes: ["composer"],
+		// workspace-composer only: plan mode is a per-session concept with
+		// no UI on the start surface. Bound to the narrower sibling scope so
+		// the start surface can reclaim Shift+Tab for cycling repositories
+		// without scope-overlap forcing both to disable each other.
+		scopes: ["workspace-composer"],
+		editable: true,
+	},
+	{
+		id: "startSurface.cycleRepository",
+		title: "Switch repository",
+		group: "Start surface",
+		defaultHotkey: "Shift+Tab",
+		// start-composer only: cycles through repositories in the start
+		// composer. Sibling scope to workspace-composer, so the two
+		// Shift+Tab bindings don't scope-overlap and stay both enabled.
+		scopes: ["start-composer"],
 		editable: true,
 	},
 	{

@@ -137,9 +137,12 @@ describe("useAppShortcuts", () => {
 					{ id: "composer.togglePlanMode", callback: togglePlanMode },
 				],
 			});
+			// Plan-mode toggle now lives on the narrower `workspace-composer`
+			// leaf; it inherits `composer` (and transitively `chat`) so generic
+			// chat shortcuts keep working alongside it.
 			return (
 				<div data-focus-scope="chat">
-					<div data-focus-scope="composer">
+					<div data-focus-scope="workspace-composer">
 						<input data-testid="composer-input" />
 					</div>
 				</div>
@@ -160,6 +163,51 @@ describe("useAppShortcuts", () => {
 		expect(togglePlanMode).toHaveBeenCalledTimes(1);
 	});
 
+	it("isolates start-composer and workspace-composer Shift+Tab bindings", () => {
+		const togglePlanMode = vi.fn();
+		const cycleRepository = vi.fn();
+
+		function Harness() {
+			useAppShortcuts({
+				overrides: {},
+				handlers: [
+					{ id: "composer.togglePlanMode", callback: togglePlanMode },
+					{
+						id: "startSurface.cycleRepository",
+						callback: cycleRepository,
+					},
+				],
+			});
+			return (
+				<div data-focus-scope="chat">
+					<div data-focus-scope="start-composer">
+						<input data-testid="start-input" />
+					</div>
+					<div data-focus-scope="workspace-composer">
+						<input data-testid="workspace-input" />
+					</div>
+				</div>
+			);
+		}
+
+		const { getByTestId } = render(<Harness />);
+
+		(getByTestId("start-input") as HTMLInputElement).focus();
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+		);
+		expect(cycleRepository).toHaveBeenCalledTimes(1);
+		expect(togglePlanMode).not.toHaveBeenCalled();
+
+		(getByTestId("workspace-input") as HTMLInputElement).focus();
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+		);
+		expect(togglePlanMode).toHaveBeenCalledTimes(1);
+		// Cycling stays put — the workspace surface doesn't claim its hotkey.
+		expect(cycleRepository).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not fire composer-only shortcuts when chat focus is outside composer", () => {
 		const togglePlanMode = vi.fn();
 
@@ -171,7 +219,7 @@ describe("useAppShortcuts", () => {
 			return (
 				<div data-focus-scope="chat">
 					<input data-testid="inspector-input" />
-					<div data-focus-scope="composer">
+					<div data-focus-scope="workspace-composer">
 						<input data-testid="composer-input" />
 					</div>
 				</div>

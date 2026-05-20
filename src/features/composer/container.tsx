@@ -209,6 +209,11 @@ type WorkspaceComposerContainerProps = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	} | null;
+	/** Surface-specific focus scope. `start-composer` on the workspace-start
+	 *  page, `workspace-composer` everywhere else. Drives the composer's
+	 *  `data-focus-scope` and gates surface-only hotkeys (plan-mode toggle
+	 *  vs cycle-repository). */
+	focusScope?: "start-composer" | "workspace-composer";
 };
 
 const noopUserInputResponse: UserInputResponseHandler = () => {};
@@ -261,6 +266,7 @@ export const WorkspaceComposerContainer = memo(
 		onToggleContextPanel,
 		startSubmitMenu = false,
 		linkedDirectoriesController = null,
+		focusScope = "workspace-composer",
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
@@ -1093,6 +1099,7 @@ export const WorkspaceComposerContainer = memo(
 						startSubmitMenu={startSubmitMenu}
 						startSubmitMode={startSubmitMode}
 						onStartSubmitModeChange={handleStartSubmitModeChange}
+						focusScope={focusScope}
 					/>
 				</div>
 			</div>

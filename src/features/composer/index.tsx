@@ -196,6 +196,10 @@ type WorkspaceComposerProps = {
 	startSubmitMenu?: boolean;
 	startSubmitMode?: StartSubmitMode;
 	onStartSubmitModeChange?: (mode: StartSubmitMode) => void;
+	/** Surface-specific focus scope. Drives `data-focus-scope` on the
+	 *  composer root and gates surface-only hotkeys (e.g. plan-mode toggle
+	 *  fires only inside `workspace-composer`, never on the start surface). */
+	focusScope?: "start-composer" | "workspace-composer";
 };
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
@@ -277,6 +281,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	startSubmitMenu = false,
 	startSubmitMode = "startNow",
 	onStartSubmitModeChange,
+	focusScope = "workspace-composer",
 }: WorkspaceComposerProps) {
 	const instanceIdRef = useRef(
 		`composer-${Math.random().toString(36).slice(2, 10)}`,
@@ -595,10 +600,16 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				return;
 			}
 
+			// Plan mode is a workspace-only concept — the start composer has
+			// no session to flip yet. Gating on `focusScope` here keeps the
+			// hotkey from double-firing alongside the start surface's
+			// `Shift+Tab` (cycle repository) without forcing the shortcuts
+			// registry to thread surface awareness through every binding.
 			if (
 				togglePlanShortcut &&
 				hotkey === togglePlanShortcut &&
-				supportsPlanMode
+				supportsPlanMode &&
+				focusScope === "workspace-composer"
 			) {
 				event.preventDefault();
 				event.stopPropagation();
@@ -607,6 +618,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		},
 		[
 			inputDisabled,
+			focusScope,
 			onChangePermissionMode,
 			permissionMode,
 			supportsPlanMode,
@@ -621,7 +633,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		<div
 			ref={composerRootRef}
 			aria-label="Workspace composer"
-			data-focus-scope="composer"
+			data-focus-scope={focusScope}
 			onKeyDownCapture={handleComposerKeyDownCapture}
 			className={cn(
 				"relative flex flex-col rounded-2xl border border-border/40 bg-sidebar shadow-[0_-1px_8px_rgba(0,0,0,0.05),0_0_0_1px_rgba(255,255,255,0.02)]",

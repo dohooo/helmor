@@ -34,6 +34,7 @@ export type ShortcutId =
 	| "composer.toggleContextPanel"
 	| "composer.openModelPicker"
 	| "composer.toggleFollowUpBehavior"
+	| "startSurface.cycleRepository"
 	| "editor.edit"
 	| "editor.new"
 	| "editor.close"
@@ -51,6 +52,7 @@ export type ShortcutGroup =
 	| "Actions"
 	| "System"
 	| "Composer"
+	| "Start surface"
 	| "Editor"
 	| "Terminal";
 
@@ -60,7 +62,20 @@ export type ShortcutGroup =
 // "composer" and "chat"), so a shortcut bound to "chat" still fires while
 // typing — and a "composer"-only shortcut stays off when chat focus lives
 // elsewhere (inspector, message list).
-export type ShortcutScope = "app" | "chat" | "composer" | "terminal" | "editor";
+//
+// `start-composer` and `workspace-composer` are sibling leaf scopes that split
+// the composer namespace by surface. They both inherit from `composer` (and
+// transitively from `chat`) so generic composer shortcuts keep firing, but
+// surface-specific shortcuts (Shift+Tab → cycle repo on start, toggle plan
+// mode on workspace) can target one and not the other.
+export type ShortcutScope =
+	| "app"
+	| "chat"
+	| "composer"
+	| "terminal"
+	| "editor"
+	| "start-composer"
+	| "workspace-composer";
 
 export type ShortcutDefinition = {
 	id: ShortcutId;

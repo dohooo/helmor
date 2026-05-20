@@ -140,11 +140,14 @@ export function useStartSurfaceController(
 
 	// Pickers read from settings; writes go through `updateSettings`.
 	const prefs = appSettings.startSurfacePreferences;
-	const startMode = readRepoPreference(
+	// Chat is a top-level toggle (independent of repo). When off, the start
+	// surface falls back to the selected repo's stored work mode.
+	const repoWorkMode = readRepoPreference(
 		prefs.modeByRepoId,
 		startRepositoryId,
 		START_SURFACE_MODE_FALLBACK,
 	);
+	const startMode: WorkspaceMode = prefs.chatModeActive ? "chat" : repoWorkMode;
 	const startBranchIntent = readRepoPreference(
 		prefs.branchIntentByRepoId,
 		startRepositoryId,
@@ -277,12 +280,29 @@ export function useStartSurfaceController(
 
 	const selectMode = useCallback(
 		(mode: WorkspaceMode) => {
-			if (!startRepository) return;
 			// pendingNewBranch is local-mode-only; clear it on any mode flip.
 			setStartPendingNewBranch(null);
+
+			// Chat is the top-level toggle — flip just the boolean, don't
+			// touch any repo-bound state. Works even with no repo selected
+			// (chat doesn't need one).
+			if (mode === "chat") {
+				if (appSettings.startSurfacePreferences.chatModeActive) return;
+				void updateSettings({
+					startSurfacePreferences: {
+						...appSettings.startSurfacePreferences,
+						chatModeActive: true,
+					},
+				});
+				return;
+			}
+
+			// Leaving chat back into a repo-bound mode requires a repo.
+			if (!startRepository) return;
 			void updateSettings({
 				startSurfacePreferences: {
 					...appSettings.startSurfacePreferences,
+					chatModeActive: false,
 					modeByRepoId: writeRepoPreference(
 						appSettings.startSurfacePreferences.modeByRepoId,
 						startRepository.id,
