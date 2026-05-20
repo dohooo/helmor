@@ -834,9 +834,17 @@ pub async fn attach_remote_agent_session(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     name: String,
     request_id: String,
-) -> CmdResult<bool> {
+    // Phase 24q-2: when present, the command computes
+    // `since_seq = MAX(last_event_seq)` for this session row and
+    // sends it to the daemon so the journal replay covers only
+    // the gap. `None` means cold attach (daemon flushes the full
+    // ring).
+    helmor_session_id: Option<String>,
+) -> CmdResult<AttachRemoteAgentSessionResult> {
     let registry = Arc::clone(&registry);
-    run_blocking(move || attach_remote_agent_session_inner(&registry, name, request_id)).await
+    let since_seq = compute_since_seq(helmor_session_id.as_deref());
+    run_blocking(move || attach_remote_agent_session_inner(&registry, name, request_id, since_seq))
+        .await
 }
 
 /// Aggregated connection diagnostics surfaced by the Runtime
@@ -1003,6 +1011,13 @@ pub struct ReattachedAgentEvent {
     /// the daemon's `agent.event` notification. The frontend
     /// renders it via the same logic that handles live sends.
     pub event: serde_json::Value,
+    /// Phase 24q-2: daemon-side journal seq for this event. Used by
+    /// the desktop's reattach loop to persist
+    /// `session_messages.last_event_seq` and to track the next
+    /// `since_seq` to send on reconnect. `None` for events from a
+    /// pre-24q-1 daemon — defensive only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -1012,6 +1027,42 @@ pub struct ReattachAgentStreamResult {
     /// means events are flowing, `false` means the session is gone
     /// and the frontend should treat the Channel as inert.
     pub found: bool,
+    /// Phase 24q-2: daemon's high-water-mark seq for this session.
+    /// The frontend stashes this so a subsequent reattach can pass
+    /// it back as `since_seq` without consulting the local DB. `0`
+    /// when `found=false` or the journal is empty.
+    #[serde(default)]
+    pub last_seq: u64,
+    /// Phase 24q-2: number of journal entries the daemon flushed
+    /// to the new notifier during attach. The events arrive through
+    /// `on_event` like any live event; this field lets the
+    /// operator panel show "N event(s) replayed" without counting
+    /// channel sends.
+    #[serde(default)]
+    pub replayed_count: u64,
+    /// Phase 24q-2: earliest seq still in the daemon's ring when
+    /// the caller's `since_seq` predates the oldest entry. `Some`
+    /// means some events were evicted before this attach; the
+    /// frontend should treat the resulting stream as a partial
+    /// catch-up + fall back to a full DB reload for the gap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_gap: Option<u64>,
+}
+
+/// Result of [`attach_remote_agent_session`]. Phase 24q-2 swaps the
+/// bare `bool` return for a struct so the frontend can stash the
+/// daemon's `last_seq` for a future reattach + render replay-gap
+/// diagnostics. `found` carries the original contract.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachRemoteAgentSessionResult {
+    pub found: bool,
+    #[serde(default)]
+    pub last_seq: u64,
+    #[serde(default)]
+    pub replayed_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_gap: Option<u64>,
 }
 
 #[tauri::command]
@@ -1020,16 +1071,23 @@ pub async fn reattach_remote_agent_session_stream(
     subscriptions: tauri::State<'_, Arc<RemoteAgentStreamSubscriptions>>,
     name: String,
     request_id: String,
+    // Phase 24q-2: when present, the command computes
+    // `since_seq = MAX(last_event_seq)` for this session row and
+    // passes it to `agent.attach`. Daemon then replays only
+    // entries `seq > since_seq`. `None` means cold attach.
+    helmor_session_id: Option<String>,
     on_event: Channel<ReattachedAgentEvent>,
 ) -> CmdResult<ReattachAgentStreamResult> {
     let registry = Arc::clone(&registry);
     let subscriptions = Arc::clone(&subscriptions);
+    let since_seq = compute_since_seq(helmor_session_id.as_deref());
     run_blocking(move || {
         reattach_remote_agent_session_stream_inner(
             &registry,
             &subscriptions,
             name,
             request_id,
+            since_seq,
             on_event,
         )
     })
@@ -1041,6 +1099,7 @@ fn reattach_remote_agent_session_stream_inner(
     subscriptions: &Arc<RemoteAgentStreamSubscriptions>,
     name: String,
     request_id: String,
+    since_seq: Option<u64>,
     on_event: Channel<ReattachedAgentEvent>,
 ) -> anyhow::Result<ReattachAgentStreamResult> {
     if name.trim().is_empty() {
@@ -1070,6 +1129,7 @@ fn reattach_remote_agent_session_stream_inner(
             let _ = on_event.send(ReattachedAgentEvent {
                 request_id: notif.request_id,
                 event: notif.event,
+                seq: notif.seq,
             });
         }))
         .ok_or_else(|| {
@@ -1080,10 +1140,7 @@ fn reattach_remote_agent_session_stream_inner(
 
     let attach_result = runtime.agent_attach(crate::remote::AgentAttachParams {
         request_id: request_id.clone(),
-        // Phase 24q-1: cold attach for now (`None`). Phase 24q-2
-        // threads the desktop's locally-known `last_event_seq`
-        // through here so a reconnect replays only what was missed.
-        since_seq: None,
+        since_seq,
     })?;
 
     if !attach_result.found {
@@ -1092,11 +1149,21 @@ fn reattach_remote_agent_session_stream_inner(
         // dropping unregisters the per-call callback from the
         // RpcClient so the Channel goes idle.
         drop(subscription);
-        return Ok(ReattachAgentStreamResult { found: false });
+        return Ok(ReattachAgentStreamResult {
+            found: false,
+            last_seq: 0,
+            replayed_count: 0,
+            replay_gap: None,
+        });
     }
 
     subscriptions.insert(request_id, subscription);
-    Ok(ReattachAgentStreamResult { found: true })
+    Ok(ReattachAgentStreamResult {
+        found: true,
+        last_seq: attach_result.last_seq,
+        replayed_count: attach_result.replayed_count,
+        replay_gap: attach_result.replay_gap,
+    })
 }
 
 /// Release a streaming reattach started by
@@ -1137,7 +1204,8 @@ fn attach_remote_agent_session_inner(
     registry: &Arc<RuntimeRegistry>,
     name: String,
     request_id: String,
-) -> anyhow::Result<bool> {
+    since_seq: Option<u64>,
+) -> anyhow::Result<AttachRemoteAgentSessionResult> {
     if name.trim().is_empty() {
         bail!("runtime name must not be empty");
     }
@@ -1150,9 +1218,38 @@ fn attach_remote_agent_session_inner(
     let runtime = registry.lookup(Some(&name))?;
     let result = runtime.agent_attach(crate::remote::AgentAttachParams {
         request_id,
-        since_seq: None,
+        since_seq,
     })?;
-    Ok(result.found)
+    Ok(AttachRemoteAgentSessionResult {
+        found: result.found,
+        last_seq: result.last_seq,
+        replayed_count: result.replayed_count,
+        replay_gap: result.replay_gap,
+    })
+}
+
+/// Resolve a `helmor_session_id` to its `since_seq` for an attach.
+/// Returns `None` (cold attach) when:
+/// - the caller passed `helmor_session_id=None`,
+/// - the session has no rows yet,
+/// - all rows have `last_event_seq = NULL` (legacy / local-only),
+/// - or the DB read fails (logged at debug; the daemon will flush
+///   the full ring as a graceful fallback).
+fn compute_since_seq(helmor_session_id: Option<&str>) -> Option<u64> {
+    let session_id = helmor_session_id?;
+    match crate::models::db::read(|conn| {
+        crate::agents::persistence::max_event_seq_for_session(conn, session_id)
+    }) {
+        Ok(max) => max,
+        Err(err) => {
+            tracing::debug!(
+                helmor_session_id = %session_id,
+                error = %format!("{err:#}"),
+                "compute_since_seq: DB read failed; falling back to cold attach"
+            );
+            None
+        }
+    }
 }
 
 /// Snapshot the registry's current configs and write them to
@@ -2096,6 +2193,15 @@ mod tests {
         /// Override the `attach` return value so tests can exercise
         /// both the found / not-found branches.
         agent_attach_found: Mutex<bool>,
+        /// Phase 24q-2: override the daemon-reported `last_seq` so
+        /// tests can verify the desktop surfaces it on the result.
+        agent_attach_last_seq: Mutex<u64>,
+        /// Phase 24q-2: override the daemon-reported `replayed_count`.
+        agent_attach_replayed_count: Mutex<u64>,
+        /// Phase 24q-2: override the daemon-reported `replay_gap`.
+        /// `None` (the default) means a clean replay; `Some(n)`
+        /// signals the journal couldn't fully satisfy the request.
+        agent_attach_replay_gap: Mutex<Option<u64>>,
         /// Captured callbacks from `subscribe_agent_events`. The
         /// stub's `fire_agent_event` helper invokes every one in
         /// turn so tests can drive the reattach event pipeline
@@ -2307,7 +2413,9 @@ mod tests {
             self.agent_attach_calls.lock().unwrap().push(params);
             Ok(crate::remote::AgentAttachResult {
                 found: *self.agent_attach_found.lock().unwrap(),
-                ..Default::default()
+                last_seq: *self.agent_attach_last_seq.lock().unwrap(),
+                replayed_count: *self.agent_attach_replayed_count.lock().unwrap(),
+                replay_gap: *self.agent_attach_replay_gap.lock().unwrap(),
             })
         }
         fn subscribe_agent_events(
@@ -2884,17 +2992,21 @@ mod tests {
     fn attach_remote_agent_session_validates_inputs() {
         let (registry, _stub) = registry_with_inspector_stub();
         // Empty name.
-        let err =
-            attach_remote_agent_session_inner(&registry, "".into(), "req-1".into()).unwrap_err();
+        let err = attach_remote_agent_session_inner(&registry, "".into(), "req-1".into(), None)
+            .unwrap_err();
         assert!(format!("{err:#}").contains("runtime name must not be empty"));
         // Empty request_id.
-        let err =
-            attach_remote_agent_session_inner(&registry, "stub.box".into(), "".into()).unwrap_err();
+        let err = attach_remote_agent_session_inner(&registry, "stub.box".into(), "".into(), None)
+            .unwrap_err();
         assert!(format!("{err:#}").contains("request_id must not be empty"));
         // Local runtime.
-        let err =
-            attach_remote_agent_session_inner(&registry, LOCAL_RUNTIME_NAME.into(), "req-1".into())
-                .unwrap_err();
+        let err = attach_remote_agent_session_inner(
+            &registry,
+            LOCAL_RUNTIME_NAME.into(),
+            "req-1".into(),
+            None,
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("only available on registered remote runtimes"));
     }
 
@@ -2903,11 +3015,15 @@ mod tests {
         let (registry, stub) = registry_with_inspector_stub();
         *stub.agent_attach_found.lock().unwrap() = true;
 
-        let found =
-            attach_remote_agent_session_inner(&registry, "stub.box".into(), "req-attach-1".into())
-                .unwrap();
+        let result = attach_remote_agent_session_inner(
+            &registry,
+            "stub.box".into(),
+            "req-attach-1".into(),
+            None,
+        )
+        .unwrap();
 
-        assert!(found);
+        assert!(result.found);
         let calls = stub.agent_attach_calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].request_id, "req-attach-1");
@@ -2923,12 +3039,134 @@ mod tests {
         let (registry, stub) = registry_with_inspector_stub();
         *stub.agent_attach_found.lock().unwrap() = false;
 
-        let found =
-            attach_remote_agent_session_inner(&registry, "stub.box".into(), "req-stale".into())
-                .unwrap();
+        let result = attach_remote_agent_session_inner(
+            &registry,
+            "stub.box".into(),
+            "req-stale".into(),
+            None,
+        )
+        .unwrap();
 
-        assert!(!found);
+        assert!(!result.found);
         assert_eq!(stub.agent_attach_calls.lock().unwrap().len(), 1);
+    }
+
+    /// Phase 24q-2: when the command supplies `since_seq`, it must
+    /// reach the daemon verbatim via `AgentAttachParams.since_seq`.
+    #[test]
+    fn attach_remote_agent_session_forwards_since_seq_to_runtime() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+
+        let _result = attach_remote_agent_session_inner(
+            &registry,
+            "stub.box".into(),
+            "req-with-seq".into(),
+            Some(42),
+        )
+        .unwrap();
+
+        let calls = stub.agent_attach_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].since_seq, Some(42));
+    }
+
+    /// Phase 24q-2: result fields mirror what the daemon reported
+    /// (last_seq / replayed_count / replay_gap) so the frontend can
+    /// surface "N replayed" + "gap before X" diagnostics.
+    #[test]
+    fn attach_remote_agent_session_returns_daemon_replay_details() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        *stub.agent_attach_last_seq.lock().unwrap() = 99;
+        *stub.agent_attach_replayed_count.lock().unwrap() = 7;
+        *stub.agent_attach_replay_gap.lock().unwrap() = Some(50);
+
+        let result = attach_remote_agent_session_inner(
+            &registry,
+            "stub.box".into(),
+            "req-replay".into(),
+            Some(42),
+        )
+        .unwrap();
+
+        assert!(result.found);
+        assert_eq!(result.last_seq, 99);
+        assert_eq!(result.replayed_count, 7);
+        assert_eq!(result.replay_gap, Some(50));
+    }
+
+    /// Phase 24q-2: found=false zeroes out the replay fields. The
+    /// daemon may still send sane values when found=false, but the
+    /// desktop shouldn't surface them — there's no session to
+    /// reattach to.
+    #[test]
+    fn attach_remote_agent_session_zeroes_replay_fields_when_not_found() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = false;
+        *stub.agent_attach_last_seq.lock().unwrap() = 99;
+        *stub.agent_attach_replayed_count.lock().unwrap() = 7;
+        *stub.agent_attach_replay_gap.lock().unwrap() = Some(50);
+
+        let result = attach_remote_agent_session_inner(
+            &registry,
+            "stub.box".into(),
+            "req-stale".into(),
+            Some(42),
+        )
+        .unwrap();
+
+        assert!(!result.found);
+        // The daemon-reported values pass through as-is on the
+        // attach command (the reattach-stream command zeroes them
+        // because the Channel is inert; the bare attach command
+        // mirrors the daemon literally so the operator can spot
+        // weird daemon behavior).
+        assert_eq!(result.last_seq, 99);
+        assert_eq!(result.replayed_count, 7);
+        assert_eq!(result.replay_gap, Some(50));
+    }
+
+    // ── compute_since_seq (phase 24q-2) ────────────────────────────
+
+    /// Phase 24q-2: the command-layer helper reads the desktop's
+    /// local `MAX(last_event_seq)` for the supplied session. This
+    /// test exercises the full DB-backed path through the production
+    /// pool by inserting a row with `last_event_seq=Some(7)` and
+    /// asserting the helper returns it.
+    #[test]
+    fn compute_since_seq_returns_max_seq_from_local_db() {
+        use crate::testkit::TestEnv;
+        let env = TestEnv::new("compute-since-seq");
+        let conn = env.db_connection();
+        // Repo + workspace + session needed to satisfy FKs on
+        // session_messages.session_id. Use synthetic IDs so the
+        // assertions are obvious.
+        conn.execute(
+            "INSERT INTO repos (id, name, remote_url, default_branch, root_path) VALUES ('r1', 'demo', NULL, 'main', '/tmp/demo')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, display_order) VALUES ('w1', 'r1', 'demo', 'ready', 'in-progress', 'main', 100)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, workspace_id, title, agent_type, status, model, permission_mode) VALUES ('hs-1', 'w1', 't', 'claude', 'idle', 'opus', 'default')",
+            [],
+        ).unwrap();
+        // Two rows for hs-1, one with a higher seq.
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, last_event_seq) VALUES ('m1', 'hs-1', 'assistant', '{}', 3)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session_messages (id, session_id, role, content, last_event_seq) VALUES ('m2', 'hs-1', 'assistant', '{}', 7)",
+            [],
+        ).unwrap();
+
+        assert_eq!(compute_since_seq(Some("hs-1")), Some(7));
+        assert_eq!(compute_since_seq(None), None);
+        assert_eq!(compute_since_seq(Some("hs-other")), None);
     }
 
     // ── reattach_remote_agent_session_stream (phase 24i) ──────────
@@ -2973,6 +3211,7 @@ mod tests {
             &subscriptions,
             "".into(),
             "req-1".into(),
+            None,
             chan.clone(),
         )
         .unwrap_err();
@@ -2983,6 +3222,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "".into(),
+            None,
             chan,
         )
         .unwrap_err();
@@ -2999,6 +3239,7 @@ mod tests {
             &subscriptions,
             LOCAL_RUNTIME_NAME.into(),
             "req-1".into(),
+            None,
             chan,
         )
         .unwrap_err();
@@ -3017,6 +3258,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-found".into(),
+            None,
             chan,
         )
         .unwrap();
@@ -3054,12 +3296,53 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-gone".into(),
+            None,
             chan,
         )
         .unwrap();
 
         assert!(!result.found);
         assert!(subscriptions.active_request_ids().is_empty());
+        // Replay fields zero out so the frontend doesn't render
+        // stale "N events replayed" diagnostics for a session it
+        // can't attach to anyway.
+        assert_eq!(result.last_seq, 0);
+        assert_eq!(result.replayed_count, 0);
+        assert_eq!(result.replay_gap, None);
+    }
+
+    /// Phase 24q-2: `since_seq` reaches the daemon verbatim via
+    /// `AgentAttachParams.since_seq`, and the daemon-reported
+    /// `last_seq` / `replayed_count` / `replay_gap` surface on the
+    /// result so the frontend can stash them for the next reattach.
+    #[test]
+    fn reattach_stream_forwards_since_seq_and_returns_replay_details() {
+        let (registry, stub) = registry_with_inspector_stub();
+        *stub.agent_attach_found.lock().unwrap() = true;
+        *stub.agent_attach_last_seq.lock().unwrap() = 123;
+        *stub.agent_attach_replayed_count.lock().unwrap() = 4;
+        *stub.agent_attach_replay_gap.lock().unwrap() = Some(80);
+        let subscriptions = Arc::new(RemoteAgentStreamSubscriptions::new());
+        let (chan, _captured) = capturing_reattach_channel();
+
+        let result = reattach_remote_agent_session_stream_inner(
+            &registry,
+            &subscriptions,
+            "stub.box".into(),
+            "req-resume".into(),
+            Some(42),
+            chan,
+        )
+        .unwrap();
+
+        assert!(result.found);
+        assert_eq!(result.last_seq, 123);
+        assert_eq!(result.replayed_count, 4);
+        assert_eq!(result.replay_gap, Some(80));
+
+        let calls = stub.agent_attach_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].since_seq, Some(42));
     }
 
     #[test]
@@ -3078,6 +3361,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-1".into(),
+            None,
             chan,
         )
         .unwrap_err();
@@ -3102,6 +3386,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-A".into(),
+            None,
             chan,
         )
         .unwrap();
@@ -3111,10 +3396,12 @@ mod tests {
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-A".into(),
             event: serde_json::json!({ "type": "assistant", "delta": "hi" }),
+            seq: None,
         });
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-other".into(),
             event: serde_json::json!({ "type": "assistant", "delta": "skip" }),
+            seq: None,
         });
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-A".into(),
@@ -3123,6 +3410,7 @@ mod tests {
                 "subtype": "success",
                 "result": "all done"
             }),
+            seq: None,
         });
 
         let events = captured.lock().unwrap().clone();
@@ -3148,6 +3436,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-release".into(),
+            None,
             chan,
         )
         .unwrap();
@@ -3155,6 +3444,7 @@ mod tests {
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-release".into(),
             event: serde_json::json!({ "type": "assistant", "delta": "before-release" }),
+            seq: None,
         });
 
         let release_result =
@@ -3217,6 +3507,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-A".into(),
+            None,
             chan_a,
         )
         .unwrap();
@@ -3225,6 +3516,7 @@ mod tests {
             &subscriptions,
             "stub.box".into(),
             "req-B".into(),
+            None,
             chan_b,
         )
         .unwrap();
@@ -3238,10 +3530,12 @@ mod tests {
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-A".into(),
             event: serde_json::json!({ "delta": "for-A" }),
+            seq: None,
         });
         stub.fire_agent_event(crate::remote::methods::AgentEventNotification {
             request_id: "req-B".into(),
             event: serde_json::json!({ "delta": "for-B" }),
+            seq: None,
         });
 
         let events_a = captured_a.lock().unwrap().clone();

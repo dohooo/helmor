@@ -1109,6 +1109,15 @@ pub struct AgentEventNotification {
     /// `SidecarEvent { raw: ... }` from this value and feeds it into
     /// the local pipeline unchanged.
     pub event: serde_json::Value,
+    /// Phase 24q-1: monotonic seq assigned by the daemon's event
+    /// journal. `None` when the daemon predates 24q-1 (defensive —
+    /// shouldn't happen on a matched-version pair, but lets us
+    /// drop in a newer desktop against an older daemon without
+    /// the deserializer choking). Threaded onto `SidecarEvent.seq`
+    /// so the reattach loop can persist it as
+    /// `session_messages.last_event_seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 #[cfg(test)]
@@ -1881,6 +1890,7 @@ mod tests {
         let notif = AgentEventNotification {
             request_id: "req-4".into(),
             event: inner.clone(),
+            seq: None,
         };
         let wire = serde_json::to_value(&notif).unwrap();
         assert_eq!(wire["requestId"], "req-4");

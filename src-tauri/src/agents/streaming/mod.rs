@@ -586,6 +586,9 @@ pub(super) fn stream_via_sidecar(
                                     ctx,
                                     pipeline_state.accumulator.turn_at(persisted_turn_count),
                                     &model_str,
+                                    // Local-sidecar path has no journal seq —
+                                    // 24q-2 only applies to remote-runner.
+                                    None,
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(error) => {
@@ -621,6 +624,7 @@ pub(super) fn stream_via_sidecar(
                                     ctx,
                                     &resolved_model,
                                     BAD_RESUME_USER_MESSAGE,
+                                    None,
                                 ) {
                                     Ok(_) => {}
                                     Err(error) => {
@@ -820,6 +824,9 @@ pub(super) fn stream_via_sidecar(
                                     ctx,
                                     pipeline_state.accumulator.turn_at(persisted_turn_count),
                                     &model_str,
+                                    // Local-sidecar path has no journal seq —
+                                    // 24q-2 only applies to remote-runner.
+                                    None,
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(error) => {
@@ -914,6 +921,9 @@ pub(super) fn stream_via_sidecar(
                                     ctx,
                                     pipeline_state.accumulator.turn_at(persisted_turn_count),
                                     &model_str,
+                                    // Local-sidecar path has no journal seq —
+                                    // 24q-2 only applies to remote-runner.
+                                    None,
                                 ) {
                                     Ok(_) => persisted_turn_count += 1,
                                     Err(error) => {
@@ -1024,7 +1034,7 @@ pub(super) fn stream_via_sidecar(
                             })
                             .unwrap_or_else(|| model_copy.cli_model.to_string());
 
-                        match persist_error_message(conn, ctx, &resolved_model, &message) {
+                        match persist_error_message(conn, ctx, &resolved_model, &message, None) {
                             Ok(_) => persisted = true,
                             Err(error) => {
                                 tracing::error!(rid = %rid, "Failed to persist error message: {error}");
@@ -1090,6 +1100,7 @@ pub(super) fn stream_via_sidecar(
                                         ctx,
                                         pipeline_state.accumulator.turn_at(persisted_turn_count),
                                         &model_str,
+                                        None,
                                     ) {
                                         Ok(_) => {
                                             persisted_turn_count += 1;

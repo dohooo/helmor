@@ -70,6 +70,7 @@ pub(super) fn persist_turn_message(
     ctx: &ExchangeContext,
     turn: &CollectedTurn,
     _resolved_model: &str,
+    event_seq: Option<u64>,
 ) -> Result<(String, bool)> {
     let now = current_timestamp_string()?;
     // Use the pre-assigned ID from the turn so streaming and historical
@@ -88,14 +89,26 @@ pub(super) fn persist_turn_message(
     // which can resurface turns the original sender already persisted.
     // Letting the second insert be a no-op keeps DB content
     // deterministic without forcing each writer to coordinate.
+    //
+    // Phase 24q-2: `last_event_seq` stores the daemon-journal seq
+    // of the event that produced this row. NULL on local-sidecar
+    // and pre-24q-1 remote writes; the reattach call queries
+    // `MAX(last_event_seq)` per session as its `since_seq` cursor.
     let rows_changed = conn.execute(
         r#"
             INSERT INTO session_messages (
-              id, session_id, role, content, created_at, sent_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+              id, session_id, role, content, created_at, sent_at, last_event_seq
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
             ON CONFLICT(id) DO NOTHING
             "#,
-        params![msg_id, ctx.helmor_session_id, turn.role, content, now],
+        params![
+            msg_id,
+            ctx.helmor_session_id,
+            turn.role,
+            content,
+            now,
+            event_seq.map(|s| s as i64),
+        ],
     )?;
     Ok((msg_id, rows_changed == 1))
 }
@@ -105,6 +118,7 @@ pub(super) fn persist_error_message(
     ctx: &ExchangeContext,
     _resolved_model: &str,
     message: &str,
+    event_seq: Option<u64>,
 ) -> Result<String> {
     let now = current_timestamp_string()?;
     let msg_id = uuid::Uuid::new_v4().to_string();
@@ -117,19 +131,53 @@ pub(super) fn persist_error_message(
     conn.execute(
         r#"
             INSERT INTO session_messages (
-              id, session_id, role, content, created_at, sent_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+              id, session_id, role, content, created_at, sent_at, last_event_seq
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
             "#,
         params![
             msg_id,
             ctx.helmor_session_id,
             MessageRole::Error,
             payload,
-            now
+            now,
+            event_seq.map(|s| s as i64),
         ],
     )?;
 
     Ok(msg_id)
+}
+
+/// Phase 24q-2: the desktop's high-water-mark across all rows for a
+/// given session. Used by the remote-runner reattach call to compute
+/// `since_seq` — events newer than this haven't been persisted
+/// locally, so the daemon should replay them.
+///
+/// Returns `None` when:
+/// - the session has no rows, or
+/// - all rows have `last_event_seq = NULL` (legacy rows pre-24q-2,
+///   or rows produced by the local-sidecar path which doesn't
+///   participate in the daemon's journal).
+///
+/// In both `None` cases the caller passes `since_seq=None` (cold
+/// attach), and the daemon flushes the full journal — the desktop's
+/// `ON CONFLICT(id) DO NOTHING` and 24n persistence absorb the
+/// replay without duplicating rows the local DB happens to already
+/// have.
+pub(crate) fn max_event_seq_for_session(
+    conn: &Connection,
+    helmor_session_id: &str,
+) -> Result<Option<u64>> {
+    // SELECT MAX(...) always returns one row (NULL when no rows
+    // match or all values are NULL), so `query_row` is safe — no
+    // QueryReturnedNoRows risk. Pass `Option<i64>` explicitly so
+    // SQLite NULLs decode as None rather than producing an
+    // InvalidColumnType error.
+    let max: Option<i64> = conn.query_row(
+        "SELECT MAX(last_event_seq) FROM session_messages WHERE session_id = ?1",
+        [helmor_session_id],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    Ok(max.and_then(|n| u64::try_from(n).ok()))
 }
 
 pub(super) fn persist_exit_plan_message(
@@ -340,7 +388,8 @@ mod tests {
                 role TEXT,
                 content TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                sent_at TEXT
+                sent_at TEXT,
+                last_event_seq INTEGER
             );
             "#,
         )
@@ -348,7 +397,7 @@ mod tests {
 
         let ctx = test_exchange_context();
         let message_id =
-            persist_error_message(&conn, &ctx, "gpt-5.4", "Reconnecting... 1/5").unwrap();
+            persist_error_message(&conn, &ctx, "gpt-5.4", "Reconnecting... 1/5", None).unwrap();
 
         let (role, content): (String, String) = conn
             .query_row(
@@ -377,7 +426,8 @@ mod tests {
                 role TEXT,
                 content TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                sent_at TEXT
+                sent_at TEXT,
+                last_event_seq INTEGER
             );
             "#,
         )
@@ -563,7 +613,7 @@ mod tests {
         };
 
         let (first_id, first_inserted) =
-            persist_turn_message(&conn, &ctx, &turn, "claude-opus-4").unwrap();
+            persist_turn_message(&conn, &ctx, &turn, "claude-opus-4", None).unwrap();
         assert_eq!(first_id, "msg-shared-1");
         assert!(first_inserted, "first call must report inserted=true");
 
@@ -586,7 +636,7 @@ mod tests {
             .to_string(),
         };
         let (second_id, second_inserted) =
-            persist_turn_message(&conn, &ctx, &same_id_diff_content, "claude-opus-4")
+            persist_turn_message(&conn, &ctx, &same_id_diff_content, "claude-opus-4", None)
                 .expect("second insert should succeed silently");
         assert_eq!(second_id, "msg-shared-1");
         assert!(
@@ -612,5 +662,64 @@ mod tests {
             .unwrap();
         assert!(stored.contains("first"));
         assert!(!stored.contains("second"));
+    }
+
+    fn insert_seq_row(conn: &Connection, id: &str, session_id: &str, seq: Option<i64>) {
+        conn.execute(
+            r#"
+            INSERT INTO session_messages (id, session_id, role, content, last_event_seq)
+            VALUES (?1, ?2, 'assistant', '{}', ?3)
+            "#,
+            params![id, session_id, seq],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn max_event_seq_for_session_returns_none_when_no_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        let max = max_event_seq_for_session(&conn, "session-empty").unwrap();
+        assert_eq!(max, None);
+    }
+
+    #[test]
+    fn max_event_seq_for_session_returns_none_when_all_rows_null() {
+        // Legacy rows (pre-24q-2) and local-only sessions both keep
+        // `last_event_seq` NULL; the helper must collapse that into a
+        // `None` result so the caller passes `since_seq=None`.
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        insert_seq_row(&conn, "row-a", "session-1", None);
+        insert_seq_row(&conn, "row-b", "session-1", None);
+        let max = max_event_seq_for_session(&conn, "session-1").unwrap();
+        assert_eq!(max, None);
+    }
+
+    #[test]
+    fn max_event_seq_for_session_picks_high_water_mark_per_session() {
+        // Only rows matching the session_id contribute; NULLs are
+        // skipped by MAX. The result is the highest non-NULL value
+        // for that session.
+        let conn = Connection::open_in_memory().unwrap();
+        make_messages_table(&conn);
+        insert_seq_row(&conn, "row-1", "session-1", Some(10));
+        insert_seq_row(&conn, "row-2", "session-1", Some(42));
+        insert_seq_row(&conn, "row-3", "session-1", None);
+        // Sibling session — different high-water-mark; must not leak.
+        insert_seq_row(&conn, "row-4", "session-2", Some(99));
+
+        assert_eq!(
+            max_event_seq_for_session(&conn, "session-1").unwrap(),
+            Some(42)
+        );
+        assert_eq!(
+            max_event_seq_for_session(&conn, "session-2").unwrap(),
+            Some(99)
+        );
+        assert_eq!(
+            max_event_seq_for_session(&conn, "session-other").unwrap(),
+            None
+        );
     }
 }

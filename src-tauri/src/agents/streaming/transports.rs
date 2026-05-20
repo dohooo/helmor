@@ -205,7 +205,10 @@ impl SidecarTransport for RemoteSidecarTransport {
             if notif.request_id != needle {
                 return;
             }
-            let event = SidecarEvent { raw: notif.event };
+            let event = SidecarEvent {
+                raw: notif.event,
+                seq: notif.seq,
+            };
             // Dropping the receiver before unsubscribe is a
             // benign race — the send returns Err, we ignore it.
             let _ = tx.send(event);
@@ -558,10 +561,12 @@ mod tests {
         runtime.fire(crate::remote::methods::AgentEventNotification {
             request_id: "req-other".into(),
             event: json!({ "type": "assistant", "delta": "skip me" }),
+            seq: None,
         });
         runtime.fire(crate::remote::methods::AgentEventNotification {
             request_id: "req-3".into(),
             event: json!({ "type": "assistant", "delta": "for me" }),
+            seq: None,
         });
 
         let event = rx

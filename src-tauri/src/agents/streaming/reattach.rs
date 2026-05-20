@@ -257,15 +257,19 @@ fn run_reattach_loop<R: Runtime>(
         // accumulator doesn't care which side of the SSH pipe
         // produced the bytes.
         let line = serde_json::to_string(&event.raw).unwrap_or_default();
+        let event_seq = event.seq;
         let emit = pipeline.push_event(&event.raw, &line);
         // Drain any new turns into the local DB before emitting the
         // user-facing envelope so the chat reflects "persisted to
-        // local DB on next refresh" semantics.
+        // local DB on next refresh" semantics. The seq comes from
+        // the daemon's journal (24q-1); for non-remote transports
+        // it's `None` and the column stays NULL.
         let wrote = drain_new_turns_into_db(
             &mut persisted_turn_count,
             &pipeline,
             &persistence_ctx,
             &request_id_for_loop,
+            event_seq,
         );
         publish_messages_appended_if(&app, wrote, &helmor_session_id);
         persisted_any |= wrote;
@@ -305,6 +309,7 @@ fn run_reattach_loop<R: Runtime>(
                     &pipeline,
                     &persistence_ctx,
                     &request_id_for_loop,
+                    event_seq,
                 );
                 publish_messages_appended_if(&app, wrote, &helmor_session_id);
                 persisted_any |= wrote;
@@ -338,6 +343,7 @@ fn run_reattach_loop<R: Runtime>(
                     &pipeline,
                     &persistence_ctx,
                     &request_id_for_loop,
+                    event_seq,
                 );
                 publish_messages_appended_if(&app, wrote, &helmor_session_id);
                 persisted_any |= wrote;
@@ -373,8 +379,12 @@ fn run_reattach_loop<R: Runtime>(
                     .get("internal")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let error_persisted =
-                    persist_error_into_db(&persistence_ctx, &message, &request_id_for_loop);
+                let error_persisted = persist_error_into_db(
+                    &persistence_ctx,
+                    &message,
+                    &request_id_for_loop,
+                    event_seq,
+                );
                 publish_messages_appended_if(&app, error_persisted, &helmor_session_id);
                 let final_persisted = error_persisted
                     | finalize_status(&persistence_ctx, "error", &request_id_for_loop);
@@ -434,6 +444,7 @@ fn drain_new_turns_into_db(
     pipeline: &MessagePipeline,
     ctx: &ExchangeContext,
     rid: &str,
+    event_seq: Option<u64>,
 ) -> bool {
     let total = pipeline.accumulator.turns_len();
     if *persisted_turn_count >= total {
@@ -454,7 +465,15 @@ fn drain_new_turns_into_db(
     let mut inserted_any = false;
     while *persisted_turn_count < total {
         let turn = pipeline.accumulator.turn_at(*persisted_turn_count);
-        match persist_turn_message(&conn, ctx, turn, &resolved_model) {
+        // Phase 24q-2: persist the seq of the event that triggered
+        // this drain. When multiple turns flush from a single
+        // accumulator state (e.g. terminal flush_pending), they all
+        // get the SAME seq — they came from the same daemon-side
+        // event boundary. The reattach call's `MAX(last_event_seq)`
+        // cursor still resolves to a meaningful "where did the
+        // desktop leave off" position because the next event will
+        // carry a higher seq.
+        match persist_turn_message(&conn, ctx, turn, &resolved_model, event_seq) {
             Ok((_id, inserted)) => {
                 // Always advance the cursor — even when the row was a
                 // no-op idempotent re-write, we've handled this index.
@@ -480,7 +499,12 @@ fn drain_new_turns_into_db(
 /// Insert an error row for the reattach turn. Mirrors the regular
 /// send's `persist_error_message` call so the chat thread surfaces
 /// the same row on next render.
-fn persist_error_into_db(ctx: &ExchangeContext, message: &str, rid: &str) -> bool {
+fn persist_error_into_db(
+    ctx: &ExchangeContext,
+    message: &str,
+    rid: &str,
+    event_seq: Option<u64>,
+) -> bool {
     let conn = match crate::models::db::write_conn() {
         Ok(conn) => conn,
         Err(err) => {
@@ -492,7 +516,7 @@ fn persist_error_into_db(ctx: &ExchangeContext, message: &str, rid: &str) -> boo
             return false;
         }
     };
-    match persist_error_message(&conn, ctx, "", message) {
+    match persist_error_message(&conn, ctx, "", message, event_seq) {
         Ok(_) => true,
         Err(err) => {
             tracing::warn!(
@@ -567,7 +591,10 @@ mod tests {
             let senders = self.senders.lock().unwrap();
             for (rid, tx) in senders.iter() {
                 if rid == request_id {
-                    let _ = tx.send(SidecarEvent { raw: raw.clone() });
+                    let _ = tx.send(SidecarEvent {
+                        raw: raw.clone(),
+                        seq: None,
+                    });
                 }
             }
         }
@@ -1517,9 +1544,14 @@ mod tests {
         };
 
         let conn = crate::models::db::write_conn().unwrap();
-        let (returned_id, inserted) =
-            super::super::persist_turn_message(&conn, &ctx, &conflicting_turn, "claude-opus-4")
-                .expect("persist_turn_message should succeed silently on conflict");
+        let (returned_id, inserted) = super::super::persist_turn_message(
+            &conn,
+            &ctx,
+            &conflicting_turn,
+            "claude-opus-4",
+            None,
+        )
+        .expect("persist_turn_message should succeed silently on conflict");
 
         // The returned id is still the input id (the contract:
         // callers can chain on the id regardless of whether the

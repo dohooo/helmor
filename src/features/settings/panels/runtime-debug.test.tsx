@@ -143,11 +143,19 @@ describe("RuntimeDebugPanel", () => {
 		// other tests.
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([]);
 		apiMocks.abortRemoteAgentSession.mockResolvedValue(undefined);
-		apiMocks.attachRemoteAgentSession.mockResolvedValue(true);
+		apiMocks.attachRemoteAgentSession.mockResolvedValue({
+			found: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
+		});
 		// Default: every streaming reattach succeeds with `found=true`
 		// — individual tests override for the notFound / error paths.
 		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValue({
 			found: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		});
 		apiMocks.releaseRemoteAgentStream.mockResolvedValue({ released: true });
 		// Default: chat-cooked reattach accepts and emits no events
@@ -1620,7 +1628,7 @@ describe("RuntimeDebugPanel", () => {
 		apiMocks.reattachRemoteAgentSessionStream.mockImplementation(
 			async (_name: string, _requestId: string, cb: typeof onEvent) => {
 				onEvent = cb;
-				return { found: true };
+				return { found: true, lastSeq: 0, replayedCount: 0, replayGap: null };
 			},
 		);
 
@@ -1654,6 +1662,7 @@ describe("RuntimeDebugPanel", () => {
 				"dev.box",
 				"req-attach-1",
 				expect.any(Function),
+				"hs-x",
 			);
 		});
 		// Live event log mounts as soon as streaming begins.
@@ -1678,6 +1687,9 @@ describe("RuntimeDebugPanel", () => {
 		// has ended" + does NOT mount the event log.
 		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValueOnce({
 			found: false,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		});
 		const user = userEvent.setup();
 		const remoteEntry: RuntimeEntry = {
@@ -1712,6 +1724,9 @@ describe("RuntimeDebugPanel", () => {
 	it("agent sessions section: stop button on a streaming row releases the subscription", async () => {
 		apiMocks.reattachRemoteAgentSessionStream.mockResolvedValue({
 			found: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		});
 		const user = userEvent.setup();
 		const remoteEntry: RuntimeEntry = {

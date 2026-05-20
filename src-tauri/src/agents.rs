@@ -12,7 +12,7 @@ mod builtin_claude_providers;
 mod catalog;
 pub(crate) mod claude_project_files;
 mod custom_providers;
-mod persistence;
+pub(crate) mod persistence;
 mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
@@ -1023,8 +1023,8 @@ mod tests {
                     .to_string(),
         };
 
-        let _ = persist_turn_message(&conn, &ctx, &turn1, "opus").unwrap();
-        let _ = persist_turn_message(&conn, &ctx, &turn2, "opus").unwrap();
+        let _ = persist_turn_message(&conn, &ctx, &turn1, "opus", None).unwrap();
+        let _ = persist_turn_message(&conn, &ctx, &turn2, "opus", None).unwrap();
 
         // Verify: 3 messages so far (user + 2 turns)
         let msg_count: i64 = conn
@@ -1115,7 +1115,7 @@ mod tests {
         //    the `while persisted < turns_len { persist_turn_message(...) }`
         //    loop in `streaming.rs`.
         for i in 0..acc.turns_len() {
-            persist_turn_message(&conn, &ctx, acc.turn_at(i), &ctx.model_id).unwrap();
+            persist_turn_message(&conn, &ctx, acc.turn_at(i), &ctx.model_id, None).unwrap();
         }
 
         // 4. Assert one-shot persistence: exactly one DB row per user

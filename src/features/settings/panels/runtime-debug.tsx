@@ -1889,11 +1889,19 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 	// operator sees actual assistant text, not raw JSON.
 	const chatStream = useChatReattachStream();
 
-	const handleReattachClick = async (requestId: string) => {
+	const handleReattachClick = async (session: RemoteAgentSession) => {
 		// Mirror the prior `attachMutation` UX: a notice on the
 		// notFound path so the user understands the panel state.
-		setBusyId(requestId);
-		await stream.start(runtimeName, requestId);
+		// Phase 24q-2: pass the session's `helmorSessionId` (when
+		// present) so the backend computes `since_seq` from the
+		// desktop's local DB high-water-mark, letting the daemon's
+		// journal replay close the gap.
+		setBusyId(session.requestId);
+		await stream.start(
+			runtimeName,
+			session.requestId,
+			session.helmorSessionId ?? undefined,
+		);
 		setBusyId(null);
 		void sessionsQuery.refetch();
 	};
@@ -2038,7 +2046,7 @@ function RemoteAgentSessionsSection({ entries }: { entries: RuntimeEntry[] }) {
 												if (isStreaming) {
 													void stream.stop();
 												} else {
-													void handleReattachClick(session.requestId);
+													void handleReattachClick(session);
 												}
 											}}
 											onChatPreview={() => {
