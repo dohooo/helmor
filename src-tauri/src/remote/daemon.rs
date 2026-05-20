@@ -197,6 +197,12 @@ pub fn run_daemon() -> Result<()> {
         tracing::warn!(error = %err, "daemon: failed to write pid file (continuing)");
     }
 
+    // Track E4: stamp this startup into the crash-history file so the
+    // `runtime.metrics` RPC can surface "daemon crashed N times in
+    // 5 min" warnings on the desktop. Best-effort — a write failure
+    // logs but doesn't block startup.
+    super::server::crash_history::record_startup();
+
     let socket_path = default_socket_path()?;
     if socket_path.exists() {
         let _ = std::fs::remove_file(&socket_path);

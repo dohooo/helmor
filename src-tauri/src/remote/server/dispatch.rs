@@ -13,9 +13,9 @@ use serde_json::Value;
 
 use crate::remote::methods::{
     AgentAbortMethod, AgentAttachMethod, AgentListMethod, AgentSendMethod, AgentSetAuthMethod,
-    DaemonTailLogMethod, InitializeMethod, Method, PingMethod, RpcMethod, TerminalAttachMethod,
-    TerminalCloseMethod, TerminalListMethod, TerminalOpenMethod, TerminalResizeMethod,
-    TerminalWriteMethod, WorkspaceBranchInfoMethod, WorkspaceChangesMethod,
+    DaemonTailLogMethod, InitializeMethod, Method, PingMethod, RpcMethod, RuntimeMetricsMethod,
+    TerminalAttachMethod, TerminalCloseMethod, TerminalListMethod, TerminalOpenMethod,
+    TerminalResizeMethod, TerminalWriteMethod, WorkspaceBranchInfoMethod, WorkspaceChangesMethod,
     WorkspaceFileTreeMethod, WorkspaceMutateFileMethod, WorkspaceReadFileAtRefMethod,
     WorkspaceReadFileMethod, WorkspaceSearchMethod, WorkspaceStartWatchMethod,
     WorkspaceStatFileMethod, WorkspaceStatusMethod, WorkspaceStopWatchMethod,
@@ -27,12 +27,12 @@ use crate::remote::protocol::{
 use super::handlers::{
     handle_agent_abort, handle_agent_attach, handle_agent_list, handle_agent_send,
     handle_agent_set_auth, handle_daemon_tail_log, handle_initialize, handle_ping,
-    handle_terminal_attach, handle_terminal_close, handle_terminal_list, handle_terminal_open,
-    handle_terminal_resize, handle_terminal_write, handle_workspace_branch_info,
-    handle_workspace_changes, handle_workspace_file_tree, handle_workspace_mutate_file,
-    handle_workspace_read_file, handle_workspace_read_file_at_ref, handle_workspace_search,
-    handle_workspace_start_watch, handle_workspace_stat_file, handle_workspace_status,
-    handle_workspace_stop_watch,
+    handle_runtime_metrics, handle_terminal_attach, handle_terminal_close, handle_terminal_list,
+    handle_terminal_open, handle_terminal_resize, handle_terminal_write,
+    handle_workspace_branch_info, handle_workspace_changes, handle_workspace_file_tree,
+    handle_workspace_mutate_file, handle_workspace_read_file, handle_workspace_read_file_at_ref,
+    handle_workspace_search, handle_workspace_start_watch, handle_workspace_stat_file,
+    handle_workspace_status, handle_workspace_stop_watch,
 };
 use super::ServerContext;
 
@@ -62,6 +62,11 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         );
     }
 
+    // Track E2: record per-method latency + outcome around every
+    // handler call. The dispatcher is the natural seam — every
+    // method funnels through this match, so a single timing scope
+    // covers the whole catalog uniformly.
+    let started_at = std::time::Instant::now();
     let outcome: Result<Value, JsonRpcError> = match method {
         Method::Initialize => {
             handle::<InitializeMethod, _>(req.params, |params| handle_initialize(ctx, params))
@@ -144,7 +149,16 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::DaemonTailLog => {
             handle::<DaemonTailLogMethod, _>(req.params, handle_daemon_tail_log)
         }
+        Method::RuntimeMetrics => handle::<RuntimeMetricsMethod, _>(req.params, |params| {
+            handle_runtime_metrics(ctx, params)
+        }),
     };
+
+    // Track E2: record after dispatch so the latency captures the
+    // handler's full execution. `method.as_str()` returns a static
+    // string ref the metrics registry stores verbatim.
+    ctx.metrics()
+        .record(method.as_str(), started_at.elapsed(), outcome.is_err());
 
     let response = match outcome {
         Ok(result) => JsonRpcResponse::success(id.clone(), result),

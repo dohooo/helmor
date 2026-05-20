@@ -13,6 +13,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,7 @@ import {
 	connectRemoteRuntime,
 	disconnectRemoteRuntime,
 	getRemoteRuntimeDiagnostics,
+	getRemoteRuntimeMetrics,
 	getRuntimeHealth,
 	getWorkspaceBranchInfo,
 	getWorkspaceChanges,
@@ -50,6 +52,7 @@ import {
 	type RuntimeDiagnostics,
 	type RuntimeEntry,
 	type RuntimeHealth,
+	type RuntimeMetricsResult,
 	reconnectRemoteRuntime,
 	setRuntimeAgentAuth,
 	setWorkspaceRuntimeBinding,
@@ -116,6 +119,7 @@ export function RuntimeDebugPanel() {
 			<SetAgentAuthSection entries={entries} />
 			<RemoteAgentSessionsSection entries={entries} />
 			<DaemonLogSection entries={entries} />
+			<RuntimeMetricsSection entries={entries} />
 			<RemotePortForwardSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
@@ -2511,7 +2515,7 @@ function DaemonLogSection({ entries }: { entries: RuntimeEntry[] }) {
 								onClick={() => logQuery.refetch()}
 								data-testid="daemon-log-refresh"
 							>
-								{logQuery.isFetching ? "Refreshing…" : "Refresh"}
+								{logQuery.isFetching ? "Refreshing…" : "Refresh log"}
 							</Button>
 						</div>
 						{logQuery.error ? (
@@ -2549,6 +2553,179 @@ function formatErrorMessage(err: unknown): string | null {
 	if (err instanceof Error) return err.message;
 	if (typeof err === "string") return err;
 	return null;
+}
+
+/// Track E2 + E4: per-method RPC counters + latency percentiles +
+/// "crashed N times in 5 min" warning when the daemon respawns
+/// repeatedly. Also doubles as the source for Track E3's "Copy
+/// diagnostics" button: serialises a snapshot of everything the
+/// operator might paste into a support thread.
+function RuntimeMetricsSection({ entries }: { entries: RuntimeEntry[] }) {
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	const [selected, setSelected] = useState<string>("");
+	const runtime =
+		selected && remotes.some((r) => r.name === selected)
+			? selected
+			: (remotes[0]?.name ?? "");
+
+	const metricsQuery = useQuery({
+		queryKey: ["remote-runtime-metrics", runtime],
+		queryFn: () => getRemoteRuntimeMetrics(runtime),
+		enabled: runtime !== "",
+		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+
+	const data: RuntimeMetricsResult | undefined = metricsQuery.data;
+	const crashCount = data?.recentStartsMs.length ?? 0;
+	const showCrashWarning = crashCount >= 3;
+
+	const handleCopy = async () => {
+		if (!data) return;
+		const payload = {
+			runtime,
+			capturedAtMs: Date.now(),
+			uptimeSecs: data.uptimeSecs,
+			recentStartsMs: data.recentStartsMs,
+			methods: data.methods,
+		};
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+			toast.success("Diagnostics copied to clipboard");
+		} catch (err) {
+			toast.error(formatErrorMessage(err) ?? "Copy failed");
+		}
+	};
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Plug2 className="size-3.5" strokeWidth={1.8} />}
+				title="Runtime metrics"
+				description="Per-method RPC counters + latency percentiles + recent daemon restart timestamps. Copy button serialises a JSON blob you can paste into a support thread."
+			/>
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remotes.length === 0 ? (
+					<SettingsNotice tone="info">
+						Connect a remote runtime to view its metrics.
+					</SettingsNotice>
+				) : (
+					<>
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)_auto_auto] sm:items-center">
+							<Label htmlFor="rt-metrics-runtime" className="text-xs">
+								Runtime
+							</Label>
+							<select
+								id="rt-metrics-runtime"
+								className="h-7 rounded border border-border bg-background px-2 text-xs"
+								value={runtime}
+								onChange={(e) => setSelected(e.target.value)}
+								data-testid="runtime-metrics-runtime-select"
+							>
+								{remotes.map((r) => (
+									<option key={r.name} value={r.name}>
+										{r.name}
+									</option>
+								))}
+							</select>
+							<Button
+								size="sm"
+								disabled={runtime === "" || metricsQuery.isFetching}
+								onClick={() => metricsQuery.refetch()}
+								data-testid="runtime-metrics-refresh"
+							>
+								{metricsQuery.isFetching ? "Refreshing…" : "Refresh metrics"}
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={!data}
+								onClick={handleCopy}
+								data-testid="runtime-metrics-copy"
+							>
+								Copy diagnostics
+							</Button>
+						</div>
+						{metricsQuery.error ? (
+							<SettingsNotice tone="error">
+								{formatErrorMessage(metricsQuery.error) ??
+									"Failed to read metrics."}
+							</SettingsNotice>
+						) : null}
+						{showCrashWarning ? (
+							<SettingsNotice
+								tone="error"
+								data-testid="runtime-metrics-crash-warning"
+							>
+								Remote daemon has restarted {crashCount} times in the last 5 min
+								— investigate the daemon log or the host's process supervisor.
+							</SettingsNotice>
+						) : null}
+						{data ? (
+							<>
+								<div className="text-[10px] text-muted-foreground">
+									Uptime{" "}
+									<span className="font-mono">
+										{formatUptime(data.uptimeSecs)}
+									</span>{" "}
+									· {data.methods.length} method
+									{data.methods.length === 1 ? "" : "s"}
+								</div>
+								{data.methods.length === 0 ? (
+									<p className="text-[11px] text-muted-foreground">
+										No RPC traffic recorded yet.
+									</p>
+								) : (
+									<table
+										className="w-full text-[11px]"
+										data-testid="runtime-metrics-table"
+									>
+										<thead>
+											<tr className="border-b border-border/40 text-left text-muted-foreground">
+												<th className="py-1 pr-3 font-medium">Method</th>
+												<th className="py-1 pr-3 font-medium">Count</th>
+												<th className="py-1 pr-3 font-medium">Errors</th>
+												<th className="py-1 pr-3 font-medium">p50 ms</th>
+												<th className="py-1 pr-3 font-medium">p99 ms</th>
+												<th className="py-1 font-medium">last ms</th>
+											</tr>
+										</thead>
+										<tbody>
+											{data.methods.map((m) => (
+												<tr
+													key={m.method}
+													className="border-b border-border/20 last:border-b-0"
+												>
+													<td className="py-1 pr-3 font-mono">{m.method}</td>
+													<td className="py-1 pr-3">{m.count}</td>
+													<td
+														className={`py-1 pr-3 ${m.errorCount > 0 ? "text-rose-300" : ""}`}
+													>
+														{m.errorCount}
+													</td>
+													<td className="py-1 pr-3">{m.p50Ms}</td>
+													<td className="py-1 pr-3">{m.p99Ms}</td>
+													<td className="py-1">{m.lastSampleMs ?? "—"}</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								)}
+							</>
+						) : null}
+					</>
+				)}
+			</div>
+		</section>
+	);
+}
+
+function formatUptime(secs: number): string {
+	if (secs < 60) return `${secs}s`;
+	const mins = Math.floor(secs / 60);
+	if (mins < 60) return `${mins}m ${secs % 60}s`;
+	const hrs = Math.floor(mins / 60);
+	return `${hrs}h ${mins % 60}m`;
 }
 
 function RemotePortForwardSection({ entries }: { entries: RuntimeEntry[] }) {

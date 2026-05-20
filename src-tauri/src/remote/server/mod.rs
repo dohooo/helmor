@@ -15,8 +15,10 @@
 //! loopback test or an in-process integration probe without spinning
 //! up a real process.
 
+pub mod crash_history;
 mod dispatch;
 mod handlers;
+pub mod metrics;
 mod notifier;
 
 #[cfg(test)]
@@ -77,6 +79,15 @@ pub struct ServerContext {
     /// so a reconnecting client starts with an empty registry and
     /// re-issues `workspace.startWatch` for whatever it cares about.
     watch_state: Arc<RemoteWatchState>,
+    /// Track E2: per-method RPC counters + latency samples. Shared
+    /// across connections so the daemon's full traffic profile is
+    /// visible from any client's `runtime.metrics` call.
+    metrics: Arc<metrics::RpcMetrics>,
+    /// Track E2: snapshot of context creation time, used to report
+    /// daemon uptime alongside the metrics result. `Instant`-based
+    /// so we don't depend on wall-clock corrections during the
+    /// daemon's lifetime.
+    started_at: std::time::Instant,
 }
 
 impl ServerContext {
@@ -95,6 +106,8 @@ impl ServerContext {
                 "agent runtime not configured for this context",
             )),
             watch_state: Arc::new(RemoteWatchState::new()),
+            metrics: Arc::new(metrics::RpcMetrics::new()),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -116,6 +129,8 @@ impl ServerContext {
                 "agent runtime not configured for this context",
             )),
             watch_state: Arc::new(RemoteWatchState::new()),
+            metrics: Arc::new(metrics::RpcMetrics::new()),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -172,6 +187,20 @@ impl ServerContext {
     /// with an empty set and re-issues watches as needed.
     pub fn watch_state(&self) -> &Arc<RemoteWatchState> {
         &self.watch_state
+    }
+
+    /// Track E2: shared RPC metrics registry. The dispatcher records
+    /// each call's latency + outcome here; the `runtime.metrics`
+    /// handler snapshots it.
+    pub fn metrics(&self) -> &Arc<metrics::RpcMetrics> {
+        &self.metrics
+    }
+
+    /// Track E2: daemon uptime since this context was constructed.
+    /// Surfaced in `runtime.metrics` so the desktop can compute
+    /// calls/sec without needing its own wall-clock anchor.
+    pub fn uptime(&self) -> std::time::Duration {
+        self.started_at.elapsed()
     }
 
     /// Server binary version — surfaced in `initialize` responses.

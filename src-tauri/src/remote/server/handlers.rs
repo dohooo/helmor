@@ -13,16 +13,17 @@ use crate::remote::methods::{
     AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult, AgentListParams,
     AgentListResult, AgentSendParams, AgentSendResult, AgentSetAuthParams, AgentSetAuthResult,
     DaemonTailLogParams, DaemonTailLogResult, InitializeParams, InitializeResult, PingParams,
-    PingResult, TerminalAttachParams, TerminalAttachResult, TerminalCloseParams,
-    TerminalCloseResult, TerminalListParams, TerminalListResult, TerminalOpenParams,
-    TerminalOpenResult, TerminalResizeParams, TerminalResizeResult, TerminalWriteParams,
-    TerminalWriteResult, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
-    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
-    WorkspaceFileTreeResult, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
-    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileParams,
-    WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStartWatchParams,
-    WorkspaceStartWatchResult, WorkspaceStatFileParams, WorkspaceStatusParams,
-    WorkspaceStatusResult, WorkspaceStopWatchParams, WorkspaceStopWatchResult,
+    PingResult, RuntimeMetricsParams, RuntimeMetricsResult, TerminalAttachParams,
+    TerminalAttachResult, TerminalCloseParams, TerminalCloseResult, TerminalListParams,
+    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalResizeParams,
+    TerminalResizeResult, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams,
+    WorkspaceBranchInfoResult, WorkspaceChangesParams, WorkspaceChangesResult,
+    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
+    WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
+    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
+    WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
+    WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
+    WorkspaceStopWatchResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -62,6 +63,21 @@ pub(super) fn handle_ping(params: PingParams) -> Result<PingResult, JsonRpcError
     Ok(PingResult {
         counter: params.counter,
         server_time: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+/// Track E2 + E4: snapshot the daemon's per-method RPC metrics and
+/// recent restart timestamps. The desktop's runtime debug panel
+/// renders the metrics table + a "crashed N times in 5 min" warning
+/// when `recent_starts_ms` exceeds the operator-configured threshold.
+pub(super) fn handle_runtime_metrics(
+    ctx: &ServerContext,
+    _params: RuntimeMetricsParams,
+) -> Result<RuntimeMetricsResult, JsonRpcError> {
+    Ok(RuntimeMetricsResult {
+        methods: ctx.metrics().snapshot(),
+        uptime_secs: ctx.uptime().as_secs(),
+        recent_starts_ms: crate::remote::server::crash_history::recent_starts_ms(5 * 60 * 1000),
     })
 }
 
