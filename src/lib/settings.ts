@@ -4,7 +4,7 @@ import type { WorkspaceBranchIntent } from "./api";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export type DarkTheme =
+export type ColorTheme =
 	| "default"
 	| "midnight"
 	| "forest"
@@ -191,7 +191,10 @@ export type AppSettings = {
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
 	theme: ThemeMode;
-	darkTheme: DarkTheme;
+	/** Color preset applied when the effective mode is `light`. */
+	lightTheme: ColorTheme;
+	/** Color preset applied when the effective mode is `dark`. */
+	darkTheme: ColorTheme;
 	notifications: boolean;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
@@ -301,6 +304,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	terminalFontFamily: null,
 	usePointerCursors: true,
 	theme: "system",
+	lightTheme: "default",
 	darkTheme: "default",
 	notifications: true,
 	terminalHoverExpansion: true,
@@ -345,6 +349,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const LIGHT_THEME_STORAGE_KEY = "helmor-light-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
 export const SIDEBAR_REPO_FILTER_STORAGE_KEY = "helmor-sidebar-repo-filter";
@@ -358,6 +363,7 @@ export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
  *  on the async SQLite round-trip. */
 const LOCALSTORAGE_KEYS = {
 	theme: THEME_STORAGE_KEY,
+	lightTheme: LIGHT_THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
 	sidebarGrouping: SIDEBAR_GROUPING_STORAGE_KEY,
 	sidebarRepoFilterIds: SIDEBAR_REPO_FILTER_STORAGE_KEY,
@@ -377,7 +383,7 @@ const VALID_SIDEBAR_SORTS: readonly SidebarSort[] = [
 	"createdAt",
 ];
 
-export const VALID_DARK_THEMES: readonly DarkTheme[] = [
+export const VALID_COLOR_THEMES: readonly ColorTheme[] = [
 	"default",
 	"midnight",
 	"forest",
@@ -407,13 +413,22 @@ function readLocalStorageString(key: string): string | null {
 	return v && v.length > 0 ? v : null;
 }
 
+function readColorTheme(key: string, fallback: ColorTheme): ColorTheme {
+	const raw = readLocalStorageString(key);
+	return VALID_COLOR_THEMES.includes(raw as ColorTheme)
+		? (raw as ColorTheme)
+		: fallback;
+}
+
 export function getPreloadedSettings(): AppSettings {
-	const darkTheme = (() => {
-		const raw = readLocalStorageString(DARK_THEME_STORAGE_KEY);
-		return VALID_DARK_THEMES.includes(raw as DarkTheme)
-			? (raw as DarkTheme)
-			: DEFAULT_SETTINGS.darkTheme;
-	})();
+	const lightTheme = readColorTheme(
+		LIGHT_THEME_STORAGE_KEY,
+		DEFAULT_SETTINGS.lightTheme,
+	);
+	const darkTheme = readColorTheme(
+		DARK_THEME_STORAGE_KEY,
+		DEFAULT_SETTINGS.darkTheme,
+	);
 	const sidebarGrouping = (() => {
 		const raw = readLocalStorageString(SIDEBAR_GROUPING_STORAGE_KEY);
 		return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)
@@ -429,6 +444,7 @@ export function getPreloadedSettings(): AppSettings {
 	return {
 		...DEFAULT_SETTINGS,
 		theme: getPreloadedTheme(),
+		lightTheme,
 		darkTheme,
 		sidebarGrouping,
 		sidebarRepoFilterIds: parseSidebarRepoFilterIds(
@@ -979,12 +995,14 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
-			darkTheme: (() => {
-				const raw = localStorage.getItem(DARK_THEME_STORAGE_KEY);
-				return VALID_DARK_THEMES.includes(raw as DarkTheme)
-					? (raw as DarkTheme)
-					: DEFAULT_SETTINGS.darkTheme;
-			})(),
+			lightTheme: readColorTheme(
+				LIGHT_THEME_STORAGE_KEY,
+				DEFAULT_SETTINGS.lightTheme,
+			),
+			darkTheme: readColorTheme(
+				DARK_THEME_STORAGE_KEY,
+				DEFAULT_SETTINGS.darkTheme,
+			),
 			sidebarGrouping: (() => {
 				const raw = localStorage.getItem(SIDEBAR_GROUPING_STORAGE_KEY);
 				return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)

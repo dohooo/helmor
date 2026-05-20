@@ -856,6 +856,7 @@ function AppShell({
 
 	useThemeApplication({
 		theme: appSettings.theme,
+		lightTheme: appSettings.lightTheme,
 		darkTheme: appSettings.darkTheme,
 		uiFontFamily: appSettings.uiFontFamily,
 		codeFontFamily: appSettings.codeFontFamily,

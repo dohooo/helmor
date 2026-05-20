@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	type AppSettings,
-	type DarkTheme,
+	type ColorTheme,
 	resolveTheme,
 	type ThemeMode,
 } from "@/lib/settings";
@@ -20,7 +20,7 @@ import { FontSizeStepper } from "../components/font-size-stepper";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
 type ColorThemeOption = {
-	id: DarkTheme;
+	id: ColorTheme;
 	label: string;
 	bg: string;
 	accent: string;
@@ -31,7 +31,7 @@ type ColorThemeOption = {
 /// Swatch tints for the Color Theme picker. Two stops per side so each
 /// preset reads as a distinct gradient circle — vivid in dark mode,
 /// softer in light mode.
-const DARK_THEME_OPTIONS: readonly ColorThemeOption[] = [
+const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	{
 		id: "default",
 		label: "Default",
@@ -135,13 +135,13 @@ function ColorThemePicker({
 	isLight,
 	onChange,
 }: {
-	value: DarkTheme;
+	value: ColorTheme;
 	isLight: boolean;
-	onChange: (next: DarkTheme) => void;
+	onChange: (next: ColorTheme) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const current =
-		DARK_THEME_OPTIONS.find((o) => o.id === value) ?? DARK_THEME_OPTIONS[0];
+		COLOR_THEME_OPTIONS.find((o) => o.id === value) ?? COLOR_THEME_OPTIONS[0];
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
@@ -163,7 +163,7 @@ function ColorThemePicker({
 			</PopoverTrigger>
 			<PopoverContent align="end" sideOffset={4} className="w-[220px] p-1">
 				<div role="listbox" className="flex flex-col">
-					{DARK_THEME_OPTIONS.map((opt) => {
+					{COLOR_THEME_OPTIONS.map((opt) => {
 						const selected = opt.id === value;
 						return (
 							<button
@@ -226,7 +226,13 @@ export function AppearancePanel({
 	settings,
 	updateSettings,
 }: AppearancePanelProps) {
+	// The picker edits the preset slot that matches the current effective
+	// mode — `lightTheme` and `darkTheme` are persisted independently, so
+	// flipping Theme between Light/Dark/System swaps which slot you see.
 	const isLight = resolveTheme(settings.theme) === "light";
+	const activeColorTheme = isLight ? settings.lightTheme : settings.darkTheme;
+	const updateActiveColorTheme = (next: ColorTheme) =>
+		updateSettings(isLight ? { lightTheme: next } : { darkTheme: next });
 
 	// Re-sample the live font stacks each time the user changes a
 	// font-affecting setting so the placeholders show what's actually
@@ -282,9 +288,9 @@ export function AppearancePanel({
 			{/* ── Color theme ──────────────────────────────────────────────── */}
 			<SettingsRow title="Color Theme" description="Choose an accent palette">
 				<ColorThemePicker
-					value={settings.darkTheme}
+					value={activeColorTheme}
 					isLight={isLight}
-					onChange={(next) => updateSettings({ darkTheme: next })}
+					onChange={updateActiveColorTheme}
 				/>
 			</SettingsRow>
 
