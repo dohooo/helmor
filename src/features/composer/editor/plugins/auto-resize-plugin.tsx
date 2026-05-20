@@ -16,13 +16,16 @@ export function AutoResizePlugin({
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => {
-		return editor.registerUpdateListener(() => {
+		return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
+			// Skip selection-only updates (click, arrow keys). Re-measuring on
+			// every selection change toggles overflow on/off via height="auto",
+			// which clobbers scrollTop and breaks native caret-into-view scroll.
+			if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
 			const rootEl = editor.getRootElement();
 			if (!rootEl) return;
 			rootEl.style.height = "auto";
 			const next = Math.min(rootEl.scrollHeight, maxHeight);
 			rootEl.style.height = `${Math.max(next, minHeight)}px`;
-			rootEl.scrollTop = rootEl.scrollHeight;
 		});
 	}, [editor, minHeight, maxHeight]);
 
