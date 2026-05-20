@@ -41,6 +41,7 @@ pub mod registry;
 pub mod runtime;
 pub mod server;
 pub mod ssh_config;
+pub mod ssh_diagnostics;
 pub mod terminal;
 pub mod transport;
 pub mod watch;

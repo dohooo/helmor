@@ -933,6 +933,38 @@ export async function listSshHosts(): Promise<string[]> {
 }
 
 /**
+ * Track B3: an identity key file the desktop can see in
+ * `$HOME/.ssh/`. Surfaced in the Add-Server wizard so the operator
+ * can confirm ssh has keys to offer.
+ */
+export type SshIdentity = {
+	name: string;
+	publicKeyPath: string;
+	hasPrivateKey: boolean;
+};
+
+export async function listSshIdentities(): Promise<SshIdentity[]> {
+	return invoke<SshIdentity[]>("list_ssh_identities");
+}
+
+/**
+ * Track B4: SSH agent reachability snapshot. The frontend renders
+ * one of three chips based on `state`:
+ * - `available` — agent answered; `keysLoaded` may be 0.
+ * - `notConfigured` — `SSH_AUTH_SOCK` unset (most often a
+ *   Finder-launched desktop without a shell-exported agent).
+ * - `stale` — socket set but unreachable; agent likely killed.
+ */
+export type SshAgentStatus =
+	| { state: "available"; socketPath: string; keysLoaded: number }
+	| { state: "notConfigured" }
+	| { state: "stale"; socketPath: string; reason: string };
+
+export async function getSshAgentStatus(): Promise<SshAgentStatus> {
+	return invoke<SshAgentStatus>("ssh_agent_status");
+}
+
+/**
  * One persisted "this workspace routes through that runtime" pin.
  * `runtimeName` is a string key into the runtime registry (not a
  * validated reference) — a binding can outlive its target runtime

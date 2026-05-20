@@ -20,6 +20,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plug2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { SshDiagnostics } from "@/components/ssh-diagnostics";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -173,6 +174,7 @@ export function AddRemoteServerWizard({
 								</datalist>
 							)}
 						</div>
+						<SshDiagnostics enabled={open} />
 						<div className="flex justify-end gap-2">
 							<Button
 								variant="ghost"

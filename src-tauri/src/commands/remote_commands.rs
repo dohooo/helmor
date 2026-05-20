@@ -1466,6 +1466,24 @@ pub fn list_ssh_hosts() -> CmdResult<Vec<String>> {
     Ok(crate::remote::ssh_config::list_user_ssh_hosts())
 }
 
+/// Track B3: enumerate the identity keys the desktop can see in
+/// `$HOME/.ssh/`. Returned sorted by file stem so the wizard renders
+/// a stable list. Empty list is fine — surfaces as a "no keys found"
+/// hint in the UI.
+#[tauri::command]
+pub fn list_ssh_identities() -> CmdResult<Vec<crate::remote::ssh_diagnostics::SshIdentity>> {
+    Ok(crate::remote::ssh_diagnostics::list_ssh_identities())
+}
+
+/// Track B4: probe the desktop's SSH agent. Returns one of three
+/// states (`available` / `notConfigured` / `stale`) so the wizard
+/// can render a chip the user can act on without digging into log
+/// files.
+#[tauri::command]
+pub fn ssh_agent_status() -> CmdResult<crate::remote::ssh_diagnostics::SshAgentStatus> {
+    Ok(crate::remote::ssh_diagnostics::ssh_agent_status())
+}
+
 #[tauri::command]
 pub fn list_remote_runtimes(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,

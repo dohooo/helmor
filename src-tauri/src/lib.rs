@@ -440,6 +440,8 @@ pub fn run() {
             commands::remote_commands::list_remote_runtimes,
             commands::remote_commands::list_remote_terminals,
             commands::remote_commands::list_ssh_hosts,
+            commands::remote_commands::list_ssh_identities,
+            commands::remote_commands::ssh_agent_status,
             commands::remote_commands::list_workspace_runtime_bindings,
             commands::remote_commands::open_remote_terminal,
             commands::remote_commands::reconnect_remote_runtime,
