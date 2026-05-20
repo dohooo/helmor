@@ -118,7 +118,6 @@ export function WorkspaceHeaderActions({
 										pushWorkspaceToast(String(e), "Failed to open Finder"),
 									);
 								}}
-								className="flex items-center gap-2"
 							>
 								<FolderOpen className="shrink-0" strokeWidth={1.8} />
 								<span className="flex-1">Finder</span>
@@ -140,7 +139,6 @@ export function WorkspaceHeaderActions({
 												),
 										);
 									}}
-									className="flex items-center gap-2"
 								>
 									<EditorIcon editorId={editor.id} className="shrink-0" />
 									<span className="flex-1">{editor.name}</span>

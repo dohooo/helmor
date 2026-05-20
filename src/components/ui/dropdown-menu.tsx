@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 // Shared classes for every interactive row inside DropdownMenu / ContextMenu.
 const dropdownMenuItemClasses =
-	"gap-1.5 py-1 text-ui leading-5 [&_svg:not([class*='size-'])]:size-3.5";
+	"gap-1.5 py-1 text-ui leading-4 [&_svg:not([class*='size-'])]:size-3.5";
 
 function DropdownMenu({
 	...props

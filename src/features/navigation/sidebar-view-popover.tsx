@@ -236,7 +236,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-ui hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui leading-4 hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() =>
 									onGroupingChange?.(option.value as SidebarGrouping)
 								}
@@ -264,7 +264,7 @@ export function SidebarViewPopover({
 								type="button"
 								role="radio"
 								aria-checked={checked}
-								className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-ui hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+								className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui leading-4 hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
 								onClick={() => onSortChange?.(option.value)}
 							>
 								<Icon className="size-3.5 shrink-0 text-muted-foreground" />

@@ -1,5 +1,6 @@
 import {
 	ChevronDown,
+	FolderPlus,
 	GitBranch,
 	GitBranchPlus,
 	GitMerge,
@@ -20,6 +21,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -45,6 +47,7 @@ import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
+import { publishShellEvent } from "@/shell/event-bus";
 import { CreateBranchDialog } from "./create-branch-dialog";
 
 const PREVIEW_TRAFFIC_LIGHT_SPACER_WIDTH = 52;
@@ -409,7 +412,7 @@ export function WorkspaceStartPage({
 									<button
 										type="button"
 										disabled={repositories.length === 0}
-										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{selectedRepository ? (
 											<>
@@ -466,7 +469,7 @@ export function WorkspaceStartPage({
 											// Chat mode is always enabled (no repo needed);
 											// other modes require a selected repository.
 											disabled={mode !== "chat" && !selectedRepository}
-											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+											className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											{mode === "local" ? (
 												<Laptop
@@ -512,30 +515,58 @@ export function WorkspaceStartPage({
 								className="w-fit min-w-36"
 								onCloseAutoFocus={(event) => event.preventDefault()}
 							>
-								<DropdownMenuItem
-									onClick={() => onModeChange("local")}
-									className="gap-2 pr-3"
-									data-checked={mode === "local" ? "true" : undefined}
-								>
-									<Laptop className="size-3.5" strokeWidth={1.8} />
-									<span>Work locally</span>
-								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={() => onModeChange("worktree")}
-									className="gap-2 pr-3"
-									data-checked={mode === "worktree" ? "true" : undefined}
-								>
-									<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
-									<span>New worktree</span>
-								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={() => onModeChange("chat")}
-									className="gap-2 pr-3"
-									data-checked={mode === "chat" ? "true" : undefined}
-								>
-									<MessageCircle className="size-3.5" strokeWidth={1.8} />
-									<span>Just chat</span>
-								</DropdownMenuItem>
+								{repositories.length === 0 ? (
+									// No repos → swap the repo-bound modes for an "Add a
+									// repository" CTA that fires `helmor:open-add-repository`
+									// (sidebar listener opens its add-repo sub-menu).
+									<>
+										<DropdownMenuItem
+											onClick={() =>
+												publishShellEvent({ type: "open-add-repository" })
+											}
+											className="gap-2 pr-3"
+										>
+											<FolderPlus className="size-3.5" strokeWidth={1.8} />
+											<span>Add a repository…</span>
+										</DropdownMenuItem>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem
+											onClick={() => onModeChange("chat")}
+											className="gap-2 pr-3"
+											data-checked="true"
+										>
+											<MessageCircle className="size-3.5" strokeWidth={1.8} />
+											<span>Just chat</span>
+										</DropdownMenuItem>
+									</>
+								) : (
+									<>
+										<DropdownMenuItem
+											onClick={() => onModeChange("local")}
+											className="gap-2 pr-3"
+											data-checked={mode === "local" ? "true" : undefined}
+										>
+											<Laptop className="size-3.5" strokeWidth={1.8} />
+											<span>Work locally</span>
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											onClick={() => onModeChange("worktree")}
+											className="gap-2 pr-3"
+											data-checked={mode === "worktree" ? "true" : undefined}
+										>
+											<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
+											<span>New worktree</span>
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											onClick={() => onModeChange("chat")}
+											className="gap-2 pr-3"
+											data-checked={mode === "chat" ? "true" : undefined}
+										>
+											<MessageCircle className="size-3.5" strokeWidth={1.8} />
+											<span>Just chat</span>
+										</DropdownMenuItem>
+									</>
+								)}
 							</DropdownMenuContent>
 						</DropdownMenu>
 						{/* Branch intent picker. Worktree mode only. */}
@@ -547,7 +578,7 @@ export function WorkspaceStartPage({
 											<button
 												type="button"
 												disabled={!selectedRepository}
-												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+												className="inline-flex h-7 cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												{branchIntent === "use_branch" ? (
 													<GitMerge
@@ -655,7 +686,7 @@ export function WorkspaceStartPage({
 											<button
 												type="button"
 												disabled={!selectedRepository}
-												className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-small font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+												className="inline-flex h-7 max-w-[13rem] cursor-interactive items-center gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 											>
 												<GitBranch
 													className="size-3.5 shrink-0"
