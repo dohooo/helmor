@@ -206,15 +206,21 @@ export function createStreamEventDispatcher(
 			deps.clearFastPrelude(deps.contextKey);
 
 			if (event.kind === "done") {
-				const sid = event.sessionId ?? deps.targetSessionId;
-				if (sid && deps.targetWorkspaceId) {
-					deps.onSessionCompleted?.(sid, deps.targetWorkspaceId);
+				// `event.sessionId` is the *provider* session id (claude/codex
+				// resume token) — only non-null from the second turn onward,
+				// after the SDK has assigned a thread. Read-state tracking
+				// keys off the helmor session id, so feeding the provider id
+				// here would address a row that doesn't exist and
+				// `mark_session_*` would silently no-op (drops the unread dot
+				// on every follow-up turn).
+				if (deps.targetWorkspaceId) {
+					deps.onSessionCompleted?.(
+						deps.targetSessionId,
+						deps.targetWorkspaceId,
+					);
 				}
-			} else {
-				const sid = event.sessionId ?? deps.targetSessionId;
-				if (sid && deps.targetWorkspaceId) {
-					deps.onSessionAborted?.(sid, deps.targetWorkspaceId);
-				}
+			} else if (deps.targetWorkspaceId) {
+				deps.onSessionAborted?.(deps.targetSessionId, deps.targetWorkspaceId);
 			}
 
 			void deps.queryClient.invalidateQueries({

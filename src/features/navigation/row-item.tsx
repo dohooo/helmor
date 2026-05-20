@@ -435,6 +435,30 @@ export const WorkspaceRowItem = memo(
 					);
 				})()}
 
+				{/* Chat rows have no branch icon / avatar to carry the unread or
+				 * interaction-required dot, so park it absolute-positioned over
+				 * the archive icon slot. On hover/focus it fades out and the
+				 * actions cluster fades in, so the archive icon visually
+				 * replaces it without any layout shift. */}
+				{row.mode === "chat" && showStatusDot && !hideRepoAvatar ? (
+					<span
+						aria-hidden="false"
+						className={cn(
+							"pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5",
+							hasActionHandler &&
+								"group-hover/row:hidden group-focus-within/row:hidden",
+							isBusy && "hidden",
+						)}
+					>
+						<span className="flex size-5 items-center justify-center">
+							<span
+								aria-label={statusDotLabel ?? undefined}
+								className={cn("size-1.5 rounded-full", statusDotClassName)}
+							/>
+						</span>
+					</span>
+				) : null}
+
 				{hasActionHandler ? (
 					<span
 						data-workspace-row-actions="true"
