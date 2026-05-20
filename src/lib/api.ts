@@ -1212,6 +1212,37 @@ export async function listRemoteAgentSessions(
 }
 
 /**
+ * Result of {@link tailRemoteDaemonLog}.
+ *
+ * Track E1: surface the remote daemon's trailing log lines so an
+ * operator can diagnose without an SSH terminal. Mirrors the
+ * `DaemonTailLogResult` Rust struct field-for-field.
+ */
+export type DaemonTailLogResult = {
+	/** Path the daemon read from (e.g. `$HOME/.helmor/server/daemon.log`). */
+	logPath: string;
+	/** Trailing lines, oldest first. Newlines stripped. */
+	lines: string[];
+	/** `true` when the file has more content than was returned. */
+	truncated: boolean;
+};
+
+/**
+ * Read up to `maxLines` (capped at 1000 server-side) trailing log
+ * lines from the remote daemon. The local runtime errors — there's
+ * no remote daemon log to read.
+ */
+export async function tailRemoteDaemonLog(
+	name: string,
+	maxLines: number,
+): Promise<DaemonTailLogResult> {
+	return invoke<DaemonTailLogResult>("tail_remote_daemon_log", {
+		name,
+		maxLines,
+	});
+}
+
+/**
  * Abort an in-flight remote agent session by request id. The remote
  * sidecar emits a terminating `aborted` event that the daemon
  * broadcasts to any attached client; if no client is attached the

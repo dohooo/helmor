@@ -12,17 +12,17 @@ use std::sync::Arc;
 use crate::remote::methods::{
     AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult, AgentListParams,
     AgentListResult, AgentSendParams, AgentSendResult, AgentSetAuthParams, AgentSetAuthResult,
-    InitializeParams, InitializeResult, PingParams, PingResult, TerminalAttachParams,
-    TerminalAttachResult, TerminalCloseParams, TerminalCloseResult, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalResizeParams,
-    TerminalResizeResult, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams,
-    WorkspaceBranchInfoResult, WorkspaceChangesParams, WorkspaceChangesResult,
-    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
-    WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
-    WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
-    WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
-    WorkspaceStopWatchResult,
+    DaemonTailLogParams, DaemonTailLogResult, InitializeParams, InitializeResult, PingParams,
+    PingResult, TerminalAttachParams, TerminalAttachResult, TerminalCloseParams,
+    TerminalCloseResult, TerminalListParams, TerminalListResult, TerminalOpenParams,
+    TerminalOpenResult, TerminalResizeParams, TerminalResizeResult, TerminalWriteParams,
+    TerminalWriteResult, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
+    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
+    WorkspaceFileTreeResult, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
+    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileParams,
+    WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStartWatchParams,
+    WorkspaceStartWatchResult, WorkspaceStatFileParams, WorkspaceStatusParams,
+    WorkspaceStatusResult, WorkspaceStopWatchParams, WorkspaceStopWatchResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -62,6 +62,102 @@ pub(super) fn handle_ping(params: PingParams) -> Result<PingResult, JsonRpcError
     Ok(PingResult {
         counter: params.counter,
         server_time: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+/// Track E1: read the trailing `max_lines` lines of the daemon's
+/// log file. Capped at 1000 lines server-side so a runaway client
+/// can't ask for an unbounded payload. `truncated=true` signals the
+/// file has more content than the cap allowed.
+pub(super) fn handle_daemon_tail_log(
+    params: DaemonTailLogParams,
+) -> Result<DaemonTailLogResult, JsonRpcError> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    const HARD_LIMIT: u32 = 1000;
+    let max_lines = params.max_lines.min(HARD_LIMIT);
+
+    let path = match crate::remote::daemon::default_log_path() {
+        Ok(p) => p,
+        Err(err) => {
+            return Err(JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("daemon.tailLog: resolve log path: {err:#}"),
+            ));
+        }
+    };
+    let log_path = path.display().to_string();
+
+    // No file yet → return an empty tail rather than erroring. The
+    // daemon may simply not have logged anything in this session.
+    if !path.exists() {
+        return Ok(DaemonTailLogResult {
+            log_path,
+            lines: Vec::new(),
+            truncated: false,
+        });
+    }
+    if max_lines == 0 {
+        return Ok(DaemonTailLogResult {
+            log_path,
+            lines: Vec::new(),
+            truncated: true,
+        });
+    }
+
+    // Tail strategy: read the file via a buffered ring of the last
+    // `max_lines` lines. For typical daemon logs (KB to a few MB)
+    // this is fast enough + bounded in memory. A future
+    // optimisation could seek-from-end for huge logs.
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(err) => {
+            return Err(JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("daemon.tailLog: open {log_path}: {err}"),
+            ));
+        }
+    };
+    let file_len = file.seek(SeekFrom::End(0)).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("daemon.tailLog: stat {log_path}: {err}"),
+        )
+    })?;
+    file.seek(SeekFrom::Start(0)).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("daemon.tailLog: rewind {log_path}: {err}"),
+        )
+    })?;
+
+    let reader = BufReader::new(file);
+    let mut ring: std::collections::VecDeque<String> =
+        std::collections::VecDeque::with_capacity(max_lines as usize);
+    let mut total_lines: u64 = 0;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(err) => {
+                tracing::warn!(
+                    log_path = %log_path,
+                    error = %err,
+                    "daemon.tailLog: read error; returning partial tail",
+                );
+                break;
+            }
+        };
+        total_lines += 1;
+        if ring.len() == max_lines as usize {
+            ring.pop_front();
+        }
+        ring.push_back(line);
+    }
+    let truncated = total_lines > max_lines as u64 || file_len > 0 && ring.is_empty();
+    Ok(DaemonTailLogResult {
+        log_path,
+        lines: ring.into_iter().collect(),
+        truncated,
     })
 }
 

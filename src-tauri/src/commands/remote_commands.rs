@@ -783,6 +783,34 @@ fn list_remote_agent_sessions_inner(
     Ok(result.sessions)
 }
 
+/// Track E1: tail the remote daemon's log file. Drives the
+/// runtime-debug panel's log surface so an operator can diagnose
+/// without dropping to an SSH terminal.
+#[tauri::command]
+pub async fn tail_remote_daemon_log(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+    max_lines: u32,
+) -> CmdResult<crate::remote::methods::DaemonTailLogResult> {
+    let registry = Arc::clone(&registry);
+    run_blocking(move || tail_remote_daemon_log_inner(&registry, name, max_lines)).await
+}
+
+fn tail_remote_daemon_log_inner(
+    registry: &Arc<RuntimeRegistry>,
+    name: String,
+    max_lines: u32,
+) -> anyhow::Result<crate::remote::methods::DaemonTailLogResult> {
+    if name.trim().is_empty() {
+        bail!("runtime name must not be empty");
+    }
+    if name == LOCAL_RUNTIME_NAME {
+        bail!("daemon.tailLog is only available on registered remote runtimes (got `{name}`)");
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    runtime.daemon_tail_log(crate::remote::methods::DaemonTailLogParams { max_lines })
+}
+
 /// Forward an abort to the daemon's per-session sidecar. Used by the
 /// reattach UX to stop an orphaned remote turn the user no longer
 /// wants. The remote sidecar emits a terminating `aborted` event that

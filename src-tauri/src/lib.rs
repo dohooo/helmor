@@ -447,6 +447,7 @@ pub fn run() {
             commands::remote_commands::search_workspace,
             commands::remote_commands::set_runtime_agent_auth,
             commands::remote_commands::set_workspace_runtime_binding,
+            commands::remote_commands::tail_remote_daemon_log,
             commands::remote_commands::write_remote_terminal,
             commands::workspace_watch::start_workspace_watch,
             commands::workspace_watch::stop_workspace_watch,

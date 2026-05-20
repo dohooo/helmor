@@ -56,6 +56,7 @@ import {
 	startRemotePortForward,
 	stopRemotePortForward,
 	type TerminalEventNotification,
+	tailRemoteDaemonLog,
 	type WorkspaceBranchInfoResult,
 	type WorkspaceChangesResult,
 	type WorkspaceFileTreeResult,
@@ -114,6 +115,7 @@ export function RuntimeDebugPanel() {
 			<WorkspaceBindingsSection entries={entries} />
 			<SetAgentAuthSection entries={entries} />
 			<RemoteAgentSessionsSection entries={entries} />
+			<DaemonLogSection entries={entries} />
 			<RemotePortForwardSection entries={entries} />
 			<RemoteTerminalSection entries={entries} />
 		</div>
@@ -2449,6 +2451,104 @@ function formatAgo(ms: number): string {
 	if (min < 60) return `${min}m ago`;
 	const hr = Math.floor(min / 60);
 	return `${hr}h ago`;
+}
+
+/// Track E1: surface the daemon's trailing log lines in the
+/// runtime-debug panel. Drives "what does the remote think went
+/// wrong?" diagnostics without needing a separate SSH terminal.
+/// Manual refetch only — auto-tail would be noisy + double-bandwidth
+/// against the heartbeat loop.
+function DaemonLogSection({ entries }: { entries: RuntimeEntry[] }) {
+	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);
+	const [selected, setSelected] = useState<string>("");
+	const runtime =
+		selected && remotes.some((r) => r.name === selected)
+			? selected
+			: (remotes[0]?.name ?? "");
+
+	const logQuery = useQuery({
+		queryKey: ["daemon-log-tail", runtime],
+		queryFn: () => tailRemoteDaemonLog(runtime, 200),
+		enabled: runtime !== "",
+		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+
+	return (
+		<section>
+			<SectionHeader
+				icon={<Plug2 className="size-3.5" strokeWidth={1.8} />}
+				title="Daemon log"
+				description="Trailing lines from `$HOME/.helmor/server/daemon.log` on the selected remote. Useful first stop when an `agent.send` errors or the connection diagnostics show a 'closed reason' you don't recognise."
+			/>
+			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
+				{remotes.length === 0 ? (
+					<SettingsNotice tone="info">
+						Connect a remote runtime to view its daemon log.
+					</SettingsNotice>
+				) : (
+					<>
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center">
+							<Label htmlFor="rt-daemon-log-runtime" className="text-xs">
+								Runtime
+							</Label>
+							<select
+								id="rt-daemon-log-runtime"
+								className="h-7 rounded border border-border bg-background px-2 text-xs"
+								value={runtime}
+								onChange={(e) => setSelected(e.target.value)}
+								data-testid="daemon-log-runtime-select"
+							>
+								{remotes.map((r) => (
+									<option key={r.name} value={r.name}>
+										{r.name}
+									</option>
+								))}
+							</select>
+							<Button
+								size="sm"
+								disabled={runtime === "" || logQuery.isFetching}
+								onClick={() => logQuery.refetch()}
+								data-testid="daemon-log-refresh"
+							>
+								{logQuery.isFetching ? "Refreshing…" : "Refresh"}
+							</Button>
+						</div>
+						{logQuery.error ? (
+							<SettingsNotice tone="error">
+								{formatErrorMessage(logQuery.error) ?? "Failed to read log."}
+							</SettingsNotice>
+						) : null}
+						{logQuery.data ? (
+							<>
+								<div className="text-[10px] text-muted-foreground">
+									<span className="font-mono">{logQuery.data.logPath}</span>
+									{logQuery.data.truncated ? " · tail truncated" : null}
+									{" · "}
+									{logQuery.data.lines.length} line
+									{logQuery.data.lines.length === 1 ? "" : "s"}
+								</div>
+								<pre
+									className="max-h-[280px] overflow-auto rounded border border-border/40 bg-muted/30 p-2 font-mono text-[11px] leading-relaxed"
+									data-testid="daemon-log-pre"
+								>
+									{logQuery.data.lines.length === 0
+										? "(log is empty)"
+										: logQuery.data.lines.join("\n")}
+								</pre>
+							</>
+						) : null}
+					</>
+				)}
+			</div>
+		</section>
+	);
+}
+
+function formatErrorMessage(err: unknown): string | null {
+	if (err instanceof Error) return err.message;
+	if (typeof err === "string") return err;
+	return null;
 }
 
 function RemotePortForwardSection({ entries }: { entries: RuntimeEntry[] }) {

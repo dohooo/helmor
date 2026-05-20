@@ -115,7 +115,7 @@ describe("AddRemoteServerWizard", () => {
 			"$HOME/.helmor/server/helmor-server",
 		);
 
-		release?.();
+		(release as (() => void) | null)?.();
 		expect(
 			await screen.findByTestId("add-remote-server-success"),
 		).toBeInTheDocument();
