@@ -838,33 +838,87 @@ fn copilot_login_ready() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct CopilotAccountInfo {
     pub login: String,
-    pub name: Option<String>,
-    pub avatar_url: Option<String>,
+    pub copilot_plan: String,
+    pub premium_requests_remaining: u64,
+    pub premium_requests_entitlement: u64,
+    pub premium_requests_percent_remaining: f64,
+    pub chat_unlimited: bool,
+    pub quota_reset_date: Option<String>,
+    pub overage_permitted: bool,
 }
 
 #[tauri::command]
 pub async fn get_copilot_account_info() -> CmdResult<Option<CopilotAccountInfo>> {
     run_blocking(|| {
         let output = std::process::Command::new("gh")
-            .args(["api", "user", "--jq", ".login,.name,.avatar_url"])
+            .args([
+                "api",
+                "-H",
+                "Editor-Version: vscode/1.96.2",
+                "-H",
+                "Editor-Plugin-Version: copilot-chat/0.26.7",
+                "-H",
+                "User-Agent: GitHubCopilotChat/0.26.7",
+                "-H",
+                "X-Github-Api-Version: 2025-04-01",
+                "https://api.github.com/copilot_internal/user",
+            ])
             .output();
         match output {
             Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let lines: Vec<&str> = stdout.trim().lines().collect();
-                if lines.is_empty() {
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(&out.stdout).unwrap_or_default();
+                let login = parsed
+                    .get("login")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if login.is_empty() {
                     return Ok(None);
                 }
+                let plan = parsed
+                    .get("copilot_plan")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let premium = parsed
+                    .get("quota_snapshots")
+                    .and_then(|q| q.get("premium_interactions"));
+                let remaining = premium
+                    .and_then(|p| p.get("remaining"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let entitlement = premium
+                    .and_then(|p| p.get("entitlement"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let percent = premium
+                    .and_then(|p| p.get("percent_remaining"))
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                let overage = premium
+                    .and_then(|p| p.get("overage_permitted"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let chat_unlimited = parsed
+                    .get("quota_snapshots")
+                    .and_then(|q| q.get("chat"))
+                    .and_then(|c| c.get("unlimited"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let reset_date = parsed
+                    .get("quota_reset_date_utc")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
                 Ok(Some(CopilotAccountInfo {
-                    login: lines.first().unwrap_or(&"").to_string(),
-                    name: lines
-                        .get(1)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string()),
-                    avatar_url: lines
-                        .get(2)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string()),
+                    login,
+                    copilot_plan: plan,
+                    premium_requests_remaining: remaining,
+                    premium_requests_entitlement: entitlement,
+                    premium_requests_percent_remaining: percent,
+                    chat_unlimited,
+                    quota_reset_date: reset_date,
+                    overage_permitted: overage,
                 }))
             }
             _ => Ok(None),

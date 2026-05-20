@@ -1030,8 +1030,13 @@ export async function listCopilotModels(): Promise<CopilotModelEntry[]> {
 
 export type CopilotAccountInfo = {
 	login: string;
-	name: string | null;
-	avatarUrl: string | null;
+	copilotPlan: string;
+	premiumRequestsRemaining: number;
+	premiumRequestsEntitlement: number;
+	premiumRequestsPercentRemaining: number;
+	chatUnlimited: boolean;
+	quotaResetDate: string | null;
+	overagePermitted: boolean;
 };
 
 export async function getCopilotAccountInfo(): Promise<CopilotAccountInfo | null> {
