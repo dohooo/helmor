@@ -1359,12 +1359,22 @@ function LineStats({
 		<span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
 			{insertions > 0 && (
 				<span className="text-chart-2">
-					+<NumberTicker value={insertions} className="text-chart-2" />
+					+
+					<NumberTicker
+						value={insertions}
+						animateOnMount={false}
+						className="text-chart-2"
+					/>
 				</span>
 			)}
 			{deletions > 0 && (
 				<span className="text-destructive">
-					−<NumberTicker value={deletions} className="text-destructive" />
+					−
+					<NumberTicker
+						value={deletions}
+						animateOnMount={false}
+						className="text-destructive"
+					/>
 				</span>
 			)}
 		</span>

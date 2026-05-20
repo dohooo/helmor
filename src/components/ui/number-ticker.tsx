@@ -7,17 +7,27 @@ interface NumberTickerProps extends ComponentPropsWithoutRef<"span"> {
 	value: number;
 	direction?: "up" | "down";
 	delay?: number;
+	/** When false, mount renders `value` directly and only later changes spring.
+	 * Use for numbers that are part of repeatedly remounted lists (e.g. inspector
+	 * change rows) where the entry animation reruns every workspace switch. */
+	animateOnMount?: boolean;
 }
 
 export function NumberTicker({
 	value,
 	direction = "up",
 	delay = 0,
+	animateOnMount = true,
 	className,
 	...props
 }: NumberTickerProps) {
 	const ref = useRef<HTMLSpanElement>(null);
-	const motionValue = useMotionValue(direction === "down" ? value : 0);
+	const initialMotion = animateOnMount
+		? direction === "down"
+			? value
+			: 0
+		: value;
+	const motionValue = useMotionValue(initialMotion);
 	const springValue = useSpring(motionValue, {
 		damping: 100,
 		stiffness: 200,
