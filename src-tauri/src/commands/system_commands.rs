@@ -18,7 +18,7 @@ use super::common::{run_blocking, CmdResult};
 // Best-fit fixed window size for the current onboarding motion layout.
 // Resizing is restored when onboarding exits.
 const ONBOARDING_WINDOW_WIDTH: f64 = 1300.0;
-const ONBOARDING_WINDOW_HEIGHT: f64 = 810.0;
+const ONBOARDING_WINDOW_HEIGHT: f64 = 880.0;
 const HELMOR_SKILL_NAME: &str = "helmor-cli";
 const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.agents/skills/helmor-cli";
 

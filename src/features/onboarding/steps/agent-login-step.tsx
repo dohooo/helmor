@@ -1,12 +1,19 @@
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import type { AgentLoginProvider } from "@/lib/api";
 import { AgentStatusAction } from "../components/agent-status-action";
 import { CursorApiKeyAction } from "../components/cursor-api-key-action";
 import { LoginTerminalPreview } from "../components/login-terminal-preview";
 import { ReadyStatus } from "../components/ready-status";
 import type { AgentLoginItem, OnboardingStep } from "../types";
+
+const MORE_AGENTS_PROVIDERS = new Set<string>(["copilot"]);
 
 export function AgentLoginStep({
 	step,
@@ -32,8 +39,14 @@ export function AgentLoginStep({
 	const terminalProvider = activeLoginProvider ?? primedLoginProvider;
 	const terminalActive = activeLoginProvider !== null;
 
+	const primaryItems = loginItems.filter(
+		(item) => !MORE_AGENTS_PROVIDERS.has(item.provider),
+	);
+	const moreItems = loginItems.filter((item) =>
+		MORE_AGENTS_PROVIDERS.has(item.provider),
+	);
+
 	const startLogin = useCallback((provider: AgentLoginProvider) => {
-		// Cursor uses an API key, not a CLI login terminal.
 		if (provider === "cursor") return;
 		setPrimedLoginProvider(provider);
 		setActiveLoginProvider(provider);
@@ -57,9 +70,6 @@ export function AgentLoginStep({
 		setWaitingProvider(null);
 	}, []);
 
-	/// Bail out of the in-progress login. `setActiveLoginProvider(null)`
-	/// triggers `LoginTerminalPreview`'s effect cleanup, which kills
-	/// the spawned PTY via `stopAgentLoginTerminal`.
 	const handleAbortLogin = useCallback(() => {
 		setActiveLoginProvider(null);
 		setLoginInstanceId(null);
@@ -94,10 +104,8 @@ export function AgentLoginStep({
 						log in now, or continue and log in later.
 					</p>
 
-					{/* h-13 (~52px) keeps three tiles + Back/Next inside the
-					    step container at ~720–820px laptop viewports. */}
 					<div className="mt-6 flex w-full flex-col gap-2">
-						{loginItems.map(
+						{primaryItems.map(
 							({ icon: Icon, provider, label, description, status }) => {
 								const subLabel =
 									provider === "cursor" && cursorKeyError
@@ -148,6 +156,59 @@ export function AgentLoginStep({
 							},
 						)}
 					</div>
+
+					{moreItems.length > 0 && (
+						<Popover>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									className="mt-3 flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+								>
+									<span>More Agents:</span>
+									<span className="flex items-center gap-1">
+										{moreItems.map(({ icon: Icon, provider }) => (
+											<Icon key={provider} className="size-3.5" />
+										))}
+									</span>
+								</button>
+							</PopoverTrigger>
+							<PopoverContent
+								align="start"
+								side="top"
+								className="w-[360px] p-2"
+							>
+								<div className="flex flex-col gap-1.5">
+									{moreItems.map(
+										({ icon: Icon, provider, label, description, status }) => (
+											<div
+												key={provider}
+												className="flex items-center gap-3 rounded-md px-2 py-2"
+											>
+												<div className="flex size-7 shrink-0 items-center justify-center rounded border border-border/40 bg-background text-foreground">
+													<Icon className="size-3.5" />
+												</div>
+												<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+													<span className="text-[12px] font-medium leading-none text-foreground">
+														{label}
+													</span>
+													<span className="truncate text-[11px] leading-none text-muted-foreground">
+														{description}
+													</span>
+												</div>
+												<AgentStatusAction
+													provider={provider}
+													status={status}
+													waiting={waitingProvider === provider}
+													onPrimeLogin={setPrimedLoginProvider}
+													onStartLogin={startLogin}
+												/>
+											</div>
+										),
+									)}
+								</div>
+							</PopoverContent>
+						</Popover>
+					)}
 
 					<div className="mt-6 flex items-center gap-3">
 						<Button
