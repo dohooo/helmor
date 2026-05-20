@@ -635,7 +635,7 @@ export function WorkspaceHoverCard({
 				side="right"
 				align="start"
 				sideOffset={sideOffset}
-				className="w-72 p-3"
+				className="w-72 bg-sidebar p-3 text-sidebar-foreground"
 			>
 				<div ref={contentWrapRef} className="flex flex-col gap-2.5">
 					{/* Header: repo › branch | git status + status dot. */}
