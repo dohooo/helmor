@@ -36,7 +36,7 @@ use helmor_lib::remote::{
 /// legible reason on every `agent.send` rather than letting the
 /// spawn fail with the cryptic `ENOENT`.
 fn build_agent_state() -> agent::RemoteAgentState {
-    match agent::BinaryAgentSpawner::resolve_from_env() {
+    let state = match agent::BinaryAgentSpawner::resolve_from_env() {
         Some(path) => {
             tracing::info!(
                 sidecar = %path.display(),
@@ -51,6 +51,20 @@ fn build_agent_state() -> agent::RemoteAgentState {
             agent::RemoteAgentState::disabled(
                 "HELMOR_SIDECAR_PATH must be set (and point to a readable file) on the remote",
             )
+        }
+    };
+    // Phase 24t: wire the on-disk journal directory so sessions
+    // survive daemon restarts. Best-effort — a missing $HOME (the
+    // daemon's running on a host that doesn't surface one) leaves
+    // durability disabled instead of refusing to start.
+    match helmor_lib::remote::daemon::default_daemon_dir() {
+        Ok(dir) => state.with_journal_dir(dir.join(agent::JOURNAL_SUBDIR)),
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "helmor-server: cannot resolve daemon dir; running without journal persistence",
+            );
+            state
         }
     }
 }

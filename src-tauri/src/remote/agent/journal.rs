@@ -33,6 +33,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+use super::journal_store::JournalDiskWriter;
+
 /// Default ring capacity. Sized for ~10 typical Claude turns of
 /// streaming events (each turn ≈ 50–100 events between deltas,
 /// tool calls, and the terminal `result`). Override via
@@ -47,13 +49,31 @@ pub struct JournalEntry {
     pub payload: Value,
 }
 
-#[derive(Debug)]
 pub struct EventJournal {
     ring: VecDeque<JournalEntry>,
     /// Seq number for the next append (always `head_seq + 1`). Held
     /// outside the ring so eviction doesn't reset the counter.
     next_seq: u64,
     capacity: usize,
+    /// Phase 24t: optional disk-backed mirror. When set, every
+    /// successful in-memory append is also written to the on-disk
+    /// JSONL file so the daemon can recover the history across
+    /// restarts. A disk-write failure logs but does NOT abort the
+    /// in-memory append — losing the durability story for one event
+    /// is better than dropping a live event the desktop is waiting
+    /// for.
+    disk_writer: Option<JournalDiskWriter>,
+}
+
+impl std::fmt::Debug for EventJournal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventJournal")
+            .field("ring_len", &self.ring.len())
+            .field("next_seq", &self.next_seq)
+            .field("capacity", &self.capacity)
+            .field("disk_backed", &self.disk_writer.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +107,17 @@ impl EventJournal {
             ring: VecDeque::with_capacity(capacity),
             next_seq: 1,
             capacity,
+            disk_writer: None,
         }
+    }
+
+    /// Phase 24t: attach a disk-backed writer so every subsequent
+    /// `append` mirrors to the on-disk JSONL file. Idempotent — a
+    /// second call overwrites the prior writer (test-only convenience;
+    /// production wires the writer once at session creation).
+    pub fn with_disk_writer(mut self, writer: JournalDiskWriter) -> Self {
+        self.disk_writer = Some(writer);
+        self
     }
 
     /// Append `payload` with a fresh seq. Evicts the oldest entry
@@ -101,17 +131,45 @@ impl EventJournal {
         if self.ring.len() >= self.capacity {
             self.ring.pop_front();
         }
-        self.ring.push_back(JournalEntry {
+        let entry = JournalEntry {
             seq,
             ts_ms: now_ms(),
             payload,
-        });
+        };
+        // Phase 24t: mirror to disk before pushing into the ring so
+        // the on-disk order matches the in-memory order. A write
+        // failure detaches the writer (defensive — repeated failures
+        // would spam logs) but lets the in-memory append succeed.
+        if let Some(writer) = self.disk_writer.as_mut() {
+            if let Err(err) = writer.append(&entry) {
+                tracing::warn!(
+                    seq = entry.seq,
+                    error = %format!("{err:#}"),
+                    "journal: disk append failed; detaching disk mirror",
+                );
+                self.disk_writer = None;
+            }
+        }
+        self.ring.push_back(entry);
         seq
     }
 
     /// Highest seq currently observed. 0 before the first append.
     pub fn head_seq(&self) -> u64 {
         self.next_seq.saturating_sub(1)
+    }
+
+    /// Phase 24t: consume the journal + return the disk path it was
+    /// mirroring to, paired with the current `head_seq`. Used when
+    /// the reader thread evicts a completed session into the
+    /// `ended_sessions` map — we need the path to feed
+    /// `read_journal_entries` on a future replay attach, and the
+    /// head_seq for diagnostics. Returns `None` when there's no disk
+    /// mirror (in-memory-only sessions don't survive the eviction).
+    pub fn into_disk_path_and_head(self) -> Option<(u64, std::path::PathBuf)> {
+        let head = self.head_seq();
+        let writer = self.disk_writer?;
+        Some((head, writer.into_path()))
     }
 
     /// Snapshot entries the caller asked for.

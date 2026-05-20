@@ -52,6 +52,17 @@ const LIVE_SESSION: RemoteAgentSession = {
 	workspaceDir: "/srv/demo",
 	startedAtMs: Date.now() - 5_000,
 	lastEventMs: Date.now() - 100,
+	state: "live",
+};
+
+const ENDED_SESSION: RemoteAgentSession = {
+	requestId: REQUEST_ID,
+	helmorSessionId: SESSION_ID,
+	provider: "claude",
+	workspaceDir: "/srv/demo",
+	startedAtMs: Date.now() - 60_000,
+	lastEventMs: Date.now() - 30_000,
+	state: "endedReplayOnly",
 };
 
 describe("useWorkspaceRemoteReattach", () => {
@@ -188,6 +199,35 @@ describe("useWorkspaceRemoteReattach", () => {
 		// though the response has resolved.
 		expect(result.current.isReattaching).toBe(true);
 		expect(result.current.currentRequestId).toBe(REQUEST_ID);
+	});
+
+	it("skips endedReplayOnly sessions on the auto-attach path", async () => {
+		// Phase 24t: the on-disk journal survives daemon restart, so
+		// agent.list returns the past session as `endedReplayOnly`.
+		// Auto-reattach must NOT fire — the desktop's local DB already
+		// has the conversation; replaying the on-disk journal again
+		// would just duplicate work + send a misleading "Caught up"
+		// when the live tail isn't coming.
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([ENDED_SESSION]);
+		const { wrapper } = withQueryClient();
+		const { result } = renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => {
+			expect(apiMocks.listRemoteAgentSessions).toHaveBeenCalled();
+		});
+		expect(apiMocks.startAgentReattachStream).not.toHaveBeenCalled();
+		expect(result.current.isReattaching).toBe(false);
 	});
 
 	it("does not fire reattach when no live session matches this helmor session", async () => {

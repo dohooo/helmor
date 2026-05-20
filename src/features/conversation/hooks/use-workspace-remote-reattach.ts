@@ -147,8 +147,16 @@ export function useWorkspaceRemoteReattach({
 			// workspace's current session. The daemon mints the request
 			// id; the desktop side keeps its helmor session id stable
 			// across reconnects.
+			// Phase 24t: skip `endedReplayOnly` rows on the auto-attach
+			// path — those are sessions whose sidecar process is gone
+			// (daemon restarted, original session terminated cleanly).
+			// The desktop's local DB already holds the conversation;
+			// no need to flush the on-disk journal again. Only the dev
+			// panel's explicit "browse history" action attaches to
+			// these.
 			const match = sessions.find(
-				(entry) => entry.helmorSessionId === sessionId,
+				(entry) =>
+					entry.helmorSessionId === sessionId && entry.state === "live",
 			);
 			if (!match) {
 				setState(IDLE_STATE);

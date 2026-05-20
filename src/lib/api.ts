@@ -1171,6 +1171,16 @@ export async function searchWorkspace(args: {
  * `workspaceDir` may be `null` for a freshly-accepted send that
  * hasn't yet seen the first event).
  */
+/**
+ * Phase 24t: lifecycle phase of the session. `live` = sidecar
+ * process still running; `endedReplayOnly` = the on-disk journal
+ * survives but the sidecar is gone (daemon restart, terminal
+ * event already fired, etc.). Auto-reattach skips
+ * `endedReplayOnly` rows — only explicit operator action
+ * (e.g. the dev panel) should attach to one.
+ */
+export type AgentSessionState = "live" | "endedReplayOnly";
+
 export type RemoteAgentSession = {
 	requestId: string;
 	helmorSessionId: string | null;
@@ -1178,6 +1188,12 @@ export type RemoteAgentSession = {
 	workspaceDir: string | null;
 	startedAtMs: number;
 	lastEventMs: number;
+	/**
+	 * Defaults to `"live"` for pre-24t daemons that don't emit the
+	 * field — the desktop's `serde(default)` mirror keeps the older
+	 * wire shape backward-compatible.
+	 */
+	state: AgentSessionState;
 };
 
 /**

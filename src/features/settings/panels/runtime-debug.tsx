@@ -2357,8 +2357,17 @@ function RemoteAgentSessionRow({
 			data-chat-preview={chatPreviewActive ? "true" : undefined}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate font-mono text-[11px]">
+				<span className="flex items-center gap-1.5 truncate font-mono text-[11px]">
 					{session.requestId}
+					{session.state === "endedReplayOnly" && (
+						<span
+							className="rounded-sm border border-muted-foreground/30 px-1 py-px text-[9px] font-sans uppercase tracking-wide text-muted-foreground"
+							title="Sidecar process is gone; on-disk journal is replay-only."
+							data-testid="remote-agent-session-ended-badge"
+						>
+							ended
+						</span>
+					)}
 				</span>
 				<span className="truncate text-[10px] text-muted-foreground">
 					{session.provider ?? "no provider"} ·{" "}

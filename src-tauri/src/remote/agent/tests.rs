@@ -845,3 +845,251 @@ fn attach_with_caught_up_since_seq_replays_nothing() {
         "nothing should have flushed to the new notifier",
     );
 }
+
+// ── Phase 24t: durable journal + replay-only sessions ─────────────
+
+#[test]
+fn terminal_event_moves_session_into_ended_replay_only_with_journal_on_disk() {
+    // The reader thread sees a `result` terminal, transitions the
+    // session from `sessions` → `ended_sessions`, and the on-disk
+    // file remains so `agent.attach` can later replay from it.
+    let dir = tempfile::tempdir().unwrap();
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({
+                "id": "req-end-1",
+                "type": "system",
+                "subtype": "init",
+                "session_id": "hs-end-1",
+                "provider": "claude",
+            }),
+            json!({
+                "id": "req-end-1",
+                "type": "assistant",
+                "delta": "done",
+            }),
+            json!({
+                "id": "req-end-1",
+                "type": "result",
+            }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
+    let notifier = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-end-1".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&notifier) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    // Wait for the terminal event to drain so the reader has
+    // moved the session into the ended map.
+    let _ = wait_for(&notifier, |events| {
+        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+    });
+    // agent.list now reports the session as ended-replay-only.
+    let listed = state.list();
+    let entry = listed
+        .sessions
+        .iter()
+        .find(|s| s.request_id == "req-end-1")
+        .expect("ended session missing from list");
+    assert_eq!(
+        entry.state,
+        crate::remote::methods::AgentSessionState::EndedReplayOnly,
+    );
+    assert_eq!(entry.helmor_session_id.as_deref(), Some("hs-end-1"));
+    assert_eq!(entry.provider.as_deref(), Some("claude"));
+    // On-disk journal file still exists.
+    let journal_path = dir.path().join("req-end-1.jsonl");
+    assert!(
+        journal_path.exists(),
+        "expected on-disk journal at {}",
+        journal_path.display(),
+    );
+}
+
+#[test]
+fn attach_to_ended_replay_only_flushes_on_disk_journal_to_notifier() {
+    // Seed a journal file by running the session, wait for its
+    // terminal, then attach a fresh notifier and assert that the
+    // pre-recorded events flow back without a live sidecar process
+    // emitting them (the spawner script is exhausted by now).
+    let dir = tempfile::tempdir().unwrap();
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({
+                "id": "req-replay-1",
+                "type": "assistant",
+                "delta": "snapshot-1",
+            }),
+            json!({
+                "id": "req-replay-1",
+                "type": "assistant",
+                "delta": "snapshot-2",
+            }),
+            json!({
+                "id": "req-replay-1",
+                "type": "result",
+            }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
+    let original = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-replay-1".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&original) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    let _ = wait_for(&original, |events| {
+        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+    });
+
+    // Now attach with a fresh notifier — the session is in the
+    // ended_sessions map, so the daemon flushes from disk.
+    let replay = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-replay-1".into(),
+                since_seq: None,
+            },
+            Arc::clone(&replay) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    assert!(result.found);
+    assert_eq!(result.replayed_count, 3, "all 3 events should replay");
+    assert_eq!(result.last_seq, 3);
+    assert_eq!(result.replay_gap, None);
+
+    let captured = replay.captured.lock().unwrap();
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[0].1["event"]["delta"], "snapshot-1");
+    assert_eq!(captured[1].1["event"]["delta"], "snapshot-2");
+    assert_eq!(captured[2].1["event"]["type"], "result");
+}
+
+#[test]
+fn attach_to_ended_replay_only_honors_since_seq_cursor() {
+    // Caller already has seq 1 + 2 locally; only seq 3 should flush.
+    let dir = tempfile::tempdir().unwrap();
+    let spawner = MockAgentSpawner::new().respond(
+        "sendMessage",
+        vec![
+            json!({ "id": "req-since-1", "type": "assistant", "delta": "one" }),
+            json!({ "id": "req-since-1", "type": "assistant", "delta": "two" }),
+            json!({ "id": "req-since-1", "type": "result" }),
+        ],
+    );
+    let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
+    let original = Arc::new(CapturingNotifier::default());
+    state
+        .send(
+            AgentSendParams {
+                request_id: "req-since-1".into(),
+                method: "sendMessage".into(),
+                params: json!({}),
+            },
+            Arc::clone(&original) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    let _ = wait_for(&original, |events| {
+        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+    });
+
+    let replay = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-since-1".into(),
+                since_seq: Some(2),
+            },
+            Arc::clone(&replay) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    assert!(result.found);
+    assert_eq!(result.replayed_count, 1);
+    let captured = replay.captured.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].1["event"]["type"], "result");
+    assert_eq!(captured[0].1["seq"], 3);
+}
+
+#[test]
+fn with_journal_dir_recovers_pre_existing_files_on_startup() {
+    // Pre-seed a JSONL file in the journal dir (simulating a daemon
+    // restart). `with_journal_dir` should pick it up as an
+    // endedReplayOnly entry surfaced by agent.list.
+    use crate::remote::agent::journal::JournalEntry;
+    use crate::remote::agent::journal_store::JournalDiskWriter;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("req-recovered-1.jsonl");
+    {
+        let mut writer = JournalDiskWriter::open(path.clone()).unwrap();
+        writer
+            .append(&JournalEntry {
+                seq: 1,
+                ts_ms: 1_000,
+                payload: json!({
+                    "id": "req-recovered-1",
+                    "type": "system",
+                    "session_id": "hs-recovered-1",
+                    "provider": "claude",
+                }),
+            })
+            .unwrap();
+        writer
+            .append(&JournalEntry {
+                seq: 2,
+                ts_ms: 2_000,
+                payload: json!({
+                    "id": "req-recovered-1",
+                    "type": "result",
+                }),
+            })
+            .unwrap();
+    }
+
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_journal_dir(dir.path().to_path_buf());
+
+    let listed = state.list();
+    let entry = listed
+        .sessions
+        .iter()
+        .find(|s| s.request_id == "req-recovered-1")
+        .expect("recovered session not surfaced by agent.list");
+    assert_eq!(
+        entry.state,
+        crate::remote::methods::AgentSessionState::EndedReplayOnly,
+    );
+    assert_eq!(entry.helmor_session_id.as_deref(), Some("hs-recovered-1"));
+    assert_eq!(entry.provider.as_deref(), Some("claude"));
+
+    // attach replays the file through the supplied notifier.
+    let replay = Arc::new(CapturingNotifier::default());
+    let result = state
+        .attach(
+            AgentAttachParams {
+                request_id: "req-recovered-1".into(),
+                since_seq: None,
+            },
+            Arc::clone(&replay) as Arc<dyn Notifier>,
+        )
+        .unwrap();
+    assert!(result.found);
+    assert_eq!(result.replayed_count, 2);
+    assert_eq!(result.last_seq, 2);
+}
