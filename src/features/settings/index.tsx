@@ -57,6 +57,7 @@ import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
+import { RemoteServersPanel } from "./panels/remote-servers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { RuntimeDebugPanel } from "./panels/runtime-debug";
 
@@ -72,6 +73,7 @@ import type { SettingsSection } from "./types";
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
 	inbox: "Contexts",
+	"remote-servers": "Remote Servers",
 	"runtime-debug": "Runtime Debug",
 };
 
@@ -196,6 +198,11 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"appearance",
 		"model",
 		"shortcuts",
+		// Track B: production-visible remote-servers surface. Lives
+		// next to the dev-only "Runtime Debug" panel — both ship; the
+		// production panel is the guided / minimal surface, the debug
+		// panel is the deep-knobs surface for operators.
+		"remote-servers",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer", "runtime-debug"] as const) : []),
 		"account",
@@ -563,6 +570,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 							{activeSection === "import" && <ConductorImportPanel />}
 
 							{activeSection === "developer" && <DevToolsPanel />}
+
+							{activeSection === "remote-servers" && <RemoteServersPanel />}
 
 							{activeSection === "runtime-debug" && <RuntimeDebugPanel />}
 
