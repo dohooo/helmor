@@ -109,7 +109,6 @@ import {
 } from "./lib/settings";
 import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { useSubmitQueue } from "./lib/use-submit-queue";
 import { summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
@@ -555,12 +554,6 @@ function AppShell({
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();
-	// Follow-up submit queue lives at App scope so its state survives the
-	// start-page ↔ workspace toggle. The two `WorkspaceConversationContainer`
-	// instances below are different React subtrees — keeping `useSubmitQueue`
-	// inside the container would drop the queue every time the user switches
-	// to the Start Page and back.
-	const submitQueueState = useSubmitQueue();
 	const notify = useOsNotifications(appSettings);
 	const { state: readState, actions: readStateActions } =
 		useReadStateController({
@@ -1649,7 +1642,6 @@ function AppShell({
 														onRequestCloseSession={requestCloseSession}
 														workspaceRootPath={null}
 														onOpenFileReference={handleOpenFileReference}
-														submitQueueState={submitQueueState}
 														composerOnly
 														composerWrapperClassName="w-full"
 														composerForceAvailable={Boolean(startRepository)}
@@ -1712,7 +1704,6 @@ function AppShell({
 													onRequestCloseSession={requestCloseSession}
 													workspaceRootPath={workspaceRootPath}
 													onOpenFileReference={handleOpenFileReference}
-													submitQueueState={submitQueueState}
 													contextPanelOpen={contextPanelOpen}
 													onToggleContextPanel={handleToggleContextPanel}
 													contextPreviewCard={workspacePreviewCard}

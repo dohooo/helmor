@@ -2,21 +2,21 @@
  * App-level submit queue — stores follow-up messages the user wants to
  * send once the current turn finishes.
  *
- * Why app-level instead of inside `use-streaming`: the queue must
- * survive session / workspace switches so the user can navigate away
- * from a long-running session and come back to see their queue still
- * intact. `use-streaming` is mounted per-conversation-view so its
- * state would be dropped the moment the displayed session changes.
+ * Why module-level singleton: the queue must survive session / workspace
+ * switches AND the start-page ↔ workspace toggle so the user can navigate
+ * away from a long-running session and come back to see their queue
+ * still intact. Component-scoped state would be dropped the moment the
+ * displaying container unmounts.
  *
- * State lives in React state (not persisted anywhere). If the app
- * restarts the queue is lost — that's the intended trade-off: the
- * queue is a short-lived intent, not a durable artifact like a
- * message. Individual rows are identified by client-generated UUIDs
- * so row-level cancel / steer actions have stable targets across
- * re-renders.
+ * State is in-memory only. If the app restarts the queue is lost —
+ * that's the intended trade-off: the queue is a short-lived intent, not
+ * a durable artifact like a message. Individual rows are identified by
+ * client-generated UUIDs so row-level cancel / steer actions have stable
+ * targets across re-renders.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type { AgentModelOption } from "./api";
 import type { ComposerCustomTag } from "./composer-insert";
 
@@ -71,112 +71,138 @@ export type SubmitQueueApi = {
 	clear: (sessionId: string) => void;
 };
 
-/** Used by the composer to render the list; `queuesBySessionId` maps
- *  sessionId → ordered list. Empty sessions are omitted from the map. */
-export type SubmitQueueState = {
-	queuesBySessionId: ReadonlyMap<string, readonly QueuedSubmit[]>;
-	api: SubmitQueueApi;
-};
+type SubmitQueueState = {
+	queuesBySessionId: Record<string, readonly QueuedSubmit[]>;
+} & SubmitQueueApi;
 
 const EMPTY: readonly QueuedSubmit[] = Object.freeze([]);
+export const EMPTY_QUEUE: readonly QueuedSubmit[] = EMPTY;
 
-export function useSubmitQueue(): SubmitQueueState {
-	const [queues, setQueues] = useState<Map<string, QueuedSubmit[]>>(
-		() => new Map(),
-	);
+const INITIAL_QUEUES: Record<string, readonly QueuedSubmit[]> = Object.freeze(
+	{},
+);
 
-	// Ref mirror so read-only accessors (`getQueue`, `findById`,
-	// `popNext`) don't need `queues` in their dep lists — keeping the
-	// exposed `api` object identity stable across queue mutations.
-	const queuesRef = useRef(queues);
-	queuesRef.current = queues;
+/**
+ * Module-level singleton. Two `WorkspaceConversationContainer` instances
+ * (start-page + workspace mode) and any future readers all consume the
+ * same store — that's how the queue survives navigation.
+ */
+export const useSubmitQueueStore = create<SubmitQueueState>((set, get) => ({
+	queuesBySessionId: INITIAL_QUEUES,
 
-	const getQueue = useCallback(
-		(sessionId: string): QueuedSubmit[] =>
-			queuesRef.current.get(sessionId)?.slice() ?? [],
-		[],
-	);
+	getQueue: (sessionId) => {
+		const bucket = get().queuesBySessionId[sessionId];
+		return bucket ? [...bucket] : [];
+	},
 
-	const findById = useCallback((id: string): QueuedSubmit | undefined => {
-		for (const entries of queuesRef.current.values()) {
-			const match = entries.find((e) => e.id === id);
+	findById: (id) => {
+		for (const entries of Object.values(get().queuesBySessionId)) {
+			const match = entries.find((entry) => entry.id === id);
 			if (match) return match;
 		}
 		return undefined;
-	}, []);
+	},
 
-	const enqueue = useCallback(
-		(context: QueuedSubmitContext, payload: QueuedSubmitPayload): string => {
-			const id = crypto.randomUUID();
-			const entry: QueuedSubmit = {
-				id,
-				context,
-				payload,
-				enqueuedAt: Date.now(),
+	enqueue: (context, payload) => {
+		const id = crypto.randomUUID();
+		const entry: QueuedSubmit = {
+			id,
+			context,
+			payload,
+			enqueuedAt: Date.now(),
+		};
+		set((state) => {
+			const existing = state.queuesBySessionId[context.sessionId] ?? EMPTY;
+			return {
+				queuesBySessionId: {
+					...state.queuesBySessionId,
+					[context.sessionId]: [...existing, entry],
+				},
 			};
-			setQueues((prev) => {
-				const next = new Map(prev);
-				const existing = next.get(context.sessionId) ?? [];
-				next.set(context.sessionId, [...existing, entry]);
-				return next;
-			});
-			return id;
-		},
-		[],
-	);
-
-	const remove = useCallback((sessionId: string, id: string): void => {
-		setQueues((prev) => {
-			const existing = prev.get(sessionId);
-			if (!existing) return prev;
-			const filtered = existing.filter((e) => e.id !== id);
-			if (filtered.length === existing.length) return prev;
-			const next = new Map(prev);
-			if (filtered.length === 0) next.delete(sessionId);
-			else next.set(sessionId, filtered);
-			return next;
 		});
-	}, []);
+		return id;
+	},
 
-	const popNext = useCallback((sessionId: string): QueuedSubmit | undefined => {
-		const existing = queuesRef.current.get(sessionId);
+	remove: (sessionId, id) => {
+		set((state) => {
+			const existing = state.queuesBySessionId[sessionId];
+			if (!existing) return state;
+			const filtered = existing.filter((entry) => entry.id !== id);
+			if (filtered.length === existing.length) return state;
+			const next = { ...state.queuesBySessionId };
+			if (filtered.length === 0) {
+				delete next[sessionId];
+			} else {
+				next[sessionId] = filtered;
+			}
+			return { queuesBySessionId: next };
+		});
+	},
+
+	popNext: (sessionId) => {
+		const existing = get().queuesBySessionId[sessionId];
 		if (!existing || existing.length === 0) return undefined;
 		const head = existing[0];
-		setQueues((prev) => {
-			const cur = prev.get(sessionId);
-			if (!cur || cur.length === 0) return prev;
+		set((state) => {
+			const cur = state.queuesBySessionId[sessionId];
+			if (!cur || cur.length === 0) return state;
 			const rest = cur.slice(1);
-			const next = new Map(prev);
-			if (rest.length === 0) next.delete(sessionId);
-			else next.set(sessionId, rest);
-			return next;
+			const next = { ...state.queuesBySessionId };
+			if (rest.length === 0) {
+				delete next[sessionId];
+			} else {
+				next[sessionId] = rest;
+			}
+			return { queuesBySessionId: next };
 		});
 		return head;
-	}, []);
+	},
 
-	const clear = useCallback((sessionId: string): void => {
-		setQueues((prev) => {
-			if (!prev.has(sessionId)) return prev;
-			const next = new Map(prev);
-			next.delete(sessionId);
-			return next;
+	clear: (sessionId) => {
+		set((state) => {
+			if (!(sessionId in state.queuesBySessionId)) return state;
+			const next = { ...state.queuesBySessionId };
+			delete next[sessionId];
+			return { queuesBySessionId: next };
 		});
-	}, []);
+	},
+}));
 
-	// `queues` is already a `Map<string, QueuedSubmit[]>` — just widen
-	// the type to ReadonlyMap + readonly arrays at the boundary. No
-	// copy needed; we never mutate in place (always `new Map(prev)`).
-	const queuesBySessionId = queues as ReadonlyMap<
-		string,
-		readonly QueuedSubmit[]
-	>;
-
-	const api = useMemo<SubmitQueueApi>(
-		() => ({ getQueue, findById, enqueue, remove, popNext, clear }),
-		[getQueue, findById, enqueue, remove, popNext, clear],
+/**
+ * Returns a stable handle to the queue API — uses a shallow selector so
+ * the consuming component doesn't re-render when queue contents change
+ * (only when action references change, which they don't outside of
+ * `__resetSubmitQueueForTests`).
+ */
+export function useSubmitQueueApi(): SubmitQueueApi {
+	return useSubmitQueueStore(
+		useShallow((state) => ({
+			getQueue: state.getQueue,
+			findById: state.findById,
+			enqueue: state.enqueue,
+			remove: state.remove,
+			popNext: state.popNext,
+			clear: state.clear,
+		})),
 	);
-
-	return { queuesBySessionId, api };
 }
 
-export const EMPTY_QUEUE: readonly QueuedSubmit[] = EMPTY;
+/**
+ * Subscribe to the queue for a given session. Returns the live array;
+ * re-renders the consumer whenever that bucket mutates.
+ */
+export function useSubmitQueueForSession(
+	sessionId: string | null,
+): readonly QueuedSubmit[] {
+	return useSubmitQueueStore((state) =>
+		sessionId ? (state.queuesBySessionId[sessionId] ?? EMPTY) : EMPTY,
+	);
+}
+
+/**
+ * Test-only — wipe the queue. Production code never resets imperatively
+ * (use `clear(sessionId)` for legitimate session-deletion paths).
+ */
+export function __resetSubmitQueueForTests(): void {
+	useSubmitQueueStore.setState({ queuesBySessionId: INITIAL_QUEUES });
+}

@@ -24,9 +24,8 @@ import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import {
-	EMPTY_QUEUE,
-	type SubmitQueueState,
-	useSubmitQueue,
+	useSubmitQueueApi,
+	useSubmitQueueForSession,
 } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
 import {
@@ -164,11 +163,6 @@ type WorkspaceConversationContainerProps = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	} | null;
-	/** Lifted submit-queue state. App.tsx owns the instance so it survives
-	 *  the start-page ↔ workspace toggle (both container instances share
-	 *  the same queue). Optional only so existing tests can mount without
-	 *  wiring this up — production callers must always pass it. */
-	submitQueueState?: SubmitQueueState;
 };
 
 export const WorkspaceConversationContainer = memo(
@@ -215,7 +209,6 @@ export const WorkspaceConversationContainer = memo(
 		onToggleContextPanel,
 		composerStartSubmitMenu = false,
 		composerLinkedDirectoriesController = null,
-		submitQueueState,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
 			Record<string, string>
@@ -238,16 +231,11 @@ export const WorkspaceConversationContainer = memo(
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
 
-		// Follow-up queue state. Production callers (App.tsx) pass a lifted
-		// instance via `submitQueueState` so the queue survives the start-page
-		// ↔ workspace toggle — this container is rendered in two separate
-		// subtrees (one inside `WorkspaceStartPage`, one outside) and switching
-		// between them unmounts the previous tree. The local fallback only
-		// exists for tests that don't care about queue lifetime.
+		// Submit queue is a module-level Zustand singleton — survives this
+		// container's unmount (the start-page ↔ workspace toggle renders two
+		// independent React subtrees, and the queue must outlive both).
 		const { settings } = useSettings();
-		const fallbackSubmitQueue = useSubmitQueue();
-		const { queuesBySessionId, api: submitQueueApi } =
-			submitQueueState ?? fallbackSubmitQueue;
+		const submitQueueApi = useSubmitQueueApi();
 
 		const {
 			activeSendError,
@@ -283,9 +271,7 @@ export const WorkspaceConversationContainer = memo(
 			onSessionAborted,
 		});
 
-		const queueItems = displayedSessionId
-			? (queuesBySessionId.get(displayedSessionId) ?? EMPTY_QUEUE)
-			: EMPTY_QUEUE;
+		const queueItems = useSubmitQueueForSession(displayedSessionId);
 
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
