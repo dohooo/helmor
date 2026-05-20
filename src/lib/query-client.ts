@@ -35,6 +35,7 @@ import {
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
+	loadProviderCapabilities,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceForgeActionStatus,
@@ -63,6 +64,7 @@ export const helmorQueryKeys = {
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
+	providerCapabilities: ["providerCapabilities"] as const,
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
@@ -405,6 +407,23 @@ export function agentModelSectionsQueryOptions() {
 		// previously stuck users on a pre-upgrade shape until they
 		// happened to invalidate the query manually.
 		staleTime: 0,
+		refetchOnWindowFocus: false,
+		retry: false,
+		meta: PERSIST_META,
+	});
+}
+
+/** Provider-capability table. The shape is intentionally static across
+ *  the app's lifetime (no per-session inputs), so the query is cached
+ *  forever and persisted to disk like the model catalog — first paint
+ *  on cold start has the data ready. Cleared via the React Query
+ *  devtools or a release-bumped persistence key if the shape changes. */
+export function providerCapabilitiesQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.providerCapabilities,
+		queryFn: loadProviderCapabilities,
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: false,
 		retry: false,
 		meta: PERSIST_META,

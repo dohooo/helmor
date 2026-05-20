@@ -145,6 +145,31 @@ export type AgentModelSection = {
 	options: AgentModelOption[];
 };
 
+/** Wire strings the sidecars accept for permission mode. The composer's
+ *  permission-mode dropdown reads {@link ProviderCapabilities.permissionModes}
+ *  to decide which entries to render — every provider supports `default`. */
+export type PermissionModeLiteral =
+	| "default"
+	| "acceptEdits"
+	| "plan"
+	| "bypassPermissions";
+
+/** Static capability table for a single provider. Mirrors the Rust
+ *  `agents::provider_capabilities::ProviderCapabilities` shape so a
+ *  cross-stack provider check is data-driven instead of a scattered
+ *  `provider === "codex"` string compare. */
+export type ProviderCapabilities = {
+	provider: string;
+	displayName: string;
+	supportsPlanMode: boolean;
+	supportsActiveGoal: boolean;
+	supportsContextUsage: boolean;
+	supportsSteer: boolean;
+	supportsSlashCommands: boolean;
+	requiresApiKey: boolean;
+	permissionModes: PermissionModeLiteral[];
+};
+
 export type AgentSendRequest = {
 	provider: AgentProvider;
 	modelId: string;
@@ -944,6 +969,26 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
+}
+
+/** Static provider-capability table. Backed by the Rust source of truth
+ *  in `agents::provider_capabilities`; callers cache the result for the
+ *  lifetime of the app and look up rows by `provider`. */
+export async function loadProviderCapabilities(): Promise<
+	ProviderCapabilities[]
+> {
+	return invoke<ProviderCapabilities[]>("list_provider_capabilities");
+}
+
+/** Look up a single provider's capabilities from a previously-fetched
+ *  table. Returns `null` when the provider id isn't represented — the
+ *  composer treats that as "use Claude's safe defaults", matching the
+ *  Rust helper's fallback. */
+export function findProviderCapabilities(
+	table: readonly ProviderCapabilities[],
+	provider: string,
+): ProviderCapabilities | null {
+	return table.find((caps) => caps.provider === provider) ?? null;
 }
 
 export type CursorModelParameterValue = {

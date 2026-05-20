@@ -22,6 +22,7 @@ import type {
 } from "@/lib/api";
 import {
 	createSession,
+	findProviderCapabilities,
 	mutateCodexGoal,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
@@ -35,6 +36,7 @@ import {
 	agentModelSectionsQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
+	providerCapabilitiesQueryOptions,
 	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
@@ -693,12 +695,31 @@ export const WorkspaceComposerContainer = memo(
 			void slashCommandsQuery.refetch();
 		}, [slashCommandsQuery]);
 
+		// Provider capability lookup — single source of truth for the
+		// active-goal interception below (composer needs to know whether
+		// the current provider has a `/goal` loop at all). Falls back to
+		// Claude defaults while the table is loading so unknown
+		// providers don't accidentally enable codex-only branches.
+		const providerCapabilitiesQuery = useQuery(
+			providerCapabilitiesQueryOptions(),
+		);
+		const providerCapabilities = useMemo(
+			() =>
+				findProviderCapabilities(
+					providerCapabilitiesQuery.data ?? [],
+					provider,
+				),
+			[providerCapabilitiesQuery.data, provider],
+		);
+		const supportsActiveGoal =
+			providerCapabilities?.supportsActiveGoal ?? false;
+
 		// Pull the active codex goal so we can intercept `/goal X` submissions
 		// when one is already in flight and ask the user for confirmation
 		// before replacing it.
 		const codexGoalQuery = useQuery({
 			...sessionCodexGoalQueryOptions(displayedSessionId ?? "__none__"),
-			enabled: Boolean(displayedSessionId) && provider === "codex",
+			enabled: Boolean(displayedSessionId) && supportsActiveGoal,
 		});
 		const activeGoal = codexGoalQuery.data ?? null;
 
@@ -782,7 +803,7 @@ export const WorkspaceComposerContainer = memo(
 				//     the goal-continuation turn codex auto-spawns.
 				//   - `/goal <new objective>` while a goal already exists
 				//                                    → confirm-replace panel.
-				if (provider === "codex" && displayedSessionId) {
+				if (supportsActiveGoal && displayedSessionId) {
 					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
 					const arg = match ? (match[1]?.trim() ?? "") : "";
 					if (arg === "pause" || arg === "clear") {
@@ -816,7 +837,12 @@ export const WorkspaceComposerContainer = memo(
 					options,
 				);
 			},
-			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+			[
+				supportsActiveGoal,
+				displayedSessionId,
+				activeGoal,
+				handleComposerSubmitInner,
+			],
 		);
 
 		const handleGoalReplaceConfirm = useCallback(() => {
