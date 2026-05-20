@@ -71,28 +71,40 @@ pub struct LivenessConfig {
 
 impl Default for LivenessConfig {
     fn default() -> Self {
+        // Track C3 watchdog cadence. Tightened from the original
+        // 10s / 5s / 3 escalation defaults so a half-open TCP socket
+        // surfaces as `Disconnected` within ~one ping cycle:
+        //
+        //   - `poll_interval` 5s — twice the cadence so the loop's
+        //     first probe lands quickly after the link drops.
+        //   - `ping_timeout` 3s — short enough that a stalled pipe
+        //     escalates instead of consuming half the tick window.
+        //   - `escalation_retries` 2 + `escalation_backoff_base` 250ms
+        //     — keeps the "slow blip" tolerance but cuts the worst-case
+        //     escalation burst from ~18s to ~7s.
         Self {
-            poll_interval: Duration::from_secs(10),
-            ping_timeout: Duration::from_secs(5),
+            poll_interval: Duration::from_secs(5),
+            ping_timeout: Duration::from_secs(3),
             transient_retry_delay: Duration::from_millis(750),
-            escalation_retries: 3,
-            escalation_backoff_base: Duration::from_millis(500),
+            escalation_retries: 2,
+            escalation_backoff_base: Duration::from_millis(250),
         }
     }
 }
 
 impl LivenessConfig {
     /// Tight-cadence variant — every sleep collapses to a near-zero
-    /// duration while retry counts stay at production values. Lets
-    /// tests exercise the retry pathway without burning seconds on
-    /// real clock waits.
+    /// duration while retry counts stay aligned with the production
+    /// default. Lets tests exercise the retry pathway without burning
+    /// seconds on real clock waits.
     #[cfg(test)]
     pub fn instant_test() -> Self {
+        let default_retries = LivenessConfig::default().escalation_retries;
         Self {
             poll_interval: Duration::ZERO,
             ping_timeout: Duration::from_secs(1),
             transient_retry_delay: Duration::ZERO,
-            escalation_retries: 3,
+            escalation_retries: default_retries,
             escalation_backoff_base: Duration::from_micros(1),
         }
     }
@@ -187,8 +199,8 @@ pub async fn decide_next_state(
     if matches!(prior, RuntimeState::Degraded { .. })
         && matches!(next, RuntimeState::Disconnected { .. })
     {
-        return retry_before_escalating(
-            runtime,
+        let escalated = retry_before_escalating(
+            Arc::clone(&runtime),
             prior,
             next,
             config.ping_timeout,
@@ -196,6 +208,17 @@ pub async fn decide_next_state(
             config.escalation_backoff_base,
         )
         .await;
+        // Track C3 watchdog: if every escalation retry also failed,
+        // the pipe is almost certainly half-open. Force-close the
+        // underlying transport so the next auto-reconnect tick gets
+        // a clean slate — without this the SSH child would hang
+        // until the kernel's own TCP keepalive (minutes) tripped it.
+        // Local + tombstoned runtimes implement `force_close` as a
+        // no-op, so the unconditional call is safe.
+        if let RuntimeState::Disconnected { ref reason } = escalated {
+            runtime.force_close(reason);
+        }
+        return escalated;
     }
     next
 }
@@ -281,16 +304,26 @@ mod tests {
 
     /// Configurable stub: each `ping()` call pops the front of `outcomes`
     /// and returns it. Tests load it with `Ok`/`Err` sequences to drive
-    /// state transitions.
+    /// state transitions. Also records [`force_close`] invocations so
+    /// the C3 watchdog wiring is checkable directly.
     struct ScriptedRuntime {
         outcomes: Mutex<std::collections::VecDeque<anyhow::Result<()>>>,
+        force_closes: Mutex<Vec<String>>,
     }
 
     impl ScriptedRuntime {
         fn new<I: IntoIterator<Item = anyhow::Result<()>>>(outcomes: I) -> Self {
             Self {
                 outcomes: Mutex::new(outcomes.into_iter().collect()),
+                force_closes: Mutex::new(Vec::new()),
             }
+        }
+
+        fn force_closes(&self) -> Vec<String> {
+            self.force_closes
+                .lock()
+                .expect("force_closes mutex poisoned")
+                .clone()
         }
     }
 
@@ -319,6 +352,12 @@ mod tests {
                 .expect("outcomes mutex poisoned")
                 .pop_front()
                 .unwrap_or_else(|| Err(anyhow::anyhow!("scripted runtime ran out of outcomes")))
+        }
+        fn force_close(&self, reason: &str) {
+            self.force_closes
+                .lock()
+                .expect("force_closes mutex poisoned")
+                .push(reason.to_string());
         }
     }
 
@@ -505,6 +544,83 @@ mod tests {
 
         tick_states_only(&registry).await;
         assert_eq!(registry.state("dev.box"), Some(RuntimeState::Connected));
+    }
+
+    // ── Track C3 watchdog: force_close on escalation ─────────────
+
+    #[tokio::test]
+    async fn escalation_to_disconnected_force_closes_the_runtime() {
+        // A Degraded entry whose every escalation retry also fails
+        // should have `force_close` called exactly once on the
+        // returned transition — the watchdog's whole point is to
+        // tear the half-open pipe down so auto-reconnect doesn't
+        // race a zombie SSH child.
+        let mut outcomes: Vec<anyhow::Result<()>> = vec![err("initial")];
+        let retries = LivenessConfig::instant_test().escalation_retries;
+        for i in 0..retries {
+            outcomes.push(err(Box::leak(format!("retry-{i}").into_boxed_str())));
+        }
+        let scripted = Arc::new(ScriptedRuntime::new(outcomes));
+        let runtime: Arc<dyn RemoteRuntime> = Arc::clone(&scripted) as Arc<dyn RemoteRuntime>;
+        let next = decide_next_state(
+            runtime,
+            &RuntimeState::Degraded {
+                reason: "prior".into(),
+            },
+            &LivenessConfig::instant_test(),
+        )
+        .await;
+        assert!(matches!(next, RuntimeState::Disconnected { .. }));
+        assert_eq!(
+            scripted.force_closes().len(),
+            1,
+            "force_close should fire exactly once on Degraded→Disconnected escalation",
+        );
+    }
+
+    #[tokio::test]
+    async fn escalation_recovery_does_not_force_close() {
+        // If one of the escalation retries succeeds the runtime is
+        // healthy after all — force_close must NOT fire, since that
+        // would kill a live pipe and force a needless reconnect.
+        let mut outcomes: Vec<anyhow::Result<()>> = vec![err("initial"), ok()];
+        let retries = LivenessConfig::instant_test().escalation_retries;
+        for i in 1..retries {
+            outcomes.push(err(Box::leak(format!("not-reached-{i}").into_boxed_str())));
+        }
+        let scripted = Arc::new(ScriptedRuntime::new(outcomes));
+        let runtime: Arc<dyn RemoteRuntime> = Arc::clone(&scripted) as Arc<dyn RemoteRuntime>;
+        let next = decide_next_state(
+            runtime,
+            &RuntimeState::Degraded {
+                reason: "prior".into(),
+            },
+            &LivenessConfig::instant_test(),
+        )
+        .await;
+        assert_eq!(next, RuntimeState::Connected);
+        assert!(
+            scripted.force_closes().is_empty(),
+            "force_close must not fire when escalation recovers: {:?}",
+            scripted.force_closes(),
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_blip_recovery_does_not_force_close() {
+        // Connected → ping fails once → transient retry succeeds.
+        // The watchdog must leave the pipe alone — the blip already
+        // self-healed.
+        let scripted = Arc::new(ScriptedRuntime::new([err("blip"), ok()]));
+        let runtime: Arc<dyn RemoteRuntime> = Arc::clone(&scripted) as Arc<dyn RemoteRuntime>;
+        let next = decide_next_state(
+            runtime,
+            &RuntimeState::Connected,
+            &LivenessConfig::instant_test(),
+        )
+        .await;
+        assert_eq!(next, RuntimeState::Connected);
+        assert!(scripted.force_closes().is_empty());
     }
 
     #[tokio::test]

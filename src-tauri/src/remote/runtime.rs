@@ -274,6 +274,20 @@ pub trait RemoteRuntime: Send + Sync {
         None
     }
 
+    /// Track C3: forcibly tear down the underlying transport. Called by
+    /// the liveness watchdog when the application-level ping has timed
+    /// out enough that the pipe is assumed half-open (the kernel hasn't
+    /// noticed the TCP socket is dead but our pings aren't returning).
+    /// The default no-op covers local + tombstoned runtimes; only
+    /// [`super::client::RemoteSshRuntime`] (and any future wire-backed
+    /// runtime) needs to drop its child + mark its state closed.
+    ///
+    /// Implementations must be idempotent — the watchdog may call this
+    /// once per failed escalation burst, and the auto-reconnect loop
+    /// replaces the runtime arc on success, so a second close on the
+    /// same instance should be a harmless no-op.
+    fn force_close(&self, _reason: &str) {}
+
     // ── agent.* ops (phase 23a — surface only) ──────────────────
     //
     // Phase 23a defines the wire shapes; the trait defaults bail.

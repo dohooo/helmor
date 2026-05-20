@@ -490,6 +490,36 @@ impl RpcClient {
         }
     }
 
+    /// Track C3: tear the pipe down on demand. Used by the liveness
+    /// watchdog when a half-open TCP socket has gone undetected by the
+    /// kernel but the application-level ping keeps timing out. Killing
+    /// the writer here drops the child (the writer's `Drop` calls
+    /// `kill + wait`) which unblocks the reader, which marks the state
+    /// closed and surfaces a transport error to any in-flight call.
+    ///
+    /// Idempotent: a second call after the writer's already been
+    /// replaced is a harmless mark-closed.
+    pub fn force_close(&self, reason: &str) {
+        // Replace the live writer with an `io::sink` — that drops the
+        // child (writer's `Drop` calls kill+wait) without holding the
+        // mutex across any join in [`Drop for RpcClient`].
+        let _writer = std::mem::replace(
+            &mut *self
+                .writer
+                .lock()
+                .expect("rpc client writer mutex poisoned"),
+            RpcWriter {
+                writer: Box::new(std::io::sink()),
+                child: None,
+            },
+        );
+        drop(_writer);
+        // Mark closed AFTER the writer drop so the reader thread's own
+        // mark_closed (it'll fire when read returns EOF/Err) finds the
+        // slot already set and leaves our reason intact.
+        self.state.mark_closed(reason.to_string());
+    }
+
     pub fn subscribe_workspace_file_events<F>(&self, callback: F) -> NotificationSubscription
     where
         F: Fn(super::methods::WorkspaceFileEventNotification) + Send + Sync + 'static,
@@ -980,6 +1010,10 @@ impl RemoteRuntime for RemoteSshRuntime {
 
     fn client_diagnostics(&self) -> Option<super::client::RpcClientDiagnostics> {
         Some(self.client.diagnostics())
+    }
+
+    fn force_close(&self, reason: &str) {
+        self.client.force_close(reason);
     }
 
     // ── agent.* delegation (phase 23a — wire-only) ───────────────
@@ -1903,6 +1937,55 @@ mod tests {
         client.state.mark_closed("simulated peer reset");
         let diag = client.diagnostics();
         assert_eq!(diag.closed_reason.as_deref(), Some("simulated peer reset"));
+    }
+
+    #[test]
+    fn force_close_marks_state_closed_and_fails_subsequent_calls() {
+        // Track C3: the liveness watchdog calls `force_close` when
+        // every escalation retry also fails. The call must mark
+        // state closed (so diagnostics surfaces a reason) and any
+        // subsequent `call` must fail fast instead of hanging on
+        // the now-dead pipe.
+        let client = split_loopback(None).unwrap();
+        assert!(client.diagnostics().closed_reason.is_none());
+
+        client.force_close("watchdog: half-open ssh pipe");
+
+        let diag = client.diagnostics();
+        assert_eq!(
+            diag.closed_reason.as_deref(),
+            Some("watchdog: half-open ssh pipe"),
+            "force_close must set the close reason for the diagnostics panel",
+        );
+
+        // Any new call after force_close has to surface the closed
+        // reason rather than block on the (now-sunk) writer.
+        let err = client
+            .call::<super::super::methods::PingMethod>(super::super::methods::PingParams {
+                counter: 0,
+            })
+            .expect_err("call after force_close must fail fast");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("watchdog"),
+            "post-close call should surface the close reason: {msg}",
+        );
+    }
+
+    #[test]
+    fn force_close_is_idempotent() {
+        // The watchdog may call force_close multiple times across
+        // ticks before the auto-reconnect loop replaces the runtime
+        // arc. A second invocation must not panic or overwrite the
+        // original reason.
+        let client = split_loopback(None).unwrap();
+        client.force_close("first close");
+        client.force_close("second close");
+        assert_eq!(
+            client.diagnostics().closed_reason.as_deref(),
+            Some("first close"),
+            "second force_close must not overwrite the original reason",
+        );
     }
 
     #[test]
