@@ -163,6 +163,9 @@ describe("RuntimeDebugPanel", () => {
 		// they can drive scripted AgentStreamEvents through it.
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies AgentReattachResponse);
 		// Default: a minimal diagnostics snapshot that the
 		// Connection diagnostics section can render without
@@ -1815,7 +1818,12 @@ describe("RuntimeDebugPanel", () => {
 			) => {
 				capturedRequest = request;
 				onEvent = cb;
-				return { accepted: true } satisfies AgentReattachResponse;
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				} satisfies AgentReattachResponse;
 			},
 		);
 
@@ -1925,7 +1933,12 @@ describe("RuntimeDebugPanel", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true } satisfies AgentReattachResponse;
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				} satisfies AgentReattachResponse;
 			},
 		);
 

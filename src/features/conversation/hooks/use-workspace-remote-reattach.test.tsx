@@ -60,6 +60,9 @@ describe("useWorkspaceRemoteReattach", () => {
 		apiMocks.startAgentReattachStream.mockReset();
 		apiMocks.startAgentReattachStream.mockResolvedValue({
 			accepted: true,
+			lastSeq: 0,
+			replayedCount: 0,
+			replayGap: null,
 		} satisfies AgentReattachResponse);
 	});
 
@@ -151,6 +154,42 @@ describe("useWorkspaceRemoteReattach", () => {
 		expect(result.current.isReattaching).toBe(true);
 	});
 
+	it("surfaces daemon replay diagnostics (replayedCount + replayGap) on the hook state", async () => {
+		// Phase 24r: after the attach RPC resolves, the hook stashes
+		// the daemon-reported replay diagnostics so the workspace
+		// chip can render "Rebuilding history (N events)" + the gap
+		// banner when applicable.
+		apiMocks.startAgentReattachStream.mockResolvedValueOnce({
+			accepted: true,
+			lastSeq: 99,
+			replayedCount: 7,
+			replayGap: 50,
+		} satisfies AgentReattachResponse);
+		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
+		const { wrapper } = withQueryClient();
+		const { result } = renderHook(
+			() =>
+				useWorkspaceRemoteReattach({
+					sessionId: SESSION_ID,
+					workspaceId: "ws-1",
+					runtimeName: RUNTIME,
+					provider: null,
+					modelId: null,
+					workingDirectory: null,
+					isAlreadyStreaming: false,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => {
+			expect(result.current.replayedCount).toBe(7);
+		});
+		expect(result.current.replayGap).toBe(50);
+		// Still reattaching — the streaming loop is alive even
+		// though the response has resolved.
+		expect(result.current.isReattaching).toBe(true);
+		expect(result.current.currentRequestId).toBe(REQUEST_ID);
+	});
+
 	it("does not fire reattach when no live session matches this helmor session", async () => {
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([
 			{
@@ -187,7 +226,12 @@ describe("useWorkspaceRemoteReattach", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true };
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				};
 			},
 		);
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);
@@ -251,7 +295,12 @@ describe("useWorkspaceRemoteReattach", () => {
 				cb: (event: AgentStreamEvent) => void,
 			) => {
 				onEvent = cb;
-				return { accepted: true };
+				return {
+					accepted: true,
+					lastSeq: 0,
+					replayedCount: 0,
+					replayGap: null,
+				};
 			},
 		);
 		apiMocks.listRemoteAgentSessions.mockResolvedValue([LIVE_SESSION]);

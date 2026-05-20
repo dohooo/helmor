@@ -57,6 +57,19 @@ export type WorkspaceRemoteReattachState = {
 	terminalLabel: string | null;
 	/** Last error message from the reattach loop or attach RPC. */
 	error: string | null;
+	/**
+	 * Phase 24r: total journal entries the daemon is flushing on
+	 * this attach. `null` until the attach RPC resolves. The chip
+	 * renders "Rebuilding history (N events)" when `> 0`.
+	 */
+	replayedCount: number | null;
+	/**
+	 * Phase 24r: earliest seq the daemon's ring can still deliver
+	 * when our `since_seq` predated the oldest entry. `null` means
+	 * the cold replay was clean; a value means partial replay — the
+	 * chip surfaces a "history unavailable" banner.
+	 */
+	replayGap: number | null;
 };
 
 const IDLE_STATE: WorkspaceRemoteReattachState = {
@@ -64,6 +77,8 @@ const IDLE_STATE: WorkspaceRemoteReattachState = {
 	currentRequestId: null,
 	terminalLabel: null,
 	error: null,
+	replayedCount: null,
+	replayGap: null,
 };
 
 export function useWorkspaceRemoteReattach({
@@ -154,10 +169,12 @@ export function useWorkspaceRemoteReattach({
 				currentRequestId: match.requestId,
 				terminalLabel: null,
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 
 			try {
-				await startAgentReattachStream(
+				const response = await startAgentReattachStream(
 					{
 						requestId: match.requestId,
 						helmorSessionId: sessionId,
@@ -179,6 +196,20 @@ export function useWorkspaceRemoteReattach({
 						});
 					},
 				);
+				if (disposed) return;
+				if (activeRequestIdRef.current !== match.requestId) return;
+				// Phase 24r: stash the daemon's replay diagnostics so the
+				// header chip can render "rebuilding N events" + the gap
+				// banner. The streaming loop is already running; the
+				// response carries these alongside `accepted=true`.
+				setState({
+					isReattaching: true,
+					currentRequestId: match.requestId,
+					terminalLabel: null,
+					error: null,
+					replayedCount: response.replayedCount,
+					replayGap: response.replayGap ?? null,
+				});
 			} catch (err) {
 				if (disposed) return;
 				if (activeRequestIdRef.current !== match.requestId) return;
@@ -187,6 +218,8 @@ export function useWorkspaceRemoteReattach({
 					currentRequestId: null,
 					terminalLabel: null,
 					error: errorMessage(err),
+					replayedCount: null,
+					replayGap: null,
 				});
 				activeRequestIdRef.current = null;
 			}
@@ -237,6 +270,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 				currentRequestId: null,
 				terminalLabel: "Caught up.",
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;
@@ -248,6 +283,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 					? `Remote aborted: ${event.reason}.`
 					: "Remote aborted.",
 				error: null,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;
@@ -257,6 +294,8 @@ function handleEvent(event: AgentStreamEvent, ctx: EventContext) {
 				currentRequestId: null,
 				terminalLabel: null,
 				error: event.message,
+				replayedCount: null,
+				replayGap: null,
 			});
 			invalidateThread(ctx);
 			return;

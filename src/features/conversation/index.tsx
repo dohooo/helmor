@@ -625,21 +625,45 @@ function RemoteReattachStatusChip({
 	state: ReturnType<typeof useWorkspaceRemoteReattach>;
 }) {
 	if (!state.isReattaching && !state.terminalLabel) return null;
-	const label = state.isReattaching
-		? `Following live remote turn (${state.currentRequestId?.slice(0, 8) ?? "—"})`
-		: state.terminalLabel;
+	// Phase 24r: while replay is flushing, surface the journal count
+	// so the user knows the chat is rebuilding history — not stuck
+	// silent on a long SSH round-trip.
+	let label: string | null = state.terminalLabel;
+	if (state.isReattaching) {
+		if (state.replayedCount !== null && state.replayedCount > 0) {
+			label = `Rebuilding history (${state.replayedCount} event${state.replayedCount === 1 ? "" : "s"})…`;
+		} else {
+			label = `Following live remote turn (${state.currentRequestId?.slice(0, 8) ?? "—"})`;
+		}
+	}
 	return (
-		<div
-			data-testid="remote-reattach-status-chip"
-			className="flex items-center gap-2 border-b border-amber-700/20 bg-amber-500/5 px-4 py-1 text-[11px] text-muted-foreground"
-		>
-			<span
-				aria-hidden
-				className={`size-1.5 rounded-full ${
-					state.isReattaching ? "animate-pulse bg-amber-400" : "bg-emerald-400"
-				}`}
-			/>
-			<span className="truncate">{label}</span>
-		</div>
+		<>
+			<div
+				data-testid="remote-reattach-status-chip"
+				className="flex items-center gap-2 border-b border-amber-700/20 bg-amber-500/5 px-4 py-1 text-[11px] text-muted-foreground"
+			>
+				<span
+					aria-hidden
+					className={`size-1.5 rounded-full ${
+						state.isReattaching
+							? "animate-pulse bg-amber-400"
+							: "bg-emerald-400"
+					}`}
+				/>
+				<span className="truncate">{label}</span>
+			</div>
+			{state.isReattaching && state.replayGap !== null && (
+				<div
+					data-testid="remote-reattach-replay-gap-banner"
+					className="flex items-center gap-2 border-b border-rose-700/30 bg-rose-500/10 px-4 py-1 text-[11px] text-rose-200"
+				>
+					<span aria-hidden className="size-1.5 rounded-full bg-rose-400" />
+					<span className="truncate">
+						History unavailable — earlier turns were evicted from the remote
+						buffer. New turns will appear here.
+					</span>
+				</div>
+			)}
+		</>
 	);
 }

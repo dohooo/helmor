@@ -87,6 +87,19 @@ pub trait SidecarTransport: Send + Sync + 'static {
     /// the production hot path; tests use it to assert the resolver
     /// picked the right transport without downcasting.
     fn kind(&self) -> TransportKind;
+
+    /// Phase 24r: ask the daemon to (re)attach the per-session
+    /// notifier to this client + flush journal entries newer than
+    /// `params.since_seq`. Only meaningful on remote transports
+    /// (the local sidecar has no journal). Default impl errors so
+    /// callers that mistakenly invoke it on `Local` get a clear
+    /// message rather than a silent no-op.
+    fn agent_attach(
+        &self,
+        _params: crate::remote::AgentAttachParams,
+    ) -> Result<crate::remote::AgentAttachResult> {
+        anyhow::bail!("agent.attach is only valid on remote transports");
+    }
 }
 
 // ── LocalSidecarTransport ────────────────────────────────────────────
@@ -254,6 +267,13 @@ impl SidecarTransport for RemoteSidecarTransport {
 
     fn kind(&self) -> TransportKind {
         TransportKind::Remote
+    }
+
+    fn agent_attach(
+        &self,
+        params: crate::remote::AgentAttachParams,
+    ) -> Result<crate::remote::AgentAttachResult> {
+        self.runtime.agent_attach(params)
     }
 }
 
