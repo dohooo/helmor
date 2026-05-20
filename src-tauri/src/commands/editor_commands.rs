@@ -112,6 +112,11 @@ pub async fn get_workspace_git_action_status(
         if !record.state.is_operational() {
             return Ok(quiet_status());
         }
+        // Chat workspaces are scratch dirs with no git binding at all. Polling
+        // `git status` would just spam `WorkspaceBroken` on every tick.
+        if record.mode.is_chat() {
+            return Ok(quiet_status());
+        }
         let workspace_dir = crate::workspace::helpers::workspace_path(&record)?;
         // Defensive: if the worktree directory was removed externally (e.g.
         // user `rm -rf`ed it while the row is still `ready`), return quiet
