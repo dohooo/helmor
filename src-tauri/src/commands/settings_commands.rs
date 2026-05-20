@@ -52,6 +52,34 @@ pub async fn update_app_settings(
             if !key.starts_with("app.") && !key.starts_with("branch_prefix_") {
                 continue;
             }
+            // Track G: route the Cursor key through the platform
+            // vault. The inbound JSON still carries the full provider
+            // config (model list, endpoints, apiKey); we extract the
+            // sensitive field, hand it to the keychain wrapper, and
+            // persist the residue (without apiKey) into SQLite.
+            if key == "app.cursor_provider" {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(value).unwrap_or(serde_json::json!({}));
+                let api_key = parsed
+                    .get("apiKey")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                crate::keychain::write_cursor_api_key(api_key)
+                    .with_context(|| format!("persist cursor api key for setting `{key}`"))?;
+                // `write_cursor_api_key` clears `apiKey` from the
+                // SQLite copy on vault hosts, so the upsert below
+                // would re-introduce it. Strip from the value we're
+                // about to store too.
+                let mut stripped = parsed;
+                if let Some(map) = stripped.as_object_mut() {
+                    if crate::keychain::has_vault_support() {
+                        map.remove("apiKey");
+                    }
+                }
+                settings::upsert_setting_value(key, &stripped.to_string())?;
+                continue;
+            }
             settings::upsert_setting_value(key, value)?;
         }
         Ok(())
