@@ -1484,6 +1484,16 @@ pub fn ssh_agent_status() -> CmdResult<crate::remote::ssh_diagnostics::SshAgentS
     Ok(crate::remote::ssh_diagnostics::ssh_agent_status())
 }
 
+/// Track B2: per-host attribute snapshot from `~/.ssh/config`.
+/// Returns one entry per non-wildcard `Host` block with the four
+/// attributes the wizard surfaces (HostName / User / IdentityFile /
+/// ProxyJump). Sorted by alias for a stable UI; empty list on a
+/// missing config.
+#[tauri::command]
+pub fn list_ssh_host_details() -> CmdResult<Vec<crate::remote::ssh_config::HostDetail>> {
+    Ok(crate::remote::ssh_config::list_user_ssh_host_details())
+}
+
 #[tauri::command]
 pub fn list_remote_runtimes(
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,

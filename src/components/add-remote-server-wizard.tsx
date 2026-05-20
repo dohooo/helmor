@@ -17,8 +17,8 @@
  */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plug2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Network, Plug2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { SshDiagnostics } from "@/components/ssh-diagnostics";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { connectRemoteRuntime, listSshHosts } from "@/lib/api";
+import {
+	connectRemoteRuntime,
+	listSshHostDetails,
+	listSshHosts,
+	type SshHostDetail,
+} from "@/lib/api";
 
 export type AddRemoteServerWizardProps = {
 	open: boolean;
@@ -80,6 +85,26 @@ export function AddRemoteServerWizard({
 		enabled: open,
 	});
 	const sshHosts: string[] = sshHostsQuery.data ?? [];
+
+	// Track B2: per-host attribute snapshot. Separate query so the
+	// older `listSshHosts` callers (anything reading the bare alias
+	// list) keep working unchanged.
+	const sshHostDetailsQuery = useQuery({
+		queryKey: ["ssh-host-details"],
+		queryFn: listSshHostDetails,
+		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		enabled: open,
+	});
+	const matchedDetail = useMemo<SshHostDetail | null>(() => {
+		const target = host.trim();
+		if (!target) return null;
+		const details = sshHostDetailsQuery.data ?? [];
+		// Trim a leading `user@` so an operator who types
+		// `dwork@dev.box` still matches a `Host dev.box` block.
+		const tail = target.includes("@") ? target.split("@", 2)[1] : target;
+		return details.find((d) => d.alias === tail) ?? null;
+	}, [host, sshHostDetailsQuery.data]);
 
 	const connect = useMutation({
 		mutationFn: async () => {
@@ -174,6 +199,7 @@ export function AddRemoteServerWizard({
 								</datalist>
 							)}
 						</div>
+						{matchedDetail && <HostDetailPreview detail={matchedDetail} />}
 						<SshDiagnostics enabled={open} />
 						<div className="flex justify-end gap-2">
 							<Button
@@ -276,4 +302,46 @@ function formatError(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	if (typeof err === "string") return err;
 	return "Connect failed.";
+}
+
+/// Track B2: read-only summary of what `~/.ssh/config` actually
+/// applies for the typed alias. Lets the operator catch
+/// "wrong-bastion" / "wrong-user" misconfigs before clicking
+/// Connect. Hidden when the typed host isn't an aliased Host block.
+function HostDetailPreview({ detail }: { detail: SshHostDetail }) {
+	const rows: { label: string; value: string }[] = [];
+	if (detail.hostName) rows.push({ label: "HostName", value: detail.hostName });
+	if (detail.user) rows.push({ label: "User", value: detail.user });
+	if (detail.identityFiles.length > 0) {
+		rows.push({
+			label:
+				detail.identityFiles.length === 1 ? "IdentityFile" : "IdentityFiles",
+			value: detail.identityFiles.join(", "),
+		});
+	}
+	if (detail.proxyJump) {
+		rows.push({ label: "ProxyJump", value: detail.proxyJump });
+	}
+	if (rows.length === 0) return null;
+	return (
+		<div
+			className="flex items-start gap-2 rounded-md border border-border/40 bg-muted/30 p-3 text-[11px]"
+			data-testid="add-remote-server-host-detail"
+		>
+			<Network className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
+			<div className="flex flex-col gap-0.5">
+				<span className="text-muted-foreground">
+					From <code className="font-mono">~/.ssh/config</code>:
+				</span>
+				{rows.map((r) => (
+					<span
+						key={r.label}
+						className="font-mono text-[10px] text-foreground/80"
+					>
+						<span className="text-muted-foreground">{r.label}</span> {r.value}
+					</span>
+				))}
+			</div>
+		</div>
+	);
 }

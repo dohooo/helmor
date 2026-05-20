@@ -65,6 +65,8 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// Hard cap on how deep we'll follow `Include` directives. Mirrors
 /// OpenSSH's MAX_INCLUDES. A user with a deeper chain than this
 /// almost certainly has a circular include and we'd rather drop the
@@ -476,6 +478,321 @@ fn strip_keyword<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 fn user_ssh_config_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok().filter(|s| !s.is_empty())?;
     Some(PathBuf::from(home).join(".ssh").join("config"))
+}
+
+// ── Track B2: per-host detail extraction ────────────────────────────
+//
+// `parse_hosts*` returns just alias names — enough for the wizard's
+// type-ahead but not enough to surface "this alias actually connects
+// to bastion → dev.box as user dwork via ~/.ssh/work_rsa". The
+// per-host detail surface captures the four attributes operators most
+// often want to see in the wizard before clicking Connect:
+//
+//   - HostName     — the real DNS name (different from the alias)
+//   - User         — the SSH login
+//   - IdentityFile — one or more keys (ssh permits multiple per host)
+//   - ProxyJump    — the multi-hop chain
+//
+// Anything else (Port, PreferredAuthentications, …) is intentionally
+// left out — the goal isn't to re-implement ssh, only to surface the
+// fields a typo / wrong-bastion misconfig would manifest in.
+
+/// One Host block flattened to the attributes the wizard surfaces.
+/// Multiple aliases on the same `Host` line each get their own entry
+/// (their attribute body is shared verbatim, mirroring ssh's
+/// semantics).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDetail {
+    /// The alias as it appeared after `Host` (or one of the aliases
+    /// when several were on the same line).
+    pub alias: String,
+    pub host_name: Option<String>,
+    pub user: Option<String>,
+    /// Multiple `IdentityFile` lines per host are legal in ssh; we
+    /// preserve the order they appeared in.
+    pub identity_files: Vec<String>,
+    pub proxy_jump: Option<String>,
+}
+
+/// Production entry point: walk `$HOME/.ssh/config` (with Include
+/// resolution + Match gating) and return per-host details sorted by
+/// alias. Empty list for missing config / `$HOME`.
+pub fn list_user_ssh_host_details() -> Vec<HostDetail> {
+    let Some(path) = user_ssh_config_path() else {
+        return Vec::new();
+    };
+    let user = current_user();
+    let mut details: Vec<HostDetail> = Vec::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let base_dir = ssh_base_dir_from_config_path(&path);
+    walk_host_details(
+        &path,
+        &base_dir,
+        user.as_deref(),
+        &mut details,
+        &mut visited,
+        0,
+    );
+    details.sort_by(|a, b| a.alias.cmp(&b.alias));
+    details
+}
+
+/// Body-only parser. Mirrors [`parse_hosts`] but emits a per-Host
+/// detail struct. No Include resolution (no IO); tests + ad-hoc
+/// callers use this with literal strings.
+pub fn parse_host_details(content: &str) -> Vec<HostDetail> {
+    let mut details: Vec<HostDetail> = Vec::new();
+    collect_host_details_from_body(content, true, &mut details);
+    // Sorted by alias so the surface is stable regardless of source
+    // order — matches what `parse_hosts` does for plain names.
+    details.sort_by(|a, b| a.alias.cmp(&b.alias));
+    details
+}
+
+/// Single-file variant — used by the body-only parser AND by the
+/// include-walking variant (which calls it per file with the
+/// matching base directory). The `block_starts_active` flag mirrors
+/// ssh's "files are evaluated fresh" rule: a Match in file A doesn't
+/// leak into included file B.
+fn collect_host_details_from_body(
+    content: &str,
+    _block_starts_active: bool,
+    details: &mut Vec<HostDetail>,
+) {
+    let user = current_user();
+    let mut current: Option<HostBlockAccumulator> = None;
+    let mut block_active = true;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = strip_keyword(trimmed, "Match") {
+            // Flush any in-progress host before swapping gates.
+            if let Some(acc) = current.take() {
+                if block_active {
+                    acc.finalise_into(details);
+                }
+            }
+            block_active = match evaluate_match(rest, user.as_deref()) {
+                MatchOutcome::Active => true,
+                MatchOutcome::Inactive | MatchOutcome::Unsupported => false,
+            };
+            continue;
+        }
+        if let Some(rest) = strip_host_directive(trimmed) {
+            if let Some(acc) = current.take() {
+                if block_active {
+                    acc.finalise_into(details);
+                }
+            }
+            block_active = true;
+            let aliases: Vec<String> = rest
+                .split_whitespace()
+                .filter(|a| !a.contains('*') && !a.contains('?') && !a.starts_with('!'))
+                .map(|a| a.to_string())
+                .collect();
+            if aliases.is_empty() {
+                continue;
+            }
+            current = Some(HostBlockAccumulator::new(aliases));
+            continue;
+        }
+        // Attribute lines apply to the in-progress block (if any).
+        if let Some(acc) = current.as_mut() {
+            apply_attribute(acc, trimmed);
+        }
+    }
+    if let Some(acc) = current.take() {
+        if block_active {
+            acc.finalise_into(details);
+        }
+    }
+}
+
+/// Include-walking variant. Mirrors [`walk_config_file`] but emits
+/// per-Host details. Includes processed inside an inactive Match
+/// block are still walked (each file evaluates its own Match gate
+/// fresh) — same semantics as the alias walker.
+fn walk_host_details(
+    path: &Path,
+    base_dir: &Path,
+    user: Option<&str>,
+    details: &mut Vec<HostDetail>,
+    visited: &mut HashSet<PathBuf>,
+    depth: u8,
+) {
+    if depth >= MAX_INCLUDE_DEPTH {
+        return;
+    }
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical) {
+        return;
+    }
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    // We can't just call collect_host_details_from_body because it
+    // doesn't know how to recurse into Include directives. Inline the
+    // walker here.
+    let mut current: Option<HostBlockAccumulator> = None;
+    let mut block_active = true;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = strip_keyword(trimmed, "Match") {
+            if let Some(acc) = current.take() {
+                if block_active {
+                    acc.finalise_into(details);
+                }
+            }
+            block_active = match evaluate_match(rest, user) {
+                MatchOutcome::Active => true,
+                MatchOutcome::Inactive | MatchOutcome::Unsupported => false,
+            };
+            continue;
+        }
+        if let Some(rest) = strip_host_directive(trimmed) {
+            if let Some(acc) = current.take() {
+                if block_active {
+                    acc.finalise_into(details);
+                }
+            }
+            block_active = true;
+            let aliases: Vec<String> = rest
+                .split_whitespace()
+                .filter(|a| !a.contains('*') && !a.contains('?') && !a.starts_with('!'))
+                .map(|a| a.to_string())
+                .collect();
+            if aliases.is_empty() {
+                continue;
+            }
+            current = Some(HostBlockAccumulator::new(aliases));
+            continue;
+        }
+        if let Some(rest) = strip_keyword(trimmed, "Include") {
+            // Flush in-progress host before recursing — its body has
+            // ended even if the directive's tail is shared.
+            if let Some(acc) = current.take() {
+                if block_active {
+                    acc.finalise_into(details);
+                }
+            }
+            for token in rest.split_whitespace() {
+                expand_include_for_details(token, base_dir, user, details, visited, depth + 1);
+            }
+            // Resetting block_active after Include matches the
+            // semantics of the alias walker.
+            block_active = true;
+            continue;
+        }
+        if let Some(acc) = current.as_mut() {
+            apply_attribute(acc, trimmed);
+        }
+    }
+    if let Some(acc) = current.take() {
+        if block_active {
+            acc.finalise_into(details);
+        }
+    }
+}
+
+fn expand_include_for_details(
+    token: &str,
+    base_dir: &Path,
+    user: Option<&str>,
+    details: &mut Vec<HostDetail>,
+    visited: &mut HashSet<PathBuf>,
+    depth: u8,
+) {
+    let expanded = expand_tilde(token);
+    let candidate = if Path::new(&expanded).is_absolute() {
+        PathBuf::from(expanded)
+    } else {
+        base_dir.join(expanded)
+    };
+    let pattern = candidate.to_string_lossy();
+    let Ok(matches) = glob::glob(&pattern) else {
+        return;
+    };
+    for entry in matches.flatten() {
+        if entry.is_dir() {
+            continue;
+        }
+        walk_host_details(&entry, base_dir, user, details, visited, depth);
+    }
+}
+
+/// Mutable accumulator: collects attributes for one Host block,
+/// then fans out into N `HostDetail` entries on finalise (one per
+/// alias on the `Host` line).
+struct HostBlockAccumulator {
+    aliases: Vec<String>,
+    host_name: Option<String>,
+    user: Option<String>,
+    identity_files: Vec<String>,
+    proxy_jump: Option<String>,
+}
+
+impl HostBlockAccumulator {
+    fn new(aliases: Vec<String>) -> Self {
+        Self {
+            aliases,
+            host_name: None,
+            user: None,
+            identity_files: Vec::new(),
+            proxy_jump: None,
+        }
+    }
+
+    fn finalise_into(self, details: &mut Vec<HostDetail>) {
+        for alias in self.aliases {
+            details.push(HostDetail {
+                alias,
+                host_name: self.host_name.clone(),
+                user: self.user.clone(),
+                identity_files: self.identity_files.clone(),
+                proxy_jump: self.proxy_jump.clone(),
+            });
+        }
+    }
+}
+
+fn apply_attribute(acc: &mut HostBlockAccumulator, line: &str) {
+    // Honour ssh's "first directive wins" precedence for scalar
+    // attributes — we only set them when not already set, so an
+    // outer-scope override doesn't surface a value the inner Host
+    // block has already pinned.
+    if let Some(rest) = strip_keyword(line, "HostName") {
+        if !rest.is_empty() && acc.host_name.is_none() {
+            acc.host_name = Some(rest.to_string());
+        }
+        return;
+    }
+    if let Some(rest) = strip_keyword(line, "User") {
+        if !rest.is_empty() && acc.user.is_none() {
+            acc.user = Some(rest.to_string());
+        }
+        return;
+    }
+    if let Some(rest) = strip_keyword(line, "IdentityFile") {
+        if !rest.is_empty() {
+            // Tilde-expand so the desktop surfaces an absolute path the
+            // operator can click through. Multiple IdentityFile lines
+            // accumulate; ssh tries them in order.
+            acc.identity_files.push(expand_tilde(rest));
+        }
+        return;
+    }
+    if let Some(rest) = strip_keyword(line, "ProxyJump") {
+        if !rest.is_empty() && acc.proxy_jump.is_none() {
+            acc.proxy_jump = Some(rest.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1122,5 +1439,212 @@ Host inner-active
         // Pattern is shorter than value with no `*` to absorb.
         assert!(!matches_pattern("foo", "foobar"));
         assert!(!matches_pattern("foobar", "foo"));
+    }
+
+    // ── Track B2: per-host detail parser ──────────────────────────
+
+    #[test]
+    fn host_details_capture_hostname_user_identity_file_proxy_jump() {
+        let cfg = "\
+Host dev.box
+    HostName 10.0.2.31
+    User dwork
+    IdentityFile ~/.ssh/work_rsa
+    ProxyJump bastion.example.com
+";
+        let details = parse_host_details(cfg);
+        assert_eq!(details.len(), 1);
+        let d = &details[0];
+        assert_eq!(d.alias, "dev.box");
+        assert_eq!(d.host_name.as_deref(), Some("10.0.2.31"));
+        assert_eq!(d.user.as_deref(), Some("dwork"));
+        // ~/ should have expanded against $HOME (or stayed literal if
+        // $HOME is missing on the test runner — assert prefix).
+        assert!(
+            d.identity_files
+                .first()
+                .map(|p| p.ends_with("/.ssh/work_rsa"))
+                .unwrap_or(false),
+            "identity_files: {:?}",
+            d.identity_files,
+        );
+        assert_eq!(d.proxy_jump.as_deref(), Some("bastion.example.com"));
+    }
+
+    #[test]
+    fn host_details_aggregate_multiple_identity_files_in_order() {
+        let cfg = "\
+Host fans-out
+    IdentityFile ~/.ssh/primary
+    IdentityFile ~/.ssh/fallback
+";
+        let details = parse_host_details(cfg);
+        assert_eq!(details.len(), 1);
+        let d = &details[0];
+        assert_eq!(d.identity_files.len(), 2);
+        assert!(d.identity_files[0].ends_with("/.ssh/primary"));
+        assert!(d.identity_files[1].ends_with("/.ssh/fallback"));
+    }
+
+    #[test]
+    fn host_details_with_multi_alias_line_get_one_entry_per_alias_sharing_body() {
+        let cfg = "\
+Host alpha beta
+    HostName shared.example.com
+    User dwork
+";
+        let details = parse_host_details(cfg);
+        let names: Vec<_> = details.iter().map(|d| d.alias.clone()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+        for d in &details {
+            assert_eq!(d.host_name.as_deref(), Some("shared.example.com"));
+            assert_eq!(d.user.as_deref(), Some("dwork"));
+        }
+    }
+
+    #[test]
+    fn host_details_drop_wildcard_host_blocks() {
+        // Wildcard Host blocks (e.g. `Host *`) aren't connectable
+        // aliases — they're config defaults. Mirror the alias parser
+        // and drop them from the detail list.
+        let cfg = "\
+Host *
+    User defaultuser
+
+Host real
+    HostName actual.example.com
+";
+        let details = parse_host_details(cfg);
+        let names: Vec<_> = details.iter().map(|d| d.alias.clone()).collect();
+        assert_eq!(names, vec!["real"]);
+    }
+
+    #[test]
+    fn host_details_terminate_block_at_next_host_directive() {
+        // Attributes from block A must not leak into block B.
+        let cfg = "\
+Host alpha
+    User dwork
+    HostName a.example.com
+
+Host beta
+    HostName b.example.com
+";
+        let details = parse_host_details(cfg);
+        let alpha = details.iter().find(|d| d.alias == "alpha").unwrap();
+        let beta = details.iter().find(|d| d.alias == "beta").unwrap();
+        assert_eq!(alpha.user.as_deref(), Some("dwork"));
+        assert_eq!(beta.user, None, "beta must not inherit alpha's User");
+    }
+
+    #[test]
+    fn host_details_first_value_wins_for_scalar_attrs() {
+        // ssh's rule: the first value for HostName/User/ProxyJump
+        // sticks. A later directive in the same block is ignored.
+        let cfg = "\
+Host h
+    HostName first.example.com
+    HostName second.example.com
+    User first-user
+    User second-user
+    ProxyJump first-jump
+    ProxyJump second-jump
+";
+        let details = parse_host_details(cfg);
+        assert_eq!(details.len(), 1);
+        let d = &details[0];
+        assert_eq!(d.host_name.as_deref(), Some("first.example.com"));
+        assert_eq!(d.user.as_deref(), Some("first-user"));
+        assert_eq!(d.proxy_jump.as_deref(), Some("first-jump"));
+    }
+
+    #[test]
+    fn host_details_ignore_lines_outside_any_host_block() {
+        // Lines before the first `Host` directive belong to the
+        // implicit "global" block; they don't surface as their own
+        // detail entry.
+        let cfg = "\
+HostName ignored.example.com
+User ignored-user
+
+Host h
+    HostName captured.example.com
+";
+        let details = parse_host_details(cfg);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].alias, "h");
+        assert_eq!(
+            details[0].host_name.as_deref(),
+            Some("captured.example.com")
+        );
+        assert_eq!(details[0].user, None);
+    }
+
+    #[test]
+    fn host_details_include_resolution_picks_up_attributes_from_included_files() {
+        // Verify the include walker carries per-host attributes the
+        // same way the alias walker carries names.
+        let (_dir, root) = fixture(&[
+            (
+                "config",
+                "\
+Include extra.conf
+Host local
+    HostName local.example.com
+",
+            ),
+            (
+                "extra.conf",
+                "\
+Host included
+    HostName included.example.com
+    User d
+",
+            ),
+        ]);
+        let details = list_user_ssh_host_details_at(&root);
+        let names: Vec<_> = details.iter().map(|d| d.alias.clone()).collect();
+        assert_eq!(names, vec!["included", "local"]);
+        let inc = details.iter().find(|d| d.alias == "included").unwrap();
+        assert_eq!(inc.host_name.as_deref(), Some("included.example.com"));
+        assert_eq!(inc.user.as_deref(), Some("d"));
+    }
+
+    /// Test-only entry point: same as [`list_user_ssh_host_details`]
+    /// but takes an explicit path so tests can drive a tempdir
+    /// fixture without spoofing `$HOME`.
+    fn list_user_ssh_host_details_at(path: &Path) -> Vec<HostDetail> {
+        let user = current_user();
+        let mut details: Vec<HostDetail> = Vec::new();
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        let base_dir = ssh_base_dir_from_config_path(path);
+        super::walk_host_details(
+            path,
+            &base_dir,
+            user.as_deref(),
+            &mut details,
+            &mut visited,
+            0,
+        );
+        details.sort_by(|a, b| a.alias.cmp(&b.alias));
+        details
+    }
+
+    #[test]
+    fn host_details_match_block_user_gates_detail_just_like_alias() {
+        // Reuses Match user evaluation. With a non-matching user, the
+        // gated block's host is excluded from the detail list.
+        let (_dir, root) = fixture(&[(
+            "config",
+            "\
+Match user me
+Host gated
+    HostName gated.example.com
+",
+        )]);
+        let with_match = parse_hosts_from_path_with_user(&root, Some("me"));
+        let without_match = parse_hosts_from_path_with_user(&root, Some("not-me"));
+        assert_eq!(with_match, vec!["gated"]);
+        assert!(without_match.is_empty(), "{without_match:?}");
     }
 }

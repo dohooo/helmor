@@ -965,6 +965,23 @@ export async function getSshAgentStatus(): Promise<SshAgentStatus> {
 }
 
 /**
+ * Track B2: per-host attribute snapshot from `~/.ssh/config`. Lets
+ * the wizard render "this alias actually resolves to host X, logs
+ * in as Y, jumps via Z" before the operator clicks Connect.
+ */
+export type SshHostDetail = {
+	alias: string;
+	hostName: string | null;
+	user: string | null;
+	identityFiles: string[];
+	proxyJump: string | null;
+};
+
+export async function listSshHostDetails(): Promise<SshHostDetail[]> {
+	return invoke<SshHostDetail[]>("list_ssh_host_details");
+}
+
+/**
  * One persisted "this workspace routes through that runtime" pin.
  * `runtimeName` is a string key into the runtime registry (not a
  * validated reference) — a binding can outlive its target runtime

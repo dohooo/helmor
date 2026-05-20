@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
 	connectRemoteRuntime: vi.fn(),
 	listSshHosts: vi.fn(),
+	listSshHostDetails: vi.fn(),
+	getSshAgentStatus: vi.fn(),
+	listSshIdentities: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -15,6 +18,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		...actual,
 		connectRemoteRuntime: apiMocks.connectRemoteRuntime,
 		listSshHosts: apiMocks.listSshHosts,
+		listSshHostDetails: apiMocks.listSshHostDetails,
+		getSshAgentStatus: apiMocks.getSshAgentStatus,
+		listSshIdentities: apiMocks.listSshIdentities,
 	};
 });
 
@@ -41,7 +47,13 @@ describe("AddRemoteServerWizard", () => {
 	beforeEach(() => {
 		apiMocks.connectRemoteRuntime.mockReset();
 		apiMocks.listSshHosts.mockReset();
+		apiMocks.listSshHostDetails.mockReset();
+		apiMocks.getSshAgentStatus.mockReset();
+		apiMocks.listSshIdentities.mockReset();
 		apiMocks.listSshHosts.mockResolvedValue([]);
+		apiMocks.listSshHostDetails.mockResolvedValue([]);
+		apiMocks.getSshAgentStatus.mockResolvedValue({ state: "notConfigured" });
+		apiMocks.listSshIdentities.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -174,6 +186,79 @@ describe("AddRemoteServerWizard", () => {
 		const nameInput = await screen.findByTestId("add-remote-server-name");
 		expect((nameInput as HTMLInputElement).value).toBe("");
 		expect(screen.getByTestId("add-remote-server-connect")).toBeDisabled();
+	});
+
+	it("surfaces matching host detail when the typed host is in ~/.ssh/config", async () => {
+		apiMocks.listSshHostDetails.mockResolvedValue([
+			{
+				alias: "dev.box",
+				hostName: "10.0.2.31",
+				user: "dwork",
+				identityFiles: ["/home/d/.ssh/work_rsa"],
+				proxyJump: "bastion.example.com",
+			},
+		]);
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await waitFor(() => expect(apiMocks.listSshHostDetails).toHaveBeenCalled());
+		await user.type(screen.getByTestId("add-remote-server-host"), "dev.box");
+		const detail = await screen.findByTestId("add-remote-server-host-detail");
+		expect(detail).toHaveTextContent("10.0.2.31");
+		expect(detail).toHaveTextContent("dwork");
+		expect(detail).toHaveTextContent("/home/d/.ssh/work_rsa");
+		expect(detail).toHaveTextContent("bastion.example.com");
+	});
+
+	it("matches a `user@alias` typed value against the bare alias", async () => {
+		apiMocks.listSshHostDetails.mockResolvedValue([
+			{
+				alias: "dev.box",
+				hostName: "10.0.2.31",
+				user: null,
+				identityFiles: [],
+				proxyJump: null,
+			},
+		]);
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await waitFor(() => expect(apiMocks.listSshHostDetails).toHaveBeenCalled());
+		await user.type(
+			screen.getByTestId("add-remote-server-host"),
+			"override@dev.box",
+		);
+		const detail = await screen.findByTestId("add-remote-server-host-detail");
+		expect(detail).toHaveTextContent("10.0.2.31");
+	});
+
+	it("hides the host-detail block when the typed host doesn't match any alias", async () => {
+		apiMocks.listSshHostDetails.mockResolvedValue([
+			{
+				alias: "dev.box",
+				hostName: "10.0.2.31",
+				user: null,
+				identityFiles: [],
+				proxyJump: null,
+			},
+		]);
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await waitFor(() => expect(apiMocks.listSshHostDetails).toHaveBeenCalled());
+		await user.type(
+			screen.getByTestId("add-remote-server-host"),
+			"never-aliased.example.com",
+		);
+		expect(
+			screen.queryByTestId("add-remote-server-host-detail"),
+		).not.toBeInTheDocument();
 	});
 
 	it("renders ssh-config host aliases as a datalist", async () => {
