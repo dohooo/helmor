@@ -689,8 +689,24 @@ fn cursor_login_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the binary to spawn for an agent CLI subcommand.
+///
+/// Prefers the bundled binary under `Helmor.app/Contents/Resources/vendor/`
+/// so onboarding works on machines that don't have `claude` / `codex` on
+/// PATH. Falls back to the bare command name (PATH lookup) for dev builds
+/// and as a last resort.
+fn resolve_agent_binary(provider: &str) -> PathBuf {
+    let bundled = sidecar::resolve_bundled_agent_paths();
+    let bundled_path = match provider {
+        "claude" => bundled.claude_bin,
+        "codex" => bundled.codex_bin,
+        _ => None,
+    };
+    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+}
+
 fn claude_login_ready() -> bool {
-    match std::process::Command::new("claude")
+    match std::process::Command::new(resolve_agent_binary("claude"))
         .args(["auth", "status"])
         .output()
     {
@@ -744,7 +760,7 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new("codex")
+    match std::process::Command::new(resolve_agent_binary("codex"))
         .args(["login", "status"])
         .output()
     {
@@ -797,12 +813,19 @@ fn env_var_is_present(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
-    match provider {
-        "claude" => Ok("claude auth login"),
-        "codex" => Ok("codex login"),
+fn agent_login_command(provider: &str) -> anyhow::Result<String> {
+    let args = match provider {
+        "claude" => "auth login",
+        "codex" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
-    }
+    };
+    // Quote the resolved binary path so spaces in `Helmor.app` survive
+    // both the embedded PTY shell and AppleScript's `do shell script`.
+    Ok(format!(
+        "{} {}",
+        shell_quote(&resolve_agent_binary(provider)),
+        args
+    ))
 }
 
 fn agent_login_script_type(provider: &str, instance_id: &str) -> String {
@@ -819,7 +842,7 @@ pub async fn spawn_agent_login_terminal(
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
-    let command = agent_login_command(&provider)?.to_string();
+    let command = agent_login_command(&provider)?;
     tracing::info!(
         provider = %provider,
         instance_id = %instance_id,
@@ -948,7 +971,7 @@ pub async fn resize_agent_login_terminal(
 #[cfg(target_os = "macos")]
 fn open_agent_login_terminal_impl(provider: &str) -> anyhow::Result<()> {
     let command = agent_login_command(provider)?;
-    let script_command = applescript_string(command);
+    let script_command = applescript_string(&command);
     let output = std::process::Command::new("osascript")
         .arg("-e")
         .arg("tell application \"Terminal\" to activate")
