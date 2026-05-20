@@ -36,6 +36,7 @@ const GROUPS: ShortcutGroup[] = [
 	"Actions",
 	"System",
 	"Composer",
+	"Start surface",
 	"Editor",
 	"Terminal",
 ];
