@@ -208,6 +208,43 @@ pub fn ensure_remote_helmor_server_with_strategy<R: SshRunner>(
 /// `true` when the binary's protocol line matches our compiled-in
 /// `PROTOCOL_VERSION`. Pre-D4 binaries (no protocol line at all)
 /// never match — forces them to be replaced.
+/// Parse a release version string like "0.22.1" or "1.0.0-beta" into
+/// its three numeric components. Pre-release / build suffixes are
+/// ignored (the suffix after `-` or `+` is dropped before parsing).
+///
+/// Returns `None` for malformed input — callers treat that as "skip
+/// the comparison" rather than blowing up the connect flow.
+pub fn parse_semver_triple(version: &str) -> Option<(u32, u32, u32)> {
+    let base = version
+        .split(['-', '+'])
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let mut parts = base.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    let patch: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// `true` when `daemon_version` is strictly older than
+/// `desktop_version`. Used by the version-drift detector to decide
+/// whether to surface a "reinstall recommended" banner.
+///
+/// `Some(false)` covers equal and newer-daemon cases (a daemon that
+/// got ahead of the desktop isn't a drift the desktop should warn
+/// about). `None` from a malformed string short-circuits to false
+/// — we'd rather miss a warning than fire one on garbage input.
+pub fn daemon_version_is_older(daemon_version: &str, desktop_version: &str) -> bool {
+    match (
+        parse_semver_triple(daemon_version),
+        parse_semver_triple(desktop_version),
+    ) {
+        (Some(daemon), Some(desktop)) => daemon < desktop,
+        _ => false,
+    }
+}
+
 fn version_matches_protocol(probed: &ProbedVersion, expected: &str) -> bool {
     probed
         .protocol_version
@@ -553,6 +590,61 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
     use std::sync::Mutex;
+
+    // ── version drift comparator ──────────────────────────────────
+
+    #[test]
+    fn parse_semver_triple_handles_release_form() {
+        assert_eq!(parse_semver_triple("0.22.1"), Some((0, 22, 1)));
+        assert_eq!(parse_semver_triple("1.0.0"), Some((1, 0, 0)));
+        assert_eq!(parse_semver_triple("10.20.30"), Some((10, 20, 30)));
+    }
+
+    #[test]
+    fn parse_semver_triple_drops_prerelease_and_build_suffixes() {
+        // Drift detection cares only about the X.Y.Z base; pre-release
+        // / build metadata is irrelevant.
+        assert_eq!(parse_semver_triple("0.22.1-beta"), Some((0, 22, 1)));
+        assert_eq!(parse_semver_triple("0.22.1+sha.abc"), Some((0, 22, 1)));
+        assert_eq!(parse_semver_triple("0.22.1-rc.4+sha.abc"), Some((0, 22, 1)));
+    }
+
+    #[test]
+    fn parse_semver_triple_defaults_missing_patch_to_zero() {
+        // Some upstream releases tag as "0.22" without a patch.
+        assert_eq!(parse_semver_triple("0.22"), Some((0, 22, 0)));
+    }
+
+    #[test]
+    fn parse_semver_triple_rejects_garbage() {
+        assert_eq!(parse_semver_triple(""), None);
+        assert_eq!(parse_semver_triple("not-a-version"), None);
+        assert_eq!(parse_semver_triple("0..1"), None);
+        assert_eq!(parse_semver_triple("0.x.1"), None);
+    }
+
+    #[test]
+    fn daemon_version_is_older_compares_each_component_lexicographically() {
+        assert!(daemon_version_is_older("0.21.0", "0.22.0"));
+        assert!(daemon_version_is_older("0.22.0", "0.22.1"));
+        assert!(daemon_version_is_older("0.22.1", "1.0.0"));
+    }
+
+    #[test]
+    fn daemon_version_is_older_returns_false_when_equal_or_newer() {
+        assert!(!daemon_version_is_older("0.22.1", "0.22.1"));
+        assert!(!daemon_version_is_older("0.22.2", "0.22.1"));
+        assert!(!daemon_version_is_older("1.0.0", "0.22.1"));
+    }
+
+    #[test]
+    fn daemon_version_is_older_returns_false_on_malformed_input() {
+        // Garbage input short-circuits to false — we'd rather miss
+        // a warning than fire one on a parse failure.
+        assert!(!daemon_version_is_older("garbage", "0.22.1"));
+        assert!(!daemon_version_is_older("0.22.1", "garbage"));
+        assert!(!daemon_version_is_older("", ""));
+    }
 
     /// Captures everything an `SshRunner` is asked to do so tests can
     /// assert on the sequence of calls (e.g. "probe → mkdir → scp →

@@ -2590,6 +2590,17 @@ export type UiMutationEvent =
 			restartCount: number;
 			windowMs: number;
 			recentStartsMs: number[];
+	  }
+	| {
+			/** The helmor-server binary on this remote is older than
+			 * the desktop's CARGO_PKG_VERSION. The auto-install path
+			 * only reinstalls on protocol mismatch; a daemon that's
+			 * protocol-compatible but missing a recent fix would
+			 * otherwise slip through silently. */
+			type: "remoteServerVersionDrift";
+			name: string;
+			daemonVersion: string;
+			desktopVersion: string;
 	  };
 
 export async function listenGitBranchChanged(

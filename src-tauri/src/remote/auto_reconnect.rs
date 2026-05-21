@@ -264,7 +264,27 @@ pub(crate) async fn tick_once<R: Runtime>(
                 .map_err(|join_err| anyhow::anyhow!("health probe task panicked: {join_err}"))
                 .and_then(|result| result);
                 match health {
-                    Ok(_) => Ok(runtime),
+                    Ok(snapshot) => {
+                        // Same drift check the manual connect path
+                        // runs. Reconnecting against an older daemon
+                        // (operator never reinstalled across desktop
+                        // upgrades) shouldn't slip past silently.
+                        let desktop_version = env!("CARGO_PKG_VERSION");
+                        if crate::remote::install::daemon_version_is_older(
+                            &snapshot.version,
+                            desktop_version,
+                        ) {
+                            publish(
+                                app,
+                                UiMutationEvent::RemoteServerVersionDrift {
+                                    name: name.clone(),
+                                    daemon_version: snapshot.version.clone(),
+                                    desktop_version: desktop_version.to_string(),
+                                },
+                            );
+                        }
+                        Ok(runtime)
+                    }
                     Err(err) => Err(format!("{err:#}")),
                 }
             }

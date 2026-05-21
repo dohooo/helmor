@@ -703,6 +703,7 @@ impl ResolvedRuntime {
 /// blocking pool — `ssh` can take seconds on a cold connection.
 #[tauri::command]
 pub async fn connect_remote_runtime(
+    app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     name: String,
     host: String,
@@ -741,11 +742,40 @@ pub async fn connect_remote_runtime(
         let runtime =
             RemoteSshRuntime::connect_ssh_with_options(&host, &resolved_binary, forward_agent)?;
         let health = runtime.runtime_health()?;
+        // Detect daemon version drift (desktop's CARGO_PKG_VERSION
+        // vs whatever the daemon reported in handshake). Fires a
+        // banner-grade event when the daemon is older — the
+        // operator may be missing recent fixes the desktop assumes
+        // are present.
+        emit_version_drift_event(&app, &name, &health.version);
         registry.register(name, Arc::new(runtime), Some(config))?;
         persist_registry(&registry);
         Ok(health)
     })
     .await
+}
+
+/// Compare the daemon's reported version against this desktop's
+/// `CARGO_PKG_VERSION` and emit a `RemoteServerVersionDrift` event
+/// when the daemon is strictly older. Idempotent — frontend
+/// dedupes on receipt.
+fn emit_version_drift_event<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime_name: &str,
+    daemon_version: &str,
+) {
+    let desktop_version = env!("CARGO_PKG_VERSION");
+    if !crate::remote::install::daemon_version_is_older(daemon_version, desktop_version) {
+        return;
+    }
+    crate::ui_sync::publish(
+        app,
+        crate::ui_sync::UiMutationEvent::RemoteServerVersionDrift {
+            name: runtime_name.to_string(),
+            daemon_version: daemon_version.to_string(),
+            desktop_version: desktop_version.to_string(),
+        },
+    );
 }
 
 /// Remove a named runtime from the registry. The runtime's `Drop`
@@ -770,6 +800,7 @@ pub fn disconnect_remote_runtime(
 /// registry or doesn't carry a persisted config.
 #[tauri::command]
 pub async fn reconnect_remote_runtime(
+    app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     name: String,
 ) -> CmdResult<RuntimeHealth> {
@@ -787,6 +818,11 @@ pub async fn reconnect_remote_runtime(
         let _ = registry.unregister(&name);
         let runtime = persistence::connect_from_config(&config)?;
         let health = runtime.runtime_health()?;
+        // Same drift check the manual + auto-reconnect paths do.
+        // The Reconnect button is the most likely surface to notice
+        // version drift — clicking it after a desktop upgrade
+        // shouldn't silently skip the warning.
+        emit_version_drift_event(&app, &name, &health.version);
         registry.register(name, runtime, Some(config))?;
         persist_registry(&registry);
         Ok(health)

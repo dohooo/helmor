@@ -106,6 +106,25 @@ pub enum UiMutationEvent {
         /// first. UI surfaces this as "last restart 30s ago" etc.
         recent_starts_ms: Vec<i64>,
     },
+    /// The helmor-server binary on this remote is older than what
+    /// the desktop ships. The auto-install path only reinstalls
+    /// when the *protocol* version disagrees; a daemon that's
+    /// protocol-compatible but missing a recent fix slips through
+    /// silently. This event surfaces the drift so the operator can
+    /// schedule a reinstall without trial-and-error debugging the
+    /// missing fix.
+    ///
+    /// Fired once per session per runtime — the desktop dedupes
+    /// in the consumer, so the auto-reconnect loop firing every
+    /// reconnect won't spam the UI.
+    RemoteServerVersionDrift {
+        name: String,
+        /// What the daemon reported in its `runtime_health.version`.
+        daemon_version: String,
+        /// `env!("CARGO_PKG_VERSION")` of the running desktop —
+        /// the version the operator's daemon should ideally match.
+        desktop_version: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
