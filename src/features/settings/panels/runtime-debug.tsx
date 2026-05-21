@@ -30,6 +30,7 @@ import {
 	connectCommandRuntime,
 	connectLocalRuntime,
 	connectRemoteRuntime,
+	type DaemonTailLogResult,
 	disconnectRemoteRuntime,
 	getRemoteRuntimeDiagnostics,
 	getRemoteRuntimeMetrics,
@@ -2616,20 +2617,39 @@ function RuntimeMetricsSection({ entries }: { entries: RuntimeEntry[] }) {
 	const crashCount = data?.recentStartsMs.length ?? 0;
 	const showCrashWarning = crashCount >= 3;
 
+	// Track E3: the Copy button bundles everything a support thread is
+	// likely to ask for, not just metrics. Runtime diagnostics (state,
+	// protocol version, RPC pipe counters, ping) + the daemon log tail
+	// are fetched fresh on click so the blob isn't stale w.r.t. the
+	// last refresh of any individual section. `Promise.allSettled` so
+	// one failing probe (daemon not answering daemon.tailLog, etc.)
+	// doesn't black out the rest of the export.
+	const [isExporting, setIsExporting] = useState(false);
+
 	const handleCopy = async () => {
-		if (!data) return;
-		const payload = {
-			runtime,
-			capturedAtMs: Date.now(),
-			uptimeSecs: data.uptimeSecs,
-			recentStartsMs: data.recentStartsMs,
-			methods: data.methods,
-		};
+		if (!data || runtime === "") return;
+		setIsExporting(true);
 		try {
+			const [diagnosticsResult, logResult] = await Promise.allSettled([
+				getRemoteRuntimeDiagnostics(runtime),
+				tailRemoteDaemonLog(runtime, 50),
+			]);
+			const payload = buildDiagnosticsPayload({
+				runtime,
+				metrics: data,
+				diagnosticsResult,
+				logResult,
+				capturedAtMs: Date.now(),
+				platform: typeof navigator !== "undefined" ? navigator.platform : null,
+				userAgent:
+					typeof navigator !== "undefined" ? navigator.userAgent : null,
+			});
 			await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
 			toast.success("Diagnostics copied to clipboard");
 		} catch (err) {
 			toast.error(formatErrorMessage(err) ?? "Copy failed");
+		} finally {
+			setIsExporting(false);
 		}
 	};
 
@@ -2638,7 +2658,7 @@ function RuntimeMetricsSection({ entries }: { entries: RuntimeEntry[] }) {
 			<SectionHeader
 				icon={<Plug2 className="size-3.5" strokeWidth={1.8} />}
 				title="Runtime metrics"
-				description="Per-method RPC counters + latency percentiles + recent daemon restart timestamps. Copy button serialises a JSON blob you can paste into a support thread."
+				description="Per-method RPC counters + latency percentiles + recent daemon restart timestamps. The Copy button bundles this with the connection diagnostics + the last 50 daemon log lines into a single JSON blob you can paste into a support thread."
 			/>
 			<div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/30 p-4">
 				{remotes.length === 0 ? (
@@ -2675,11 +2695,11 @@ function RuntimeMetricsSection({ entries }: { entries: RuntimeEntry[] }) {
 							<Button
 								size="sm"
 								variant="outline"
-								disabled={!data}
+								disabled={!data || isExporting}
 								onClick={handleCopy}
 								data-testid="runtime-metrics-copy"
 							>
-								Copy diagnostics
+								{isExporting ? "Bundling…" : "Copy diagnostics"}
 							</Button>
 						</div>
 						{metricsQuery.error ? (
@@ -2762,6 +2782,48 @@ function formatUptime(secs: number): string {
 	if (mins < 60) return `${mins}m ${secs % 60}s`;
 	const hrs = Math.floor(mins / 60);
 	return `${hrs}h ${mins % 60}m`;
+}
+
+/// Track E3: shape the "Copy diagnostics" JSON blob from the
+/// metrics-section state + a freshly-fetched diagnostics + log-tail
+/// pair. Exported as a pure function so the unit test can assert the
+/// payload shape without driving the wizard click flow + clipboard
+/// stub. The handler itself just wires this up + writes to
+/// `navigator.clipboard`.
+export function buildDiagnosticsPayload(args: {
+	runtime: string;
+	metrics: RuntimeMetricsResult;
+	diagnosticsResult: PromiseSettledResult<RuntimeDiagnostics>;
+	logResult: PromiseSettledResult<DaemonTailLogResult>;
+	capturedAtMs: number;
+	platform: string | null;
+	userAgent: string | null;
+}) {
+	return {
+		capturedAtMs: args.capturedAtMs,
+		runtime: args.runtime,
+		desktop: {
+			platform: args.platform,
+			userAgent: args.userAgent,
+		},
+		// Runtime state + RPC pipe telemetry + ping. The protocol
+		// version + server version land here via `diagnostics.client`
+		// — that's the field reviewers ask for first when triaging
+		// "is this a protocol-mismatch issue?".
+		diagnostics:
+			args.diagnosticsResult.status === "fulfilled"
+				? args.diagnosticsResult.value
+				: { error: formatErrorMessage(args.diagnosticsResult.reason) },
+		metrics: {
+			uptimeSecs: args.metrics.uptimeSecs,
+			recentStartsMs: args.metrics.recentStartsMs,
+			methods: args.metrics.methods,
+		},
+		daemonLog:
+			args.logResult.status === "fulfilled"
+				? args.logResult.value
+				: { error: formatErrorMessage(args.logResult.reason) },
+	};
 }
 
 function RemotePortForwardSection({ entries }: { entries: RuntimeEntry[] }) {

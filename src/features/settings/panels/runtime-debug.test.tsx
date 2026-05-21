@@ -40,6 +40,8 @@ const apiMocks = vi.hoisted(() => ({
 	releaseRemoteAgentStream: vi.fn(),
 	startAgentReattachStream: vi.fn(),
 	getRemoteRuntimeDiagnostics: vi.fn(),
+	getRemoteRuntimeMetrics: vi.fn(),
+	tailRemoteDaemonLog: vi.fn(),
 	startRemotePortForward: vi.fn(),
 	stopRemotePortForward: vi.fn(),
 	listRemotePortForwards: vi.fn(),
@@ -78,6 +80,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		releaseRemoteAgentStream: apiMocks.releaseRemoteAgentStream,
 		startAgentReattachStream: apiMocks.startAgentReattachStream,
 		getRemoteRuntimeDiagnostics: apiMocks.getRemoteRuntimeDiagnostics,
+		getRemoteRuntimeMetrics: apiMocks.getRemoteRuntimeMetrics,
+		tailRemoteDaemonLog: apiMocks.tailRemoteDaemonLog,
 		startRemotePortForward: apiMocks.startRemotePortForward,
 		stopRemotePortForward: apiMocks.stopRemotePortForward,
 		listRemotePortForwards: apiMocks.listRemotePortForwards,
@@ -85,6 +89,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import {
+	buildDiagnosticsPayload,
 	parseArgvInput,
 	parseSshUrl,
 	previewSpawnedCommand,
@@ -183,6 +188,18 @@ describe("RuntimeDebugPanel", () => {
 			agentSessionCount: null,
 			lastPingMs: 1,
 			lastError: null,
+		});
+		// Track E2/E3 defaults: metrics + log tail. Individual tests
+		// override when they want to assert on the export payload.
+		apiMocks.getRemoteRuntimeMetrics.mockResolvedValue({
+			methods: [],
+			uptimeSecs: 0,
+			recentStartsMs: [],
+		});
+		apiMocks.tailRemoteDaemonLog.mockResolvedValue({
+			logPath: "/home/u/.helmor/server/daemon.log",
+			lines: [],
+			truncated: false,
 		});
 		// Port forwards default to empty list + happy-path
 		// start/stop mocks — individual tests override.
@@ -2574,5 +2591,153 @@ describe("previewSpawnedCommand", () => {
 				argv: ["echo", "it's fine"],
 			}),
 		).toBe("echo 'it'\\''s fine'");
+	});
+});
+
+describe("buildDiagnosticsPayload (Track E3)", () => {
+	// The Copy button on the metrics section drives this builder
+	// after `Promise.allSettled([diagnostics, log])`. Asserting on
+	// the pure function side-steps the React render + clipboard
+	// stub gymnastics — what matters for E3 is the support-thread
+	// blob's shape.
+	const metrics = {
+		methods: [
+			{
+				method: "agent.send",
+				count: 5,
+				errorCount: 0,
+				p50Ms: 12,
+				p99Ms: 47,
+				lastSampleMs: 12,
+			},
+		],
+		uptimeSecs: 3600,
+		recentStartsMs: [],
+	};
+	const diagnostics = {
+		name: "dev.box",
+		state: { type: "connected" as const },
+		health: {
+			kind: { type: "remote" as const, host: "dev.box" },
+			hostname: "dev.box",
+			version: "0.22.1",
+		},
+		client: {
+			peerLabel: "ssh:dev.box",
+			serverVersion: "0.22.1",
+			serverHostname: "dev.box",
+			protocolVersion: "0.1.0",
+			connectedAtMs: 1_000_000,
+			closedReason: null,
+			requestsSent: 42,
+			responsesReceived: 42,
+			notificationsReceived: 7,
+			decodeErrors: 0,
+		},
+		agentSessionCount: 1,
+		lastPingMs: 18,
+		lastError: null,
+	};
+	const logLines = {
+		logPath: "/home/u/.helmor/server/daemon.log",
+		lines: [
+			"INFO  helmor_server::accept: client connected",
+			"INFO  helmor_server::handle: agent.send completed in 12ms",
+		],
+		truncated: false,
+	};
+
+	it("bundles metrics, diagnostics, and daemon log lines into one blob", () => {
+		const payload = buildDiagnosticsPayload({
+			runtime: "dev.box",
+			metrics,
+			diagnosticsResult: { status: "fulfilled", value: diagnostics },
+			logResult: { status: "fulfilled", value: logLines },
+			capturedAtMs: 1_700_000_000_000,
+			platform: "MacIntel",
+			userAgent: "Helmor/0.22.1",
+		});
+		expect(payload.runtime).toBe("dev.box");
+		expect(payload.capturedAtMs).toBe(1_700_000_000_000);
+		// Connection diagnostics carried through with protocol version —
+		// the field reviewers ask about first.
+		expect(payload.diagnostics).toEqual(diagnostics);
+		expect(payload.metrics).toEqual({
+			uptimeSecs: 3600,
+			recentStartsMs: [],
+			methods: metrics.methods,
+		});
+		expect(payload.daemonLog).toEqual(logLines);
+		expect(payload.desktop).toEqual({
+			platform: "MacIntel",
+			userAgent: "Helmor/0.22.1",
+		});
+	});
+
+	it("substitutes an error stub when diagnostics fetch rejects", () => {
+		// Diagnostics RPC can fail (degraded connection, version
+		// drift) but the rest of the blob is still useful. The
+		// error stub must surface the message so a support thread
+		// reader can see *why* the diagnostics card was empty.
+		const payload = buildDiagnosticsPayload({
+			runtime: "dev.box",
+			metrics,
+			diagnosticsResult: {
+				status: "rejected",
+				reason: new Error("pipe closed mid-request"),
+			},
+			logResult: { status: "fulfilled", value: logLines },
+			capturedAtMs: 1,
+			platform: null,
+			userAgent: null,
+		});
+		expect(payload.diagnostics).toEqual({ error: "pipe closed mid-request" });
+		// The log + metrics still made it in — one failed probe
+		// doesn't black out the rest.
+		expect(payload.metrics.methods).toHaveLength(1);
+		expect(payload.daemonLog).toEqual(logLines);
+	});
+
+	it("substitutes an error stub when daemon.tailLog rejects", () => {
+		// Common cause: the operator is connected to an older daemon
+		// that doesn't implement `daemon.tailLog` (or the log file's
+		// unreadable). Don't lose the diagnostics + metrics over it.
+		const payload = buildDiagnosticsPayload({
+			runtime: "dev.box",
+			metrics,
+			diagnosticsResult: { status: "fulfilled", value: diagnostics },
+			logResult: {
+				status: "rejected",
+				reason: new Error("daemon.tailLog unsupported on this server"),
+			},
+			capturedAtMs: 1,
+			platform: null,
+			userAgent: null,
+		});
+		expect(payload.daemonLog).toEqual({
+			error: "daemon.tailLog unsupported on this server",
+		});
+		expect(payload.diagnostics).toEqual(diagnostics);
+	});
+
+	it("serialises cleanly to JSON for clipboard pasting", () => {
+		// Guard against an accidental circular reference or BigInt
+		// landing in the payload (both would blow up
+		// `JSON.stringify`). The blob is exclusively consumed by
+		// human eyeballs in a support thread, so a non-throwing
+		// stringify is the test that matters.
+		const payload = buildDiagnosticsPayload({
+			runtime: "dev.box",
+			metrics,
+			diagnosticsResult: { status: "fulfilled", value: diagnostics },
+			logResult: { status: "fulfilled", value: logLines },
+			capturedAtMs: 1,
+			platform: "MacIntel",
+			userAgent: "Helmor/0.22.1",
+		});
+		expect(() => JSON.stringify(payload)).not.toThrow();
+		const round = JSON.parse(JSON.stringify(payload));
+		expect(round.diagnostics.client.protocolVersion).toBe("0.1.0");
+		expect(round.daemonLog.lines).toHaveLength(2);
 	});
 });
