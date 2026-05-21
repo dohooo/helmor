@@ -560,6 +560,7 @@ mod tests {
                 Some(RuntimeConnectionConfig::Ssh {
                     host: host.to_string(),
                     remote_binary: "helmor-server".into(),
+                    forward_agent: false,
                 }),
             )
             .unwrap();

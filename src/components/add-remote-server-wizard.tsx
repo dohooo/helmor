@@ -59,6 +59,7 @@ export function AddRemoteServerWizard({
 }: AddRemoteServerWizardProps) {
 	const [name, setName] = useState("");
 	const [host, setHost] = useState("");
+	const [forwardAgent, setForwardAgent] = useState(false);
 	const [step, setStep] = useState<WizardStep>("form");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -69,6 +70,7 @@ export function AddRemoteServerWizard({
 		if (open) {
 			setName("");
 			setHost("");
+			setForwardAgent(false);
 			setStep("form");
 			setErrorMessage(null);
 		}
@@ -116,6 +118,7 @@ export function AddRemoteServerWizard({
 				trimmedName,
 				trimmedHost,
 				DEFAULT_REMOTE_BINARY,
+				{ forwardAgent },
 			);
 		},
 		onMutate: () => {
@@ -200,6 +203,33 @@ export function AddRemoteServerWizard({
 							)}
 						</div>
 						{matchedDetail && <HostDetailPreview detail={matchedDetail} />}
+						<label
+							className="flex items-start gap-2 rounded-md border border-border/40 bg-muted/30 p-3 text-[11px] hover:bg-muted/50"
+							data-testid="add-remote-server-forward-agent"
+						>
+							<input
+								type="checkbox"
+								className="mt-0.5"
+								checked={forwardAgent}
+								onChange={(e) => setForwardAgent(e.target.checked)}
+								data-testid="add-remote-server-forward-agent-input"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="font-medium">
+									Forward SSH agent
+									<span className="ml-1 rounded bg-muted px-1 py-px font-mono text-[10px] text-muted-foreground">
+										-o ForwardAgent=yes
+									</span>
+								</span>
+								<span className="text-muted-foreground">
+									Required if you want the remote daemon to run{" "}
+									<code className="font-mono">git fetch</code> /{" "}
+									<code className="font-mono">git push</code> against private
+									repos using your local SSH keys. Skip if the remote already
+									has its own deploy key.
+								</span>
+							</span>
+						</label>
 						<SshDiagnostics enabled={open} />
 						<div className="flex justify-end gap-2">
 							<Button

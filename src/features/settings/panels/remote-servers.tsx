@@ -19,10 +19,11 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plug, Plug2, ServerCog } from "lucide-react";
+import { KeyRound, Plug, Plug2, ServerCog } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AddRemoteServerWizard } from "@/components/add-remote-server-wizard";
+import { RuntimeAuthDialog } from "@/components/runtime-auth-dialog";
 import { Button } from "@/components/ui/button";
 import {
 	disconnectRemoteRuntime,
@@ -35,6 +36,9 @@ import {
 export function RemoteServersPanel() {
 	const queryClient = useQueryClient();
 	const [wizardOpen, setWizardOpen] = useState(false);
+	// Track G2: per-runtime auth dialog. `authRuntime` is the runtime
+	// the user clicked Auth on; `null` means closed.
+	const [authRuntime, setAuthRuntime] = useState<string | null>(null);
 
 	const runtimesQuery = useQuery({
 		queryKey: ["remote-runtimes"],
@@ -113,6 +117,7 @@ export function RemoteServersPanel() {
 							entry={entry}
 							onDisconnect={() => disconnect.mutate(entry.name)}
 							onReconnect={() => reconnect.mutate(entry.name)}
+							onSetAuth={() => setAuthRuntime(entry.name)}
 							pending={
 								(disconnect.isPending && disconnect.variables === entry.name) ||
 								(reconnect.isPending && reconnect.variables === entry.name)
@@ -131,6 +136,13 @@ export function RemoteServersPanel() {
 					});
 				}}
 			/>
+			<RuntimeAuthDialog
+				open={authRuntime !== null}
+				onOpenChange={(open) => {
+					if (!open) setAuthRuntime(null);
+				}}
+				runtimeName={authRuntime}
+			/>
 		</section>
 	);
 }
@@ -140,11 +152,13 @@ function RemoteServerRow({
 	pending,
 	onDisconnect,
 	onReconnect,
+	onSetAuth,
 }: {
 	entry: RuntimeEntry;
 	pending: boolean;
 	onDisconnect: () => void;
 	onReconnect: () => void;
+	onSetAuth: () => void;
 }) {
 	const stateLabel = formatStateLabel(entry.state);
 	const reconnectable = entry.state.type !== "connected";
@@ -160,6 +174,17 @@ function RemoteServerRow({
 				</span>
 			</div>
 			<div className="flex items-center gap-1">
+				<Button
+					size="sm"
+					variant="ghost"
+					disabled={pending || entry.state.type !== "connected"}
+					onClick={onSetAuth}
+					data-testid={`remote-server-set-auth-${entry.name}`}
+					title="Set the SDK API key the remote daemon should use"
+				>
+					<KeyRound className="mr-1.5 size-3" />
+					Auth
+				</Button>
 				{reconnectable && (
 					<Button
 						size="sm"

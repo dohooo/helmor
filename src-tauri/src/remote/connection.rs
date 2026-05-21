@@ -12,6 +12,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Helper for `#[serde(skip_serializing_if)]` — the `forward_agent`
+/// field is added in a backward-compatible way (defaults to `false`),
+/// and we keep the wire shape compact by omitting it when unset.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// How a registered runtime was constructed. The command layer
 /// stashes one of these on the registry entry so the persistence
 /// loop knows how to recreate the connection at next boot.
@@ -35,7 +42,18 @@ pub enum RuntimeConnectionConfig {
     /// Spawn `ssh <host> <remote_binary>`. Auth is whatever the
     /// system ssh-agent / key files provide — the spike intentionally
     /// doesn't try to manage credentials.
-    Ssh { host: String, remote_binary: String },
+    ///
+    /// `forward_agent` (Track G3): when `true`, the transport adds
+    /// `-o ForwardAgent=yes` to the ssh argv so the remote daemon
+    /// can use the user's local SSH agent for git operations
+    /// (push/pull against private repos). Defaults to `false` so
+    /// existing configs deserialise unchanged.
+    Ssh {
+        host: String,
+        remote_binary: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        forward_agent: bool,
+    },
     /// Spawn an arbitrary `argv`. Used for transports like Teleport
     /// (`tsh ssh host helmor-server --proxy`), Tailscale SSH
     /// (`tailscale ssh host helmor-server --proxy`), or
@@ -59,7 +77,14 @@ impl RuntimeConnectionConfig {
             Self::Ssh {
                 host,
                 remote_binary,
-            } => format!("ssh: {host} {remote_binary}"),
+                forward_agent,
+            } => {
+                if *forward_agent {
+                    format!("ssh: {host} {remote_binary} (agent-forwarded)")
+                } else {
+                    format!("ssh: {host} {remote_binary}")
+                }
+            }
             Self::Command { argv } => {
                 // Join with spaces for the label only — the underlying
                 // transport never shell-tokenises argv, so a label
@@ -114,10 +139,58 @@ mod tests {
         let cfg = RuntimeConnectionConfig::Ssh {
             host: "dev.box".into(),
             remote_binary: "helmor-server".into(),
+            forward_agent: false,
         };
         let wire = serde_json::to_string(&cfg).unwrap();
         let restored: RuntimeConnectionConfig = serde_json::from_str(&wire).unwrap();
         assert_eq!(cfg, restored);
+    }
+
+    #[test]
+    fn ssh_variant_omits_forward_agent_when_false() {
+        // Backward-compat: pre-G3 saves don't carry `forwardAgent`.
+        // The default-`false` case skip-serialises so on-disk files
+        // stay byte-identical.
+        let cfg = RuntimeConnectionConfig::Ssh {
+            host: "h".into(),
+            remote_binary: "b".into(),
+            forward_agent: false,
+        };
+        let wire = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            !wire.contains("forwardAgent"),
+            "absent forwardAgent should be skipped: {wire}"
+        );
+    }
+
+    #[test]
+    fn ssh_variant_serialises_forward_agent_when_true() {
+        let cfg = RuntimeConnectionConfig::Ssh {
+            host: "h".into(),
+            remote_binary: "b".into(),
+            forward_agent: true,
+        };
+        let wire = serde_json::to_string(&cfg).unwrap();
+        assert!(wire.contains("\"forwardAgent\":true"), "{wire}");
+    }
+
+    #[test]
+    fn ssh_variant_default_deserialises_legacy_payload_without_forward_agent() {
+        // Old on-disk payloads predate G3 — must still parse cleanly.
+        let legacy = r#"{"type":"ssh","host":"h","remoteBinary":"b"}"#;
+        let cfg: RuntimeConnectionConfig = serde_json::from_str(legacy).unwrap();
+        match cfg {
+            RuntimeConnectionConfig::Ssh {
+                host,
+                remote_binary,
+                forward_agent,
+            } => {
+                assert_eq!(host, "h");
+                assert_eq!(remote_binary, "b");
+                assert!(!forward_agent, "missing forwardAgent must default to false");
+            }
+            other => panic!("expected Ssh, got {other:?}"),
+        }
     }
 
     #[test]
@@ -130,6 +203,7 @@ mod tests {
         let c = RuntimeConnectionConfig::Ssh {
             host: "x".into(),
             remote_binary: "y".into(),
+            forward_agent: false,
         }
         .describe();
         let d = RuntimeConnectionConfig::Command {

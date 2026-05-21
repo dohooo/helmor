@@ -595,6 +595,7 @@ mod tests {
         let cfg = RuntimeConnectionConfig::Ssh {
             host: "dev.box".into(),
             remote_binary: "helmor-server".into(),
+            forward_agent: false,
         };
         registry
             .register("dev.box", Arc::new(TaggedRuntime("dev")), Some(cfg.clone()))

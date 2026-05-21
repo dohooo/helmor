@@ -115,6 +115,12 @@ pub struct OpenSshTransport {
     /// [`ssh_control_dir`], which reads the app data dir. Tests inject
     /// a tempdir; production code leaves it `None`.
     control_dir_override: Option<PathBuf>,
+    /// Track G3: when `true`, the spawned ssh invocation gets
+    /// `-o ForwardAgent=yes` so the remote daemon can drive `git`
+    /// over the user's local SSH agent for private repo
+    /// push / pull. Defaults to `false` — agent forwarding has a
+    /// security trade-off and shouldn't be on by default.
+    forward_agent: bool,
 }
 
 impl OpenSshTransport {
@@ -123,7 +129,15 @@ impl OpenSshTransport {
             host: host.into(),
             remote_binary: remote_binary.into(),
             control_dir_override: None,
+            forward_agent: false,
         }
+    }
+
+    /// Toggle ssh's `ForwardAgent` option. Builder-style so the call
+    /// site reads as `OpenSshTransport::new(...).with_forward_agent(true)`.
+    pub fn with_forward_agent(mut self, forward: bool) -> Self {
+        self.forward_agent = forward;
+        self
     }
 
     /// Test-only constructor that pins the ControlPath directory.
@@ -139,6 +153,7 @@ impl OpenSshTransport {
             host: host.into(),
             remote_binary: remote_binary.into(),
             control_dir_override: Some(control_dir),
+            forward_agent: false,
         }
     }
 
@@ -165,6 +180,14 @@ impl OpenSshTransport {
         let mut cmd = Command::new("ssh");
         for arg in DEFAULT_SSH_ARGS {
             cmd.arg(arg);
+        }
+        // Track G3: opt-in agent forwarding so the remote daemon can
+        // use the user's local keys for git pulls/pushes. Off by
+        // default — agent forwarding lets the remote root drive your
+        // local agent, which is a real risk if the remote host isn't
+        // trusted.
+        if self.forward_agent {
+            cmd.arg("-o").arg("ForwardAgent=yes");
         }
         // Connection multiplexing — see comment on SSH_MUX_ARGS. The
         // ControlPath is computed at call time so a missing data dir
@@ -390,6 +413,39 @@ mod tests {
         assert!(
             rendered.contains("'/usr/local/bin/helmor-server'"),
             "single-quoted bin path missing: {rendered}",
+        );
+    }
+
+    #[test]
+    fn open_ssh_transport_omits_forward_agent_by_default() {
+        let transport = OpenSshTransport::with_control_dir(
+            "dev.box",
+            "/usr/local/bin/helmor-server",
+            std::env::temp_dir(),
+        );
+        let cmd = transport.build_command();
+        let rendered = argv_string(&cmd);
+        assert!(
+            !rendered.contains("ForwardAgent=yes"),
+            "ForwardAgent must be off unless opted in: {rendered}"
+        );
+    }
+
+    #[test]
+    fn open_ssh_transport_adds_forward_agent_when_opted_in() {
+        // Track G3: with_forward_agent(true) flips the option on so
+        // the remote daemon can drive git via the user's local agent.
+        let transport = OpenSshTransport::with_control_dir(
+            "dev.box",
+            "/usr/local/bin/helmor-server",
+            std::env::temp_dir(),
+        )
+        .with_forward_agent(true);
+        let cmd = transport.build_command();
+        let rendered = argv_string(&cmd);
+        assert!(
+            rendered.contains("ForwardAgent=yes"),
+            "ForwardAgent should appear when opted in: {rendered}"
         );
     }
 

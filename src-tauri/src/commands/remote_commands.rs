@@ -620,8 +620,14 @@ pub async fn connect_remote_runtime(
     name: String,
     host: String,
     remote_binary: String,
+    forward_agent: Option<bool>,
 ) -> CmdResult<RuntimeHealth> {
     let registry = Arc::clone(&registry);
+    // Track G3: optional opt-in to `ForwardAgent=yes`. `None` from
+    // pre-G3 callers (older wizard versions, command-line invocations)
+    // defaults to false so the connect surface stays backward
+    // compatible.
+    let forward_agent = forward_agent.unwrap_or(false);
     run_blocking(move || {
         // Capture the operator's *requested* binary in the persisted
         // config — that's what they should see in the dev panel — even
@@ -631,6 +637,7 @@ pub async fn connect_remote_runtime(
         let config = RuntimeConnectionConfig::Ssh {
             host: host.clone(),
             remote_binary: remote_binary.clone(),
+            forward_agent,
         };
         // Auto-install runs on the blocking pool because both ssh
         // probe + scp upload are sync subprocesses. A locally-built
@@ -644,7 +651,8 @@ pub async fn connect_remote_runtime(
             &remote_binary,
             &local_binary,
         )?;
-        let runtime = RemoteSshRuntime::connect_ssh(&host, &resolved_binary)?;
+        let runtime =
+            RemoteSshRuntime::connect_ssh_with_options(&host, &resolved_binary, forward_agent)?;
         let health = runtime.runtime_health()?;
         registry.register(name, Arc::new(runtime), Some(config))?;
         persist_registry(&registry);

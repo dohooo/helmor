@@ -125,6 +125,7 @@ describe("AddRemoteServerWizard", () => {
 			"dev",
 			"dev.example.com",
 			"$HOME/.helmor/server/helmor-server",
+			{ forwardAgent: false },
 		);
 
 		(release as (() => void) | null)?.();
@@ -259,6 +260,33 @@ describe("AddRemoteServerWizard", () => {
 		expect(
 			screen.queryByTestId("add-remote-server-host-detail"),
 		).not.toBeInTheDocument();
+	});
+
+	it("threads the forward-agent checkbox into the connect call", async () => {
+		apiMocks.connectRemoteRuntime.mockResolvedValue(undefined);
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await user.type(screen.getByTestId("add-remote-server-name"), "dev");
+		await user.type(
+			screen.getByTestId("add-remote-server-host"),
+			"dev.example.com",
+		);
+		// Tick the agent-forwarding checkbox.
+		await user.click(
+			screen.getByTestId("add-remote-server-forward-agent-input"),
+		);
+		await user.click(screen.getByTestId("add-remote-server-connect"));
+		await waitFor(() =>
+			expect(apiMocks.connectRemoteRuntime).toHaveBeenCalledWith(
+				"dev",
+				"dev.example.com",
+				"$HOME/.helmor/server/helmor-server",
+				{ forwardAgent: true },
+			),
+		);
 	});
 
 	it("renders ssh-config host aliases as a datalist", async () => {

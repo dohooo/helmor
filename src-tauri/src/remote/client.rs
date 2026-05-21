@@ -276,8 +276,21 @@ impl RpcClient {
     /// auto-install path in phase 12 puts it there on first
     /// connect.
     pub fn connect_ssh(host: &str, remote_binary: &str) -> Result<Self> {
+        Self::connect_ssh_with_options(host, remote_binary, false)
+    }
+
+    /// Variant of [`connect_ssh`] that lets the caller opt in to
+    /// `ForwardAgent=yes` (Track G3). Off by default; callers that
+    /// want agent forwarding (typically because the operator chose
+    /// it for a runtime whose remote needs to authenticate to git
+    /// over the local agent) pass `true`.
+    pub fn connect_ssh_with_options(
+        host: &str,
+        remote_binary: &str,
+        forward_agent: bool,
+    ) -> Result<Self> {
         let transport: Arc<dyn RemoteTransport> =
-            Arc::new(OpenSshTransport::new(host, remote_binary));
+            Arc::new(OpenSshTransport::new(host, remote_binary).with_forward_agent(forward_agent));
         Self::connect_with_transport(transport)
     }
 
@@ -819,7 +832,19 @@ impl RemoteSshRuntime {
     /// callers wanting a friendlier UI label can wrap [`new`]
     /// directly.
     pub fn connect_ssh(host: &str, remote_binary: &str) -> Result<Self> {
-        let client = RpcClient::connect_ssh(host, remote_binary)?;
+        Self::connect_ssh_with_options(host, remote_binary, false)
+    }
+
+    /// Variant that opts in to ssh agent forwarding (Track G3). The
+    /// surfaced runtime is the same; the underlying transport just
+    /// adds `-o ForwardAgent=yes` so the remote daemon can drive
+    /// git over the user's local agent.
+    pub fn connect_ssh_with_options(
+        host: &str,
+        remote_binary: &str,
+        forward_agent: bool,
+    ) -> Result<Self> {
+        let client = RpcClient::connect_ssh_with_options(host, remote_binary, forward_agent)?;
         Ok(Self::new(client, host.to_string()))
     }
 }

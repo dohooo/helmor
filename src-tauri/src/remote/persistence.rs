@@ -185,7 +185,9 @@ pub fn connect_from_config(config: &RuntimeConnectionConfig) -> Result<Arc<dyn R
         RuntimeConnectionConfig::Ssh {
             host,
             remote_binary,
+            forward_agent,
         } => {
+            let forward_agent = *forward_agent;
             // Mirror the auto-install path that
             // `connect_remote_runtime` runs on first connect — the
             // operator-supplied `remote_binary` might still resolve
@@ -206,7 +208,8 @@ pub fn connect_from_config(config: &RuntimeConnectionConfig) -> Result<Arc<dyn R
                 // and hope the operator-supplied path works.
                 None => remote_binary.clone(),
             };
-            let runtime = RemoteSshRuntime::connect_ssh(host, &resolved_binary)?;
+            let runtime =
+                RemoteSshRuntime::connect_ssh_with_options(host, &resolved_binary, forward_agent)?;
             Ok(Arc::new(runtime))
         }
         RuntimeConnectionConfig::Command { argv } => {
@@ -404,6 +407,7 @@ mod tests {
                 config: RuntimeConnectionConfig::Ssh {
                     host: "dev.box".into(),
                     remote_binary: "helmor-server".into(),
+                    forward_agent: false,
                 },
             },
         ]);
@@ -494,6 +498,7 @@ mod tests {
             config: RuntimeConnectionConfig::Ssh {
                 host: "h".into(),
                 remote_binary: "b".into(),
+                forward_agent: false,
             },
         }]);
         let wire = serde_json::to_string(&snapshot).unwrap();

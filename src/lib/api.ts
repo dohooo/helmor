@@ -1026,11 +1026,16 @@ export async function connectRemoteRuntime(
 	name: string,
 	host: string,
 	remoteBinary: string,
+	options?: { forwardAgent?: boolean },
 ): Promise<RuntimeHealth> {
 	return invoke<RuntimeHealth>("connect_remote_runtime", {
 		name,
 		host,
 		remoteBinary,
+		// Track G3: omit when undefined so older daemons / mocks that
+		// don't see the param treat it as `false`. Tauri serialises
+		// `undefined` as missing, so this stays backward compatible.
+		forwardAgent: options?.forwardAgent,
 	});
 }
 
