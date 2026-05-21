@@ -71,6 +71,17 @@ describe("RemoteServersPanel", () => {
 		).toBeInTheDocument();
 	});
 
+	it("opens the wizard from the empty-state CTA", async () => {
+		apiMocks.listRemoteRuntimes.mockResolvedValue([LOCAL_ENTRY]);
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<RemoteServersPanel />, { wrapper });
+		const cta = await screen.findByTestId("remote-servers-empty-add");
+		await user.click(cta);
+		// Wizard mounts its dialog with role=dialog when opened.
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+	});
+
 	it("renders one row per remote with the state label", async () => {
 		apiMocks.listRemoteRuntimes.mockResolvedValue([
 			LOCAL_ENTRY,

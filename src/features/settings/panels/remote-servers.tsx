@@ -125,16 +125,26 @@ export function RemoteServersPanel() {
 				<p className="text-[11px] text-muted-foreground">Loading…</p>
 			) : remotes.length === 0 ? (
 				<div
-					className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border/40 bg-card/30 px-4 py-6 text-[11px] text-muted-foreground"
+					className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-border/40 bg-card/30 px-4 py-6 text-[11px] text-muted-foreground"
 					data-testid="remote-servers-empty"
 				>
-					<span className="font-medium text-foreground">
-						No remote servers yet.
-					</span>
-					<span>
-						Add one to run agents on a beefier machine, a cloud dev VM, or any
-						other SSH-reachable host.
-					</span>
+					<div className="flex flex-col gap-1">
+						<span className="font-medium text-foreground">
+							No remote servers yet.
+						</span>
+						<span>
+							Add one to run agents on a beefier machine, a cloud dev VM, or any
+							other SSH-reachable host.
+						</span>
+					</div>
+					<Button
+						size="sm"
+						onClick={() => setWizardOpen(true)}
+						data-testid="remote-servers-empty-add"
+					>
+						<Plug2 className="mr-1.5 size-3.5" />
+						Add a remote server
+					</Button>
 				</div>
 			) : (
 				<ul className="flex flex-col gap-1.5">
