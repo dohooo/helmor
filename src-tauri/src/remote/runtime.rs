@@ -240,6 +240,31 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("workspace.search is not yet implemented on this runtime")
     }
 
+    /// Track F3 bundle: serialise the workspace's full repo state
+    /// (refs + commits + objects) into a portable `git bundle` and
+    /// return the bytes base64-encoded. Used by the cross-host move
+    /// flow to ship a workspace from source to destination over the
+    /// JSON-RPC channel without needing direct host-to-host
+    /// connectivity.
+    fn workspace_bundle(
+        &self,
+        _params: super::methods::WorkspaceBundleParams,
+    ) -> Result<super::methods::WorkspaceBundleResult> {
+        anyhow::bail!("workspace.bundle is not yet implemented on this runtime")
+    }
+
+    /// Track F3 unbundle: receive a bundle produced by
+    /// `workspace.bundle` and `git clone` it into `target_dir`.
+    /// Verifies the caller-supplied SHA-256 before cloning so
+    /// transport corruption surfaces as a clear error rather than a
+    /// confusing git failure.
+    fn workspace_unbundle(
+        &self,
+        _params: super::methods::WorkspaceUnbundleParams,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        anyhow::bail!("workspace.unbundle is not yet implemented on this runtime")
+    }
+
     fn workspace_start_watch(
         &self,
         _params: super::methods::WorkspaceStartWatchParams,
@@ -626,6 +651,193 @@ impl RemoteRuntime for LocalRuntime {
             truncated: results.truncated,
         })
     }
+
+    // ── Track F3 bundle + unbundle ──────────────────────────────
+    //
+    // `workspace_bundle` writes `git bundle create --all <tmp>` and
+    // returns the raw bytes base64-encoded + a SHA-256 the receiver
+    // verifies before cloning. `workspace_unbundle` does the inverse:
+    // decode, verify, `git clone --no-hardlinks <tmp> <target>`,
+    // read the resulting HEAD branch.
+
+    fn workspace_bundle(
+        &self,
+        params: super::methods::WorkspaceBundleParams,
+    ) -> Result<super::methods::WorkspaceBundleResult> {
+        bundle_local_workspace(&params.workspace_dir)
+    }
+
+    fn workspace_unbundle(
+        &self,
+        params: super::methods::WorkspaceUnbundleParams,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        unbundle_local_workspace(
+            &params.target_dir,
+            &params.bundle_base64,
+            &params.expected_sha256,
+        )
+    }
+}
+
+/// Pure-function `git bundle create --all` for a workspace path.
+/// Reads the bundle bytes back, computes SHA-256, base64-encodes,
+/// returns the wire-shaped result. Refuses to ship bundles larger
+/// than [`super::methods::WORKSPACE_BUNDLE_MAX_BYTES`].
+fn bundle_local_workspace(workspace_dir: &str) -> Result<super::methods::WorkspaceBundleResult> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    if workspace_dir.is_empty() {
+        bail!("workspace_dir must not be empty");
+    }
+    let workspace_path = PathBuf::from(workspace_dir);
+    if !workspace_path.is_dir() {
+        bail!("workspace_dir `{workspace_dir}` does not exist or is not a directory");
+    }
+
+    // Write the bundle into a tempfile inside the system temp dir.
+    // Keeping it OUT of the workspace itself avoids polluting the
+    // user's `.git` with a stray file if the call fails midway.
+    let tmp = tempfile::Builder::new()
+        .prefix("helmor-bundle-")
+        .suffix(".bundle")
+        .tempfile()
+        .context("failed to allocate temporary bundle file")?;
+
+    // `git bundle create <out> --all` packs every ref + reachable
+    // commit. Stderr (which is where `git bundle` prints its
+    // progress) is captured so a failure surfaces a legible message
+    // rather than just an exit code.
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&workspace_path)
+        .arg("bundle")
+        .arg("create")
+        .arg(tmp.path())
+        .arg("--all")
+        .output()
+        .with_context(|| format!("failed to spawn git bundle in {workspace_dir}"))?;
+    if !output.status.success() {
+        bail!(
+            "git bundle create failed (status {:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+
+    let bytes = std::fs::read(tmp.path())
+        .with_context(|| format!("failed to read bundle from {}", tmp.path().display()))?;
+    if bytes.len() > super::methods::WORKSPACE_BUNDLE_MAX_BYTES {
+        bail!(
+            "bundle is {} bytes; over the {} byte limit (set HELMOR_BUNDLE_MAX or use chunked transfer when that lands)",
+            bytes.len(),
+            super::methods::WORKSPACE_BUNDLE_MAX_BYTES,
+        );
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256_hex = format!("{:x}", hasher.finalize());
+    let size_bytes = bytes.len() as u64;
+    let bundle_base64 = STANDARD.encode(&bytes);
+
+    Ok(super::methods::WorkspaceBundleResult {
+        bundle_base64,
+        size_bytes,
+        sha256_hex,
+    })
+}
+
+/// Inverse of [`bundle_local_workspace`]. Decodes the base64
+/// payload, verifies it hashes to `expected_sha256`, writes to a
+/// tempfile, runs `git clone --no-hardlinks <tmp> <target>`, and
+/// returns the cloned workspace's HEAD branch.
+fn unbundle_local_workspace(
+    target_dir: &str,
+    bundle_base64: &str,
+    expected_sha256: &str,
+) -> Result<super::methods::WorkspaceUnbundleResult> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    if target_dir.is_empty() {
+        bail!("target_dir must not be empty");
+    }
+    if expected_sha256.is_empty() {
+        bail!("expected_sha256 must not be empty");
+    }
+
+    let bytes = STANDARD
+        .decode(bundle_base64.as_bytes())
+        .context("bundle_base64 is not valid standard-alphabet base64")?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let actual_sha = format!("{:x}", hasher.finalize());
+    if !actual_sha.eq_ignore_ascii_case(expected_sha256) {
+        bail!(
+            "bundle SHA-256 mismatch: caller declared `{expected_sha256}`, content hashes to `{actual_sha}`"
+        );
+    }
+
+    // Refuse to clone into a non-empty target. The desktop's UI
+    // is expected to surface an "already exists" check before
+    // calling, but defending here keeps a misbehaving caller from
+    // clobbering a real workspace.
+    let target = PathBuf::from(target_dir);
+    if let Ok(read) = std::fs::read_dir(&target) {
+        if read.flatten().next().is_some() {
+            bail!(
+                "target_dir `{}` is not empty; refusing to clone into a populated directory",
+                target.display()
+            );
+        }
+    }
+    // git clone needs the parent to exist; create it lazily so the
+    // caller doesn't have to mkdir first. The leaf itself stays
+    // missing — `git clone` creates it.
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create parent directory at {}", parent.display())
+        })?;
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("helmor-unbundle-")
+        .suffix(".bundle")
+        .tempfile()
+        .context("failed to allocate temporary bundle file")?;
+    std::fs::write(tmp.path(), &bytes)
+        .with_context(|| format!("failed to stage bundle to {}", tmp.path().display()))?;
+
+    // `--no-hardlinks` avoids cross-filesystem hardlink failures in
+    // unusual deployments (overlayfs, NFS); the perf cost is a few
+    // ms for the bundle sizes we accept.
+    let clone_output = std::process::Command::new("git")
+        .arg("clone")
+        .arg("--no-hardlinks")
+        .arg(tmp.path())
+        .arg(&target)
+        .output()
+        .with_context(|| format!("failed to spawn git clone into {}", target.display()))?;
+    if !clone_output.status.success() {
+        bail!(
+            "git clone failed (status {:?}): {}",
+            clone_output.status.code(),
+            String::from_utf8_lossy(&clone_output.stderr).trim(),
+        );
+    }
+
+    // `git rev-parse --abbrev-ref HEAD` returns the branch name or
+    // `HEAD` when detached. Treat the detached form as an empty
+    // string for the wire — matches `branchInfo`'s contract.
+    let head_branch = crate::git_ops::current_branch_name(&target).unwrap_or_default();
+    Ok(super::methods::WorkspaceUnbundleResult {
+        cloned: true,
+        head_branch,
+    })
 }
 
 /// Validate a workspace-relative path coming over the wire and join
@@ -1353,5 +1565,159 @@ mod tests {
         let parsed = parse_porcelain_status("");
         assert!(parsed.is_clean);
         assert!(parsed.changed_paths.is_empty());
+    }
+
+    // ── Track F3 bundle + unbundle ──────────────────────────────
+
+    use crate::remote::methods::{WorkspaceBundleParams, WorkspaceUnbundleParams};
+
+    #[test]
+    fn workspace_bundle_round_trips_through_unbundle_into_a_fresh_clone() {
+        // End-to-end: bundle a real repo via the trait, decode the
+        // wire shape, hand it to unbundle, verify the clone has the
+        // same commit + branch as the source. Exercises every
+        // contract the cross-host move depends on.
+        let source = init_repo();
+        let runtime = make_local_runtime();
+
+        let bundle = runtime
+            .workspace_bundle(WorkspaceBundleParams {
+                workspace_dir: source.path().display().to_string(),
+            })
+            .expect("bundle a fresh repo");
+        assert!(bundle.size_bytes > 0);
+        assert_eq!(
+            bundle.sha256_hex.len(),
+            64,
+            "SHA-256 should be 64 hex chars: {}",
+            bundle.sha256_hex
+        );
+
+        // Clone into a sibling tempdir; the target dir is created
+        // lazily by unbundle.
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("cloned");
+        let unbundle = runtime
+            .workspace_unbundle(WorkspaceUnbundleParams {
+                target_dir: target.display().to_string(),
+                bundle_base64: bundle.bundle_base64.clone(),
+                expected_sha256: bundle.sha256_hex.clone(),
+            })
+            .expect("unbundle should succeed against the same daemon");
+        assert!(unbundle.cloned);
+        assert_eq!(unbundle.head_branch, "main");
+
+        // The cloned workspace has the same HEAD commit as the source.
+        let source_head = crate::git_ops::current_workspace_head_commit(source.path()).unwrap();
+        let cloned_head = crate::git_ops::current_workspace_head_commit(&target).unwrap();
+        assert_eq!(
+            source_head, cloned_head,
+            "cloned workspace should land on the same commit",
+        );
+        // file.txt is in the working tree.
+        assert!(target.join("file.txt").exists());
+    }
+
+    #[test]
+    fn workspace_unbundle_rejects_bundle_with_mismatched_sha() {
+        let source = init_repo();
+        let runtime = make_local_runtime();
+        let bundle = runtime
+            .workspace_bundle(WorkspaceBundleParams {
+                workspace_dir: source.path().display().to_string(),
+            })
+            .unwrap();
+
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("cloned");
+        let err = runtime
+            .workspace_unbundle(WorkspaceUnbundleParams {
+                target_dir: target.display().to_string(),
+                bundle_base64: bundle.bundle_base64,
+                expected_sha256: "0".repeat(64), // wrong
+            })
+            .expect_err("mismatched sha must bail");
+        assert!(
+            format!("{err:#}").contains("SHA-256 mismatch"),
+            "error should call out the hash mismatch: {err:#}",
+        );
+        assert!(
+            !target.exists(),
+            "target must not be touched on a sha mismatch",
+        );
+    }
+
+    #[test]
+    fn workspace_unbundle_refuses_to_clone_into_a_non_empty_directory() {
+        let source = init_repo();
+        let runtime = make_local_runtime();
+        let bundle = runtime
+            .workspace_bundle(WorkspaceBundleParams {
+                workspace_dir: source.path().display().to_string(),
+            })
+            .unwrap();
+
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("populated");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("existing.txt"), "do not clobber").unwrap();
+
+        let err = runtime
+            .workspace_unbundle(WorkspaceUnbundleParams {
+                target_dir: target.display().to_string(),
+                bundle_base64: bundle.bundle_base64,
+                expected_sha256: bundle.sha256_hex,
+            })
+            .expect_err("non-empty target must bail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not empty") || msg.contains("populated"),
+            "error should mention the non-empty target: {msg}",
+        );
+        // Existing file untouched.
+        assert!(target.join("existing.txt").exists());
+    }
+
+    #[test]
+    fn workspace_bundle_rejects_missing_workspace_dir() {
+        let runtime = make_local_runtime();
+        let err = runtime
+            .workspace_bundle(WorkspaceBundleParams {
+                workspace_dir: "/tmp/nonexistent-helmor-bundle-target".into(),
+            })
+            .expect_err("missing dir must bail");
+        assert!(
+            format!("{err:#}").contains("does not exist"),
+            "error should call out the missing dir: {err:#}",
+        );
+    }
+
+    #[test]
+    fn workspace_bundle_rejects_empty_workspace_dir() {
+        let runtime = make_local_runtime();
+        let err = runtime
+            .workspace_bundle(WorkspaceBundleParams {
+                workspace_dir: String::new(),
+            })
+            .expect_err("empty dir must bail");
+        assert!(format!("{err:#}").contains("must not be empty"));
+    }
+
+    #[test]
+    fn workspace_unbundle_rejects_garbage_base64() {
+        let runtime = make_local_runtime();
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("cloned");
+        let err = runtime
+            .workspace_unbundle(WorkspaceUnbundleParams {
+                target_dir: target.display().to_string(),
+                bundle_base64: "this is not base64 !!".into(),
+                expected_sha256: "0".repeat(64),
+            })
+            .expect_err("garbage base64 must bail");
+        assert!(
+            format!("{err:#}").contains("base64"),
+            "error should call out the decode failure: {err:#}",
+        );
     }
 }

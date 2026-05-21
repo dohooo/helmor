@@ -9,7 +9,7 @@ describe("MoveWorkspaceDialog", () => {
 		cleanup();
 	});
 
-	it("fires onConfirm with the trimmed remote path", async () => {
+	it("fires onConfirm with the trimmed remote path and cloneFromCurrent=false by default", async () => {
 		const onConfirm = vi.fn();
 		const user = userEvent.setup();
 		render(
@@ -29,6 +29,7 @@ describe("MoveWorkspaceDialog", () => {
 		expect(onConfirm).toHaveBeenCalledExactlyOnceWith({
 			runtimeName: "dev.box",
 			remotePath: "/home/d/code/foo",
+			cloneFromCurrent: false,
 		});
 	});
 
@@ -49,7 +50,75 @@ describe("MoveWorkspaceDialog", () => {
 		expect(onConfirm).toHaveBeenCalledExactlyOnceWith({
 			runtimeName: "dev.box",
 			remotePath: null,
+			cloneFromCurrent: false,
 		});
+	});
+
+	it("propagates cloneFromCurrent=true when the toggle is checked", async () => {
+		const onConfirm = vi.fn();
+		const user = userEvent.setup();
+		render(
+			<MoveWorkspaceDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+				workspaceId="ws-1"
+				onConfirm={onConfirm}
+			/>,
+		);
+		await user.type(
+			screen.getByTestId("move-workspace-remote-path"),
+			"/home/dwork/code/foo",
+		);
+		await user.click(screen.getByTestId("move-workspace-clone-toggle-input"));
+		await user.click(screen.getByTestId("move-workspace-confirm"));
+		expect(onConfirm).toHaveBeenCalledExactlyOnceWith({
+			runtimeName: "dev.box",
+			remotePath: "/home/dwork/code/foo",
+			cloneFromCurrent: true,
+		});
+	});
+
+	it("disables Confirm when cloneFromCurrent is checked but no path is provided", async () => {
+		const user = userEvent.setup();
+		render(
+			<MoveWorkspaceDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+				workspaceId="ws-1"
+				onConfirm={() => {}}
+			/>,
+		);
+		// Initially enabled (toggle off).
+		expect(screen.getByTestId("move-workspace-confirm")).toBeEnabled();
+		// Check the toggle without filling in a path — submit must
+		// disable because clone needs a destination.
+		await user.click(screen.getByTestId("move-workspace-clone-toggle-input"));
+		expect(screen.getByTestId("move-workspace-confirm")).toBeDisabled();
+		// Type a path → re-enabled.
+		await user.type(screen.getByTestId("move-workspace-remote-path"), "/dest");
+		expect(screen.getByTestId("move-workspace-confirm")).toBeEnabled();
+	});
+
+	it("changes the confirm button label to 'Clone + Move' when toggle is on", async () => {
+		const user = userEvent.setup();
+		render(
+			<MoveWorkspaceDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+				workspaceId="ws-1"
+				onConfirm={() => {}}
+			/>,
+		);
+		expect(screen.getByTestId("move-workspace-confirm")).toHaveTextContent(
+			"Move",
+		);
+		await user.click(screen.getByTestId("move-workspace-clone-toggle-input"));
+		expect(screen.getByTestId("move-workspace-confirm")).toHaveTextContent(
+			"Clone + Move",
+		);
 	});
 
 	it("disables Confirm when there's no runtime to move to", () => {

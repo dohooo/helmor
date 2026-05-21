@@ -1688,6 +1688,151 @@ pub fn list_remote_runtimes(
 
 // ── per-workspace runtime bindings ───────────────────────────────
 
+/// Track F3 bundle orchestrator: copy a workspace from its current
+/// runtime to a new one via the `workspace.bundle` /
+/// `workspace.unbundle` RPC pair and flip the binding on success.
+/// Used by the move-workspace dialog's "Clone from current binding"
+/// toggle when the operator wants Helmor to handle the file
+/// transfer instead of running rsync themselves.
+///
+/// Flow:
+///   1. Resolve the source (the workspace's current binding or
+///      `local` if unbound).
+///   2. `source.workspace_bundle(source_path)` — bundle the repo's
+///      full `.git`, return base64 + sha256.
+///   3. Resolve the destination by name from the registry.
+///   4. `destination.workspace_unbundle(target_path, base64, sha)` —
+///      decode + verify + `git clone` on the destination.
+///   5. Update the persisted binding to point at the new runtime +
+///      remote_path so future ops route correctly.
+///
+/// Bundle size is capped at [`crate::remote::methods::WORKSPACE_BUNDLE_MAX_BYTES`].
+/// Repos larger than the cap surface a clean error rather than a
+/// codec failure; chunked streaming is the follow-up.
+#[tauri::command]
+pub async fn clone_workspace_to_runtime(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_id: String,
+    source_workspace_dir: String,
+    destination_runtime: String,
+    destination_path: String,
+) -> CmdResult<CloneWorkspaceResult> {
+    let registry = Arc::clone(&registry);
+    let bindings = Arc::clone(&bindings);
+    run_blocking(move || {
+        clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            &workspace_id,
+            &source_workspace_dir,
+            &destination_runtime,
+            &destination_path,
+        )
+    })
+    .await
+}
+
+/// Wire-friendly result the desktop renders after a successful
+/// cross-host clone. `head_branch` mirrors the daemon's report; the
+/// caller surfaces "(detached)" when empty.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneWorkspaceResult {
+    /// Always `true` today — present for forward-compat with a
+    /// future "skipped, already cloned" idempotent return.
+    pub cloned: bool,
+    pub head_branch: String,
+    /// Echo the destination path so toast text doesn't have to
+    /// thread the input value separately.
+    pub remote_path: String,
+}
+
+fn clone_workspace_to_runtime_inner(
+    registry: &Arc<RuntimeRegistry>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
+    workspace_id: &str,
+    source_workspace_dir: &str,
+    destination_runtime: &str,
+    destination_path: &str,
+) -> Result<CloneWorkspaceResult> {
+    if workspace_id.trim().is_empty() {
+        return Err(anyhow::anyhow!("workspace_id must not be empty"));
+    }
+    if source_workspace_dir.trim().is_empty() {
+        return Err(anyhow::anyhow!("source_workspace_dir must not be empty"));
+    }
+    if destination_runtime.trim().is_empty() {
+        return Err(anyhow::anyhow!("destination_runtime must not be empty"));
+    }
+    if destination_path.trim().is_empty() {
+        return Err(anyhow::anyhow!("destination_path must not be empty"));
+    }
+    if destination_runtime == crate::remote::LOCAL_RUNTIME_NAME {
+        // Cloning *into* local would clobber whatever's at the
+        // path. The move flow has a separate "Move to local" path
+        // that clears the binding without touching files — point
+        // the caller at that instead of silently misbehaving.
+        return Err(anyhow::anyhow!(
+            "destination_runtime `{destination_runtime}` is the local runtime; use clearWorkspaceRuntimeBinding to move a workspace back to local without cloning",
+        ));
+    }
+
+    // ── Source: resolve the runtime currently serving this
+    // workspace + the path that runtime sees. The translator
+    // already knows how to substitute the bound `remote_path` when
+    // present.
+    let source_resolved = resolve_runtime_for_call(registry, bindings, Some(workspace_id), None)?;
+    let source_path = source_resolved.translate_workspace_dir(source_workspace_dir);
+
+    // ── Destination: must already be registered. Cross-host
+    // moves don't auto-connect — the operator is expected to add
+    // the destination via the Add-Server wizard first.
+    let destination = registry.lookup(Some(destination_runtime))?;
+
+    let bundle = source_resolved
+        .runtime
+        .workspace_bundle(crate::remote::methods::WorkspaceBundleParams {
+            workspace_dir: source_path,
+        })
+        .context("bundle source workspace")?;
+
+    let unbundle = destination
+        .workspace_unbundle(crate::remote::methods::WorkspaceUnbundleParams {
+            target_dir: destination_path.to_string(),
+            bundle_base64: bundle.bundle_base64,
+            expected_sha256: bundle.sha256_hex,
+        })
+        .context("unbundle into destination runtime")?;
+
+    // ── Flip the binding. Treat the destination_path as the new
+    // `remote_path` override — every subsequent op routes through
+    // the destination at exactly the path we just cloned into.
+    bindings.set(
+        workspace_id.to_string(),
+        destination_runtime.to_string(),
+        Some(destination_path.to_string()),
+    );
+    persist_bindings(bindings);
+    if let Err(err) = crate::models::workspaces::update_workspace_runtime_name(
+        workspace_id,
+        Some(destination_runtime),
+    ) {
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            runtime_name = %destination_runtime,
+            error = %format!("{err:#}"),
+            "remote-runner: failed to mirror runtime binding into workspaces.runtime_name; sidecar JSON is still authoritative"
+        );
+    }
+
+    Ok(CloneWorkspaceResult {
+        cloned: unbundle.cloned,
+        head_branch: unbundle.head_branch,
+        remote_path: destination_path.to_string(),
+    })
+}
+
 /// Pin a workspace to a runtime by name. Persisted across restarts.
 /// The runtime doesn't have to exist at pin time — `lookup` falls
 /// back to local when a bound runtime isn't currently registered.
@@ -2062,6 +2207,45 @@ mod tests {
 
     struct StubRuntime {
         hostname: &'static str,
+        /// Track F3: captured `workspace_bundle` calls so the
+        /// orchestrator tests can assert the source got the right
+        /// `workspace_dir` (translated via the binding override).
+        bundle_calls: std::sync::Mutex<Vec<crate::remote::methods::WorkspaceBundleParams>>,
+        /// Track F3: captured `workspace_unbundle` calls so the
+        /// destination assertion can confirm the bytes + sha + target
+        /// arrived intact.
+        unbundle_calls: std::sync::Mutex<Vec<crate::remote::methods::WorkspaceUnbundleParams>>,
+        /// Pre-baked response for `workspace_bundle`. `None` means
+        /// "bail with the default 'not implemented' error" — useful
+        /// for tests that need to exercise the bundle-failed branch.
+        bundle_response: std::sync::Mutex<Option<crate::remote::methods::WorkspaceBundleResult>>,
+        /// Pre-baked response for `workspace_unbundle`. `None` →
+        /// trait default bails.
+        unbundle_response:
+            std::sync::Mutex<Option<crate::remote::methods::WorkspaceUnbundleResult>>,
+    }
+    impl StubRuntime {
+        fn new(hostname: &'static str) -> Self {
+            Self {
+                hostname,
+                bundle_calls: std::sync::Mutex::new(Vec::new()),
+                unbundle_calls: std::sync::Mutex::new(Vec::new()),
+                bundle_response: std::sync::Mutex::new(None),
+                unbundle_response: std::sync::Mutex::new(None),
+            }
+        }
+        fn set_bundle_response(&self, result: crate::remote::methods::WorkspaceBundleResult) {
+            *self.bundle_response.lock().unwrap() = Some(result);
+        }
+        fn set_unbundle_response(&self, result: crate::remote::methods::WorkspaceUnbundleResult) {
+            *self.unbundle_response.lock().unwrap() = Some(result);
+        }
+        fn last_bundle_call(&self) -> Option<crate::remote::methods::WorkspaceBundleParams> {
+            self.bundle_calls.lock().unwrap().last().cloned()
+        }
+        fn last_unbundle_call(&self) -> Option<crate::remote::methods::WorkspaceUnbundleParams> {
+            self.unbundle_calls.lock().unwrap().last().cloned()
+        }
     }
     impl RemoteRuntime for StubRuntime {
         fn runtime_health(&self) -> Result<RuntimeHealth> {
@@ -2092,18 +2276,34 @@ mod tests {
         fn ping(&self) -> Result<()> {
             Ok(())
         }
+        fn workspace_bundle(
+            &self,
+            params: crate::remote::methods::WorkspaceBundleParams,
+        ) -> Result<crate::remote::methods::WorkspaceBundleResult> {
+            self.bundle_calls.lock().unwrap().push(params);
+            self.bundle_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("stub: bundle_response not configured"))
+        }
+        fn workspace_unbundle(
+            &self,
+            params: crate::remote::methods::WorkspaceUnbundleParams,
+        ) -> Result<crate::remote::methods::WorkspaceUnbundleResult> {
+            self.unbundle_calls.lock().unwrap().push(params);
+            self.unbundle_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("stub: unbundle_response not configured"))
+        }
     }
 
     fn registry_with_stub_remote() -> Arc<RuntimeRegistry> {
         let registry = Arc::new(RuntimeRegistry::new());
         registry
-            .register(
-                "stub.box",
-                Arc::new(StubRuntime {
-                    hostname: "stub.box",
-                }),
-                None,
-            )
+            .register("stub.box", Arc::new(StubRuntime::new("stub.box")), None)
             .unwrap();
         registry
     }
@@ -4172,6 +4372,242 @@ mod tests {
             stub.mutate_calls.lock().unwrap().len(),
             1,
             "binding should resolve mutate to the bound runtime"
+        );
+    }
+
+    // ── Track F3 orchestrator: clone_workspace_to_runtime_inner ───────
+
+    fn fixed_bundle_response() -> crate::remote::methods::WorkspaceBundleResult {
+        crate::remote::methods::WorkspaceBundleResult {
+            bundle_base64: "Zm9v".into(), // "foo" base64 — not a real bundle, the
+            // stub destination doesn't actually decode.
+            size_bytes: 3,
+            sha256_hex:
+                // sha256 of the bytes "foo"
+                "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae".into(),
+        }
+    }
+
+    fn fixed_unbundle_response() -> crate::remote::methods::WorkspaceUnbundleResult {
+        crate::remote::methods::WorkspaceUnbundleResult {
+            cloned: true,
+            head_branch: "main".into(),
+        }
+    }
+
+    /// Build a registry with `source` + `destination` runtimes both
+    /// configured as F3-aware stubs, plus a workspace bound to
+    /// `source` at the given path. Returns Arc-handles for the
+    /// caller to set responses on + assert against.
+    fn registry_for_clone(
+        source_path: Option<&str>,
+    ) -> (
+        Arc<RuntimeRegistry>,
+        Arc<WorkspaceRuntimeBindings>,
+        Arc<StubRuntime>,
+        Arc<StubRuntime>,
+    ) {
+        let registry = Arc::new(RuntimeRegistry::new());
+        let source = Arc::new(StubRuntime::new("source.box"));
+        let destination = Arc::new(StubRuntime::new("destination.box"));
+        registry
+            .register(
+                "source.box",
+                Arc::clone(&source) as Arc<dyn RemoteRuntime>,
+                None,
+            )
+            .unwrap();
+        registry
+            .register(
+                "destination.box",
+                Arc::clone(&destination) as Arc<dyn RemoteRuntime>,
+                None,
+            )
+            .unwrap();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set("ws-1", "source.box", source_path.map(|s| s.to_string()));
+        (registry, bindings, source, destination)
+    }
+
+    #[test]
+    fn clone_workspace_inner_ships_bundle_from_source_to_destination_and_flips_binding() {
+        // Happy path: source bound to source.box with no path override,
+        // destination is a different remote. The orchestrator should
+        // call `workspace_bundle` on source with the local path,
+        // forward the bytes verbatim to destination's
+        // `workspace_unbundle`, and update the binding to point at
+        // destination + the supplied path.
+        let (registry, bindings, source, destination) = registry_for_clone(None);
+        source.set_bundle_response(fixed_bundle_response());
+        destination.set_unbundle_response(fixed_unbundle_response());
+
+        let result = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "destination.box",
+            "/home/dwork/code/foo",
+        )
+        .expect("clone should succeed against configured stubs");
+        assert!(result.cloned);
+        assert_eq!(result.head_branch, "main");
+        assert_eq!(result.remote_path, "/home/dwork/code/foo");
+
+        // Source bundle call carried the workspace_dir verbatim
+        // (no remote_path override was set on the source binding).
+        let bundle_call = source.last_bundle_call().expect("source should be bundled");
+        assert_eq!(bundle_call.workspace_dir, "/Users/d/code/foo");
+
+        // Destination unbundle call got the bytes + sha + target.
+        let unbundle_call = destination
+            .last_unbundle_call()
+            .expect("destination should be unbundled into");
+        assert_eq!(unbundle_call.target_dir, "/home/dwork/code/foo");
+        assert_eq!(unbundle_call.bundle_base64, "Zm9v");
+        assert_eq!(
+            unbundle_call.expected_sha256,
+            "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        );
+
+        // Binding got flipped to the destination + the new path.
+        assert_eq!(
+            bindings.lookup("ws-1").as_deref(),
+            Some("destination.box"),
+            "binding should point at the new runtime"
+        );
+        assert_eq!(
+            bindings.lookup_remote_path("ws-1").as_deref(),
+            Some("/home/dwork/code/foo"),
+            "binding's remote_path should be the cloned-into path"
+        );
+    }
+
+    #[test]
+    fn clone_workspace_inner_translates_source_path_via_remote_path_override() {
+        // When the source binding carries a remote_path override
+        // (the workspace was previously moved to source.box at a
+        // different path), the bundle call must hit that path —
+        // NOT the local checkout path the desktop passes in.
+        let (registry, bindings, source, destination) =
+            registry_for_clone(Some("/home/work/elsewhere"));
+        source.set_bundle_response(fixed_bundle_response());
+        destination.set_unbundle_response(fixed_unbundle_response());
+
+        clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "destination.box",
+            "/home/dwork/code/foo",
+        )
+        .expect("clone should succeed");
+
+        let bundle_call = source.last_bundle_call().unwrap();
+        assert_eq!(
+            bundle_call.workspace_dir, "/home/work/elsewhere",
+            "source's remote_path override must take precedence over the local path",
+        );
+    }
+
+    #[test]
+    fn clone_workspace_inner_rejects_local_destination() {
+        let (registry, bindings, _, _) = registry_for_clone(None);
+        let err = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "local",
+            "/Users/d/code/foo",
+        )
+        .expect_err("local destination must bail");
+        assert!(
+            format!("{err:#}").contains("local runtime"),
+            "error should call out the local restriction: {err:#}",
+        );
+        // No bundle or unbundle should have been attempted.
+    }
+
+    #[test]
+    fn clone_workspace_inner_rejects_empty_inputs() {
+        let (registry, bindings, _, _) = registry_for_clone(None);
+        for (workspace_id, source_dir, dest_runtime, dest_path) in [
+            ("", "/path", "destination.box", "/dest"),
+            ("ws-1", "", "destination.box", "/dest"),
+            ("ws-1", "/path", "", "/dest"),
+            ("ws-1", "/path", "destination.box", ""),
+        ] {
+            let err = clone_workspace_to_runtime_inner(
+                &registry,
+                &bindings,
+                workspace_id,
+                source_dir,
+                dest_runtime,
+                dest_path,
+            )
+            .expect_err("empty input must bail");
+            assert!(
+                format!("{err:#}").contains("must not be empty"),
+                "empty inputs should surface a clear error: {err:#}",
+            );
+        }
+    }
+
+    #[test]
+    fn clone_workspace_inner_propagates_unbundle_error_without_touching_the_binding() {
+        // When the destination's unbundle bails (sha mismatch, git
+        // clone failure, target not empty, etc.) the binding must
+        // STAY pointed at the source — partial state is worse than
+        // a clear error.
+        let (registry, bindings, source, _destination) = registry_for_clone(None);
+        source.set_bundle_response(fixed_bundle_response());
+        // Don't set unbundle_response — the stub will bail with
+        // "unbundle_response not configured".
+        let err = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "destination.box",
+            "/home/dwork/code/foo",
+        )
+        .expect_err("unconfigured unbundle must bail");
+        assert!(
+            format!("{err:#}").contains("unbundle"),
+            "error should surface the destination failure: {err:#}",
+        );
+        // Binding still on source.
+        assert_eq!(
+            bindings.lookup("ws-1").as_deref(),
+            Some("source.box"),
+            "binding must not flip when unbundle fails",
+        );
+    }
+
+    #[test]
+    fn clone_workspace_inner_rejects_unknown_destination_runtime() {
+        let (registry, bindings, source, _destination) = registry_for_clone(None);
+        source.set_bundle_response(fixed_bundle_response());
+        let err = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "never-registered.box",
+            "/home/dwork/code/foo",
+        )
+        .expect_err("unknown destination must bail");
+        assert!(
+            format!("{err:#}").contains("never-registered"),
+            "error should name the missing runtime: {err:#}",
+        );
+        // Source shouldn't have been bundled — the destination
+        // check fires first.
+        assert!(
+            source.last_bundle_call().is_none(),
+            "we shouldn't bundle when the destination doesn't exist",
         );
     }
 }

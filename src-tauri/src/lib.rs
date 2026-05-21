@@ -430,6 +430,7 @@ pub fn run() {
             commands::remote_commands::stat_workspace_file,
             commands::remote_commands::attach_remote_terminal,
             commands::remote_commands::clear_workspace_runtime_binding,
+            commands::remote_commands::clone_workspace_to_runtime,
             commands::remote_commands::abort_remote_agent_session,
             commands::remote_commands::attach_remote_agent_session,
             commands::remote_commands::reattach_remote_agent_session_stream,

@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { MoveWorkspaceDialog } from "@/components/move-workspace-dialog";
 import {
 	clearWorkspaceRuntimeBinding,
+	cloneWorkspaceToRuntime,
 	listRemoteRuntimes,
+	loadWorkspaceDetail,
 	openWorkspaceInFinder,
 	setWorkspaceRuntimeBinding,
 } from "@/lib/api";
@@ -115,27 +117,51 @@ export const WorkspacesSidebarContainer = memo(
 				workspaceId,
 				runtimeName,
 				remotePath,
+				cloneFromCurrent,
 			}: {
 				workspaceId: string;
 				runtimeName: string | null;
 				remotePath?: string | null;
+				cloneFromCurrent?: boolean;
 			}) => {
 				if (runtimeName === null || runtimeName === "local") {
 					await clearWorkspaceRuntimeBinding(workspaceId);
-					return { workspaceId, runtimeName: null };
+					return { workspaceId, runtimeName: null, cloned: false };
+				}
+				// Track F3 bundle: when the operator opted in to
+				// clone-from-current, route through the orchestrator
+				// (bundle on source → unbundle on destination → flip
+				// binding). Otherwise, the legacy path: just rebind +
+				// trust the operator to have placed the files.
+				if (cloneFromCurrent && remotePath) {
+					const detail = await loadWorkspaceDetail(workspaceId);
+					if (!detail?.rootPath) {
+						throw new Error(
+							"This workspace has no recorded path. Clone-from-current needs a source path to bundle.",
+						);
+					}
+					await cloneWorkspaceToRuntime(
+						workspaceId,
+						detail.rootPath,
+						runtimeName,
+						remotePath,
+					);
+					return { workspaceId, runtimeName, cloned: true };
 				}
 				await setWorkspaceRuntimeBinding(
 					workspaceId,
 					runtimeName,
 					remotePath ?? null,
 				);
-				return { workspaceId, runtimeName };
+				return { workspaceId, runtimeName, cloned: false };
 			},
-			onSuccess: ({ runtimeName }) => {
+			onSuccess: ({ runtimeName, cloned }) => {
 				toast.success(
 					runtimeName === null
 						? "Moved to local runtime"
-						: `Moved to ${runtimeName}`,
+						: cloned
+							? `Cloned + moved to ${runtimeName}`
+							: `Moved to ${runtimeName}`,
 				);
 				void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
 				void queryClient.invalidateQueries({
@@ -247,12 +273,13 @@ export const WorkspacesSidebarContainer = memo(
 					}}
 					workspaceId={pendingMove?.workspaceId ?? null}
 					runtimeName={pendingMove?.runtimeName ?? null}
-					onConfirm={({ runtimeName, remotePath }) => {
+					onConfirm={({ runtimeName, remotePath, cloneFromCurrent }) => {
 						if (!pendingMove) return;
 						moveToRuntime.mutate({
 							workspaceId: pendingMove.workspaceId,
 							runtimeName,
 							remotePath,
+							cloneFromCurrent,
 						});
 					}}
 				/>

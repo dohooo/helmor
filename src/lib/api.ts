@@ -1040,6 +1040,41 @@ export async function clearWorkspaceRuntimeBinding(
 	return invoke<void>("clear_workspace_runtime_binding", { workspaceId });
 }
 
+/**
+ * Track F3 bundle orchestrator: clone a workspace from its current
+ * runtime to a new one over the JSON-RPC channel and flip the
+ * binding on success.
+ *
+ * The desktop calls `workspace.bundle` on the source runtime → ships
+ * the base64 bytes through itself → calls `workspace.unbundle` on
+ * the destination. The bundle is capped at 10 MiB pre-base64; larger
+ * repos surface a clean error rather than a codec failure.
+ *
+ * `sourceWorkspaceDir` is the workspace's path AS THE DESKTOP SEES
+ * IT (i.e. the local checkout path). The orchestrator translates
+ * to the source runtime's actual path via the binding's
+ * `remote_path` override when one exists.
+ */
+export type CloneWorkspaceResult = {
+	cloned: boolean;
+	headBranch: string;
+	remotePath: string;
+};
+
+export async function cloneWorkspaceToRuntime(
+	workspaceId: string,
+	sourceWorkspaceDir: string,
+	destinationRuntime: string,
+	destinationPath: string,
+): Promise<CloneWorkspaceResult> {
+	return invoke<CloneWorkspaceResult>("clone_workspace_to_runtime", {
+		workspaceId,
+		sourceWorkspaceDir,
+		destinationRuntime,
+		destinationPath,
+	});
+}
+
 export async function connectRemoteRuntime(
 	name: string,
 	host: string,

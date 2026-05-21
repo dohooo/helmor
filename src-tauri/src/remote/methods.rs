@@ -136,6 +136,15 @@ pub enum Method {
     /// configured on the daemon. Returns presence bits + optional
     /// base URLs only — the literal API key never leaves the daemon.
     AgentAuthStatus,
+    /// Track F3 bundle: serialise the workspace's `.git` into a
+    /// portable bundle the desktop can ship to a destination
+    /// runtime. Capped at 10 MiB pre-base64 to stay inside the
+    /// codec's frame budget.
+    WorkspaceBundle,
+    /// Track F3 unbundle: receive a bundle the desktop produced via
+    /// `workspace.bundle` and `git clone` it into the named target
+    /// directory on this runtime's filesystem.
+    WorkspaceUnbundle,
     /// Track E1: trailing log tail. Reads up to `max_lines`
     /// lines from `$HOME/.helmor/server/daemon.log` and returns
     /// them so an operator can debug without an extra SSH session.
@@ -173,6 +182,8 @@ impl Method {
             Self::AgentAttach => "agent.attach",
             Self::AgentSetAuth => "agent.setAuth",
             Self::AgentAuthStatus => "agent.authStatus",
+            Self::WorkspaceBundle => "workspace.bundle",
+            Self::WorkspaceUnbundle => "workspace.unbundle",
             Self::DaemonTailLog => "daemon.tailLog",
             Self::RuntimeMetrics => "runtime.metrics",
         }
@@ -223,6 +234,8 @@ impl FromStr for Method {
             "agent.attach" => Ok(Self::AgentAttach),
             "agent.setAuth" => Ok(Self::AgentSetAuth),
             "agent.authStatus" => Ok(Self::AgentAuthStatus),
+            "workspace.bundle" => Ok(Self::WorkspaceBundle),
+            "workspace.unbundle" => Ok(Self::WorkspaceUnbundle),
             "daemon.tailLog" => Ok(Self::DaemonTailLog),
             "runtime.metrics" => Ok(Self::RuntimeMetrics),
             _ => Err(UnknownMethod(value.to_string())),
@@ -956,6 +969,96 @@ impl RpcMethod for WorkspaceStopWatchMethod {
     const NAME: &'static str = "workspace.stopWatch";
     type Params = WorkspaceStopWatchParams;
     type Result = WorkspaceStopWatchResult;
+}
+
+// ── Track F3 bundle + unbundle (cross-host workspace move) ─────────
+//
+// F3's UI today expects the operator to have copied the workspace to
+// the destination themselves. This pair lets Helmor handle the
+// transfer over the existing JSON-RPC channel: the source's daemon
+// runs `git bundle create --all`, base64-encodes the bytes, and
+// returns them in a single response; the destination's daemon
+// receives the bytes, writes them to a temporary file, verifies the
+// caller-supplied SHA-256, and runs `git clone --no-hardlinks
+// <bundle> <target>`.
+//
+// Bundles are framed inside the codec's 16 MiB body cap; with
+// base64 inflation that puts the hard ceiling at ~12 MiB of `.git`
+// pack data. Larger repos surface a legible error rather than a
+// codec failure — the chunked-streaming variant is a follow-up.
+
+/// Max raw bundle size we'll attempt to ship in a single RPC.
+/// Conservative vs the codec's 16 MiB cap so the base64 expansion
+/// (~4/3) still fits with headroom for the envelope. Bundles larger
+/// than this surface as a clean `INVALID_PARAMS` error.
+pub const WORKSPACE_BUNDLE_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleParams {
+    /// Workspace root on the runtime's filesystem.
+    pub workspace_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleResult {
+    /// Bundle bytes, base64-encoded (standard alphabet, padded).
+    /// Decoders should reject any non-standard variant.
+    pub bundle_base64: String,
+    /// Raw byte count of the bundle pre-base64. The caller can
+    /// surface a "transferring N MiB…" progress hint without
+    /// decoding first.
+    pub size_bytes: u64,
+    /// Lowercase hex SHA-256 of the raw bundle bytes. The
+    /// destination's `workspace.unbundle` verifies against this
+    /// before running `git clone` so corruption en route is
+    /// detected before it manifests as a confusing clone error.
+    pub sha256_hex: String,
+}
+
+pub struct WorkspaceBundleMethod;
+impl RpcMethod for WorkspaceBundleMethod {
+    const NAME: &'static str = "workspace.bundle";
+    type Params = WorkspaceBundleParams;
+    type Result = WorkspaceBundleResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleParams {
+    /// Absolute path the destination should clone INTO. Must not
+    /// exist (or must be empty) — the daemon refuses to overwrite
+    /// a non-empty directory so a wrong path can't clobber a real
+    /// workspace.
+    pub target_dir: String,
+    /// Bundle bytes the source's `workspace.bundle` returned. Same
+    /// base64 encoding contract.
+    pub bundle_base64: String,
+    /// Lowercase hex SHA-256 the source reported. The destination
+    /// recomputes after decoding + bails on mismatch.
+    pub expected_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleResult {
+    /// `true` once `git clone` has succeeded against the bundle.
+    /// `false` is reserved for future no-op semantics (e.g. a
+    /// "target already cloned from this sha" idempotent return)
+    /// and shouldn't appear in current daemons.
+    pub cloned: bool,
+    /// The branch the cloned workspace's HEAD now points at. Empty
+    /// when the source had a detached HEAD; the desktop's UI then
+    /// surfaces "(detached)" the same way `branchInfo` does.
+    pub head_branch: String,
+}
+
+pub struct WorkspaceUnbundleMethod;
+impl RpcMethod for WorkspaceUnbundleMethod {
+    const NAME: &'static str = "workspace.unbundle";
+    type Params = WorkspaceUnbundleParams;
+    type Result = WorkspaceUnbundleResult;
 }
 
 /// Server-pushed notification fired for every debounced batch of

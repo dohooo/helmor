@@ -1015,6 +1015,22 @@ impl RemoteRuntime for RemoteSshRuntime {
             .call::<super::methods::WorkspaceSearchMethod>(params)
     }
 
+    fn workspace_bundle(
+        &self,
+        params: super::methods::WorkspaceBundleParams,
+    ) -> Result<super::methods::WorkspaceBundleResult> {
+        self.client
+            .call::<super::methods::WorkspaceBundleMethod>(params)
+    }
+
+    fn workspace_unbundle(
+        &self,
+        params: super::methods::WorkspaceUnbundleParams,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        self.client
+            .call::<super::methods::WorkspaceUnbundleMethod>(params)
+    }
+
     fn workspace_start_watch(
         &self,
         params: super::methods::WorkspaceStartWatchParams,

@@ -18,12 +18,13 @@ use crate::remote::methods::{
     TerminalCloseParams, TerminalCloseResult, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOpenResult, TerminalResizeParams, TerminalResizeResult,
     TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
-    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
-    WorkspaceFileTreeResult, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
-    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileParams,
-    WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStartWatchParams,
-    WorkspaceStartWatchResult, WorkspaceStatFileParams, WorkspaceStatusParams,
-    WorkspaceStatusResult, WorkspaceStopWatchParams, WorkspaceStopWatchResult,
+    WorkspaceBundleParams, WorkspaceBundleResult, WorkspaceChangesParams, WorkspaceChangesResult,
+    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
+    WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
+    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
+    WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
+    WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
+    WorkspaceStopWatchResult, WorkspaceUnbundleParams, WorkspaceUnbundleResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -375,6 +376,30 @@ pub(super) fn handle_workspace_search(
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("workspace.search failed: {err:#}"),
+        )
+    })
+}
+
+pub(super) fn handle_workspace_bundle(
+    ctx: &ServerContext,
+    params: WorkspaceBundleParams,
+) -> Result<WorkspaceBundleResult, JsonRpcError> {
+    ctx.runtime().workspace_bundle(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.bundle failed: {err:#}"),
+        )
+    })
+}
+
+pub(super) fn handle_workspace_unbundle(
+    ctx: &ServerContext,
+    params: WorkspaceUnbundleParams,
+) -> Result<WorkspaceUnbundleResult, JsonRpcError> {
+    ctx.runtime().workspace_unbundle(params).map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("workspace.unbundle failed: {err:#}"),
         )
     })
 }

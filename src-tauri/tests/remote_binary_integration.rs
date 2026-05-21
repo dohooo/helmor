@@ -20,9 +20,10 @@ use helmor_lib::remote::{
     methods::{
         PingMethod, PingParams, TerminalAttachParams, TerminalCloseParams, TerminalEventKind,
         TerminalEventNotification, TerminalListParams, TerminalOpenParams, TerminalWriteParams,
-        WorkspaceChangesParams, WorkspaceFileTreeParams, WorkspaceMutateFileAction,
-        WorkspaceMutateFileParams, WorkspaceReadFileAtRefParams, WorkspaceReadFileParams,
-        WorkspaceStatFileParams,
+        WorkspaceBundleMethod, WorkspaceBundleParams, WorkspaceChangesParams,
+        WorkspaceFileTreeParams, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
+        WorkspaceReadFileAtRefParams, WorkspaceReadFileParams, WorkspaceStatFileParams,
+        WorkspaceUnbundleMethod, WorkspaceUnbundleParams,
     },
     CommandTransport, OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RemoteTransport, RpcClient,
     RuntimeKind, WorkspaceStatusMethod, WorkspaceStatusParams,
@@ -1013,4 +1014,108 @@ fn force_close_unblocks_in_flight_call_against_a_suspended_peer() {
     // The Child object was consumed by force_close's writer-drop,
     // so SIGKILL/wait already happened on the suspended process —
     // nothing left to clean up here.
+}
+
+// ── Track F3: cross-host bundle + unbundle through real daemons ─────
+//
+// The runtime-level unit tests prove the bundle/unbundle pair
+// works against a real git repo. This integration test proves the
+// same pair survives the full RPC wire: spawn two `helmor-server`
+// processes, bundle on the first, ship the base64 + sha across the
+// wire (no chunking), unbundle on the second, verify the cloned
+// workspace's HEAD matches. Same shape as the desktop's cross-host
+// move flow.
+
+#[test]
+fn workspace_bundle_round_trips_through_two_spawned_daemons() {
+    // ── source side: spawn a daemon + create a real repo to bundle.
+    let source_repo = init_repo();
+    let source_cmd = Command::new(HELMOR_SERVER_BIN);
+    let source_client = RpcClient::connect_command(source_cmd, "source-daemon".into())
+        .expect("source daemon handshake");
+
+    let bundle = source_client
+        .call::<WorkspaceBundleMethod>(WorkspaceBundleParams {
+            workspace_dir: source_repo.path().display().to_string(),
+        })
+        .expect("workspace.bundle should round-trip through the source daemon");
+    assert!(bundle.size_bytes > 0);
+    assert_eq!(
+        bundle.sha256_hex.len(),
+        64,
+        "sha256_hex must be 64 chars: {}",
+        bundle.sha256_hex,
+    );
+    assert!(
+        !bundle.bundle_base64.is_empty(),
+        "bundle_base64 must carry payload bytes",
+    );
+
+    // ── destination side: spawn a *different* daemon process so
+    // the test exercises the wire boundary on both sides.
+    let dest_cmd = Command::new(HELMOR_SERVER_BIN);
+    let dest_client =
+        RpcClient::connect_command(dest_cmd, "dest-daemon".into()).expect("dest daemon handshake");
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("cloned");
+    let unbundle = dest_client
+        .call::<WorkspaceUnbundleMethod>(WorkspaceUnbundleParams {
+            target_dir: target.display().to_string(),
+            bundle_base64: bundle.bundle_base64.clone(),
+            expected_sha256: bundle.sha256_hex.clone(),
+        })
+        .expect("workspace.unbundle should round-trip through the dest daemon");
+    assert!(unbundle.cloned);
+    assert_eq!(unbundle.head_branch, "main");
+
+    // Cloned workspace has the same head commit as the source.
+    let source_head = helmor_lib::git_ops::current_workspace_head_commit(source_repo.path())
+        .expect("source HEAD");
+    let cloned_head =
+        helmor_lib::git_ops::current_workspace_head_commit(&target).expect("cloned HEAD");
+    assert_eq!(
+        source_head, cloned_head,
+        "cloned workspace must land on the same commit the source had",
+    );
+    // The committed file lands in the working tree.
+    assert!(target.join("file.txt").exists());
+}
+
+#[test]
+fn workspace_unbundle_surfaces_handler_failed_on_sha_mismatch_via_wire() {
+    // Proves the JsonRpcError shape (HANDLER_FAILED code +
+    // human-readable message) makes it through the wire when the
+    // daemon refuses a bad bundle. The desktop relies on the
+    // message verbatim for its toast.
+    let source_repo = init_repo();
+    let source_cmd = Command::new(HELMOR_SERVER_BIN);
+    let source_client =
+        RpcClient::connect_command(source_cmd, "source-daemon".into()).expect("source handshake");
+    let bundle = source_client
+        .call::<WorkspaceBundleMethod>(WorkspaceBundleParams {
+            workspace_dir: source_repo.path().display().to_string(),
+        })
+        .expect("bundle");
+
+    let dest_cmd = Command::new(HELMOR_SERVER_BIN);
+    let dest_client =
+        RpcClient::connect_command(dest_cmd, "dest-daemon".into()).expect("dest handshake");
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("cloned");
+    let err = dest_client
+        .call::<WorkspaceUnbundleMethod>(WorkspaceUnbundleParams {
+            target_dir: target.display().to_string(),
+            bundle_base64: bundle.bundle_base64,
+            expected_sha256: "0".repeat(64),
+        })
+        .expect_err("sha mismatch must surface as RPC error");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("SHA-256 mismatch") || msg.contains("workspace.unbundle failed"),
+        "error message should reach the desktop verbatim: {msg}",
+    );
+    assert!(
+        !target.exists(),
+        "target dir must not be created on a sha mismatch"
+    );
 }
