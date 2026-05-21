@@ -479,9 +479,19 @@ fn install_via_scp<R: SshRunner>(runner: &R, host: &str, local_binary: &Path) ->
 
 /// Phase D3 download install. Detects the remote arch via `uname -sm`,
 /// composes the GitHub release URL for that target, pipes a single
-/// bash script that downloads + verifies + extracts. The script runs
-/// `set -euo pipefail` so any failure bubbles out as a non-zero exit
-/// code; the caller can then fall back to scp.
+/// bash script that downloads + verifies + extracts.
+///
+/// **Hash-mismatch retry**: the script emits the distinctive sentinel
+/// [`CHECKSUM_MISMATCH_MARKER`] on stderr when `shasum -c` rejects the
+/// tarball. If we see that marker on the first attempt we re-run the
+/// script once before bubbling — a CDN serving a stale or corrupted
+/// byte run is the canonical reason this would happen, and a retry
+/// is cheaper + safer than falling through to scp (which would happily
+/// install the wrong-arch local binary).
+///
+/// Any *other* failure (network, extract, missing release artefact)
+/// bubbles immediately so the outer `install_remote` can fall back to
+/// scp without burning a second download attempt.
 fn install_via_download<R: SshRunner>(
     runner: &R,
     host: &str,
@@ -500,9 +510,62 @@ fn install_via_download<R: SshRunner>(
         format!("can't map remote `uname -sm` output `{arch_line}` to a download target")
     })?;
 
-    // Compose URLs. The version string is the protocol version we
-    // EXPECT — releases are tagged `helmor-server-v<protocol>` so a
-    // protocol bump and a matching release tag move in lockstep.
+    let script = build_download_script(expected_protocol, target);
+
+    // First attempt.
+    let first = runner
+        .run_ssh(host, &script)
+        .context("ssh download install script")?;
+    if first.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&first.stderr);
+    if !stderr.contains(CHECKSUM_MISMATCH_MARKER) {
+        // Network failure, missing release artefact, extract failure,
+        // etc. — none of those get better by trying again. Bubble so
+        // the caller falls through to scp.
+        bail!(
+            "download install on {host} failed (exit {}): {}",
+            first.status,
+            stderr.trim()
+        );
+    }
+
+    tracing::warn!(
+        host = %host,
+        "remote-runner: checksum mismatch on first download attempt; retrying once before scp fallback"
+    );
+    let second = runner
+        .run_ssh(host, &script)
+        .context("ssh download install script (retry)")?;
+    if second.status.success() {
+        return Ok(());
+    }
+    let retry_stderr = String::from_utf8_lossy(&second.stderr);
+    bail!(
+        "download install on {host} failed twice (exit {}): {}",
+        second.status,
+        retry_stderr.trim()
+    )
+}
+
+/// Sentinel the install script emits on checksum mismatch. Grep'd by
+/// [`install_via_download`] to decide whether to retry. Lives in code
+/// rather than in the docs because the script is *generated* — the
+/// constant + the script have to move together.
+const CHECKSUM_MISMATCH_MARKER: &str = "HELMOR_INSTALL_CHECKSUM_MISMATCH";
+
+/// Build the install shell script. Extracted so retries re-run the
+/// same script verbatim and tests can assert structure without
+/// re-spawning ssh.
+///
+/// The script drops `set -e` because we want to detect specific
+/// failure modes and emit distinguishing sentinels rather than have
+/// the shell exit on the first non-zero status. `set -u -o pipefail`
+/// stays — unset vars are real bugs, and we want pipe failures to
+/// surface as a non-zero exit on the relevant line.
+fn build_download_script(expected_protocol: &str, target: &str) -> String {
     let tarball = format!("helmor-server-{expected_protocol}-{target}.tar.gz");
     let tag = format!("helmor-server-v{expected_protocol}");
     let release_base = format!(
@@ -511,34 +574,33 @@ fn install_via_download<R: SshRunner>(
     );
     let tarball_url = format!("{release_base}/{tarball}");
     let sums_url = format!("{release_base}/SHA256SUMS");
-
-    // Compose the remote-side script. Heredoc-style so the whole
-    // sequence runs atomically — a partial state can't trick the
-    // post-install probe into a false-positive.
-    let script = format!(
-        r#"set -euo pipefail
+    format!(
+        r#"set -uo pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fsSL -o "$tmp/{tarball}" "{tarball_url}"
-curl -fsSL -o "$tmp/SHA256SUMS" "{sums_url}"
+if ! curl -fsSL -o "$tmp/{tarball}" "{tarball_url}"; then
+  echo "HELMOR_INSTALL_DOWNLOAD_FAILED tarball" >&2
+  exit 70
+fi
+if ! curl -fsSL -o "$tmp/SHA256SUMS" "{sums_url}"; then
+  echo "HELMOR_INSTALL_DOWNLOAD_FAILED sums" >&2
+  exit 70
+fi
 cd "$tmp"
-grep -F " {tarball}" SHA256SUMS | shasum -a 256 -c -
-tar xzf {tarball}
-install -m 0755 helmor-server-{expected_protocol}-{target}/helmor-server "{REMOTE_INSTALL_BINARY}"
+if ! grep -F " {tarball}" SHA256SUMS | shasum -a 256 -c - >/dev/null 2>&1; then
+  echo "{CHECKSUM_MISMATCH_MARKER} {tarball}" >&2
+  exit 65
+fi
+if ! tar xzf {tarball}; then
+  echo "HELMOR_INSTALL_EXTRACT_FAILED" >&2
+  exit 71
+fi
+if ! install -m 0755 helmor-server-{expected_protocol}-{target}/helmor-server "{REMOTE_INSTALL_BINARY}"; then
+  echo "HELMOR_INSTALL_INSTALL_FAILED" >&2
+  exit 72
+fi
 "#
-    );
-    let out = runner
-        .run_ssh(host, &script)
-        .context("ssh download install script")?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        bail!(
-            "download install on {host} failed (exit {}): {}",
-            out.status,
-            stderr.trim()
-        );
-    }
-    Ok(())
+    )
 }
 
 /// Map `uname -sm` output (one of `Linux x86_64`, `Linux aarch64`,
@@ -754,6 +816,17 @@ mod tests {
             status: std::process::ExitStatus::from_raw(code << 8),
             stdout: Vec::new(),
             stderr: b"bash: helmor-server: command not found\n".to_vec(),
+        }
+    }
+
+    /// Variant of [`err_output`] that lets a test specify the exact
+    /// stderr bytes — needed to drive the hash-mismatch retry path
+    /// which keys off [`CHECKSUM_MISMATCH_MARKER`].
+    fn err_output_with_stderr(code: i32, stderr: &str) -> std::process::Output {
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
         }
     }
 
@@ -1137,5 +1210,155 @@ mod tests {
         assert_eq!(resolved, REMOTE_INSTALL_BINARY);
         // Both download AND scp ran — the fallback chain.
         assert_eq!(runner.scp_calls.lock().unwrap().len(), 1);
+    }
+
+    // ── Phase D3: hash-mismatch retry ───────────────────────────
+
+    #[test]
+    fn download_retries_once_on_checksum_mismatch_and_succeeds() {
+        // First download script attempt fails with the checksum
+        // sentinel; the retry succeeds. No scp fallback should run —
+        // a CDN serving stale bytes shouldn't push the wrong-arch
+        // local binary onto the remote.
+        let runner = RecordingRunner::default();
+        runner.queue_ssh(err_output(127)); // requested probe
+        runner.queue_ssh(err_output(127)); // managed probe
+        runner.queue_ssh(ok_output("")); // mkdir
+        runner.queue_ssh(ok_output("Linux x86_64\n")); // uname
+        runner.queue_ssh(err_output_with_stderr(
+            65,
+            "HELMOR_INSTALL_CHECKSUM_MISMATCH helmor-server-0.1.0-x86_64-unknown-linux-gnu.tar.gz\n",
+        )); // download script: 1st attempt → checksum mismatch
+        runner.queue_ssh(ok_output("")); // download script: 2nd attempt → success
+        runner.queue_ssh(ok_output(&matching_probe())); // post-install probe
+
+        let resolved = ensure_remote_helmor_server_with_strategy(
+            &runner,
+            "dev.box",
+            "helmor-server",
+            Path::new("/local/helmor-server"),
+            InstallStrategy::DownloadFallbackScp,
+        )
+        .unwrap();
+        assert_eq!(resolved, REMOTE_INSTALL_BINARY);
+        assert!(
+            runner.scp_calls.lock().unwrap().is_empty(),
+            "retry succeeded — scp must not run"
+        );
+        // Two download script invocations (the 5th + 6th ssh calls
+        // after requested probe + managed probe + mkdir + uname).
+        let ssh_calls = runner.ssh_calls.lock().unwrap();
+        assert!(
+            ssh_calls[4].1.contains("curl") && ssh_calls[4].1.contains("shasum"),
+            "5th ssh call should be the first download attempt"
+        );
+        assert_eq!(
+            ssh_calls[4].1, ssh_calls[5].1,
+            "retry must run the EXACT same script — anything else would risk \
+             a different artefact landing on the remote"
+        );
+    }
+
+    #[test]
+    fn download_falls_back_to_scp_when_checksum_mismatch_persists() {
+        // Both download attempts come back with the checksum
+        // sentinel (e.g. the release artefact + SHA256SUMS got
+        // mis-published together). The install_remote dispatcher
+        // catches the bubbled error and falls through to scp.
+        let runner = RecordingRunner::default();
+        runner.queue_ssh(err_output(127)); // requested probe
+        runner.queue_ssh(err_output(127)); // managed probe
+        runner.queue_ssh(ok_output("")); // mkdir
+        runner.queue_ssh(ok_output("Linux x86_64\n")); // uname
+        runner.queue_ssh(err_output_with_stderr(
+            65,
+            "HELMOR_INSTALL_CHECKSUM_MISMATCH a\n",
+        )); // 1st attempt → checksum mismatch
+        runner.queue_ssh(err_output_with_stderr(
+            65,
+            "HELMOR_INSTALL_CHECKSUM_MISMATCH a\n",
+        )); // 2nd attempt → checksum mismatch again
+        runner.queue_scp(ok_output("")); // scp fallback
+        runner.queue_ssh(ok_output("")); // chmod
+        runner.queue_ssh(ok_output(&matching_probe())); // post-install probe
+
+        let resolved = ensure_remote_helmor_server_with_strategy(
+            &runner,
+            "dev.box",
+            "helmor-server",
+            Path::new("/local/helmor-server"),
+            InstallStrategy::DownloadFallbackScp,
+        )
+        .unwrap();
+        assert_eq!(resolved, REMOTE_INSTALL_BINARY);
+        assert_eq!(
+            runner.scp_calls.lock().unwrap().len(),
+            1,
+            "two checksum failures must fall through to scp"
+        );
+    }
+
+    #[test]
+    fn download_does_not_retry_on_non_checksum_failure() {
+        // First attempt fails with a network error (curl 22, no
+        // checksum sentinel). The retry path is gated on the
+        // sentinel — without it, scp fallback kicks in immediately
+        // so we don't burn the wall clock on a second download
+        // that's just as doomed.
+        let runner = RecordingRunner::default();
+        runner.queue_ssh(err_output(127)); // requested probe
+        runner.queue_ssh(err_output(127)); // managed probe
+        runner.queue_ssh(ok_output("")); // mkdir
+        runner.queue_ssh(ok_output("Linux x86_64\n")); // uname
+        runner.queue_ssh(err_output_with_stderr(
+            70,
+            "HELMOR_INSTALL_DOWNLOAD_FAILED tarball\n",
+        )); // download script: network failure
+            // ↑ note: only ONE download attempt. If a retry slipped in
+            // here the next ssh call would be the script again, not
+            // the scp.
+        runner.queue_scp(ok_output("")); // scp fallback
+        runner.queue_ssh(ok_output("")); // chmod
+        runner.queue_ssh(ok_output(&matching_probe())); // post-install probe
+
+        let resolved = ensure_remote_helmor_server_with_strategy(
+            &runner,
+            "dev.box",
+            "helmor-server",
+            Path::new("/local/helmor-server"),
+            InstallStrategy::DownloadFallbackScp,
+        )
+        .unwrap();
+        assert_eq!(resolved, REMOTE_INSTALL_BINARY);
+        // Confirm the script ran exactly once before scp kicked in.
+        let ssh_calls = runner.ssh_calls.lock().unwrap();
+        let download_attempts = ssh_calls
+            .iter()
+            .filter(|(_, cmd)| cmd.contains("HELMOR_INSTALL_CHECKSUM_MISMATCH"))
+            .count();
+        assert_eq!(
+            download_attempts, 1,
+            "network failures must not retry the download script"
+        );
+        assert_eq!(runner.scp_calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn download_script_emits_checksum_mismatch_marker_in_source() {
+        // Belt-and-braces: the retry logic depends on the script
+        // emitting the exact marker constant. Regression-guard
+        // against an editing accident.
+        let script = build_download_script("0.1.0", "x86_64-unknown-linux-gnu");
+        assert!(
+            script.contains(CHECKSUM_MISMATCH_MARKER),
+            "install script must echo the checksum marker on shasum failure"
+        );
+        // And the other distinguishing sentinels stay in lockstep —
+        // if any of these regress to plain bash error text the
+        // retry classifier can't tell them apart from a checksum
+        // failure.
+        assert!(script.contains("HELMOR_INSTALL_DOWNLOAD_FAILED"));
+        assert!(script.contains("HELMOR_INSTALL_EXTRACT_FAILED"));
+        assert!(script.contains("HELMOR_INSTALL_INSTALL_FAILED"));
     }
 }
