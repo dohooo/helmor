@@ -69,7 +69,24 @@ agent forwarding.
      in the sidebar host chip + the workspace binding picker.
    - **SSH host** — either `user@host.example.com` or an alias from
      your `~/.ssh/config` (the field autocompletes from your config).
-4. Click **Connect**. The wizard shows:
+     If the alias is a `Host` block in your config, the wizard
+     shows the effective `HostName`, `User`, `IdentityFile`(s), and
+     `ProxyJump` chain below the input — a sanity check before you
+     click Connect.
+   - **Forward SSH agent** (optional checkbox) — adds
+     `-o ForwardAgent=yes` to the SSH invocation so the remote
+     daemon can run `git push` / `git fetch` against private repos
+     using your local SSH keys. Off by default since agent
+     forwarding lets the remote root drive your local agent — only
+     enable for remotes you trust.
+4. The **SSH diagnostics** strip under the form surfaces:
+   - **SSH agent chip** — green if `SSH_AUTH_SOCK` answers
+     `ssh-add -l`, amber if not configured (launch from a shell that
+     exports it), red if the socket points at a dead agent.
+   - **Identity keys** — file stems of `~/.ssh/*.pub` whose private
+     counterpart also exists, truncated to four with a `+N more`
+     overflow.
+5. Click **Connect**. The wizard shows:
    - **Connecting…** while Helmor SSHes in, downloads + verifies the
      daemon binary (first connect only), and starts the daemon.
    - **Live** on success.
@@ -79,6 +96,28 @@ First connect typically takes 3-8 seconds (SSH handshake + binary
 download). Subsequent connects to the same host reuse the installed
 binary and complete in under a second.
 
+### Configuring provider API keys
+
+After a remote is connected:
+
+1. **Settings → Remote Servers → your remote → Auth**.
+2. The dialog shows whether a key is already configured (green chip
+   "Currently configured" with the optional base URL, or a muted
+   "No key configured yet" hint).
+3. Paste an API key + optional base URL → **Save**. Leave the field
+   blank and click **Clear** to remove a stored key.
+
+The key transits the live SSH pipe and is written to
+`$HOME/.helmor/server/secrets.json` (mode 0600) on the remote.
+**The desktop does not persist the key value.** Each runtime keeps
+its own secrets store, so multi-account setups
+("dev-stage uses my personal key, prod uses the team key") work
+without conflict.
+
+A small `KeyRound` chip on each remote-server row shows which
+providers have a key registered — at-a-glance confirmation without
+opening the dialog.
+
 ## Binding a workspace to a remote
 
 After registering a remote, any workspace can be bound to it:
@@ -86,12 +125,26 @@ After registering a remote, any workspace can be bound to it:
 1. Open the workspace context menu (right-click the workspace row in
    the sidebar).
 2. **Move to runtime → `<your remote>`**.
-3. Helmor will:
-   - Mirror the workspace shape on the remote (under
-     `~/helmor/<repo>/<directory>/` by default).
-   - Update the binding in the local DB.
-4. The sidebar row gains a small chip showing the bound runtime
-   (`myproject @ dev-stage`).
+3. A small **Move workspace** dialog appears asking for an optional
+   **Remote path**:
+   - Leave blank if the workspace sits at the same absolute path on
+     both sides (`~/code/foo` on macOS happens to map to
+     `/Users/d/code/foo`, which exists on a Linux remote with
+     `/home/d/code/foo` only if the layout happens to match).
+   - Otherwise type the absolute path on the remote
+     (`/home/dwork/code/foo`). Every workspace op — file reads,
+     `git status`, agent runs — uses this path on the daemon side
+     instead of the local one. Helmor itself does NOT copy files;
+     you're expected to have cloned / rsynced the workspace to the
+     destination yourself.
+4. Helmor updates the binding in the local DB and the sidebar row
+   gains a small chip showing the bound runtime
+   (`myproject @ dev-stage`). If a remote path is set, hovering the
+   chip shows it.
+
+Moving back to `local` (right-click → **Move to runtime → Local**)
+clears the binding entirely — both the runtime pin and any remote
+path override.
 
 Workspaces with no binding default to the built-in `local` runtime
 and run on your laptop, unchanged.
@@ -190,6 +243,52 @@ goes silent for more than 45s with no heartbeat. Causes:
   protocol-version probe; the journal will replay any events emitted
   before the crash.
 
+### "SSH agent not detected" amber chip in the wizard
+
+`SSH_AUTH_SOCK` isn't exported in the desktop's environment. Most
+common cause: launching Helmor from Finder / Spotlight, which
+doesn't inherit your shell's env. Fixes:
+
+- Launch Helmor from a terminal: `open -a Helmor` from a shell that
+  has the agent socket exported.
+- Or pre-load the key into the agent before launch:
+  `ssh-add ~/.ssh/id_ed25519`.
+- Plain identity-file auth (`~/.ssh/id_rsa`, `~/.ssh/id_ed25519`)
+  still works without the agent — the chip is informational, not
+  blocking. Helmor calls `ssh` and ssh reads your config + key
+  files itself.
+
+### "SSH agent socket is stale" red chip
+
+The `SSH_AUTH_SOCK` env var points at a Unix socket that no agent
+is listening on. Usually means the agent was killed (or restarted
+with a new socket path) since the desktop launched. Re-launch
+Helmor from a fresh shell.
+
+### "Agent forwarding required" — remote `git fetch` asks for a password
+
+The remote daemon needs to authenticate to a private git repo and
+your local agent isn't being forwarded. Two fixes:
+
+- Re-add the remote with **Forward SSH agent** checked in the
+  Add-Server wizard. The flag persists on the runtime so
+  auto-reconnect keeps it on across restarts.
+- Or have the remote use a dedicated deploy key (then leave
+  forwarding off — the security trade-off only matters when the
+  remote needs *your* keys).
+
+### "Connect failed: Permission denied (publickey)"
+
+The wizard's SSH diagnostics strip is the fastest debug path:
+
+- Empty identity list → `ssh-keygen` is missing or the agent has no
+  keys. Either generate one (`ssh-keygen -t ed25519`) or
+  `ssh-add ~/.ssh/id_*`.
+- Identity is amber (public-key only, no matching private key) →
+  re-copy the private key into `~/.ssh` or regenerate.
+- Both chips green but auth still fails → check the remote's
+  `~/.ssh/authorized_keys` for your public key.
+
 ### Daemon logs
 
 The daemon writes to `$HOME/.helmor/server/daemon.log` on the
@@ -199,18 +298,36 @@ remote. Tail it during troubleshooting:
 ssh <host> tail -f ~/.helmor/server/daemon.log
 ```
 
+Or from inside the desktop without an extra SSH session: the
+`daemon.tailLog` RPC is wired into the dev-only Runtime Debug
+panel (Settings → Developer → Runtime Debug → Daemon log).
+
 ## Security model
 
 - **Auth**: all transport goes through SSH. Helmor never sees
   passwords; key handling is whatever `ssh-agent` / `~/.ssh/config`
   already set up.
+- **Agent forwarding**: off by default. The Add-Server wizard
+  exposes a per-runtime opt-in for `-o ForwardAgent=yes` so the
+  remote daemon can drive git over your local agent. Only enable
+  for hosts you trust — agent forwarding lets the remote user
+  drive your agent to authenticate against any service that
+  recognises your keys.
 - **Binary integrity**: the download install path verifies SHA256
   against the release `SHA256SUMS` manifest before installing.
   A mismatch aborts the install and surfaces an error.
-- **API key storage**: provider API keys (e.g. Anthropic, OpenAI)
-  pushed to the daemon are stored at
-  `$HOME/.helmor/server/secrets.json` (mode 0600). A platform
-  keychain integration is planned but not yet shipped.
+- **API key storage (remote runtimes)**: provider API keys pushed
+  to a remote daemon are stored at
+  `$HOME/.helmor/server/secrets.json` (mode 0600) on that remote.
+  The desktop never persists the key value. Each runtime has its
+  own secrets store. The `agent.authStatus` RPC returns only the
+  presence bit + optional base URL — the literal key never crosses
+  the wire after the initial set.
+- **API key storage (local runtime)**: provider keys for the
+  built-in `local` runtime live in the desktop's macOS Keychain
+  (`com.helmor.api-keys` service). On non-macOS desktops a
+  cross-platform vault backend is on the roadmap; until that ships
+  the value falls back to the desktop's SQLite settings table.
 - **Journal contents**: every agent event is mirrored to disk under
   `$HOME/.helmor/server/journals/`. This includes prompt text,
   tool outputs, and file contents the agent read. The journal is

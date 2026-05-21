@@ -243,6 +243,92 @@ Push (or clear) an SDK API key. The daemon stores it at
 `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-pushes the
 change to the live sidecar via an `updateConfig` request.
 
+**Params**:
+```json
+{
+  "provider": "cursor",
+  "apiKey": "sk-...",
+  "baseUrl": "https://proxy.internal/v1"
+}
+```
+
+`apiKey: null` (or an all-whitespace string) clears the entry. The
+daemon's hot-push to the sidecar carries `null` so the next request
+reverts to the unauthenticated state.
+
+### `agent.authStatus`
+
+**Track G2.** Read side of `agent.setAuth`. Returns which providers
+have a key configured on the daemon. The literal API key value is
+**never** on the wire — only the presence bit and the optional
+base URL the operator supplied alongside.
+
+**Params**: `{}`
+
+**Result**:
+```json
+{
+  "providers": [
+    {
+      "provider": "cursor",
+      "configured": true,
+      "baseUrl": "https://proxy.internal/v1"
+    }
+  ]
+}
+```
+
+`providers` is sorted alphabetically. An empty list means no key
+has been configured (fresh daemon or the operator cleared every
+key). Drives the "Currently configured" chip in the desktop's
+runtime-auth dialog and the key-icon chip on the Remote Servers
+settings panel.
+
+### `daemon.tailLog`
+
+**Track E1.** Read up to `maxLines` lines from
+`$HOME/.helmor/server/daemon.log` so operators can debug without
+opening a parallel SSH session.
+
+**Params**:
+```json
+{ "maxLines": 200 }
+```
+
+**Result**:
+```json
+{
+  "lines": ["...", "..."],
+  "truncated": true
+}
+```
+
+`truncated: true` when the log file had more lines than `maxLines`
+allowed; older entries were dropped.
+
+### `runtime.metrics`
+
+**Track E2.** Snapshot the daemon's per-method RPC counters +
+latency percentiles. Empty params.
+
+**Result**:
+```json
+{
+  "methods": [
+    {
+      "method": "agent.send",
+      "totalCalls": 142,
+      "errorCalls": 1,
+      "p50Ms": 4.2,
+      "p99Ms": 18.7
+    }
+  ]
+}
+```
+
+The daemon keeps a 512-sample ring per method; percentiles are
+nearest-rank over the ring.
+
 ### Notification: `agent.event`
 
 Every event the sidecar emits flows back as one of these. Carried

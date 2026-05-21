@@ -253,7 +253,77 @@ the `state` field (`"live"` / `"endedReplayOnly"`). The desktop's
 auto-attach hook only matches `state === "live"` so a workspace
 doesn't re-replay a finished session every time it opens.
 
-## 9. Configuration env
+## 9. Workspace bindings + path translation
+
+A workspace's binding (`workspace_runtime_bindings.json`) carries two
+fields:
+
+- `runtimeName` — which runtime the workspace's ops route through.
+- `remotePath` (Track F2, optional) — the absolute path the daemon
+  should resolve as the workspace root.
+
+Every workspace-op command in
+[`src-tauri/src/commands/remote_commands.rs`](../src-tauri/src/commands/remote_commands.rs)
+routes through `resolve_runtime_for_call`, which returns a
+`ResolvedRuntime` pairing the live runtime arc with the optional
+remote-path override. Before invoking any trait method that takes a
+`workspace_dir`, callers run `resolved.translate_workspace_dir(&local)`
+— the daemon sees the override when one is set, or the local path
+when not.
+
+Three precedence rules govern the override:
+
+1. Explicit `runtime_name` (caller passes it directly) → no
+   override. The caller is bypassing the binding's context.
+2. Workspace ID with a registered binding → override comes from the
+   binding's `remote_path` field.
+3. Fallback to the local runtime (unregistered binding,
+   no-workspace-id paths) → no override; paths interpret on the
+   desktop's filesystem.
+
+Cross-host moves (Track F3) populate `remote_path` via the move
+dialog. The dialog never copies files; the operator's expected to
+clone/rsync the workspace to the destination before binding.
+
+## 10. Per-runtime auth (Track G)
+
+Provider API keys for remote runtimes live entirely server-side:
+
+- The desktop's `RuntimeAuthDialog` calls
+  `set_runtime_agent_auth(name, provider, key, baseUrl)` which
+  dispatches to the daemon's `agent.setAuth` RPC. The key transits
+  the live SSH pipe; the desktop **does not persist** the value.
+- The daemon writes `$HOME/.helmor/server/secrets.json` (mode 0600,
+  atomic via `.tmp` rename) and hot-pushes an `updateConfig`
+  request to the sidecar so the in-flight session picks up the new
+  credential without a restart.
+- `agent.authStatus` is the read side (Track G2). It returns one
+  `ProviderAuthStatus` per provider with a `configured: bool` +
+  optional `baseUrl`. The literal API key value is **never** on
+  the wire — that's enforced by a regression test that asserts the
+  serialised JSON payload doesn't contain a known secret value.
+
+The local runtime takes a different path: provider keys live in the
+desktop's macOS Keychain
+([`src-tauri/src/keychain.rs`](../src-tauri/src/keychain.rs)) under
+service `com.helmor.api-keys`. The trait surfaces (`agent_set_auth`,
+`agent_auth_status`) default-bail on the local runtime so the desktop
+knows to consult the local settings inspector instead.
+
+## 11. Connection options (Track G3)
+
+`RuntimeConnectionConfig::Ssh` carries a `forward_agent: bool` field
+that the `OpenSshTransport` translates to `-o ForwardAgent=yes`.
+Defaults to `false` (skip-serialised when unset so pre-G3 payloads
+stay byte-identical). Enables the remote daemon to drive `git` over
+the operator's local SSH agent for private-repo push/pull.
+
+The flag persists in the runtime registry so the auto-reconnect loop
+keeps it on across restarts. The Add-Server wizard exposes the
+toggle as a labeled checkbox with a security warning ("Required for
+private repo access; only enable for hosts you trust").
+
+## 12. Configuration env
 
 Variables the daemon and desktop honor:
 
@@ -263,22 +333,22 @@ Variables the daemon and desktop honor:
 | `HELMOR_JOURNAL_RETENTION_HOURS` | daemon | How long ended journals live on disk. Default 24. |
 | `HELMOR_DAEMON_INSTALL_STRATEGY` | desktop | `scp` forces the legacy local-binary upload. Default falls through `DownloadFallbackScp`. |
 | `HELMOR_RELEASE_REPO` | desktop (build-time) | GitHub repo to pull releases from. Default `dohooo/helmor`. |
+| `SSH_AUTH_SOCK` | desktop | Read by the wizard's diagnostic chip to detect agent reachability. |
 | `HOME` | both | `$HOME/.helmor/server/` is the managed dir on each side. |
 
-## 10. Things this doc deliberately doesn't cover
+## 13. Things this doc deliberately doesn't cover
 
-- **Auth surface**: SSH key resolution, `ssh-agent` forwarding,
-  password prompts. Helmor doesn't capture credentials; everything
-  flows through your existing `~/.ssh/config` / `ssh-agent`. The auth
-  story for daemon-side API keys lives in `secrets.json` for now (a
-  follow-up will move it to platform keychains — see
-  [`docs/plans/remote-runner-upstream-readiness.md`](./plans/remote-runner-upstream-readiness.md)
-  Track G).
 - **File sync**: the daemon serves the workspace files where they
   live on the remote. There is no local mirror. File operations
   (read/write/list) flow through `workspace_*` RPC methods.
-- **Multi-host workspaces**: a single workspace is bound to a single
-  runtime. Cross-host moves are planned (Track F) but not shipped.
+- **Cross-platform secret vault**: macOS Keychain is wired today.
+  Linux / Windows backends are on the roadmap — until they ship,
+  the desktop's local-runtime keys fall back to SQLite plaintext on
+  those platforms.
+- **Helmor-driven file transfer**: F3's clone-from-binding workflow
+  (run `git bundle` / `git clone` on the destination) is on the
+  roadmap; today the operator copies files into the remote path
+  themselves before binding.
 - **Web client**: out of scope. The Tauri desktop app is the only
   client.
 
