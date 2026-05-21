@@ -1920,6 +1920,21 @@ export async function listWorkspaceFiles(
 	}
 }
 
+export async function listWorkspaceChanges(
+	workspaceRootPath: string,
+): Promise<EditorFilesWithContentResponse> {
+	try {
+		const items = await invoke<InspectorFileItem[]>("list_workspace_changes", {
+			workspaceRootPath,
+		});
+		return { items, prefetched: [] };
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to list workspace changes."),
+		);
+	}
+}
+
 export async function listEditorFilesWithContent(
 	workspaceRootPath: string,
 ): Promise<EditorFilesWithContentResponse> {

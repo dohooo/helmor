@@ -399,16 +399,6 @@ export function useWorkspaceInspectorSidebar({
 		prevChangesRef.current = nextChangesSnapshot;
 	}, [nextChangesSnapshot]);
 
-	useEffect(() => {
-		const prefetched = changesQuery.data?.prefetched;
-		if (!prefetched?.length) {
-			return;
-		}
-		void import("@/lib/monaco-runtime").then(({ preWarmFileContents }) => {
-			preWarmFileContents(prefetched);
-		});
-	}, [changesQuery.data]);
-
 	const handleToggleTabs = useCallback(() => {
 		setTabsOpen((open) => !open);
 	}, []);

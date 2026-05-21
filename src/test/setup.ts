@@ -202,6 +202,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_workspace_files":
 				return [];
+			case "list_workspace_changes":
+				return [];
 			case "list_workspace_changes_with_content":
 				return { items: [], prefetched: [] };
 			case "list_slash_commands":

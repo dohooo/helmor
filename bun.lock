@@ -9,6 +9,7 @@
         "@fontsource-variable/geist": "^5.2.8",
         "@fontsource-variable/geist-mono": "^5.2.7",
         "@lexical/react": "^0.42.0",
+        "@lexical/utils": "0.42.0",
         "@lobehub/icons": "^5.4.0",
         "@primer/octicons-react": "^19.23.1",
         "@radix-ui/react-avatar": "^1.1.11",

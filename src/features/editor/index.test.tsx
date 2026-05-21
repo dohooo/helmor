@@ -13,7 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
 
 const apiMocks = vi.hoisted(() => ({
-	listWorkspaceChangesWithContent: vi.fn(),
+	listWorkspaceChanges: vi.fn(),
 	listWorkspaceFiles: vi.fn(),
 	readEditorFile: vi.fn(),
 	readFileAtRef: vi.fn(),
@@ -91,7 +91,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 	return {
 		...actual,
-		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
+		listWorkspaceChanges: apiMocks.listWorkspaceChanges,
 		listWorkspaceFiles: apiMocks.listWorkspaceFiles,
 		readEditorFile: apiMocks.readEditorFile,
 		readFileAtRef: apiMocks.readFileAtRef,
@@ -154,8 +154,8 @@ function EditorSurfaceHarness({
 describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
 		runtimeMocks.reset();
-		apiMocks.listWorkspaceChangesWithContent.mockReset();
-		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+		apiMocks.listWorkspaceChanges.mockReset();
+		apiMocks.listWorkspaceChanges.mockResolvedValue({
 			items: [],
 			prefetched: [],
 		});
@@ -406,7 +406,7 @@ describe("WorkspaceEditorSurface", () => {
 				committedDeletions: 0,
 			},
 		]);
-		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+		apiMocks.listWorkspaceChanges.mockResolvedValue({
 			items: [
 				{
 					path: "src/utils.ts",
@@ -712,7 +712,7 @@ describe("WorkspaceEditorSurface", () => {
 				committedDeletions: 0,
 			},
 		]);
-		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
+		apiMocks.listWorkspaceChanges.mockResolvedValue({
 			items: [
 				{
 					path: "src/utils.ts",

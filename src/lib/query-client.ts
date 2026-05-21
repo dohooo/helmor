@@ -28,7 +28,7 @@ import {
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
-	listWorkspaceChangesWithContent,
+	listWorkspaceChanges,
 	listWorkspaceFiles,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
@@ -913,7 +913,7 @@ export function workspaceForgeRefetchInterval(
 export function workspaceChangesQueryOptions(workspaceRootPath: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
-		queryFn: () => listWorkspaceChangesWithContent(workspaceRootPath),
+		queryFn: () => listWorkspaceChanges(workspaceRootPath),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,

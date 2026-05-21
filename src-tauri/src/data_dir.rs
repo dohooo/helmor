@@ -181,9 +181,7 @@ fn resolve_data_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
 
-    // 2. Build profile based
     let home = dirs_home().context("Could not determine home directory")?;
-
     Ok(home.join(default_data_dir_name()))
 }
 

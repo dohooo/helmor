@@ -32,6 +32,7 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 	load_auto_close_opt_in_asked: () => [],
 	list_remote_branches: () => [],
 	list_workspace_files: () => [],
+	list_workspace_changes: () => [],
 	list_workspace_changes_with_content: () => ({ items: [], prefetched: [] }),
 	list_slash_commands: () => [],
 	list_forge_labels: () => [],

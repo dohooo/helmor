@@ -51,7 +51,9 @@ import {
 	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
+	INSPECTOR_SECTION_HEIGHT_TRANSITION_CLASS,
 	INSPECTOR_SECTION_TITLE_CLASS,
+	INSPECTOR_SECTION_TOGGLE_ICON_CLASS,
 } from "../layout";
 
 interface GitStatusItem {
@@ -108,6 +110,7 @@ type ActionsSectionProps = {
 	workspaceRemote?: string | null;
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	open: boolean;
+	resizing?: boolean;
 	onToggle: () => void;
 	bodyHeight: number;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -160,6 +163,7 @@ export function ActionsSection({
 	workspaceRemote,
 	sectionRef,
 	open,
+	resizing = false,
 	onToggle,
 	bodyHeight,
 	onCommitAction,
@@ -327,6 +331,9 @@ export function ActionsSection({
 			aria-label="Inspector section Actions"
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
+				resizing
+					? "transition-none"
+					: INSPECTOR_SECTION_HEIGHT_TRANSITION_CLASS,
 			)}
 			style={{
 				// Height via CSS var, written by mousemove during drag. Collapsed
@@ -354,12 +361,11 @@ export function ActionsSection({
 					className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 				>
 					<ChevronDown
-						className="size-3.5"
+						className={cn(
+							INSPECTOR_SECTION_TOGGLE_ICON_CLASS,
+							!open && "-rotate-90",
+						)}
 						strokeWidth={1.9}
-						style={{
-							transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-							transition: "none",
-						}}
 					/>
 				</Button>
 			</div>
