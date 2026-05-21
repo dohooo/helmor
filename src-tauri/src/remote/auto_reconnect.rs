@@ -39,8 +39,23 @@ use tokio::time::{sleep, Instant};
 
 use crate::ui_sync::{publish, UiMutationEvent};
 
+use super::methods::{RuntimeMetricsParams, RuntimeMetricsResult};
 use super::persistence;
 use super::registry::{RuntimeRegistry, RuntimeState};
+
+/// Track E4 consumer: after this many daemon restarts within
+/// [`CRASH_LOOP_WINDOW`], the auto-reconnect loop emits a
+/// `RemoteCrashLoopDetected` event. 3 is conservative — one
+/// legitimate restart for the user's own actions (config tweak,
+/// version upgrade) plus two crashes inside a 5-minute window
+/// would still not trip; three "fresh" daemon starts inside 5min
+/// almost always means a crash loop.
+pub const CRASH_LOOP_THRESHOLD: u32 = 3;
+
+/// Sliding window for the crash-loop detector. 5 minutes mirrors
+/// the `recent_starts_ms` window the daemon already uses for its
+/// metrics surface.
+pub const CRASH_LOOP_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 /// Knobs for the auto-reconnect loop. Built once at startup; tests
 /// override individual fields via [`AutoReconnectConfig::instant_test`].
@@ -104,6 +119,19 @@ pub(crate) struct BackoffState {
     attempts: u32,
 }
 
+/// Per-runtime crash-loop bookkeeping. Lives in its own map so the
+/// reconnect backoff lifecycle doesn't accidentally reset the alert
+/// state (a runtime that recovers, then crash-loops a few minutes
+/// later, should re-fire the alert).
+#[derive(Debug, Default)]
+pub(crate) struct CrashLoopState {
+    /// `true` once we've published a `RemoteCrashLoopDetected` event
+    /// for the current "loop episode." Resets to false when the
+    /// underlying daemon metrics show fewer than the threshold inside
+    /// the window — i.e. the loop has actually cleared.
+    alerted: bool,
+}
+
 impl BackoffState {
     fn new(config: &AutoReconnectConfig, now: Instant) -> Self {
         Self {
@@ -148,9 +176,10 @@ pub async fn run_auto_reconnect_loop<R: Runtime>(
     config: AutoReconnectConfig,
 ) {
     let mut bookkeeping: HashMap<String, BackoffState> = HashMap::new();
+    let mut crash_loops: HashMap<String, CrashLoopState> = HashMap::new();
     loop {
         sleep(config.poll_interval).await;
-        tick_once(&app, &registry, &config, &mut bookkeeping).await;
+        tick_once(&app, &registry, &config, &mut bookkeeping, &mut crash_loops).await;
     }
 }
 
@@ -165,6 +194,7 @@ pub(crate) async fn tick_once<R: Runtime>(
     registry: &Arc<RuntimeRegistry>,
     config: &AutoReconnectConfig,
     bookkeeping: &mut HashMap<String, BackoffState>,
+    crash_loops: &mut HashMap<String, CrashLoopState>,
 ) {
     let snapshot = registry.remote_snapshot();
     let live_disconnected: HashSet<String> = snapshot
@@ -177,6 +207,14 @@ pub(crate) async fn tick_once<R: Runtime>(
     // either they recovered on their own (via liveness ping) or got
     // unregistered. Keeps the map from growing unbounded.
     bookkeeping.retain(|name, _| live_disconnected.contains(name));
+    // Drop crash-loop bookkeeping for entries that no longer exist
+    // in the registry at all (a runtime the user deleted should
+    // start fresh if they re-add it). Re-registered entries that
+    // happen to share a name keep their alert-state; that's the
+    // intended behaviour — the same daemon coming back after a few
+    // minutes of being unregistered shouldn't bypass the cooldown.
+    let known: HashSet<&str> = snapshot.iter().map(|(name, _, _)| name.as_str()).collect();
+    crash_loops.retain(|name, _| known.contains(name.as_str()));
 
     let now = Instant::now();
     for name in live_disconnected {
@@ -273,11 +311,19 @@ pub(crate) async fn tick_once<R: Runtime>(
                 publish(
                     app,
                     UiMutationEvent::RemoteReconnectAttempt {
-                        name,
+                        name: name.clone(),
                         attempt,
                         succeeded: Some(true),
                     },
                 );
+                // Track E4 consumer: every successful reconnect is
+                // also a chance to spot a crash-loop pattern. Pulls
+                // `runtime.metrics` from the freshly-registered
+                // runtime and fires `RemoteCrashLoopDetected` when
+                // the daemon's own restart history exceeds the
+                // threshold inside the window. Idempotent per
+                // episode via `CrashLoopState::alerted`.
+                check_crash_loop(app, registry, &name, crash_loops).await;
             }
             Err(reason) => {
                 // Stash the new failure reason on the existing
@@ -308,6 +354,95 @@ pub(crate) async fn tick_once<R: Runtime>(
                 );
             }
         }
+    }
+}
+
+/// Track E4 consumer: pull `runtime.metrics` from the named runtime,
+/// count restarts inside `CRASH_LOOP_WINDOW`, and publish a
+/// `RemoteCrashLoopDetected` event when the count crosses the
+/// threshold. Idempotent per `CrashLoopState::alerted` — re-firing
+/// every reconnect would spam a banner the user already dismissed.
+///
+/// Failures (runtime unregistered between detection + lookup, metrics
+/// RPC errored, etc.) silently no-op: this is opportunistic detection,
+/// not the source of truth. The daemon's `recent_starts_ms` field
+/// remains the authoritative signal the dev panel reads on demand.
+pub(crate) async fn check_crash_loop<R: Runtime>(
+    app: &AppHandle<R>,
+    registry: &Arc<RuntimeRegistry>,
+    name: &str,
+    crash_loops: &mut HashMap<String, CrashLoopState>,
+) {
+    // Re-lookup so we exercise the freshly-registered runtime, not
+    // the in-flight Arc that may have been replaced. The set/get
+    // race window is small but real (another tick or a manual
+    // reconnect could swap mid-flight); the lookup is cheap.
+    let runtime = match registry.lookup(Some(name)) {
+        Ok(rt) => rt,
+        Err(_) => return,
+    };
+    // Spin the RPC off the cooperative scheduler — `runtime.metrics`
+    // is sync (frame I/O on the wire) and we don't want to stall
+    // the auto-reconnect loop on a slow remote.
+    let metrics: RuntimeMetricsResult = match tauri::async_runtime::spawn_blocking(move || {
+        runtime.runtime_metrics(RuntimeMetricsParams {})
+    })
+    .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => {
+            tracing::debug!(
+                runtime = %name,
+                error = %format!("{err:#}"),
+                "auto_reconnect: runtime.metrics failed during crash-loop probe",
+            );
+            return;
+        }
+        Err(join_err) => {
+            tracing::debug!(
+                runtime = %name,
+                error = %format!("{join_err:#}"),
+                "auto_reconnect: crash-loop probe task panicked",
+            );
+            return;
+        }
+    };
+
+    evaluate_crash_loop(app, name, &metrics.recent_starts_ms, crash_loops);
+}
+
+/// Pure-logic evaluator. Separated so unit tests can drive the
+/// threshold + cooldown semantics without a real RPC pipe.
+pub(crate) fn evaluate_crash_loop<R: Runtime>(
+    app: &AppHandle<R>,
+    name: &str,
+    recent_starts_ms: &[i64],
+    crash_loops: &mut HashMap<String, CrashLoopState>,
+) {
+    let count = recent_starts_ms.len() as u32;
+    let entry = crash_loops.entry(name.to_string()).or_default();
+    if count >= CRASH_LOOP_THRESHOLD {
+        if entry.alerted {
+            // Same loop episode — banner is already up.
+            return;
+        }
+        entry.alerted = true;
+        publish(
+            app,
+            UiMutationEvent::RemoteCrashLoopDetected {
+                name: name.to_string(),
+                restart_count: count,
+                window_ms: CRASH_LOOP_WINDOW.as_millis() as i64,
+                recent_starts_ms: recent_starts_ms.to_vec(),
+            },
+        );
+        return;
+    }
+    // Count dropped back below the threshold — the window has slid
+    // past the qualifying restarts (or the daemon is genuinely
+    // stable now). Clear the cooldown so a future episode re-fires.
+    if entry.alerted {
+        entry.alerted = false;
     }
 }
 
@@ -499,6 +634,122 @@ mod tests {
             "backoff after first failure should be ~doubled, got {:?}",
             state.current_backoff,
         );
+    }
+
+    // ── Track E4 consumer: crash-loop detection ───────────────────
+
+    use serde_json::Value;
+    use std::sync::Mutex as StdMutex;
+    use tauri::ipc::{Channel, InvokeResponseBody};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    /// Build a mock app + a captured-publish channel hung off the
+    /// global UiSyncManager. Tests assert on the channel's captured
+    /// payload to verify the right event was fired.
+    fn mock_app_with_capture() -> (
+        tauri::AppHandle<tauri::test::MockRuntime>,
+        Arc<StdMutex<Vec<Value>>>,
+    ) {
+        let app = mock_builder()
+            .manage(crate::ui_sync::UiSyncManager::new())
+            .build(mock_context(noop_assets()))
+            .expect("mock app should build");
+        let captured: Arc<StdMutex<Vec<Value>>> = Arc::new(StdMutex::new(Vec::new()));
+        let inner = Arc::clone(&captured);
+        let channel = Channel::<UiMutationEvent>::new(move |body| {
+            if let InvokeResponseBody::Json(s) = body {
+                let value: Value = serde_json::from_str(&s).unwrap();
+                inner.lock().unwrap().push(value);
+            }
+            Ok(())
+        });
+        let handle = app.handle().clone();
+        let manager = handle.state::<crate::ui_sync::UiSyncManager>();
+        manager.subscribe("test".to_string(), channel);
+        (handle, captured)
+    }
+
+    fn crash_loop_events(captured: &Arc<StdMutex<Vec<Value>>>) -> Vec<Value> {
+        captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|v| v.get("type").and_then(Value::as_str) == Some("remoteCrashLoopDetected"))
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn evaluate_below_threshold_does_not_fire_an_event() {
+        let (app, captured) = mock_app_with_capture();
+        let mut loops: HashMap<String, CrashLoopState> = HashMap::new();
+        // 2 restarts < threshold (3) → no event.
+        evaluate_crash_loop(&app, "dev.box", &[100, 200], &mut loops);
+        assert!(crash_loop_events(&captured).is_empty());
+        assert!(
+            !loops.get("dev.box").map(|e| e.alerted).unwrap_or(false),
+            "alerted flag should stay false below threshold",
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_at_threshold_fires_a_crash_loop_event() {
+        let (app, captured) = mock_app_with_capture();
+        let mut loops: HashMap<String, CrashLoopState> = HashMap::new();
+        evaluate_crash_loop(&app, "dev.box", &[100, 200, 300], &mut loops);
+        let events = crash_loop_events(&captured);
+        assert_eq!(events.len(), 1, "expected exactly one event: {events:?}");
+        let event = &events[0];
+        assert_eq!(event["name"], "dev.box");
+        assert_eq!(event["restartCount"], 3);
+        assert_eq!(event["windowMs"], 5 * 60 * 1000);
+        let starts = event["recentStartsMs"].as_array().expect("array");
+        assert_eq!(starts.len(), 3);
+        assert!(loops.get("dev.box").map(|e| e.alerted).unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn evaluate_above_threshold_does_not_re_fire_within_the_same_episode() {
+        // Two ticks in the same loop episode → one event total. The
+        // banner stays up; we don't want to spam the user.
+        let (app, captured) = mock_app_with_capture();
+        let mut loops: HashMap<String, CrashLoopState> = HashMap::new();
+        evaluate_crash_loop(&app, "dev.box", &[1, 2, 3, 4], &mut loops);
+        evaluate_crash_loop(&app, "dev.box", &[1, 2, 3, 4, 5], &mut loops);
+        assert_eq!(crash_loop_events(&captured).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn evaluate_clears_alerted_flag_when_window_slides_past_qualifying_restarts() {
+        // First call trips the cooldown. Second call sees the count
+        // drop below threshold (window has slid past) — flag clears
+        // so a future episode re-fires.
+        let (app, captured) = mock_app_with_capture();
+        let mut loops: HashMap<String, CrashLoopState> = HashMap::new();
+        evaluate_crash_loop(&app, "dev.box", &[1, 2, 3], &mut loops);
+        assert!(loops["dev.box"].alerted);
+        evaluate_crash_loop(&app, "dev.box", &[5], &mut loops);
+        assert!(!loops["dev.box"].alerted, "cooldown must clear");
+        // Re-trip: a new event fires.
+        evaluate_crash_loop(&app, "dev.box", &[10, 11, 12], &mut loops);
+        let events = crash_loop_events(&captured);
+        assert_eq!(events.len(), 2, "expected two distinct episodes");
+    }
+
+    #[tokio::test]
+    async fn evaluate_keeps_per_runtime_state_independent() {
+        // Tripping the loop on dev.box must NOT silence a later
+        // detection on staging — the cooldown is per-runtime.
+        let (app, captured) = mock_app_with_capture();
+        let mut loops: HashMap<String, CrashLoopState> = HashMap::new();
+        evaluate_crash_loop(&app, "dev.box", &[1, 2, 3], &mut loops);
+        evaluate_crash_loop(&app, "staging", &[10, 11, 12], &mut loops);
+        let events = crash_loop_events(&captured);
+        assert_eq!(events.len(), 2);
+        let names: Vec<_> = events.iter().filter_map(|e| e["name"].as_str()).collect();
+        assert!(names.contains(&"dev.box"));
+        assert!(names.contains(&"staging"));
     }
 
     #[tokio::test]

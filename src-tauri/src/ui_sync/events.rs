@@ -82,6 +82,30 @@ pub enum UiMutationEvent {
         /// runtime entry's RuntimeState carries the failure reason).
         succeeded: Option<bool>,
     },
+    /// The daemon on a registered remote has restarted ≥ N times
+    /// inside a sliding window — the auto-reconnect loop interpreted
+    /// the pattern as a crash loop and is surfacing it to the
+    /// operator. Carries the recent restart timestamps so the
+    /// receiver can render a one-glance "N restarts in M minutes"
+    /// banner; the canonical source remains the daemon's
+    /// `runtime.metrics.recentStartsMs` field.
+    ///
+    /// Fired at most once per cooldown — re-firing every tick would
+    /// spam the UI. The cooldown clears when:
+    ///   - The window slides past the qualifying restarts.
+    ///   - The user calls `acknowledge_remote_crash_loop` (clears
+    ///     the in-memory cooldown without touching the on-disk
+    ///     crash-history file).
+    RemoteCrashLoopDetected {
+        name: String,
+        /// How many restarts the daemon recorded inside `window_ms`.
+        restart_count: u32,
+        /// The sliding window used for the detection (ms).
+        window_ms: i64,
+        /// The actual restart timestamps inside the window, oldest
+        /// first. UI surfaces this as "last restart 30s ago" etc.
+        recent_starts_ms: Vec<i64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

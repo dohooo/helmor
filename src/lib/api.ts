@@ -2577,6 +2577,19 @@ export type UiMutationEvent =
 			 * resolve. The runtime entry's RuntimeState carries the
 			 * latest failure reason. */
 			succeeded: boolean | null;
+	  }
+	| {
+			/** The daemon on this remote restarted ≥ N times inside the
+			 * sliding window — the auto-reconnect loop flagged the
+			 * pattern as a crash loop. Fired at most once per episode
+			 * (the loop's bookkeeping clears when the window slides past
+			 * the qualifying restarts).
+			 */
+			type: "remoteCrashLoopDetected";
+			name: string;
+			restartCount: number;
+			windowMs: number;
+			recentStartsMs: number[];
 	  };
 
 export async function listenGitBranchChanged(

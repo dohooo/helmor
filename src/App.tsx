@@ -118,6 +118,7 @@ import {
 } from "./lib/workspace-toast-context";
 import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
 import { RemoteConnectionBanner } from "./shell/components/remote-connection-banner";
+import { RemoteCrashLoopBanner } from "./shell/components/remote-crash-loop-banner";
 import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
 import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
 import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
@@ -1461,6 +1462,7 @@ function AppShell({
 							aria-label="Application shell"
 							className="relative flex h-screen flex-col overflow-hidden bg-background font-sans text-foreground antialiased"
 						>
+							<RemoteCrashLoopBanner />
 							<RemoteConnectionBanner />
 							<div className="relative flex h-full min-h-0 flex-1 bg-background">
 								{workspaceViewMode !== "editor" && (
