@@ -67,9 +67,9 @@ use serde_json::{json, Value};
 use secrets::{default_secrets_path, load_secrets, save_secrets, ProviderSecret};
 
 use super::methods::{
-    AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult, AgentListResult,
-    AgentSendParams, AgentSendResult, AgentSessionEntry, AgentSetAuthParams, AgentSetAuthResult,
-    AGENT_EVENT_METHOD,
+    AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult,
+    AgentAuthStatusResult, AgentListResult, AgentSendParams, AgentSendResult, AgentSessionEntry,
+    AgentSetAuthParams, AgentSetAuthResult, ProviderAuthStatus, AGENT_EVENT_METHOD,
 };
 use super::server::Notifier;
 
@@ -592,6 +592,43 @@ impl RemoteAgentState {
             self.push_cursor_key(params.api_key.clone());
         }
         Ok(AgentSetAuthResult::default())
+    }
+
+    /// Track G2 read side: snapshot which providers have a key
+    /// configured without ever returning the literal value.
+    /// Surfaces `configured: bool` + the optional `base_url` so the
+    /// desktop can render a chip on each remote-server row + a
+    /// "Currently configured" line in the auth dialog.
+    ///
+    /// Empty list when no auth has been written (fresh daemon, or
+    /// the operator cleared every key). Missing secrets file is
+    /// treated as "no entries" — same conservative fallback as
+    /// [`set_auth`] uses.
+    pub fn auth_status(&self) -> Result<AgentAuthStatusResult> {
+        let store = self
+            .secrets_path
+            .as_ref()
+            .map(|path| load_secrets(path).unwrap_or_default())
+            .unwrap_or_default();
+        let mut providers: Vec<ProviderAuthStatus> = store
+            .providers
+            .iter()
+            .map(|(name, secret)| ProviderAuthStatus {
+                provider: name.clone(),
+                // Only treat a non-empty `api_key` as configured. An
+                // empty string in the store would be a bug, but we
+                // surface it as "not configured" so the chip doesn't
+                // flash green on stale state.
+                configured: secret
+                    .api_key
+                    .as_deref()
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false),
+                base_url: secret.base_url.clone(),
+            })
+            .collect();
+        providers.sort_by(|a, b| a.provider.cmp(&b.provider));
+        Ok(AgentAuthStatusResult { providers })
     }
 
     /// Send an `updateConfig` SidecarRequest carrying the current

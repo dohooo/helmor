@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
 	setRuntimeAgentAuth: vi.fn(),
+	getRemoteRuntimeAuthStatus: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -13,6 +14,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		setRuntimeAgentAuth: apiMocks.setRuntimeAgentAuth,
+		getRemoteRuntimeAuthStatus: apiMocks.getRemoteRuntimeAuthStatus,
 	};
 });
 
@@ -37,7 +39,11 @@ function withClient(): {
 describe("RuntimeAuthDialog", () => {
 	beforeEach(() => {
 		apiMocks.setRuntimeAgentAuth.mockReset();
+		apiMocks.getRemoteRuntimeAuthStatus.mockReset();
 		apiMocks.setRuntimeAgentAuth.mockResolvedValue(undefined);
+		// Default: no providers configured. Individual tests override
+		// to test the configured-state UI.
+		apiMocks.getRemoteRuntimeAuthStatus.mockResolvedValue({ providers: [] });
 	});
 
 	afterEach(() => {
@@ -118,6 +124,82 @@ describe("RuntimeAuthDialog", () => {
 				"https://proxy.internal/v1",
 			),
 		);
+	});
+
+	it("renders the 'currently configured' chip when the daemon has a key", async () => {
+		apiMocks.getRemoteRuntimeAuthStatus.mockResolvedValue({
+			providers: [{ provider: "cursor", configured: true, baseUrl: null }],
+		});
+		const { wrapper } = withClient();
+		render(
+			<RuntimeAuthDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+			/>,
+			{ wrapper },
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId("runtime-auth-status-configured"),
+			).toBeInTheDocument(),
+		);
+	});
+
+	it("renders the 'not configured' chip when no key exists yet", async () => {
+		apiMocks.getRemoteRuntimeAuthStatus.mockResolvedValue({ providers: [] });
+		const { wrapper } = withClient();
+		render(
+			<RuntimeAuthDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+			/>,
+			{ wrapper },
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId("runtime-auth-status-not-configured"),
+			).toBeInTheDocument(),
+		);
+	});
+
+	it("surfaces the optional base URL in the configured chip", async () => {
+		apiMocks.getRemoteRuntimeAuthStatus.mockResolvedValue({
+			providers: [
+				{
+					provider: "cursor",
+					configured: true,
+					baseUrl: "https://proxy.internal/v1",
+				},
+			],
+		});
+		const { wrapper } = withClient();
+		render(
+			<RuntimeAuthDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName="dev.box"
+			/>,
+			{ wrapper },
+		);
+		const chip = await screen.findByTestId("runtime-auth-status-configured");
+		expect(chip).toHaveTextContent("https://proxy.internal/v1");
+	});
+
+	it("skips the status query when no runtime is selected", async () => {
+		const { wrapper } = withClient();
+		render(
+			<RuntimeAuthDialog
+				open={true}
+				onOpenChange={() => {}}
+				runtimeName={null}
+			/>,
+			{ wrapper },
+		);
+		// Settle.
+		await Promise.resolve();
+		expect(apiMocks.getRemoteRuntimeAuthStatus).not.toHaveBeenCalled();
 	});
 
 	it("disables Save when no runtime is selected", async () => {

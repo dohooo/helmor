@@ -516,6 +516,130 @@ fn set_auth_rejects_empty_provider() {
     assert!(format!("{err:#}").contains("provider must not be empty"));
 }
 
+// ── Track G2: auth_status read side ─────────────────────────────────
+
+#[test]
+fn auth_status_returns_empty_list_for_fresh_daemon() {
+    // No secrets file → no providers. The chip on the desktop should
+    // read "no key configured" rather than erroring or panicking.
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    let snapshot = state.auth_status().unwrap();
+    assert!(snapshot.providers.is_empty(), "{:?}", snapshot.providers);
+}
+
+#[test]
+fn auth_status_reports_configured_true_for_provider_with_key() {
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    state
+        .set_auth(AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: Some("sk-real".into()),
+            base_url: None,
+        })
+        .unwrap();
+    let snapshot = state.auth_status().unwrap();
+    assert_eq!(snapshot.providers.len(), 1);
+    assert_eq!(snapshot.providers[0].provider, "cursor");
+    assert!(snapshot.providers[0].configured);
+}
+
+#[test]
+fn auth_status_never_returns_the_api_key_value() {
+    // Defence-in-depth: the wire-shape is presence-only. Even if a
+    // future refactor stuffs the key into the struct somehow, the
+    // serialised payload mustn't contain the literal value.
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    state
+        .set_auth(AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: Some("sk-supersecret-do-not-leak".into()),
+            base_url: None,
+        })
+        .unwrap();
+    let snapshot = state.auth_status().unwrap();
+    let wire = serde_json::to_string(&snapshot).unwrap();
+    assert!(
+        !wire.contains("sk-supersecret-do-not-leak"),
+        "auth_status JSON must not leak the api_key: {wire}",
+    );
+}
+
+#[test]
+fn auth_status_surfaces_optional_base_url() {
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    state
+        .set_auth(AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: Some("sk-test".into()),
+            base_url: Some("https://proxy.internal/v1".into()),
+        })
+        .unwrap();
+    let snapshot = state.auth_status().unwrap();
+    assert_eq!(
+        snapshot.providers[0].base_url.as_deref(),
+        Some("https://proxy.internal/v1"),
+    );
+}
+
+#[test]
+fn auth_status_drops_provider_after_clear() {
+    // Set + clear → snapshot reports zero providers. The chip should
+    // flip from "configured" back to "not configured" without a
+    // restart.
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    state
+        .set_auth(AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: Some("sk-test".into()),
+            base_url: None,
+        })
+        .unwrap();
+    state
+        .set_auth(AgentSetAuthParams {
+            provider: "cursor".into(),
+            api_key: None,
+            base_url: None,
+        })
+        .unwrap();
+    let snapshot = state.auth_status().unwrap();
+    assert!(snapshot.providers.is_empty(), "{:?}", snapshot.providers);
+}
+
+#[test]
+fn auth_status_returns_providers_sorted_alphabetically() {
+    // Stable UI surface — chips render in the same order across
+    // reloads regardless of HashMap iteration order.
+    let (_dir, path) = temp_secrets_path();
+    let state = RemoteAgentState::new(Arc::new(MockAgentSpawner::new()))
+        .with_secrets_path(Some(path.clone()));
+    for name in ["zeta", "alpha", "middle"] {
+        state
+            .set_auth(AgentSetAuthParams {
+                provider: name.into(),
+                api_key: Some("sk".into()),
+                base_url: None,
+            })
+            .unwrap();
+    }
+    let snapshot = state.auth_status().unwrap();
+    let names: Vec<_> = snapshot
+        .providers
+        .iter()
+        .map(|p| p.provider.as_str())
+        .collect();
+    assert_eq!(names, vec!["alpha", "middle", "zeta"]);
+}
+
 #[test]
 fn set_auth_hot_pushes_update_config_to_running_sidecar() {
     // Spin up the bridge (send + handshake), then call set_auth.

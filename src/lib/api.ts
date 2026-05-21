@@ -1125,6 +1125,31 @@ export async function setRuntimeAgentAuth(
 	});
 }
 
+/**
+ * Track G2 read side: snapshot which providers have a key configured
+ * on the named remote runtime's daemon. Returns presence + optional
+ * base URLs only — the literal API key never crosses the wire. Used
+ * by RuntimeAuthDialog ("Currently configured: cursor") and the
+ * Remote Servers panel (key-icon chip per row).
+ */
+export type ProviderAuthStatus = {
+	provider: string;
+	configured: boolean;
+	baseUrl?: string | null;
+};
+
+export type RuntimeAuthStatus = {
+	providers: ProviderAuthStatus[];
+};
+
+export async function getRemoteRuntimeAuthStatus(
+	name: string,
+): Promise<RuntimeAuthStatus> {
+	return invoke<RuntimeAuthStatus>("get_remote_runtime_auth_status", {
+		name,
+	});
+}
+
 // ── workspace file watcher (phase 24g) ─────────────────────────────
 
 export type WorkspaceFileWatchKind = "local" | "remote";

@@ -10,20 +10,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::remote::methods::{
-    AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult, AgentListParams,
-    AgentListResult, AgentSendParams, AgentSendResult, AgentSetAuthParams, AgentSetAuthResult,
-    DaemonTailLogParams, DaemonTailLogResult, InitializeParams, InitializeResult, PingParams,
-    PingResult, RuntimeMetricsParams, RuntimeMetricsResult, TerminalAttachParams,
-    TerminalAttachResult, TerminalCloseParams, TerminalCloseResult, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalResizeParams,
-    TerminalResizeResult, TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams,
-    WorkspaceBranchInfoResult, WorkspaceChangesParams, WorkspaceChangesResult,
-    WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
-    WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
-    WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
-    WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
-    WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
-    WorkspaceStopWatchResult,
+    AgentAbortParams, AgentAbortResult, AgentAttachParams, AgentAttachResult,
+    AgentAuthStatusParams, AgentAuthStatusResult, AgentListParams, AgentListResult,
+    AgentSendParams, AgentSendResult, AgentSetAuthParams, AgentSetAuthResult, DaemonTailLogParams,
+    DaemonTailLogResult, InitializeParams, InitializeResult, PingParams, PingResult,
+    RuntimeMetricsParams, RuntimeMetricsResult, TerminalAttachParams, TerminalAttachResult,
+    TerminalCloseParams, TerminalCloseResult, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOpenResult, TerminalResizeParams, TerminalResizeResult,
+    TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
+    WorkspaceChangesParams, WorkspaceChangesResult, WorkspaceFileTreeParams,
+    WorkspaceFileTreeResult, WorkspaceMutateFileParams, WorkspaceMutateFileResult,
+    WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult, WorkspaceReadFileParams,
+    WorkspaceSearchParams, WorkspaceSearchResult, WorkspaceStartWatchParams,
+    WorkspaceStartWatchResult, WorkspaceStatFileParams, WorkspaceStatusParams,
+    WorkspaceStatusResult, WorkspaceStopWatchParams, WorkspaceStopWatchResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -470,6 +470,22 @@ pub(super) fn handle_agent_set_auth(
         JsonRpcError::new(
             error_codes::HANDLER_FAILED,
             format!("agent.setAuth failed: {err:#}"),
+        )
+    })
+}
+
+/// Track G2 read side: snapshot which providers have a key configured
+/// without ever revealing the key itself. The desktop renders the
+/// presence bits as a chip on the remote-server row + as a
+/// "Currently configured" line in the auth dialog.
+pub(super) fn handle_agent_auth_status(
+    ctx: &ServerContext,
+    _params: AgentAuthStatusParams,
+) -> Result<AgentAuthStatusResult, JsonRpcError> {
+    ctx.agent_state().auth_status().map_err(|err| {
+        JsonRpcError::new(
+            error_codes::HANDLER_FAILED,
+            format!("agent.authStatus failed: {err:#}"),
         )
     })
 }

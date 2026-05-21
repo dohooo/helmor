@@ -337,6 +337,19 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("agent.setAuth is only supported on a connected remote runtime")
     }
 
+    /// Track G2 read side: snapshot which providers have a key
+    /// configured on the daemon. Returns presence + optional base
+    /// URLs only — the literal API key never leaves the daemon.
+    /// The local runtime bails so the desktop knows to fall back to
+    /// its own settings inspector (cursor_provider, etc.) for the
+    /// local-runtime case.
+    fn agent_auth_status(
+        &self,
+        _params: super::methods::AgentAuthStatusParams,
+    ) -> Result<super::methods::AgentAuthStatusResult> {
+        anyhow::bail!("agent.authStatus is only supported on a connected remote runtime")
+    }
+
     /// Subscribe to `agent.event` notifications coming back from the
     /// runtime. Default `None` mirrors [`subscribe_terminal_events`]:
     /// local + tombstoned runtimes don't stream, so the desktop's

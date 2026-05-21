@@ -12,23 +12,24 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::remote::methods::{
-    AgentAbortMethod, AgentAttachMethod, AgentListMethod, AgentSendMethod, AgentSetAuthMethod,
-    DaemonTailLogMethod, InitializeMethod, Method, PingMethod, RpcMethod, RuntimeMetricsMethod,
-    TerminalAttachMethod, TerminalCloseMethod, TerminalListMethod, TerminalOpenMethod,
-    TerminalResizeMethod, TerminalWriteMethod, WorkspaceBranchInfoMethod, WorkspaceChangesMethod,
-    WorkspaceFileTreeMethod, WorkspaceMutateFileMethod, WorkspaceReadFileAtRefMethod,
-    WorkspaceReadFileMethod, WorkspaceSearchMethod, WorkspaceStartWatchMethod,
-    WorkspaceStatFileMethod, WorkspaceStatusMethod, WorkspaceStopWatchMethod,
+    AgentAbortMethod, AgentAttachMethod, AgentAuthStatusMethod, AgentListMethod, AgentSendMethod,
+    AgentSetAuthMethod, DaemonTailLogMethod, InitializeMethod, Method, PingMethod, RpcMethod,
+    RuntimeMetricsMethod, TerminalAttachMethod, TerminalCloseMethod, TerminalListMethod,
+    TerminalOpenMethod, TerminalResizeMethod, TerminalWriteMethod, WorkspaceBranchInfoMethod,
+    WorkspaceChangesMethod, WorkspaceFileTreeMethod, WorkspaceMutateFileMethod,
+    WorkspaceReadFileAtRefMethod, WorkspaceReadFileMethod, WorkspaceSearchMethod,
+    WorkspaceStartWatchMethod, WorkspaceStatFileMethod, WorkspaceStatusMethod,
+    WorkspaceStopWatchMethod,
 };
 use crate::remote::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
 };
 
 use super::handlers::{
-    handle_agent_abort, handle_agent_attach, handle_agent_list, handle_agent_send,
-    handle_agent_set_auth, handle_daemon_tail_log, handle_initialize, handle_ping,
-    handle_runtime_metrics, handle_terminal_attach, handle_terminal_close, handle_terminal_list,
-    handle_terminal_open, handle_terminal_resize, handle_terminal_write,
+    handle_agent_abort, handle_agent_attach, handle_agent_auth_status, handle_agent_list,
+    handle_agent_send, handle_agent_set_auth, handle_daemon_tail_log, handle_initialize,
+    handle_ping, handle_runtime_metrics, handle_terminal_attach, handle_terminal_close,
+    handle_terminal_list, handle_terminal_open, handle_terminal_resize, handle_terminal_write,
     handle_workspace_branch_info, handle_workspace_changes, handle_workspace_file_tree,
     handle_workspace_mutate_file, handle_workspace_read_file, handle_workspace_read_file_at_ref,
     handle_workspace_search, handle_workspace_start_watch, handle_workspace_stat_file,
@@ -146,6 +147,9 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::AgentSetAuth => {
             handle::<AgentSetAuthMethod, _>(req.params, |params| handle_agent_set_auth(ctx, params))
         }
+        Method::AgentAuthStatus => handle::<AgentAuthStatusMethod, _>(req.params, |params| {
+            handle_agent_auth_status(ctx, params)
+        }),
         Method::DaemonTailLog => {
             handle::<DaemonTailLogMethod, _>(req.params, handle_daemon_tail_log)
         }

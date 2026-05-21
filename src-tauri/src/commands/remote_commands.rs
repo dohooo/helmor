@@ -794,6 +794,37 @@ pub async fn reconnect_remote_runtime(
     .await
 }
 
+/// Track G2 read side: snapshot which providers have a key configured
+/// on the named remote runtime's daemon. Returns presence + optional
+/// base URLs; the literal API key value never crosses the wire. Used
+/// by the desktop's RuntimeAuthDialog to render a "Currently
+/// configured" line and by the Remote Servers settings panel to
+/// surface a key-icon chip on each row.
+#[tauri::command]
+pub async fn get_remote_runtime_auth_status(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<crate::remote::methods::AgentAuthStatusResult> {
+    if name.trim().is_empty() {
+        return Err(anyhow::anyhow!("runtime name must not be empty").into());
+    }
+    // Refuse the built-in local runtime — its keys come from the
+    // desktop's own keychain / SQLite settings, not from the
+    // daemon's secrets store. Surfacing this here matches the
+    // [`set_runtime_agent_auth`] contract.
+    if name == crate::remote::LOCAL_RUNTIME_NAME {
+        return Err(anyhow::anyhow!(
+            "agent.authStatus is only available on registered remote runtimes (got `{name}`)"
+        )
+        .into());
+    }
+    let runtime = registry.lookup(Some(&name))?;
+    run_blocking(move || -> anyhow::Result<_> {
+        runtime.agent_auth_status(crate::remote::methods::AgentAuthStatusParams {})
+    })
+    .await
+}
+
 /// Phase 23d: push an SDK API key (or clear it) into a remote
 /// runtime's secrets store. The daemon persists to
 /// `$HOME/.helmor/server/secrets.json` (mode 0600) and hot-pushes

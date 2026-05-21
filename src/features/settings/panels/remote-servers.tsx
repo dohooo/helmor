@@ -18,7 +18,12 @@
  * sections.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useQueries,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { KeyRound, Plug, Plug2, ServerCog } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -27,7 +32,9 @@ import { RuntimeAuthDialog } from "@/components/runtime-auth-dialog";
 import { Button } from "@/components/ui/button";
 import {
 	disconnectRemoteRuntime,
+	getRemoteRuntimeAuthStatus,
 	listRemoteRuntimes,
+	type RuntimeAuthStatus,
 	type RuntimeEntry,
 	type RuntimeState,
 	reconnectRemoteRuntime,
@@ -51,6 +58,26 @@ export function RemoteServersPanel() {
 	const remotes: RuntimeEntry[] = (runtimesQuery.data ?? []).filter(
 		(entry) => !entry.isLocal,
 	);
+
+	// Track G2 read side: fetch the daemon-side auth snapshot for every
+	// connected remote so each row can render a key-icon chip without
+	// the operator opening the dialog. Disconnected runtimes are
+	// skipped — they can't answer agent.authStatus and the chip would
+	// just spin.
+	const authStatusQueries = useQueries({
+		queries: remotes.map((entry) => ({
+			queryKey: ["runtime-auth-status", entry.name],
+			queryFn: () => getRemoteRuntimeAuthStatus(entry.name),
+			enabled: entry.state.type === "connected",
+			refetchOnWindowFocus: false,
+			staleTime: 30_000,
+		})),
+	});
+	const authStatusByName = new Map<string, RuntimeAuthStatus>();
+	remotes.forEach((entry, idx) => {
+		const data = authStatusQueries[idx]?.data;
+		if (data) authStatusByName.set(entry.name, data);
+	});
 
 	const disconnect = useMutation({
 		mutationFn: (name: string) => disconnectRemoteRuntime(name),
@@ -115,6 +142,7 @@ export function RemoteServersPanel() {
 						<RemoteServerRow
 							key={entry.name}
 							entry={entry}
+							authStatus={authStatusByName.get(entry.name) ?? null}
 							onDisconnect={() => disconnect.mutate(entry.name)}
 							onReconnect={() => reconnect.mutate(entry.name)}
 							onSetAuth={() => setAuthRuntime(entry.name)}
@@ -149,12 +177,14 @@ export function RemoteServersPanel() {
 
 function RemoteServerRow({
 	entry,
+	authStatus,
 	pending,
 	onDisconnect,
 	onReconnect,
 	onSetAuth,
 }: {
 	entry: RuntimeEntry;
+	authStatus: RuntimeAuthStatus | null;
 	pending: boolean;
 	onDisconnect: () => void;
 	onReconnect: () => void;
@@ -162,13 +192,34 @@ function RemoteServerRow({
 }) {
 	const stateLabel = formatStateLabel(entry.state);
 	const reconnectable = entry.state.type !== "connected";
+	// Track G2 read side: collect the providers with a key so we can
+	// surface them as a chip next to the runtime name. Surfacing the
+	// list (`cursor`) gives the operator a one-glance answer to "is
+	// this runtime ready to run agents?" before they click anything.
+	const configuredProviders =
+		authStatus?.providers.filter((p) => p.configured).map((p) => p.provider) ??
+		[];
 	return (
 		<li
 			className="flex items-center justify-between gap-3 rounded-md border border-border/40 bg-card/40 px-3 py-2"
 			data-testid={`remote-server-row-${entry.name}`}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate text-[12px] font-medium">{entry.name}</span>
+				<div className="flex items-center gap-1.5">
+					<span className="truncate text-[12px] font-medium">{entry.name}</span>
+					{configuredProviders.length > 0 ? (
+						<span
+							className="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-px text-[9px] font-medium text-emerald-300"
+							data-testid={`remote-server-auth-chip-${entry.name}`}
+							title={`Configured providers: ${configuredProviders.join(", ")}`}
+						>
+							<KeyRound className="size-2.5" />
+							{configuredProviders.length === 1
+								? configuredProviders[0]
+								: `${configuredProviders.length} keys`}
+						</span>
+					) : null}
+				</div>
 				<span className="truncate text-[10px] text-muted-foreground">
 					{stateLabel}
 				</span>

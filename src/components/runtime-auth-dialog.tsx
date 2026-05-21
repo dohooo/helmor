@@ -14,8 +14,8 @@
  * second provider does.
  */
 
-import { useMutation } from "@tanstack/react-query";
-import { KeyRound, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, KeyRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { setRuntimeAgentAuth } from "@/lib/api";
+import {
+	getRemoteRuntimeAuthStatus,
+	type ProviderAuthStatus,
+	setRuntimeAgentAuth,
+} from "@/lib/api";
 
 export type RuntimeAuthDialogProps = {
 	open: boolean;
@@ -46,6 +50,7 @@ export function RuntimeAuthDialog({
 	runtimeName,
 	provider = "cursor",
 }: RuntimeAuthDialogProps) {
+	const queryClient = useQueryClient();
 	const [apiKey, setApiKey] = useState("");
 	const [baseUrl, setBaseUrl] = useState("");
 
@@ -58,6 +63,20 @@ export function RuntimeAuthDialog({
 			setBaseUrl("");
 		}
 	}, [open]);
+
+	// Track G2 read side: surface what's currently stored on the
+	// daemon so the operator can confirm whether a key exists before
+	// typing a new one (or know that a Clear actually went through).
+	const statusQuery = useQuery({
+		queryKey: ["runtime-auth-status", runtimeName],
+		queryFn: () =>
+			runtimeName ? getRemoteRuntimeAuthStatus(runtimeName) : null,
+		enabled: open && runtimeName !== null,
+		refetchOnWindowFocus: false,
+		staleTime: 5_000,
+	});
+	const currentStatus: ProviderAuthStatus | null =
+		statusQuery.data?.providers.find((p) => p.provider === provider) ?? null;
 
 	const save = useMutation({
 		mutationFn: async () => {
@@ -72,6 +91,11 @@ export function RuntimeAuthDialog({
 					? `Cleared ${provider} key on ${runtimeName}`
 					: `Saved ${provider} key on ${runtimeName}`,
 			);
+			// Refresh the status query so the row chip flips
+			// immediately on close.
+			void queryClient.invalidateQueries({
+				queryKey: ["runtime-auth-status", runtimeName],
+			});
 			onOpenChange(false);
 		},
 		onError: (err) => toast.error(formatError(err)),
@@ -105,6 +129,39 @@ export function RuntimeAuthDialog({
 					— it transits the live SSH pipe and is written to a 0600 file on the
 					remote.
 				</DialogDescription>
+				{currentStatus?.configured ? (
+					<div
+						className="flex items-start gap-2 rounded-md border border-emerald-700/30 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-200"
+						data-testid="runtime-auth-status-configured"
+					>
+						<CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+						<div className="flex flex-col gap-0.5">
+							<span>
+								<strong className="font-medium">
+									{provider} key is currently configured.
+								</strong>{" "}
+								Leave the field blank below to clear it; type a new key to
+								rotate.
+							</span>
+							{currentStatus.baseUrl ? (
+								<span className="font-mono text-[10px] text-emerald-200/70">
+									Base URL: {currentStatus.baseUrl}
+								</span>
+							) : null}
+						</div>
+					</div>
+				) : statusQuery.isSuccess ? (
+					<div
+						className="flex items-start gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground"
+						data-testid="runtime-auth-status-not-configured"
+					>
+						<KeyRound className="mt-0.5 size-3.5 shrink-0 opacity-50" />
+						<span>
+							No <strong className="font-medium">{provider}</strong> key
+							configured on this runtime yet.
+						</span>
+					</div>
+				) : null}
 				<div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3">
 					<Label htmlFor="runtime-auth-api-key" className="text-xs">
 						API key

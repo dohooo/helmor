@@ -132,6 +132,10 @@ pub enum Method {
     /// Keys never persist on the desktop side — phase 23d's
     /// design intent is "auth lives remote-only".
     AgentSetAuth,
+    /// Track G2 read side: snapshot which providers have a key
+    /// configured on the daemon. Returns presence bits + optional
+    /// base URLs only — the literal API key never leaves the daemon.
+    AgentAuthStatus,
     /// Track E1: trailing log tail. Reads up to `max_lines`
     /// lines from `$HOME/.helmor/server/daemon.log` and returns
     /// them so an operator can debug without an extra SSH session.
@@ -168,6 +172,7 @@ impl Method {
             Self::AgentList => "agent.list",
             Self::AgentAttach => "agent.attach",
             Self::AgentSetAuth => "agent.setAuth",
+            Self::AgentAuthStatus => "agent.authStatus",
             Self::DaemonTailLog => "daemon.tailLog",
             Self::RuntimeMetrics => "runtime.metrics",
         }
@@ -217,6 +222,7 @@ impl FromStr for Method {
             "agent.list" => Ok(Self::AgentList),
             "agent.attach" => Ok(Self::AgentAttach),
             "agent.setAuth" => Ok(Self::AgentSetAuth),
+            "agent.authStatus" => Ok(Self::AgentAuthStatus),
             "daemon.tailLog" => Ok(Self::DaemonTailLog),
             "runtime.metrics" => Ok(Self::RuntimeMetrics),
             _ => Err(UnknownMethod(value.to_string())),
@@ -1199,6 +1205,50 @@ impl RpcMethod for AgentSetAuthMethod {
     const NAME: &'static str = "agent.setAuth";
     type Params = AgentSetAuthParams;
     type Result = AgentSetAuthResult;
+}
+
+// ── Track G2: read side of the daemon's auth store ──────────────────
+//
+// `agent.setAuth` writes; this method reads what's currently
+// configured so the desktop can render "key set / not set" without
+// pushing a fake key. Crucially the API key value is *never*
+// returned — only its presence + the optional base URL. Returning
+// the literal key would defeat the keychain split entirely.
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAuthStatusParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAuthStatus {
+    /// Provider name — same key the desktop passes in
+    /// `AgentSetAuthParams.provider` (`"cursor"`, future providers).
+    pub provider: String,
+    /// `true` iff the daemon's secrets store has a non-empty API key
+    /// recorded for this provider. The actual key value is never
+    /// surfaced on the wire — only the presence bit.
+    pub configured: bool,
+    /// Optional base-URL override the operator supplied alongside the
+    /// key. Surfaced as informational only so the dialog can render
+    /// "configured against proxy.internal/v1" when relevant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAuthStatusResult {
+    /// One entry per provider the daemon has ever stored a key for,
+    /// sorted by name so the UI surface is stable across reloads.
+    /// Empty when no auth has been configured.
+    pub providers: Vec<ProviderAuthStatus>,
+}
+
+pub struct AgentAuthStatusMethod;
+impl RpcMethod for AgentAuthStatusMethod {
+    const NAME: &'static str = "agent.authStatus";
+    type Params = AgentAuthStatusParams;
+    type Result = AgentAuthStatusResult;
 }
 
 /// Notification payload pushed via
