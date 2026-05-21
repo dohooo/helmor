@@ -1733,6 +1733,37 @@ pub async fn clone_workspace_to_runtime(
     .await
 }
 
+/// Probe the destination runtime for a path that's safe to clone
+/// into. Returns `Ok(())` when the target either doesn't exist
+/// (clone will create it) or exists as an empty directory (clone
+/// will reuse it). Returns `Err` only for the populated-directory
+/// case — that's the one where bundle-and-clone would otherwise
+/// waste a multi-MB transfer just to fail at the clone step.
+///
+/// Uses `workspace.fileTree` which is already wired on the daemon
+/// — no new RPC required. The probe pulls a directory listing
+/// from the daemon; for empty dirs the round-trip is a few hundred
+/// bytes, much cheaper than shipping the bundle.
+fn pre_flight_destination_clonable(
+    destination: &dyn RemoteRuntime,
+    destination_path: &str,
+) -> Result<()> {
+    let probe = destination.workspace_file_tree(crate::remote::methods::WorkspaceFileTreeParams {
+        workspace_dir: destination_path.to_string(),
+    });
+    match probe {
+        // Doesn't exist → clone will create it.
+        Err(_) => Ok(()),
+        // Exists + empty → clone will reuse it.
+        Ok(tree) if tree.entries.is_empty() => Ok(()),
+        // Exists + populated → fail fast.
+        Ok(tree) => Err(anyhow::anyhow!(
+            "destination `{destination_path}` already exists and is not empty ({} entries; refusing to clone over it)",
+            tree.entries.len(),
+        )),
+    }
+}
+
 /// Wire-friendly result the desktop renders after a successful
 /// cross-host clone. `head_branch` mirrors the daemon's report; the
 /// caller surfaces "(detached)" when empty.
@@ -1789,6 +1820,17 @@ fn clone_workspace_to_runtime_inner(
     // moves don't auto-connect — the operator is expected to add
     // the destination via the Add-Server wizard first.
     let destination = registry.lookup(Some(destination_runtime))?;
+
+    // ── Pre-flight: probe the destination path BEFORE bundling so
+    // the operator doesn't wait for a multi-MB transfer just to
+    // get an "already exists" error. `workspace.fileTree` is the
+    // cheapest probe — it errors when the path doesn't exist
+    // (clone will create it, fine), returns an empty list for an
+    // empty dir (also fine), and returns a populated list when
+    // the dir already has files (the case we want to fail fast
+    // on).
+    pre_flight_destination_clonable(&*destination, destination_path)
+        .context("destination pre-flight check")?;
 
     // Track F3 chunked: drive the wire-side chunking through the
     // trait helpers so the orchestrator stays runtime-agnostic
@@ -2221,6 +2263,13 @@ mod tests {
         /// trait default bails.
         unbundle_response:
             std::sync::Mutex<Option<crate::remote::methods::WorkspaceUnbundleResult>>,
+        /// Track F3 pre-flight: response for `workspace_file_tree`.
+        /// `None` (default) = bail (mimics "path doesn't exist";
+        /// pre-flight reads this as "safe to clone"). `Some(empty)`
+        /// = empty dir (also safe). `Some(populated)` = pre-flight
+        /// blocks.
+        file_tree_response:
+            std::sync::Mutex<Option<crate::remote::methods::WorkspaceFileTreeResult>>,
     }
     impl StubRuntime {
         fn new(hostname: &'static str) -> Self {
@@ -2230,6 +2279,7 @@ mod tests {
                 unbundle_calls: std::sync::Mutex::new(Vec::new()),
                 bundle_response: std::sync::Mutex::new(None),
                 unbundle_response: std::sync::Mutex::new(None),
+                file_tree_response: std::sync::Mutex::new(None),
             }
         }
         fn set_bundle_response(&self, result: crate::remote::methods::WorkspaceBundleResult) {
@@ -2237,6 +2287,34 @@ mod tests {
         }
         fn set_unbundle_response(&self, result: crate::remote::methods::WorkspaceUnbundleResult) {
             *self.unbundle_response.lock().unwrap() = Some(result);
+        }
+        /// Mark the destination as populated (pre-flight should
+        /// block). Pass `&[]` for "empty but exists" (also fine for
+        /// clone); skip the call entirely for "doesn't exist" (the
+        /// default).
+        fn set_destination_file_tree(&self, entries: Vec<&'static str>) {
+            use crate::workspace::files::EditorFileListItem;
+            let items: Vec<EditorFileListItem> = entries
+                .iter()
+                .map(|name| EditorFileListItem {
+                    path: name.to_string(),
+                    absolute_path: format!("/fake/{name}"),
+                    name: name.to_string(),
+                    status: "?".to_string(),
+                    staged_insertions: 0,
+                    staged_deletions: 0,
+                    unstaged_insertions: 0,
+                    unstaged_deletions: 0,
+                    committed_insertions: 0,
+                    committed_deletions: 0,
+                    is_binary: false,
+                    staged_status: None,
+                    unstaged_status: None,
+                    committed_status: None,
+                })
+                .collect();
+            *self.file_tree_response.lock().unwrap() =
+                Some(crate::remote::methods::WorkspaceFileTreeResult { entries: items });
         }
         fn last_bundle_call(&self) -> Option<crate::remote::methods::WorkspaceBundleParams> {
             self.bundle_calls.lock().unwrap().last().cloned()
@@ -2335,6 +2413,20 @@ mod tests {
                 .unwrap()
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("stub: unbundle_response not configured"))
+        }
+        fn workspace_file_tree(
+            &self,
+            _params: crate::remote::methods::WorkspaceFileTreeParams,
+        ) -> Result<crate::remote::methods::WorkspaceFileTreeResult> {
+            // Default (no response set) → bail. The pre-flight
+            // treats Err as "path doesn't exist" → safe to clone.
+            self.file_tree_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("stub: file_tree_response not configured (path doesn't exist)")
+                })
         }
     }
 
@@ -4622,6 +4714,67 @@ mod tests {
             Some("source.box"),
             "binding must not flip when unbundle fails",
         );
+    }
+
+    #[test]
+    fn clone_workspace_inner_pre_flights_destination_and_bails_when_already_populated() {
+        // Pre-flight: if `workspace_file_tree` on the destination
+        // returns >0 entries, the orchestrator must refuse to bundle
+        // — no wasted multi-MB transfer for a clone that would have
+        // failed at the unbundle step.
+        let (registry, bindings, source, destination) = registry_for_clone(None);
+        source.set_bundle_response(fixed_bundle_response());
+        destination.set_unbundle_response(fixed_unbundle_response());
+        // Mark the destination as populated.
+        destination.set_destination_file_tree(vec!["existing.txt", "src"]);
+
+        let err = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "destination.box",
+            "/home/dwork/code/foo",
+        )
+        .expect_err("populated destination must bail before bundling");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("already exists") && msg.contains("not empty"),
+            "error should call out the populated dir: {msg}",
+        );
+        // Critical: the source must NOT have been bundled. The
+        // whole point of the pre-flight is to skip the expensive
+        // transfer when the destination is unsafe.
+        assert!(
+            source.last_bundle_call().is_none(),
+            "bundle should not have been generated when pre-flight bailed",
+        );
+        // Binding still points at source.
+        assert_eq!(bindings.lookup("ws-1").as_deref(), Some("source.box"));
+    }
+
+    #[test]
+    fn clone_workspace_inner_pre_flight_accepts_empty_destination_directory() {
+        // Pre-flight: empty dir on destination is fine — clone
+        // reuses it. Distinguish "exists + empty" from "doesn't
+        // exist" by stubbing the file_tree response to Ok(vec![]).
+        let (registry, bindings, source, destination) = registry_for_clone(None);
+        source.set_bundle_response(fixed_bundle_response());
+        destination.set_unbundle_response(fixed_unbundle_response());
+        destination.set_destination_file_tree(vec![]);
+
+        let result = clone_workspace_to_runtime_inner(
+            &registry,
+            &bindings,
+            "ws-1",
+            "/Users/d/code/foo",
+            "destination.box",
+            "/home/dwork/code/foo",
+        )
+        .expect("empty destination should be clonable");
+        assert!(result.cloned);
+        // Bundle DID run — pre-flight was satisfied.
+        assert!(source.last_bundle_call().is_some());
     }
 
     #[test]
