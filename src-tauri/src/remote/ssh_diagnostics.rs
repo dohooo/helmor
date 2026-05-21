@@ -9,6 +9,13 @@
 //!   us to bypass the operator's existing config. The point is to
 //!   show that the desktop *can* see the keys ssh would use.
 //!
+//! - **B3 (host pre-flight probe)** — run `ssh -o BatchMode=yes -o
+//!   ConnectTimeout=5 <host> true` and classify the outcome so the
+//!   wizard can fail fast on auth / network issues before kicking
+//!   off the multi-second `connect_remote_runtime` path (which
+//!   spawns the daemon, runs install, etc.). Without this, a bad
+//!   key shows up as a confusing scp error several seconds in.
+//!
 //! - **B4 (agent diagnostics)** — detect whether `SSH_AUTH_SOCK` is
 //!   set and the socket answers `ssh-add -l`. Three outcomes:
 //!     - `Ok` with `keys` count if the agent answered. Banner is
@@ -20,7 +27,7 @@
 //!       since the desktop launched (or a fresh login shell needs to
 //!       export `SSH_AUTH_SOCK` again).
 //!
-//! Both checks are *best-effort* — they never error to the caller.
+//! All checks are *best-effort* — they never error to the caller.
 //! A missing `$HOME`, a permissions denial, an `ssh-add` binary the
 //! user doesn't have all surface as empty / `NotConfigured` rather
 //! than failing the whole settings panel.
@@ -271,6 +278,227 @@ fn ssh_dir_from_env() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".ssh"))
 }
 
+// ── B3: pre-flight host probe ─────────────────────────────────────
+
+/// Outcome of a fast `ssh <host> true` probe. The wizard runs this
+/// before `connect_remote_runtime` so the user gets an actionable
+/// error in ~1 second instead of watching the install path stall
+/// for ten before producing a confusing `scp` message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum SshHostProbe {
+    /// The probe completed with exit 0 — ssh dialed the host,
+    /// authenticated, and ran the `true` command. The wizard treats
+    /// this as a green light for the full connect path.
+    Reachable {
+        /// Wall-clock latency in milliseconds. Surfaced as a tooltip
+        /// ("reached in 234 ms") so the user can spot suspiciously
+        /// slow auth (key going through a hardware token, etc.).
+        latency_ms: u32,
+    },
+    /// ssh dialed the host but the auth step failed (no key matched,
+    /// password prompt suppressed by BatchMode, etc.). Stderr usually
+    /// contains "Permission denied (publickey)". The wizard tells the
+    /// operator to load a key into the agent or update
+    /// `~/.ssh/config`.
+    AuthFailed {
+        /// Trimmed stderr from the failed probe — surfaced verbatim
+        /// in the error so the operator can see exactly what ssh
+        /// complained about.
+        stderr: String,
+    },
+    /// ssh couldn't dial the host at all (DNS failure, port closed,
+    /// route unreachable, host actively refusing). Distinct from
+    /// auth so the UI can suggest checking the hostname / network
+    /// rather than keys.
+    Unreachable {
+        /// Trimmed stderr from ssh, e.g. "ssh: Could not resolve
+        /// hostname …" or "ssh: connect to host … port 22: …".
+        stderr: String,
+    },
+    /// The probe hit the wall-clock timeout. Almost always means
+    /// the host is firewalled / behind a slow VPN; legible enough
+    /// that we surface it distinctly rather than folding into
+    /// `Unreachable`.
+    Timeout,
+}
+
+/// Raw outcome of running the probe. The classifier consumes this;
+/// keeping the IO surface separate lets tests drive a scripted
+/// runner without a real ssh process.
+pub struct SshHostProbeOutcome {
+    /// Exit code from ssh. `Some(0)` = success; `Some(255)` is the
+    /// catch-all for ssh-level failures (auth, connect, host key).
+    /// `None` = the probe timed out before ssh exited, or the
+    /// binary couldn't be spawned.
+    pub status_code: Option<i32>,
+    /// Trimmed stderr from the probe. The classifier scans this to
+    /// distinguish `AuthFailed` from `Unreachable`.
+    pub stderr: String,
+    /// Wall-clock duration the probe took. Surfaced as latency in
+    /// the `Reachable` arm.
+    pub elapsed: Duration,
+    /// `true` when the helper killed the child after the timeout.
+    /// Maps to `SshHostProbe::Timeout` regardless of exit code.
+    pub timed_out: bool,
+}
+
+/// Plumbing for the probe so unit tests don't have to spawn ssh.
+pub trait SshHostProbeRunner: Send + Sync {
+    fn probe(&self, host: &str, timeout: Duration) -> SshHostProbeOutcome;
+}
+
+/// Production runner: `ssh -o BatchMode=yes -o ConnectTimeout=5
+/// <host> true`, wall-clock killed after `timeout`. Mirrors the
+/// `BatchMode=yes` arg the install path uses so the probe's auth
+/// surface matches the eventual connect.
+pub struct ProcessSshHostProbeRunner;
+
+impl SshHostProbeRunner for ProcessSshHostProbeRunner {
+    fn probe(&self, host: &str, timeout: Duration) -> SshHostProbeOutcome {
+        let started = Instant::now();
+        // `ConnectTimeout=5` caps the TCP-level dial; the outer
+        // timeout caps the whole probe (including auth). Belt and
+        // braces — without ConnectTimeout, a black-holed port would
+        // leave ssh blocked on connect() much longer than the wall
+        // clock the wizard is willing to wait.
+        let mut cmd = Command::new("ssh");
+        cmd.arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=5")
+            .arg(host)
+            .arg("true");
+        run_probe_with_timeout(cmd, timeout, started)
+    }
+}
+
+/// Spawn the probe child, wait up to `timeout`, capture stderr.
+/// Kept private — production callers go through
+/// [`ProcessSshHostProbeRunner`] which configures the args.
+fn run_probe_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+    started: Instant,
+) -> SshHostProbeOutcome {
+    cmd.stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(err) => {
+            return SshHostProbeOutcome {
+                status_code: None,
+                stderr: format!("failed to spawn ssh: {err}"),
+                elapsed: started.elapsed(),
+                timed_out: false,
+            };
+        }
+    };
+    let deadline = started + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                use std::io::Read;
+                let mut stderr = String::new();
+                if let Some(mut handle) = child.stderr.take() {
+                    let _ = handle.read_to_string(&mut stderr);
+                }
+                return SshHostProbeOutcome {
+                    status_code: status.code(),
+                    stderr: stderr.trim().to_string(),
+                    elapsed: started.elapsed(),
+                    timed_out: false,
+                };
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return SshHostProbeOutcome {
+                    status_code: None,
+                    stderr: String::new(),
+                    elapsed: started.elapsed(),
+                    timed_out: true,
+                };
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(err) => {
+                return SshHostProbeOutcome {
+                    status_code: None,
+                    stderr: format!("ssh probe wait failed: {err}"),
+                    elapsed: started.elapsed(),
+                    timed_out: false,
+                };
+            }
+        }
+    }
+}
+
+/// Production entry point. Uses [`ProcessSshHostProbeRunner`] with
+/// an 8-second total budget — generous enough for a slow VPN /
+/// hardware-token first-touch, tight enough that the wizard's UI
+/// doesn't feel hung.
+pub fn probe_ssh_host(host: &str) -> SshHostProbe {
+    probe_ssh_host_with(&ProcessSshHostProbeRunner, host, Duration::from_secs(8))
+}
+
+/// Runner-injectable variant. Splits IO from classification so the
+/// state-machine tests don't have to spawn ssh.
+pub fn probe_ssh_host_with<R: SshHostProbeRunner + ?Sized>(
+    runner: &R,
+    host: &str,
+    timeout: Duration,
+) -> SshHostProbe {
+    let outcome = runner.probe(host, timeout);
+    classify_ssh_host_probe(&outcome)
+}
+
+/// Pure decision over a probe outcome. Extracted so the unit tests
+/// can pin the auth/network split without launching subprocesses.
+pub(crate) fn classify_ssh_host_probe(outcome: &SshHostProbeOutcome) -> SshHostProbe {
+    if outcome.timed_out {
+        return SshHostProbe::Timeout;
+    }
+    match outcome.status_code {
+        Some(0) => SshHostProbe::Reachable {
+            latency_ms: outcome.elapsed.as_millis().min(u32::MAX as u128) as u32,
+        },
+        // ssh canonically uses 255 for any ssh-level failure: auth,
+        // connect, host-key mismatch. The stderr text is the only
+        // way to tell them apart for a user-facing message.
+        Some(_) => {
+            if stderr_looks_like_auth(&outcome.stderr) {
+                SshHostProbe::AuthFailed {
+                    stderr: outcome.stderr.clone(),
+                }
+            } else {
+                SshHostProbe::Unreachable {
+                    stderr: outcome.stderr.clone(),
+                }
+            }
+        }
+        // status_code = None covers spawn failure + un-killed
+        // timeout escape (shouldn't happen, but fold to Unreachable
+        // with the stderr message we captured).
+        None => SshHostProbe::Unreachable {
+            stderr: outcome.stderr.clone(),
+        },
+    }
+}
+
+/// Pattern-match ssh's stderr to decide whether the failure is auth
+/// or transport. ssh stderr is reasonably consistent across versions
+/// — we look for the well-known phrases rather than parsing exit
+/// codes (which all collapse to 255).
+fn stderr_looks_like_auth(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("publickey")
+        || lower.contains("password")
+        || lower.contains("no supported authentication methods")
+        || lower.contains("too many authentication failures")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,4 +724,134 @@ mod tests {
     use std::sync::Mutex;
     // Serialise env-mutating tests so they don't race each other.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── classify_ssh_host_probe ───────────────────────────────────
+
+    #[test]
+    fn host_probe_exit_0_maps_to_reachable_with_latency() {
+        let outcome = SshHostProbeOutcome {
+            status_code: Some(0),
+            stderr: String::new(),
+            elapsed: Duration::from_millis(234),
+            timed_out: false,
+        };
+        assert_eq!(
+            classify_ssh_host_probe(&outcome),
+            SshHostProbe::Reachable { latency_ms: 234 }
+        );
+    }
+
+    #[test]
+    fn host_probe_permission_denied_publickey_maps_to_auth_failed() {
+        let outcome = SshHostProbeOutcome {
+            status_code: Some(255),
+            stderr: "user@dev.box: Permission denied (publickey).".into(),
+            elapsed: Duration::from_millis(120),
+            timed_out: false,
+        };
+        match classify_ssh_host_probe(&outcome) {
+            SshHostProbe::AuthFailed { stderr } => {
+                assert!(stderr.contains("Permission denied"), "{stderr}");
+            }
+            other => panic!("expected AuthFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_probe_too_many_auth_failures_maps_to_auth_failed() {
+        // Defensive: the user-facing message should be auth-shaped
+        // even when ssh phrases the rejection as "Too many
+        // authentication failures" (happens on hosts that count
+        // wrong-key attempts).
+        let outcome = SshHostProbeOutcome {
+            status_code: Some(255),
+            stderr: "Received disconnect from 1.2.3.4 port 22:2: Too many authentication failures"
+                .into(),
+            elapsed: Duration::from_millis(80),
+            timed_out: false,
+        };
+        assert!(matches!(
+            classify_ssh_host_probe(&outcome),
+            SshHostProbe::AuthFailed { .. }
+        ));
+    }
+
+    #[test]
+    fn host_probe_could_not_resolve_maps_to_unreachable() {
+        let outcome = SshHostProbeOutcome {
+            status_code: Some(255),
+            stderr: "ssh: Could not resolve hostname typo.box: nodename nor servname provided"
+                .into(),
+            elapsed: Duration::from_millis(40),
+            timed_out: false,
+        };
+        match classify_ssh_host_probe(&outcome) {
+            SshHostProbe::Unreachable { stderr } => {
+                assert!(stderr.contains("Could not resolve"), "{stderr}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_probe_timeout_overrides_status_code() {
+        // The runner sets timed_out=true after killing the child.
+        // The classifier must ignore the (possibly-non-zero) status
+        // code in that case so the UI surfaces a Timeout chip rather
+        // than a misleading Unreachable.
+        let outcome = SshHostProbeOutcome {
+            status_code: Some(255),
+            stderr: "blah blah".into(),
+            elapsed: Duration::from_secs(8),
+            timed_out: true,
+        };
+        assert_eq!(classify_ssh_host_probe(&outcome), SshHostProbe::Timeout);
+    }
+
+    #[test]
+    fn host_probe_no_status_code_folds_to_unreachable_not_panic() {
+        let outcome = SshHostProbeOutcome {
+            status_code: None,
+            stderr: "failed to spawn ssh: No such file or directory".into(),
+            elapsed: Duration::from_millis(2),
+            timed_out: false,
+        };
+        match classify_ssh_host_probe(&outcome) {
+            SshHostProbe::Unreachable { stderr } => {
+                assert!(stderr.contains("No such file"), "{stderr}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+    }
+
+    // ── probe_ssh_host_with: end-to-end via scripted runner ───────
+
+    type ProbeFactory = dyn Fn(&str, Duration) -> SshHostProbeOutcome + Send + Sync;
+
+    struct ScriptedProbeRunner {
+        outcome_factory: Box<ProbeFactory>,
+    }
+
+    impl SshHostProbeRunner for ScriptedProbeRunner {
+        fn probe(&self, host: &str, timeout: Duration) -> SshHostProbeOutcome {
+            (self.outcome_factory)(host, timeout)
+        }
+    }
+
+    #[test]
+    fn probe_ssh_host_with_routes_outcome_through_classifier() {
+        let runner = ScriptedProbeRunner {
+            outcome_factory: Box::new(|host, _timeout| {
+                assert_eq!(host, "dev.box");
+                SshHostProbeOutcome {
+                    status_code: Some(0),
+                    stderr: String::new(),
+                    elapsed: Duration::from_millis(7),
+                    timed_out: false,
+                }
+            }),
+        };
+        let result = probe_ssh_host_with(&runner, "dev.box", Duration::from_secs(8));
+        assert_eq!(result, SshHostProbe::Reachable { latency_ms: 7 });
+    }
 }

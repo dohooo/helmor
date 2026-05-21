@@ -34,7 +34,9 @@ import {
 	connectRemoteRuntime,
 	listSshHostDetails,
 	listSshHosts,
+	probeSshHost,
 	type SshHostDetail,
+	type SshHostProbe,
 } from "@/lib/api";
 
 export type AddRemoteServerWizardProps = {
@@ -108,12 +110,23 @@ export function AddRemoteServerWizard({
 		return details.find((d) => d.alias === tail) ?? null;
 	}, [host, sshHostDetailsQuery.data]);
 
+	// Track B3: pre-flight `ssh <host> true` probe runs before the
+	// full connect path so an auth or network failure surfaces in
+	// ~1 second with a precise message instead of a confusing scp
+	// error ten seconds later. The probe inherits the operator's
+	// `~/.ssh/config` + agent — no key picking.
 	const connect = useMutation({
 		mutationFn: async () => {
 			const trimmedName = name.trim();
 			const trimmedHost = host.trim();
 			if (!trimmedName) throw new Error("Name must not be empty");
 			if (!trimmedHost) throw new Error("Host must not be empty");
+
+			const probe = await probeSshHost(trimmedHost);
+			if (probe.state !== "reachable") {
+				throw new SshProbeFailure(probe, trimmedHost);
+			}
+
 			return connectRemoteRuntime(
 				trimmedName,
 				trimmedHost,
@@ -328,10 +341,55 @@ export function AddRemoteServerWizard({
 	);
 }
 
+/// Thrown from the connect mutation when the pre-flight ssh probe
+/// fails — distinct from a generic Error so the catch arm in
+/// `formatError` can produce a multi-line, action-oriented message
+/// (e.g. "Auth failed against dev.box. Load a key with `ssh-add` or
+/// set IdentityFile in ~/.ssh/config.") rather than the raw stderr.
+class SshProbeFailure extends Error {
+	readonly probe: SshHostProbe;
+	readonly host: string;
+	constructor(probe: SshHostProbe, host: string) {
+		super(`ssh probe of ${host} failed: ${probe.state}`);
+		this.name = "SshProbeFailure";
+		this.probe = probe;
+		this.host = host;
+	}
+}
+
 function formatError(err: unknown): string {
+	if (err instanceof SshProbeFailure) return formatProbeFailure(err);
 	if (err instanceof Error) return err.message;
 	if (typeof err === "string") return err;
 	return "Connect failed.";
+}
+
+function formatProbeFailure(err: SshProbeFailure): string {
+	const { probe, host } = err;
+	switch (probe.state) {
+		case "authFailed":
+			return [
+				`SSH auth against ${host} failed before Helmor could install the daemon.`,
+				`Load a key into your agent with \`ssh-add ~/.ssh/<key>\` or set IdentityFile in ~/.ssh/config and try again.`,
+				probe.stderr ? `ssh said: ${probe.stderr}` : null,
+			]
+				.filter(Boolean)
+				.join("\n\n");
+		case "unreachable":
+			return [
+				`Helmor couldn't reach ${host} over SSH.`,
+				`Check the hostname / port / VPN; the host's `,
+				`\`~/.ssh/config\` alias may also be wrong.`,
+				probe.stderr ? `ssh said: ${probe.stderr}` : null,
+			]
+				.filter(Boolean)
+				.join("\n\n");
+		case "timeout":
+			return `Timed out probing ${host} over SSH. The host is unreachable, behind a firewall, or going through a slow VPN. Retry once the network is up.`;
+		case "reachable":
+			// Defensive — we don't throw on reachable.
+			return `Pre-flight succeeded — please retry connect.`;
+	}
 }
 
 /// Track B2: read-only summary of what `~/.ssh/config` actually

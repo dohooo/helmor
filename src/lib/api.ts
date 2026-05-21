@@ -965,6 +965,34 @@ export async function getSshAgentStatus(): Promise<SshAgentStatus> {
 }
 
 /**
+ * Track B3: pre-flight `ssh <host> true` probe outcome. The
+ * Add-Server wizard runs this before kicking off the full
+ * `connect_remote_runtime` path so the user gets an actionable
+ * error in ~1 second instead of a confusing scp failure ten
+ * seconds in.
+ *
+ * - `reachable` — ssh dialed + authenticated. Carries the
+ *   wall-clock latency; the wizard surfaces it as a tooltip.
+ * - `authFailed` — ssh dialed but auth was rejected; the wizard
+ *   tells the operator to load a key into the agent or update
+ *   `~/.ssh/config`.
+ * - `unreachable` — DNS / TCP / route-level failure. Distinct
+ *   so the UI suggests checking hostname / network rather than
+ *   keys.
+ * - `timeout` — wall-clock budget exhausted. Almost always a
+ *   firewall or slow VPN.
+ */
+export type SshHostProbe =
+	| { state: "reachable"; latencyMs: number }
+	| { state: "authFailed"; stderr: string }
+	| { state: "unreachable"; stderr: string }
+	| { state: "timeout" };
+
+export async function probeSshHost(host: string): Promise<SshHostProbe> {
+	return invoke<SshHostProbe>("probe_ssh_host", { host });
+}
+
+/**
  * Track B2: per-host attribute snapshot from `~/.ssh/config`. Lets
  * the wizard render "this alias actually resolves to host X, logs
  * in as Y, jumps via Z" before the operator clicks Connect.

@@ -1732,6 +1732,26 @@ pub fn ssh_agent_status() -> CmdResult<crate::remote::ssh_diagnostics::SshAgentS
     Ok(crate::remote::ssh_diagnostics::ssh_agent_status())
 }
 
+/// Track B3: pre-flight `ssh <host> true` probe. Runs synchronously
+/// from the wizard's "Connect" handler before the multi-second
+/// `connect_remote_runtime` path so an auth failure or unreachable
+/// host produces an actionable error in ~1 second instead of a
+/// confusing scp message ten seconds in. The probe inherits the
+/// operator's `~/.ssh/config` + agent state — no key picking.
+#[tauri::command]
+pub async fn probe_ssh_host(
+    host: String,
+) -> CmdResult<crate::remote::ssh_diagnostics::SshHostProbe> {
+    // The probe shells out to ssh; do it on a blocking thread so the
+    // Tauri command loop isn't blocked for the duration.
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::remote::ssh_diagnostics::probe_ssh_host(&host)
+    })
+    .await
+    .context("probe_ssh_host: join blocking task")?;
+    Ok(result)
+}
+
 /// Track B2: per-host attribute snapshot from `~/.ssh/config`.
 /// Returns one entry per non-wildcard `Host` block with the four
 /// attributes the wizard surfaces (HostName / User / IdentityFile /

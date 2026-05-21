@@ -443,6 +443,7 @@ pub fn run() {
             commands::remote_commands::list_ssh_host_details,
             commands::remote_commands::list_ssh_hosts,
             commands::remote_commands::list_ssh_identities,
+            commands::remote_commands::probe_ssh_host,
             commands::remote_commands::ssh_agent_status,
             commands::remote_commands::list_workspace_runtime_bindings,
             commands::remote_commands::open_remote_terminal,

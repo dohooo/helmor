@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
 	listSshHostDetails: vi.fn(),
 	getSshAgentStatus: vi.fn(),
 	listSshIdentities: vi.fn(),
+	probeSshHost: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		listSshHostDetails: apiMocks.listSshHostDetails,
 		getSshAgentStatus: apiMocks.getSshAgentStatus,
 		listSshIdentities: apiMocks.listSshIdentities,
+		probeSshHost: apiMocks.probeSshHost,
 	};
 });
 
@@ -50,10 +52,17 @@ describe("AddRemoteServerWizard", () => {
 		apiMocks.listSshHostDetails.mockReset();
 		apiMocks.getSshAgentStatus.mockReset();
 		apiMocks.listSshIdentities.mockReset();
+		apiMocks.probeSshHost.mockReset();
 		apiMocks.listSshHosts.mockResolvedValue([]);
 		apiMocks.listSshHostDetails.mockResolvedValue([]);
 		apiMocks.getSshAgentStatus.mockResolvedValue({ state: "notConfigured" });
 		apiMocks.listSshIdentities.mockResolvedValue([]);
+		// Default: pre-flight probe succeeds so existing tests don't
+		// have to opt in. Per-test overrides cover the failure paths.
+		apiMocks.probeSshHost.mockResolvedValue({
+			state: "reachable",
+			latencyMs: 12,
+		});
 	});
 
 	afterEach(() => {
@@ -159,6 +168,71 @@ describe("AddRemoteServerWizard", () => {
 			await screen.findByTestId("add-remote-server-success"),
 		).toBeInTheDocument();
 		expect(apiMocks.connectRemoteRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("blocks the connect call when the pre-flight ssh probe reports authFailed", async () => {
+		apiMocks.probeSshHost.mockResolvedValue({
+			state: "authFailed",
+			stderr: "dwork@dev.box: Permission denied (publickey).",
+		});
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await user.type(screen.getByTestId("add-remote-server-name"), "dev");
+		await user.type(screen.getByTestId("add-remote-server-host"), "dev.box");
+		await user.click(screen.getByTestId("add-remote-server-connect"));
+
+		const errorRegion = await screen.findByTestId("add-remote-server-error");
+		expect(errorRegion.textContent).toContain("SSH auth against dev.box");
+		expect(errorRegion.textContent).toContain("ssh-add");
+		expect(errorRegion.textContent).toContain("Permission denied");
+		// connectRemoteRuntime must NOT have been called — the whole
+		// point of the probe is to fail before the expensive install
+		// path runs.
+		expect(apiMocks.connectRemoteRuntime).not.toHaveBeenCalled();
+	});
+
+	it("blocks the connect call when the pre-flight ssh probe reports unreachable", async () => {
+		apiMocks.probeSshHost.mockResolvedValue({
+			state: "unreachable",
+			stderr: "ssh: Could not resolve hostname typo.box",
+		});
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await user.type(screen.getByTestId("add-remote-server-name"), "dev");
+		await user.type(screen.getByTestId("add-remote-server-host"), "typo.box");
+		await user.click(screen.getByTestId("add-remote-server-connect"));
+
+		const errorRegion = await screen.findByTestId("add-remote-server-error");
+		expect(errorRegion.textContent).toContain("couldn't reach typo.box");
+		expect(errorRegion.textContent).toContain("Could not resolve hostname");
+		expect(apiMocks.connectRemoteRuntime).not.toHaveBeenCalled();
+	});
+
+	it("blocks the connect call when the pre-flight ssh probe times out", async () => {
+		apiMocks.probeSshHost.mockResolvedValue({ state: "timeout" });
+		const user = userEvent.setup();
+		const { wrapper } = withClient();
+		render(<AddRemoteServerWizard open={true} onOpenChange={() => {}} />, {
+			wrapper,
+		});
+		await user.type(screen.getByTestId("add-remote-server-name"), "dev");
+		await user.type(
+			screen.getByTestId("add-remote-server-host"),
+			"behind-vpn.box",
+		);
+		await user.click(screen.getByTestId("add-remote-server-connect"));
+
+		const errorRegion = await screen.findByTestId("add-remote-server-error");
+		expect(errorRegion.textContent).toContain(
+			"Timed out probing behind-vpn.box",
+		);
+		expect(apiMocks.connectRemoteRuntime).not.toHaveBeenCalled();
 	});
 
 	it("resets to the form step when reopened after a successful connect", async () => {
