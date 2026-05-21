@@ -806,31 +806,31 @@ fn env_var_is_present(key: &str) -> bool {
 }
 
 fn copilot_login_ready() -> bool {
-    match std::process::Command::new("copilot")
+    // Source of truth: ~/.copilot/config.json's `loggedInUsers`.
+    // `copilot login`/`logout` mutate this file, so reading it gives an
+    // immediate, fresh status without spawning a subprocess.
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = std::path::Path::new(&home)
+            .join(".copilot")
+            .join("config.json");
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(arr) = parsed
+                    .get("loggedInUsers")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    return !arr.is_empty();
+                }
+            }
+        }
+    }
+    // Copilot config absent — fall back to `gh auth status`.
+    match std::process::Command::new("gh")
         .args(["auth", "status"])
         .output()
     {
-        Ok(output) if output.status.success() => true,
-        Ok(_) => {
-            // Fall back to `gh auth status` since Copilot uses GitHub auth.
-            match std::process::Command::new("gh")
-                .args(["auth", "status"])
-                .output()
-            {
-                Ok(gh_output) => gh_output.status.success(),
-                Err(_) => false,
-            }
-        }
-        Err(_) => {
-            tracing::debug!("Copilot CLI not found, checking gh auth");
-            match std::process::Command::new("gh")
-                .args(["auth", "status"])
-                .output()
-            {
-                Ok(gh_output) => gh_output.status.success(),
-                Err(_) => false,
-            }
-        }
+        Ok(gh_output) => gh_output.status.success(),
+        Err(_) => false,
     }
 }
 
@@ -929,18 +929,40 @@ pub async fn get_copilot_account_info() -> CmdResult<Option<CopilotAccountInfo>>
 
 #[tauri::command]
 pub async fn copilot_logout() -> CmdResult<()> {
+    // `copilot` CLI has no `logout` subcommand. The only authoritative
+    // sign-out is to clear `loggedInUsers` in ~/.copilot/config.json.
     run_blocking(|| {
-        let output = std::process::Command::new("copilot")
-            .args(["auth", "logout"])
-            .output();
-        match output {
-            Ok(out) if out.status.success() => Ok(()),
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                anyhow::bail!("copilot auth logout failed: {}", stderr.trim())
-            }
-            Err(e) => anyhow::bail!("Failed to run copilot auth logout: {e}"),
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| anyhow::anyhow!("HOME environment variable not set"))?;
+        let path = std::path::Path::new(&home)
+            .join(".copilot")
+            .join("config.json");
+        if !path.exists() {
+            return Ok(());
         }
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        // The file is JSONC: starts with `// ...` banner comments. Strip
+        // any leading lines that begin with `//` before parsing.
+        let stripped: String = raw
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut parsed: serde_json::Value = serde_json::from_str(&stripped)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        if let Some(obj) = parsed.as_object_mut() {
+            obj.insert(
+                "loggedInUsers".to_string(),
+                serde_json::Value::Array(Vec::new()),
+            );
+            obj.remove("lastLoggedInUser");
+        }
+        let serialized = serde_json::to_string_pretty(&parsed)
+            .context("Failed to serialize updated copilot config")?;
+        std::fs::write(&path, serialized)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        Ok(())
     })
     .await
 }
@@ -949,7 +971,7 @@ fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
     match provider {
         "claude" => Ok("claude auth login"),
         "codex" => Ok("codex login"),
-        "copilot" => Ok("copilot auth login"),
+        "copilot" => Ok("copilot login"),
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
     }
 }

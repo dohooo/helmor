@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, LogOut, RefreshCcw } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	type CopilotModelEntry,
@@ -47,7 +47,8 @@ export function CopilotProviderPanel() {
 	const statusQuery = useQuery({
 		queryKey: ["agentLoginStatus"],
 		queryFn: getAgentLoginStatus,
-		refetchInterval: 5000,
+		refetchInterval: 2000,
+		refetchOnWindowFocus: true,
 	});
 
 	const isReady = statusQuery.data?.copilot ?? false;
@@ -82,9 +83,15 @@ export function CopilotProviderPanel() {
 		},
 	});
 
+	const [signingIn, setSigningIn] = useState(false);
 	const handleSignIn = useCallback(() => {
+		setSigningIn(true);
 		openAgentLoginTerminal("copilot");
 	}, []);
+
+	useEffect(() => {
+		if (isReady && signingIn) setSigningIn(false);
+	}, [isReady, signingIn]);
 
 	const account = accountQuery.data;
 
@@ -115,17 +122,33 @@ export function CopilotProviderPanel() {
 								disabled={logoutMutation.isPending}
 								onClick={() => logoutMutation.mutate()}
 							>
-								<LogOut className="size-3" />
-								Sign out
+								{logoutMutation.isPending ? (
+									<Loader2 className="size-3 animate-spin" />
+								) : (
+									<LogOut className="size-3" />
+								)}
+								{logoutMutation.isPending ? "Signing out…" : "Sign out"}
 							</Button>
 						</div>
 					) : (
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-orange-400">
-								Need Reauthentication
+								{signingIn ? "Waiting for sign-in…" : "Need Reauthentication"}
 							</span>
-							<Button variant="outline" size="sm" onClick={handleSignIn}>
-								Sign in
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={signingIn}
+								onClick={handleSignIn}
+							>
+								{signingIn ? (
+									<>
+										<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+										Signing in…
+									</>
+								) : (
+									"Sign in"
+								)}
 							</Button>
 						</div>
 					)}
