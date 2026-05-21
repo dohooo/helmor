@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getRememberedWorkspaceRemotePath } from "@/lib/api";
 
 export type MoveWorkspaceDialogProps = {
 	open: boolean;
@@ -72,6 +73,10 @@ export function MoveWorkspaceDialog({
 }: MoveWorkspaceDialogProps) {
 	const [remotePath, setRemotePath] = useState("");
 	const [cloneFromCurrent, setCloneFromCurrent] = useState(false);
+	// Track F2.1: track whether the user has touched the input
+	// since the dialog opened. If they have, we don't overwrite
+	// their typing with a late-arriving remembered-path fetch.
+	const [userTouchedRemotePath, setUserTouchedRemotePath] = useState(false);
 
 	// Reset on open so a half-typed path or a stale toggle state
 	// from a previous move doesn't leak into the next one.
@@ -79,8 +84,38 @@ export function MoveWorkspaceDialog({
 		if (open) {
 			setRemotePath("");
 			setCloneFromCurrent(false);
+			setUserTouchedRemotePath(false);
 		}
 	}, [open]);
+
+	// Track F2.1: pre-fill the remote-path input with the last
+	// value the operator typed for this `(workspaceId, runtimeName)`
+	// pair. A user who has moved a workspace across hosts doesn't
+	// have to re-type the path each time they rebind. The fetch is
+	// best-effort — a failure (older daemon, IPC hiccup) falls back
+	// to the empty input.
+	useEffect(() => {
+		if (!open || !workspaceId || !runtimeName) return;
+		let cancelled = false;
+		void getRememberedWorkspaceRemotePath(workspaceId, runtimeName)
+			.then((remembered) => {
+				if (cancelled) return;
+				// Only pre-fill if the user hasn't typed anything yet —
+				// the fetch is async, the input is sync, and the
+				// human's choice always wins.
+				if (remembered && !userTouchedRemotePath) {
+					setRemotePath(remembered);
+				}
+			})
+			.catch(() => {
+				// Swallow — the input just stays empty if the fetch
+				// fails. We don't want a missing-method daemon (older
+				// binary) or a transient IPC error to block the dialog.
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [open, workspaceId, runtimeName, userTouchedRemotePath]);
 
 	const trimmedRemotePath = remotePath.trim();
 	const cloneRequiresPath = cloneFromCurrent && trimmedRemotePath.length === 0;
@@ -133,7 +168,10 @@ export function MoveWorkspaceDialog({
 					<Input
 						id="move-workspace-remote-path"
 						value={remotePath}
-						onChange={(e) => setRemotePath(e.target.value)}
+						onChange={(e) => {
+							setRemotePath(e.target.value);
+							setUserTouchedRemotePath(true);
+						}}
 						placeholder={
 							cloneFromCurrent
 								? "Required: /home/dwork/code/foo"

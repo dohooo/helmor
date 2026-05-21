@@ -2023,6 +2023,32 @@ pub fn set_workspace_runtime_binding(
     Ok(())
 }
 
+/// Track F2.1: per-host remote-path memory lookup. Returns the
+/// last `remote_path` the operator typed for `(workspace_id,
+/// runtime_name)`, irrespective of whether that pair is the
+/// current active binding. The move-workspace dialog calls this
+/// on open to pre-fill its input — a user who's moved a workspace
+/// across hosts shouldn't have to re-type the path for each one.
+///
+/// `None` for never-bound pairs or pairs the operator only ever
+/// confirmed with an empty path.
+#[tauri::command]
+pub fn get_remembered_workspace_remote_path(
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
+    workspace_id: String,
+    runtime_name: String,
+) -> CmdResult<Option<String>> {
+    let workspace_id = workspace_id.trim();
+    let runtime_name = runtime_name.trim();
+    if workspace_id.is_empty() || runtime_name.is_empty() {
+        // Don't error — an empty input from a defensive caller is
+        // semantically "no memory to look up", not a programming
+        // bug worth surfacing.
+        return Ok(None);
+    }
+    Ok(bindings.lookup_remembered_remote_path(workspace_id, runtime_name))
+}
+
 /// Remove a binding. Idempotent — clearing an unbound workspace is
 /// a no-op.
 #[tauri::command]

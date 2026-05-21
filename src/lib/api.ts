@@ -1069,6 +1069,26 @@ export async function clearWorkspaceRuntimeBinding(
 }
 
 /**
+ * Track F2.1: look up the last `remotePath` the operator typed for
+ * a given `(workspaceId, runtimeName)` pair. Returns `null` for
+ * pairs the user has never confirmed with a non-empty path.
+ *
+ * Independent of which runtime is currently active for the
+ * workspace — useful for pre-filling the move-workspace dialog
+ * when the operator re-binds back to a host they had a path on
+ * before.
+ */
+export async function getRememberedWorkspaceRemotePath(
+	workspaceId: string,
+	runtimeName: string,
+): Promise<string | null> {
+	return invoke<string | null>("get_remembered_workspace_remote_path", {
+		workspaceId,
+		runtimeName,
+	});
+}
+
+/**
  * Track F3 bundle orchestrator: clone a workspace from its current
  * runtime to a new one over the JSON-RPC channel and flip the
  * binding on success.

@@ -436,6 +436,7 @@ pub fn run() {
             commands::remote_commands::reattach_remote_agent_session_stream,
             commands::remote_commands::release_remote_agent_session_stream,
             commands::remote_commands::close_remote_terminal,
+            commands::remote_commands::get_remembered_workspace_remote_path,
             commands::remote_commands::list_owned_terminals,
             commands::remote_commands::list_remote_agent_sessions,
             commands::remote_commands::list_remote_runtimes,
