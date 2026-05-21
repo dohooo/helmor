@@ -177,7 +177,10 @@ export function WorkspaceStartPage({
 	}, [onClosePreview, previewCard]);
 
 	return (
-		<div className="flex min-h-0 flex-1 justify-center">
+		<div
+			data-focus-scope="start-composer"
+			className="flex min-h-0 flex-1 justify-center"
+		>
 			<div className="relative h-full min-h-0 w-full max-w-5xl">
 				<div
 					className={cn(

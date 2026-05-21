@@ -208,6 +208,42 @@ describe("useAppShortcuts", () => {
 		expect(cycleRepository).toHaveBeenCalledTimes(1);
 	});
 
+	it("fires cycleRepository on Shift+Tab when focus is on a start-surface button (not the composer itself)", () => {
+		const cycleRepository = vi.fn();
+
+		function Harness() {
+			useAppShortcuts({
+				overrides: {},
+				handlers: [
+					{
+						id: "startSurface.cycleRepository",
+						callback: cycleRepository,
+					},
+				],
+			});
+			return (
+				<div data-focus-scope="chat">
+					<div data-focus-scope="start-composer">
+						<button type="button" data-testid="repo-button">
+							Repo
+						</button>
+						<div data-focus-scope="start-composer">
+							<input data-testid="composer-input" />
+						</div>
+					</div>
+				</div>
+			);
+		}
+
+		const { getByTestId } = render(<Harness />);
+		(getByTestId("repo-button") as HTMLButtonElement).focus();
+
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Tab", code: "Tab", shiftKey: true }),
+		);
+		expect(cycleRepository).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not fire composer-only shortcuts when chat focus is outside composer", () => {
 		const togglePlanMode = vi.fn();
 
