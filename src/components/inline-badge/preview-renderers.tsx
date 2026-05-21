@@ -10,9 +10,13 @@ export type InlineBadgePreviewEditHandlers = {
 	onEditBlur: (nextText: string) => void;
 };
 
+// `--radix-popover-content-available-height` lets the body shrink when neither
+// side fits the fixed 520px (e.g. composer centered on the start surface).
+// Subtract 2.5rem for the title row. Fallback keeps the original 520px cap.
 const PREVIEW_VIEWPORT_CLASS =
-	"h-[min(60vh,520px)] overflow-y-auto overflow-x-hidden";
-const EDITOR_VIEWPORT_CLASS = "h-[min(60vh,520px)]";
+	"h-[min(60vh,520px,calc(var(--radix-popover-content-available-height,100vh)-2.5rem))] overflow-y-auto overflow-x-hidden";
+const EDITOR_VIEWPORT_CLASS =
+	"h-[min(60vh,520px,calc(var(--radix-popover-content-available-height,100vh)-2.5rem))]";
 
 function resolveLocalPreviewSrc(path: string) {
 	try {
