@@ -1,4 +1,4 @@
-//! Provider API key storage backed by the macOS Keychain (Track G).
+//! Provider API key storage backed by the OS-native vault.
 //!
 //! Helmor used to stash provider API keys in the desktop's SQLite
 //! `settings` table under `app.cursor_provider` (and similar). That
@@ -9,15 +9,27 @@
 //!
 //! ## Platform support
 //!
+//! Every supported desktop target now has a real vault backend; the
+//! "store inline in SQLite" fallback is gone in favour of a fail-fast
+//! error so a misconfigured host never silently drops back to
+//! plaintext.
+//!
 //! - **macOS**: `security-framework` writes a `kSecClassGenericPassword`
 //!   item under service `com.helmor.api-keys` with the provider name
 //!   as the account. The item inherits the user's login keychain by
 //!   default, so the user gets the standard "always allow Helmor"
-//!   grant prompt on first read.
-//! - **Linux / Windows**: vault implementations live behind feature
-//!   flags + follow-up PRs. Today both fall back to "store inline in
-//!   the SQLite JSON value", same as before — see
-//!   `cursor_provider_settings_io.rs` for the integration seam.
+//!   grant prompt on first read. (Kept on the direct security-framework
+//!   path so we can match the `errSecItemNotFound` code from the
+//!   "no entry" branch — the cross-platform crate hides that detail.)
+//! - **Linux**: `keyring` crate, configured with the
+//!   `sync-secret-service` feature, talks to the standard
+//!   `org.freedesktop.Secret.Service` D-Bus interface (GNOME Keyring,
+//!   KWallet, KeePassXC, and any other implementer). The user's
+//!   default collection (usually "login") holds the entries.
+//! - **Windows**: `keyring` crate, configured with the
+//!   `windows-native` feature, writes to the Windows Credential
+//!   Manager. Entries land under the same service string as the
+//!   macOS variant so dual-boot users see a consistent name.
 //!
 //! ## Why not just delete from SQLite outright
 //!
@@ -43,14 +55,22 @@ pub const KEYCHAIN_SERVICE: &str = "com.helmor.api-keys";
 
 /// Read the password for `account` under [`KEYCHAIN_SERVICE`].
 /// `Ok(None)` for "no entry exists"; `Err` only on backend failure.
-/// On non-macOS hosts always returns `Ok(None)` so the caller can
-/// fall through to the legacy storage.
+/// Unsupported targets (anything that isn't macOS / Linux / Windows)
+/// return `Ok(None)` so the caller's migration path stays inert.
 pub fn read_password(account: &str) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
         macos::read_password(account)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        keyring_backend::read_password(account)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        keyring_backend::read_password(account)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = account;
         Ok(None)
@@ -58,20 +78,25 @@ pub fn read_password(account: &str) -> Result<Option<String>> {
 }
 
 /// Upsert `password` under `account`. Replaces any existing value.
-/// No-op on non-macOS — caller is expected to fall back to legacy
-/// SQLite storage on those platforms.
 pub fn write_password(account: &str, password: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         macos::write_password(account, password)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        keyring_backend::write_password(account, password)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        keyring_backend::write_password(account, password)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (account, password);
-        // Treat as success on non-macOS so the caller's "wrote to
-        // keychain" branch doesn't fail. The legacy SQLite path is
-        // still in effect on those platforms (see
-        // `cursor_provider_settings_io.rs`).
+        // Unsupported platform: treat as success so the caller's
+        // "wrote to keychain" branch doesn't fail. The SQLite fallback
+        // still kicks in via `cursor_provider_settings_io.rs`.
         Ok(())
     }
 }
@@ -83,17 +108,31 @@ pub fn delete_password(account: &str) -> Result<()> {
     {
         macos::delete_password(account)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        keyring_backend::delete_password(account)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        keyring_backend::delete_password(account)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = account;
         Ok(())
     }
 }
 
-/// `true` when the platform has a vault Helmor can use. macOS today;
-/// Linux / Windows once the corresponding backends ship.
+/// `true` when the platform has a vault Helmor can use. All three
+/// supported desktop targets (macOS / Linux / Windows) now have a
+/// real backend; only "other" targets fall back to the SQLite
+/// plaintext path.
 pub fn has_vault_support() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -141,6 +180,61 @@ mod macos {
             Err(err) if err.code() == -25_300 => Ok(()), // already gone
             Err(err) => Err(anyhow::Error::new(err).context(format!(
                 "delete keychain entry for service={KEYCHAIN_SERVICE} account={account}"
+            ))),
+        }
+    }
+}
+
+/// Cross-platform vault backend for Linux + Windows. Wraps the
+/// `keyring` crate so a single code path serves both platforms; the
+/// crate dispatches to secret-service on Linux and Credential Manager
+/// on Windows under the hood. Compiled out on macOS (which keeps the
+/// direct `security-framework` integration above).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod keyring_backend {
+    use super::KEYCHAIN_SERVICE;
+    use anyhow::{Context, Result};
+    use keyring::{Entry, Error as KeyringError};
+
+    /// Distinguish "no entry exists for this account" from "the
+    /// backend errored." `keyring` collapses platform-specific
+    /// not-found signals (`errSecItemNotFound` on macOS, the
+    /// `NoEntry` error on linux/secret-service, `ERROR_NOT_FOUND` on
+    /// Windows) into a single variant; surfacing that as `Ok(None)`
+    /// matches the contract `cursor::read_with_migration` expects.
+    pub(super) fn read_password(account: &str) -> Result<Option<String>> {
+        let entry = Entry::new(KEYCHAIN_SERVICE, account).with_context(|| {
+            format!("build keyring entry for service={KEYCHAIN_SERVICE} account={account}")
+        })?;
+        match entry.get_password() {
+            Ok(password) => Ok(Some(password)),
+            Err(KeyringError::NoEntry) => Ok(None),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "read keyring entry for service={KEYCHAIN_SERVICE} account={account}"
+            ))),
+        }
+    }
+
+    pub(super) fn write_password(account: &str, password: &str) -> Result<()> {
+        let entry = Entry::new(KEYCHAIN_SERVICE, account).with_context(|| {
+            format!("build keyring entry for service={KEYCHAIN_SERVICE} account={account}")
+        })?;
+        entry.set_password(password).with_context(|| {
+            format!("write keyring entry for service={KEYCHAIN_SERVICE} account={account}")
+        })
+    }
+
+    pub(super) fn delete_password(account: &str) -> Result<()> {
+        let entry = Entry::new(KEYCHAIN_SERVICE, account).with_context(|| {
+            format!("build keyring entry for service={KEYCHAIN_SERVICE} account={account}")
+        })?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            // Already deleted → idempotent success. Mirrors the
+            // macOS branch's handling of errSecItemNotFound = -25300.
+            Err(KeyringError::NoEntry) => Ok(()),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "delete keyring entry for service={KEYCHAIN_SERVICE} account={account}"
             ))),
         }
     }
@@ -321,8 +415,13 @@ mod tests {
     use std::cell::RefCell;
 
     #[test]
-    fn has_vault_support_matches_target_os() {
-        assert_eq!(has_vault_support(), cfg!(target_os = "macos"));
+    fn has_vault_support_covers_every_supported_desktop_target() {
+        let expected = cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        ));
+        assert_eq!(has_vault_support(), expected);
     }
 
     /// In-memory backend so the migration logic can be exercised
@@ -475,9 +574,16 @@ mod tests {
         assert!(cursor::read_with_migration(&backend).unwrap().is_none());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    // The Linux + Windows backends talk to a real OS vault (D-Bus
+    // secret-service / Credential Manager) — exercising them under
+    // `cargo test` would require a session bus + a running keyring
+    // daemon, which CI doesn't provide. The cross-platform unit
+    // coverage lives on the in-memory `InMemoryCursorBackend` above;
+    // the per-backend integration smoke is captured in the
+    // architecture doc's "manual smoke test" section.
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     #[test]
-    fn non_macos_keychain_helpers_no_op() {
+    fn unsupported_target_keychain_helpers_no_op() {
         assert!(read_password("test").unwrap().is_none());
         write_password("test", "value").unwrap();
         delete_password("test").unwrap();

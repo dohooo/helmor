@@ -61,6 +61,20 @@ core-foundation = "0.10"
 security-framework = "3"
 security-framework-sys = "2"
 
+# Cross-platform vault backend (Linux secret-service + Windows
+# Credential Manager). Track G security-clean follow-up: pre-G the
+# desktop's API keys landed in SQLite plaintext on every non-macOS
+# host. `keyring` wraps the standard platform vaults so the same
+# `Entry::set_password` / `get_password` API works on every desktop
+# target. We only pull it in on the non-macOS targets — macOS keeps
+# the existing security-framework path so the migration logic + the
+# errSecItemNotFound code-matching stay intact.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "sync-secret-service"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
 [[bin]]
 name = "helmor-cli"
 path = "src/bin/helmor-cli.rs"

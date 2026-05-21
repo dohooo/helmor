@@ -285,6 +285,54 @@ Cross-host moves (Track F3) populate `remote_path` via the move
 dialog. The dialog never copies files; the operator's expected to
 clone/rsync the workspace to the destination before binding.
 
+## 9b. Local-runtime key vault (Track G, cross-platform)
+
+The desktop's local-runtime keys (the cursor key in the legacy
+`app.cursor_provider` setting; future provider keys will follow the
+same path) land in the OS-native vault on every supported desktop
+target:
+
+- **macOS** — `security-framework` writes a `kSecClassGenericPassword`
+  item under service `com.helmor.api-keys`. Direct integration
+  (not the `keyring` crate) so the migration path can match
+  `errSecItemNotFound = -25300` to distinguish "no entry" from
+  backend failure.
+- **Linux** — `keyring` crate with the `sync-secret-service`
+  feature, talking D-Bus to whatever implements
+  `org.freedesktop.Secret.Service` (GNOME Keyring, KWallet,
+  KeePassXC, …). Entries land in the user's default collection.
+- **Windows** — `keyring` crate with the `windows-native` feature,
+  writing to the Windows Credential Manager.
+
+The "store inline in SQLite" fallback exists only for genuinely
+unsupported targets (anything that isn't macOS / Linux / Windows).
+Migration from older plaintext SQLite values happens transparently
+on first read on every vault-capable platform.
+
+### Manual smoke test
+
+CI runs on macOS; the Linux + Windows backends need a real session
+bus / Credential Manager to exercise. To smoke-test locally:
+
+```bash
+# Linux (under a GNOME or KDE session)
+gnome-keyring-daemon --start --components=secrets
+cargo run --bin helmor-cli -- cursor-set-api-key sk-test
+secret-tool lookup service com.helmor.api-keys account cursor
+# → sk-test
+
+# Windows (PowerShell)
+helmor-cli.exe cursor-set-api-key sk-test
+cmdkey /list:helmor* 
+# → Target: helmor:cursor (or similar — the format varies by Windows version)
+```
+
+The fork's release pipeline cross-builds the `helmor-server`
+binary on Linux x86_64 + aarch64 via `cross`; the desktop bundle
+itself remains macOS-only today but the keychain code is already
+wired so a future Linux / Windows bundle inherits the vault path
+without a refactor.
+
 ## 10. Per-runtime auth (Track G)
 
 Provider API keys for remote runtimes live entirely server-side:

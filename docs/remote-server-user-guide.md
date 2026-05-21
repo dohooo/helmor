@@ -324,10 +324,15 @@ panel (Settings → Developer → Runtime Debug → Daemon log).
   presence bit + optional base URL — the literal key never crosses
   the wire after the initial set.
 - **API key storage (local runtime)**: provider keys for the
-  built-in `local` runtime live in the desktop's macOS Keychain
-  (`com.helmor.api-keys` service). On non-macOS desktops a
-  cross-platform vault backend is on the roadmap; until that ships
-  the value falls back to the desktop's SQLite settings table.
+  built-in `local` runtime live in the OS-native vault under
+  service `com.helmor.api-keys`:
+  - macOS → Keychain (security-framework, login keychain).
+  - Linux → Secret Service via D-Bus (GNOME Keyring, KWallet, etc.).
+  - Windows → Credential Manager.
+  Helmor migrates pre-existing plaintext SQLite values into the
+  vault transparently on first read; the SQLite field is cleared
+  after a successful migration. Only genuinely unsupported targets
+  (e.g. FreeBSD desktops) fall back to the legacy plaintext path.
 - **Journal contents**: every agent event is mirrored to disk under
   `$HOME/.helmor/server/journals/`. This includes prompt text,
   tool outputs, and file contents the agent read. The journal is
