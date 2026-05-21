@@ -11,7 +11,7 @@
 //! registry. The actual `ssh` spawn + initialize handshake runs on the
 //! blocking thread pool because `RpcClient::connect_ssh` is sync.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -170,7 +170,8 @@ pub async fn get_workspace_status(
             workspace_id.as_deref(),
             runtime_name.as_deref(),
         )?;
-        resolved.workspace_status(&path)
+        let translated = resolved.translate_workspace_path(&path);
+        resolved.runtime.workspace_status(&translated)
     })
     .await
 }
@@ -197,7 +198,8 @@ pub async fn get_workspace_branch_info(
             workspace_id.as_deref(),
             runtime_name.as_deref(),
         )?;
-        resolved.workspace_branch_info(&path)
+        let translated = resolved.translate_workspace_path(&path);
+        resolved.runtime.workspace_branch_info(&translated)
     })
     .await
 }
@@ -248,7 +250,10 @@ fn get_workspace_file_tree_inner(
     runtime_name: Option<&str>,
 ) -> Result<WorkspaceFileTreeResult> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_file_tree(WorkspaceFileTreeParams { workspace_dir })
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved
+        .runtime
+        .workspace_file_tree(WorkspaceFileTreeParams { workspace_dir })
 }
 
 /// `git status`-aware projection plus optional per-file diff bodies.
@@ -288,7 +293,8 @@ fn get_workspace_changes_inner(
     runtime_name: Option<&str>,
 ) -> Result<WorkspaceChangesResult> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_changes(WorkspaceChangesParams {
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved.runtime.workspace_changes(WorkspaceChangesParams {
         workspace_dir,
         include_content,
     })
@@ -329,10 +335,13 @@ fn read_workspace_file_inner(
     runtime_name: Option<&str>,
 ) -> Result<EditorFileReadResponse> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_read_file(WorkspaceReadFileParams {
-        workspace_dir,
-        relative_path,
-    })
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved
+        .runtime
+        .workspace_read_file(WorkspaceReadFileParams {
+            workspace_dir,
+            relative_path,
+        })
 }
 
 /// `git show <ref>:<path>` body. `None` content means "the path
@@ -373,11 +382,14 @@ fn read_workspace_file_at_ref_inner(
     runtime_name: Option<&str>,
 ) -> Result<WorkspaceReadFileAtRefResult> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
-        workspace_dir,
-        relative_path,
-        git_ref,
-    })
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved
+        .runtime
+        .workspace_read_file_at_ref(WorkspaceReadFileAtRefParams {
+            workspace_dir,
+            relative_path,
+            git_ref,
+        })
 }
 
 /// Stat probe. `exists=false` (rather than an error) for a missing
@@ -416,10 +428,13 @@ fn stat_workspace_file_inner(
     runtime_name: Option<&str>,
 ) -> Result<EditorFileStatResponse> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_stat_file(WorkspaceStatFileParams {
-        workspace_dir,
-        relative_path,
-    })
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved
+        .runtime
+        .workspace_stat_file(WorkspaceStatFileParams {
+            workspace_dir,
+            relative_path,
+        })
 }
 
 /// All write-side ops in one command, discriminated by the `action`
@@ -462,11 +477,14 @@ fn mutate_workspace_file_inner(
     runtime_name: Option<&str>,
 ) -> Result<WorkspaceMutateFileResult> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_mutate_file(WorkspaceMutateFileParams {
-        workspace_dir,
-        relative_path,
-        action,
-    })
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved
+        .runtime
+        .workspace_mutate_file(WorkspaceMutateFileParams {
+            workspace_dir,
+            relative_path,
+            action,
+        })
 }
 
 #[tauri::command]
@@ -513,7 +531,8 @@ fn search_workspace_inner(
     runtime_name: Option<&str>,
 ) -> Result<WorkspaceSearchResult> {
     let resolved = resolve_runtime_for_call(registry, bindings, workspace_id, runtime_name)?;
-    resolved.workspace_search(WorkspaceSearchParams {
+    let workspace_dir = resolved.translate_workspace_dir(&workspace_dir);
+    resolved.runtime.workspace_search(WorkspaceSearchParams {
         workspace_dir,
         query,
         max_results,
@@ -543,7 +562,7 @@ fn resolve_runtime_for_call(
     bindings: &Arc<WorkspaceRuntimeBindings>,
     workspace_id: Option<&str>,
     runtime_name: Option<&str>,
-) -> anyhow::Result<Arc<dyn RemoteRuntime>> {
+) -> anyhow::Result<ResolvedRuntime> {
     // Hot-cache the column lookup once per call so the rest of the
     // resolver is DB-free and can be unit-tested via
     // `resolve_runtime_for_call_with_column`.
@@ -572,9 +591,13 @@ fn resolve_runtime_for_call_with_column(
     workspace_id: Option<&str>,
     runtime_name: Option<&str>,
     column_binding: Option<&str>,
-) -> anyhow::Result<Arc<dyn RemoteRuntime>> {
+) -> anyhow::Result<ResolvedRuntime> {
     if let Some(name) = runtime_name.filter(|n| !n.is_empty()) {
-        return registry.lookup(Some(name));
+        let runtime = registry.lookup(Some(name))?;
+        // Explicit `runtime_name` overrides the binding lookup, so
+        // there's no remote_path to apply — the caller is asking for
+        // raw routing without a workspace binding's context.
+        return Ok(ResolvedRuntime::without_override(runtime));
     }
     if let Some(id) = workspace_id.filter(|id| !id.is_empty()) {
         // Phase 22b precedence: DB column wins over sidecar. Phase
@@ -592,7 +615,16 @@ fn resolve_runtime_for_call_with_column(
             // with a log line — same contract as the dev panel's
             // "isn't currently registered" warning.
             match registry.lookup(Some(&bound)) {
-                Ok(rt) => return Ok(rt),
+                Ok(rt) => {
+                    // Track F2: pair the runtime with the per-host
+                    // worktree path override (`None` is fine; it just
+                    // means callers pass `workspace_dir` through
+                    // unchanged). The sidecar-store lookup is the only
+                    // source of truth — the DB column doesn't carry
+                    // the path yet.
+                    let remote_path = bindings.lookup_remote_path(id);
+                    return Ok(ResolvedRuntime::new(rt, remote_path));
+                }
                 Err(_) => {
                     tracing::warn!(
                         workspace_id = %id,
@@ -603,7 +635,62 @@ fn resolve_runtime_for_call_with_column(
             }
         }
     }
-    registry.lookup(None)
+    let runtime = registry.lookup(None)?;
+    Ok(ResolvedRuntime::without_override(runtime))
+}
+
+/// Track F2: pair of "the runtime an op should route through" + "the
+/// path translation to apply on its workspace_dir argument."
+///
+/// Returned by [`resolve_runtime_for_call`] so each command path can
+/// stay one-line — call `translate_workspace_dir(&local)` before
+/// passing the path into any trait method, and the daemon receives
+/// the right absolute path on the remote filesystem.
+///
+/// The local runtime always has `remote_path_override = None` (paths
+/// are interpreted on the same filesystem the desktop is running on).
+/// A remote runtime with no F2 override likewise leaves the path
+/// untranslated — the typical macOS↔Linux pair where `~/code/foo`
+/// resolves on both sides.
+pub struct ResolvedRuntime {
+    pub runtime: Arc<dyn RemoteRuntime>,
+    pub remote_path_override: Option<String>,
+}
+
+impl ResolvedRuntime {
+    pub fn new(runtime: Arc<dyn RemoteRuntime>, remote_path_override: Option<String>) -> Self {
+        Self {
+            runtime,
+            remote_path_override,
+        }
+    }
+
+    pub fn without_override(runtime: Arc<dyn RemoteRuntime>) -> Self {
+        Self::new(runtime, None)
+    }
+
+    /// Translate a workspace path for the bound runtime.
+    ///
+    /// - `Some(remote)` → return the override verbatim. The desktop's
+    ///   local path is irrelevant; the daemon needs to open files at
+    ///   `remote` regardless of what the local checkout's at.
+    /// - `None` → return `local.to_string()`. Same path on both sides.
+    pub fn translate_workspace_dir(&self, local: &str) -> String {
+        match self.remote_path_override.as_deref() {
+            Some(remote) => remote.to_string(),
+            None => local.to_string(),
+        }
+    }
+
+    /// Convenience for the workspace-status / branch-info path-driven
+    /// trait methods that take a `&Path` rather than a `String` —
+    /// they go straight to a `PathBuf` after translation.
+    pub fn translate_workspace_path(&self, local: &Path) -> PathBuf {
+        match self.remote_path_override.as_deref() {
+            Some(remote) => PathBuf::from(remote),
+            None => local.to_path_buf(),
+        }
+    }
 }
 
 /// Spawn `ssh <host> <remote_binary>`, run the JSON-RPC handshake,
@@ -2081,7 +2168,10 @@ mod tests {
         let registry = registry_with_stub_remote();
         let bindings = Arc::new(WorkspaceRuntimeBindings::new());
         let runtime = resolve_runtime_for_call(&registry, &bindings, None, None).unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2092,7 +2182,10 @@ mod tests {
         let bindings = bindings_with("ws-1", "stub.box");
         let runtime =
             resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), Some("local")).unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2100,7 +2193,7 @@ mod tests {
         let registry = registry_with_stub_remote();
         let bindings = bindings_with("ws-1", "stub.box");
         let runtime = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
-        let health = runtime.runtime_health().unwrap();
+        let health = runtime.runtime.runtime_health().unwrap();
         assert!(matches!(health.kind, RuntimeKind::Remote { .. }));
         assert_eq!(health.hostname, "stub.box");
     }
@@ -2111,7 +2204,10 @@ mod tests {
         let bindings = Arc::new(WorkspaceRuntimeBindings::new());
         let runtime =
             resolve_runtime_for_call(&registry, &bindings, Some("ws-unbound"), None).unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2122,7 +2218,10 @@ mod tests {
         let registry = registry_with_stub_remote();
         let bindings = bindings_with("ws-1", "never-registered");
         let runtime = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2132,7 +2231,10 @@ mod tests {
         let registry = registry_with_stub_remote();
         let bindings = bindings_with("ws-1", "stub.box");
         let runtime = resolve_runtime_for_call(&registry, &bindings, Some(""), Some("")).unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     // ── column-vs-sidecar precedence (phase 22b) ──────────────────
@@ -2161,7 +2263,7 @@ mod tests {
             Some("stub.box"), // column points at the real entry
         )
         .unwrap();
-        let health = runtime.runtime_health().unwrap();
+        let health = runtime.runtime.runtime_health().unwrap();
         assert!(matches!(health.kind, RuntimeKind::Remote { .. }));
         assert_eq!(health.hostname, "stub.box");
     }
@@ -2181,7 +2283,7 @@ mod tests {
             None, // column NULL
         )
         .unwrap();
-        let health = runtime.runtime_health().unwrap();
+        let health = runtime.runtime.runtime_health().unwrap();
         assert_eq!(health.hostname, "stub.box");
     }
 
@@ -2200,7 +2302,10 @@ mod tests {
             Some("stub.box"),
         )
         .unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2218,7 +2323,10 @@ mod tests {
             Some("never-registered"),
         )
         .unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     #[test]
@@ -2236,7 +2344,91 @@ mod tests {
             Some("stub.box"), // would route if workspace_id mattered
         )
         .unwrap();
-        assert_eq!(runtime.runtime_health().unwrap().kind, RuntimeKind::Local);
+        assert_eq!(
+            runtime.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
+    }
+
+    // ── Track F2: remote_path consumption through ResolvedRuntime ──
+
+    #[test]
+    fn translate_workspace_dir_passes_local_through_when_no_override() {
+        // No binding → ResolvedRuntime::without_override → translation
+        // is a no-op. The local path arrives at the daemon unchanged.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        let resolved = resolve_runtime_for_call(&registry, &bindings, None, None).unwrap();
+        assert_eq!(resolved.remote_path_override, None);
+        assert_eq!(
+            resolved.translate_workspace_dir("/Users/d/code/foo"),
+            "/Users/d/code/foo",
+        );
+    }
+
+    #[test]
+    fn translate_workspace_dir_substitutes_when_binding_has_remote_path() {
+        // The binding's remote_path overrides the local path verbatim.
+        // The desktop's local checkout path is irrelevant — the daemon
+        // sees the path the operator typed into the move dialog.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set("ws-1", "stub.box", Some("/home/dwork/code/foo".into()));
+        let resolved = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
+        assert_eq!(
+            resolved.remote_path_override.as_deref(),
+            Some("/home/dwork/code/foo"),
+        );
+        assert_eq!(
+            resolved.translate_workspace_dir("/Users/d/code/foo"),
+            "/home/dwork/code/foo",
+        );
+    }
+
+    #[test]
+    fn translate_workspace_path_returns_a_pathbuf_for_path_driven_methods() {
+        // workspace_status / workspace_branch_info take `&Path` rather
+        // than `String`; verify the path-flavoured translator does the
+        // same substitution.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set("ws-1", "stub.box", Some("/home/dwork/code/foo".into()));
+        let resolved = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
+        let translated = resolved.translate_workspace_path(Path::new("/Users/d/code/foo"));
+        assert_eq!(translated, Path::new("/home/dwork/code/foo"));
+    }
+
+    #[test]
+    fn explicit_runtime_name_strips_the_binding_remote_path_override() {
+        // When the caller passes runtime_name explicitly, the resolver
+        // bypasses the binding lookup. F2's override is binding-scoped,
+        // so an explicit override should NOT pick it up — the caller is
+        // routing without the workspace's context.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set("ws-1", "stub.box", Some("/home/dwork/code/foo".into()));
+        let resolved =
+            resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), Some("stub.box")).unwrap();
+        assert_eq!(
+            resolved.remote_path_override, None,
+            "explicit runtime_name must not pick up the binding's override"
+        );
+    }
+
+    #[test]
+    fn local_fallback_has_no_remote_path_override() {
+        // Bound runtime is disconnected → resolver falls back to local
+        // (with a warn log). The local fallback never carries a
+        // remote_path; paths run on the desktop's filesystem.
+        let registry = registry_with_stub_remote();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set("ws-1", "never-registered", Some("/elsewhere".into()));
+        let resolved = resolve_runtime_for_call(&registry, &bindings, Some("ws-1"), None).unwrap();
+        assert_eq!(resolved.remote_path_override, None);
+        assert_eq!(
+            resolved.runtime.runtime_health().unwrap().kind,
+            RuntimeKind::Local
+        );
     }
 
     // ── workspace inspector ops (phase 20c) ──────────────────────
@@ -2617,6 +2809,69 @@ mod tests {
             recorded.len(),
             1,
             "binding should resolve to the stub runtime"
+        );
+    }
+
+    #[test]
+    fn get_workspace_file_tree_translates_remote_path_when_binding_has_an_override() {
+        // Track F2 end-to-end: a binding carrying remote_path causes
+        // the workspace_dir argument to be REPLACED before reaching
+        // the trait method. The stub records its inputs verbatim, so
+        // we can assert the daemon-side path is what the operator typed
+        // into the move dialog rather than the desktop's local path.
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set(
+            "ws-bound",
+            "stub.box",
+            Some("/home/dwork/code/foo".to_string()),
+        );
+
+        get_workspace_file_tree_inner(
+            &registry,
+            &bindings,
+            "/Users/d/code/foo".into(),
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+        let recorded = stub.file_tree_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].workspace_dir, "/home/dwork/code/foo",
+            "remote_path override must replace the local path before the trait method is called",
+        );
+    }
+
+    #[test]
+    fn read_workspace_file_translates_remote_path_when_binding_has_an_override() {
+        // Same translation contract for the workspace.readFile path —
+        // a binding with remote_path replaces the workspace_dir, while
+        // relative_path flows through untouched (the daemon joins
+        // workspace_dir + relative on its own filesystem).
+        let (registry, stub) = registry_with_inspector_stub();
+        let bindings = Arc::new(WorkspaceRuntimeBindings::new());
+        bindings.set(
+            "ws-bound",
+            "stub.box",
+            Some("/home/dwork/code/foo".to_string()),
+        );
+
+        read_workspace_file_inner(
+            &registry,
+            &bindings,
+            "/Users/d/code/foo".into(),
+            "src/lib.rs".into(),
+            Some("ws-bound"),
+            None,
+        )
+        .unwrap();
+        let recorded = stub.read_calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].workspace_dir, "/home/dwork/code/foo");
+        assert_eq!(
+            recorded[0].relative_path, "src/lib.rs",
+            "relative_path must NOT be translated — it's already remote-relative",
         );
     }
 
