@@ -50,8 +50,6 @@ pub(super) fn handle_status(acc: &mut StreamAccumulator, value: &Value) -> PushO
         "RUNNING" => {
             acc.copilot_state = new_run_state();
             acc.copilot_state.started_at = Some(now_ms());
-            acc.fallback_text.clear();
-            acc.fallback_thinking.clear();
             PushOutcome::NoOp
         }
         "FINISHED" => finalize(acc),
@@ -63,7 +61,6 @@ pub(super) fn handle_thinking(acc: &mut StreamAccumulator, value: &Value) -> Pus
     if let Some(text) = value.get("text").and_then(Value::as_str) {
         if !text.is_empty() {
             acc.copilot_state.thinking_text.push_str(text);
-            acc.fallback_thinking.push_str(text);
             acc.saw_thinking_delta = true;
         }
     }
@@ -74,7 +71,6 @@ pub(super) fn handle_assistant_delta(acc: &mut StreamAccumulator, value: &Value)
     if let Some(text) = value.get("text").and_then(Value::as_str) {
         if !text.is_empty() {
             acc.copilot_state.assistant_text.push_str(text);
-            acc.fallback_text.push_str(text);
             acc.saw_text_delta = true;
         }
     }
@@ -271,9 +267,6 @@ fn finalize(acc: &mut StreamAccumulator) -> PushOutcome {
         }
         acc.thinking_text.push_str(&state.thinking_text);
     }
-
-    acc.fallback_text.clear();
-    acc.fallback_thinking.clear();
 
     if let Some(started) = state.started_at {
         let duration = now_ms() - started;

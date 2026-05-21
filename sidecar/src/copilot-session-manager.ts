@@ -119,27 +119,20 @@ export class CopilotSessionManager implements SessionManager {
 		});
 
 		try {
-			if (effortLevel) {
-				try {
-					await this.sendAcpRequest(ctx, "unstable_setSessionModel", {
-						sessionId: ctx.sessionId,
-						model: modelId,
-						options: { effort: effortLevel },
-					});
-				} catch {
-					// unstable — best effort
-				}
-			}
-
 			emitter.passthrough(requestId, {
 				type: "copilot/status",
 				status: "RUNNING",
 			});
 
-			await this.sendAcpRequest(ctx, "prompt", {
-				sessionId: ctx.sessionId,
-				prompt: [{ type: "text", text: prompt }],
-			});
+			await this.sendAcpRequest(
+				ctx,
+				"session/prompt",
+				{
+					sessionId: ctx.sessionId,
+					prompt: [{ type: "text", text: prompt }],
+				},
+				0,
+			);
 
 			emitter.passthrough(requestId, {
 				type: "copilot/status",
@@ -278,13 +271,16 @@ export class CopilotSessionManager implements SessionManager {
 
 		if (ctx.sessionId) {
 			try {
-				this.sendJsonRpcNotification(ctx, "cancel", {
+				this.sendJsonRpcNotification(ctx, "session/cancel", {
 					sessionId: ctx.sessionId,
 				});
 			} catch {
 				// best effort
 			}
 		}
+
+		ctx.activeRequestId = null;
+		ctx.activeEmitter = null;
 	}
 
 	async steer(
@@ -336,8 +332,6 @@ export class CopilotSessionManager implements SessionManager {
 			modelId,
 		};
 
-		this.sessions.set(helmorSessionId, ctx);
-
 		const rl = createInterface({ input: child.stdout });
 		rl.on("line", (line) => {
 			this.handleLine(helmorSessionId, ctx, line);
@@ -359,22 +353,30 @@ export class CopilotSessionManager implements SessionManager {
 			ctx.pendingRequests.clear();
 		});
 
-		// Initialize ACP connection
-		await this.sendAcpRequest(ctx, "initialize", {
-			protocolVersion: "0.1",
-			clientCapabilities: {
-				fs: { readTextFile: true, writeTextFile: true },
-				permissions: { requestPermission: true },
-			},
-		});
+		try {
+			await this.sendAcpRequest(ctx, "initialize", {
+				protocolVersion: 1,
+				clientCapabilities: {
+					fs: { readTextFile: true, writeTextFile: true },
+				},
+			});
 
-		// Create a session
-		const sessionResult = (await this.sendAcpRequest(ctx, "newSession", {
-			cwd,
-		})) as { sessionId?: string };
+			const sessionResult = (await this.sendAcpRequest(ctx, "session/new", {
+				cwd,
+				mcpServers: [],
+			})) as { sessionId?: string };
 
-		ctx.sessionId = sessionResult?.sessionId ?? helmorSessionId;
+			ctx.sessionId = sessionResult?.sessionId ?? helmorSessionId;
+		} catch (err) {
+			try {
+				child.kill("SIGTERM");
+			} catch {
+				// already dead
+			}
+			throw err;
+		}
 
+		this.sessions.set(helmorSessionId, ctx);
 		return ctx;
 	}
 
@@ -434,16 +436,17 @@ export class CopilotSessionManager implements SessionManager {
 		const id = msg.id as number;
 		const params = (msg.params ?? {}) as Record<string, unknown>;
 
-		if (method === "requestPermission" || method === "permissions/request") {
+		if (method === "session/request_permission") {
 			const permissionId = `copilot-${helmorSessionId}-${id}`;
 			this.pendingPermissions.set(permissionId, {
 				helmorSessionId,
 				jsonRpcId: id,
 			});
 
-			const toolName = (params.tool as string) ?? "unknown";
-			const description = (params.description as string) ?? "";
-			const toolInput = (params.input as Record<string, unknown>) ?? {};
+			const toolCall = (params.toolCall ?? {}) as Record<string, unknown>;
+			const toolName =
+				(toolCall.title as string) ?? (toolCall.kind as string) ?? "tool";
+			const toolInput = (toolCall.rawInput as Record<string, unknown>) ?? {};
 
 			if (ctx.activeRequestId && ctx.activeEmitter) {
 				ctx.activeEmitter.passthrough(ctx.activeRequestId, {
@@ -452,14 +455,68 @@ export class CopilotSessionManager implements SessionManager {
 					toolName,
 					toolInput,
 					title: toolName,
-					description,
+					description: "",
 				});
 			}
 			return;
 		}
 
-		// Unknown agent request — auto-approve
+		if (method === "fs/read_text_file") {
+			void this.handleFsReadTextFile(ctx, id, params);
+			return;
+		}
+
+		if (method === "fs/write_text_file") {
+			void this.handleFsWriteTextFile(ctx, id, params);
+			return;
+		}
+
 		this.sendJsonRpcResponse(ctx, id, {});
+	}
+
+	private async handleFsReadTextFile(
+		ctx: CopilotSession,
+		id: number,
+		params: Record<string, unknown>,
+	): Promise<void> {
+		const path = params.path as string;
+		const line = params.line as number | undefined;
+		const limit = params.limit as number | undefined;
+		try {
+			const fs = await import("node:fs/promises");
+			let content = await fs.readFile(path, "utf-8");
+			if (line !== undefined || limit !== undefined) {
+				const lines = content.split("\n");
+				const start = line ?? 0;
+				const end = limit !== undefined ? start + limit : lines.length;
+				content = lines.slice(start, end).join("\n");
+			}
+			this.sendJsonRpcResponse(ctx, id, { content });
+		} catch (err) {
+			this.sendJsonRpcError(ctx, id, {
+				code: -32603,
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	private async handleFsWriteTextFile(
+		ctx: CopilotSession,
+		id: number,
+		params: Record<string, unknown>,
+	): Promise<void> {
+		const path = params.path as string;
+		const content = params.content as string;
+		try {
+			const fs = await import("node:fs/promises");
+			await fs.writeFile(path, content, "utf-8");
+			this.sendJsonRpcResponse(ctx, id, {});
+		} catch (err) {
+			this.sendJsonRpcError(ctx, id, {
+				code: -32603,
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	private handleNotification(
@@ -475,72 +532,96 @@ export class CopilotSessionManager implements SessionManager {
 		const requestId = ctx.activeRequestId;
 		const emitter = ctx.activeEmitter;
 
-		// Map ACP SessionUpdate notifications to copilot/ prefixed events
-		switch (method) {
-			case "sessionUpdate": {
-				const update = params as { type?: string; [key: string]: unknown };
-				const updateType = update.type ?? "unknown";
+		if (method !== "session/update") {
+			logger.debug(
+				`[copilot:${helmorSessionId}] unhandled notification: ${method}`,
+			);
+			return;
+		}
 
-				switch (updateType) {
-					case "agent_message_chunk":
-						emitter.passthrough(requestId, {
-							type: "copilot/assistant",
-							text: (update.text as string) ?? "",
-						});
-						break;
-					case "agent_thought_chunk":
-						emitter.passthrough(requestId, {
-							type: "copilot/thinking",
-							text: (update.text as string) ?? "",
-						});
-						break;
-					case "tool_call": {
-						const callId = (update.callId as string) ?? `tc-${Date.now()}`;
-						emitter.passthrough(requestId, {
-							type: "copilot/tool_call_start",
-							call_id: callId,
-							name: (update.name as string) ?? "unknown",
-							args: update.arguments ?? {},
-						});
-						if (update.result !== undefined) {
-							emitter.passthrough(requestId, {
-								type: "copilot/tool_call_end",
-								call_id: callId,
-								result: update.result,
-								is_error: (update.isError as boolean) ?? false,
-							});
-						}
-						break;
-					}
-					case "tool_call_update":
-						emitter.passthrough(requestId, {
-							type: "copilot/tool_call_update",
-							call_id: (update.callId as string) ?? "",
-							output: (update.output as string) ?? "",
-						});
-						break;
-					case "plan":
-						emitter.passthrough(requestId, {
-							type: "copilot/plan",
-							plan: update.plan ?? update.text ?? "",
-						});
-						break;
-					case "available_commands_update":
-						// Cache for listSlashCommands — no pipeline event needed
-						break;
-					case "current_mode_update":
-						break;
-					default:
-						emitter.passthrough(requestId, {
-							type: `copilot/${updateType}`,
-							...update,
-						});
+		const update = (params.update ?? {}) as {
+			sessionUpdate?: string;
+			[key: string]: unknown;
+		};
+		const variant = update.sessionUpdate ?? "unknown";
+
+		const extractText = (block: unknown): string => {
+			if (!block || typeof block !== "object") return "";
+			const b = block as { type?: string; text?: unknown };
+			if (b.type === "text" && typeof b.text === "string") return b.text;
+			return "";
+		};
+
+		switch (variant) {
+			case "agent_message_chunk":
+				emitter.passthrough(requestId, {
+					type: "copilot/assistant",
+					text: extractText(update.content),
+				});
+				break;
+			case "agent_thought_chunk":
+				emitter.passthrough(requestId, {
+					type: "copilot/thinking",
+					text: extractText(update.content),
+				});
+				break;
+			case "user_message_chunk":
+				break;
+			case "tool_call": {
+				const callId =
+					(update.toolCallId as string) ??
+					(update.callId as string) ??
+					`tc-${Date.now()}`;
+				emitter.passthrough(requestId, {
+					type: "copilot/tool_call_start",
+					call_id: callId,
+					name: (update.title as string) ?? (update.kind as string) ?? "tool",
+					args: update.rawInput ?? {},
+				});
+				const status = update.status as string | undefined;
+				if (status === "completed" || status === "failed") {
+					emitter.passthrough(requestId, {
+						type: "copilot/tool_call_end",
+						call_id: callId,
+						result: update.content ?? update.rawOutput ?? null,
+						is_error: status === "failed",
+					});
 				}
 				break;
 			}
+			case "tool_call_update": {
+				const callId =
+					(update.toolCallId as string) ?? (update.callId as string) ?? "";
+				const status = update.status as string | undefined;
+				if (status === "completed" || status === "failed") {
+					emitter.passthrough(requestId, {
+						type: "copilot/tool_call_end",
+						call_id: callId,
+						result: update.content ?? update.rawOutput ?? null,
+						is_error: status === "failed",
+					});
+				} else {
+					emitter.passthrough(requestId, {
+						type: "copilot/tool_call_update",
+						call_id: callId,
+						output:
+							(update.content as string) ?? (update.rawOutput as string) ?? "",
+					});
+				}
+				break;
+			}
+			case "plan":
+				emitter.passthrough(requestId, {
+					type: "copilot/plan",
+					plan: update.entries ?? update.plan ?? [],
+				});
+				break;
+			case "available_commands_update":
+			case "current_mode_update":
+				break;
 			default:
 				logger.debug(
-					`[copilot:${helmorSessionId}] unhandled notification: ${method}`,
+					`[copilot:${helmorSessionId}] unhandled session/update variant: ${variant}`,
 				);
 		}
 	}
@@ -549,22 +630,31 @@ export class CopilotSessionManager implements SessionManager {
 		ctx: CopilotSession,
 		method: string,
 		params: Record<string, unknown>,
+		timeoutMs?: number,
 	): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			const id = ctx.nextId++;
-			const timeout = setTimeout(() => {
-				ctx.pendingRequests.delete(id);
-				reject(new Error(`ACP request '${method}' timed out`));
-			}, ACP_REQUEST_TIMEOUT_MS);
+			const effectiveTimeout = timeoutMs ?? ACP_REQUEST_TIMEOUT_MS;
+			const timeout =
+				effectiveTimeout > 0
+					? setTimeout(() => {
+							ctx.pendingRequests.delete(id);
+							reject(new Error(`ACP request '${method}' timed out`));
+						}, effectiveTimeout)
+					: null;
 
-			ctx.pendingRequests.set(id, { resolve, reject, timeout });
+			ctx.pendingRequests.set(id, {
+				resolve,
+				reject,
+				timeout: timeout as ReturnType<typeof setTimeout>,
+			});
 
 			const msg = JSON.stringify({ jsonrpc: "2.0", id, method, params });
 			try {
 				ctx.child.stdin.write(`${msg}\n`);
 			} catch (err) {
 				ctx.pendingRequests.delete(id);
-				clearTimeout(timeout);
+				if (timeout) clearTimeout(timeout);
 				reject(err instanceof Error ? err : new Error(String(err)));
 			}
 		});
@@ -576,6 +666,19 @@ export class CopilotSessionManager implements SessionManager {
 		result: unknown,
 	): void {
 		const msg = JSON.stringify({ jsonrpc: "2.0", id, result });
+		try {
+			ctx.child.stdin.write(`${msg}\n`);
+		} catch {
+			// pipe closed
+		}
+	}
+
+	private sendJsonRpcError(
+		ctx: CopilotSession,
+		id: number,
+		error: { code: number; message: string },
+	): void {
+		const msg = JSON.stringify({ jsonrpc: "2.0", id, error });
 		try {
 			ctx.child.stdin.write(`${msg}\n`);
 		} catch {

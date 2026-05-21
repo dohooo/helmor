@@ -806,15 +806,17 @@ fn env_var_is_present(key: &str) -> bool {
 }
 
 fn copilot_login_ready() -> bool {
-    // Source of truth: ~/.copilot/config.json's `loggedInUsers`.
-    // `copilot login`/`logout` mutate this file, so reading it gives an
-    // immediate, fresh status without spawning a subprocess.
     if let Some(home) = std::env::var_os("HOME") {
         let path = std::path::Path::new(&home)
             .join(".copilot")
             .join("config.json");
         if let Ok(raw) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            let stripped: String = raw
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&stripped) {
                 if let Some(arr) = parsed
                     .get("loggedInUsers")
                     .and_then(serde_json::Value::as_array)
@@ -824,7 +826,6 @@ fn copilot_login_ready() -> bool {
             }
         }
     }
-    // Copilot config absent — fall back to `gh auth status`.
     match std::process::Command::new("gh")
         .args(["auth", "status"])
         .output()

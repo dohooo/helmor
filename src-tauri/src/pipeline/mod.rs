@@ -139,6 +139,7 @@ impl MessagePipeline {
             .accumulator
             .build_partial(&self.context_key, &self.session_id)
             .or_else(|| self.accumulator.build_codex_partial())
+            .or_else(|| self.accumulator.build_copilot_partial(&self.session_id))
         {
             Some(p) => p,
             None => return PipelineEmit::None,

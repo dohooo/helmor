@@ -615,12 +615,85 @@ impl StreamAccumulator {
         })
     }
 
+    /// Build a streaming partial for Copilot that includes in-progress
+    /// tool calls alongside any accumulated text/thinking. Without this,
+    /// tool calls only appear on `finalize()` (FINISHED), making the UI
+    /// look frozen during agentic work.
+    pub fn build_copilot_partial(&mut self, session_id: &str) -> Option<IntermediateMessage> {
+        if self.provider != "copilot" {
+            return None;
+        }
+        let has_tools = !self.copilot_state.tools.is_empty();
+        let has_text = !self.copilot_state.assistant_text.is_empty();
+        let has_thinking = !self.copilot_state.thinking_text.is_empty();
+        if !has_tools && !has_text && !has_thinking {
+            return None;
+        }
+
+        let (turn_id, created_at) = self.get_or_create_turn_identity();
+        let session_id_value = serde_json::Value::String(session_id.to_string());
+
+        let mut content: Vec<serde_json::Value> = Vec::new();
+        if has_thinking {
+            // Thinking is "done" once tools or text start arriving
+            let thinking_still_active = !has_tools && !has_text;
+            content.push(serde_json::json!({
+                "type": "thinking",
+                "thinking": self.copilot_state.thinking_text,
+                "signature": "",
+                "__is_streaming": thinking_still_active,
+            }));
+        }
+        for tool in &self.copilot_state.tools {
+            let mut block = serde_json::json!({
+                "type": "tool_use",
+                "id": tool.call_id,
+                "name": tool.name,
+                "input": tool.args,
+                "__streaming_status": if tool.result.is_some() { "done" } else { "streaming" },
+            });
+            if !tool.output.is_empty() {
+                block["__streaming_output"] = serde_json::Value::String(tool.output.clone());
+            }
+            content.push(block);
+        }
+        if has_text {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": self.copilot_state.assistant_text,
+            }));
+        }
+
+        let msg = serde_json::json!({
+            "type": "assistant",
+            "session_id": session_id_value,
+            "message": {
+                "id": turn_id,
+                "role": "assistant",
+                "model": self.resolved_model,
+                "content": content,
+            },
+        });
+        let raw_json = msg.to_string();
+        Some(IntermediateMessage {
+            id: turn_id,
+            role: super::types::MessageRole::Assistant,
+            raw_json,
+            parsed: Some(msg),
+            created_at,
+            is_streaming: true,
+        })
+    }
+
     /// Whether the accumulator has an active streaming partial.
     pub fn has_active_partial(&self) -> bool {
         !self.blocks.is_empty()
             || !self.fallback_text.trim().is_empty()
             || !self.fallback_thinking.trim().is_empty()
             || self.codex_partial_idx.is_some()
+            || !self.copilot_state.tools.is_empty()
+            || !self.copilot_state.assistant_text.is_empty()
+            || !self.copilot_state.thinking_text.is_empty()
     }
 
     // ── Persistence accessors ───────────────────────────────────────
