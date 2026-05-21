@@ -18,13 +18,17 @@ use crate::remote::methods::{
     TerminalCloseParams, TerminalCloseResult, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOpenResult, TerminalResizeParams, TerminalResizeResult,
     TerminalWriteParams, TerminalWriteResult, WorkspaceBranchInfoParams, WorkspaceBranchInfoResult,
+    WorkspaceBundleBeginParams, WorkspaceBundleBeginResult, WorkspaceBundleChunkParams,
+    WorkspaceBundleChunkResult, WorkspaceBundleEndParams, WorkspaceBundleEndResult,
     WorkspaceBundleParams, WorkspaceBundleResult, WorkspaceChangesParams, WorkspaceChangesResult,
     WorkspaceFileTreeParams, WorkspaceFileTreeResult, WorkspaceMutateFileParams,
     WorkspaceMutateFileResult, WorkspaceReadFileAtRefParams, WorkspaceReadFileAtRefResult,
     WorkspaceReadFileParams, WorkspaceSearchParams, WorkspaceSearchResult,
     WorkspaceStartWatchParams, WorkspaceStartWatchResult, WorkspaceStatFileParams,
     WorkspaceStatusParams, WorkspaceStatusResult, WorkspaceStopWatchParams,
-    WorkspaceStopWatchResult, WorkspaceUnbundleParams, WorkspaceUnbundleResult,
+    WorkspaceStopWatchResult, WorkspaceUnbundleBeginParams, WorkspaceUnbundleBeginResult,
+    WorkspaceUnbundleChunkParams, WorkspaceUnbundleChunkResult, WorkspaceUnbundleFinishParams,
+    WorkspaceUnbundleParams, WorkspaceUnbundleResult,
 };
 use crate::remote::protocol::{error_codes, JsonRpcError, PROTOCOL_VERSION};
 
@@ -402,6 +406,198 @@ pub(super) fn handle_workspace_unbundle(
             format!("workspace.unbundle failed: {err:#}"),
         )
     })
+}
+
+// ── Chunked bundle handlers ──────────────────────────────────────
+//
+// These don't go through the `RemoteRuntime` trait — chunking is a
+// server-side dispatcher concern (lifecycle state on
+// `ServerContext::bundle_transfers`). The runtime trait stays
+// single-shot; the chunked methods just sit on the dispatcher and
+// drive the `BundleTransferStore` directly.
+
+pub(super) fn handle_workspace_bundle_begin(
+    ctx: &ServerContext,
+    params: WorkspaceBundleBeginParams,
+) -> Result<WorkspaceBundleBeginResult, JsonRpcError> {
+    // Re-use the single-shot generator to actually produce the
+    // bundle bytes (same `git bundle --all` invocation). The
+    // trait already imposes a 10 MiB cap for the single-shot
+    // path; we need to bypass that for chunked transfers, so the
+    // generator lives next to the trait impl and the chunked
+    // entry uses the higher-cap variant.
+    let bytes_result =
+        ctx.runtime()
+            .workspace_bundle_for_chunked(crate::remote::methods::WorkspaceBundleParams {
+                workspace_dir: params.workspace_dir.clone(),
+            });
+    let (bytes, sha256_hex) = match bytes_result {
+        Ok(bundle) => bundle,
+        Err(err) => {
+            return Err(JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.bundleBegin failed: {err:#}"),
+            ));
+        }
+    };
+    let total_size_bytes = bytes.len() as u64;
+    let chunk_size_bytes = clamp_chunk_size(params.chunk_size_bytes);
+    let total_chunks = chunks_for_size(total_size_bytes, chunk_size_bytes);
+
+    let transfer_id = match ctx
+        .bundle_transfers()
+        .register_outbound(bytes, sha256_hex.clone())
+    {
+        Ok(id) => id,
+        Err(err) => {
+            return Err(JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.bundleBegin failed: {err:#}"),
+            ));
+        }
+    };
+
+    Ok(WorkspaceBundleBeginResult {
+        transfer_id,
+        total_size_bytes,
+        sha256_hex,
+        total_chunks,
+        chunk_size_bytes,
+    })
+}
+
+pub(super) fn handle_workspace_bundle_chunk(
+    ctx: &ServerContext,
+    params: WorkspaceBundleChunkParams,
+) -> Result<WorkspaceBundleChunkResult, JsonRpcError> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let chunk_size = clamp_chunk_size(Some(params.chunk_size_bytes)) as usize;
+    let chunk_bytes = ctx
+        .bundle_transfers()
+        .read_chunk(&params.transfer_id, params.chunk_index as usize, chunk_size)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.bundleChunk failed: {err:#}"),
+            )
+        })?;
+    Ok(WorkspaceBundleChunkResult {
+        chunk_index: params.chunk_index,
+        chunk_base64: STANDARD.encode(&chunk_bytes),
+    })
+}
+
+pub(super) fn handle_workspace_bundle_end(
+    ctx: &ServerContext,
+    params: WorkspaceBundleEndParams,
+) -> Result<WorkspaceBundleEndResult, JsonRpcError> {
+    ctx.bundle_transfers()
+        .release(&params.transfer_id)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.bundleEnd failed: {err:#}"),
+            )
+        })?;
+    Ok(WorkspaceBundleEndResult { released: true })
+}
+
+pub(super) fn handle_workspace_unbundle_begin(
+    ctx: &ServerContext,
+    params: WorkspaceUnbundleBeginParams,
+) -> Result<WorkspaceUnbundleBeginResult, JsonRpcError> {
+    let id = ctx
+        .bundle_transfers()
+        .register_inbound(
+            params.target_dir,
+            params.total_size_bytes,
+            params.sha256_hex,
+        )
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.unbundleBegin failed: {err:#}"),
+            )
+        })?;
+    Ok(WorkspaceUnbundleBeginResult { transfer_id: id })
+}
+
+pub(super) fn handle_workspace_unbundle_chunk(
+    ctx: &ServerContext,
+    params: WorkspaceUnbundleChunkParams,
+) -> Result<WorkspaceUnbundleChunkResult, JsonRpcError> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let bytes = STANDARD
+        .decode(params.chunk_base64.as_bytes())
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.unbundleChunk: chunk_base64 is not valid base64: {err:#}"),
+            )
+        })?;
+    ctx.bundle_transfers()
+        .write_chunk(&params.transfer_id, params.chunk_index as usize, bytes)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.unbundleChunk failed: {err:#}"),
+            )
+        })?;
+    Ok(WorkspaceUnbundleChunkResult { accepted: true })
+}
+
+pub(super) fn handle_workspace_unbundle_finish(
+    ctx: &ServerContext,
+    params: WorkspaceUnbundleFinishParams,
+) -> Result<WorkspaceUnbundleResult, JsonRpcError> {
+    let finalized = ctx
+        .bundle_transfers()
+        .finalize_inbound(&params.transfer_id)
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.unbundleFinish failed: {err:#}"),
+            )
+        })?;
+    // The trait's `workspace_unbundle` already does the verify +
+    // clone work; ship the assembled buffer through it as a
+    // base64-encoded single-shot. The verify step recomputes the
+    // sha on the buffer we just assembled — defence-in-depth even
+    // though `BundleTransferStore` already validated the total
+    // size matched the announced one.
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let bundle_base64 = STANDARD.encode(&finalized.bytes);
+    ctx.runtime()
+        .workspace_unbundle(WorkspaceUnbundleParams {
+            target_dir: finalized.target_dir,
+            bundle_base64,
+            expected_sha256: finalized.sha256_hex,
+        })
+        .map_err(|err| {
+            JsonRpcError::new(
+                error_codes::HANDLER_FAILED,
+                format!("workspace.unbundleFinish: clone failed: {err:#}"),
+            )
+        })
+}
+
+fn clamp_chunk_size(requested: Option<u64>) -> u64 {
+    use crate::remote::server::bundle_transfer::{DEFAULT_CHUNK_BYTES, MAX_CHUNK_BYTES};
+    match requested {
+        None | Some(0) => DEFAULT_CHUNK_BYTES as u64,
+        Some(v) => v.min(MAX_CHUNK_BYTES as u64),
+    }
+}
+
+fn chunks_for_size(total: u64, chunk: u64) -> u32 {
+    if chunk == 0 || total == 0 {
+        return 0;
+    }
+    // Ceil division. Saturating to u32 because the chunk count fits
+    // in u32 even for 4 GiB transfers at the 4 MiB default (~1024
+    // chunks per GiB).
+    let count = total.div_ceil(chunk);
+    count.min(u32::MAX as u64) as u32
 }
 
 pub(super) fn handle_workspace_start_watch(

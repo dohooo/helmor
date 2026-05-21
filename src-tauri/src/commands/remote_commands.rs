@@ -1790,19 +1790,17 @@ fn clone_workspace_to_runtime_inner(
     // the destination via the Add-Server wizard first.
     let destination = registry.lookup(Some(destination_runtime))?;
 
-    let bundle = source_resolved
+    // Track F3 chunked: drive the wire-side chunking through the
+    // trait helpers so the orchestrator stays runtime-agnostic
+    // (local-on-local is a no-op fast path; SSH-backed runtimes
+    // drive bundleBegin/Chunk/End + unbundleBegin/Chunk/Finish).
+    let (bundle_bytes, sha256_hex) = source_resolved
         .runtime
-        .workspace_bundle(crate::remote::methods::WorkspaceBundleParams {
-            workspace_dir: source_path,
-        })
+        .workspace_bundle_chunked(&source_path)
         .context("bundle source workspace")?;
 
     let unbundle = destination
-        .workspace_unbundle(crate::remote::methods::WorkspaceUnbundleParams {
-            target_dir: destination_path.to_string(),
-            bundle_base64: bundle.bundle_base64,
-            expected_sha256: bundle.sha256_hex,
-        })
+        .workspace_unbundle_chunked(destination_path, &bundle_bytes, &sha256_hex)
         .context("unbundle into destination runtime")?;
 
     // ── Flip the binding. Treat the destination_path as the new
@@ -2291,6 +2289,46 @@ mod tests {
             &self,
             params: crate::remote::methods::WorkspaceUnbundleParams,
         ) -> Result<crate::remote::methods::WorkspaceUnbundleResult> {
+            self.unbundle_calls.lock().unwrap().push(params);
+            self.unbundle_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("stub: unbundle_response not configured"))
+        }
+        fn workspace_bundle_chunked(&self, workspace_dir: &str) -> Result<(Vec<u8>, String)> {
+            // Re-route through the same captured stub state used by
+            // workspace_bundle so existing orchestrator tests
+            // continue to assert on `last_bundle_call`. The "chunked"
+            // shape in the stub is just the decoded bytes + sha.
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let params = crate::remote::methods::WorkspaceBundleParams {
+                workspace_dir: workspace_dir.to_string(),
+            };
+            self.bundle_calls.lock().unwrap().push(params);
+            let response = self
+                .bundle_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("stub: bundle_response not configured"))?;
+            let bytes = STANDARD
+                .decode(response.bundle_base64.as_bytes())
+                .map_err(|err| anyhow::anyhow!("stub: bundle_base64 decode failed: {err}"))?;
+            Ok((bytes, response.sha256_hex))
+        }
+        fn workspace_unbundle_chunked(
+            &self,
+            target_dir: &str,
+            bundle_bytes: &[u8],
+            sha256_hex: &str,
+        ) -> Result<crate::remote::methods::WorkspaceUnbundleResult> {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let params = crate::remote::methods::WorkspaceUnbundleParams {
+                target_dir: target_dir.to_string(),
+                bundle_base64: STANDARD.encode(bundle_bytes),
+                expected_sha256: sha256_hex.to_string(),
+            };
             self.unbundle_calls.lock().unwrap().push(params);
             self.unbundle_response
                 .lock()

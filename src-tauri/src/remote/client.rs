@@ -1031,6 +1031,110 @@ impl RemoteRuntime for RemoteSshRuntime {
             .call::<super::methods::WorkspaceUnbundleMethod>(params)
     }
 
+    fn workspace_bundle_chunked(&self, workspace_dir: &str) -> Result<(Vec<u8>, String)> {
+        // Drive the bundleBegin → bundleChunk × N → bundleEnd loop
+        // through the wire. Each chunk arrives base64-encoded; we
+        // accumulate the raw bytes locally + return them plus the
+        // sha the server already computed.
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let begin = self
+            .client
+            .call::<super::methods::WorkspaceBundleBeginMethod>(
+                super::methods::WorkspaceBundleBeginParams {
+                    workspace_dir: workspace_dir.to_string(),
+                    chunk_size_bytes: None,
+                },
+            )?;
+        let mut assembled: Vec<u8> = Vec::with_capacity(begin.total_size_bytes as usize);
+        for chunk_index in 0..begin.total_chunks {
+            let chunk = self
+                .client
+                .call::<super::methods::WorkspaceBundleChunkMethod>(
+                    super::methods::WorkspaceBundleChunkParams {
+                        transfer_id: begin.transfer_id.clone(),
+                        chunk_index,
+                        chunk_size_bytes: begin.chunk_size_bytes,
+                    },
+                )?;
+            let bytes = STANDARD
+                .decode(chunk.chunk_base64.as_bytes())
+                .with_context(|| {
+                    format!("workspace_bundle_chunked: chunk {chunk_index} decode failed")
+                })?;
+            assembled.extend_from_slice(&bytes);
+        }
+        // Best-effort release — even on success we don't want server
+        // memory hanging around per the 5-min TTL. Failures here log
+        // but don't abort (the sweep will take it eventually).
+        if let Err(err) = self
+            .client
+            .call::<super::methods::WorkspaceBundleEndMethod>(
+                super::methods::WorkspaceBundleEndParams {
+                    transfer_id: begin.transfer_id.clone(),
+                },
+            )
+        {
+            tracing::debug!(
+                error = %err,
+                "workspace_bundle_chunked: bundleEnd best-effort release failed",
+            );
+        }
+        if assembled.len() as u64 != begin.total_size_bytes {
+            bail!(
+                "workspace_bundle_chunked: assembled {} bytes but server announced {}",
+                assembled.len(),
+                begin.total_size_bytes,
+            );
+        }
+        Ok((assembled, begin.sha256_hex))
+    }
+
+    fn workspace_unbundle_chunked(
+        &self,
+        target_dir: &str,
+        bundle_bytes: &[u8],
+        sha256_hex: &str,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        use super::server::bundle_transfer::DEFAULT_CHUNK_BYTES;
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let total = bundle_bytes.len() as u64;
+        let begin = self
+            .client
+            .call::<super::methods::WorkspaceUnbundleBeginMethod>(
+                super::methods::WorkspaceUnbundleBeginParams {
+                    target_dir: target_dir.to_string(),
+                    total_size_bytes: total,
+                    sha256_hex: sha256_hex.to_string(),
+                },
+            )?;
+        let chunk_size = DEFAULT_CHUNK_BYTES;
+        let mut offset = 0usize;
+        let mut chunk_index: u32 = 0;
+        while offset < bundle_bytes.len() {
+            let end = (offset + chunk_size).min(bundle_bytes.len());
+            let slice = &bundle_bytes[offset..end];
+            self.client
+                .call::<super::methods::WorkspaceUnbundleChunkMethod>(
+                    super::methods::WorkspaceUnbundleChunkParams {
+                        transfer_id: begin.transfer_id.clone(),
+                        chunk_index,
+                        chunk_base64: STANDARD.encode(slice),
+                    },
+                )
+                .with_context(|| {
+                    format!("workspace_unbundle_chunked: chunk {chunk_index} push failed")
+                })?;
+            offset = end;
+            chunk_index += 1;
+        }
+        self.client
+            .call::<super::methods::WorkspaceUnbundleFinishMethod>(
+                super::methods::WorkspaceUnbundleFinishParams {
+                    transfer_id: begin.transfer_id,
+                },
+            )
+    }
+
     fn workspace_start_watch(
         &self,
         params: super::methods::WorkspaceStartWatchParams,

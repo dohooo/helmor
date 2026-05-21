@@ -265,6 +265,44 @@ pub trait RemoteRuntime: Send + Sync {
         anyhow::bail!("workspace.unbundle is not yet implemented on this runtime")
     }
 
+    /// Chunked-bundle helper: returns the raw bundle bytes + sha
+    /// for `workspace.bundleBegin` to stash in its transfer store.
+    /// Bypasses the 10 MiB cap [`workspace_bundle`] enforces — the
+    /// whole point of the chunked path is to ship bigger bundles.
+    /// Local + tombstoned runtimes bail; the SSH-backed runtime
+    /// forwards (currently bails on the remote, since the chunked
+    /// path is server-side state — the desktop drives the loop
+    /// directly via the dispatcher).
+    fn workspace_bundle_for_chunked(
+        &self,
+        _params: super::methods::WorkspaceBundleParams,
+    ) -> Result<(Vec<u8>, String)> {
+        anyhow::bail!("workspace_bundle_for_chunked is not implemented on this runtime")
+    }
+
+    /// Orchestrator-facing chunked bundle: returns the assembled
+    /// bundle bytes + sha. The local impl runs `git bundle` directly;
+    /// the SSH-backed impl drives the
+    /// `bundleBegin → bundleChunk × N → bundleEnd` loop. The
+    /// orchestrator uses this exclusively (the single-shot
+    /// [`workspace_bundle`] stays for backward-compat + tests).
+    fn workspace_bundle_chunked(&self, _workspace_dir: &str) -> Result<(Vec<u8>, String)> {
+        anyhow::bail!("workspace_bundle_chunked is not implemented on this runtime")
+    }
+
+    /// Orchestrator-facing chunked unbundle: receive the assembled
+    /// bytes, verify them, run `git clone`. The local impl writes
+    /// + clones directly; the SSH-backed impl drives the
+    ///   `unbundleBegin → unbundleChunk × N → unbundleFinish` loop.
+    fn workspace_unbundle_chunked(
+        &self,
+        _target_dir: &str,
+        _bundle_bytes: &[u8],
+        _sha256_hex: &str,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        anyhow::bail!("workspace_unbundle_chunked is not implemented on this runtime")
+    }
+
     fn workspace_start_watch(
         &self,
         _params: super::methods::WorkspaceStartWatchParams,
@@ -677,15 +715,39 @@ impl RemoteRuntime for LocalRuntime {
             &params.expected_sha256,
         )
     }
+
+    fn workspace_bundle_for_chunked(
+        &self,
+        params: super::methods::WorkspaceBundleParams,
+    ) -> Result<(Vec<u8>, String)> {
+        bundle_local_workspace_raw(&params.workspace_dir)
+    }
+
+    fn workspace_bundle_chunked(&self, workspace_dir: &str) -> Result<(Vec<u8>, String)> {
+        // Local: no wire to chunk through. The chunked path is a
+        // no-op compared to the raw helper.
+        bundle_local_workspace_raw(workspace_dir)
+    }
+
+    fn workspace_unbundle_chunked(
+        &self,
+        target_dir: &str,
+        bundle_bytes: &[u8],
+        sha256_hex: &str,
+    ) -> Result<super::methods::WorkspaceUnbundleResult> {
+        // Local: write the bytes to a tempfile + clone directly.
+        // Mirrors `unbundle_local_workspace` minus the base64 decode
+        // (we already have raw bytes).
+        unbundle_local_workspace_raw(target_dir, bundle_bytes, sha256_hex)
+    }
 }
 
-/// Pure-function `git bundle create --all` for a workspace path.
-/// Reads the bundle bytes back, computes SHA-256, base64-encodes,
-/// returns the wire-shaped result. Refuses to ship bundles larger
-/// than [`super::methods::WORKSPACE_BUNDLE_MAX_BYTES`].
-fn bundle_local_workspace(workspace_dir: &str) -> Result<super::methods::WorkspaceBundleResult> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
+/// Raw-bytes helper. Runs `git bundle create --all` against the
+/// workspace, returns the bundle bytes + their SHA-256 hex. The
+/// single-shot trait method wraps this with a 10 MiB cap + base64
+/// (frame budget); the chunked path consumes the raw bytes
+/// directly without the cap.
+pub(super) fn bundle_local_workspace_raw(workspace_dir: &str) -> Result<(Vec<u8>, String)> {
     use sha2::{Digest, Sha256};
 
     if workspace_dir.is_empty() {
@@ -728,20 +790,31 @@ fn bundle_local_workspace(workspace_dir: &str) -> Result<super::methods::Workspa
 
     let bytes = std::fs::read(tmp.path())
         .with_context(|| format!("failed to read bundle from {}", tmp.path().display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256_hex = format!("{:x}", hasher.finalize());
+    Ok((bytes, sha256_hex))
+}
+
+/// Pure-function `git bundle create --all` for a workspace path.
+/// Reads the bundle bytes back, computes SHA-256, base64-encodes,
+/// returns the wire-shaped result. Refuses to ship bundles larger
+/// than [`super::methods::WORKSPACE_BUNDLE_MAX_BYTES`] — chunked
+/// callers ([`bundle_local_workspace_raw`]) bypass the cap.
+fn bundle_local_workspace(workspace_dir: &str) -> Result<super::methods::WorkspaceBundleResult> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let (bytes, sha256_hex) = bundle_local_workspace_raw(workspace_dir)?;
     if bytes.len() > super::methods::WORKSPACE_BUNDLE_MAX_BYTES {
         bail!(
-            "bundle is {} bytes; over the {} byte limit (set HELMOR_BUNDLE_MAX or use chunked transfer when that lands)",
+            "bundle is {} bytes; over the {} byte limit for single-shot transfers — use workspace.bundleBegin for chunked",
             bytes.len(),
             super::methods::WORKSPACE_BUNDLE_MAX_BYTES,
         );
     }
-
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let sha256_hex = format!("{:x}", hasher.finalize());
     let size_bytes = bytes.len() as u64;
     let bundle_base64 = STANDARD.encode(&bytes);
-
     Ok(super::methods::WorkspaceBundleResult {
         bundle_base64,
         size_bytes,
@@ -760,6 +833,20 @@ fn unbundle_local_workspace(
 ) -> Result<super::methods::WorkspaceUnbundleResult> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    let bytes = STANDARD
+        .decode(bundle_base64.as_bytes())
+        .context("bundle_base64 is not valid standard-alphabet base64")?;
+    unbundle_local_workspace_raw(target_dir, &bytes, expected_sha256)
+}
+
+/// Raw-bytes inverse of [`bundle_local_workspace_raw`]. Used by
+/// both the base64 path ([`unbundle_local_workspace`]) and the
+/// chunked path ([`LocalRuntime::workspace_unbundle_chunked`]).
+pub(super) fn unbundle_local_workspace_raw(
+    target_dir: &str,
+    bytes: &[u8],
+    expected_sha256: &str,
+) -> Result<super::methods::WorkspaceUnbundleResult> {
     use sha2::{Digest, Sha256};
 
     if target_dir.is_empty() {
@@ -769,12 +856,8 @@ fn unbundle_local_workspace(
         bail!("expected_sha256 must not be empty");
     }
 
-    let bytes = STANDARD
-        .decode(bundle_base64.as_bytes())
-        .context("bundle_base64 is not valid standard-alphabet base64")?;
-
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    hasher.update(bytes);
     let actual_sha = format!("{:x}", hasher.finalize());
     if !actual_sha.eq_ignore_ascii_case(expected_sha256) {
         bail!(
@@ -809,7 +892,7 @@ fn unbundle_local_workspace(
         .suffix(".bundle")
         .tempfile()
         .context("failed to allocate temporary bundle file")?;
-    std::fs::write(tmp.path(), &bytes)
+    std::fs::write(tmp.path(), bytes)
         .with_context(|| format!("failed to stage bundle to {}", tmp.path().display()))?;
 
     // `--no-hardlinks` avoids cross-filesystem hardlink failures in

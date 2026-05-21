@@ -145,6 +145,23 @@ pub enum Method {
     /// `workspace.bundle` and `git clone` it into the named target
     /// directory on this runtime's filesystem.
     WorkspaceUnbundle,
+    /// Chunked F3: start a bundle the caller will pull chunk-by-
+    /// chunk. Lifts the 10 MiB single-shot cap.
+    WorkspaceBundleBegin,
+    /// Chunked F3: read one chunk of a transfer started via
+    /// `bundleBegin`.
+    WorkspaceBundleChunk,
+    /// Chunked F3: release the server-side state for an outbound
+    /// transfer after the caller has fetched every chunk.
+    WorkspaceBundleEnd,
+    /// Chunked F3: announce an inbound transfer the caller is
+    /// about to push chunks into.
+    WorkspaceUnbundleBegin,
+    /// Chunked F3: append one chunk to an inbound transfer.
+    WorkspaceUnbundleChunk,
+    /// Chunked F3: verify the assembled bundle's sha + run
+    /// `git clone` into the target dir.
+    WorkspaceUnbundleFinish,
     /// Track E1: trailing log tail. Reads up to `max_lines`
     /// lines from `$HOME/.helmor/server/daemon.log` and returns
     /// them so an operator can debug without an extra SSH session.
@@ -184,6 +201,12 @@ impl Method {
             Self::AgentAuthStatus => "agent.authStatus",
             Self::WorkspaceBundle => "workspace.bundle",
             Self::WorkspaceUnbundle => "workspace.unbundle",
+            Self::WorkspaceBundleBegin => "workspace.bundleBegin",
+            Self::WorkspaceBundleChunk => "workspace.bundleChunk",
+            Self::WorkspaceBundleEnd => "workspace.bundleEnd",
+            Self::WorkspaceUnbundleBegin => "workspace.unbundleBegin",
+            Self::WorkspaceUnbundleChunk => "workspace.unbundleChunk",
+            Self::WorkspaceUnbundleFinish => "workspace.unbundleFinish",
             Self::DaemonTailLog => "daemon.tailLog",
             Self::RuntimeMetrics => "runtime.metrics",
         }
@@ -236,6 +259,12 @@ impl FromStr for Method {
             "agent.authStatus" => Ok(Self::AgentAuthStatus),
             "workspace.bundle" => Ok(Self::WorkspaceBundle),
             "workspace.unbundle" => Ok(Self::WorkspaceUnbundle),
+            "workspace.bundleBegin" => Ok(Self::WorkspaceBundleBegin),
+            "workspace.bundleChunk" => Ok(Self::WorkspaceBundleChunk),
+            "workspace.bundleEnd" => Ok(Self::WorkspaceBundleEnd),
+            "workspace.unbundleBegin" => Ok(Self::WorkspaceUnbundleBegin),
+            "workspace.unbundleChunk" => Ok(Self::WorkspaceUnbundleChunk),
+            "workspace.unbundleFinish" => Ok(Self::WorkspaceUnbundleFinish),
             "daemon.tailLog" => Ok(Self::DaemonTailLog),
             "runtime.metrics" => Ok(Self::RuntimeMetrics),
             _ => Err(UnknownMethod(value.to_string())),
@@ -1058,6 +1087,181 @@ pub struct WorkspaceUnbundleMethod;
 impl RpcMethod for WorkspaceUnbundleMethod {
     const NAME: &'static str = "workspace.unbundle";
     type Params = WorkspaceUnbundleParams;
+    type Result = WorkspaceUnbundleResult;
+}
+
+// ── Chunked bundle transfer (lifts the 10 MiB single-shot cap) ─────
+//
+// The single-shot bundle/unbundle pair above is the fast path for
+// small bundles. Real-world repos with >10 MiB of `.git` data need
+// to ship the bundle in chunks to stay inside the codec's 16 MiB
+// per-frame body budget. The chunked variants split the
+// responsibilities like this:
+//
+//   * source bundles ONCE on `workspace.bundleBegin`, returns
+//     metadata (transfer id, total size, sha) + the total chunk
+//     count for the caller-supplied chunk size.
+//   * caller loops `workspace.bundleChunk` pulling each chunk by
+//     index, accumulating bytes locally.
+//   * caller calls `workspace.bundleEnd` to release the server-side
+//     state. The store also sweeps abandoned transfers after 5 min.
+//
+// The unbundle side mirrors:
+//
+//   * `workspace.unbundleBegin` allocates an inbound buffer of the
+//     announced size + locks in the target dir + sha.
+//   * caller loops `workspace.unbundleChunk` pushing each chunk in
+//     order (out-of-order pushes are not supported; clients
+//     re-`unbundleBegin` after a transport reset).
+//   * `workspace.unbundleFinish` runs the sha check + `git clone`
+//     once the assembled buffer matches the announced size.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleBeginParams {
+    /// Workspace root on the runtime's filesystem.
+    pub workspace_dir: String,
+    /// Caller-preferred chunk size. The daemon clamps to
+    /// [`super::server::bundle_transfer::MAX_CHUNK_BYTES`]; pass
+    /// `None` to take the default (`DEFAULT_CHUNK_BYTES`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleBeginResult {
+    /// Server-issued handle for subsequent `bundleChunk` / `bundleEnd`
+    /// calls. UUID-shaped; clients treat it as an opaque string.
+    pub transfer_id: String,
+    pub total_size_bytes: u64,
+    /// Lowercase hex SHA-256 of the full bundle. The unbundle side
+    /// receives this verbatim from the caller and checks against
+    /// the assembled buffer at `unbundleFinish` time.
+    pub sha256_hex: String,
+    /// How many chunks the caller will need to fetch. Computed
+    /// server-side from the (possibly-clamped) chunk size so the
+    /// client doesn't have to reason about clamping itself.
+    pub total_chunks: u32,
+    /// The effective chunk size after server-side clamping. The
+    /// caller passes this verbatim back in subsequent `bundleChunk`
+    /// calls so the server-side index math stays consistent.
+    pub chunk_size_bytes: u64,
+}
+
+pub struct WorkspaceBundleBeginMethod;
+impl RpcMethod for WorkspaceBundleBeginMethod {
+    const NAME: &'static str = "workspace.bundleBegin";
+    type Params = WorkspaceBundleBeginParams;
+    type Result = WorkspaceBundleBeginResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleChunkParams {
+    pub transfer_id: String,
+    pub chunk_index: u32,
+    /// Echoed back from `bundleBegin.chunk_size_bytes`. The server
+    /// re-clamps to its own ceiling for safety.
+    pub chunk_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleChunkResult {
+    pub chunk_index: u32,
+    pub chunk_base64: String,
+}
+
+pub struct WorkspaceBundleChunkMethod;
+impl RpcMethod for WorkspaceBundleChunkMethod {
+    const NAME: &'static str = "workspace.bundleChunk";
+    type Params = WorkspaceBundleChunkParams;
+    type Result = WorkspaceBundleChunkResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleEndParams {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBundleEndResult {
+    /// Always `true` today — server-side memory has been released.
+    /// Carried for forward-compat (e.g. future "already released
+    /// by sweep" idempotent return).
+    pub released: bool,
+}
+
+pub struct WorkspaceBundleEndMethod;
+impl RpcMethod for WorkspaceBundleEndMethod {
+    const NAME: &'static str = "workspace.bundleEnd";
+    type Params = WorkspaceBundleEndParams;
+    type Result = WorkspaceBundleEndResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleBeginParams {
+    pub target_dir: String,
+    pub total_size_bytes: u64,
+    /// Lowercase hex SHA-256 the caller computed over the source
+    /// bundle's bytes. Verified by `unbundleFinish` against the
+    /// assembled buffer.
+    pub sha256_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleBeginResult {
+    pub transfer_id: String,
+}
+
+pub struct WorkspaceUnbundleBeginMethod;
+impl RpcMethod for WorkspaceUnbundleBeginMethod {
+    const NAME: &'static str = "workspace.unbundleBegin";
+    type Params = WorkspaceUnbundleBeginParams;
+    type Result = WorkspaceUnbundleBeginResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleChunkParams {
+    pub transfer_id: String,
+    pub chunk_index: u32,
+    pub chunk_base64: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleChunkResult {
+    /// Always `true` today — the chunk was appended. Forward-compat
+    /// shape for future flow control (backpressure when a daemon
+    /// can't keep up).
+    pub accepted: bool,
+}
+
+pub struct WorkspaceUnbundleChunkMethod;
+impl RpcMethod for WorkspaceUnbundleChunkMethod {
+    const NAME: &'static str = "workspace.unbundleChunk";
+    type Params = WorkspaceUnbundleChunkParams;
+    type Result = WorkspaceUnbundleChunkResult;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUnbundleFinishParams {
+    pub transfer_id: String,
+}
+
+/// Re-uses [`WorkspaceUnbundleResult`] so callers parse the same
+/// shape whether they came via the single-shot or chunked path.
+pub struct WorkspaceUnbundleFinishMethod;
+impl RpcMethod for WorkspaceUnbundleFinishMethod {
+    const NAME: &'static str = "workspace.unbundleFinish";
+    type Params = WorkspaceUnbundleFinishParams;
     type Result = WorkspaceUnbundleResult;
 }
 

@@ -15,6 +15,7 @@
 //! loopback test or an in-process integration probe without spinning
 //! up a real process.
 
+pub mod bundle_transfer;
 pub mod crash_history;
 mod dispatch;
 mod handlers;
@@ -83,6 +84,13 @@ pub struct ServerContext {
     /// across connections so the daemon's full traffic profile is
     /// visible from any client's `runtime.metrics` call.
     metrics: Arc<metrics::RpcMetrics>,
+    /// Track F3 chunked bundles: in-flight transfer state for
+    /// `workspace.bundle{Begin,Chunk,End}` +
+    /// `workspace.unbundle{Begin,Chunk,Finish}`. Shared via Arc so
+    /// daemon mode (one ServerContext per connection but the same
+    /// underlying state) sees the same transfer ids across the
+    /// chunk-fetch loop even if a transfer spans a reconnect.
+    bundle_transfers: Arc<bundle_transfer::BundleTransferStore>,
     /// Track E2: snapshot of context creation time, used to report
     /// daemon uptime alongside the metrics result. `Instant`-based
     /// so we don't depend on wall-clock corrections during the
@@ -107,6 +115,7 @@ impl ServerContext {
             )),
             watch_state: Arc::new(RemoteWatchState::new()),
             metrics: Arc::new(metrics::RpcMetrics::new()),
+            bundle_transfers: Arc::new(bundle_transfer::BundleTransferStore::new()),
             started_at: std::time::Instant::now(),
         }
     }
@@ -130,6 +139,7 @@ impl ServerContext {
             )),
             watch_state: Arc::new(RemoteWatchState::new()),
             metrics: Arc::new(metrics::RpcMetrics::new()),
+            bundle_transfers: Arc::new(bundle_transfer::BundleTransferStore::new()),
             started_at: std::time::Instant::now(),
         }
     }
@@ -194,6 +204,23 @@ impl ServerContext {
     /// handler snapshots it.
     pub fn metrics(&self) -> &Arc<metrics::RpcMetrics> {
         &self.metrics
+    }
+
+    /// Track F3 chunked bundles: in-flight transfer state for
+    /// `workspace.bundle{Begin,Chunk,End}` +
+    /// `workspace.unbundle{Begin,Chunk,Finish}`. The handler reaches
+    /// in from each method to register / look up / drop the active
+    /// transfer.
+    pub fn bundle_transfers(&self) -> &Arc<bundle_transfer::BundleTransferStore> {
+        &self.bundle_transfers
+    }
+
+    /// Builder-style: swap in a shared `BundleTransferStore`. The
+    /// daemon uses this so chunked transfers can survive a client
+    /// reconnect — same pattern as `set_terminal_state` /
+    /// `set_agent_state`.
+    pub fn set_bundle_transfers(&mut self, transfers: Arc<bundle_transfer::BundleTransferStore>) {
+        self.bundle_transfers = transfers;
     }
 
     /// Track E2: daemon uptime since this context was constructed.

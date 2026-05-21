@@ -16,10 +16,12 @@ use crate::remote::methods::{
     AgentSetAuthMethod, DaemonTailLogMethod, InitializeMethod, Method, PingMethod, RpcMethod,
     RuntimeMetricsMethod, TerminalAttachMethod, TerminalCloseMethod, TerminalListMethod,
     TerminalOpenMethod, TerminalResizeMethod, TerminalWriteMethod, WorkspaceBranchInfoMethod,
+    WorkspaceBundleBeginMethod, WorkspaceBundleChunkMethod, WorkspaceBundleEndMethod,
     WorkspaceBundleMethod, WorkspaceChangesMethod, WorkspaceFileTreeMethod,
     WorkspaceMutateFileMethod, WorkspaceReadFileAtRefMethod, WorkspaceReadFileMethod,
     WorkspaceSearchMethod, WorkspaceStartWatchMethod, WorkspaceStatFileMethod,
-    WorkspaceStatusMethod, WorkspaceStopWatchMethod, WorkspaceUnbundleMethod,
+    WorkspaceStatusMethod, WorkspaceStopWatchMethod, WorkspaceUnbundleBeginMethod,
+    WorkspaceUnbundleChunkMethod, WorkspaceUnbundleFinishMethod, WorkspaceUnbundleMethod,
 };
 use crate::remote::protocol::{
     error_codes, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
@@ -30,11 +32,13 @@ use super::handlers::{
     handle_agent_send, handle_agent_set_auth, handle_daemon_tail_log, handle_initialize,
     handle_ping, handle_runtime_metrics, handle_terminal_attach, handle_terminal_close,
     handle_terminal_list, handle_terminal_open, handle_terminal_resize, handle_terminal_write,
-    handle_workspace_branch_info, handle_workspace_bundle, handle_workspace_changes,
+    handle_workspace_branch_info, handle_workspace_bundle, handle_workspace_bundle_begin,
+    handle_workspace_bundle_chunk, handle_workspace_bundle_end, handle_workspace_changes,
     handle_workspace_file_tree, handle_workspace_mutate_file, handle_workspace_read_file,
     handle_workspace_read_file_at_ref, handle_workspace_search, handle_workspace_start_watch,
     handle_workspace_stat_file, handle_workspace_status, handle_workspace_stop_watch,
-    handle_workspace_unbundle,
+    handle_workspace_unbundle, handle_workspace_unbundle_begin, handle_workspace_unbundle_chunk,
+    handle_workspace_unbundle_finish,
 };
 use super::ServerContext;
 
@@ -139,6 +143,34 @@ pub fn dispatch_request(ctx: &ServerContext, req: JsonRpcRequest) -> Option<Json
         Method::WorkspaceUnbundle => handle::<WorkspaceUnbundleMethod, _>(req.params, |params| {
             handle_workspace_unbundle(ctx, params)
         }),
+        Method::WorkspaceBundleBegin => {
+            handle::<WorkspaceBundleBeginMethod, _>(req.params, |params| {
+                handle_workspace_bundle_begin(ctx, params)
+            })
+        }
+        Method::WorkspaceBundleChunk => {
+            handle::<WorkspaceBundleChunkMethod, _>(req.params, |params| {
+                handle_workspace_bundle_chunk(ctx, params)
+            })
+        }
+        Method::WorkspaceBundleEnd => handle::<WorkspaceBundleEndMethod, _>(req.params, |params| {
+            handle_workspace_bundle_end(ctx, params)
+        }),
+        Method::WorkspaceUnbundleBegin => {
+            handle::<WorkspaceUnbundleBeginMethod, _>(req.params, |params| {
+                handle_workspace_unbundle_begin(ctx, params)
+            })
+        }
+        Method::WorkspaceUnbundleChunk => {
+            handle::<WorkspaceUnbundleChunkMethod, _>(req.params, |params| {
+                handle_workspace_unbundle_chunk(ctx, params)
+            })
+        }
+        Method::WorkspaceUnbundleFinish => {
+            handle::<WorkspaceUnbundleFinishMethod, _>(req.params, |params| {
+                handle_workspace_unbundle_finish(ctx, params)
+            })
+        }
         Method::AgentSend => {
             handle::<AgentSendMethod, _>(req.params, |params| handle_agent_send(ctx, params))
         }

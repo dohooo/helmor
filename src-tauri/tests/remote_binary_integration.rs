@@ -20,9 +20,13 @@ use helmor_lib::remote::{
     methods::{
         PingMethod, PingParams, TerminalAttachParams, TerminalCloseParams, TerminalEventKind,
         TerminalEventNotification, TerminalListParams, TerminalOpenParams, TerminalWriteParams,
+        WorkspaceBundleBeginMethod, WorkspaceBundleBeginParams, WorkspaceBundleChunkMethod,
+        WorkspaceBundleChunkParams, WorkspaceBundleEndMethod, WorkspaceBundleEndParams,
         WorkspaceBundleMethod, WorkspaceBundleParams, WorkspaceChangesParams,
         WorkspaceFileTreeParams, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
         WorkspaceReadFileAtRefParams, WorkspaceReadFileParams, WorkspaceStatFileParams,
+        WorkspaceUnbundleBeginMethod, WorkspaceUnbundleBeginParams, WorkspaceUnbundleChunkMethod,
+        WorkspaceUnbundleChunkParams, WorkspaceUnbundleFinishMethod, WorkspaceUnbundleFinishParams,
         WorkspaceUnbundleMethod, WorkspaceUnbundleParams,
     },
     CommandTransport, OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RemoteTransport, RpcClient,
@@ -1079,6 +1083,175 @@ fn workspace_bundle_round_trips_through_two_spawned_daemons() {
     );
     // The committed file lands in the working tree.
     assert!(target.join("file.txt").exists());
+}
+
+#[test]
+fn chunked_bundle_round_trips_through_two_spawned_daemons() {
+    // End-to-end chunked transfer: spawn source + destination
+    // daemons, run the full bundleBegin/Chunk/End cycle on source,
+    // run unbundleBegin/Chunk/Finish on destination, verify the
+    // cloned repo's HEAD matches. Same shape as the single-shot
+    // integration test but exercises the chunk-splitting code +
+    // server-side BundleTransferStore.
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let source_repo = init_repo();
+    let source_cmd = Command::new(HELMOR_SERVER_BIN);
+    let source_client = RpcClient::connect_command(source_cmd, "source-daemon".into())
+        .expect("source daemon handshake");
+    let dest_cmd = Command::new(HELMOR_SERVER_BIN);
+    let dest_client =
+        RpcClient::connect_command(dest_cmd, "dest-daemon".into()).expect("dest daemon handshake");
+
+    // Force a tiny chunk size so the test actually exercises the
+    // multi-chunk path even on a small repo.
+    let chunk_size: u64 = 1024;
+
+    // ── Source: begin + chunk + end.
+    let begin = source_client
+        .call::<WorkspaceBundleBeginMethod>(WorkspaceBundleBeginParams {
+            workspace_dir: source_repo.path().display().to_string(),
+            chunk_size_bytes: Some(chunk_size),
+        })
+        .expect("bundleBegin");
+    assert!(!begin.transfer_id.is_empty());
+    assert!(begin.total_size_bytes > 0);
+    assert_eq!(begin.sha256_hex.len(), 64);
+    assert!(
+        begin.total_chunks > 0,
+        "small chunk size should produce multiple chunks: {:?}",
+        begin,
+    );
+    assert!(
+        begin.chunk_size_bytes <= chunk_size,
+        "server should respect or clamp the requested chunk size: {:?}",
+        begin,
+    );
+
+    let mut assembled: Vec<u8> = Vec::with_capacity(begin.total_size_bytes as usize);
+    for chunk_index in 0..begin.total_chunks {
+        let chunk = source_client
+            .call::<WorkspaceBundleChunkMethod>(WorkspaceBundleChunkParams {
+                transfer_id: begin.transfer_id.clone(),
+                chunk_index,
+                chunk_size_bytes: begin.chunk_size_bytes,
+            })
+            .unwrap_or_else(|err| panic!("bundleChunk {chunk_index}: {err:#}"));
+        let bytes = STANDARD
+            .decode(chunk.chunk_base64.as_bytes())
+            .expect("chunk decoded");
+        assembled.extend_from_slice(&bytes);
+    }
+    assert_eq!(
+        assembled.len() as u64,
+        begin.total_size_bytes,
+        "assembled size should match bundleBegin's declared size",
+    );
+
+    // Sanity: SHA matches.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&assembled);
+    let assembled_sha = format!("{:x}", hasher.finalize());
+    assert_eq!(
+        assembled_sha, begin.sha256_hex,
+        "reassembled bundle's sha should match the server's announcement",
+    );
+
+    // Release the outbound transfer.
+    source_client
+        .call::<WorkspaceBundleEndMethod>(WorkspaceBundleEndParams {
+            transfer_id: begin.transfer_id.clone(),
+        })
+        .expect("bundleEnd should succeed");
+
+    // ── Destination: unbundleBegin + chunk + finish.
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("cloned");
+    let inbound = dest_client
+        .call::<WorkspaceUnbundleBeginMethod>(WorkspaceUnbundleBeginParams {
+            target_dir: target.display().to_string(),
+            total_size_bytes: assembled.len() as u64,
+            sha256_hex: assembled_sha.clone(),
+        })
+        .expect("unbundleBegin");
+    assert!(!inbound.transfer_id.is_empty());
+
+    // Push the assembled buffer back across the wire in the SAME
+    // chunk size so we exercise the multi-chunk inbound path too.
+    let chunk_size_usize = begin.chunk_size_bytes as usize;
+    let mut chunk_index: u32 = 0;
+    let mut offset = 0;
+    while offset < assembled.len() {
+        let end = (offset + chunk_size_usize).min(assembled.len());
+        let slice = &assembled[offset..end];
+        let chunk_b64 = STANDARD.encode(slice);
+        dest_client
+            .call::<WorkspaceUnbundleChunkMethod>(WorkspaceUnbundleChunkParams {
+                transfer_id: inbound.transfer_id.clone(),
+                chunk_index,
+                chunk_base64: chunk_b64,
+            })
+            .unwrap_or_else(|err| panic!("unbundleChunk {chunk_index}: {err:#}"));
+        offset = end;
+        chunk_index += 1;
+    }
+
+    let finish = dest_client
+        .call::<WorkspaceUnbundleFinishMethod>(WorkspaceUnbundleFinishParams {
+            transfer_id: inbound.transfer_id,
+        })
+        .expect("unbundleFinish");
+    assert!(finish.cloned);
+    assert_eq!(finish.head_branch, "main");
+
+    // The cloned workspace's HEAD matches the source.
+    let source_head = helmor_lib::git_ops::current_workspace_head_commit(source_repo.path())
+        .expect("source HEAD");
+    let cloned_head =
+        helmor_lib::git_ops::current_workspace_head_commit(&target).expect("cloned HEAD");
+    assert_eq!(source_head, cloned_head);
+    assert!(target.join("file.txt").exists());
+}
+
+#[test]
+fn chunked_unbundle_finish_rejects_short_transfer_via_wire() {
+    // Announce 10 MiB but only push 6 bytes → unbundleFinish must
+    // bail with a clean error. Exercises the server-side size-mismatch
+    // check end-to-end.
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let dest_cmd = Command::new(HELMOR_SERVER_BIN);
+    let dest_client =
+        RpcClient::connect_command(dest_cmd, "dest-daemon".into()).expect("dest handshake");
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("cloned");
+    let inbound = dest_client
+        .call::<WorkspaceUnbundleBeginMethod>(WorkspaceUnbundleBeginParams {
+            target_dir: target.display().to_string(),
+            total_size_bytes: 10 * 1024 * 1024, // claim 10 MiB
+            sha256_hex: "0".repeat(64),
+        })
+        .expect("unbundleBegin");
+    dest_client
+        .call::<WorkspaceUnbundleChunkMethod>(WorkspaceUnbundleChunkParams {
+            transfer_id: inbound.transfer_id.clone(),
+            chunk_index: 0,
+            chunk_base64: STANDARD.encode(b"only-6"),
+        })
+        .expect("unbundleChunk");
+    let err = dest_client
+        .call::<WorkspaceUnbundleFinishMethod>(WorkspaceUnbundleFinishParams {
+            transfer_id: inbound.transfer_id,
+        })
+        .expect_err("short transfer must bail on finish");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("declared 10485760") || msg.contains("only"),
+        "error should call out the size mismatch: {msg}",
+    );
+    assert!(!target.exists(), "target dir must not be created");
 }
 
 #[test]
