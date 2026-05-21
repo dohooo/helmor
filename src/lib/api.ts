@@ -1130,6 +1130,22 @@ export async function disconnectRemoteRuntime(name: string): Promise<void> {
  * config. Used to recover from a Disconnected state (typically a
  * tombstone from boot-time restore failure).
  */
+/**
+ * Force re-install the helmor-server binary on a remote + reconnect.
+ * Used by the version-drift banner's "Reinstall" action when the
+ * remote's daemon version is older than the desktop's and the
+ * operator wants to refresh it without dropping back to the
+ * standalone installer.
+ *
+ * Only valid for SSH-backed remotes — local + command-transport
+ * runtimes bail with a legible error.
+ */
+export async function reinstallRemoteDaemon(
+	name: string,
+): Promise<RuntimeHealth> {
+	return invoke<RuntimeHealth>("reinstall_remote_daemon", { name });
+}
+
 export async function reconnectRemoteRuntime(
 	name: string,
 ): Promise<RuntimeHealth> {

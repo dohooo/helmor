@@ -830,6 +830,92 @@ pub async fn reconnect_remote_runtime(
     .await
 }
 
+/// Force re-install the helmor-server binary on a remote + reconnect.
+/// Used by the desktop's "Reinstall daemon" action when the version-
+/// drift banner has been showing — the operator decided to refresh
+/// the daemon to match this desktop's version even though the
+/// protocol check would otherwise let the existing install slide.
+///
+/// Flow:
+///   1. Resolve the runtime's persisted SSH config (host +
+///      remote_binary). Local + command-transport runtimes bail —
+///      reinstall only makes sense for an SSH-backed remote.
+///   2. Disconnect the live runtime (kills the SSH child).
+///   3. Run `force_reinstall_remote_helmor_server` — scp / download
+///      the binary up, verify the new version.
+///   4. Reconnect using the same config.
+///
+/// On any failure the binding is preserved, but the runtime is left
+/// in a Disconnected state — auto-reconnect picks it up on the next
+/// tick.
+#[tauri::command]
+pub async fn reinstall_remote_daemon(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<RuntimeHealth> {
+    if name.trim().is_empty() {
+        return Err(anyhow::anyhow!("runtime name must not be empty").into());
+    }
+    if name == crate::remote::LOCAL_RUNTIME_NAME {
+        return Err(anyhow::anyhow!(
+            "reinstall_remote_daemon is only valid for SSH-backed remote runtimes"
+        )
+        .into());
+    }
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let config = registry.config_for(&name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime `{name}` has no persisted config; remove it and re-add via Connect"
+            )
+        })?;
+        let (host, _remote_binary, forward_agent) = match &config {
+            RuntimeConnectionConfig::Ssh {
+                host,
+                remote_binary,
+                forward_agent,
+            } => (host.clone(), remote_binary.clone(), *forward_agent),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "runtime `{name}` is not SSH-backed; reinstall only supports the SSH transport (use the wizard for command-transport remotes)",
+                ));
+            }
+        };
+
+        // Drop the live runtime BEFORE shoving a new binary at the
+        // remote — the running daemon may have an in-flight RPC
+        // that'd contend with the install. Idempotent: works for
+        // both live + tombstoned entries.
+        let _ = registry.unregister(&name);
+
+        // Force install. Resolves the local binary the same way
+        // `connect_remote_runtime` does.
+        let local_binary = crate::remote::install::resolve_local_helmor_server_path()?;
+        let resolved_binary = crate::remote::install::force_reinstall_remote_helmor_server(
+            &crate::remote::install::ProcessSshRunner,
+            &host,
+            &local_binary,
+        )?;
+
+        // Reconnect using the same SSH options as the original.
+        let runtime = RemoteSshRuntime::connect_ssh_with_options(
+            &host,
+            &resolved_binary,
+            forward_agent,
+        )?;
+        let health = runtime.runtime_health()?;
+        // Same drift-emit hook as the regular connect path — if the
+        // new binary STILL drifts (e.g. force-install pulled the
+        // same version somehow), surface it again.
+        emit_version_drift_event(&app, &name, &health.version);
+        registry.register(name, Arc::new(runtime), Some(config))?;
+        persist_registry(&registry);
+        Ok(health)
+    })
+    .await
+}
+
 /// Track G2 read side: snapshot which providers have a key configured
 /// on the named remote runtime's daemon. Returns presence + optional
 /// base URLs; the literal API key value never crosses the wire. Used

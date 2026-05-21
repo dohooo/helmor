@@ -16,15 +16,18 @@
  * - Amber tone (informational; less urgent than crash-loop).
  * - Per-runtime dismiss (local-only — re-fires on the next
  *   connect / reconnect that exercises the drift detector).
- * - The actual reinstall lives outside this banner today: the
- *   operator follows the docs' "Pre-installing the daemon manually"
- *   section to swap the binary, then clicks Reconnect.
+ * - "Reinstall" action drives `reinstall_remote_daemon` which
+ *   force-installs the binary + reconnects. The button shows a
+ *   spinner during the reinstall (multi-second operation: scp /
+ *   download + verify + reconnect).
  */
 
-import { ArrowUpCircle, X } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowUpCircle, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { subscribeUiMutations } from "@/lib/api";
+import { reinstallRemoteDaemon, subscribeUiMutations } from "@/lib/api";
 
 type DriftAlert = {
 	name: string;
@@ -34,6 +37,7 @@ type DriftAlert = {
 };
 
 export function RemoteVersionDriftBanner() {
+	const queryClient = useQueryClient();
 	// Keyed by runtime name so re-fires (manual reconnect after
 	// upgrading the desktop, etc.) replace the stale row rather
 	// than stacking.
@@ -67,6 +71,31 @@ export function RemoteVersionDriftBanner() {
 		};
 	}, []);
 
+	const reinstall = useMutation({
+		mutationFn: (name: string) => reinstallRemoteDaemon(name),
+		onSuccess: (health, name) => {
+			toast.success(
+				`Reinstalled helmor-server on ${name} — now running ${health.version}`,
+			);
+			// Drop the alert from local state. If the daemon's STILL
+			// older somehow, the connect path re-emits the event +
+			// the banner pops again.
+			setAlerts((prev) => {
+				const next = { ...prev };
+				delete next[name];
+				return next;
+			});
+			void queryClient.invalidateQueries({ queryKey: ["remote-runtimes"] });
+		},
+		onError: (err, name) => {
+			toast.error(
+				`Reinstall on ${name} failed: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		},
+	});
+
 	const entries = Object.values(alerts);
 	if (entries.length === 0) return null;
 
@@ -79,6 +108,10 @@ export function RemoteVersionDriftBanner() {
 				<DriftRow
 					key={alert.name}
 					alert={alert}
+					reinstallPending={
+						reinstall.isPending && reinstall.variables === alert.name
+					}
+					onReinstall={() => reinstall.mutate(alert.name)}
 					onDismiss={() =>
 						setAlerts((prev) => {
 							const next = { ...prev };
@@ -94,9 +127,13 @@ export function RemoteVersionDriftBanner() {
 
 function DriftRow({
 	alert,
+	reinstallPending,
+	onReinstall,
 	onDismiss,
 }: {
 	alert: DriftAlert;
+	reinstallPending: boolean;
+	onReinstall: () => void;
 	onDismiss: () => void;
 }) {
 	return (
@@ -117,9 +154,30 @@ function DriftRow({
 				. Reinstall recommended — recent fixes may be missing on the remote.
 			</span>
 			<Button
+				size="sm"
+				variant="ghost"
+				className="text-amber-100 hover:bg-amber-900/40 hover:text-amber-50"
+				disabled={reinstallPending}
+				onClick={onReinstall}
+				data-testid={`remote-version-drift-reinstall-${alert.name}`}
+			>
+				{reinstallPending ? (
+					<>
+						<Loader2 className="mr-1.5 size-3 animate-spin" />
+						Reinstalling…
+					</>
+				) : (
+					<>
+						<RefreshCw className="mr-1.5 size-3" />
+						Reinstall
+					</>
+				)}
+			</Button>
+			<Button
 				size="icon"
 				variant="ghost"
 				className="size-7 text-amber-100 hover:bg-amber-900/40 hover:text-amber-50"
+				disabled={reinstallPending}
 				onClick={onDismiss}
 				aria-label={`Dismiss version drift alert for ${alert.name}`}
 				data-testid={`remote-version-drift-dismiss-${alert.name}`}

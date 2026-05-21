@@ -447,6 +447,7 @@ pub fn run() {
             commands::remote_commands::list_workspace_runtime_bindings,
             commands::remote_commands::open_remote_terminal,
             commands::remote_commands::reconnect_remote_runtime,
+            commands::remote_commands::reinstall_remote_daemon,
             commands::remote_commands::resize_remote_terminal,
             commands::remote_commands::search_workspace,
             commands::remote_commands::set_runtime_agent_auth,

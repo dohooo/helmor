@@ -205,6 +205,54 @@ pub fn ensure_remote_helmor_server_with_strategy<R: SshRunner>(
     }
 }
 
+/// Force-reinstall variant: skip the "binary already present and
+/// protocol-compatible" probe and go straight to a fresh install at
+/// the managed location. Used by the "Reinstall daemon" action the
+/// desktop surfaces when it detects version drift — the operator
+/// explicitly asked for the binary to be replaced even though the
+/// protocol still matches.
+///
+/// Identical to [`ensure_remote_helmor_server`] from step 3 onward
+/// (install plus post-install verify); just bypasses the early-return
+/// when the existing install passes the protocol check.
+pub fn force_reinstall_remote_helmor_server<R: SshRunner>(
+    runner: &R,
+    host: &str,
+    local_binary: &Path,
+) -> Result<String> {
+    let strategy = resolve_install_strategy();
+    let expected_protocol = super::PROTOCOL_VERSION;
+    install_remote(runner, host, local_binary, expected_protocol, strategy)
+        .with_context(|| format!("force re-install of helmor-server on `{host}` failed"))?;
+    // Same post-install verify as `ensure_remote_helmor_server` —
+    // confirm the new binary runs + reports the expected protocol.
+    match probe_remote_version(runner, host, REMOTE_INSTALL_BINARY) {
+        ProbeOutcome::Found(version) if version_matches_protocol(&version, expected_protocol) => {
+            tracing::info!(
+                host = %host,
+                binary = %REMOTE_INSTALL_BINARY,
+                version = %version.binary_version,
+                "remote-runner: forced re-install completed; new binary verified"
+            );
+            Ok(REMOTE_INSTALL_BINARY.to_string())
+        }
+        ProbeOutcome::Found(version) => {
+            bail!(
+                "force re-install completed but the new binary's protocol \
+                 ({:?}) doesn't match the desktop's expected protocol ({})",
+                version.protocol_version,
+                expected_protocol,
+            )
+        }
+        ProbeOutcome::Missing => {
+            bail!(
+                "force re-install reported success but binary still missing at `{REMOTE_INSTALL_BINARY}`"
+            )
+        }
+        ProbeOutcome::TransportError(err) => Err(err),
+    }
+}
+
 /// `true` when the binary's protocol line matches our compiled-in
 /// `PROTOCOL_VERSION`. Pre-D4 binaries (no protocol line at all)
 /// never match — forces them to be replaced.

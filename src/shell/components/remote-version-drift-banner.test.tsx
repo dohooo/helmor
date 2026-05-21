@@ -6,6 +6,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 
 const apiMocks = vi.hoisted(() => ({
 	subscribeUiMutations: vi.fn(),
+	reinstallRemoteDaemon: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -13,8 +14,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		subscribeUiMutations: apiMocks.subscribeUiMutations,
+		reinstallRemoteDaemon: apiMocks.reinstallRemoteDaemon,
 	};
 });
+
+vi.mock("sonner", () => ({
+	toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 import { RemoteVersionDriftBanner } from "./remote-version-drift-banner";
 
@@ -54,6 +60,12 @@ function driftEvent(
 describe("RemoteVersionDriftBanner", () => {
 	beforeEach(() => {
 		apiMocks.subscribeUiMutations.mockReset();
+		apiMocks.reinstallRemoteDaemon.mockReset();
+		apiMocks.reinstallRemoteDaemon.mockResolvedValue({
+			kind: { type: "remote", host: "dev.box" },
+			hostname: "dev.box",
+			version: "0.22.1",
+		});
 	});
 
 	afterEach(() => {
@@ -153,6 +165,55 @@ describe("RemoteVersionDriftBanner", () => {
 				screen.queryByTestId("remote-version-drift-row-dev.box"),
 			).toBeNull(),
 		);
+	});
+
+	it("fires reinstallRemoteDaemon when the Reinstall button is clicked", async () => {
+		const sub = buildSubscribeMock();
+		apiMocks.subscribeUiMutations.mockImplementation(sub.subscribe);
+		const user = userEvent.setup();
+		renderWithProviders(<RemoteVersionDriftBanner />);
+		await waitFor(() => expect(sub.subscribe).toHaveBeenCalled());
+
+		act(() => sub.fire(driftEvent({ name: "dev.box" })));
+		await screen.findByTestId("remote-version-drift-row-dev.box");
+
+		await user.click(
+			screen.getByTestId("remote-version-drift-reinstall-dev.box"),
+		);
+		await waitFor(() =>
+			expect(apiMocks.reinstallRemoteDaemon).toHaveBeenCalledWith("dev.box"),
+		);
+		// Banner dismisses itself on success.
+		await waitFor(() =>
+			expect(
+				screen.queryByTestId("remote-version-drift-row-dev.box"),
+			).toBeNull(),
+		);
+	});
+
+	it("keeps the alert visible when reinstall fails", async () => {
+		apiMocks.reinstallRemoteDaemon.mockRejectedValueOnce(
+			new Error("scp: permission denied"),
+		);
+		const sub = buildSubscribeMock();
+		apiMocks.subscribeUiMutations.mockImplementation(sub.subscribe);
+		const user = userEvent.setup();
+		renderWithProviders(<RemoteVersionDriftBanner />);
+		await waitFor(() => expect(sub.subscribe).toHaveBeenCalled());
+
+		act(() => sub.fire(driftEvent({ name: "dev.box" })));
+		await screen.findByTestId("remote-version-drift-row-dev.box");
+
+		await user.click(
+			screen.getByTestId("remote-version-drift-reinstall-dev.box"),
+		);
+		await waitFor(() =>
+			expect(apiMocks.reinstallRemoteDaemon).toHaveBeenCalled(),
+		);
+		// Alert still up so the operator can retry / dismiss.
+		expect(
+			screen.getByTestId("remote-version-drift-row-dev.box"),
+		).toBeInTheDocument();
 	});
 
 	it("unsubscribes on unmount", async () => {
