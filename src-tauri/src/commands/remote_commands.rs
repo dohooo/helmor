@@ -1544,6 +1544,7 @@ pub fn set_workspace_runtime_binding(
     bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
     workspace_id: String,
     runtime_name: String,
+    remote_path: Option<String>,
 ) -> CmdResult<()> {
     if workspace_id.trim().is_empty() {
         return Err(anyhow::anyhow!("workspace id must not be empty").into());
@@ -1551,7 +1552,14 @@ pub fn set_workspace_runtime_binding(
     if runtime_name.trim().is_empty() {
         return Err(anyhow::anyhow!("runtime name must not be empty").into());
     }
-    bindings.set(workspace_id.clone(), runtime_name.clone());
+    // Track F2: trim + reject empty-but-present remote_path so a UI
+    // that submits an empty string doesn't persist a useless override.
+    // `None` means "no override", "/some/path" means "use this on
+    // remote", "  " collapses to `None` for the same reason.
+    let remote_path = remote_path
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+    bindings.set(workspace_id.clone(), runtime_name.clone(), remote_path);
     persist_bindings(&bindings);
     // Phase 22b dual-write: keep the column in sync with the sidecar
     // so the resolver's column-first lookup sees the new binding
@@ -2064,7 +2072,7 @@ mod tests {
 
     fn bindings_with(workspace_id: &str, runtime_name: &str) -> Arc<WorkspaceRuntimeBindings> {
         let bindings = Arc::new(WorkspaceRuntimeBindings::new());
-        bindings.set(workspace_id, runtime_name);
+        bindings.set(workspace_id, runtime_name, None);
         bindings
     }
 

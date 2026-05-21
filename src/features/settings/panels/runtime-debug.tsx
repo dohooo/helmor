@@ -1539,6 +1539,9 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 
 	const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
 	const [draftRuntimeName, setDraftRuntimeName] = useState<string>("local");
+	// Track F2: optional per-host worktree path. Empty string → no
+	// override (defaults to the local workspace path on the remote).
+	const [draftRemotePath, setDraftRemotePath] = useState("");
 
 	// Keep the draft runtime selection valid as the registry list
 	// shifts under us (e.g. user disconnects the selected entry).
@@ -1549,13 +1552,21 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 	}, [entries, draftRuntimeName]);
 
 	const setBinding = useMutation({
-		mutationFn: ({ id, runtime }: { id: string; runtime: string }) =>
-			setWorkspaceRuntimeBinding(id, runtime),
+		mutationFn: ({
+			id,
+			runtime,
+			remotePath,
+		}: {
+			id: string;
+			runtime: string;
+			remotePath: string | null;
+		}) => setWorkspaceRuntimeBinding(id, runtime, remotePath),
 		onSuccess: () => {
 			void queryClient.invalidateQueries({
 				queryKey: ["workspace-runtime-bindings"],
 			});
 			setDraftWorkspaceId("");
+			setDraftRemotePath("");
 		},
 	});
 	const clearBinding = useMutation({
@@ -1596,6 +1607,14 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 										<span>{binding.workspaceId}</span>
 										<span className="text-muted-foreground">→</span>
 										<span>{binding.runtimeName}</span>
+										{binding.remotePath ? (
+											<span
+												className="ml-1 rounded bg-muted px-1 py-px text-[10px] font-normal text-muted-foreground"
+												title={`Remote worktree path: ${binding.remotePath}`}
+											>
+												@ {binding.remotePath}
+											</span>
+										) : null}
 									</span>
 								}
 								description={
@@ -1652,6 +1671,18 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 							</option>
 						))}
 					</select>
+
+					<Label htmlFor="binding-remote-path" className="text-xs">
+						Remote path
+					</Label>
+					<Input
+						id="binding-remote-path"
+						value={draftRemotePath}
+						onChange={(e) => setDraftRemotePath(e.target.value)}
+						placeholder="Optional — defaults to the local path"
+						disabled={draftRuntimeName === "local"}
+						data-testid="binding-remote-path-input"
+					/>
 				</div>
 
 				<div className="flex items-center justify-between gap-3">
@@ -1670,6 +1701,11 @@ function WorkspaceBindingsSection({ entries }: { entries: RuntimeEntry[] }) {
 							setBinding.mutate({
 								id: draftWorkspaceId.trim(),
 								runtime: draftRuntimeName,
+								// Track F2: empty / whitespace input means "no override".
+								remotePath:
+									draftRuntimeName === "local" || draftRemotePath.trim() === ""
+										? null
+										: draftRemotePath.trim(),
 							})
 						}
 					>

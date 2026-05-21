@@ -990,6 +990,15 @@ export async function listSshHostDetails(): Promise<SshHostDetail[]> {
 export type WorkspaceRuntimeBinding = {
 	workspaceId: string;
 	runtimeName: string;
+	/**
+	 * Track F2: optional per-host worktree path override. `null` /
+	 * `undefined` means "the same path as locally" (works when both
+	 * sides happen to share a filesystem layout). Set when the
+	 * remote keeps the project at a different absolute path so the
+	 * resolver doesn't ship local paths into a remote `git` /
+	 * `agent` op.
+	 */
+	remotePath?: string | null;
 };
 
 export async function listWorkspaceRuntimeBindings(): Promise<
@@ -1001,14 +1010,23 @@ export async function listWorkspaceRuntimeBindings(): Promise<
 /**
  * Pin a workspace to a runtime by name. Overwrites any prior
  * binding for the same workspace. Empty inputs are rejected.
+ *
+ * Track F2: pass `remotePath` to override the worktree path on the
+ * bound runtime (typical when local + remote have different
+ * filesystem layouts). Omit / pass `null` for the default "same
+ * path on both sides" behaviour.
  */
 export async function setWorkspaceRuntimeBinding(
 	workspaceId: string,
 	runtimeName: string,
+	remotePath?: string | null,
 ): Promise<void> {
 	return invoke<void>("set_workspace_runtime_binding", {
 		workspaceId,
 		runtimeName,
+		// Tauri serialises `undefined` as missing; pass through both
+		// so older backends that don't accept the arg keep working.
+		remotePath: remotePath ?? null,
 	});
 }
 

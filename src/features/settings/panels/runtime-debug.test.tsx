@@ -1019,6 +1019,7 @@ describe("RuntimeDebugPanel", () => {
 			expect(apiMocks.setWorkspaceRuntimeBinding).toHaveBeenCalledWith(
 				"ws-1234",
 				"local",
+				null,
 			);
 		});
 		// Input clears on success so the user can pin another.
