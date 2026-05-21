@@ -513,9 +513,18 @@ impl RpcClient {
     /// Idempotent: a second call after the writer's already been
     /// replaced is a harmless mark-closed.
     pub fn force_close(&self, reason: &str) {
-        // Replace the live writer with an `io::sink` — that drops the
-        // child (writer's `Drop` calls kill+wait) without holding the
-        // mutex across any join in [`Drop for RpcClient`].
+        // Mark closed FIRST. The writer drop below kills the child,
+        // which closes the kernel pipe, which unblocks the reader
+        // thread, which races us to call `mark_closed` with its own
+        // "EOF" reason. `mark_closed` uses first-write-wins so we
+        // need to claim the slot before the reader gets a chance.
+        // Without this ordering an in-flight `call` would surface
+        // "peer closed (EOF)" instead of the watchdog's diagnostic
+        // — same end-state (Err) but a strictly worse message.
+        self.state.mark_closed(reason.to_string());
+        // Now replace the live writer with an `io::sink` — that drops
+        // the child (writer's `Drop` calls kill+wait) without holding
+        // the mutex across any join in [`Drop for RpcClient`].
         let _writer = std::mem::replace(
             &mut *self
                 .writer
@@ -527,10 +536,6 @@ impl RpcClient {
             },
         );
         drop(_writer);
-        // Mark closed AFTER the writer drop so the reader thread's own
-        // mark_closed (it'll fire when read returns EOF/Err) finds the
-        // slot already set and leaves our reason intact.
-        self.state.mark_closed(reason.to_string());
     }
 
     pub fn subscribe_workspace_file_events<F>(&self, callback: F) -> NotificationSubscription

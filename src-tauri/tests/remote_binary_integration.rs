@@ -18,10 +18,11 @@ use std::time::{Duration, Instant};
 
 use helmor_lib::remote::{
     methods::{
-        TerminalAttachParams, TerminalCloseParams, TerminalEventKind, TerminalEventNotification,
-        TerminalListParams, TerminalOpenParams, TerminalWriteParams, WorkspaceChangesParams,
-        WorkspaceFileTreeParams, WorkspaceMutateFileAction, WorkspaceMutateFileParams,
-        WorkspaceReadFileAtRefParams, WorkspaceReadFileParams, WorkspaceStatFileParams,
+        PingMethod, PingParams, TerminalAttachParams, TerminalCloseParams, TerminalEventKind,
+        TerminalEventNotification, TerminalListParams, TerminalOpenParams, TerminalWriteParams,
+        WorkspaceChangesParams, WorkspaceFileTreeParams, WorkspaceMutateFileAction,
+        WorkspaceMutateFileParams, WorkspaceReadFileAtRefParams, WorkspaceReadFileParams,
+        WorkspaceStatFileParams,
     },
     CommandTransport, OwnedTerminals, RemoteRuntime, RemoteSshRuntime, RemoteTransport, RpcClient,
     RuntimeKind, WorkspaceStatusMethod, WorkspaceStatusParams,
@@ -898,4 +899,118 @@ fn owned_terminals_persistence_round_trips_with_daemon_list_and_attach() {
         after_close.list_for_runtime("daemon-under-test").is_empty(),
         "close should drop ownership from disk"
     );
+}
+
+// ── Track C3 integration: half-open socket force_close ───────────────
+//
+// Track C3 added `RpcClient::force_close` so the liveness loop can
+// kill a wedged pipe instead of letting it hang for the kernel's TCP
+// keepalive window. Unit tests cover the seam in isolation; this
+// test proves the full vertical works on a real OS pipe boundary:
+// spawn the binary, suspend it with SIGSTOP (the closest reliable
+// reproduction of "TCP socket alive in the kernel but the peer
+// process is stuck"), issue an in-flight ping, force_close from
+// another thread, and verify both the in-flight call AND any
+// subsequent call fail fast with the close reason rather than
+// blocking forever.
+
+#[test]
+#[cfg(unix)]
+fn force_close_unblocks_in_flight_call_against_a_suspended_peer() {
+    use std::io::BufReader;
+    use std::process::Stdio;
+
+    // Spawn the binary ourselves (rather than connect_command's
+    // convenience wrapper) so we can capture the PID for SIGSTOP
+    // before the Child gets consumed by RpcClient.
+    let mut cmd = Command::new(HELMOR_SERVER_BIN);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().expect("spawn helmor-server");
+    let pid: libc::pid_t = child.id() as libc::pid_t;
+
+    let stdin = child.stdin.take().expect("child stdin");
+    let stdout = child.stdout.take().expect("child stdout");
+    let reader: Box<dyn std::io::BufRead + Send> = Box::new(BufReader::new(stdout));
+    let writer: Box<dyn std::io::Write + Send> = Box::new(stdin);
+    let client = Arc::new(
+        RpcClient::connect_with_pipe(reader, writer, Some(child), "half-open-test".into())
+            .expect("handshake before SIGSTOP should succeed"),
+    );
+
+    // Sanity: a ping works while the peer is healthy. Establishes
+    // the baseline so a failure after SIGSTOP is unambiguously
+    // attributable to the suspension.
+    client
+        .call::<PingMethod>(PingParams::default())
+        .expect("pre-suspend ping should succeed");
+
+    // Half-open simulation: SIGSTOP suspends the child process.
+    // Kernel buffers our future writes; no reads ever happen. From
+    // the client's perspective the pipe is alive at the OS level
+    // but nothing will ever respond — exactly the failure mode C3
+    // exists to detect.
+    let stop_result = unsafe { libc::kill(pid, libc::SIGSTOP) };
+    assert_eq!(
+        stop_result,
+        0,
+        "kill(SIGSTOP) should succeed; errno-as-i32 = {}",
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    );
+
+    // Fire an in-flight ping on a worker thread. Without the
+    // force_close call below it would hang here forever.
+    let in_flight_client = Arc::clone(&client);
+    let in_flight =
+        std::thread::spawn(move || in_flight_client.call::<PingMethod>(PingParams::default()));
+
+    // Give the worker a moment to actually send the request +
+    // register its pending oneshot. 100ms is plenty — the writer
+    // mutex is uncontended and the codec is two pipe writes.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Watchdog kill — the operation under test. force_close should
+    // drop the writer (which Drops the suspended child, sending
+    // SIGKILL via std::process::Child::kill) and mark state closed.
+    client.force_close("watchdog: simulated half-open ssh pipe");
+
+    // The in-flight call must return Err within a reasonable
+    // deadline; if force_close didn't actually unblock the reader,
+    // the loop below would spin past this timeout.
+    let join_deadline = Instant::now() + Duration::from_secs(3);
+    while !in_flight.is_finished() {
+        if Instant::now() >= join_deadline {
+            panic!("force_close did not unblock the in-flight ping within 3s");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let in_flight_result = in_flight.join().expect("in-flight thread panicked");
+    let err = in_flight_result.expect_err("in-flight ping must fail after force_close");
+    let err_msg = format!("{err:#}");
+    assert!(
+        err_msg.contains("watchdog"),
+        "in-flight error should carry the force_close reason: {err_msg}",
+    );
+
+    // Subsequent calls also fail fast — no hang waiting for a
+    // response that will never come.
+    let post_start = Instant::now();
+    let post_err = client
+        .call::<PingMethod>(PingParams::default())
+        .expect_err("post-close ping must fail");
+    assert!(
+        post_start.elapsed() < Duration::from_secs(1),
+        "post-close ping should fail within 1s, took {:?}",
+        post_start.elapsed(),
+    );
+    let post_msg = format!("{post_err:#}");
+    assert!(
+        post_msg.contains("watchdog") || post_msg.contains("closed"),
+        "post-close error should reference the close reason: {post_msg}",
+    );
+
+    // The Child object was consumed by force_close's writer-drop,
+    // so SIGKILL/wait already happened on the suspended process —
+    // nothing left to clean up here.
 }
