@@ -1,6 +1,12 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { LineStats, ShinyFlash } from "./row-primitives";
+import { getCachedFileIcon, LineStats, ShinyFlash } from "./row-primitives";
+
+vi.mock("file-extension-icon-js", () => ({
+	getMaterialFileIcon: (name: string) => `icon:${name}`,
+	getMaterialFolderIcon: (name: string, open?: boolean) =>
+		`folder:${name}:${open ? "open" : "closed"}`,
+}));
 
 vi.mock("@/components/ui/number-ticker", () => ({
 	NumberTicker: ({
@@ -125,5 +131,12 @@ describe("LineStats", () => {
 			"data-animate-on-mount",
 			"true",
 		);
+	});
+});
+
+describe("getCachedFileIcon", () => {
+	it("keeps filename-specific icons distinct for files with the same extension", () => {
+		expect(getCachedFileIcon("package.json")).toBe("icon:package.json");
+		expect(getCachedFileIcon("tsconfig.json")).toBe("icon:tsconfig.json");
 	});
 });

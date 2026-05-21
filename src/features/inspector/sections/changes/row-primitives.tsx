@@ -210,7 +210,7 @@ function markLineStatMountAnimationPlayed(animationKey: string) {
 }
 
 export function getCachedFileIcon(name: string) {
-	const key = name.slice(name.lastIndexOf(".") + 1).toLowerCase() || name;
+	const key = name;
 	const existing = fileIconCache.get(key);
 	if (existing) return existing;
 	const icon = getMaterialFileIcon(name);
