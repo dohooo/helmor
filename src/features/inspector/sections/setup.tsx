@@ -170,8 +170,9 @@ export function SetupTab({
 					</div>
 
 					{showFloatingAction && (
+						// z-20 keeps the button above xterm's link-layer canvas (z:2).
 						<div
-							className="absolute bottom-3 right-4"
+							className="absolute right-4 bottom-3 z-20"
 							style={
 								autoExpandEnabled
 									? {
