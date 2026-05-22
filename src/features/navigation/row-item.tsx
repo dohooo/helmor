@@ -40,8 +40,8 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-	getScriptState,
-	subscribeStatus,
+	isAnyRunScriptRunning,
+	subscribeWorkspaceRunStatus,
 } from "@/features/inspector/script-store";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
@@ -113,20 +113,28 @@ export type WorkspaceRowItemProps = {
 };
 
 /**
- * Subscribes to this workspace's `run`-script status via the module-level
- * script-store used by the inspector. Returns true only while the script is
- * actively executing (not "idle" or "exited"). Per-row subscription keeps the
- * re-render fan-out narrow — only rows whose status flipped re-render.
+ * Subscribes to ANY run-action's status for this workspace. With multi
+ * run-action support a single workspace can have several concurrent runs
+ * (e.g. Dev + Tests); the row indicator lights up whenever at least one
+ * is live. Per-row subscription keeps the re-render fan-out narrow — only
+ * rows whose status flipped re-render. The store handles the per-action
+ * → per-workspace fan-in.
  */
 function useIsRunScriptRunning(workspaceId: string): boolean {
-	const [running, setRunning] = useState(
-		() => getScriptState(workspaceId, "run")?.status === "running",
+	const [running, setRunning] = useState(() =>
+		isAnyRunScriptRunning(workspaceId),
 	);
 	useEffect(() => {
-		// Re-sync when the row is reused for a different workspace (virtual list).
-		setRunning(getScriptState(workspaceId, "run")?.status === "running");
-		return subscribeStatus(workspaceId, "run", (status) => {
-			setRunning(status === "running");
+		// Re-sync when the row is reused for a different workspace
+		// (virtual list slot recycling).
+		setRunning(isAnyRunScriptRunning(workspaceId));
+		return subscribeWorkspaceRunStatus(workspaceId, (status) => {
+			// Each event reports the action that just flipped. When it
+			// goes "running" we know the workspace has at least one live
+			// run; when it goes "exited" we have to re-check the store
+			// in case another action is still live.
+			if (status === "running") setRunning(true);
+			else setRunning(isAnyRunScriptRunning(workspaceId));
 		});
 	}, [workspaceId]);
 	return running;

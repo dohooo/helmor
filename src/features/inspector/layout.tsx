@@ -9,6 +9,15 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
@@ -16,6 +25,7 @@ import {
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import type { RunAction } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
@@ -203,6 +213,20 @@ type InspectorTabsSectionProps = {
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
 	/**
+	 * All run actions configured for the current repo (DB + helmor.json
+	 * merged). Empty when none configured — the Run-tab dropdown still
+	 * renders, but only carries the "Create new" entry.
+	 */
+	runActions: RunAction[];
+	/** id of the run action the user has picked as active in this workspace
+	 * (or `null` to mean "the first action"). */
+	activeRunActionId: string | null;
+	/** Setting a new active id from the dropdown radio. */
+	onSelectRunAction: (actionId: string) => void;
+	/** "Create" item in the dropdown — opens the repo settings UI focused
+	 * on the run-scripts section. */
+	onCreateRunAction: () => void;
+	/**
 	 * Live list of terminal sub-tabs for the current workspace. Each instance
 	 * becomes a tab in the unified row, identified by `instance.id` as the
 	 * activeTab value. Display labels are positional (`getTerminalDisplayTitle`).
@@ -236,6 +260,10 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
+	runActions,
+	activeRunActionId,
+	onSelectRunAction,
+	onCreateRunAction,
 	terminalInstances,
 	onAddTerminal,
 	onCloseTerminal,
@@ -426,22 +454,37 @@ export function InspectorTabsSection({
 										)}
 									/>
 								</button>
-								<button
-									type="button"
-									role="tab"
-									id="inspector-tab-run"
-									aria-controls="inspector-panel-run"
-									aria-selected={activeTab === "run"}
-									tabIndex={activeTab === "run" ? 0 : -1}
-									className={cn(
-										INSPECTOR_TAB_BUTTON_CLASS,
-										"shrink-0",
-										activeTab === "run" && "text-foreground",
-									)}
-									onClick={() => handleTabClick("run")}
-								>
-									<ScriptStatusIcon state={runScriptState} />
-									Run
+								{/* Run tab + dropdown chevron share a wrapper so the
+								    active-tab underline can span both — covering the
+								    chevron too, not just the "Run" label. */}
+								<div className="relative flex shrink-0 items-stretch">
+									<button
+										type="button"
+										role="tab"
+										id="inspector-tab-run"
+										aria-controls="inspector-panel-run"
+										aria-selected={activeTab === "run"}
+										tabIndex={activeTab === "run" ? 0 : -1}
+										className={cn(
+											INSPECTOR_TAB_BUTTON_CLASS,
+											// Tighten right padding so the dropdown chevron sits
+											// flush against the label instead of inheriting the
+											// full tab gutter.
+											"shrink-0 pr-1",
+											activeTab === "run" && "text-foreground",
+										)}
+										onClick={() => handleTabClick("run")}
+									>
+										<ScriptStatusIcon state={runScriptState} />
+										Run
+									</button>
+									<RunActionsDropdown
+										activeTab={activeTab}
+										runActions={runActions}
+										activeRunActionId={activeRunActionId}
+										onSelectRunAction={onSelectRunAction}
+										onCreateRunAction={onCreateRunAction}
+									/>
 									<span
 										aria-hidden="true"
 										className={cn(
@@ -449,7 +492,7 @@ export function InspectorTabsSection({
 											activeTab === "run" && "opacity-100",
 										)}
 									/>
-								</button>
+								</div>
 								{terminalInstances.length === 0 ? (
 									// Placeholder tab so the Terminal entry point is always
 									// discoverable, even on a fresh workspace with no live
@@ -677,5 +720,102 @@ export function HorizontalResizeHandle({
 				}`}
 			/>
 		</div>
+	);
+}
+
+/**
+ * Chevron trigger rendered to the right of the Run tab label. Clicking it
+ * (a) does NOT switch tabs — the dropdown handles its own focus — and
+ * (b) shows the list of configured run actions plus a "Create" entry
+ * that punts to the repository settings panel.
+ *
+ * Composition-only: uses the project's standard shadcn DropdownMenu
+ * primitives (RadioGroup / RadioItem / Separator / Item) so visual style
+ * stays consistent with every other menu in the app.
+ */
+function RunActionsDropdown({
+	activeTab,
+	runActions,
+	activeRunActionId,
+	onSelectRunAction,
+	onCreateRunAction,
+}: {
+	activeTab: string;
+	runActions: RunAction[];
+	activeRunActionId: string | null;
+	onSelectRunAction: (id: string) => void;
+	onCreateRunAction: () => void;
+}) {
+	// Resolve which radio value should be checked. Falls back to the first
+	// action when the persisted id is missing or stale (recently deleted).
+	const resolvedActiveId =
+		runActions.find((a) => a.id === activeRunActionId)?.id ??
+		runActions[0]?.id ??
+		"";
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button
+					type="button"
+					aria-label="Switch run action"
+					// Sit visually adjacent to the Run tab without claiming
+					// tab semantics — pure menu trigger. Pull a hair to the
+					// left so it nests against the label.
+					//
+					// Hover feedback mirrors the inline-icon-button pattern
+					// already used in this file: muted → foreground text +
+					// a soft `bg-accent/60` halo so the affordance reads
+					// even when the chevron is already at full color
+					// (active-Run case). `data-[state=open]` keeps the bg
+					// pinned while the dropdown is open — Radix sets that
+					// attribute on the trigger automatically.
+					className={cn(
+						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent/60 data-[state=open]:text-foreground",
+						activeTab === "run" && "text-foreground",
+					)}
+					// Don't bubble the click — the parent tablist would
+					// otherwise interpret it as activating the Run tab.
+					onClick={(e) => e.stopPropagation()}
+				>
+					<ChevronDown className="size-3" strokeWidth={2} />
+				</button>
+			</DropdownMenuTrigger>
+			{/* `align="end"` pins the dropdown's right edge to the chevron's
+			    right edge — the menu extends leftward, so each item's
+			    right edge lines up cleanly with the trigger. Min width is
+			    tight; Radix grows the panel to fit the longest item, so
+			    short labels stay compact. */}
+			<DropdownMenuContent align="end" className="min-w-[112px]">
+				{runActions.length > 0 && (
+					<>
+						<DropdownMenuRadioGroup
+							value={resolvedActiveId}
+							onValueChange={onSelectRunAction}
+						>
+							{runActions.map((action) => (
+								<DropdownMenuRadioItem
+									key={action.id}
+									value={action.id}
+									className="flex items-center gap-2"
+								>
+									<span className="truncate">{action.name}</span>
+								</DropdownMenuRadioItem>
+							))}
+						</DropdownMenuRadioGroup>
+						<DropdownMenuSeparator />
+					</>
+				)}
+				{/* Mirror the radio items' shape: label on the left, glyph
+				    pinned absolute-right so the icon column lines up with
+				    the `✓` checkmark above (same `pr-8 + right-2` slot). */}
+				<DropdownMenuItem onSelect={onCreateRunAction} className="pr-8">
+					<span>Create</span>
+					<Plus
+						className="pointer-events-none absolute right-2 size-3.5"
+						strokeWidth={1.8}
+					/>
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

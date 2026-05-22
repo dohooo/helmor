@@ -91,6 +91,11 @@ type UseWorkspaceInspectorSidebarArgs = {
 	 * `null` until the workspace detail query resolves; nothing happens
 	 * while loading. */
 	workspaceState?: string | null;
+	/** Persisted active-run-action id for this workspace (workspace row).
+	 * `null` if the user hasn't picked one yet; the hook falls back to the
+	 * first action returned by `loadRepoScripts`. Cmd+R uses whatever this
+	 * resolves to. */
+	workspaceActiveRunActionId?: string | null;
 };
 
 type DerivedSizes = {
@@ -149,6 +154,7 @@ export function useWorkspaceInspectorSidebar({
 	workspaceId,
 	repoId,
 	workspaceState,
+	workspaceActiveRunActionId,
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [actionsOpen, setActionsOpen] = useState(getInitialActionsOpen);
 	const [tabsOpen, setTabsOpen] = useState(getInitialTabsOpen);
@@ -324,20 +330,30 @@ export function useWorkspaceInspectorSidebar({
 
 	// Cmd+R toggle: idle/exited → start; running → stop. Tab visibility
 	// unchanged — the user can open the Run tab later to replay output.
+	//
+	// With multiple run actions, the shortcut always targets the *active*
+	// one (the dropdown's checked entry). Falls back to the first action
+	// when the workspace hasn't pinned an active id yet, or when the pinned
+	// id no longer exists (e.g. user deleted it from settings).
+	const runActions = repoScripts?.runActions ?? [];
+	const resolvedActiveId =
+		runActions.find((a) => a.id === workspaceActiveRunActionId)?.id ??
+		runActions[0]?.id ??
+		null;
 	useEffect(() => {
 		const handler = () => {
 			if (!repoId || !workspaceId) return;
-			if (!repoScripts?.runScript?.trim()) return;
-			const state = getScriptState(workspaceId, "run");
+			if (!resolvedActiveId) return;
+			const state = getScriptState(workspaceId, "run", resolvedActiveId);
 			if (state?.status === "running") {
-				stopScript(repoId, "run", workspaceId);
+				stopScript(repoId, "run", workspaceId, resolvedActiveId);
 			} else {
-				startScript(repoId, "run", workspaceId);
+				startScript(repoId, "run", workspaceId, resolvedActiveId);
 			}
 		};
 		window.addEventListener("helmor:run-script", handler);
 		return () => window.removeEventListener("helmor:run-script", handler);
-	}, [repoId, workspaceId, repoScripts]);
+	}, [repoId, workspaceId, resolvedActiveId]);
 
 	const isResizing = resizeState !== null;
 	const isActionsResizing = resizeState?.target === RESIZE_TARGET_ACTIONS;

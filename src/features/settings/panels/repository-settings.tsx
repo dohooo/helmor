@@ -1,5 +1,5 @@
 import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
@@ -54,6 +54,23 @@ export function RepositorySettingsPanel({
 	const [branches, setBranches] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	// Anchor used by the Inspector's Run-tab dropdown "Create" flow to
+	// jump straight into the scripts editor after the settings dialog
+	// opens. The event is fired one frame after the panel mounts, so
+	// the ref is guaranteed to point at the rendered section.
+	const scriptsAnchorRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const handler = () => {
+			scriptsAnchorRef.current?.scrollIntoView({
+				behavior: "smooth",
+				block: "start",
+			});
+		};
+		window.addEventListener("helmor:scroll-to-repo-scripts", handler);
+		return () =>
+			window.removeEventListener("helmor:scroll-to-repo-scripts", handler);
+	}, []);
 
 	const currentBranch = repo.defaultBranch ?? "main";
 
@@ -229,7 +246,9 @@ export function RepositorySettingsPanel({
 				onChanged={onRepoSettingsChanged}
 			/>
 
-			<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
+			<div ref={scriptsAnchorRef}>
+				<ScriptsSection repoId={repo.id} workspaceId={workspaceId} />
+			</div>
 			<RepositoryPreferencesSection repoId={repo.id} />
 
 			<DeleteRepoSection repo={repo} onDeleted={onRepoDeleted} />

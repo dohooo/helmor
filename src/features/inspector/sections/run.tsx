@@ -31,8 +31,24 @@ import {
 type RunTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	/**
+	 * `RunAction.id` for the action whose lifecycle this panel mirrors. `null`
+	 * when no action is selected yet (e.g. fresh repo with zero configured
+	 * actions) — the body falls back to the "add first script" placeholder.
+	 */
+	activeRunActionId: string | null;
+	/** Display name of the active action; surfaces in the empty-state heading
+	 * so the user knows which action the Run button will trigger. */
+	activeRunActionName: string | null;
+	/** `RunAction.command` for the active action, or `null` when no action
+	 * is selected. Used to decide which placeholder copy to render. */
 	runScript: string | null;
+	/** True when at least one run action is configured. Drives whether the
+	 * empty state offers "Add run script" (no actions yet) or the per-action
+	 * empty state with the Run button. */
+	hasAnyRunAction: boolean;
 	isActive: boolean;
+	/** Open the repo settings panel. */
 	onOpenSettings: () => void;
 	onStatusChange?: (status: ScriptStatus) => void;
 	onUrlsChange?: (urls: string[]) => void;
@@ -139,7 +155,10 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 export function RunTab({
 	repoId,
 	workspaceId,
+	activeRunActionId,
+	activeRunActionName,
 	runScript,
+	hasAnyRunAction,
 	isActive,
 	onOpenSettings,
 	onStatusChange,
@@ -159,23 +178,31 @@ export function RunTab({
 	}, [status, onStatusChange]);
 
 	useEffect(() => {
-		if (!workspaceId) {
+		if (!workspaceId || !activeRunActionId) {
 			onUrlsChange?.([]);
+			setHasRun(false);
+			setStatus("idle");
+			termRef.current?.clear();
 			return;
 		}
 
-		const existing = attach(workspaceId, "run", {
-			onChunk: (data) => termRef.current?.write(data),
-			onStatusChange: setStatus,
-			onUrlsChange: (urls) => onUrlsChange?.(urls),
-			// When a fresh run is triggered externally (e.g. Cmd+R while this
-			// tab is mounted), wipe the terminal so old output doesn't bleed
-			// into the new run's stream.
-			onReset: () => {
-				termRef.current?.clear();
-				setHasRun(true);
+		const existing = attach(
+			workspaceId,
+			"run",
+			{
+				onChunk: (data) => termRef.current?.write(data),
+				onStatusChange: setStatus,
+				onUrlsChange: (urls) => onUrlsChange?.(urls),
+				// When a fresh run is triggered externally (e.g. Cmd+R while
+				// this tab is mounted), wipe the terminal so old output
+				// doesn't bleed into the new run's stream.
+				onReset: () => {
+					termRef.current?.clear();
+					setHasRun(true);
+				},
 			},
-		});
+			activeRunActionId,
+		);
 
 		if (existing) {
 			setHasRun(true);
@@ -199,38 +226,38 @@ export function RunTab({
 			termRef.current?.clear();
 		}
 
-		return () => detach(workspaceId, "run");
-	}, [workspaceId]);
+		return () => detach(workspaceId, "run", activeRunActionId);
+	}, [workspaceId, activeRunActionId]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId || !workspaceId) return;
+		if (!repoId || !workspaceId || !activeRunActionId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		startScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		startScript(repoId, "run", workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId || !workspaceId) return;
-		stopScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		if (!repoId || !workspaceId || !activeRunActionId) return;
+		stopScript(repoId, "run", workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
 
 	// Forward keystrokes to the PTY. The backend silently ignores writes
 	// when no script is live, so we don't gate this on status.
 	const handleData = useCallback(
 		(data: string) => {
-			if (!repoId || !workspaceId) return;
-			writeStdin(repoId, "run", workspaceId, data);
+			if (!repoId || !workspaceId || !activeRunActionId) return;
+			writeStdin(repoId, "run", workspaceId, data, activeRunActionId);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, activeRunActionId],
 	);
 
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
-			if (!repoId || !workspaceId) return;
-			resizeScript(repoId, "run", workspaceId, cols, rows);
+			if (!repoId || !workspaceId || !activeRunActionId) return;
+			resizeScript(repoId, "run", workspaceId, cols, rows, activeRunActionId);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, activeRunActionId],
 	);
 
 	const hasScript = !!runScript?.trim();
@@ -303,7 +330,7 @@ export function RunTab({
 						</div>
 					)}
 				</>
-			) : !hasScript ? (
+			) : !hasAnyRunAction ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<Button
 						variant="outline"
@@ -320,7 +347,16 @@ export function RunTab({
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-ui text-muted-foreground">No run script output</p>
+					{/* Inline the active action's name in the heading so the
+					    user always sees which action the Run button will
+					    trigger — important now that one workspace can have
+					    several. */}
+					<p className="text-ui text-muted-foreground">
+						No output for{" "}
+						<span className="font-medium text-foreground">
+							{activeRunActionName ?? "Default"}
+						</span>
+					</p>
 					<p className="text-small text-muted-foreground/70">
 						Run script output will appear here after running.
 					</p>
@@ -329,6 +365,7 @@ export function RunTab({
 						size="sm"
 						className="mt-1 gap-2 text-small"
 						onClick={handleRun}
+						disabled={!hasScript}
 					>
 						<Play className="size-3" strokeWidth={2} />
 						Run

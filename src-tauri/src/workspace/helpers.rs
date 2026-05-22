@@ -934,6 +934,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             last_user_message_at: None,
             setup_completed_at: None,
+            active_run_action_id: None,
         }
     }
 

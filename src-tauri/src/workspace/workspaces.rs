@@ -172,6 +172,11 @@ pub struct WorkspaceDetail {
     /// workspace was created before this column existed). Drives the
     /// inspector's Setup tab "ran in another session" notice.
     pub setup_completed_at: Option<String>,
+    /// `repo_run_actions.id` the user last picked from the Run-tab
+    /// dropdown in this workspace. NULL means "use the first action"
+    /// (either fresh or because the previously-active id no longer
+    /// exists; the frontend re-renders against the first item).
+    pub active_run_action_id: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -1379,6 +1384,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         forge_provider: record.forge_provider,
         forge_login: record.forge_login,
         setup_completed_at: record.setup_completed_at,
+        active_run_action_id: record.active_run_action_id,
     }
 }
 

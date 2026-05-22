@@ -69,6 +69,11 @@ pub struct WorkspaceRecord {
     /// workspace. `None` means setup was never run (or was skipped
     /// because the repo has no setup script).
     pub setup_completed_at: Option<String>,
+    /// `repo_run_actions.id` the user last picked from the Run-tab dropdown
+    /// in this workspace. `None` means "use the first action" — both for
+    /// fresh workspaces and for ones whose previously-active action was
+    /// deleted (the loader auto-clears stale ids).
+    pub active_run_action_id: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -176,7 +181,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.created_at,
       w.updated_at,
       wss.last_user_message_at,
-      w.setup_completed_at
+      w.setup_completed_at,
+      w.active_run_action_id
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -707,5 +713,27 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         updated_at: row.get(37)?,
         last_user_message_at: row.get(38)?,
         setup_completed_at: row.get(39)?,
+        active_run_action_id: row.get(40)?,
     })
+}
+
+/// Persist the user-picked active run-action id for a workspace. Passing
+/// `None` clears the column (read sites fall back to the first action).
+pub fn update_workspace_active_run_action(
+    workspace_id: &str,
+    action_id: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE workspaces SET active_run_action_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            (action_id, workspace_id),
+        )
+        .with_context(|| format!("Failed to update active_run_action_id for {workspace_id}"))?;
+
+    if updated != 1 {
+        bail!("Workspace not found: {workspace_id}");
+    }
+
+    Ok(())
 }

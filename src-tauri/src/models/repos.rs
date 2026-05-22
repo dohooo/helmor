@@ -815,20 +815,45 @@ pub fn update_repository_branch_prefix(
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RunAction {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    /// "concurrent" or "non-concurrent". Per-action: same-action runs
+    /// across workspaces in the same repo are mutually exclusive when
+    /// "non-concurrent"; different actions never interfere with each
+    /// other regardless of mode.
+    pub mode: String,
+    /// True when this action's name/command/mode come from a
+    /// `helmor.json` declaration (settings UI shows the row read-only).
+    pub from_project: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepoScripts {
     pub setup_script: Option<String>,
+    /// Convenience mirror of `run_actions[0].command` — kept for the few
+    /// existing call sites that only want "the run script" as a string.
+    /// New code should iterate `run_actions` instead.
     pub run_script: Option<String>,
     pub archive_script: Option<String>,
     pub setup_from_project: bool,
+    /// True when *any* run action came from `helmor.json` (the entire run
+    /// list is project-owned when this is true — we don't mix DB and
+    /// project-defined actions in the same response).
     pub run_from_project: bool,
     pub archive_from_project: bool,
     /// Auto-run setup on workspace creation. DB-only — not configurable
     /// from `helmor.json`. Defaults to true.
     pub auto_run_setup: bool,
-    /// "concurrent" (default) lets the run script run in many workspaces
-    /// at once. "non-concurrent" makes a new run stop any other live run
-    /// in the same repo first — useful when the script binds a fixed port.
+    /// Convenience mirror of `run_actions[0].mode`. Kept for the few
+    /// existing call sites that read the legacy single-script mode.
     pub run_script_mode: String,
+    /// All run actions for this repo, in display order. May come from
+    /// `helmor.json` (locked) or from the `repo_run_actions` table. The
+    /// list is empty when neither source declares a run script.
+    pub run_actions: Vec<RunAction>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -850,9 +875,10 @@ pub struct RepoPreferences {
 ///   2. The source repo root's `helmor.json` — used whenever (1) can't
 ///      apply: no `workspace_id`, unknown workspace, or worktree missing
 ///      (archived / broken / pre-Phase-2 creation).
-///   3. DB-level config (`repos.setup_script/run_script/archive_script`) —
-///      the per-user override set via the Settings UI, used as a final
-///      fallback when neither `helmor.json` source provides a value.
+///   3. DB-level config (`repos.setup_script/archive_script` for
+///      setup+archive; the `repo_run_actions` table for run actions, with
+///      a legacy fallback to `repos.run_script` if the table is empty for
+///      this repo).
 ///
 /// The same rule applies regardless of caller (runtime panel, settings
 /// page, script execution, archive hook) — there is no special-case
@@ -865,7 +891,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
             .flatten()
             .and_then(|ws| crate::workspace::helpers::workspace_path(&ws).ok())
             .filter(|dir| dir.is_dir())
-            .and_then(|dir| load_helmor_json_scripts(&dir))
+            .and_then(|dir| load_helmor_json_scripts(&dir, repo_id))
     });
 
     // Priority 2: source repo root helmor.json (worktree missing or no
@@ -874,11 +900,16 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         load_repository_by_id(repo_id)
             .ok()
             .flatten()
-            .and_then(|repo| load_helmor_json_scripts(&PathBuf::from(repo.root_path.trim())))
+            .and_then(|repo| {
+                load_helmor_json_scripts(&PathBuf::from(repo.root_path.trim()), repo_id)
+            })
     });
 
-    // Priority 3: DB values — picked up by `pick_script` when the project
-    // config doesn't provide a value.
+    // Priority 3: DB values — setup/archive use `pick_script` against the
+    // project config; run actions come from `repo_run_actions` (with a
+    // legacy fallback to `repos.run_script` for repos that predate the
+    // multi-action migration, and where the backfill SQL happened to miss
+    // them).
     let connection = db::read_conn()?;
     let mut statement = connection
         .prepare(
@@ -886,7 +917,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         )
         .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
 
-    let (db_setup, db_run, db_archive, auto_run_setup, run_script_mode) = statement
+    let (db_setup, db_run, db_archive, auto_run_setup, db_run_mode) = statement
         .query_row([repo_id], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
@@ -901,12 +932,65 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
 
     let (setup_script, setup_from_project) =
         pick_script(project.as_ref().and_then(|p| p.setup.as_deref()), db_setup);
-    let (run_script, run_from_project) =
-        pick_script(project.as_ref().and_then(|p| p.run.as_deref()), db_run);
     let (archive_script, archive_from_project) = pick_script(
         project.as_ref().and_then(|p| p.archive.as_deref()),
         db_archive,
     );
+
+    let project_run = project.as_ref().map(|p| p.run.as_slice()).unwrap_or(&[]);
+    let (run_actions, run_from_project) = if !project_run.is_empty() {
+        (project_run.to_vec(), true)
+    } else {
+        let mut stmt = connection
+            .prepare(
+                "SELECT id, name, command, mode FROM repo_run_actions \
+                 WHERE repo_id = ?1 ORDER BY display_order ASC, created_at ASC, id ASC",
+            )
+            .with_context(|| format!("Failed to prepare run-actions lookup for {repo_id}"))?;
+        let db_actions: Vec<RunAction> = stmt
+            .query_map([repo_id], |row| {
+                Ok(RunAction {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    command: row.get(2)?,
+                    mode: row.get(3)?,
+                    from_project: false,
+                })
+            })
+            .with_context(|| format!("Failed to load run actions for {repo_id}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .with_context(|| format!("Failed to read run-action rows for {repo_id}"))?;
+
+        if !db_actions.is_empty() {
+            (db_actions, false)
+        } else {
+            // Legacy fallback: a one-off virtual action synthesised from
+            // the old `repos.run_script` column. The settings UI promotes
+            // this into a real row on first edit (it has a stable
+            // `legacy:<repo_id>` id so an active-id reference survives).
+            let fallback: Vec<RunAction> = db_run
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|cmd| {
+                    vec![RunAction {
+                        id: format!("legacy:{repo_id}"),
+                        name: "Default".to_string(),
+                        command: cmd.to_string(),
+                        mode: db_run_mode.clone(),
+                        from_project: false,
+                    }]
+                })
+                .unwrap_or_default();
+            (fallback, false)
+        }
+    };
+
+    let run_script = run_actions.first().map(|a| a.command.clone());
+    let run_script_mode = run_actions
+        .first()
+        .map(|a| a.mode.clone())
+        .unwrap_or_else(|| db_run_mode.clone());
 
     Ok(RepoScripts {
         setup_script,
@@ -917,6 +1001,7 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
         archive_from_project,
         auto_run_setup,
         run_script_mode,
+        run_actions,
     })
 }
 
@@ -930,15 +1015,15 @@ fn pick_script(project_value: Option<&str>, db_value: Option<String>) -> (Option
 
 struct HelmorJsonScripts {
     setup: Option<String>,
-    run: Option<String>,
+    run: Vec<RunAction>,
     archive: Option<String>,
 }
 
-fn load_helmor_json_scripts(root_path: &Path) -> Option<HelmorJsonScripts> {
-    parse_project_config_scripts(&root_path.join("helmor.json"))
+fn load_helmor_json_scripts(root_path: &Path, repo_id: &str) -> Option<HelmorJsonScripts> {
+    parse_project_config_scripts(&root_path.join("helmor.json"), repo_id)
 }
 
-fn parse_project_config_scripts(config_path: &Path) -> Option<HelmorJsonScripts> {
+fn parse_project_config_scripts(config_path: &Path, repo_id: &str) -> Option<HelmorJsonScripts> {
     if !config_path.is_file() {
         return None;
     }
@@ -962,15 +1047,79 @@ fn parse_project_config_scripts(config_path: &Path) -> Option<HelmorJsonScripts>
             .get("setup")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        run: scripts
-            .get("run")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        run: parse_project_run_actions(scripts.get("run"), repo_id),
         archive: scripts
             .get("archive")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     })
+}
+
+/// Accept `scripts.run` in exactly two strict forms — anything else is
+/// dropped silently:
+///
+///   - `"run": "npm run dev"`             — single action; name defaults
+///     to "Default". ("Run" is reserved as the tab label / operation
+///     type; individual actions inside that tab use semantic labels.)
+///   - `"run": [{"name": "…", "command": "…", "mode"?: "…"}]` — array of
+///     fully-specified actions. **Both `name` and `command` are required
+///     and must be non-blank**; entries missing either are skipped. We
+///     deliberately don't synthesise a fallback name here — helmor.json
+///     is checked-in project config, ambiguity should fail loudly (or at
+///     least invisibly) rather than land in the UI as "Default 3".
+///
+/// Project-defined actions get a deterministic id (`project:<repoId>:<idx>`)
+/// so workspace `active_run_action_id` references stay stable across
+/// reloads.
+fn parse_project_run_actions(value: Option<&Value>, repo_id: &str) -> Vec<RunAction> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    if let Some(cmd) = value.as_str() {
+        let trimmed = cmd.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        return vec![RunAction {
+            id: format!("project:{repo_id}:0"),
+            name: "Default".to_string(),
+            command: trimmed.to_string(),
+            mode: "concurrent".to_string(),
+            from_project: true,
+        }];
+    }
+    if let Some(array) = value.as_array() {
+        return array
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| {
+                let obj = entry.as_object()?;
+                let name = obj
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())?;
+                let command = obj
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())?;
+                let mode = match obj.get("mode").and_then(Value::as_str) {
+                    Some("non-concurrent") => "non-concurrent",
+                    _ => "concurrent",
+                }
+                .to_string();
+                Some(RunAction {
+                    id: format!("project:{repo_id}:{idx}"),
+                    name: name.to_string(),
+                    command: command.to_string(),
+                    mode,
+                    from_project: true,
+                })
+            })
+            .collect();
+    }
+    Vec::new()
 }
 
 pub fn update_repo_scripts(
@@ -1032,6 +1181,109 @@ pub fn update_repo_run_script_mode(repo_id: &str, mode: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_run_mode(mode: &str) -> Result<&str> {
+    match mode {
+        "concurrent" | "non-concurrent" => Ok(mode),
+        other => bail!("Invalid run-action mode: {other}"),
+    }
+}
+
+/// Append a new run action to the end of the repo's list and return the
+/// resulting row. The new id is server-generated so callers can't collide
+/// with the deterministic `legacy:` / `project:` ids reserved for
+/// fallback and helmor.json actions.
+pub fn create_repo_run_action(
+    repo_id: &str,
+    name: &str,
+    command: &str,
+    mode: &str,
+) -> Result<RunAction> {
+    let mode = validate_run_mode(mode)?;
+    let id = format!("run:{}", uuid::Uuid::new_v4());
+    let connection = db::write_conn()?;
+    let next_order: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(display_order), -1) + 1 FROM repo_run_actions WHERE repo_id = ?1",
+            [repo_id],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Failed to compute next display_order for {repo_id}"))?;
+    connection
+        .execute(
+            "INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, repo_id, name, command, mode, next_order],
+        )
+        .with_context(|| format!("Failed to insert run action for {repo_id}"))?;
+    Ok(RunAction {
+        id,
+        name: name.to_string(),
+        command: command.to_string(),
+        mode: mode.to_string(),
+        from_project: false,
+    })
+}
+
+/// Update an existing run action's name, command, and mode in place.
+/// Returns an error if no row matched — callers should treat that as
+/// "stale id, refresh the list" rather than swallowing it.
+pub fn update_repo_run_action(
+    action_id: &str,
+    name: &str,
+    command: &str,
+    mode: &str,
+) -> Result<()> {
+    let mode = validate_run_mode(mode)?;
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE repo_run_actions SET name = ?1, command = ?2, mode = ?3, \
+             updated_at = datetime('now') WHERE id = ?4",
+            rusqlite::params![name, command, mode, action_id],
+        )
+        .with_context(|| format!("Failed to update run action {action_id}"))?;
+    if updated != 1 {
+        bail!("Run action not found: {action_id}");
+    }
+    Ok(())
+}
+
+/// Delete a run action. Workspaces still referencing it via
+/// `active_run_action_id` are not touched here — the loader transparently
+/// falls back to the first action when the stored id is stale.
+pub fn delete_repo_run_action(action_id: &str) -> Result<()> {
+    let connection = db::write_conn()?;
+    let deleted = connection
+        .execute("DELETE FROM repo_run_actions WHERE id = ?1", [action_id])
+        .with_context(|| format!("Failed to delete run action {action_id}"))?;
+    if deleted != 1 {
+        bail!("Run action not found: {action_id}");
+    }
+    Ok(())
+}
+
+/// Re-write `display_order` so the actions land in the supplied order.
+/// IDs not present in `ordered_ids` are left untouched (caller is expected
+/// to pass the full set).
+pub fn reorder_repo_run_actions(repo_id: &str, ordered_ids: &[String]) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start reorder transaction")?;
+    for (idx, id) in ordered_ids.iter().enumerate() {
+        transaction
+            .execute(
+                "UPDATE repo_run_actions SET display_order = ?1, updated_at = datetime('now') \
+                 WHERE id = ?2 AND repo_id = ?3",
+                rusqlite::params![idx as i64, id, repo_id],
+            )
+            .with_context(|| format!("Failed to reorder run action {id}"))?;
+    }
+    transaction
+        .commit()
+        .context("Failed to commit reorder transaction")
 }
 
 pub fn load_repo_preferences(repo_id: &str) -> Result<RepoPreferences> {
@@ -1633,5 +1885,143 @@ mod tests {
         update_repo_preferences(&repo_id, &blanked).unwrap();
         let cleared = load_repo_preferences(&repo_id).unwrap();
         assert_eq!(cleared.review, None);
+    }
+
+    fn insert_test_repo(env: &crate::testkit::TestEnv, slug: &str) -> String {
+        let repo = ResolvedRepositoryInput {
+            name: slug.to_string(),
+            normalized_root_path: env.root.join(slug).display().to_string(),
+            remote: None,
+            remote_url: None,
+            default_branch: "main".to_string(),
+            forge_provider: None,
+        };
+        insert_repository(&repo).unwrap()
+    }
+
+    #[test]
+    fn run_actions_crud_round_trips() {
+        let env = crate::testkit::TestEnv::new("repos-run-actions-crud");
+        let repo_id = insert_test_repo(&env, "actions");
+
+        // Fresh repo has no actions.
+        let initial = load_repo_scripts(&repo_id, None).unwrap();
+        assert!(initial.run_actions.is_empty());
+        assert!(initial.run_script.is_none());
+
+        // Create -> visible + ordered by insertion.
+        let dev = create_repo_run_action(&repo_id, "Dev", "npm run dev", "concurrent").unwrap();
+        let tests =
+            create_repo_run_action(&repo_id, "Tests", "npm test", "non-concurrent").unwrap();
+
+        let loaded = load_repo_scripts(&repo_id, None).unwrap();
+        assert_eq!(loaded.run_actions.len(), 2);
+        assert_eq!(loaded.run_actions[0].name, "Dev");
+        assert_eq!(loaded.run_actions[1].name, "Tests");
+        assert_eq!(loaded.run_script.as_deref(), Some("npm run dev"));
+        assert_eq!(loaded.run_script_mode, "concurrent");
+        assert!(!loaded.run_from_project);
+
+        // Update one of them.
+        update_repo_run_action(&dev.id, "Dev Server", "pnpm dev", "non-concurrent").unwrap();
+        let after_update = load_repo_scripts(&repo_id, None).unwrap();
+        assert_eq!(after_update.run_actions[0].name, "Dev Server");
+        assert_eq!(after_update.run_actions[0].command, "pnpm dev");
+        assert_eq!(after_update.run_actions[0].mode, "non-concurrent");
+
+        // Reorder.
+        reorder_repo_run_actions(&repo_id, &[tests.id.clone(), dev.id.clone()]).unwrap();
+        let reordered = load_repo_scripts(&repo_id, None).unwrap();
+        assert_eq!(reordered.run_actions[0].id, tests.id);
+        assert_eq!(reordered.run_actions[1].id, dev.id);
+
+        // Delete leaves the survivor.
+        delete_repo_run_action(&dev.id).unwrap();
+        let remaining = load_repo_scripts(&repo_id, None).unwrap();
+        assert_eq!(remaining.run_actions.len(), 1);
+        assert_eq!(remaining.run_actions[0].id, tests.id);
+
+        // Invalid mode is rejected outright (column constraint is enforced
+        // at the Rust layer, not by SQLite).
+        assert!(
+            create_repo_run_action(&repo_id, "Bad", "echo", "wat").is_err(),
+            "mode validation should reject unknown values"
+        );
+    }
+
+    #[test]
+    fn legacy_run_script_falls_through_when_actions_table_empty() {
+        let env = crate::testkit::TestEnv::new("repos-legacy-run-fallback");
+        let repo_id = insert_test_repo(&env, "legacy");
+
+        // Simulate a pre-migration row: write the old columns directly
+        // (bypassing the migration backfill — which only runs at schema
+        // init, not on every insert). This is the exact shape we want the
+        // loader to gracefully fall back from.
+        let conn = db::write_conn().unwrap();
+        conn.execute(
+            "UPDATE repos SET run_script = ?1, run_script_mode = ?2 WHERE id = ?3",
+            rusqlite::params!["npm start", "non-concurrent", &repo_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let scripts = load_repo_scripts(&repo_id, None).unwrap();
+        assert_eq!(scripts.run_actions.len(), 1);
+        let action = &scripts.run_actions[0];
+        assert_eq!(action.id, format!("legacy:{repo_id}"));
+        assert_eq!(action.name, "Default");
+        assert_eq!(action.command, "npm start");
+        assert_eq!(action.mode, "non-concurrent");
+        assert!(!action.from_project);
+        assert_eq!(scripts.run_script.as_deref(), Some("npm start"));
+        assert_eq!(scripts.run_script_mode, "non-concurrent");
+    }
+
+    #[test]
+    fn project_run_actions_parse_string_and_array_forms() {
+        let repo_id = "test-repo";
+
+        // String form — gets the synthetic "Default" name ("Run" is
+        // reserved as the tab label, not an individual action name).
+        let single = parse_project_run_actions(Some(&Value::String("npm dev".into())), repo_id);
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].id, format!("project:{repo_id}:0"));
+        assert_eq!(single[0].name, "Default");
+        assert_eq!(single[0].command, "npm dev");
+        assert_eq!(single[0].mode, "concurrent");
+        assert!(single[0].from_project);
+
+        // Array form — strict: each entry needs BOTH a non-blank `name`
+        // AND a non-blank `command`. Anything else is silently dropped.
+        let array_value: Value = serde_json::from_str(
+            r#"[
+                {"name": "Dev", "command": "npm run dev"},
+                {"name": "DB",  "command": "docker compose up", "mode": "non-concurrent"},
+                {"command": "echo no-name"},
+                {"name": "  ", "command": "echo blank-name"},
+                {"name": "Blank", "command": "  "},
+                {"name": "Tests", "command": "npm test"}
+            ]"#,
+        )
+        .unwrap();
+        let many = parse_project_run_actions(Some(&array_value), repo_id);
+        assert_eq!(many.len(), 3, "entries missing name or command are dropped");
+        assert_eq!(many[0].name, "Dev");
+        assert_eq!(many[0].mode, "concurrent");
+        assert_eq!(many[1].name, "DB");
+        assert_eq!(many[1].mode, "non-concurrent");
+        assert_eq!(many[2].name, "Tests");
+        // Indices are stable to the array position (not the filtered idx),
+        // so workspace `active_run_action_id` references survive edits
+        // that only add / remove entries elsewhere in the file.
+        assert_eq!(many[0].id, format!("project:{repo_id}:0"));
+        assert_eq!(many[1].id, format!("project:{repo_id}:1"));
+        assert_eq!(many[2].id, format!("project:{repo_id}:5"));
+
+        // Missing / empty / wrong-typed top-level values yield an empty vec.
+        assert!(parse_project_run_actions(None, repo_id).is_empty());
+        assert!(parse_project_run_actions(Some(&Value::String("  ".into())), repo_id).is_empty());
+        assert!(parse_project_run_actions(Some(&Value::Bool(true)), repo_id).is_empty());
     }
 }

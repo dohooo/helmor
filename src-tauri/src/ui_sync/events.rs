@@ -43,6 +43,11 @@ pub enum UiMutationEvent {
     RepositoryChanged {
         repo_id: String,
     },
+    /// A repo's `repo_run_actions` list changed (create / update / delete /
+    /// reorder). Frontends invalidate `["repoScripts", repoId, ...]`.
+    RepoRunActionsChanged {
+        repo_id: String,
+    },
     SettingsChanged {
         key: Option<String>,
     },
@@ -121,6 +126,9 @@ mod tests {
                 workspace_id: "w".into(),
             },
             UiMutationEvent::RepositoryChanged {
+                repo_id: "r".into(),
+            },
+            UiMutationEvent::RepoRunActionsChanged {
                 repo_id: "r".into(),
             },
             UiMutationEvent::SettingsChanged { key: None },

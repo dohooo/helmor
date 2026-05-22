@@ -7,6 +7,7 @@ import type {
 } from "@/features/commit/button";
 import type { PendingPromptForSession } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import type { SettingsSection } from "@/features/settings";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
 import type {
 	ChangeRequestInfo,
@@ -59,7 +60,7 @@ type Props = {
 	commitButtonState: CommitButtonState | undefined;
 	workspaceChangeRequest: ChangeRequestInfo | null;
 	workspaceForgeIsRefreshing: boolean;
-	onOpenSettings: () => void;
+	onOpenSettings: (initialSection?: SettingsSection) => void;
 };
 
 export function ShellInspectorPane({
@@ -172,6 +173,9 @@ export function ShellInspectorPane({
 						workspaceState={selectedWorkspaceDetail?.state ?? null}
 						workspaceSetupCompletedAt={
 							selectedWorkspaceDetail?.setupCompletedAt ?? null
+						}
+						workspaceActiveRunActionId={
+							selectedWorkspaceDetail?.activeRunActionId ?? null
 						}
 						repoId={selectedWorkspaceDetail?.repoId ?? null}
 						workspaceBranch={selectedWorkspaceDetail?.branch ?? null}

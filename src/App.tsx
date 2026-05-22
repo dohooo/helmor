@@ -670,16 +670,20 @@ function AppShell({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	const handleOpenSettings = useCallback((): void => {
-		onOpenSettings(
+	const handleOpenSettings = useCallback(
+		(initialSection?: SettingsSection): void => {
+			onOpenSettings(
+				selectedWorkspaceId,
+				selectedWorkspaceDetailQuery.data?.repoId ?? null,
+				initialSection,
+			);
+		},
+		[
+			onOpenSettings,
+			selectedWorkspaceDetailQuery.data?.repoId,
 			selectedWorkspaceId,
-			selectedWorkspaceDetailQuery.data?.repoId ?? null,
-		);
-	}, [
-		onOpenSettings,
-		selectedWorkspaceDetailQuery.data?.repoId,
-		selectedWorkspaceId,
-	]);
+		],
+	);
 	const handleOpenAnnouncementSettings = useCallback(
 		(initialSection?: SettingsSection): void => {
 			onOpenSettings(null, null, initialSection);

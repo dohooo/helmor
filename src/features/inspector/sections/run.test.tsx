@@ -44,7 +44,10 @@ vi.mock("@/components/terminal-output", () => ({
 const defaults = {
 	repoId: "repo-1",
 	workspaceId: "ws-1",
+	activeRunActionId: "action-1" as string | null,
+	activeRunActionName: "Default" as string | null,
 	runScript: "npm test" as string | null,
+	hasAnyRunAction: true,
 	isActive: true,
 	onOpenSettings: vi.fn(),
 };
@@ -126,7 +129,11 @@ describe("RunTab", () => {
 	// ── Empty / idle states ────────────────────────────────────────────────
 
 	it("shows empty state when no script is configured", () => {
-		renderRun({ runScript: null });
+		renderRun({
+			runScript: null,
+			activeRunActionId: null,
+			hasAnyRunAction: false,
+		});
 
 		expect(
 			screen.getByRole("button", { name: /add run script/i }),
@@ -152,6 +159,7 @@ describe("RunTab", () => {
 			"run",
 			expect.any(Function),
 			"ws-1",
+			"action-1",
 		);
 	});
 
@@ -175,6 +183,7 @@ describe("RunTab", () => {
 			"repo-1",
 			"run",
 			"ws-1",
+			"action-1",
 		);
 	});
 

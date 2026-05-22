@@ -158,6 +158,17 @@ function handleUiMutation(
 			});
 			requestSidebarReconcile(queryClient);
 			return;
+		case "repoRunActionsChanged":
+			// Settings UI edits + dropdown reorder + create / delete all
+			// land here. Invalidate every `repoScripts` query for this
+			// repo (one per workspace context — the loader merges DB
+			// + helmor.json + workspace overrides per call).
+			void queryClient.invalidateQueries({
+				predicate: (query) =>
+					query.queryKey[0] === "repoScripts" &&
+					query.queryKey[1] === event.repoId,
+			});
+			return;
 		case "settingsChanged":
 			if (
 				event.key === null ||

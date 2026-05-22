@@ -630,6 +630,102 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add workspaces.branch_intent column")?;
     }
 
+    // Multi run-action support: each repo gets a list of named run scripts
+    // instead of a single `run_script`. Old `repos.run_script` /
+    // `run_script_mode` columns stay populated as a fallback / rollback
+    // safety net — see backfill below. `workspaces.active_run_action_id`
+    // remembers which action the user last switched to in that workspace
+    // (NULL = use the first action).
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "active_run_action_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN active_run_action_id TEXT")
+            .context("Failed to add workspaces.active_run_action_id column")?;
+    }
+
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS repo_run_actions (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'concurrent',
+                display_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
+                ON repo_run_actions(repo_id, display_order);
+            CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
+                AFTER UPDATE ON repo_run_actions
+                BEGIN
+                    UPDATE repo_run_actions SET updated_at = datetime('now')
+                    WHERE id = NEW.id;
+                END;
+            "#,
+        )
+        .context("Failed to create repo_run_actions table")?;
+
+    // Backfill: every repo that has a non-empty `run_script` but no row in
+    // `repo_run_actions` yet gets a single migrated action carrying the old
+    // command + mode. Deterministic id (`legacy:<repo_id>`) keeps the
+    // migration idempotent across restarts and stable for any active-id
+    // references we later add. The `repos.run_script` column intentionally
+    // stays populated — kept as a fallback / rollback safety net for at
+    // least two release cycles.
+    //
+    // Guarded on `has_column("repos", "run_script")` because the
+    // migration-test bench seeds legacy schemas that predate the column;
+    // production rows always have it (CREATE TABLE in SCHEMA_SQL ships it).
+    if has_table(connection, "repos")
+        && has_table(connection, "repo_run_actions")
+        && has_column(connection, "repos", "run_script")
+    {
+        let has_mode = has_column(connection, "repos", "run_script_mode");
+        let mode_expr = if has_mode {
+            "COALESCE(NULLIF(run_script_mode, ''), 'concurrent')"
+        } else {
+            "'concurrent'"
+        };
+        connection
+            .execute_batch(&format!(
+                r#"
+                INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order)
+                SELECT
+                    'legacy:' || id,
+                    id,
+                    'Default',
+                    run_script,
+                    {mode_expr},
+                    0
+                FROM repos
+                WHERE run_script IS NOT NULL
+                  AND TRIM(run_script) != ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM repo_run_actions WHERE repo_run_actions.repo_id = repos.id
+                  );
+                "#
+            ))
+            .context("Failed to backfill repo_run_actions from repos.run_script")?;
+
+        // One-shot rename for installs that backfilled with the earlier
+        // label ("Run"). Targeted by id pattern + exact-match name so it
+        // never touches a row the user manually renamed.
+        connection
+            .execute_batch(
+                r#"
+                UPDATE repo_run_actions
+                SET name = 'Default'
+                WHERE id LIKE 'legacy:%' AND name = 'Run';
+                "#,
+            )
+            .context("Failed to rename legacy run actions to 'Default'")?;
+    }
+
     Ok(())
 }
 
@@ -753,9 +849,24 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_base INTEGER,
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
+    active_run_action_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS repo_run_actions (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'concurrent',
+    display_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
+    ON repo_run_actions(repo_id, display_order);
 
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -812,6 +923,13 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
     AFTER UPDATE ON sessions
     BEGIN
         UPDATE sessions SET updated_at = datetime('now')
+        WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
+    AFTER UPDATE ON repo_run_actions
+    BEGIN
+        UPDATE repo_run_actions SET updated_at = datetime('now')
         WHERE id = NEW.id;
     END;
 

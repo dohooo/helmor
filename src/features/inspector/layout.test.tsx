@@ -27,6 +27,10 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runActions={[]}
+				activeRunActionId={null}
+				onSelectRunAction={vi.fn()}
+				onCreateRunAction={vi.fn()}
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
@@ -74,6 +78,10 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runActions={[]}
+				activeRunActionId={null}
+				onSelectRunAction={vi.fn()}
+				onCreateRunAction={vi.fn()}
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
@@ -109,6 +117,10 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runActions={[]}
+				activeRunActionId={null}
+				onSelectRunAction={vi.fn()}
+				onCreateRunAction={vi.fn()}
 				terminalInstances={[]}
 				onAddTerminal={vi.fn()}
 				onCloseTerminal={vi.fn()}
@@ -128,5 +140,120 @@ describe("InspectorTabsSection", () => {
 		expect(zoomContainer.firstElementChild?.firstElementChild).toHaveStyle({
 			filter: "blur(6px)",
 		});
+	});
+
+	it("renders the Run dropdown chevron and exposes 'Create'", async () => {
+		const onCreate = vi.fn();
+		const onSelect = vi.fn();
+		const { userEvent: makeUser } = await import("@testing-library/user-event");
+		const user = makeUser.setup();
+		renderWithProviders(
+			<InspectorTabsSection
+				wrapperRef={createRef<HTMLDivElement>()}
+				open
+				onToggle={vi.fn()}
+				activeTab="run"
+				onTabChange={vi.fn()}
+				setupScriptState="idle"
+				runScriptState="idle"
+				runActions={[
+					{
+						id: "a1",
+						name: "Dev",
+						command: "npm run dev",
+						mode: "concurrent",
+						fromProject: false,
+					},
+					{
+						id: "a2",
+						name: "Tests",
+						command: "npm test",
+						mode: "concurrent",
+						fromProject: false,
+					},
+				]}
+				activeRunActionId="a1"
+				onSelectRunAction={onSelect}
+				onCreateRunAction={onCreate}
+				terminalInstances={[]}
+				onAddTerminal={vi.fn()}
+				onCloseTerminal={vi.fn()}
+				onToggleTerminalHoverZoom={vi.fn()}
+				canSpawnTerminal={false}
+				bodyHeight={128}
+				canHoverExpand
+			>
+				<div>Body</div>
+			</InspectorTabsSection>,
+		);
+
+		// Chevron trigger sits next to the Run tab. Click opens the menu.
+		const trigger = screen.getByRole("button", { name: /switch run action/i });
+		await user.click(trigger);
+
+		// Both actions and the Create entry are now in the menu.
+		expect(
+			screen.getByRole("menuitemradio", { name: /^dev$/i }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("menuitemradio", { name: /^tests$/i }),
+		).toBeInTheDocument();
+		const createEntry = screen.getByRole("menuitem", {
+			name: /^create$/i,
+		});
+
+		await user.click(createEntry);
+		expect(onCreate).toHaveBeenCalledTimes(1);
+	});
+
+	it("Run dropdown radio selection fires onSelectRunAction", async () => {
+		const onSelect = vi.fn();
+		const { userEvent: makeUser } = await import("@testing-library/user-event");
+		const user = makeUser.setup();
+		renderWithProviders(
+			<InspectorTabsSection
+				wrapperRef={createRef<HTMLDivElement>()}
+				open
+				onToggle={vi.fn()}
+				activeTab="run"
+				onTabChange={vi.fn()}
+				setupScriptState="idle"
+				runScriptState="idle"
+				runActions={[
+					{
+						id: "a1",
+						name: "Dev",
+						command: "npm run dev",
+						mode: "concurrent",
+						fromProject: false,
+					},
+					{
+						id: "a2",
+						name: "Tests",
+						command: "npm test",
+						mode: "concurrent",
+						fromProject: false,
+					},
+				]}
+				activeRunActionId="a1"
+				onSelectRunAction={onSelect}
+				onCreateRunAction={vi.fn()}
+				terminalInstances={[]}
+				onAddTerminal={vi.fn()}
+				onCloseTerminal={vi.fn()}
+				onToggleTerminalHoverZoom={vi.fn()}
+				canSpawnTerminal={false}
+				bodyHeight={128}
+				canHoverExpand
+			>
+				<div>Body</div>
+			</InspectorTabsSection>,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: /switch run action/i }),
+		);
+		await user.click(screen.getByRole("menuitemradio", { name: /^tests$/i }));
+		expect(onSelect).toHaveBeenCalledWith("a2");
 	});
 });

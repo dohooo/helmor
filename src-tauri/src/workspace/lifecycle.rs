@@ -244,6 +244,7 @@ pub fn prepare_workspace_from_repo_impl(
                 archive_from_project: false,
                 auto_run_setup: true,
                 run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         }
     };
@@ -395,6 +396,7 @@ pub fn prepare_local_workspace_impl(
                 archive_from_project: false,
                 auto_run_setup: false,
                 run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         });
 
@@ -496,6 +498,7 @@ pub fn prepare_chat_workspace_impl(
             archive_from_project: false,
             auto_run_setup: false,
             run_script_mode: "concurrent".to_string(),
+            run_actions: Vec::new(),
         },
         working_directory: Some(working_directory.display().to_string()),
         branch_intent: WorkspaceBranchIntent::UseBranch,

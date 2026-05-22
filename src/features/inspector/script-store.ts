@@ -9,6 +9,9 @@ import { dedupUrlKey, extractLocalUrls } from "./detect-urls";
 
 export type ScriptStatus = "idle" | "running" | "exited";
 
+/** Logical script type for the inspector store. */
+export type ScriptKind = "setup" | "run";
+
 type Listener = {
 	onChunk: (data: string) => void;
 	onStatusChange: (status: ScriptStatus) => void;
@@ -76,27 +79,62 @@ const listeners = new Map<string, Listener>();
  * so both the tab panel and the tab label header can reflect live status.
  */
 const statusListeners = new Map<string, Set<StatusListener>>();
+/**
+ * Wildcard run-status subscribers keyed by workspace id. Notified whenever
+ * ANY run-action entry in that workspace flips status — used by the sidebar
+ * row dot which doesn't know about specific action ids and just wants
+ * "anything running here?".
+ */
+const workspaceRunListeners = new Map<string, Set<StatusListener>>();
 
 function emitStatus(k: string, status: ScriptStatus, exitCode: number | null) {
 	const subs = statusListeners.get(k);
+	if (subs) {
+		for (const sub of subs) sub(status, exitCode);
+	}
+}
+
+function emitWorkspaceRunStatus(
+	workspaceId: string,
+	status: ScriptStatus,
+	exitCode: number | null,
+) {
+	const subs = workspaceRunListeners.get(workspaceId);
 	if (!subs) return;
 	for (const sub of subs) sub(status, exitCode);
 }
 
-function key(workspaceId: string, scriptType: string) {
+/**
+ * Build the store key for a given script. For "run" scripts the key carries
+ * the action id so multiple actions per workspace each get their own
+ * lifecycle / output buffer. For "setup" the action id is ignored.
+ */
+function key(
+	workspaceId: string,
+	scriptType: ScriptKind | string,
+	actionId?: string | null,
+) {
+	if (scriptType === "run") {
+		return `${workspaceId}:run:${actionId ?? ""}`;
+	}
 	return `${workspaceId}:${scriptType}`;
 }
 
-export function getScriptState(workspaceId: string, scriptType: string) {
-	return entries.get(key(workspaceId, scriptType)) ?? null;
+export function getScriptState(
+	workspaceId: string,
+	scriptType: ScriptKind | string,
+	actionId?: string | null,
+) {
+	return entries.get(key(workspaceId, scriptType, actionId)) ?? null;
 }
 
 export function startScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: ScriptKind,
 	workspaceId: string,
+	actionId?: string | null,
 ) {
-	const k = key(workspaceId, scriptType);
+	const k = key(workspaceId, scriptType, actionId);
 
 	// Notify any already-attached listener to reset (e.g. clear its terminal)
 	// before we swap in the fresh entry — prevents old output from the
@@ -117,6 +155,9 @@ export function startScript(
 	// Reset URL listener to empty — previous run's URLs don't apply.
 	listeners.get(k)?.onUrlsChange?.([]);
 	emitStatus(k, "running", null);
+	if (scriptType === "run") {
+		emitWorkspaceRunStatus(workspaceId, "running", null);
+	}
 
 	executeRepoScript(
 		repoId,
@@ -172,6 +213,9 @@ export function startScript(
 					entry.exitCode = event.code;
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", event.code);
+					if (scriptType === "run") {
+						emitWorkspaceRunStatus(workspaceId, "exited", event.code);
+					}
 					break;
 				case "error": {
 					const msg = `\r\n\x1b[31m${event.message}\x1b[0m\r\n`;
@@ -182,11 +226,15 @@ export function startScript(
 					listeners.get(k)?.onChunk(msg);
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", entry.exitCode);
+					if (scriptType === "run") {
+						emitWorkspaceRunStatus(workspaceId, "exited", entry.exitCode);
+					}
 					break;
 				}
 			}
 		},
 		workspaceId,
+		actionId ?? null,
 	).catch((err) => {
 		if (entries.get(k) !== entry) return;
 		const msg = `\r\n\x1b[31mFailed to start: ${err}\x1b[0m\r\n`;
@@ -196,15 +244,19 @@ export function startScript(
 		listeners.get(k)?.onChunk(msg);
 		listeners.get(k)?.onStatusChange("exited");
 		emitStatus(k, "exited", entry.exitCode);
+		if (scriptType === "run") {
+			emitWorkspaceRunStatus(workspaceId, "exited", entry.exitCode);
+		}
 	});
 }
 
 export function stopScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: ScriptKind,
 	workspaceId: string,
+	actionId?: string | null,
 ) {
-	void stopRepoScript(repoId, scriptType, workspaceId);
+	void stopRepoScript(repoId, scriptType, workspaceId, actionId ?? null);
 }
 
 /**
@@ -214,11 +266,18 @@ export function stopScript(
  */
 export function writeStdin(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: ScriptKind,
 	workspaceId: string,
 	data: string,
+	actionId?: string | null,
 ) {
-	void writeRepoScriptStdin(repoId, scriptType, workspaceId, data);
+	void writeRepoScriptStdin(
+		repoId,
+		scriptType,
+		workspaceId,
+		data,
+		actionId ?? null,
+	);
 }
 
 /**
@@ -228,40 +287,55 @@ export function writeStdin(
  */
 export function resizeScript(
 	repoId: string,
-	scriptType: "setup" | "run",
+	scriptType: ScriptKind,
 	workspaceId: string,
 	cols: number,
 	rows: number,
+	actionId?: string | null,
 ) {
-	void resizeRepoScript(repoId, scriptType, workspaceId, cols, rows);
+	void resizeRepoScript(
+		repoId,
+		scriptType,
+		workspaceId,
+		cols,
+		rows,
+		actionId ?? null,
+	);
 }
 
 /** Attach a live listener. Returns current entry for replay, or null. */
 export function attach(
 	workspaceId: string,
-	scriptType: string,
+	scriptType: ScriptKind | string,
 	listener: Listener,
+	actionId?: string | null,
 ): ScriptEntry | null {
-	listeners.set(key(workspaceId, scriptType), listener);
-	return entries.get(key(workspaceId, scriptType)) ?? null;
+	const k = key(workspaceId, scriptType, actionId);
+	listeners.set(k, listener);
+	return entries.get(k) ?? null;
 }
 
 /** Detach the live listener (entry stays alive). */
-export function detach(workspaceId: string, scriptType: string) {
-	listeners.delete(key(workspaceId, scriptType));
+export function detach(
+	workspaceId: string,
+	scriptType: ScriptKind | string,
+	actionId?: string | null,
+) {
+	listeners.delete(key(workspaceId, scriptType, actionId));
 }
 
 /**
- * Subscribe to status-only updates for a script. Multiple subscribers are
- * allowed per key, so both the tab body and the tab header can observe live
+ * Subscribe to status-only updates for a specific script. Multiple subscribers
+ * are allowed per key, so both the tab body and the tab header can observe live
  * status changes in parallel. Returns an unsubscribe fn.
  */
 export function subscribeStatus(
 	workspaceId: string,
-	scriptType: string,
+	scriptType: ScriptKind | string,
 	listener: StatusListener,
+	actionId?: string | null,
 ): () => void {
-	const k = key(workspaceId, scriptType);
+	const k = key(workspaceId, scriptType, actionId);
 	let set = statusListeners.get(k);
 	if (!set) {
 		set = new Set();
@@ -276,9 +350,45 @@ export function subscribeStatus(
 	};
 }
 
+/**
+ * Subscribe to "any run script in this workspace flipped status" events.
+ * Used by the sidebar row indicator which lights up when ANY action is
+ * live — it doesn't track per-action ids.
+ */
+export function subscribeWorkspaceRunStatus(
+	workspaceId: string,
+	listener: StatusListener,
+): () => void {
+	let set = workspaceRunListeners.get(workspaceId);
+	if (!set) {
+		set = new Set();
+		workspaceRunListeners.set(workspaceId, set);
+	}
+	set.add(listener);
+	return () => {
+		const current = workspaceRunListeners.get(workspaceId);
+		if (!current) return;
+		current.delete(listener);
+		if (current.size === 0) workspaceRunListeners.delete(workspaceId);
+	};
+}
+
+/**
+ * True if ANY run-action in this workspace currently has status === "running".
+ * Used by the sidebar row to seed its initial state when remounted.
+ */
+export function isAnyRunScriptRunning(workspaceId: string): boolean {
+	const prefix = `${workspaceId}:run:`;
+	for (const [k, entry] of entries) {
+		if (k.startsWith(prefix) && entry.status === "running") return true;
+	}
+	return false;
+}
+
 /** Reset all state. Test-only. */
 export function _resetForTesting() {
 	entries.clear();
 	listeners.clear();
 	statusListeners.clear();
+	workspaceRunListeners.clear();
 }

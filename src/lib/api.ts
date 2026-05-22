@@ -330,6 +330,10 @@ export type WorkspaceDetail = {
 	 * setup script). Drives the inspector's Setup tab "ran in another
 	 * session" notice and the default-tab heuristic on workspace switch. */
 	setupCompletedAt?: string | null;
+	/** `RunAction.id` the user last picked from the Run-tab dropdown in
+	 * this workspace. NULL means "use the first action" — either fresh,
+	 * or because the previously-active action was deleted. */
+	activeRunActionId?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -1581,6 +1585,7 @@ export type UiMutationEvent =
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
+	| { type: "repoRunActionsChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
 	| {
 			type: "pendingCliSendQueued";
@@ -3112,21 +3117,41 @@ export async function loadHiddenSessions(
 
 export type RunScriptMode = "concurrent" | "non-concurrent";
 
+/**
+ * One named run script for a repository. Multiple actions can be defined
+ * per repo (e.g. "Dev server", "Tests"); each gets its own dropdown entry
+ * and PTY lifecycle. `fromProject` is true when the entry comes from a
+ * `helmor.json` declaration — the settings UI renders it read-only.
+ */
+export type RunAction = {
+	id: string;
+	name: string;
+	command: string;
+	mode: RunScriptMode;
+	fromProject: boolean;
+};
+
 export type RepoScripts = {
 	setupScript?: string | null;
+	/**
+	 * Convenience mirror of `runActions[0]?.command` kept for callers that
+	 * only want "the run script". New code should iterate `runActions`.
+	 */
 	runScript?: string | null;
 	archiveScript?: string | null;
 	setupFromProject: boolean;
+	/** True when ANY run action was declared in `helmor.json`. */
 	runFromProject: boolean;
 	archiveFromProject: boolean;
 	/** Auto-run the setup script on workspace creation. Defaults to true. */
 	autoRunSetup: boolean;
 	/**
-	 * "non-concurrent" makes a new run stop any other run script in the
-	 * same repo first — useful when the script binds a fixed port.
-	 * Defaults to "concurrent".
+	 * Convenience mirror of `runActions[0]?.mode`. New code reads
+	 * per-action mode off the `RunAction` directly.
 	 */
 	runScriptMode: RunScriptMode;
+	/** All run actions for this repo, in display order. */
+	runActions: RunAction[];
 };
 
 export type RepoPreferences = {
@@ -3214,11 +3239,19 @@ export async function updateRepoPreferences(
 	});
 }
 
+/**
+ * `actionId` is required when `scriptType === "run"` (each named run
+ * action has its own PTY lifecycle). For setup / archive scripts it's
+ * ignored — they remain single per repo. The backend will fall back to
+ * the first run action when no id is supplied, only to keep older
+ * callers compiling; new code should always pass one explicitly.
+ */
 export async function executeRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
+	actionId?: string | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -3226,6 +3259,7 @@ export async function executeRepoScript(
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		channel,
 	});
 }
@@ -3234,11 +3268,13 @@ export async function stopRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run",
 	workspaceId?: string | null,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 	});
 }
 
@@ -3256,11 +3292,13 @@ export async function writeRepoScriptStdin(
 	scriptType: "setup" | "run",
 	workspaceId: string | null,
 	data: string,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("write_repo_script_stdin", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		data,
 	});
 }
@@ -3275,13 +3313,57 @@ export async function resizeRepoScript(
 	workspaceId: string | null,
 	cols: number,
 	rows: number,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("resize_repo_script", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		cols,
 		rows,
+	});
+}
+
+// ---- Run actions CRUD ----
+
+export async function createRepoRunAction(
+	repoId: string,
+	name: string,
+	command: string,
+	mode: RunScriptMode,
+): Promise<RunAction> {
+	return invoke<RunAction>("create_repo_run_action", {
+		repoId,
+		name,
+		command,
+		mode,
+	});
+}
+
+export async function updateRepoRunAction(
+	repoId: string,
+	actionId: string,
+	name: string,
+	command: string,
+	mode: RunScriptMode,
+): Promise<void> {
+	await invoke("update_repo_run_action", {
+		repoId,
+		actionId,
+		name,
+		command,
+		mode,
+	});
+}
+
+export async function setWorkspaceActiveRunAction(
+	workspaceId: string,
+	actionId: string | null,
+): Promise<void> {
+	await invoke("set_workspace_active_run_action", {
+		workspaceId,
+		actionId,
 	});
 }
 
