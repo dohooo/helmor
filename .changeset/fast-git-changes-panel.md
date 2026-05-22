@@ -2,4 +2,7 @@
 "helmor": patch
 ---
 
-Stop eagerly prefetching every changed file's contents when opening the Git Changes panel — Monaco now reads files on demand instead, cutting CPU and IPC traffic on large workspaces.
+Reduce Git Changes panel CPU and rendering work on large workspaces.
+
+- Stop eagerly prefetching every changed file's contents when opening the panel; Monaco now reads files on demand.
+- Render the Git Changes file tree through a virtualized list so only visible rows and a small overscan window mount while scrolling.

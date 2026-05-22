@@ -51,6 +51,8 @@ const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
 export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
 export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
+export const INSPECTOR_SECTION_HEIGHT_TRANSITION_CLASS =
+	"transition-[height] duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)]";
 
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
