@@ -887,7 +887,10 @@ export function useConversationStreaming({
 				const changesRefreshInterval = window.setInterval(() => {
 					if (!workingDirectory) return;
 					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceChanges(workingDirectory),
+						queryKey: helmorQueryKeys.workspaceChanges(
+							workingDirectory,
+							targetWorkspaceId,
+						),
 					});
 				}, 3_000);
 

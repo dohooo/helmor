@@ -1917,10 +1917,12 @@ export async function listWorkspaceFiles(
 
 export async function listWorkspaceChanges(
 	workspaceRootPath: string,
+	workspaceId?: string | null,
 ): Promise<InspectorFileItem[]> {
 	try {
 		return await invoke<InspectorFileItem[]>("list_workspace_changes", {
 			workspaceRootPath,
+			workspaceId: workspaceId ?? null,
 		});
 	} catch (error) {
 		throw new Error(
