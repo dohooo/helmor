@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.6
+
+### Patch Changes
+
+- [#643](https://github.com/dohooo/helmor/pull/643) [`b94fe03`](https://github.com/dohooo/helmor/commit/b94fe03ec16f496d1a2224b6d7640bc07b5bb696) Thanks [@dohooo](https://github.com/dohooo)! - Fix the hover-expanded terminal panel from collapsing the moment you open the Run action dropdown, so the menu now opens at the expanded position instead of an empty patch of inspector chrome.
+
 ## 0.23.5
 
 ### Patch Changes
