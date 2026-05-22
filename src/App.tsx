@@ -670,24 +670,54 @@ function AppShell({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	// Zero-arg: prop is bound directly to button onClick, so an arg would
-	// receive the click event. Use a separate helper if section-aware open
-	// is ever needed.
-	const handleOpenSettings = useCallback((): void => {
-		onOpenSettings(
+	// Optional `initialSection` lets callers jump straight to a panel
+	// (e.g. inspector's "Add run script" → the current repo's Scripts
+	// editor). Bound directly to button onClick is still safe — React
+	// passes the click event as the first arg, which doesn't match the
+	// `SettingsSection` shape, so we coerce non-string args back to
+	// `undefined` to preserve the original zero-arg behavior.
+	const handleOpenSettings = useCallback(
+		(initialSection?: SettingsSection): void => {
+			const section =
+				typeof initialSection === "string" ? initialSection : undefined;
+			onOpenSettings(
+				selectedWorkspaceId,
+				selectedWorkspaceDetailQuery.data?.repoId ?? null,
+				section,
+			);
+		},
+		[
+			onOpenSettings,
+			selectedWorkspaceDetailQuery.data?.repoId,
 			selectedWorkspaceId,
-			selectedWorkspaceDetailQuery.data?.repoId ?? null,
-		);
-	}, [
-		onOpenSettings,
-		selectedWorkspaceDetailQuery.data?.repoId,
-		selectedWorkspaceId,
-	]);
+		],
+	);
 	const handleOpenAnnouncementSettings = useCallback(
 		(initialSection?: SettingsSection): void => {
+			// Sentinel: announcements written before a workspace is
+			// selected can ask for "the current repo's Scripts section"
+			// without knowing the repo id at authoring time. We resolve
+			// it here and replay the same open-then-scroll dance the
+			// inspector empty states use.
+			if (initialSection === ("repo:current" as SettingsSection)) {
+				const currentRepoId = selectedWorkspaceDetailQuery.data?.repoId;
+				if (currentRepoId) {
+					onOpenSettings(null, null, `repo:${currentRepoId}`);
+					requestAnimationFrame(() => {
+						window.dispatchEvent(
+							new CustomEvent("helmor:scroll-to-repo-scripts"),
+						);
+					});
+					return;
+				}
+				// No active repo (chat-only workspace, or none selected) —
+				// fall back to plain settings rather than a broken link.
+				onOpenSettings(null, null);
+				return;
+			}
 			onOpenSettings(null, null, initialSection);
 		},
-		[onOpenSettings],
+		[onOpenSettings, selectedWorkspaceDetailQuery.data?.repoId],
 	);
 	const handleOpenReleaseChangelog = useCallback(() => {
 		void openUrl(GITHUB_RELEASES_URL).catch((error) => {

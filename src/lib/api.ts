@@ -3133,11 +3133,6 @@ export type RunAction = {
 
 export type RepoScripts = {
 	setupScript?: string | null;
-	/**
-	 * Convenience mirror of `runActions[0]?.command` kept for callers that
-	 * only want "the run script". New code should iterate `runActions`.
-	 */
-	runScript?: string | null;
 	archiveScript?: string | null;
 	setupFromProject: boolean;
 	/** True when ANY run action was declared in `helmor.json`. */
@@ -3145,11 +3140,6 @@ export type RepoScripts = {
 	archiveFromProject: boolean;
 	/** Auto-run the setup script on workspace creation. Defaults to true. */
 	autoRunSetup: boolean;
-	/**
-	 * Convenience mirror of `runActions[0]?.mode`. New code reads
-	 * per-action mode off the `RunAction` directly.
-	 */
-	runScriptMode: RunScriptMode;
 	/** All run actions for this repo, in display order. */
 	runActions: RunAction[];
 };
@@ -3196,13 +3186,11 @@ export async function loadRepoScripts(
 export async function updateRepoScripts(
 	repoId: string,
 	setupScript: string | null,
-	runScript: string | null,
 	archiveScript: string | null,
 ): Promise<void> {
 	await invoke("update_repo_scripts", {
 		repoId,
 		setupScript,
-		runScript,
 		archiveScript,
 	});
 }
@@ -3212,13 +3200,6 @@ export async function updateRepoAutoRunSetup(
 	enabled: boolean,
 ): Promise<void> {
 	await invoke("update_repo_auto_run_setup", { repoId, enabled });
-}
-
-export async function updateRepoRunScriptMode(
-	repoId: string,
-	mode: RunScriptMode,
-): Promise<void> {
-	await invoke("update_repo_run_script_mode", { repoId, mode });
 }
 
 export async function loadRepoPreferences(
@@ -3355,6 +3336,20 @@ export async function updateRepoRunAction(
 		command,
 		mode,
 	});
+}
+
+export async function deleteRepoRunAction(
+	repoId: string,
+	actionId: string,
+): Promise<void> {
+	await invoke("delete_repo_run_action", { repoId, actionId });
+}
+
+export async function reorderRepoRunActions(
+	repoId: string,
+	orderedIds: string[],
+): Promise<void> {
+	await invoke("reorder_repo_run_actions", { repoId, orderedIds });
 }
 
 export async function setWorkspaceActiveRunAction(

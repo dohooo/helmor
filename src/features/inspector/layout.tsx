@@ -29,6 +29,7 @@ import type { RunAction } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
+import { useScriptStatus } from "./hooks/use-script-status";
 import { useHoverZoom } from "./layout/use-hover-zoom";
 import { ScriptStatusIcon } from "./script-status-icon";
 import {
@@ -205,6 +206,11 @@ type InspectorTabsSectionProps = {
 	tabActions?: React.ReactNode;
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
+	/** Current workspace id — needed so each Run-tab dropdown item can
+	 * subscribe to its own action's live status (per-action loading /
+	 * success / failure glyph). `null` outside a workspace context — the
+	 * dropdown then renders each item without a status icon. */
+	workspaceId: string | null;
 	/**
 	 * All run actions configured for the current repo (DB + helmor.json
 	 * merged). Empty when none configured — the Run-tab dropdown still
@@ -252,6 +258,7 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
+	workspaceId,
 	runActions,
 	activeRunActionId,
 	onSelectRunAction,
@@ -464,6 +471,7 @@ export function InspectorTabsSection({
 									</button>
 									<RunActionsDropdown
 										activeTab={activeTab}
+										workspaceId={workspaceId}
 										runActions={runActions}
 										activeRunActionId={activeRunActionId}
 										onSelectRunAction={onSelectRunAction}
@@ -719,12 +727,14 @@ export function HorizontalResizeHandle({
  */
 function RunActionsDropdown({
 	activeTab,
+	workspaceId,
 	runActions,
 	activeRunActionId,
 	onSelectRunAction,
 	onCreateRunAction,
 }: {
 	activeTab: string;
+	workspaceId: string | null;
 	runActions: RunAction[];
 	activeRunActionId: string | null;
 	onSelectRunAction: (id: string) => void;
@@ -777,13 +787,11 @@ function RunActionsDropdown({
 							onValueChange={onSelectRunAction}
 						>
 							{runActions.map((action) => (
-								<DropdownMenuRadioItem
+								<RunActionDropdownItem
 									key={action.id}
-									value={action.id}
-									className="flex items-center gap-2"
-								>
-									<span className="truncate">{action.name}</span>
-								</DropdownMenuRadioItem>
+									action={action}
+									workspaceId={workspaceId}
+								/>
 							))}
 						</DropdownMenuRadioGroup>
 						<DropdownMenuSeparator />
@@ -801,5 +809,38 @@ function RunActionsDropdown({
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+/**
+ * Single radio item in the Run dropdown. Pulled out so each row can own
+ * its own `useScriptStatus` subscription — that's how the per-action
+ * loading / success / failure glyph stays live without the parent
+ * re-rendering the whole list on every status tick.
+ *
+ * `aria-hidden` on the icon keeps the radio item's accessible name as
+ * just the action's display name (matching the header tab convention).
+ */
+function RunActionDropdownItem({
+	action,
+	workspaceId,
+}: {
+	action: RunAction;
+	workspaceId: string | null;
+}) {
+	const state = useScriptStatus(
+		workspaceId,
+		"run",
+		action.command.trim().length > 0,
+		action.id,
+	);
+	return (
+		<DropdownMenuRadioItem
+			value={action.id}
+			className="flex items-center gap-2"
+		>
+			<ScriptStatusIcon state={state} />
+			<span className="truncate">{action.name}</span>
+		</DropdownMenuRadioItem>
 	);
 }

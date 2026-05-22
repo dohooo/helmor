@@ -35,7 +35,10 @@ fn show(repo_ref: &str, workspace: Option<&str>, cli: &Cli) -> Result<()> {
             s.setup_from_project,
             s.setup_script.as_deref().unwrap_or("-"),
             s.run_from_project,
-            s.run_script.as_deref().unwrap_or("-"),
+            s.run_actions
+                .first()
+                .map(|a| a.command.as_str())
+                .unwrap_or("-"),
             s.archive_from_project,
             s.archive_script.as_deref().unwrap_or("-"),
         )

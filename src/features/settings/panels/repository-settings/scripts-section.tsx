@@ -1,14 +1,16 @@
-// Repo-level scripts section (setup / run-actions / archive). Setup and
-// archive remain single-script slots and stay editable here. The Run
-// section is **display-only**: rows list each action's name + command
-// (read-only, scrollable textarea), no rename / delete / mode toggle.
-// Users create new actions from the Inspector's Run dropdown ("Create"
-// pops a pre-filled new session); existing ones get edited by chatting
-// the agent or hand-editing helmor.json.
+// Repo-level scripts section (setup / run-scripts / archive). All three
+// follow the same `ScriptField` rhythm: a left-aligned label + tooltip
+// description above the editor, with optional right-side controls in the
+// header slot. The Run section is a list of editable rows (DB-owned) or
+// read-only rows mirroring helmor.json. The "Add script" button lives in
+// the section header's right slot so the list itself stays a clean
+// vertical stack of name+command pairs aligned with setup/archive.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HelpCircle, Plus } from "lucide-react";
+import { HelpCircle, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -19,9 +21,12 @@ import {
 } from "@/components/ui/tooltip";
 import {
 	createRepoRunAction,
+	deleteRepoRunAction,
 	loadRepoScripts,
 	type RunAction,
+	type RunScriptMode,
 	updateRepoAutoRunSetup,
+	updateRepoRunAction,
 	updateRepoScripts,
 } from "@/lib/api";
 
@@ -49,6 +54,11 @@ export function ScriptsSection({
 	const [archiveScript, setArchiveScript] = useState("");
 	const [autoRunSetup, setAutoRunSetup] = useState(false);
 	const initialized = useRef(false);
+
+	// Id of the row that should grab focus on mount. Cleared after focus
+	// fires so subsequent re-renders (e.g. query refetch) don't keep
+	// stealing the user's caret.
+	const [focusActionId, setFocusActionId] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (!data) return;
@@ -78,14 +88,6 @@ export function ScriptsSection({
 				void updateRepoScripts(
 					repoId,
 					nextSetup.trim() || null,
-					// The legacy `run_script` column is no longer the
-					// truth source for run actions, but we keep writing it
-					// (via `updateRepoScripts`) so a downgrade still finds
-					// something. Pass `null` to leave it untouched would
-					// require a separate API; the column doubles as our
-					// rollback safety net so writing the empty value is
-					// safe.
-					null,
 					nextArchive.trim() || null,
 				).then(() => {
 					void queryClient.invalidateQueries({
@@ -129,11 +131,17 @@ export function ScriptsSection({
 
 	const handleCreateRunAction = useCallback(async () => {
 		// First row gets "Default" (matches the legacy / single-script
-		// convention). Subsequent rows are "Action N" so they're clearly
+		// convention). Subsequent rows are "Script N" so they're clearly
 		// distinct and the user is nudged to rename them.
 		const fallbackName =
-			runActions.length === 0 ? "Default" : `Action ${runActions.length + 1}`;
-		await createRepoRunAction(repoId, fallbackName, "", "concurrent");
+			runActions.length === 0 ? "Default" : `Script ${runActions.length + 1}`;
+		const created = await createRepoRunAction(
+			repoId,
+			fallbackName,
+			"",
+			"concurrent",
+		);
+		setFocusActionId(created.id);
 		void queryClient.invalidateQueries({
 			queryKey: ["repoScripts", repoId],
 		});
@@ -189,18 +197,14 @@ export function ScriptsSection({
 					}
 				/>
 
-				<RunActionsList actions={runActions} locked={runLocked} />
-				{!runLocked && (
-					<Button
-						variant="outline"
-						size="sm"
-						className="gap-1.5 text-small"
-						onClick={() => void handleCreateRunAction()}
-					>
-						<Plus className="size-3.5" strokeWidth={1.8} />
-						Add action
-					</Button>
-				)}
+				<RunScriptsSection
+					repoId={repoId}
+					actions={runActions}
+					locked={runLocked}
+					focusActionId={focusActionId}
+					onFocused={() => setFocusActionId(null)}
+					onCreate={() => void handleCreateRunAction()}
+				/>
 
 				<ScriptField
 					label="Archive script"
@@ -274,92 +278,327 @@ function ScriptField({
 }
 
 /**
- * Vertical list of run actions for the current repo. Display-only —
- * rows render the action name + command in a read-only scrollable
- * textarea. Renaming / editing / deleting all happen via chat-with-agent
- * flows (Inspector "Create" dropdown) or by hand-editing helmor.json.
+ * Run-scripts section. One section header (matching `ScriptField`'s
+ * layout) plus a vertical stack of name+command pairs. The header's
+ * right slot carries the "Add script" button when the list is editable,
+ * mirroring how Setup carries its "Auto-run" switch in the same slot —
+ * keeps each section header visually balanced.
+ *
+ * Each row is a flat `name input + textarea` pair (no card, no inner
+ * border) so the editor column lines up with setup/archive's textarea
+ * left edge. Per-row controls (Exclusive switch + delete) sit in the
+ * name row's right slot.
  */
-function RunActionsList({
+function RunScriptsSection({
+	repoId,
 	actions,
 	locked,
+	focusActionId,
+	onFocused,
+	onCreate,
 }: {
+	repoId: string;
 	actions: RunAction[];
 	locked: boolean;
+	focusActionId: string | null;
+	onFocused: () => void;
+	onCreate: () => void;
 }) {
 	return (
 		<div>
-			<div className="flex items-start justify-between gap-3">
-				<div className="min-w-0">
-					<div className="text-small font-medium text-app-foreground">
-						Run actions
-					</div>
-					<div className="mt-0.5 text-mini text-muted-foreground">
-						One per script you want to run from the Inspector's Run dropdown.
-					</div>
+			<div className="min-w-0">
+				<div className="text-small font-medium text-app-foreground">
+					Run scripts
+				</div>
+				<div className="mt-0.5 text-mini text-muted-foreground">
+					Each entry appears in the Inspector's Run dropdown.
 				</div>
 			</div>
 
 			{actions.length === 0 ? (
-				<div className="mt-2 rounded-md border border-dashed border-border/60 bg-app-base/30 px-3 py-4 text-center text-mini text-muted-foreground">
-					No run actions yet. Click "Add action" below to create one.
-				</div>
+				locked ? (
+					<div className="mt-2 text-mini text-muted-foreground/70">
+						Set by this workspace's helmor.json — edit it there.
+					</div>
+				) : (
+					// Empty state: dashed placeholder explaining what run
+					// scripts are for. The dashed border + muted bg
+					// signals "nothing here yet"; the `Add script` CTA
+					// sits below so the user always finds the entry point.
+					<div className="mt-3 rounded-lg border border-dashed border-border/60 bg-app-base/30 px-4 py-5 text-center">
+						<div className="text-small font-medium text-foreground">
+							No run scripts yet
+						</div>
+						<div className="mx-auto mt-1 max-w-[320px] text-mini leading-relaxed text-muted-foreground">
+							Add one to expose a command — like a dev server, test runner, or
+							background task.
+						</div>
+					</div>
+				)
 			) : (
-				// Flat list. `mt-4` gives the first row room to breathe
-				// after the section description; `space-y-3` keeps inter-
-				// row gaps tighter (12px) since each row already has its
-				// own textarea border for separation.
-				<div className="mt-4 space-y-3">
+				<div className="mt-3 space-y-5">
 					{actions.map((action) => (
-						<RunActionRow key={action.id} action={action} locked={locked} />
+						<RunScriptRow
+							key={action.id}
+							repoId={repoId}
+							action={action}
+							locked={locked}
+							autoFocus={focusActionId === action.id}
+							onFocused={onFocused}
+						/>
 					))}
+				</div>
+			)}
+
+			{/* Add CTA on its own line below the list so it can't be
+			    misread as a control on the section above. Kept compact
+			    (`size="xs"`) so it reads as a focused entry point, not a
+			    primary action that competes with the editors. */}
+			{!locked && (
+				<div className="mt-3">
+					<Button
+						variant="default"
+						size="xs"
+						className="gap-1 hover:bg-primary/80"
+						onClick={onCreate}
+					>
+						<Plus strokeWidth={2} />
+						Add script
+					</Button>
 				</div>
 			)}
 		</div>
 	);
 }
 
-function RunActionRow({
+function RunScriptRow({
+	repoId,
 	action,
 	locked,
+	autoFocus,
+	onFocused,
 }: {
+	repoId: string;
 	action: RunAction;
 	locked: boolean;
+	autoFocus: boolean;
+	onFocused: () => void;
 }) {
+	const queryClient = useQueryClient();
 	const isProjectOwned = action.fromProject || locked;
 
-	// Display-only row — no local state, no save logic. The textarea is
-	// `readOnly` so it scrolls when the command is multi-line but never
-	// accepts input. `tabIndex={-1}` keeps it out of the keyboard tab
-	// order; `focus-visible:ring-0` + `cursor-default` strip the focused-
-	// input affordance so it doesn't pretend to be editable.
-	const rowBody = (
-		<div>
-			{/* Action name subheading — same size + color as the section
-			    description (`text-mini text-muted-foreground`) so it stays
-			    within the section's typographic rhythm, but bold so it
-			    still reads as a label above the command box. */}
-			<div className="text-mini font-semibold leading-tight text-muted-foreground">
-				{action.name}
-			</div>
-			<Textarea
-				className="mt-2 min-h-[56px] cursor-default resize-y bg-app-base/30 font-mono text-small focus-visible:ring-0"
-				value={action.command}
-				readOnly
-				tabIndex={-1}
-				aria-label={`${action.name} command`}
-			/>
-		</div>
+	const [name, setName] = useState(action.name);
+	const [command, setCommand] = useState(action.command);
+	const [mode, setMode] = useState<RunScriptMode>(action.mode);
+	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+
+	// Keep local state in sync when the upstream record changes (e.g. an
+	// out-of-band update via UI-sync). We only overwrite the local draft
+	// when the incoming value diverges — guards against clobbering the
+	// caret while the user is mid-typing.
+	const lastSyncedRef = useRef({
+		name: action.name,
+		command: action.command,
+		mode: action.mode,
+	});
+	useEffect(() => {
+		const prev = lastSyncedRef.current;
+		if (prev.name !== action.name) setName(action.name);
+		if (prev.command !== action.command) setCommand(action.command);
+		if (prev.mode !== action.mode) setMode(action.mode);
+		lastSyncedRef.current = {
+			name: action.name,
+			command: action.command,
+			mode: action.mode,
+		};
+	}, [action.name, action.command, action.mode]);
+
+	const nameInputRef = useRef<HTMLInputElement | null>(null);
+	useEffect(() => {
+		if (!autoFocus || isProjectOwned) return;
+		nameInputRef.current?.focus();
+		nameInputRef.current?.select();
+		onFocused();
+	}, [autoFocus, isProjectOwned, onFocused]);
+
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const persist = useCallback(
+		(next: { name: string; command: string; mode: RunScriptMode }) => {
+			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+			saveTimerRef.current = setTimeout(() => {
+				const trimmedName = next.name.trim();
+				// Drop empty-name writes — backend rejects them and we'd
+				// just bounce. The red-ring affordance below tells the
+				// user why nothing's persisting.
+				if (!trimmedName) return;
+				void updateRepoRunAction(
+					repoId,
+					action.id,
+					trimmedName,
+					next.command,
+					next.mode,
+				).then(() => {
+					void queryClient.invalidateQueries({
+						queryKey: ["repoScripts", repoId],
+					});
+				});
+			}, 600);
+		},
+		[repoId, action.id, queryClient],
 	);
 
-	if (!isProjectOwned) return rowBody;
+	// Flush pending edits if the row unmounts (e.g. deleted, navigated
+	// away). 600ms is forgiving but a fast close-the-dialog could drop
+	// the last keystroke otherwise.
+	useEffect(() => {
+		return () => {
+			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		};
+	}, []);
+
+	const handleDelete = useCallback(async () => {
+		setDeleting(true);
+		try {
+			await deleteRepoRunAction(repoId, action.id);
+			// UI-sync will invalidate, but invalidate explicitly so the
+			// row disappears immediately even if the event is in flight.
+			void queryClient.invalidateQueries({
+				queryKey: ["repoScripts", repoId],
+			});
+		} finally {
+			setDeleting(false);
+			setConfirmOpen(false);
+		}
+	}, [repoId, action.id, queryClient]);
+
+	if (isProjectOwned) {
+		// Read-only branch: same `header + textarea` shape as ScriptField,
+		// with the name rendered as a static label (mirrors "Setup script"
+		// / "Archive script" headings). Disabled textarea + tooltip
+		// explain why it's inert.
+		const body = (
+			<div>
+				<div className="text-small font-medium text-muted-foreground">
+					{action.name}
+				</div>
+				<Textarea
+					className="mt-2 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
+					value={action.command}
+					readOnly
+					disabled
+					tabIndex={-1}
+					aria-label={`${action.name} command`}
+				/>
+			</div>
+		);
+		return (
+			<TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>{body}</TooltipTrigger>
+					<TooltipContent side="top">
+						Set by this workspace's helmor.json — edit it there
+					</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
+		);
+	}
+
+	const nameInvalid = !name.trim();
+
 	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>{rowBody}</TooltipTrigger>
-				<TooltipContent side="top">
-					Set by this workspace's helmor.json — edit it there
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+		<>
+			<div>
+				<div className="flex items-center justify-between gap-3">
+					<Input
+						ref={nameInputRef}
+						className="h-7 w-full max-w-[220px] text-small font-medium"
+						placeholder="Script name"
+						value={name}
+						aria-invalid={nameInvalid}
+						aria-label="Script name"
+						onChange={(e) => {
+							const value = e.target.value;
+							setName(value);
+							persist({ name: value, command, mode });
+						}}
+					/>
+					<div className="flex shrink-0 items-center gap-1.5">
+						<span className="text-mini font-medium text-muted-foreground">
+							Exclusive
+						</span>
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<HelpCircle
+										className="size-3 cursor-help text-muted-foreground/70"
+										strokeWidth={1.8}
+									/>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-[240px]">
+									Only let one workspace run this script at a time. Starting a
+									new run stops any other run in this repository — useful when
+									the script binds a fixed port.
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+						<Switch
+							checked={mode === "non-concurrent"}
+							onCheckedChange={(checked) => {
+								const next: RunScriptMode = checked
+									? "non-concurrent"
+									: "concurrent";
+								setMode(next);
+								persist({ name, command, mode: next });
+							}}
+							aria-label="Stop other runs in this repository when starting a new run"
+						/>
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-7 text-muted-foreground hover:text-destructive"
+										onClick={() => setConfirmOpen(true)}
+										aria-label={`Delete script ${action.name || "(unnamed)"}`}
+									>
+										<Trash2 className="size-3.5" strokeWidth={1.8} />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top">Delete script</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+					</div>
+				</div>
+				<Textarea
+					className="mt-2 min-h-[56px] resize-y bg-app-base/30 font-mono text-small"
+					placeholder="e.g., npm run dev"
+					value={command}
+					aria-label={`${action.name || "Script"} command`}
+					onChange={(e) => {
+						const value = e.target.value;
+						setCommand(value);
+						persist({ name, command: value, mode });
+					}}
+				/>
+			</div>
+
+			<ConfirmDialog
+				open={confirmOpen}
+				onOpenChange={setConfirmOpen}
+				title={`Delete ${action.name || "this script"}?`}
+				description={
+					<>
+						This removes the script from the Inspector's Run dropdown. Any PTY
+						that's currently running will keep going until it exits or you stop
+						it from the terminal.
+					</>
+				}
+				confirmLabel={deleting ? "Deleting..." : "Delete"}
+				onConfirm={() => void handleDelete()}
+				loading={deleting}
+			/>
+		</>
 	);
 }

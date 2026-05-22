@@ -48,11 +48,16 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    // `branch_prefix_type` and `run_script_mode` were once stubs here.
-    // Both have since been revived as real per-repo columns (multi-account
-    // refactor and non-concurrent run mode respectively) — keep them OUT
-    // of this list so they survive startup.
+    // `branch_prefix_type` was once a stub here. It has since been
+    // revived as a real per-repo column (multi-account refactor) — keep
+    // it OUT of this list so it survives startup.
     ("repos", "storage_version"),
+    // Retired with the multi run-action migration. Each repo now stores
+    // its run scripts as rows in `repo_run_actions`; the legacy single
+    // `run_script` + `run_script_mode` columns are backfilled in
+    // `run_migrations` and then dropped here.
+    ("repos", "run_script"),
+    ("repos", "run_script_mode"),
     // workspaces: legacy fields with no read path in production.
     ("workspaces", "big_terminal_mode"),
     ("workspaces", "initialization_files_copied"),
@@ -460,17 +465,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add branch_prefix_type column")?;
     }
 
-    // Migration: per-repo run-script mode. 'concurrent' (default) preserves
-    // the historical behavior of allowing multiple workspaces in the same
-    // repo to run their scripts at once. 'non-concurrent' makes a new run
-    // stop any other run script in the same repo first — convenient when
-    // the script binds a fixed port.
-    if has_table(connection, "repos") && !has_column(connection, "repos", "run_script_mode") {
-        connection
-            .execute_batch("ALTER TABLE repos ADD COLUMN run_script_mode TEXT DEFAULT 'concurrent'")
-            .context("Failed to add run_script_mode column")?;
-    }
-
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
     {
         connection
@@ -554,6 +548,96 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to normalize workspace status values")?;
     }
 
+    // Multi run-action support: each repo gets a list of named run scripts
+    // instead of a single `run_script`. The migration must run BEFORE
+    // `drop_dead_schema` so the backfill can still read the legacy
+    // `repos.run_script` / `run_script_mode` columns — `drop_dead_schema`
+    // is what actually retires them (see `DEAD_COLUMNS`).
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "active_run_action_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN active_run_action_id TEXT")
+            .context("Failed to add workspaces.active_run_action_id column")?;
+    }
+
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS repo_run_actions (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'concurrent',
+                display_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
+                ON repo_run_actions(repo_id, display_order);
+            CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
+                AFTER UPDATE ON repo_run_actions
+                BEGIN
+                    UPDATE repo_run_actions SET updated_at = datetime('now')
+                    WHERE id = NEW.id;
+                END;
+            "#,
+        )
+        .context("Failed to create repo_run_actions table")?;
+
+    // Backfill: every repo that has a non-empty `run_script` but no row in
+    // `repo_run_actions` yet gets a single migrated action carrying the old
+    // command + mode. Deterministic id (`legacy:<repo_id>`) keeps the
+    // migration idempotent across restarts and stable for any active-id
+    // references we later add. After this block both legacy columns are
+    // listed in `DEAD_COLUMNS` and get dropped by `drop_dead_schema` below.
+    if has_table(connection, "repos")
+        && has_table(connection, "repo_run_actions")
+        && has_column(connection, "repos", "run_script")
+    {
+        let has_mode = has_column(connection, "repos", "run_script_mode");
+        let mode_expr = if has_mode {
+            "COALESCE(NULLIF(run_script_mode, ''), 'concurrent')"
+        } else {
+            "'concurrent'"
+        };
+        connection
+            .execute_batch(&format!(
+                r#"
+                INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order)
+                SELECT
+                    'legacy:' || id,
+                    id,
+                    'Default',
+                    run_script,
+                    {mode_expr},
+                    0
+                FROM repos
+                WHERE run_script IS NOT NULL
+                  AND TRIM(run_script) != ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM repo_run_actions WHERE repo_run_actions.repo_id = repos.id
+                  );
+                "#
+            ))
+            .context("Failed to backfill repo_run_actions from repos.run_script")?;
+
+        // One-shot rename for installs that backfilled with the earlier
+        // label ("Run"). Targeted by id pattern + exact-match name so it
+        // never touches a row the user manually renamed.
+        connection
+            .execute_batch(
+                r#"
+                UPDATE repo_run_actions
+                SET name = 'Default'
+                WHERE id LIKE 'legacy:%' AND name = 'Run';
+                "#,
+            )
+            .context("Failed to rename legacy run actions to 'Default'")?;
+    }
+
     drop_dead_schema(connection)?;
 
     // Migration: remap legacy "opus-1m" model ID — the CLI no longer accepts it.
@@ -628,102 +712,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 "ALTER TABLE workspaces ADD COLUMN branch_intent TEXT DEFAULT 'from_branch'",
             )
             .context("Failed to add workspaces.branch_intent column")?;
-    }
-
-    // Multi run-action support: each repo gets a list of named run scripts
-    // instead of a single `run_script`. Old `repos.run_script` /
-    // `run_script_mode` columns stay populated as a fallback / rollback
-    // safety net — see backfill below. `workspaces.active_run_action_id`
-    // remembers which action the user last switched to in that workspace
-    // (NULL = use the first action).
-    if has_table(connection, "workspaces")
-        && !has_column(connection, "workspaces", "active_run_action_id")
-    {
-        connection
-            .execute_batch("ALTER TABLE workspaces ADD COLUMN active_run_action_id TEXT")
-            .context("Failed to add workspaces.active_run_action_id column")?;
-    }
-
-    connection
-        .execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS repo_run_actions (
-                id TEXT PRIMARY KEY,
-                repo_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                mode TEXT NOT NULL DEFAULT 'concurrent',
-                display_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
-                ON repo_run_actions(repo_id, display_order);
-            CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
-                AFTER UPDATE ON repo_run_actions
-                BEGIN
-                    UPDATE repo_run_actions SET updated_at = datetime('now')
-                    WHERE id = NEW.id;
-                END;
-            "#,
-        )
-        .context("Failed to create repo_run_actions table")?;
-
-    // Backfill: every repo that has a non-empty `run_script` but no row in
-    // `repo_run_actions` yet gets a single migrated action carrying the old
-    // command + mode. Deterministic id (`legacy:<repo_id>`) keeps the
-    // migration idempotent across restarts and stable for any active-id
-    // references we later add. The `repos.run_script` column intentionally
-    // stays populated — kept as a fallback / rollback safety net for at
-    // least two release cycles.
-    //
-    // Guarded on `has_column("repos", "run_script")` because the
-    // migration-test bench seeds legacy schemas that predate the column;
-    // production rows always have it (CREATE TABLE in SCHEMA_SQL ships it).
-    if has_table(connection, "repos")
-        && has_table(connection, "repo_run_actions")
-        && has_column(connection, "repos", "run_script")
-    {
-        let has_mode = has_column(connection, "repos", "run_script_mode");
-        let mode_expr = if has_mode {
-            "COALESCE(NULLIF(run_script_mode, ''), 'concurrent')"
-        } else {
-            "'concurrent'"
-        };
-        connection
-            .execute_batch(&format!(
-                r#"
-                INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order)
-                SELECT
-                    'legacy:' || id,
-                    id,
-                    'Default',
-                    run_script,
-                    {mode_expr},
-                    0
-                FROM repos
-                WHERE run_script IS NOT NULL
-                  AND TRIM(run_script) != ''
-                  AND NOT EXISTS (
-                    SELECT 1 FROM repo_run_actions WHERE repo_run_actions.repo_id = repos.id
-                  );
-                "#
-            ))
-            .context("Failed to backfill repo_run_actions from repos.run_script")?;
-
-        // One-shot rename for installs that backfilled with the earlier
-        // label ("Run"). Targeted by id pattern + exact-match name so it
-        // never touches a row the user manually renamed.
-        connection
-            .execute_batch(
-                r#"
-                UPDATE repo_run_actions
-                SET name = 'Default'
-                WHERE id LIKE 'legacy:%' AND name = 'Run';
-                "#,
-            )
-            .context("Failed to rename legacy run actions to 'Default'")?;
     }
 
     materialize_review_pr_model_defaults(connection)?;
@@ -840,7 +828,6 @@ CREATE TABLE IF NOT EXISTS repos (
     setup_script TEXT,
     archive_script TEXT,
     display_order INTEGER DEFAULT 0,
-    run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
     custom_prompt_review TEXT,
@@ -854,7 +841,6 @@ CREATE TABLE IF NOT EXISTS repos (
     forge_login TEXT,
     branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
-    run_script_mode TEXT DEFAULT 'concurrent',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1348,6 +1334,7 @@ mod tests {
                     root_path TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     storage_version INTEGER DEFAULT 1,
+                    run_script TEXT,
                     run_script_mode TEXT DEFAULT 'concurrent',
                     custom_prompt_code_review TEXT,
                     conductor_config TEXT,
@@ -1623,35 +1610,44 @@ mod tests {
     }
 
     #[test]
-    fn run_script_mode_present_on_fresh_install() {
+    fn legacy_run_script_columns_are_dropped_on_fresh_install() {
+        // New installs never carry the retired columns. SCHEMA_SQL omits
+        // them and `drop_dead_schema` would clean them up anyway.
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
-        assert!(column_exists(&connection, "repos", "run_script_mode"));
+        assert!(!column_exists(&connection, "repos", "run_script"));
+        assert!(!column_exists(&connection, "repos", "run_script_mode"));
     }
 
     #[test]
-    fn run_script_mode_retained_from_legacy_schema() {
-        // Conductor DBs already carry this column. Migration must keep it
-        // (and any persisted value) rather than dropping it.
+    fn legacy_run_script_columns_backfill_into_repo_run_actions_then_drop() {
+        // Legacy DBs carry `run_script` + `run_script_mode`. Migration
+        // must move their values into `repo_run_actions` before
+        // `drop_dead_schema` retires the columns.
         let (connection, _dir) = open_test_db();
         create_legacy_schema(&connection);
         connection
             .execute(
-                "INSERT INTO repos (id, name, run_script_mode) VALUES ('r1', 'x', 'non-concurrent')",
+                "INSERT INTO repos (id, name, run_script, run_script_mode) VALUES ('r1', 'x', 'npm dev', 'non-concurrent')",
                 [],
             )
             .unwrap();
 
         run_migrations(&connection).unwrap();
-        assert!(column_exists(&connection, "repos", "run_script_mode"));
 
-        let mode: String = connection
+        assert!(!column_exists(&connection, "repos", "run_script"));
+        assert!(!column_exists(&connection, "repos", "run_script_mode"));
+
+        let (id, name, command, mode): (String, String, String, String) = connection
             .query_row(
-                "SELECT run_script_mode FROM repos WHERE id = 'r1'",
+                "SELECT id, name, command, mode FROM repo_run_actions WHERE repo_id = 'r1'",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
+        assert_eq!(id, "legacy:r1");
+        assert_eq!(name, "Default");
+        assert_eq!(command, "npm dev");
         assert_eq!(mode, "non-concurrent");
     }
 

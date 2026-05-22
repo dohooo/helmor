@@ -1,0 +1,14 @@
+{
+	"items": [
+		{
+			"text": "You can now configure multiple run scripts per repository",
+			"action": {
+				"label": "Open Run scripts",
+				"value": {
+					"type": "openSettings",
+					"section": "repo:current"
+				}
+			}
+		}
+	]
+}

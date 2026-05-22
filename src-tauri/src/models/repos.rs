@@ -91,8 +91,6 @@ pub(crate) struct RepositoryRecord {
     pub default_branch: Option<String>,
     pub root_path: String,
     pub setup_script: Option<String>,
-    #[allow(dead_code)] // Queried separately via RepoScripts; kept here for completeness.
-    pub run_script: Option<String>,
     /// Auto-run the setup script when a workspace is created.
     /// Defaults to true; users disable it from repo settings.
     pub auto_run_setup: bool,
@@ -236,7 +234,7 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE id = ?1
             "#,
@@ -252,10 +250,9 @@ pub(crate) fn load_repository_by_id(repo_id: &str) -> Result<Option<RepositoryRe
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-                forge_login: row.get(9)?,
+                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
+                forge_provider: row.get(7)?,
+                forge_login: row.get(8)?,
             })
         })
         .with_context(|| format!("Failed to query repository {repo_id}"))?;
@@ -307,7 +304,7 @@ fn query_repository_by_root_path(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE root_path = ?1
             ORDER BY created_at ASC
@@ -325,10 +322,9 @@ fn query_repository_by_root_path(
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-                forge_login: row.get(9)?,
+                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
+                forge_provider: row.get(7)?,
+                forge_login: row.get(8)?,
             })
         })
         .with_context(|| format!("Failed to query repository row for {root_path}"))?;
@@ -349,7 +345,7 @@ fn query_repository_candidates_by_name(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT id, name, remote, default_branch, root_path, setup_script, run_script, auto_run_setup, forge_provider, forge_login
+            SELECT id, name, remote, default_branch, root_path, setup_script, auto_run_setup, forge_provider, forge_login
             FROM repos
             WHERE name = ?1 OR root_path LIKE ?2
             ORDER BY created_at ASC
@@ -368,10 +364,9 @@ fn query_repository_candidates_by_name(
                 default_branch: row.get(3)?,
                 root_path: row.get(4)?,
                 setup_script: row.get(5)?,
-                run_script: row.get(6)?,
-                auto_run_setup: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
-                forge_provider: row.get(8)?,
-                forge_login: row.get(9)?,
+                auto_run_setup: row.get::<_, Option<i64>>(6)?.unwrap_or(1) != 0,
+                forge_provider: row.get(7)?,
+                forge_login: row.get(8)?,
             })
         })
         .with_context(|| format!("Failed to query repository candidates for {repository_name}"))?;
@@ -408,12 +403,11 @@ pub(crate) fn insert_repository(repository: &ResolvedRepositoryInput) -> Result<
               display_order,
               hidden,
               setup_script,
-              run_script,
               archive_script,
               forge_provider,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, NULL, ?8, datetime('now'), datetime('now'))
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, ?8, datetime('now'), datetime('now'))
             "#,
             (
                 repo_id.as_str(),
@@ -833,10 +827,6 @@ pub struct RunAction {
 #[serde(rename_all = "camelCase")]
 pub struct RepoScripts {
     pub setup_script: Option<String>,
-    /// Convenience mirror of `run_actions[0].command` — kept for the few
-    /// existing call sites that only want "the run script" as a string.
-    /// New code should iterate `run_actions` instead.
-    pub run_script: Option<String>,
     pub archive_script: Option<String>,
     pub setup_from_project: bool,
     /// True when *any* run action came from `helmor.json` (the entire run
@@ -847,9 +837,6 @@ pub struct RepoScripts {
     /// Auto-run setup on workspace creation. DB-only — not configurable
     /// from `helmor.json`. Defaults to true.
     pub auto_run_setup: bool,
-    /// Convenience mirror of `run_actions[0].mode`. Kept for the few
-    /// existing call sites that read the legacy single-script mode.
-    pub run_script_mode: String,
     /// All run actions for this repo, in display order. May come from
     /// `helmor.json` (locked) or from the `repo_run_actions` table. The
     /// list is empty when neither source declares a run script.
@@ -876,9 +863,7 @@ pub struct RepoPreferences {
 ///      apply: no `workspace_id`, unknown workspace, or worktree missing
 ///      (archived / broken / pre-Phase-2 creation).
 ///   3. DB-level config (`repos.setup_script/archive_script` for
-///      setup+archive; the `repo_run_actions` table for run actions, with
-///      a legacy fallback to `repos.run_script` if the table is empty for
-///      this repo).
+///      setup+archive; the `repo_run_actions` table for run actions).
 ///
 /// The same rule applies regardless of caller (runtime panel, settings
 /// page, script execution, archive hook) — there is no special-case
@@ -905,27 +890,19 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
             })
     });
 
-    // Priority 3: DB values — setup/archive use `pick_script` against the
-    // project config; run actions come from `repo_run_actions` (with a
-    // legacy fallback to `repos.run_script` for repos that predate the
-    // multi-action migration, and where the backfill SQL happened to miss
-    // them).
+    // Priority 3: DB values — setup/archive from `repos`; run actions
+    // from `repo_run_actions`.
     let connection = db::read_conn()?;
     let mut statement = connection
-        .prepare(
-            "SELECT setup_script, run_script, archive_script, auto_run_setup, run_script_mode FROM repos WHERE id = ?1",
-        )
+        .prepare("SELECT setup_script, archive_script, auto_run_setup FROM repos WHERE id = ?1")
         .with_context(|| format!("Failed to prepare script lookup for {repo_id}"))?;
 
-    let (db_setup, db_run, db_archive, auto_run_setup, db_run_mode) = statement
+    let (db_setup, db_archive, auto_run_setup) = statement
         .query_row([repo_id], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?.unwrap_or(1) != 0,
-                row.get::<_, Option<String>>(4)?
-                    .unwrap_or_else(|| "concurrent".to_string()),
+                row.get::<_, Option<i64>>(2)?.unwrap_or(1) != 0,
             ))
         })
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -960,47 +937,16 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
             .with_context(|| format!("Failed to load run actions for {repo_id}"))?
             .collect::<rusqlite::Result<Vec<_>>>()
             .with_context(|| format!("Failed to read run-action rows for {repo_id}"))?;
-
-        if !db_actions.is_empty() {
-            (db_actions, false)
-        } else {
-            // Legacy fallback: a one-off virtual action synthesised from
-            // the old `repos.run_script` column. The settings UI promotes
-            // this into a real row on first edit (it has a stable
-            // `legacy:<repo_id>` id so an active-id reference survives).
-            let fallback: Vec<RunAction> = db_run
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|cmd| {
-                    vec![RunAction {
-                        id: format!("legacy:{repo_id}"),
-                        name: "Default".to_string(),
-                        command: cmd.to_string(),
-                        mode: db_run_mode.clone(),
-                        from_project: false,
-                    }]
-                })
-                .unwrap_or_default();
-            (fallback, false)
-        }
+        (db_actions, false)
     };
-
-    let run_script = run_actions.first().map(|a| a.command.clone());
-    let run_script_mode = run_actions
-        .first()
-        .map(|a| a.mode.clone())
-        .unwrap_or_else(|| db_run_mode.clone());
 
     Ok(RepoScripts {
         setup_script,
-        run_script,
         archive_script,
         setup_from_project,
         run_from_project,
         archive_from_project,
         auto_run_setup,
-        run_script_mode,
         run_actions,
     })
 }
@@ -1125,14 +1071,13 @@ fn parse_project_run_actions(value: Option<&Value>, repo_id: &str) -> Vec<RunAct
 pub fn update_repo_scripts(
     repo_id: &str,
     setup_script: Option<&str>,
-    run_script: Option<&str>,
     archive_script: Option<&str>,
 ) -> Result<()> {
     let connection = db::write_conn()?;
     let updated = connection
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3, updated_at = datetime('now') WHERE id = ?4",
-            rusqlite::params![setup_script, run_script, archive_script, repo_id],
+            "UPDATE repos SET setup_script = ?1, archive_script = ?2, updated_at = datetime('now') WHERE id = ?3",
+            rusqlite::params![setup_script, archive_script, repo_id],
         )
         .with_context(|| format!("Failed to update scripts for {repo_id}"))?;
 
@@ -1153,28 +1098,6 @@ pub fn update_repo_auto_run_setup(repo_id: &str, enabled: bool) -> Result<()> {
             rusqlite::params![if enabled { 1 } else { 0 }, repo_id],
         )
         .with_context(|| format!("Failed to update auto_run_setup for {repo_id}"))?;
-
-    if updated != 1 {
-        bail!("Repository not found: {repo_id}");
-    }
-
-    Ok(())
-}
-
-/// Persist the per-repo run-script mode. Accepts "concurrent" or
-/// "non-concurrent"; anything else is rejected so the column never holds
-/// an unrecognized value.
-pub fn update_repo_run_script_mode(repo_id: &str, mode: &str) -> Result<()> {
-    if mode != "concurrent" && mode != "non-concurrent" {
-        bail!("Invalid run_script_mode: {mode}");
-    }
-    let connection = db::write_conn()?;
-    let updated = connection
-        .execute(
-            "UPDATE repos SET run_script_mode = ?1, updated_at = datetime('now') WHERE id = ?2",
-            rusqlite::params![mode, repo_id],
-        )
-        .with_context(|| format!("Failed to update run_script_mode for {repo_id}"))?;
 
     if updated != 1 {
         bail!("Repository not found: {repo_id}");
@@ -1907,7 +1830,6 @@ mod tests {
         // Fresh repo has no actions.
         let initial = load_repo_scripts(&repo_id, None).unwrap();
         assert!(initial.run_actions.is_empty());
-        assert!(initial.run_script.is_none());
 
         // Create -> visible + ordered by insertion.
         let dev = create_repo_run_action(&repo_id, "Dev", "npm run dev", "concurrent").unwrap();
@@ -1918,8 +1840,8 @@ mod tests {
         assert_eq!(loaded.run_actions.len(), 2);
         assert_eq!(loaded.run_actions[0].name, "Dev");
         assert_eq!(loaded.run_actions[1].name, "Tests");
-        assert_eq!(loaded.run_script.as_deref(), Some("npm run dev"));
-        assert_eq!(loaded.run_script_mode, "concurrent");
+        assert_eq!(loaded.run_actions[0].command, "npm run dev");
+        assert_eq!(loaded.run_actions[0].mode, "concurrent");
         assert!(!loaded.run_from_project);
 
         // Update one of them.
@@ -1947,35 +1869,6 @@ mod tests {
             create_repo_run_action(&repo_id, "Bad", "echo", "wat").is_err(),
             "mode validation should reject unknown values"
         );
-    }
-
-    #[test]
-    fn legacy_run_script_falls_through_when_actions_table_empty() {
-        let env = crate::testkit::TestEnv::new("repos-legacy-run-fallback");
-        let repo_id = insert_test_repo(&env, "legacy");
-
-        // Simulate a pre-migration row: write the old columns directly
-        // (bypassing the migration backfill — which only runs at schema
-        // init, not on every insert). This is the exact shape we want the
-        // loader to gracefully fall back from.
-        let conn = db::write_conn().unwrap();
-        conn.execute(
-            "UPDATE repos SET run_script = ?1, run_script_mode = ?2 WHERE id = ?3",
-            rusqlite::params!["npm start", "non-concurrent", &repo_id],
-        )
-        .unwrap();
-        drop(conn);
-
-        let scripts = load_repo_scripts(&repo_id, None).unwrap();
-        assert_eq!(scripts.run_actions.len(), 1);
-        let action = &scripts.run_actions[0];
-        assert_eq!(action.id, format!("legacy:{repo_id}"));
-        assert_eq!(action.name, "Default");
-        assert_eq!(action.command, "npm start");
-        assert_eq!(action.mode, "non-concurrent");
-        assert!(!action.from_project);
-        assert_eq!(scripts.run_script.as_deref(), Some("npm start"));
-        assert_eq!(scripts.run_script_mode, "non-concurrent");
     }
 
     #[test]

@@ -557,7 +557,7 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (!scripts.setupScript?.trim()) {
 			missing.push("setup");
 		}
-		if (!scripts.runScript?.trim()) {
+		if (!scripts.runActions.some((a) => a.command.trim())) {
 			missing.push("run");
 		}
 		if (!scripts.archiveScript?.trim()) {

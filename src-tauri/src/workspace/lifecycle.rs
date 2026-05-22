@@ -237,13 +237,11 @@ pub fn prepare_workspace_from_repo_impl(
             tracing::warn!(%error, "Failed to load repo scripts during prepare; defaulting to empty");
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: true,
-                run_script_mode: "concurrent".to_string(),
                 run_actions: Vec::new(),
             }
         }
@@ -389,13 +387,11 @@ pub fn prepare_local_workspace_impl(
         repos::load_repo_scripts(repo_id, Some(&workspace_id)).unwrap_or_else(|_| {
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: false,
-                run_script_mode: "concurrent".to_string(),
                 run_actions: Vec::new(),
             }
         });
@@ -491,13 +487,11 @@ pub fn prepare_chat_workspace_impl(
         // No setup/run scripts for chat mode — return the empty shape.
         repo_scripts: repos::RepoScripts {
             setup_script: None,
-            run_script: None,
             archive_script: None,
             setup_from_project: false,
             run_from_project: false,
             archive_from_project: false,
             auto_run_setup: false,
-            run_script_mode: "concurrent".to_string(),
             run_actions: Vec::new(),
         },
         working_directory: Some(working_directory.display().to_string()),
