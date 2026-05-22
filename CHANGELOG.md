@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.23.5
+
+### Patch Changes
+
+- [#632](https://github.com/dohooo/helmor/pull/632) [`b27c5e1`](https://github.com/dohooo/helmor/commit/b27c5e1a771144ec2c72422d9e735ce35ad5f899) Thanks [@aidxun](https://github.com/aidxun)! - Stop eagerly prefetching every changed file's contents when opening the Git Changes panel — Monaco now reads files on demand instead, cutting CPU and IPC traffic on large workspaces.
+
+- [#631](https://github.com/dohooo/helmor/pull/631) [`7093895`](https://github.com/dohooo/helmor/commit/7093895cd375cafd657721879b0211e63b129682) Thanks [@natllian](https://github.com/natllian)! - Fix Shift+Tab on the new-thread page only cycling repositories when focus was inside the composer; the shortcut now works anywhere on the start surface.
+
+- [#633](https://github.com/dohooo/helmor/pull/633) [`fb0bba1`](https://github.com/dohooo/helmor/commit/fb0bba177287b0ff3d65c3725770616cc9e34ffe) Thanks [@natllian](https://github.com/natllian)! - Fix the composer preview popover running off the bottom of the screen when pasting a long-text pill or image on the start page — the preview now shrinks to fit the space between the composer and the screen edge.
+
+- [#629](https://github.com/dohooo/helmor/pull/629) [`eadc55d`](https://github.com/dohooo/helmor/commit/eadc55d13a0952f383425a25de7142bce67f929f) Thanks [@natllian](https://github.com/natllian)! - Fix the inspector Run/Setup tabs' floating Stop/Rerun button only registering clicks on a thin strip near its bottom edge. The xterm WebGL link-layer canvas sits at `z-index: 2` and was painted over the upper portion of the button — the button now sits above the xterm canvas stack so the entire visible rectangle is clickable.
+
+- [#641](https://github.com/dohooo/helmor/pull/641) [`9d7d236`](https://github.com/dohooo/helmor/commit/9d7d236812d3afbed04862aaec45ac820e71dfee) Thanks [@natllian](https://github.com/natllian)! - Restore 60 FPS on inspector and sidebar / inspector drag with thousands of changed files.
+
 ## 0.23.4
 
 ### Patch Changes
