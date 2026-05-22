@@ -21,6 +21,7 @@ import type {
 	ForgeActionStatus,
 	ForgeDetection,
 } from "@/lib/api";
+import type { MergeBlockedReason } from "@/lib/commit-button-logic";
 import { useSettings } from "@/lib/settings";
 import { useMinDisplayDuration } from "@/lib/use-min-display-duration";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,8 @@ export type GitSectionHeaderProps = {
 	commitButtonMode: WorkspaceCommitButtonMode;
 	commitButtonState?: CommitButtonState;
 	changeRequest: ChangeRequestInfo | null;
+	/** Forwarded to the commit button when `commitButtonMode === "merge-blocked"`. */
+	mergeBlockedReason?: MergeBlockedReason | null;
 	hasChanges?: boolean;
 	/**
 	 * Whether change request data is currently being (re)fetched. Drives the
@@ -100,6 +103,7 @@ export function GitSectionHeader({
 	commitButtonMode,
 	commitButtonState,
 	changeRequest,
+	mergeBlockedReason = null,
 	hasChanges = false,
 	isRefreshing = false,
 	changeRequestName = "PR",
@@ -311,7 +315,7 @@ export function GitSectionHeader({
 											<GithubBrandIcon size={12} />
 										)}
 									</span>
-									<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-[13px] font-light">
+									<span className="inline-flex h-4 min-w-0 items-center truncate leading-4 tabular-nums text-ui font-light">
 										{isMergeRequest ? "!" : "#"}
 										{changeRequest.number}
 									</span>
@@ -331,7 +335,7 @@ export function GitSectionHeader({
 								<TooltipTrigger asChild>{button}</TooltipTrigger>
 								<TooltipContent
 									side="bottom"
-									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-[12px] leading-tight"
+									className="flex max-w-[320px] items-center gap-2 rounded-md px-2 py-1 text-small leading-tight"
 								>
 									<span className="truncate">{openLabel}</span>
 									{openChangeRequestShortcut ? (
@@ -389,6 +393,7 @@ export function GitSectionHeader({
 											mode={commitButtonMode}
 											state={commitButtonState}
 											changeRequestName={changeRequestName}
+											mergeBlockedReason={mergeBlockedReason}
 											className="self-center rounded-md"
 											onCommit={onCommit}
 										/>
@@ -397,13 +402,14 @@ export function GitSectionHeader({
 								{commitShortcut ? (
 									<TooltipContent
 										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 									>
 										<span>
 											{getCommitButtonLabel(
 												commitButtonMode,
 												"idle",
 												changeRequestName,
+												mergeBlockedReason,
 											)}
 										</span>
 										<InlineShortcutDisplay

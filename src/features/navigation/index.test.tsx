@@ -468,7 +468,46 @@ describe("WorkspacesSidebar", () => {
 		expect(archiveButtons[1]).toBeEnabled();
 
 		await user.click(archiveButtons[1]);
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		const confirmButton = screen.getByRole("button", {
+			name: "Confirm archive workspace",
+		});
+		expect(confirmButton).toBeEnabled();
+		expect(confirmButton).toHaveTextContent("Confirm");
+
+		await user.click(confirmButton);
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-2");
+	});
+
+	it("resets the archive confirm button when the pointer leaves the workspace row", async () => {
+		const user = userEvent.setup();
+		const onArchiveWorkspace = vi.fn();
+
+		render(
+			<TooltipProvider delayDuration={0}>
+				<WorkspacesSidebar
+					groups={workspaceGroups}
+					archivedRows={[]}
+					onArchiveWorkspace={onArchiveWorkspace}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		).toHaveTextContent("Confirm");
+
+		fireEvent.pointerLeave(screen.getByRole("button", { name: "Workspace 1" }));
+
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole("button", { name: "Confirm archive workspace" }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Archive workspace" }),
+		).toBeInTheDocument();
 	});
 
 	it("keeps workspace actions enabled while a new workspace is being created", async () => {
@@ -492,6 +531,10 @@ describe("WorkspacesSidebar", () => {
 		expect(archiveButton).toBeEnabled();
 
 		await user.click(archiveButton);
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("workspace-1");
 	});
 

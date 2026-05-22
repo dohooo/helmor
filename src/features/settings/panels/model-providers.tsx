@@ -148,7 +148,7 @@ export function ClaudeCustomProvidersPanel() {
 									}))
 								}
 								placeholder={`${builtinProvider.label} API key`}
-								className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
+								className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
 							/>
 							{!draft.apiKey && (
 								<Button
@@ -175,7 +175,7 @@ export function ClaudeCustomProvidersPanel() {
 									}))
 								}
 								placeholder="Base URL"
-								className="h-8 border-border/50 bg-muted/20 text-[13px]"
+								className="h-8 border-border/50 bg-muted/20 text-ui"
 							/>
 							<Input
 								type="password"
@@ -188,7 +188,7 @@ export function ClaudeCustomProvidersPanel() {
 									}))
 								}
 								placeholder="API key"
-								className="h-8 border-border/50 bg-muted/20 text-[13px]"
+								className="h-8 border-border/50 bg-muted/20 text-ui"
 							/>
 							<Textarea
 								value={draft.models}
@@ -202,7 +202,7 @@ export function ClaudeCustomProvidersPanel() {
 								placeholder={`model-a
 model-b
 model-c`}
-								className="h-20 resize-none overflow-y-auto border-border/50 bg-muted/20 text-[13px]"
+								className="h-20 resize-none overflow-y-auto border-border/50 bg-muted/20 text-ui"
 							/>
 						</div>
 					)}
@@ -232,7 +232,7 @@ function ProviderPicker({
 		<DropdownMenu>
 			<DropdownMenuTrigger
 				className={cn(
-					"flex h-8 min-w-0 flex-1 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-[13px] text-foreground hover:bg-muted/50",
+					"flex h-8 min-w-0 flex-1 cursor-interactive items-center justify-between rounded-lg border border-border/50 bg-muted/30 px-3 text-ui text-foreground hover:bg-muted/50",
 				)}
 			>
 				<span className="flex min-w-0 items-center gap-2">
@@ -290,7 +290,7 @@ function ConfiguredProvidersList({
 }) {
 	if (items.length === 0) {
 		return (
-			<div className="pt-1 text-[12px] text-muted-foreground">
+			<div className="pt-1 text-small text-muted-foreground">
 				No third-party providers configured.
 			</div>
 		);
@@ -309,10 +309,10 @@ function ConfiguredProvidersList({
 					<div className="flex size-4 shrink-0 items-center justify-center">
 						<ProviderIcon item={item} className="size-4" />
 					</div>
-					<div className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+					<div className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
 						{item.label}
 					</div>
-					<div className="w-[88px] shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+					<div className="w-[88px] shrink-0 text-right font-mono text-mini text-muted-foreground">
 						{item.keyPreview}
 					</div>
 					<Button

@@ -5,6 +5,7 @@ const apiMocks = vi.hoisted(() => ({
 	prepareWorkspaceFromRepo: vi.fn(),
 	finalizeWorkspaceFromRepo: vi.fn(),
 	setWorkspaceStatus: vi.fn(),
+	updateSessionSettings: vi.fn(),
 }));
 
 const draftMocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ vi.mock("@/lib/api", () => ({
 	prepareWorkspaceFromRepo: apiMocks.prepareWorkspaceFromRepo,
 	finalizeWorkspaceFromRepo: apiMocks.finalizeWorkspaceFromRepo,
 	setWorkspaceStatus: apiMocks.setWorkspaceStatus,
+	updateSessionSettings: apiMocks.updateSessionSettings,
 }));
 
 vi.mock("@/features/composer/draft-storage", () => ({
@@ -44,6 +46,7 @@ describe("createWorkspaceFromStartComposer", () => {
 		apiMocks.prepareWorkspaceFromRepo.mockReset();
 		apiMocks.finalizeWorkspaceFromRepo.mockReset();
 		apiMocks.setWorkspaceStatus.mockReset();
+		apiMocks.updateSessionSettings.mockReset();
 		draftMocks.persistSessionDraft.mockReset();
 
 		apiMocks.prepareWorkspaceFromRepo.mockResolvedValue({
@@ -57,8 +60,16 @@ describe("createWorkspaceFromStartComposer", () => {
 			workingDirectory: finalizedWorkingDirectory,
 		});
 		apiMocks.setWorkspaceStatus.mockResolvedValue(undefined);
+		apiMocks.updateSessionSettings.mockResolvedValue(undefined);
 		draftMocks.persistSessionDraft.mockResolvedValue(undefined);
 	}
+
+	const composerConfig = {
+		modelId: "claude-sonnet-4-5",
+		effortLevel: "max",
+		permissionMode: "bypassPermissions",
+		fastMode: false,
+	};
 
 	it("creates an in-progress workspace and returns a streaming target", async () => {
 		resetMocks();
@@ -77,12 +88,16 @@ describe("createWorkspaceFromStartComposer", () => {
 			"worktree",
 			null,
 			null,
+			null,
+			undefined,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
 		);
 		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
 		expect(draftMocks.persistSessionDraft).not.toHaveBeenCalled();
+		// No composerConfig → no persist call.
+		expect(apiMocks.updateSessionSettings).not.toHaveBeenCalled();
 		expect(result.outcome).toEqual({
 			shouldStream: true,
 			workspaceId: "workspace-1",
@@ -96,6 +111,30 @@ describe("createWorkspaceFromStartComposer", () => {
 		expect(result.preparedWorkingDirectory).toBeNull();
 	});
 
+	it("persists composer picks immediately on startNow so they survive a container unmount", async () => {
+		// Regression: previously only `saveForLater` wrote the session row.
+		// `startNow` left effort/permission/model/fastMode in memory only,
+		// so visiting start-page and back snapped chips to defaults until
+		// the first turn's finalize ran.
+		resetMocks();
+
+		await createWorkspaceFromStartComposer({
+			repoId: "repo-1",
+			sourceBranch: "origin/main",
+			mode: "worktree",
+			submitMode: "startNow",
+			editorStateSnapshot,
+			composerConfig,
+		});
+
+		expect(apiMocks.updateSessionSettings).toHaveBeenCalledWith("session-1", {
+			model: "claude-sonnet-4-5",
+			effortLevel: "max",
+			permissionMode: "bypassPermissions",
+			fastMode: false,
+		});
+	});
+
 	it("saves the new workspace to backlog with the composer draft", async () => {
 		resetMocks();
 
@@ -105,6 +144,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			mode: "worktree",
 			submitMode: "saveForLater",
 			editorStateSnapshot,
+			composerConfig,
 		});
 
 		// "Save for later" passes initialStatus=backlog directly into Phase 1
@@ -114,8 +154,10 @@ describe("createWorkspaceFromStartComposer", () => {
 			"repo-1",
 			"origin/dev",
 			"worktree",
+			null,
 			"backlog",
 			null,
+			undefined,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
@@ -124,6 +166,12 @@ describe("createWorkspaceFromStartComposer", () => {
 			"session-1",
 			editorStateSnapshot,
 		);
+		expect(apiMocks.updateSessionSettings).toHaveBeenCalledWith("session-1", {
+			model: "claude-sonnet-4-5",
+			effortLevel: "max",
+			permissionMode: "bypassPermissions",
+			fastMode: false,
+		});
 		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
 		expect(result).toEqual({
 			outcome: { shouldStream: false },
@@ -142,6 +190,7 @@ describe("createWorkspaceFromStartComposer", () => {
 			mode: "worktree",
 			submitMode: "createOnly",
 			editorStateSnapshot,
+			composerConfig,
 		});
 
 		expect(apiMocks.prepareWorkspaceFromRepo).toHaveBeenCalledWith(
@@ -150,11 +199,19 @@ describe("createWorkspaceFromStartComposer", () => {
 			"worktree",
 			null,
 			null,
+			null,
+			undefined,
 		);
 		expect(apiMocks.finalizeWorkspaceFromRepo).toHaveBeenCalledWith(
 			"workspace-1",
 		);
 		expect(draftMocks.persistSessionDraft).not.toHaveBeenCalled();
+		expect(apiMocks.updateSessionSettings).toHaveBeenCalledWith("session-1", {
+			model: "claude-sonnet-4-5",
+			effortLevel: "max",
+			permissionMode: "bypassPermissions",
+			fastMode: false,
+		});
 		expect(apiMocks.setWorkspaceStatus).not.toHaveBeenCalled();
 		expect(result).toEqual({
 			outcome: { shouldStream: false },
@@ -184,11 +241,12 @@ describe("createWorkspaceFromStartComposer", () => {
 	});
 
 	it("forwards a selected runtime name into prepareWorkspaceFromRepo (phase 22c)", async () => {
-		// Where-picker selection lands as the 5th arg on the wire.
-		// The backend collapses null / "local" into NULL on the row,
-		// so the equivalence is tested separately at the
-		// `normalise_runtime_name_input` layer; here we just make sure
-		// the value isn't lost between the controller and the wrapper.
+		// Where-picker selection lands on the wire as the runtime_name
+		// positional arg. The backend collapses null / "local" into
+		// NULL on the row, so the equivalence is tested separately at
+		// the `normalise_runtime_name_input` layer; here we just make
+		// sure the value isn't lost between the controller and the
+		// wrapper.
 		resetMocks();
 
 		await createWorkspaceFromStartComposer({
@@ -205,7 +263,9 @@ describe("createWorkspaceFromStartComposer", () => {
 			"main",
 			"worktree",
 			null,
+			null,
 			"dev.box",
+			undefined,
 		);
 	});
 
@@ -230,6 +290,8 @@ describe("createWorkspaceFromStartComposer", () => {
 			"worktree",
 			null,
 			null,
+			null,
+			undefined,
 		);
 	});
 });

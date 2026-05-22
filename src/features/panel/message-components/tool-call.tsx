@@ -169,7 +169,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 			{!hasDiff &&
 			!hasFiles &&
 			(info.diffAdd != null || info.diffDel != null) ? (
-				<span className="flex items-center gap-1 text-[11px]">
+				<span className="flex items-center gap-1 text-mini">
 					{info.diffAdd != null ? (
 						<span className="text-chart-2">+{info.diffAdd}</span>
 					) : null}
@@ -179,7 +179,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				</span>
 			) : null}
 			{info.command ? (
-				<code className="inline-block min-w-0 truncate rounded bg-accent/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+				<code className="inline-block min-w-0 truncate rounded bg-accent/60 px-1.5 py-0.5 font-mono text-mini text-muted-foreground">
 					{info.command}
 				</code>
 			) : info.detail ? (
@@ -206,7 +206,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 	if (compact) {
 		const detail = info.file ?? info.command ?? info.detail ?? null;
 		return (
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground">
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground">
 				<span className="shrink-0">{info.icon}</span>
 				<span className="shrink-0 font-medium">{info.action}</span>
 				{detail ? (
@@ -227,7 +227,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 			>
 				<summary
 					className={cn(
-						"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden",
+						"flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground [&::-webkit-details-marker]:hidden",
 						canExpand ? "cursor-interactive" : "cursor-default",
 					)}
 				>
@@ -253,7 +253,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 				{canExpand && isOpen ? (
 					<div className="flex flex-col gap-1">
 						{hasOutput ? (
-							<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-[11px] leading-5">
+							<div className="max-h-[16rem] overflow-auto rounded-md bg-accent/35 text-mini leading-5">
 								{info.fullCommand ? (
 									<div className="border-b border-border/20 px-2 py-1.5">
 										<span className="mr-1.5 text-chart-3/70">$</span>
@@ -292,7 +292,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 									) : (
 										<div
 											key={`${f.name}-${i}`}
-											className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/60"
+											className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-small leading-4 text-muted-foreground transition-colors hover:bg-accent/60"
 										>
 											<img
 												src={getMaterialFileIcon(f.name)}
@@ -301,7 +301,7 @@ export const AssistantToolCall = memo(function AssistantToolCall({
 											/>
 											<span className="min-w-0 truncate">{f.name}</span>
 											{f.diffAdd != null || f.diffDel != null ? (
-												<span className="flex shrink-0 items-center gap-1 text-[11px]">
+												<span className="flex shrink-0 items-center gap-1 text-mini">
 													{f.diffAdd != null ? (
 														<span className="text-chart-2">+{f.diffAdd}</span>
 													) : null}
@@ -405,19 +405,19 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 		>
 			<summary
 				className={cn(
-					"flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-destructive [&::-webkit-details-marker]:hidden",
+					"flex max-w-full items-center gap-1.5 py-0.5 text-small text-destructive [&::-webkit-details-marker]:hidden",
 					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
 				<AlertCircle className="size-3.5 shrink-0" strokeWidth={1.8} />
 				<span className="shrink-0 font-medium">Error</span>
 				{exitCode != null ? (
-					<code className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[11px]">
+					<code className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-mini">
 						Exit code {exitCode}
 					</code>
 				) : null}
 				{preview ? (
-					<span className="min-w-0 truncate font-mono text-[11px] text-destructive/80">
+					<span className="min-w-0 truncate font-mono text-mini text-destructive/80">
 						{preview}
 					</span>
 				) : null}
@@ -440,7 +440,7 @@ const ToolCallErrorRow = memo(function ToolCallErrorRow({
 				) : null}
 			</summary>
 			{expandable && open ? (
-				<div className="mt-0.5 max-h-[16rem] overflow-auto rounded-md border border-destructive/15 bg-destructive/[0.05] text-[11px] leading-5">
+				<div className="mt-0.5 max-h-[16rem] overflow-auto rounded-md border border-destructive/15 bg-destructive/[0.05] text-mini leading-5">
 					<pre className="whitespace-pre-wrap break-words p-1.5 text-destructive/80">
 						{full!.slice(0, 4000)}
 						{full!.length > 4000 ? "…" : ""}
@@ -507,7 +507,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 
 	return (
 		<div className="flex flex-col">
-			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground">
+			<div className="flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground">
 				<span className="shrink-0">{info.icon}</span>
 				<span className="font-medium">{info.action}</span>
 				{info.detail ? (
@@ -521,7 +521,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						strokeWidth={2}
 					/>
 				) : null}
-				<span className="shrink-0 text-[11px] text-muted-foreground/40">
+				<span className="shrink-0 text-mini text-muted-foreground/40">
 					{toolUseCount > 0
 						? `${toolUseCount} tool ${toolUseCount === 1 ? "use" : "uses"}`
 						: `${parts.length} steps`}
@@ -535,7 +535,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						variant="ghost"
 						size="xs"
 						onClick={() => setExpanded((value) => !value)}
-						className="mb-0.5 h-auto items-center justify-start gap-1 px-0 text-[11px] text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
+						className="mb-0.5 h-auto items-center justify-start gap-1 px-0 text-mini text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground"
 					>
 						<ChevronDown
 							className={cn(
@@ -570,7 +570,7 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 							return (
 								<div
 									key={key}
-									className="text-[13px] leading-6 text-muted-foreground"
+									className="text-ui leading-6 text-muted-foreground"
 								>
 									{part.text.slice(0, 300)}
 									{part.text.length > 300 ? "…" : ""}
@@ -623,7 +623,7 @@ export function CollapsedToolGroup({
 			}}
 			open={open}
 		>
-			<summary className="flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground [&::-webkit-details-marker]:hidden">
+			<summary className="flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-small text-muted-foreground [&::-webkit-details-marker]:hidden">
 				<span className="shrink-0">{icon}</span>
 				<span className="font-medium">{group.summary}</span>
 				{group.active ? (
@@ -649,7 +649,7 @@ export function CollapsedToolGroup({
 						/>
 					</svg>
 				</span>
-				<span className="shrink-0 text-[11px] text-muted-foreground/40">
+				<span className="shrink-0 text-mini text-muted-foreground/40">
 					{group.tools.length} tools
 				</span>
 			</summary>

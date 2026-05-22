@@ -591,6 +591,11 @@ pub(crate) fn run_script_with_shell(
     let killed = manager.register(key.clone(), pid, pgid, stdin.clone());
 
     // Single reader on the PTY master — stdout+stderr are merged by the PTY.
+    // Uses poll(2) so the kernel wakes the thread the instant data is
+    // readable instead of the legacy 25ms `sleep` loop. The PTY master keeps
+    // O_NONBLOCK so we can drain everything available after each wake without
+    // re-entering poll for each chunk; write_stdin also benefits (PTY full
+    // → WouldBlock instead of blocking the IPC thread).
     let ch = channel.clone();
     let stop_reader = Arc::new(AtomicBool::new(false));
     let stop_reader_in_thread = stop_reader.clone();
@@ -599,32 +604,66 @@ pub(crate) fn run_script_with_shell(
         .spawn(move || {
             let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
             let mut buf = [0u8; 4096];
+            // 100ms tick is just a stop-flag fallback — kill() also closes
+            // the PTY which triggers EIO/POLLHUP and wakes us instantly.
+            const POLL_TIMEOUT_MS: libc::c_int = 100;
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
-                match master.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        let _ = ch.send(ScriptEvent::Stdout { data });
+                let mut pfd = libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, POLL_TIMEOUT_MS) };
+                if ret < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
                     }
-                    Err(e) => {
-                        // master_fd is non-blocking, so an idle PTY (Terminal
-                        // tab waiting for keystrokes) returns EAGAIN every
-                        // poll. Sleep + continue without logging — otherwise
-                        // the debug log floods at PTY_POLL_INTERVAL frequency.
-                        if e.kind() == std::io::ErrorKind::WouldBlock {
-                            std::thread::sleep(PTY_POLL_INTERVAL);
-                            continue;
+                    tracing::debug!(error = %err, "PTY poll failed");
+                    break;
+                }
+                if ret == 0 {
+                    // Timeout — re-check stop flag and re-poll.
+                    continue;
+                }
+                // POLLHUP / POLLERR fire when the slave fd is closed (child
+                // exited). We still try to read first so any pending bytes
+                // ahead of the hangup are delivered.
+                let revents = pfd.revents;
+                let hung_up = revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
+
+                // Drain everything available in this wake cycle.
+                let mut should_exit = hung_up;
+                loop {
+                    match master.read(&mut buf) {
+                        Ok(0) => {
+                            should_exit = true;
+                            break;
                         }
-                        // EIO is expected when the child exits and slave closes.
-                        if e.raw_os_error() != Some(libc::EIO) {
-                            tracing::debug!(error = %e, "PTY read error");
+                        Ok(n) => {
+                            let data = String::from_utf8_lossy(&buf[..n]).into_owned();
+                            let _ = ch.send(ScriptEvent::Stdout { data });
                         }
-                        break;
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Drained for now — back to poll().
+                            break;
+                        }
+                        Err(e) => {
+                            // EIO is expected when the child exits and slave closes.
+                            if e.raw_os_error() != Some(libc::EIO) {
+                                tracing::debug!(error = %e, "PTY read error");
+                            }
+                            should_exit = true;
+                            break;
+                        }
                     }
+                }
+                if should_exit {
+                    break;
                 }
             }
         })

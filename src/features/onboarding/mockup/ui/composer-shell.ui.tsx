@@ -52,7 +52,7 @@ export function ComposerInputPlaceholderUI({
 	placeholder?: string;
 }) {
 	return (
-		<div className="min-h-[64px] max-h-[240px] whitespace-pre-wrap break-words bg-transparent text-[14px] leading-5 tracking-[-0.01em] text-muted-foreground outline-none">
+		<div className="min-h-[64px] max-h-[240px] whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-muted-foreground outline-none">
 			{placeholder}
 		</div>
 	);

@@ -10,6 +10,7 @@ import { WorkspaceInspectorSidebar } from "@/features/inspector";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
 import type {
 	ChangeRequestInfo,
+	DetectedEditor,
 	RepositoryCreateOption,
 	WorkspaceDetail,
 } from "@/lib/api";
@@ -49,6 +50,7 @@ type Props = {
 	selectedWorkspaceDetail: WorkspaceDetail | null;
 	displayedSessionId: string | null;
 	activeEditor: ActiveEditorTarget | null;
+	preferredEditor: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	onCommitAction: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction: () => Promise<void>;
@@ -84,6 +86,7 @@ export function ShellInspectorPane({
 	selectedWorkspaceDetail,
 	displayedSessionId,
 	activeEditor,
+	preferredEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -108,14 +111,23 @@ export function ShellInspectorPane({
 		<aside
 			aria-hidden={collapsed}
 			aria-label="Inspector sidebar"
+			data-shell-pane="inspector"
 			className={cn(
-				"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
+				"relative h-full shrink-0 overflow-hidden bg-inspector has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
 				resizing
 					? "transition-none"
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			style={{ width: collapsed ? 0 : `${width}px` }}
+			// Width driven by a CSS var written on THIS element (not documentElement)
+			// during drag — keeps style invalidation inside the pane subtree.
+			// `contain: layout style` further isolates the inspector's inner layout
+			// (~4000 elements) from the outer shell. Skip `paint` so the tabs
+			// hover-zoom can still overflow (`has-[[data-tabs-zoomed=true]]:overflow-visible`).
+			style={{
+				contain: "layout style",
+				width: collapsed ? 0 : `var(--shell-inspector-width, ${width}px)`,
+			}}
 		>
 			<div
 				className={cn(
@@ -124,7 +136,7 @@ export function ShellInspectorPane({
 						? "translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${width}px` }}
+				style={{ width: `var(--shell-inspector-width, ${width}px)` }}
 			>
 				{rightSidebarMode === "context" ? (
 					<WorkspaceStartContextSidebar
@@ -169,6 +181,7 @@ export function ShellInspectorPane({
 						workspaceRuntimeName={selectedWorkspaceDetail?.runtimeName ?? null}
 						editorMode={editorMode}
 						activeEditor={activeEditor}
+						preferredEditor={preferredEditor}
 						onOpenEditorFile={onOpenEditorFile}
 						onCommitAction={onCommitAction}
 						onReviewAction={onReviewAction}

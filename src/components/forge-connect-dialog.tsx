@@ -396,7 +396,7 @@ export function ForgeConnectDialog({
 					Connect {providerLabel(provider)}
 				</DialogTitle>
 				<header className="flex h-10 items-center gap-2 border-b border-border/55 px-3">
-					<div className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
+					<div className="flex items-center gap-1.5 text-small font-medium text-foreground">
 						{providerIcon(provider)}
 						<span>Connect {providerLabel(provider)}</span>
 						{provider === "gitlab" ? (

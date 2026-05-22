@@ -93,6 +93,10 @@ export function buildPendingUserInput(
 	const userInputId = event.userInputId?.trim();
 	const modelId = event.modelId || fallbackModelId || null;
 	if (!userInputId || !modelId) {
+		console.warn(
+			"[conversation] userInputRequest dropped: missing userInputId/modelId",
+			{ userInputId, modelId, hasFallback: Boolean(fallbackModelId) },
+		);
 		return null;
 	}
 
@@ -100,8 +104,21 @@ export function buildPendingUserInput(
 		event.payload as Record<string, unknown> | undefined,
 	);
 	if (!payload) {
+		console.warn(
+			"[conversation] userInputRequest dropped: payload normalization failed",
+			{
+				userInputId,
+				rawPayloadKind: (event.payload as { kind?: unknown })?.kind,
+			},
+		);
 		return null;
 	}
+
+	console.info("[conversation] userInputRequest accepted", {
+		userInputId,
+		payloadKind: payload.kind,
+		source: event.source,
+	});
 
 	return {
 		provider: event.provider,

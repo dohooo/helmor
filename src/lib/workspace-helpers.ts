@@ -349,10 +349,12 @@ export function reorderWorkspaceInSidebar(
 		pinnedAt: mutation.pinnedAt,
 	};
 
-	const homeGroupId = workspaceGroupIdFromStatus(
-		updatedRow.status,
-		updatedRow.pinnedAt,
-	);
+	// Chat workspaces have their own bucket — status/pinned don't apply.
+	// They reorder inside "chats" exclusively.
+	const homeGroupId =
+		sourceRow.mode === "chat"
+			? "chats"
+			: workspaceGroupIdFromStatus(updatedRow.status, updatedRow.pinnedAt);
 
 	// Neighbour scope must match the backend — for a repo target that's
 	// every row of the repo (cross-status), not just the row's own lane.
@@ -380,7 +382,7 @@ export function reorderWorkspaceInSidebar(
 	);
 }
 
-/** Mirrors the backend's three `MoveTarget` scopes. */
+/** Mirrors the backend's `MoveTarget` scopes (incl. the chats bucket). */
 function collectNeighboursForTarget(
 	targetGroupId: string,
 	row: WorkspaceRow,
@@ -389,6 +391,10 @@ function collectNeighboursForTarget(
 	if (targetGroupId === "pinned") {
 		const pinned = groups.find((g) => g.id === "pinned");
 		return [...(pinned?.rows ?? [])].sort(compareSidebarOrder);
+	}
+	if (targetGroupId === "chats") {
+		const chats = groups.find((g) => g.id === "chats");
+		return [...(chats?.rows ?? [])].sort(compareSidebarOrder);
 	}
 	if (targetGroupId.startsWith("repo:")) {
 		const repoId = targetGroupId.slice("repo:".length);
@@ -451,6 +457,12 @@ function resolveTargetGroup(
 			status: row.status ?? null,
 			pinnedAt: row.pinnedAt ?? new Date().toISOString(),
 		};
+	}
+	if (targetGroupId === "chats") {
+		// Chats bucket holds chat-mode rows only; status/pinned don't
+		// apply. Mutation is "no-op" — just signal acceptance so the
+		// outer reorder proceeds to recompute displayOrder.
+		return { status: null, pinnedAt: null };
 	}
 	if (targetGroupId.startsWith("repo:")) {
 		// A backlog row dragged into its repo bucket needs to leave the
@@ -763,6 +775,16 @@ export function getComposerContextKey(
 	}
 
 	return "global";
+}
+
+/** Reverse of `getComposerContextKey` for the `session:*` form. Returns null
+ *  for `workspace:*` / `start:*` / `global` — those have no session row to
+ *  persist composer picks against. */
+export function parseSessionIdFromContextKey(
+	contextKey: string,
+): string | null {
+	const prefix = "session:";
+	return contextKey.startsWith(prefix) ? contextKey.slice(prefix.length) : null;
 }
 
 export function inferDefaultModelId(

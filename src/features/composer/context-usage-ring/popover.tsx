@@ -51,7 +51,7 @@ export function ContextUsagePopoverContent({
 			)}
 
 			{richLoading && !showCategories ? (
-				<div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+				<div className="flex items-center gap-2 text-mini text-muted-foreground">
 					<HelmorThinkingIndicator size={12} />
 					<span>Loading context details…</span>
 				</div>

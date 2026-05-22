@@ -9,68 +9,83 @@ For the why + lifecycle see
 For the wire shape see
 [`remote-server-protocol.md`](./remote-server-protocol.md).
 
-## Two-machine test rig (Docker)
+## Local test rig
 
-The fastest way to exercise the real SSH path without renting a VM:
-run the daemon inside a Linux container, point the desktop at it over
-`localhost:2222`.
+The remote-runner stack runs end-to-end on a single host. Pick the
+path that matches what you're working on; none of them require
+Docker, a remote VM, or any external service.
 
-### 1. Build a Linux helmor-server
+### Option A: local-binary transport (no SSH)
 
-From the repo root:
+Skips the SSH layer entirely. Use this for everything that isn't
+the SSH transport itself — agent attach, journal/replay, the
+chat/editor surfaces, the RPC method catalog. ~1 second to start
+a new daemon process.
 
 ```bash
 cd src-tauri
-cargo build --release --bin helmor-server --target x86_64-unknown-linux-gnu
+cargo build --release --bin helmor-server
+HELMOR_SERVER_PATH="$(pwd)/target/release/helmor-server" bun run dev
 ```
 
-(If you're on macOS arm64, add `cross` first: `cargo install cross`,
-then `cross build --release --bin helmor-server --target x86_64-unknown-linux-gnu`.)
+In the app, **Settings → Remote Servers → Add remote server** →
+host: `local` → connect. The desktop spawns the binary directly
+over a stdin/stdout transport and skips the SSH machinery.
 
-### 2. Spin up an SSH container
+### Option B: SSH to your own host
 
+Exercises the real `ssh <host> helmor-server` path against your
+host's own sshd. Use this when you're working on the SSH
+transport, install path, or anything that depends on the wire
+protocol going through a real OpenSSH session.
+
+1. **Enable host SSH.**
+   - macOS: System Settings → General → Sharing → enable "Remote
+     Login". Add your own user to the allowed list.
+   - Linux: install `openssh-server`, `sudo systemctl enable
+     --now ssh`.
+2. **Authorise your own key.**
+   ```bash
+   cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   ssh "$USER@localhost" echo ok   # smoke-test
+   ```
+3. **Point Helmor at `localhost`** — wizard or settings. The
+   desktop's auto-install path runs against the same machine but
+   uses the real SSH plumbing.
+4. **Speed up the dev loop** by forcing the scp install path so
+   the desktop's freshly-built local binary lands on the remote
+   without needing a tagged release:
+   ```bash
+   HELMOR_DAEMON_INSTALL_STRATEGY=scp bun run dev
+   ```
+
+Tail the daemon log on a successful install:
 ```bash
-docker run -d --name helmor-test \
-  -p 2222:22 \
-  -v "$(pwd)/src-tauri/target/x86_64-unknown-linux-gnu/release/helmor-server:/usr/local/bin/helmor-server:ro" \
-  -e USER_NAME=helmor \
-  -e USER_PASSWORD=helmor \
-  linuxserver/openssh-server
+tail -f "$HOME/.helmor/server/daemon.log"
 ```
 
-Add your key to the container:
-```bash
-docker exec -i helmor-test sh -c 'mkdir -p /config/.ssh && cat >> /config/.ssh/authorized_keys' < ~/.ssh/id_ed25519.pub
-docker exec helmor-test chown -R helmor:helmor /config/.ssh
-```
+### Option C: Docker (optional, for isolation)
 
-Sanity-check SSH:
-```bash
-ssh -p 2222 helmor@localhost echo ok
-```
+If you specifically want to test against a different OS / arch /
+filesystem layout than your host, you can run `helmor-server`
+inside a Docker container with sshd exposed on `localhost:2222`.
+This is **not required** — Options A and B cover the same code
+paths against your host kernel + filesystem, with no Docker
+dependency.
 
-### 3. Point Helmor at it
+The container approach is most useful when:
+- You're testing the download install path (D3) against a clean
+  Linux user account without manually wiping `~/.helmor/`.
+- You need to verify the `linux-x64` or `linux-arm64` release
+  artefacts on a macOS desktop.
+- You're reproducing a layout-specific bug (paths, `$HOME`
+  resolution, etc.) reported by a user on a different platform.
 
-In Helmor → **Settings → Remote Servers → Add remote server**:
-
-- Name: `docker-test`
-- SSH host: `helmor@localhost:2222`
-
-Or skip the wizard for a faster dev loop:
-
-```bash
-# From repo root, with HELMOR_DAEMON_INSTALL_STRATEGY=scp so the
-# desktop's local binary uploads instead of trying a release URL
-# that doesn't exist yet.
-HELMOR_DAEMON_INSTALL_STRATEGY=scp \
-  bun run dev
-```
-
-### 4. Tail the daemon log
-
-```bash
-docker exec -it helmor-test tail -f /config/.helmor/server/daemon.log
-```
+Any standard `linuxserver/openssh-server`-style image works —
+follow that image's docs for key setup, then add the runtime via
+the wizard with host `user@localhost:2222`. Nothing in this
+repo depends on a specific container image or compose file.
 
 ## Where the seams are
 

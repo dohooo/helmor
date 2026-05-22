@@ -7,6 +7,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { FeedbackButton } from "@/features/feedback";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { SettingsButton } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
@@ -36,6 +37,7 @@ type Props = {
 	onAddRepositoryNeedsStart: (repositoryId: string) => void;
 	onMoveLocalToWorktree: (workspaceId: string) => void;
 	onCollapseSidebar: () => void;
+	onOpenFeedback: () => void;
 	onOpenSettings: () => void;
 	pushWorkspaceToast: PushWorkspaceToast;
 };
@@ -59,6 +61,7 @@ export function ShellSidebarPane({
 	onAddRepositoryNeedsStart,
 	onMoveLocalToWorktree,
 	onCollapseSidebar,
+	onOpenFeedback,
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
@@ -67,6 +70,7 @@ export function ShellSidebarPane({
 			aria-hidden={collapsed}
 			aria-label="Workspace sidebar"
 			data-helmor-sidebar-root
+			data-shell-pane="sidebar"
 			className={cn(
 				"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
 				resizing
@@ -74,7 +78,11 @@ export function ShellSidebarPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			style={{ width: collapsed ? 0 : `${width}px` }}
+			// Width driven by a CSS var written on THIS element (not documentElement)
+			// during drag — keeps style invalidation inside the pane subtree.
+			style={{
+				width: collapsed ? 0 : `var(--shell-sidebar-width, ${width}px)`,
+			}}
 		>
 			<div
 				className={cn(
@@ -83,7 +91,7 @@ export function ShellSidebarPane({
 						? "-translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${width}px` }}
+				style={{ width: `var(--shell-sidebar-width, ${width}px)` }}
 			>
 				<div className="min-h-0 flex-1">
 					<WorkspacesSidebarContainer
@@ -117,7 +125,7 @@ export function ShellSidebarPane({
 						</TooltipTrigger>
 						<TooltipContent
 							side="bottom"
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>Collapse left sidebar</span>
 							{leftSidebarToggleShortcut ? (
@@ -129,11 +137,12 @@ export function ShellSidebarPane({
 						</TooltipContent>
 					</Tooltip>
 				</div>
-				<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+				<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
 					<SettingsButton
 						onClick={onOpenSettings}
 						shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
 					/>
+					<FeedbackButton onClick={onOpenFeedback} />
 				</div>
 			</div>
 		</aside>

@@ -2,6 +2,68 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.23.4",
+			"items": [
+				{
+					"text": "Press ArrowUp / ArrowDown in the composer to step through previously-sent prompts for the current session — like bash or zsh."
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.23.1",
+			"items": [
+				{
+					"text": "Four new color themes are now available — Aubergine, Hoth, Choco Mint, and Banana.",
+					"action": {
+						"label": "Open Appearance",
+						"value": {
+							"type": "openSettings",
+							"section": "appearance"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.23.0",
+			"items": [
+				{
+					"text": "Workspaces can now archive themselves automatically once their linked PR/MR is merged.",
+					"action": {
+						"label": "Open General",
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
+					}
+				},
+				{
+					"text": "You can now edit code right from the diff view."
+				},
+				{
+					"text": "Send Helmor feedback right from the app — file a GitHub issue or hit \"Quick fix\" to open a workspace with the feedback as the first prompt."
+				},
+				{
+					"text": "Pick \"Just Chat\" on the start page to open a workspace without binding it to a repo.",
+					"action": {
+						"label": "Open Start",
+						"value": {
+							"type": "openStartPage"
+						}
+					}
+				},
+				{
+					"text": "You can now reuse an existing branch when creating a workspace.",
+					"action": {
+						"label": "Open Start",
+						"value": {
+							"type": "openStartPage"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.22.1",
 			"items": [
 				{

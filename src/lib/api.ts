@@ -25,7 +25,7 @@ export type WorkspaceState =
 
 /**
  * Mirror of the Rust `WorkspaceStatus` enum
- * (`src-tauri/src/workspace/status.rs`). Drives the sidebar kanban
+ * (`src-tauri/src/workspace/status.rs`). Drives the sidebar status
  * lanes and PR-driven auto-status transitions.
  */
 export type WorkspaceStatus =
@@ -396,14 +396,22 @@ export type PrepareArchiveWorkspaceResponse = {
 	workspaceId: string;
 };
 
+/** Mirrors `workspace::archive::ArchiveOrigin`. `manual` drives the existing
+ *  `pendingArchives` + `archiveGate` UI flow; `autoAfterMerge` has no
+ *  optimistic state and needs the controller to reconcile + use a calmer
+ *  failure toast on its own. */
+export type ArchiveOrigin = "manual" | "autoAfterMerge";
+
 export type ArchiveExecutionFailedPayload = {
 	workspaceId: string;
 	code: ErrorCode;
 	message: string;
+	origin: ArchiveOrigin;
 };
 
 export type ArchiveExecutionSucceededPayload = {
 	workspaceId: string;
+	origin: ArchiveOrigin;
 };
 
 export type CreateWorkspaceResponse = {
@@ -429,6 +437,8 @@ export type PrepareWorkspaceResponse = {
 	 *  immediately. Worktree mode: null until finalize materialises the
 	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
 	workingDirectory: string | null;
+	/** Echo of the branch-intent the workspace was created with. */
+	branchIntent: WorkspaceBranchIntent;
 };
 
 export type FinalizeWorkspaceResponse = {
@@ -2082,7 +2092,7 @@ export async function listCursorModels(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox (kanban-mode left sidebar)
+// Inbox (start-surface left sidebar)
 // ---------------------------------------------------------------------------
 
 export type InboxItemSource =
@@ -2501,6 +2511,32 @@ export async function listBranchesForLocalPicker(
 	}
 }
 
+/** One row of the start-page branch picker. */
+export type BranchPickerEntry = {
+	name: string;
+	hasLocal: boolean;
+	hasRemote: boolean;
+};
+
+/**
+ * Merged local + remote branches with source flags so the picker can
+ * show an icon and the pill can decide whether to prefix with `origin/`.
+ * Pure local fs reads — no network.
+ */
+export async function listBranchesForWorkspacePicker(
+	repoId: string,
+): Promise<BranchPickerEntry[]> {
+	try {
+		return await invoke<BranchPickerEntry[]>(
+			"list_branches_for_workspace_picker",
+			{ repoId },
+		);
+	} catch (error) {
+		console.warn("[helmor] listBranchesForWorkspacePicker failed:", error);
+		return [];
+	}
+}
+
 /**
  * `git checkout -b <branch>` against the repo's source path. Caller is
  * responsible for refreshing whatever query feeds the branch picker.
@@ -2535,8 +2571,17 @@ export async function moveLocalWorkspaceToWorktree(
 	);
 }
 
-/** How a workspace's filesystem is provisioned. */
-export type WorkspaceMode = "worktree" | "local";
+/**
+ * How a workspace's filesystem is provisioned.
+ * - `worktree`: a dedicated git worktree with its own auto-named branch.
+ * - `local`: operates directly on the source repo's root path.
+ * - `chat`: a scratch dir under `<data_dir>/chats/<YYYY-MM-DD>/<name>`
+ *   with no git context. "Just Chat" mode from the start page.
+ */
+export type WorkspaceMode = "worktree" | "local" | "chat";
+
+/** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
+export type WorkspaceBranchIntent = "from_branch" | "use_branch";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -2917,6 +2962,13 @@ export async function openWorkspaceInEditor(
 	editor: string,
 ): Promise<void> {
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
+}
+
+export async function openFileInEditor(
+	path: string,
+	editor: string,
+): Promise<void> {
+	await invoke("open_file_in_editor", { path, editor });
 }
 
 export async function openWorkspaceInFinder(
@@ -3630,29 +3682,37 @@ export async function createWorkspaceFromRepo(
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
  *
- * `sourceBranch` (optional): branch to branch the new workspace from. When
- * omitted, the repo's default branch is used. The kanban "create" flow
- * forwards the user's branch picker selection here.
+ * `sourceBranch` is the fork base for `from_branch` (default) or the
+ * branch to attach to for `use_branch` (required). The kanban "create"
+ * flow forwards the user's branch picker selection here.
  *
  * `runtimeName` (optional, phase 22c): binds the new workspace to a
  * registered remote runtime at creation time. `"local"` and `null` both
  * mean "use the local runtime" — the backend collapses them into a NULL
  * `workspaces.runtime_name` column so the resolver's NULL/"local"
  * equivalence holds.
+ *
+ * `seedSessionId` (optional): pre-allocated session UUID so pre-submit
+ * paste-cache files (`cache/paste/<seedSessionId>/`) end up owned by
+ * the new session. Omit unless the caller is pre-allocating.
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
+	branchIntent?: WorkspaceBranchIntent | null,
 	initialStatus?: WorkspaceStatus | null,
 	runtimeName?: string | null,
+	seedSessionId?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
 		runtimeName: runtimeName ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -3667,6 +3727,24 @@ export async function finalizeWorkspaceFromRepo(
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+	});
+}
+
+/**
+ * One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+ * bound to any repo — they're a scratch dir under
+ * `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+ * AI chat session. No `finalize_*` follow-up — the row is `ready`
+ * immediately.
+ */
+export async function prepareChatWorkspace(
+	initialStatus?: WorkspaceStatus | null,
+	/** See `prepareWorkspaceFromRepo`'s `seedSessionId`. */
+	seedSessionId?: string | null,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_chat_workspace", {
+		initialStatus: initialStatus ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -3976,13 +4054,17 @@ export type AgentStreamEvent =
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
- * Save a pasted clipboard image (base64) to a temp file and return its path.
+ * Save a pasted clipboard image (base64) under `cache/paste/<sessionId>/`
+ * and return its absolute path. Callers without a real `sessions.id`
+ * (StartPage composer) must pre-allocate a UUID and submit with the
+ * same value so the bucket gets owned by the new session.
  */
 export async function savePastedImage(
 	data: string,
 	mediaType: string,
+	sessionId: string,
 ): Promise<string> {
-	return invoke<string>("save_pasted_image", { data, mediaType });
+	return invoke<string>("save_pasted_image", { data, mediaType, sessionId });
 }
 
 /**
@@ -4282,6 +4364,8 @@ export async function createSession(
 		effortLevel?: string | null;
 		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
 		fastMode?: boolean | null;
+		/** Pre-allocated session UUID; see `prepareWorkspaceFromRepo`. */
+		seedSessionId?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
@@ -4291,6 +4375,7 @@ export async function createSession(
 		model: options?.model ?? null,
 		effortLevel: options?.effortLevel ?? null,
 		fastMode: options?.fastMode ?? null,
+		seedSessionId: options?.seedSessionId ?? null,
 	});
 }
 
@@ -4731,6 +4816,42 @@ export async function resizeTerminal(
 }
 
 export { DEFAULT_WORKSPACE_GROUPS };
+
+// ---------------------------------------------------------------------------
+// Feedback / "Quick fix" contribution flow
+// ---------------------------------------------------------------------------
+
+export type ForkResult = {
+	owner: string;
+	repo: string;
+	cloneUrl: string;
+	htmlUrl: string;
+};
+
+export type ExistingHelmorRepo = {
+	repoId: string;
+	repoName: string;
+};
+
+export async function forkHelmorUpstream(): Promise<ForkResult> {
+	return invoke<ForkResult>("fork_helmor_upstream");
+}
+
+export type IssueResult = {
+	url: string;
+	number: number;
+};
+
+export async function createHelmorIssue(
+	title: string,
+	body: string,
+): Promise<IssueResult> {
+	return invoke<IssueResult>("create_helmor_issue", { title, body });
+}
+
+export async function findExistingHelmorRepo(): Promise<ExistingHelmorRepo | null> {
+	return invoke<ExistingHelmorRepo | null>("find_existing_helmor_repo");
+}
 
 function describeInvokeError(error: unknown, fallback: string): string {
 	return extractError(error, fallback).message;

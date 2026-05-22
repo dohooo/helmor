@@ -34,26 +34,26 @@ export function AccountHoverCardContent({ account }: { account: AccountInfo }) {
 					src={account.avatarUrl}
 					alt={account.login}
 					fallback={initialsFor(displayName)}
-					fallbackClassName="bg-muted text-[13px] font-semibold uppercase text-muted-foreground"
+					fallbackClassName="bg-muted text-ui font-semibold uppercase text-muted-foreground"
 				/>
 				<span className="absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center rounded-full bg-popover ring-2 ring-popover">
 					{providerBadge}
 				</span>
 			</div>
 			<div className="min-w-0 flex-1">
-				<div className="truncate text-[13px] font-semibold text-foreground">
+				<div className="truncate text-ui font-semibold text-foreground">
 					{displayName}
 				</div>
-				<div className="truncate text-[12px] text-muted-foreground">
+				<div className="truncate text-small text-muted-foreground">
 					@{account.login}
 				</div>
 				{account.email ? (
-					<div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+					<div className="mt-0.5 truncate text-mini text-muted-foreground">
 						{account.email}
 					</div>
 				) : null}
 				{account.provider === "gitlab" ? (
-					<div className="mt-0.5 truncate text-[11px] text-muted-foreground/70">
+					<div className="mt-0.5 truncate text-mini text-muted-foreground/70">
 						{account.host}
 					</div>
 				) : null}

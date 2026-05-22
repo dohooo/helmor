@@ -1,4 +1,5 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { INDEX_REF } from "@/lib/editor-session";
 import { useEditorSessionController } from "./use-editor-session-controller";
@@ -115,6 +116,71 @@ describe("useEditorSessionController.openFile", () => {
 			inline: true,
 		});
 	});
+
+	it("switches a dirty edit of the same file back to diff without confirming", () => {
+		const { hook } = setup();
+		act(() => {
+			hook.result.current.actions.changeSession({
+				kind: "file",
+				path: filePath,
+				dirty: true,
+				fileStatus: "M",
+				originalText: "disk",
+				modifiedText: "user edits",
+				diffOriginalText: "base",
+				diffModifiedText: "disk",
+			});
+		});
+
+		act(() => {
+			hook.result.current.actions.openFile(filePath, { fileStatus: "M" });
+		});
+
+		expect(hook.result.current.state.editorSession).toMatchObject({
+			kind: "diff",
+			path: filePath,
+			dirty: true,
+			originalText: "base",
+			modifiedText: "user edits",
+		});
+		expect(getDialogProps(hook).open).toBe(false);
+	});
+
+	it("asks before discarding a dirty edit when opening a different file", async () => {
+		const { hook } = setup();
+		const otherPath = `${workspaceRoot}/bar.txt`;
+		act(() => {
+			hook.result.current.actions.changeSession({
+				kind: "file",
+				path: filePath,
+				dirty: true,
+				fileStatus: "M",
+				originalText: "disk",
+				modifiedText: "user edits",
+			});
+		});
+
+		act(() => {
+			hook.result.current.actions.openFile(otherPath, { fileStatus: "A" });
+		});
+
+		expect(hook.result.current.state.editorSession?.path).toBe(filePath);
+		const dialog = getDialogProps(hook);
+		expect(dialog.open).toBe(true);
+
+		act(() => {
+			dialog.onConfirm();
+		});
+
+		await waitFor(() => {
+			expect(hook.result.current.state.editorSession).toMatchObject({
+				kind: "diff",
+				path: otherPath,
+				dirty: false,
+				fileStatus: "A",
+			});
+		});
+	});
 });
 
 describe("useEditorSessionController.openFileReference", () => {
@@ -183,3 +249,15 @@ describe("useEditorSessionController.openFileReference", () => {
 		expect(session?.column).toBe(5);
 	});
 });
+
+function getDialogProps(hook: ReturnType<typeof setup>["hook"]): {
+	open: boolean;
+	onConfirm: () => void;
+} {
+	return (
+		hook.result.current.dialogNode as ReactElement<{
+			open: boolean;
+			onConfirm: () => void;
+		}>
+	).props;
+}

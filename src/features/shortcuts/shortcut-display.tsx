@@ -24,7 +24,7 @@ export function ShortcutDisplay({
 			<span
 				aria-hidden="true"
 				className={cn(
-					"inline-flex h-5 items-center px-2 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground",
+					"inline-flex h-5 items-center px-2 text-mini font-semibold tracking-[0.08em] text-muted-foreground",
 					className,
 					emptyClassName,
 				)}
@@ -44,7 +44,7 @@ export function ShortcutDisplay({
 					key={`${key}-${index}`}
 					name={key}
 					className={cn(
-						"h-5 min-w-5 rounded-[4px] border-border/70 bg-background px-1.5 text-[11px] text-muted-foreground shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)] dark:border-white/15 dark:bg-white/5 dark:text-white/70",
+						"h-5 min-w-5 rounded-[4px] border-border/70 bg-background px-1.5 text-mini text-muted-foreground shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)] dark:border-white/15 dark:bg-white/5 dark:text-white/70",
 						keyClassName,
 					)}
 				/>

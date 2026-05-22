@@ -402,8 +402,11 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
 				null,
 				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {
@@ -443,8 +446,8 @@ describe("App create workspace flow", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 		expect(
-			screen.queryByLabelText("Workspace panel drag region"),
-		).not.toBeInTheDocument();
+			screen.getByLabelText("Workspace panel drag region"),
+		).toBeInTheDocument();
 
 		commitComposerText(
 			screen.getByLabelText("Workspace input"),
@@ -460,8 +463,11 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
 				null,
 				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {

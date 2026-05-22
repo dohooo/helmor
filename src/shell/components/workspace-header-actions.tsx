@@ -39,6 +39,9 @@ type Props = {
 	openPreferredEditorShortcut: string | null;
 	rightSidebarToggleShortcut: string | null;
 	inspectorCollapsed: boolean;
+	/** Chat-mode workspaces hide the editor/finder picker and the
+	 *  inspector toggle (the inspector is hidden entirely in chat). */
+	isChatMode?: boolean;
 	onOpenPreferredEditor: () => void;
 	onToggleInspector: () => void;
 	onPickEditor: (editorId: string) => void;
@@ -53,6 +56,7 @@ export function WorkspaceHeaderActions({
 	openPreferredEditorShortcut,
 	rightSidebarToggleShortcut,
 	inspectorCollapsed,
+	isChatMode = false,
 	onOpenPreferredEditor,
 	onToggleInspector,
 	onPickEditor,
@@ -60,7 +64,7 @@ export function WorkspaceHeaderActions({
 }: Props) {
 	return (
 		<div className="flex items-center gap-1">
-			{installedEditors.length > 0 && preferredEditor ? (
+			{!isChatMode && installedEditors.length > 0 && preferredEditor ? (
 				<div className="flex -translate-x-1 items-center gap-0">
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -81,7 +85,7 @@ export function WorkspaceHeaderActions({
 						<TooltipContent
 							side="bottom"
 							sideOffset={4}
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>{`Open in ${preferredEditor.name}`}</span>
 							{openPreferredEditorShortcut ? (
@@ -114,7 +118,6 @@ export function WorkspaceHeaderActions({
 										pushWorkspaceToast(String(e), "Failed to open Finder"),
 									);
 								}}
-								className="flex items-center gap-2"
 							>
 								<FolderOpen className="shrink-0" strokeWidth={1.8} />
 								<span className="flex-1">Finder</span>
@@ -136,7 +139,6 @@ export function WorkspaceHeaderActions({
 												),
 										);
 									}}
-									className="flex items-center gap-2"
 								>
 									<EditorIcon editorId={editor.id} className="shrink-0" />
 									<span className="flex-1">{editor.name}</span>
@@ -151,43 +153,47 @@ export function WorkspaceHeaderActions({
 			) : null}
 			<div className="flex -translate-x-px items-center gap-1">
 				<ExportSessionImageButton sessionId={sessionId} />
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							aria-label={
-								inspectorCollapsed
-									? "Expand right sidebar"
-									: "Collapse right sidebar"
-							}
-							onClick={onToggleInspector}
-							variant="ghost"
-							size="icon-xs"
-							className="text-muted-foreground hover:text-foreground"
+				{/* Inspector toggle hidden in chat mode — the inspector pane
+				 *  itself is hidden, so the button has nothing to toggle. */}
+				{!isChatMode ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								aria-label={
+									inspectorCollapsed
+										? "Expand right sidebar"
+										: "Collapse right sidebar"
+								}
+								onClick={onToggleInspector}
+								variant="ghost"
+								size="icon-xs"
+								className="text-muted-foreground hover:text-foreground"
+							>
+								{inspectorCollapsed ? (
+									<PanelRightOpen className="size-4" strokeWidth={1.8} />
+								) : (
+									<PanelRightClose className="size-4" strokeWidth={1.8} />
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="bottom"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
-							{inspectorCollapsed ? (
-								<PanelRightOpen className="size-4" strokeWidth={1.8} />
-							) : (
-								<PanelRightClose className="size-4" strokeWidth={1.8} />
-							)}
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent
-						side="bottom"
-						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-					>
-						<span>
-							{inspectorCollapsed
-								? "Expand right sidebar"
-								: "Collapse right sidebar"}
-						</span>
-						{rightSidebarToggleShortcut ? (
-							<InlineShortcutDisplay
-								hotkey={rightSidebarToggleShortcut}
-								className="text-background/60"
-							/>
-						) : null}
-					</TooltipContent>
-				</Tooltip>
+							<span>
+								{inspectorCollapsed
+									? "Expand right sidebar"
+									: "Collapse right sidebar"}
+							</span>
+							{rightSidebarToggleShortcut ? (
+								<InlineShortcutDisplay
+									hotkey={rightSidebarToggleShortcut}
+									className="text-background/60"
+								/>
+							) : null}
+						</TooltipContent>
+					</Tooltip>
+				) : null}
 			</div>
 		</div>
 	);

@@ -4,6 +4,7 @@ pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
 pub mod error;
+pub mod feedback;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
@@ -11,6 +12,7 @@ pub mod image_store;
 mod import;
 pub mod keychain;
 pub mod logging;
+pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
@@ -61,7 +63,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build());
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -115,6 +118,13 @@ pub fn run() {
             // Build read/write connection pools (must happen after schema).
             db::init_pools()?;
 
+            // Refresh the synthetic chat repo's display name in case the
+            // canonical value moved between releases. No-op for installs
+            // that have never created a chat workspace (no row to update).
+            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
+                tracing::warn!(%error, "Failed to refresh chat repo name");
+            }
+
             tracing::info!(
                 mode = data_dir::data_mode_label(),
                 data = %db_path.display(),
@@ -133,6 +143,20 @@ pub fn run() {
                     })
                     .ok();
             }
+
+            // GC orphan `cache/paste/<id>/` buckets. Off the main thread
+            // — slow IO can't stall startup. Legacy `paste-cache/` and
+            // `query-cache/` at the data-dir root are intentionally
+            // left alone (historical messages embed absolute paths into
+            // them).
+            std::thread::Builder::new()
+                .name("helmor-paste-cache-sweep".into())
+                .spawn(|| {
+                    if let Err(error) = maintenance::paste_cache::sweep() {
+                        tracing::warn!(error = %error, "paste-cache sweep failed");
+                    }
+                })
+                .ok();
 
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
@@ -409,6 +433,7 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_chat_workspace,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
@@ -545,6 +570,7 @@ pub fn run() {
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::list_branches_for_workspace_picker,
             commands::workspace_commands::get_repo_current_branch,
             commands::workspace_commands::create_and_checkout_branch,
             commands::workspace_commands::move_local_workspace_to_worktree,
@@ -576,6 +602,7 @@ pub fn run() {
             commands::workspace_commands::list_workspace_candidate_directories,
             commands::workspace_commands::trigger_workspace_fetch,
             commands::editors::detect_installed_editors,
+            commands::editors::open_file_in_editor,
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
@@ -585,6 +612,9 @@ pub fn run() {
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
+            commands::feedback_commands::fork_helmor_upstream,
+            commands::feedback_commands::create_helmor_issue,
+            commands::feedback_commands::find_existing_helmor_repo,
             commands::system_commands::save_pasted_image,
             commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,

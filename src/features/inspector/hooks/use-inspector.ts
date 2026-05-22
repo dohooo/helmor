@@ -8,6 +8,10 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	suspendTerminalFit,
+	suspendTerminalWrites,
+} from "@/components/terminal-output";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
@@ -17,13 +21,15 @@ import {
 	getInitialChangesHeight,
 	getInitialTabsHeight,
 	getInitialTabsOpen,
+	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_ACTIONS_OPEN_STORAGE_KEY,
 	INSPECTOR_ACTIVE_TAB_STORAGE_KEY,
+	INSPECTOR_CHANGES_BODY_VAR,
 	INSPECTOR_CHANGES_HEIGHT_STORAGE_KEY,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
+	INSPECTOR_TABS_BODY_VAR,
 	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
 	INSPECTOR_TABS_OPEN_STORAGE_KEY,
-	TABS_ANIMATION_MS,
 } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
 
@@ -61,7 +67,21 @@ type ResizeState = {
 	bodyBudget: number;
 	tabsBody: number;
 	actionsOpen: boolean;
+	tabsOpen: boolean;
 };
+
+function writeBodyVars(container: HTMLElement | null, sizes: DerivedSizes) {
+	if (!container) return;
+	container.style.setProperty(
+		INSPECTOR_CHANGES_BODY_VAR,
+		`${sizes.changesBody}px`,
+	);
+	container.style.setProperty(
+		INSPECTOR_ACTIONS_BODY_VAR,
+		`${sizes.actionsBody}px`,
+	);
+	container.style.setProperty(INSPECTOR_TABS_BODY_VAR, `${sizes.tabsBody}px`);
+}
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
@@ -162,31 +182,10 @@ export function useWorkspaceInspectorSidebar({
 		getInitialTabsHeight(DEFAULT_TABS_BODY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
-	const [isPanelToggleAnimating, setIsPanelToggleAnimating] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const tabsWrapperRef = useRef<HTMLDivElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
-	const panelToggleTimerRef = useRef<number | null>(null);
-
-	const beginPanelToggleAnimation = useCallback(() => {
-		if (panelToggleTimerRef.current !== null) {
-			window.clearTimeout(panelToggleTimerRef.current);
-		}
-		setIsPanelToggleAnimating(true);
-		panelToggleTimerRef.current = window.setTimeout(() => {
-			panelToggleTimerRef.current = null;
-			setIsPanelToggleAnimating(false);
-		}, TABS_ANIMATION_MS + 50);
-	}, []);
-
-	useEffect(() => {
-		return () => {
-			if (panelToggleTimerRef.current !== null) {
-				window.clearTimeout(panelToggleTimerRef.current);
-			}
-		};
-	}, []);
 
 	useLayoutEffect(() => {
 		const element = containerRef.current;
@@ -232,6 +231,20 @@ export function useWorkspaceInspectorSidebar({
 			}),
 		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
 	);
+
+	// During drag, mousemove writes the CSS vars directly and React state
+	// stays stale until mouseup commits. This effect only handles non-drag
+	// cases (toggle, keyboard step, initial mount); the isResizingRef gate
+	// prevents stale state from clobbering the live mousemove values mid-drag.
+	const isResizingRef = useRef(false);
+	useLayoutEffect(() => {
+		if (isResizingRef.current) return;
+		writeBodyVars(containerRef.current, {
+			changesBody,
+			actionsBody,
+			tabsBody,
+		});
+	}, [changesBody, actionsBody, tabsBody]);
 
 	useEffect(() => {
 		try {
@@ -400,54 +413,72 @@ export function useWorkspaceInspectorSidebar({
 	}, [changesQuery.data]);
 
 	const handleToggleTabs = useCallback(() => {
-		beginPanelToggleAnimation();
 		setTabsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	const handleToggleActions = useCallback(() => {
-		beginPanelToggleAnimation();
 		setActionsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
+		isResizingRef.current = true;
+		// Vertical section resize can pause terminal work; horizontal shell
+		// resize stays live so the sidebar never appears frozen.
+		const releaseFitSuspend = suspendTerminalFit();
+		const releaseWriteSuspend = suspendTerminalWrites();
+
+		const captured = resizeState;
+		const container = containerRef.current;
+
 		let pendingMove: globalThis.MouseEvent | null = null;
 		let animationFrameId: number | null = null;
+		let lastStoredChanges: number = captured.initialChangesBody;
+		let lastStoredTabs: number = captured.initialTabsBody;
+
 		const flush = () => {
 			animationFrameId = null;
 			const event = pendingMove;
 			pendingMove = null;
 			if (!event) return;
-			const deltaY = event.clientY - resizeState.pointerY;
+			const deltaY = event.clientY - captured.pointerY;
 
-			if (resizeState.target === RESIZE_TARGET_ACTIONS) {
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
 				// Drag down → changes grows, actions auto-shrinks.
 				const max = Math.max(
 					MIN_CHANGES_BODY,
-					resizeState.bodyBudget - resizeState.tabsBody - MIN_ACTIONS_BODY,
+					captured.bodyBudget - captured.tabsBody - MIN_ACTIONS_BODY,
 				);
-				const next = clamp(
-					resizeState.initialChangesBody + deltaY,
+				lastStoredChanges = clamp(
+					captured.initialChangesBody + deltaY,
 					MIN_CHANGES_BODY,
 					max,
 				);
-				setStoredChangesBody(next);
-				return;
+			} else {
+				// Drag down → tabs shrinks, upper region (actions or changes) grows.
+				const upperMin =
+					MIN_CHANGES_BODY + (captured.actionsOpen ? MIN_ACTIONS_BODY : 0);
+				const max = Math.max(MIN_TABS_BODY, captured.bodyBudget - upperMin);
+				lastStoredTabs = clamp(
+					captured.initialTabsBody - deltaY,
+					MIN_TABS_BODY,
+					max,
+				);
 			}
 
-			// Drag down → tabs shrinks, upper region (actions or changes) grows.
-			const upperMin =
-				MIN_CHANGES_BODY + (resizeState.actionsOpen ? MIN_ACTIONS_BODY : 0);
-			const max = Math.max(MIN_TABS_BODY, resizeState.bodyBudget - upperMin);
-			const next = clamp(
-				resizeState.initialTabsBody - deltaY,
-				MIN_TABS_BODY,
-				max,
-			);
-			setStoredTabsBody(next);
+			// Derive sizes and write CSS vars directly — no setState, no React
+			// render. The three sections read via var(--inspector-X-body-height).
+			const sizes = deriveSizes({
+				bodyBudget: captured.bodyBudget,
+				actionsOpen: captured.actionsOpen,
+				tabsOpen: captured.tabsOpen,
+				storedChangesBody: lastStoredChanges,
+				storedTabsBody: lastStoredTabs,
+			});
+			writeBodyVars(container, sizes);
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
@@ -463,6 +494,18 @@ export function useWorkspaceInspectorSidebar({
 				animationFrameId = null;
 			}
 			flush();
+			// Commit the final value back to React state for localStorage
+			// persistence and any external consumers. Same-value setState is a no-op.
+			isResizingRef.current = false;
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
+				if (lastStoredChanges !== captured.initialChangesBody) {
+					setStoredChangesBody(lastStoredChanges);
+				}
+			} else {
+				if (lastStoredTabs !== captured.initialTabsBody) {
+					setStoredTabsBody(lastStoredTabs);
+				}
+			}
 			setResizeState(null);
 		};
 
@@ -478,6 +521,9 @@ export function useWorkspaceInspectorSidebar({
 			if (animationFrameId !== null) {
 				window.cancelAnimationFrame(animationFrameId);
 			}
+			isResizingRef.current = false;
+			releaseFitSuspend();
+			releaseWriteSuspend();
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
 			window.removeEventListener("mousemove", handleMouseMove);
@@ -497,9 +543,17 @@ export function useWorkspaceInspectorSidebar({
 				bodyBudget,
 				tabsBody,
 				actionsOpen,
+				tabsOpen,
 			});
 		},
-		[storedChangesBody, storedTabsBody, bodyBudget, tabsBody, actionsOpen],
+		[
+			storedChangesBody,
+			storedTabsBody,
+			bodyBudget,
+			tabsBody,
+			actionsOpen,
+			tabsOpen,
+		],
 	);
 
 	return {
@@ -515,7 +569,6 @@ export function useWorkspaceInspectorSidebar({
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,

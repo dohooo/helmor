@@ -60,7 +60,7 @@ import {
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-interactive",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-ui cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -212,13 +212,38 @@ export const WorkspaceRowItem = memo(
 		]);
 		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
 		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+		const [archiveConfirming, setArchiveConfirming] = useState(false);
+		const resetArchiveConfirm = useCallback(() => {
+			setArchiveConfirming(false);
+		}, []);
+		const startArchiveConfirm = useCallback(() => {
+			setArchiveConfirming(true);
+		}, []);
+		const handleRowPointerLeave = useCallback(() => {
+			cancelPendingPrefetch();
+			resetArchiveConfirm();
+		}, [cancelPendingPrefetch, resetArchiveConfirm]);
 		const actionLabel =
-			row.state === "archived" ? "Restore workspace" : "Archive workspace";
+			row.state === "archived"
+				? "Restore workspace"
+				: archiveConfirming
+					? "Confirm archive workspace"
+					: "Archive workspace";
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
 		const isRestoreAction = row.state === "archived";
 		const isBusy = isArchiving || isMarkingUnread || isRestoring;
+		useEffect(() => resetArchiveConfirm, [resetArchiveConfirm]);
+		useEffect(() => {
+			resetArchiveConfirm();
+		}, [
+			resetArchiveConfirm,
+			row.id,
+			isRestoreAction,
+			isBusy,
+			workspaceActionsDisabled,
+		]);
 		const hasActionHandler = isRestoreAction
 			? Boolean(onRestoreWorkspace)
 			: Boolean(onArchiveWorkspace);
@@ -229,12 +254,19 @@ export const WorkspaceRowItem = memo(
 		// instead of leaving a visible gap.
 		const hasTwoActions =
 			hasActionHandler && isRestoreAction && Boolean(onDeleteWorkspace);
-		const rowFadeStyle = hasTwoActions
+		const isArchiveConfirmVisible =
+			archiveConfirming && !isRestoreAction && !isBusy;
+		const rowFadeStyle = isArchiveConfirmVisible
 			? ({
-					"--row-fade-transparent": "2.6rem",
-					"--row-fade-solid": "3.4rem",
+					"--row-fade-transparent": "3.9rem",
+					"--row-fade-solid": "4.8rem",
 				} as React.CSSProperties)
-			: undefined;
+			: hasTwoActions
+				? ({
+						"--row-fade-transparent": "2.6rem",
+						"--row-fade-solid": "3.4rem",
+					} as React.CSSProperties)
+				: undefined;
 		const actionIcon = isBusy ? (
 			<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
 		) : isRestoreAction ? (
@@ -257,11 +289,11 @@ export const WorkspaceRowItem = memo(
 			? "bg-yellow-500"
 			: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
-		// Local workspaces don't carry a meaningful per-row branch label
-		// (multiple locals share the repo + a single HEAD), so always
-		// fall back to the auto-titled session title (`row.title`).
+		// Local & Chat workspaces don't carry a meaningful per-row branch
+		// label (locals share the repo's HEAD; chats have no branch at
+		// all), so always fall back to the auto-titled session title.
 		const displayTitle =
-			row.mode === "local"
+			row.mode === "local" || row.mode === "chat"
 				? row.title
 				: row.branch
 					? humanizeBranch(row.branch)
@@ -279,7 +311,7 @@ export const WorkspaceRowItem = memo(
 				data-busy={isBusy ? "true" : undefined}
 				style={rowFadeStyle}
 				onPointerEnter={handlePointerEnter}
-				onPointerLeave={cancelPendingPrefetch}
+				onPointerLeave={handleRowPointerLeave}
 				onPointerDown={(event) => {
 					cancelPendingPrefetch();
 					if (onDragPointerDown && groupId) {
@@ -317,6 +349,24 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
+						) : row.mode === "chat" ? (
+							// Chat rows are bucketed under the dedicated
+							// "Chats" group header (which carries the
+							// MessageCircle glyph) — drawing the same icon on
+							// every row would just be noise. When the row
+							// carries an unread / interaction-required signal,
+							// the leading slot becomes a small status dot
+							// instead — a trailing dot can overlap long titles
+							// since chat titles run flush to the right edge.
+							showStatusDot && !hideRepoAvatar ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"size-1.5 shrink-0 rounded-full",
+										statusDotClassName,
+									)}
+								/>
+							) : null
 						) : (
 							<GitBranch
 								className={cn(
@@ -386,7 +436,12 @@ export const WorkspaceRowItem = memo(
 					const runtimeChipSlot = (
 						<RuntimeHostChip runtimeName={row.runtimeName} />
 					);
-					if (hideRepoAvatar) {
+					// Chat workspaces have no real repo, so skip the avatar
+					// slot entirely — the branch icon (MessageCircle in
+					// chat mode) carries the leading visual identity. Falls
+					// through to the same layout used when an outer repo
+					// bucket already shows the avatar.
+					if (hideRepoAvatar || row.mode === "chat") {
 						return (
 							<div className="flex min-w-0 flex-1 items-center gap-2">
 								{branchSlot}
@@ -437,20 +492,28 @@ export const WorkspaceRowItem = memo(
 										if (workspaceActionsDisabled || isBusy) return;
 										if (isRestoreAction) {
 											onRestoreWorkspace?.(row.id);
-										} else {
+										} else if (archiveConfirming) {
+											resetArchiveConfirm();
 											onArchiveWorkspace?.(row.id);
+										} else {
+											startArchiveConfirm();
 										}
 									}}
-									variant="ghost"
+									variant={isArchiveConfirmVisible ? "destructive" : "ghost"}
 									size="icon-xs"
 									className={cn(
-										"size-5 rounded-md p-0 text-muted-foreground",
+										"size-5 rounded-md p-0",
+										!isArchiveConfirmVisible && "text-muted-foreground",
+										isArchiveConfirmVisible &&
+											"h-5 w-auto min-w-11 px-1.5 text-mini font-medium leading-none transition-colors duration-100 hover:bg-destructive/10 hover:text-destructive active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-destructive/20",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
-											: "cursor-interactive hover:text-foreground",
+											: isArchiveConfirmVisible
+												? "cursor-interactive"
+												: "cursor-interactive hover:text-foreground",
 									)}
 								>
-									{actionIcon}
+									{isArchiveConfirmVisible ? "Confirm" : actionIcon}
 								</Button>
 							);
 							// Archived rows show restore + delete with no tooltips
@@ -458,13 +521,15 @@ export const WorkspaceRowItem = memo(
 							// extra hover layer on a destructive control feels noisy).
 							return isRestoreAction ? (
 								actionButton
+							) : isArchiveConfirmVisible ? (
+								actionButton
 							) : (
 								<Tooltip>
 									<TooltipTrigger asChild>{actionButton}</TooltipTrigger>
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 									>
 										<span>{actionLabel}</span>
 									</TooltipContent>

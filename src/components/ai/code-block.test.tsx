@@ -9,7 +9,7 @@ afterEach(() => {
 describe("CodeBlock", () => {
 	it("uses floating actions when no language is provided", () => {
 		const { container } = render(
-			<CodeBlock code="mutation 持续未完成 → 32.5s 后超时，共 10 次调用">
+			<CodeBlock code="mutation kept pending → timed out after 32.5s, 10 calls total">
 				<CodeBlockCopyButton />
 			</CodeBlock>,
 		);

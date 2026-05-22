@@ -513,6 +513,11 @@ export class ClaudeSessionManager implements SessionManager {
 							!Array.isArray(auqInput.metadata)
 								? (auqInput.metadata as Record<string, unknown>)
 								: undefined;
+						logger.info(`[${requestId}] AUQ canUseTool fired`, {
+							toolUseId,
+							questionCount: rawQuestions.length,
+							hasMetadata: metadata !== undefined,
+						});
 						emitter.userInputRequest(
 							requestId,
 							toolUseId,
@@ -524,6 +529,9 @@ export class ClaudeSessionManager implements SessionManager {
 								...(metadata ? { metadata } : {}),
 							},
 						);
+						logger.info(`[${requestId}] AUQ userInputRequest emitted`, {
+							toolUseId,
+						});
 						const resolution = await new Promise<UserInputResolution>(
 							(resolve) => {
 								this.pendingUserInputs.set(toolUseId, {
@@ -540,6 +548,10 @@ export class ClaudeSessionManager implements SessionManager {
 								);
 							},
 						);
+						logger.info(`[${requestId}] AUQ resolved`, {
+							toolUseId,
+							action: resolution.action,
+						});
 						if (resolution.action === "submit") {
 							// The frontend AUQ renderer produces the full
 							// `updatedInput` shape directly (questions +

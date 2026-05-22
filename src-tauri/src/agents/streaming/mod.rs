@@ -904,6 +904,23 @@ pub(super) fn stream_via_sidecar(
                     // right position. Subsequent stream events flow
                     // normally once the user submits via
                     // `respondToUserInput`.
+                    let user_input_id = event
+                        .raw
+                        .get("userInputId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let payload_kind = event
+                        .raw
+                        .get("payload")
+                        .and_then(|p| p.get("kind"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    tracing::info!(
+                        rid = %rid,
+                        user_input_id = %user_input_id,
+                        payload_kind = %payload_kind,
+                        "AUQ/elicitation userInputRequest received from sidecar",
+                    );
                     let mut resolved_model = model_copy.cli_model.to_string();
                     let mut final_messages: Vec<ThreadMessageLike> = Vec::new();
 
@@ -950,9 +967,19 @@ pub(super) fn stream_via_sidecar(
                         final_messages,
                     ) {
                         Ok(actions) => {
+                            let emit_count = actions
+                                .iter()
+                                .filter(|a| matches!(a, actions::Action::EmitToFrontend(_)))
+                                .count();
                             for action in actions {
                                 actions::apply_action(action, &apply_ctx);
                             }
+                            tracing::info!(
+                                rid = %rid,
+                                user_input_id = %user_input_id,
+                                emit_count = emit_count,
+                                "AUQ/elicitation forwarded to frontend",
+                            );
                         }
                         Err(err) => {
                             tracing::error!(

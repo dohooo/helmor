@@ -3,18 +3,24 @@
 // the rest of the app picks up the right tokens without each component
 // reaching into settings.
 import { useEffect } from "react";
-import { type DarkTheme, resolveTheme, type ThemeMode } from "@/lib/settings";
+import {
+	type ColorTheme,
+	resolveTheme,
+	type ThemeMode,
+	VALID_COLOR_THEMES,
+} from "@/lib/settings";
 
-const DARK_THEME_CLASSES: readonly DarkTheme[] = [
-	"midnight",
-	"forest",
-	"ember",
-	"aurora",
-];
+// Preset class names we need to strip before applying the next one. Source-
+// of-truth is VALID_COLOR_THEMES so adding a new preset can't drift;
+// "default" has no class so we exclude it.
+const COLOR_THEME_CLASSES: readonly ColorTheme[] = VALID_COLOR_THEMES.filter(
+	(t) => t !== "default",
+);
 
 export type ThemeApplicationOptions = {
 	theme: ThemeMode;
-	darkTheme: DarkTheme;
+	lightTheme: ColorTheme;
+	darkTheme: ColorTheme;
 	uiFontFamily: string | null;
 	codeFontFamily: string | null;
 	terminalFontFamily: string | null;
@@ -37,6 +43,7 @@ function setOrRemoveProperty(
 export function useThemeApplication(opts: ThemeApplicationOptions): void {
 	const {
 		theme,
+		lightTheme,
 		darkTheme,
 		uiFontFamily,
 		codeFontFamily,
@@ -46,10 +53,18 @@ export function useThemeApplication(opts: ThemeApplicationOptions): void {
 	} = opts;
 
 	useEffect(() => {
+		const root = document.documentElement;
 		const apply = () => {
 			const effective = resolveTheme(theme);
-			document.documentElement.classList.toggle("dark", effective === "dark");
-			document.documentElement.style.colorScheme = effective;
+			root.classList.toggle("dark", effective === "dark");
+			root.style.colorScheme = effective;
+			const preset = effective === "dark" ? darkTheme : lightTheme;
+			for (const t of COLOR_THEME_CLASSES) {
+				if (t !== preset) root.classList.remove(`theme-${t}`);
+			}
+			if (preset && preset !== "default") {
+				root.classList.add(`theme-${preset}`);
+			}
 			// Monaco's theme is synced via a MutationObserver inside
 			// `monaco-runtime.ts` — avoid importing it here to keep Monaco out
 			// of the critical boot path and out of tests that never open the
@@ -63,16 +78,7 @@ export function useThemeApplication(opts: ThemeApplicationOptions): void {
 			mq.addEventListener("change", apply);
 			return () => mq.removeEventListener("change", apply);
 		}
-	}, [theme]);
-
-	useEffect(() => {
-		for (const t of DARK_THEME_CLASSES) {
-			document.documentElement.classList.remove(`theme-${t}`);
-		}
-		if (darkTheme && darkTheme !== "default") {
-			document.documentElement.classList.add(`theme-${darkTheme}`);
-		}
-	}, [darkTheme]);
+	}, [theme, lightTheme, darkTheme]);
 
 	// Font family overrides. `--font-sans` / `--font-mono` are also written by
 	// Tailwind's @theme block in `App.css`, but inline style on :root wins.

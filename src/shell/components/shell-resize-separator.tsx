@@ -26,18 +26,19 @@ export function ShellResizeSeparator({
 	onMouseDown,
 	onKeyDown,
 }: Props) {
+	// Position also CSS-var driven so the handle follows the pane during drag without React renders.
 	const containerStyle: CSSProperties =
 		side === "sidebar"
 			? {
 					left: collapsed
 						? `${-SIDEBAR_RESIZE_HIT_AREA / 2}px`
-						: `${width - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
+						: `calc(var(--shell-sidebar-width, ${width}px) - ${SIDEBAR_RESIZE_HIT_AREA / 2}px)`,
 					width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
 				}
 			: {
 					right: collapsed
 						? `${-SIDEBAR_RESIZE_HIT_AREA}px`
-						: `${Math.max(0, width - SIDEBAR_RESIZE_HIT_AREA)}px`,
+						: `calc(var(--shell-inspector-width, ${width}px) - ${SIDEBAR_RESIZE_HIT_AREA}px)`,
 					width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
 				};
 
@@ -57,6 +58,7 @@ export function ShellResizeSeparator({
 			aria-valuemin={MIN_SIDEBAR_WIDTH}
 			aria-valuemax={MAX_SIDEBAR_WIDTH}
 			aria-valuenow={width}
+			data-shell-resize={side}
 			onMouseDown={onMouseDown}
 			onKeyDown={onKeyDown}
 			className={cn(

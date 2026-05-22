@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.22.1"
+version = "0.23.4"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -44,6 +44,7 @@ tauri-plugin-mcp-bridge = "0.11.0"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
 notify = "7"
 notify-debouncer-full = "0.4"
 toml = "0.8"

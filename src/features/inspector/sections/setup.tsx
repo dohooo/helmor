@@ -7,6 +7,7 @@ import {
 } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { TABS_EASING, TABS_HOVER_TRANSITION_MS, useTabsZoom } from "../layout";
 import {
@@ -47,8 +48,14 @@ export function SetupTab({
 	const [hasRun, setHasRun] = useState(false);
 	const queryClient = useQueryClient();
 	const { isZoomPresented, isHoverExpanded } = useTabsZoom();
+	const { settings } = useSettings();
 
 	const hasScript = !!setupScript?.trim();
+	const autoExpandEnabled = settings.terminalHoverExpansion;
+	// Auto-expand off → zoom never fires, so anchor the button unconditionally.
+	const showFloatingAction =
+		(status === "running" || status === "exited") &&
+		(autoExpandEnabled ? isZoomPresented : true);
 
 	useEffect(() => {
 		if (!workspaceId) return;
@@ -162,19 +169,24 @@ export function SetupTab({
 						/>
 					</div>
 
-					{isZoomPresented && (status === "running" || status === "exited") && (
+					{showFloatingAction && (
+						// z-20 keeps the button above xterm's link-layer canvas (z:2).
 						<div
-							className="absolute bottom-3 right-4"
-							style={{
-								opacity: isHoverExpanded ? 1 : 0,
-								pointerEvents: isHoverExpanded ? "auto" : "none",
-								transition: `opacity ${TABS_HOVER_TRANSITION_MS}ms ${TABS_EASING}`,
-							}}
+							className="absolute right-4 bottom-3 z-20"
+							style={
+								autoExpandEnabled
+									? {
+											opacity: isHoverExpanded ? 1 : 0,
+											pointerEvents: isHoverExpanded ? "auto" : "none",
+											transition: `opacity ${TABS_HOVER_TRANSITION_MS}ms ${TABS_EASING}`,
+										}
+									: undefined
+							}
 						>
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="text-small shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
 							>
@@ -190,16 +202,16 @@ export function SetupTab({
 				</>
 			) : !hasScript ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] font-medium text-muted-foreground">
+					<p className="text-ui font-medium text-muted-foreground">
 						No setup script configured
 					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Add a setup script in repository settings to run it here.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
@@ -213,13 +225,13 @@ export function SetupTab({
 						className="size-8 text-[var(--workspace-pr-open-accent)]"
 						strokeWidth={1.75}
 					/>
-					<p className="text-[13px] font-medium text-muted-foreground">
+					<p className="text-ui font-medium text-muted-foreground">
 						Setup completed
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={handleRun}
 					>
 						<RotateCcw className="size-3" strokeWidth={2} />
@@ -228,16 +240,16 @@ export function SetupTab({
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
+					<p className="text-ui text-muted-foreground">
 						No setup script output
 					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Setup script output will appear here after running setup.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-1.5 text-[12px]"
+						className="mt-1 gap-1.5 text-small"
 						onClick={handleRun}
 					>
 						<Play className="size-3" strokeWidth={2} />

@@ -29,7 +29,7 @@ export function CommitSplitButton({
 	onOpenChange,
 }: CommitSplitButtonProps) {
 	const commitButtonClasses = cn(
-		"inline-flex h-full shrink-0 items-center gap-1 rounded-l-[4px] px-2 py-1 text-[11px] font-medium leading-none tracking-[0.01em] transition-colors",
+		"inline-flex h-full shrink-0 items-center gap-1 rounded-l-[4px] px-2 py-1 text-mini font-medium leading-none tracking-[0.01em] transition-colors",
 		disabled
 			? "bg-muted text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
 			: "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",

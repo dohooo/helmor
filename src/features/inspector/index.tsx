@@ -7,7 +7,7 @@ import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
-import type { ChangeRequestInfo } from "@/lib/api";
+import type { ChangeRequestInfo, DetectedEditor } from "@/lib/api";
 import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -52,6 +52,7 @@ type WorkspaceInspectorSidebarProps = {
 	workspaceSetupCompletedAt?: string | null;
 	editorMode: boolean;
 	activeEditor?: ActiveEditorTarget | null;
+	preferredEditor?: DetectedEditor | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -88,6 +89,7 @@ export function WorkspaceInspectorSidebar({
 	repoId,
 	editorMode,
 	activeEditor,
+	preferredEditor = null,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -112,7 +114,6 @@ export function WorkspaceInspectorSidebar({
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
@@ -409,6 +410,7 @@ export function WorkspaceInspectorSidebar({
 				changes={changes}
 				editorMode={editorMode}
 				activeEditor={activeEditor}
+				preferredEditor={preferredEditor}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}
@@ -417,8 +419,6 @@ export function WorkspaceInspectorSidebar({
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
 				bodyHeight={changesHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			/>
 			{actionsOpen ? (
 				<HorizontalResizeHandle
@@ -435,7 +435,6 @@ export function WorkspaceInspectorSidebar({
 				open={actionsOpen}
 				onToggle={handleToggleActions}
 				bodyHeight={actionsHeight}
-				isResizing={isResizing}
 				onCommitAction={onCommitAction}
 				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
@@ -443,7 +442,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				animatePanelToggle={isPanelToggleAnimating}
 			/>
 			{tabsOpen ? (
 				<HorizontalResizeHandle
@@ -467,8 +465,6 @@ export function WorkspaceInspectorSidebar({
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 				bodyHeight={tabsBodyHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			>
 				<SetupTab
 					repoId={repoId ?? null}

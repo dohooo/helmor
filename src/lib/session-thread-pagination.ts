@@ -14,7 +14,7 @@
  * Read via `useSessionThreadPagination(sessionId)` (the only consumer is
  * the viewport's load-earlier affordance).
  */
-import { useSyncExternalStore } from "react";
+import { create } from "zustand";
 
 export type SessionThreadPaginationState = {
 	/**
@@ -30,53 +30,62 @@ export type SessionThreadPaginationState = {
 	loadedTailLimit: number | null;
 };
 
-const DEFAULT_STATE: SessionThreadPaginationState = {
+const DEFAULT_STATE: SessionThreadPaginationState = Object.freeze({
 	hasMore: false,
 	loadedTailLimit: null,
+});
+
+type SessionThreadPaginationStore = {
+	bySessionId: Record<string, SessionThreadPaginationState>;
+	setState: (sessionId: string, next: SessionThreadPaginationState) => void;
+	clear: (sessionId: string) => void;
 };
 
-const store = new Map<string, SessionThreadPaginationState>();
-const listeners = new Set<() => void>();
-
-function emit() {
-	for (const listener of listeners) {
-		listener();
-	}
-}
+const useSessionThreadPaginationStore = create<SessionThreadPaginationStore>(
+	(set) => ({
+		bySessionId: {},
+		setState: (sessionId, next) =>
+			set((state) => {
+				const prev = state.bySessionId[sessionId];
+				if (
+					prev &&
+					prev.hasMore === next.hasMore &&
+					prev.loadedTailLimit === next.loadedTailLimit
+				) {
+					return state;
+				}
+				return {
+					bySessionId: { ...state.bySessionId, [sessionId]: next },
+				};
+			}),
+		clear: (sessionId) =>
+			set((state) => {
+				if (!(sessionId in state.bySessionId)) return state;
+				const stripped = { ...state.bySessionId };
+				delete stripped[sessionId];
+				return { bySessionId: stripped };
+			}),
+	}),
+);
 
 export function setSessionThreadPaginationState(
 	sessionId: string,
-	state: SessionThreadPaginationState,
+	next: SessionThreadPaginationState,
 ) {
-	const prev = store.get(sessionId);
-	if (
-		prev &&
-		prev.hasMore === state.hasMore &&
-		prev.loadedTailLimit === state.loadedTailLimit
-	) {
-		return;
-	}
-	store.set(sessionId, state);
-	emit();
+	useSessionThreadPaginationStore.getState().setState(sessionId, next);
 }
 
 export function getSessionThreadPaginationState(
 	sessionId: string,
 ): SessionThreadPaginationState {
-	return store.get(sessionId) ?? DEFAULT_STATE;
+	return (
+		useSessionThreadPaginationStore.getState().bySessionId[sessionId] ??
+		DEFAULT_STATE
+	);
 }
 
 export function clearSessionThreadPaginationState(sessionId: string) {
-	if (!store.has(sessionId)) return;
-	store.delete(sessionId);
-	emit();
-}
-
-function subscribe(listener: () => void) {
-	listeners.add(listener);
-	return () => {
-		listeners.delete(listener);
-	};
+	useSessionThreadPaginationStore.getState().clear(sessionId);
 }
 
 /**
@@ -87,9 +96,7 @@ function subscribe(listener: () => void) {
 export function useSessionThreadPagination(
 	sessionId: string | null,
 ): SessionThreadPaginationState {
-	return useSyncExternalStore(
-		subscribe,
-		() => (sessionId ? (store.get(sessionId) ?? DEFAULT_STATE) : DEFAULT_STATE),
-		() => DEFAULT_STATE,
+	return useSessionThreadPaginationStore((state) =>
+		sessionId ? (state.bySessionId[sessionId] ?? DEFAULT_STATE) : DEFAULT_STATE,
 	);
 }

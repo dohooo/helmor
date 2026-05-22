@@ -35,7 +35,7 @@ export function AppUpdateButton({ status, className }: AppUpdateButtonProps) {
 					size="xs"
 					aria-label={`Update Helmor to ${update.version}`}
 					className={cn(
-						"h-6 gap-1 rounded-sm px-1.5 text-[11px] font-medium tracking-[0.01em] text-muted-foreground transition-[background-color,color,border-color,box-shadow] duration-200 hover:bg-accent/60 hover:text-foreground dark:hover:bg-muted/45",
+						"h-6 gap-1 rounded-sm px-1.5 text-mini font-medium tracking-[0.01em] text-muted-foreground transition-[background-color,color,border-color,box-shadow] duration-200 hover:bg-accent/60 hover:text-foreground dark:hover:bg-muted/45",
 						"relative overflow-hidden shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--border)_36%,transparent)] hover:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_12%,transparent)]",
 						className,
 					)}
@@ -71,7 +71,7 @@ export function AppUpdateButton({ status, className }: AppUpdateButtonProps) {
 			<TooltipContent
 				side="top"
 				sideOffset={4}
-				className="flex h-[22px] items-center gap-1 rounded-md px-1.5 text-[11px] leading-none"
+				className="flex h-[22px] items-center gap-1 rounded-md px-1.5 text-mini leading-none"
 			>
 				{update.currentVersion} {"->"} {update.version}
 			</TooltipContent>

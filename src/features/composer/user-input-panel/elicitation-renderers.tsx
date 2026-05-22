@@ -388,10 +388,10 @@ function FormElicitationPanel({
 				description={currentField.description || viewModel.message}
 				trailing={
 					<>
-						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
 							{viewModel.serverName}
 						</span>
-						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
 							{fieldIndex + 1}/{viewModel.fields.length}
 						</span>
 						{viewModel.fields.length > 1 ? (
@@ -577,7 +577,7 @@ function FormElicitationPanel({
 										onChange={(event) =>
 											updateOtherValue(currentField.key, event.target.value)
 										}
-										className="h-auto rounded-none border-0 !bg-transparent px-1 py-0.5 text-[13px] leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0"
+										className="h-auto rounded-none border-0 !bg-transparent px-1 py-0.5 text-ui leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0"
 									/>
 								</div>
 							</div>
@@ -587,7 +587,7 @@ function FormElicitationPanel({
 
 				<p
 					className={cn(
-						"px-3 pt-1 text-[11px] leading-5 min-h-5",
+						"px-3 pt-1 text-mini leading-5 min-h-5",
 						currentValidation?.message ? "text-muted-foreground" : "invisible",
 					)}
 				>
@@ -668,7 +668,7 @@ function UrlElicitationPanel({
 						: "Open the requested URL to continue."
 				}
 				trailing={
-					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
 						{viewModel.serverName}
 					</span>
 				}
@@ -676,14 +676,14 @@ function UrlElicitationPanel({
 
 			<div className="grid gap-2 px-1 pb-2">
 				<div className="rounded-lg bg-accent/35 px-3 py-2">
-					<p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+					<p className="text-mini uppercase tracking-[0.08em] text-muted-foreground">
 						Target URL
 					</p>
-					<p className="mt-1 break-all text-[12px] leading-5 text-foreground">
+					<p className="mt-1 break-all text-small leading-5 text-foreground">
 						{viewModel.url}
 					</p>
 				</div>
-				<div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-[12px] leading-5 text-muted-foreground">
+				<div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-small leading-5 text-muted-foreground">
 					Only continue if you trust this MCP server and understand why it needs
 					an external URL.
 				</div>

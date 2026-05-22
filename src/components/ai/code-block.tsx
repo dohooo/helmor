@@ -153,7 +153,7 @@ export const CodeBlock = ({
 		? "overflow-x-hidden overflow-y-hidden [&>pre]:whitespace-pre-wrap [&>pre]:break-words [&_code]:whitespace-pre-wrap [&_code]:break-words"
 		: "overflow-x-auto overflow-y-hidden [&>pre]:min-w-full";
 	const codeBase =
-		"[&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:text-[12px] [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-[12px]";
+		"[&>pre]:m-0 [&>pre]:bg-transparent! [&>pre]:text-small [&>pre]:leading-5 [&>pre]:text-foreground! [&_code]:font-mono [&_code]:text-small";
 
 	return (
 		<CodeBlockContext.Provider value={{ code }}>
@@ -171,7 +171,7 @@ export const CodeBlock = ({
 						data-code-block-actions="header"
 						className="flex items-center justify-between gap-2 px-3 pt-1.5"
 					>
-						<span className="truncate font-mono text-[10px] leading-none tracking-wide text-muted-foreground/50 uppercase select-none">
+						<span className="truncate font-mono text-micro leading-none tracking-wide text-muted-foreground/50 uppercase select-none">
 							{language}
 						</span>
 						<div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">

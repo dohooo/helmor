@@ -249,11 +249,11 @@ export function AskUserQuestionRenderer({
 				trailing={
 					<>
 						{viewModel.source ? (
-							<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+							<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
 								{viewModel.source}
 							</span>
 						) : null}
-						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
 							{questionIndex + 1}/{questions.length}
 						</span>
 						{questions.length > 1 ? (
@@ -326,7 +326,7 @@ export function AskUserQuestionRenderer({
 							onClick={() => handleOptionToggle(option.label)}
 						>
 							{selected && option.preview ? (
-								<pre className="mt-2 ml-[1.6rem] max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background/70 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
+								<pre className="mt-2 ml-[1.6rem] max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background/70 px-2.5 py-2 text-mini leading-5 text-muted-foreground">
 									{option.preview}
 								</pre>
 							) : null}
@@ -405,7 +405,7 @@ export function AskUserQuestionRenderer({
 									otherText: value,
 								}));
 							}}
-							className="h-auto rounded-none border-0 !bg-transparent px-1 py-0.5 text-[13px] leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0 disabled:!bg-transparent dark:!bg-transparent dark:disabled:!bg-transparent"
+							className="h-auto rounded-none border-0 !bg-transparent px-1 py-0.5 text-ui leading-5 shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-0 disabled:!bg-transparent dark:!bg-transparent dark:disabled:!bg-transparent"
 						/>
 					</div>
 				</div>

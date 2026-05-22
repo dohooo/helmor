@@ -428,18 +428,14 @@ pub fn get_cli_status() -> CmdResult<CliStatus> {
     Ok(cli_status_for_paths(&install_path, &cli_binary))
 }
 
-/// File-backed React Query persister storage. The cache lives in the
-/// data dir (next to `helmor.db`) instead of localStorage, so it isn't
-/// bound by the webview's ~5–10 MB localStorage quota. The frontend
-/// addresses each cache key as a distinct file under
-/// `<data_dir>/query-cache/<key>` — only one key is in use today
-/// (`helmor-query-cache`), but the namespacing keeps the door open for
-/// the persister's optional `entries()` extension.
+/// File-backed React Query persister storage. The cache lives at
+/// `<data_dir>/cache/query/` instead of localStorage so it isn't bound
+/// by the webview's ~5–10 MB localStorage quota. The frontend addresses
+/// each cache key as a distinct file under this dir — only one key is
+/// in use today (`helmor-query-cache`), but the namespacing keeps the
+/// door open for the persister's optional `entries()` extension.
 fn query_cache_dir() -> anyhow::Result<PathBuf> {
-    let dir = data_dir::data_dir()?.join("query-cache");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create query cache dir at {dir:?}"))?;
-    Ok(dir)
+    data_dir::query_cache_dir()
 }
 
 /// Reject anything that could escape the cache dir (`..`, `/`, etc.) —
@@ -687,8 +683,24 @@ fn cursor_login_ready() -> bool {
     }
 }
 
+/// Resolve the binary to spawn for an agent CLI subcommand.
+///
+/// Prefers the bundled binary under `Helmor.app/Contents/Resources/vendor/`
+/// so onboarding works on machines that don't have `claude` / `codex` on
+/// PATH. Falls back to the bare command name (PATH lookup) for dev builds
+/// and as a last resort.
+fn resolve_agent_binary(provider: &str) -> PathBuf {
+    let bundled = sidecar::resolve_bundled_agent_paths();
+    let bundled_path = match provider {
+        "claude" => bundled.claude_bin,
+        "codex" => bundled.codex_bin,
+        _ => None,
+    };
+    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+}
+
 fn claude_login_ready() -> bool {
-    match std::process::Command::new("claude")
+    match std::process::Command::new(resolve_agent_binary("claude"))
         .args(["auth", "status"])
         .output()
     {
@@ -742,7 +754,7 @@ fn codex_auth_status() -> CodexAuthStatus {
 }
 
 fn codex_login_ready() -> bool {
-    match std::process::Command::new("codex")
+    match std::process::Command::new(resolve_agent_binary("codex"))
         .args(["login", "status"])
         .output()
     {
@@ -795,12 +807,19 @@ fn env_var_is_present(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
-    match provider {
-        "claude" => Ok("claude auth login"),
-        "codex" => Ok("codex login"),
+fn agent_login_command(provider: &str) -> anyhow::Result<String> {
+    let args = match provider {
+        "claude" => "auth login",
+        "codex" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
-    }
+    };
+    // Quote the resolved binary path so spaces in `Helmor.app` survive
+    // both the embedded PTY shell and AppleScript's `do shell script`.
+    Ok(format!(
+        "{} {}",
+        shell_quote(&resolve_agent_binary(provider)),
+        args
+    ))
 }
 
 fn agent_login_script_type(provider: &str, instance_id: &str) -> String {
@@ -817,7 +836,7 @@ pub async fn spawn_agent_login_terminal(
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
-    let command = agent_login_command(&provider)?.to_string();
+    let command = agent_login_command(&provider)?;
     tracing::info!(
         provider = %provider,
         instance_id = %instance_id,
@@ -946,7 +965,7 @@ pub async fn resize_agent_login_terminal(
 #[cfg(target_os = "macos")]
 fn open_agent_login_terminal_impl(provider: &str) -> anyhow::Result<()> {
     let command = agent_login_command(provider)?;
-    let script_command = applescript_string(command);
+    let script_command = applescript_string(&command);
     let output = std::process::Command::new("osascript")
         .arg("-e")
         .arg("tell application \"Terminal\" to activate")
@@ -995,8 +1014,15 @@ pub async fn drain_pending_cli_sends() -> CmdResult<Vec<service::PendingCliSend>
     run_blocking(service::drain_pending_cli_sends).await
 }
 
+/// `session_id` is the composer's bound `sessions.id` or its provisional
+/// UUID. Required — paste-cache GC keys on it (see
+/// `maintenance::paste_cache`).
 #[tauri::command]
-pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
+pub async fn save_pasted_image(
+    data: String,
+    media_type: String,
+    session_id: String,
+) -> CmdResult<String> {
     run_blocking(move || {
         use std::fs;
         use uuid::Uuid;
@@ -1008,7 +1034,10 @@ pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<St
             _ => "png",
         };
 
-        let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
+        // <paste-cache>/<session_id>/paste-<uuid>.<ext>; destination_dir
+        // bails on path-unsafe ids.
+        let paste_root = crate::data_dir::paste_cache_dir()?;
+        let paste_dir = crate::maintenance::paste_cache::destination_dir(&paste_root, &session_id)?;
         fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
 
         let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
@@ -1318,7 +1347,10 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         // --- Filesystem cleanup (best-effort) ----------------------------
         let mut dirs_removed = Vec::new();
 
-        let dirs_to_clear = [data_dir.join("workspaces"), data_dir.join("paste-cache")];
+        let dirs_to_clear = [
+            data_dir.join("workspaces"),
+            data_dir.join("cache").join("paste"),
+        ];
 
         for dir in &dirs_to_clear {
             if dir.is_dir() {

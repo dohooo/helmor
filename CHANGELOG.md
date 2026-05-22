@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.23.4
+
+### Patch Changes
+
+- [#610](https://github.com/dohooo/helmor/pull/610) [`9d3c72b`](https://github.com/dohooo/helmor/commit/9d3c72be40c64375d03a6690a86b2e2a247ea044) Thanks [@natllian](https://github.com/natllian)! - Fix the unread dot on chat rows in the sidebar overlapping the last character of long titles by moving it to the start of the row.
+
+- [#613](https://github.com/dohooo/helmor/pull/613) [`44f17b4`](https://github.com/dohooo/helmor/commit/44f17b4773382b1d287a2dbec7f7fe43161160bb) Thanks [@natllian](https://github.com/natllian)! - Add ArrowUp / ArrowDown history recall in the composer — at the first or last line of the input, the arrow keys step through previously-sent prompts for the current session, just like bash or zsh.
+
+- [#608](https://github.com/dohooo/helmor/pull/608) [`129c24a`](https://github.com/dohooo/helmor/commit/129c24a4c5ca6133ac999995f81b218df723724d) Thanks [@natllian](https://github.com/natllian)! - Remember a separate color theme for light and dark mode, so switching between them no longer resets your accent palette.
+
+- [#615](https://github.com/dohooo/helmor/pull/615) [`9fc32da`](https://github.com/dohooo/helmor/commit/9fc32dadad35b816b033d45e3f52e6b68ef8a7fb) Thanks [@natllian](https://github.com/natllian)! - Fix the +/- line counters in the inspector's change list replaying their roll-in animation every time you switch workspace.
+
+- [#614](https://github.com/dohooo/helmor/pull/614) [`5863ca5`](https://github.com/dohooo/helmor/commit/5863ca582775cd0f7861c54523a6e73040a9386f) Thanks [@natllian](https://github.com/natllian)! - Fix onboarding misreporting Claude or Codex as signed-out, and the login terminal failing with "command not found", on machines that don't have the agent CLIs on PATH — Helmor now uses the bundled binaries it ships with.
+
+- [#616](https://github.com/dohooo/helmor/pull/616) [`e5c8dc2`](https://github.com/dohooo/helmor/commit/e5c8dc2df732c2c3a85bc98afda60519c4267d6f) Thanks [@natllian](https://github.com/natllian)! - Reduce input latency in the embedded terminal so fast typing no longer feels laggy or drops characters on lower-spec hardware.
+
+- [#618](https://github.com/dohooo/helmor/pull/618) [`4726702`](https://github.com/dohooo/helmor/commit/472670251f7ea5758edd68eb1d7a2683395c2fcc) Thanks [@natllian](https://github.com/natllian)! - - Land on the start page after finishing onboarding so users can chat immediately even before adding their first repository.
+
+- [#612](https://github.com/dohooo/helmor/pull/612) [`395eae1`](https://github.com/dohooo/helmor/commit/395eae198c2c195f18a5eface56147a735890069) Thanks [@natllian](https://github.com/natllian)! - Unify font sizes across menus, sidebar, inspector, composer, and other chrome so the app reads on a single semantic typographic scale instead of mixed ad-hoc pixel values.
+
+## 0.23.3
+
+### Patch Changes
+
+- [#601](https://github.com/dohooo/helmor/pull/601) [`d7228c7`](https://github.com/dohooo/helmor/commit/d7228c73fff2cace18d724e1b5e838f4b6e463e4) Thanks [@natllian](https://github.com/natllian)! - Stop dropping in-flight AskUserQuestion prompts when you switch to the Start Page mid-stream.
+
+- [#603](https://github.com/dohooo/helmor/pull/603) [`c5d658a`](https://github.com/dohooo/helmor/commit/c5d658a2c8bf2efa0e87082de074b5d487c38e15) Thanks [@natllian](https://github.com/natllian)! - Fix two sidebar unread-indicator gaps:
+
+  - Chat rows now show the unread / interaction-required dot (hidden on hover so the archive icon can take its place); previously the dot had no carrier on chat entries and was silently dropped.
+  - Background-completed sessions stay marked unread on every follow-up turn instead of only the first one — read-state was keying off the provider's resume token (non-null from the second turn onward), so subsequent completions no-op'd against the DB.
+
+- [#602](https://github.com/dohooo/helmor/pull/602) [`afb8680`](https://github.com/dohooo/helmor/commit/afb868047169d50aa7bfe6df807bf91279496621) Thanks [@natllian](https://github.com/natllian)! - Fix a `WorkspaceBroken` error logged on every git-status poll for chat workspaces, which have no git binding.
+
+- [#607](https://github.com/dohooo/helmor/pull/607) [`aa1f32a`](https://github.com/dohooo/helmor/commit/aa1f32a1993447e6be2b8bb52093c61984d9bea4) Thanks [@natllian](https://github.com/natllian)! - Fix the composer jumping to the bottom when you click into it, and not following the caret when you arrow up past the visible area.
+
+- [#599](https://github.com/dohooo/helmor/pull/599) [`1f78c48`](https://github.com/dohooo/helmor/commit/1f78c485d4c17539a93dc65cfd68f87eac9b458e) Thanks [@dohooo](https://github.com/dohooo)! - Fix a horizontal scrollbar appearing in the Send Feedback dialog textarea so the placeholder wraps within the dialog width.
+
+- [#606](https://github.com/dohooo/helmor/pull/606) [`95d5485`](https://github.com/dohooo/helmor/commit/95d54853282f8cd9238f252d68fcaf0b895fa722) Thanks [@natllian](https://github.com/natllian)! - Fix sidebar workspace hover cards sometimes getting stuck on screen after a streaming session finishes, until the cursor was moved again.
+
+- [#604](https://github.com/dohooo/helmor/pull/604) [`357a572`](https://github.com/dohooo/helmor/commit/357a5728ffa6c7189fd4f06e97e3bb5a6ef56f03) Thanks [@natllian](https://github.com/natllian)! - Fix Shift+Tab on the workspace-start page so cycling repositories no longer also toggles Just Chat or plan mode.
+
+- [#605](https://github.com/dohooo/helmor/pull/605) [`bc8cbe0`](https://github.com/dohooo/helmor/commit/bc8cbe093b3b86b9a2bf03a9c3752fd39d464a0d) Thanks [@natllian](https://github.com/natllian)! - Surface the specific reason a merge is blocked (behind base, draft PR, branch protection, or unstable checks) on the commit button and confirm dialog, for both GitHub and GitLab.
+
+## 0.23.2
+
+### Patch Changes
+
+- [#592](https://github.com/dohooo/helmor/pull/592) [`5ce7f6d`](https://github.com/dohooo/helmor/commit/5ce7f6d1fe2a726433f2e3322460837e636253fd) Thanks [@natllian](https://github.com/natllian)! - Remember the window size and position across restarts.
+
+- [#597](https://github.com/dohooo/helmor/pull/597) [`636fc4a`](https://github.com/dohooo/helmor/commit/636fc4a1583e4ea7b490a82e2940517a117aa918) Thanks [@natllian](https://github.com/natllian)! - Stop clearing the follow-up message queue when switching to the Start Page so queued messages survive the trip back to the workspace.
+
+- [#594](https://github.com/dohooo/helmor/pull/594) [`4906e39`](https://github.com/dohooo/helmor/commit/4906e39ee13646b2aa4e68c690c610e5246430ba) Thanks [@natllian](https://github.com/natllian)! - Fix composer effort/model/permission/fast-mode picks reverting to defaults when switching back to a workspace whose first turn hasn't finished.
+
+- [#595](https://github.com/dohooo/helmor/pull/595) [`e89064e`](https://github.com/dohooo/helmor/commit/e89064e4e2496f2d39cb5451c94c6d343050ca2a) Thanks [@natllian](https://github.com/natllian)! - Fix sidebar and inspector resize stuttering that persisted for the rest of the session after the file editor had been opened.
+
+## 0.23.1
+
+### Patch Changes
+
+- [#590](https://github.com/dohooo/helmor/pull/590) [`2091313`](https://github.com/dohooo/helmor/commit/20913132dd5a447ab50b8067748c442fab4f9153) Thanks [@natllian](https://github.com/natllian)! - Automatically reclaim disk space from composer-pasted images once their session is deleted, so the paste cache no longer grows unbounded.
+
+- [#582](https://github.com/dohooo/helmor/pull/582) [`a06583d`](https://github.com/dohooo/helmor/commit/a06583d44a27dba4306f0f0a0d7e644ee6dbcd4a) Thanks [@natllian](https://github.com/natllian)! - Fix the feedback dialog opening with a brief window jump on workspace pages.
+
+- [#589](https://github.com/dohooo/helmor/pull/589) [`fbc078c`](https://github.com/dohooo/helmor/commit/fbc078c5c998e4b856e1100db6815e7d9b458773) Thanks [@natllian](https://github.com/natllian)! - Fix the chat visibly scrolling from the top down to the latest message every time the editor view closes.
+
+- [#584](https://github.com/dohooo/helmor/pull/584) [`5970940`](https://github.com/dohooo/helmor/commit/597094048bab567d763628b07bffb2217b43b523) Thanks [@natllian](https://github.com/natllian)! - Add four new color themes (Aubergine, Hoth, Choco Mint, Banana) and rework theme switching to repaint every shell region — editor and terminal included.
+
+## 0.23.0
+
+### Minor Changes
+
+- [#570](https://github.com/dohooo/helmor/pull/570) [`b042374`](https://github.com/dohooo/helmor/commit/b042374f44ea304b5b1235dc2259572bc2162152) Thanks [@natllian](https://github.com/natllian)! - Add an opt-in General setting to auto-archive a workspace when its linked PR/MR is merged.
+
+- [#568](https://github.com/dohooo/helmor/pull/568) [`217ab7b`](https://github.com/dohooo/helmor/commit/217ab7b73ca986f76829d5a284c6407b7631e39e) Thanks [@dohooo](https://github.com/dohooo)! - Add a feedback button next to Settings that lets you contribute back to Helmor without leaving the app:
+
+  - Send a quick GitHub issue to the Helmor repo with a two-click confirm.
+  - Use "Quick fix" to open a workspace on your local Helmor clone with the feedback drafted as the first prompt, so an agent can start on the change immediately.
+
+- [#577](https://github.com/dohooo/helmor/pull/577) [`4e03c13`](https://github.com/dohooo/helmor/commit/4e03c13b24413252e13e6073f60297e8c8026913) Thanks [@natllian](https://github.com/natllian)! - Add a "Just Chat" mode on the start page for opening throwaway chat workspaces that aren't bound to any repository.
+
+- [#571](https://github.com/dohooo/helmor/pull/571) [`95280a0`](https://github.com/dohooo/helmor/commit/95280a09517cdccd105e88629c2350f08ac952ba) Thanks [@natllian](https://github.com/natllian)! - New workspaces can now reuse an existing branch instead of always forking a new one, and the start page remembers your last picker choices across restarts.
+
+- [#572](https://github.com/dohooo/helmor/pull/572) [`1fb5faa`](https://github.com/dohooo/helmor/commit/1fb5faae9b12119b546fb5457df8f7fdbabc6f28) Thanks [@natllian](https://github.com/natllian)! - Let the workspace editor edit changes inline from the diff view.
+
+### Patch Changes
+
+- [#564](https://github.com/dohooo/helmor/pull/564) [`bfa0ef1`](https://github.com/dohooo/helmor/commit/bfa0ef19212ce535f02532eece918de0ffbd7670) Thanks [@natllian](https://github.com/natllian)! - Add a Confirm step to sidebar archive actions so workspaces are not archived from a single click.
+
+- [#422](https://github.com/dohooo/helmor/pull/422) [`c2189cf`](https://github.com/dohooo/helmor/commit/c2189cf1c163f3fcd16ebfb04796c46f6c76440d) Thanks [@aidxun](https://github.com/aidxun)! - Remove the inspector sidebar's explicit toggle animations so opening and closing its sections feels more direct and easier to maintain.
+
+- [#575](https://github.com/dohooo/helmor/pull/575) [`28f8471`](https://github.com/dohooo/helmor/commit/28f84711421b4e5cae4028333c2bbc35323a9cfe) Thanks [@natllian](https://github.com/natllian)! - Fix laggy dragging of the inspector sidebar's vertical section dividers, especially when resizing the Scripts section with terminal output.
+
+- [#569](https://github.com/dohooo/helmor/pull/569) [`23fe1cb`](https://github.com/dohooo/helmor/commit/23fe1cbfa596a796000e5c42da98faa6fc76abf2) Thanks [@natllian](https://github.com/natllian)! - Keep the Stop and Rerun buttons reachable in the Setup and Run tabs when "Expand terminals on hover" is turned off.
+
+- [#574](https://github.com/dohooo/helmor/pull/574) [`b1207cf`](https://github.com/dohooo/helmor/commit/b1207cfc89f65e75159946102fb98775a632c18c) Thanks [@natllian](https://github.com/natllian)! - Restore window dragging on the Editor view and Start Page top bars.
+
+- [#576](https://github.com/dohooo/helmor/pull/576) [`9047d91`](https://github.com/dohooo/helmor/commit/9047d912a511edcf57f29df444accd3f0dbaf511) Thanks [@natllian](https://github.com/natllian)! - - Remember the worktree/local mode and branch intent per repository so each project keeps its own defaults.
+
+- [#567](https://github.com/dohooo/helmor/pull/567) [`21a742d`](https://github.com/dohooo/helmor/commit/21a742dbbfd024d7ad5e200d257854e6ead558fd) Thanks [@natllian](https://github.com/natllian)! - Make dragging to resize the left sidebar and right inspector feel fluid, even with a long chat thread open.
+
 ## 0.22.1
 
 ### Patch Changes

@@ -8,7 +8,6 @@ import {
 	LoaderCircleIcon,
 	TriangleIcon,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -49,12 +48,10 @@ import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import {
+	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_SECTION_HEADER_CLASS,
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_SECTION_TITLE_CLASS,
-	TABS_ANIMATION_MS,
-	TABS_EASING,
-	TABS_EASING_CURVE,
 } from "../layout";
 
 interface GitStatusItem {
@@ -113,8 +110,6 @@ type ActionsSectionProps = {
 	open: boolean;
 	onToggle: () => void;
 	bodyHeight: number;
-	animatePanelToggle?: boolean;
-	isResizing?: boolean;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
@@ -167,8 +162,6 @@ export function ActionsSection({
 	open,
 	onToggle,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 	onCommitAction,
 	onReviewAction,
 	currentSessionId,
@@ -180,16 +173,6 @@ export function ActionsSection({
 	const queryClient = useQueryClient();
 	const [syncPending, setSyncPending] = useState(false);
 	const [reviewPending, setReviewPending] = useState(false);
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
-	const chevronTransitionMs =
-		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 	const forgeQuery = useQuery({
 		...workspaceForgeQueryOptions(workspaceId ?? "__none__"),
 		enabled: workspaceId !== null,
@@ -339,19 +322,19 @@ export function ActionsSection({
 		[workspaceId],
 	);
 	return (
-		<motion.section
+		<section
 			ref={sectionRef}
 			aria-label="Inspector section Actions"
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
-			initial={false}
-			animate={{
-				height: INSPECTOR_SECTION_HEADER_HEIGHT + (open ? bodyHeight : 0),
-			}}
-			transition={panelTransition}
 			style={{
-				willChange: isResizing ? undefined : "height",
+				// Height via CSS var, written by mousemove during drag. Collapsed
+				// state pins to the header height (skips calc); fallback covers
+				// the mount frame before the layout effect writes the var.
+				height: open
+					? `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px))`
+					: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`,
 			}}
 		>
 			<div
@@ -375,7 +358,7 @@ export function ActionsSection({
 						strokeWidth={1.9}
 						style={{
 							transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-							transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
+							transition: "none",
 						}}
 					/>
 				</Button>
@@ -385,13 +368,15 @@ export function ActionsSection({
 				<div className="min-h-0">
 					<ScrollArea
 						aria-label="Actions panel body"
-						className="min-h-0 bg-muted/18 text-[11.5px]"
-						style={{ height: `${bodyHeight}px` }}
+						className="min-h-0 bg-muted/18 text-mini"
+						style={{
+							height: `var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px)`,
+						}}
 					>
 						{showHelpersGroup && (
 							<>
 								<div className="px-2.5 pb-1 pt-2">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Helpers
 									</span>
 								</div>
@@ -409,7 +394,7 @@ export function ActionsSection({
 											disabled={reviewPending || workspaceId === null}
 											aria-busy={reviewPending ? true : undefined}
 											aria-label={reviewPending ? "Reviewing" : undefined}
-											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<span className="inline-flex items-center gap-1">
 												{reviewPending ? (
@@ -427,7 +412,7 @@ export function ActionsSection({
 							</>
 						)}
 						<div className="px-2.5 pb-1 pt-2">
-							<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+							<span className="text-micro font-medium tracking-wide text-muted-foreground">
 								Git
 							</span>
 						</div>
@@ -463,7 +448,7 @@ export function ActionsSection({
 												}
 												void onCommitAction?.(action.mode!);
 											}}
-											className="ml-auto shrink-0 cursor-interactive text-[10.5px] text-primary transition-colors hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+											className="ml-auto shrink-0 cursor-interactive text-micro text-foreground transition-colors hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"
 											disabled={
 												action.kind === "commit" ? actionDisabled : syncPending
 											}
@@ -493,7 +478,7 @@ export function ActionsSection({
 						{reviewRows.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Review
 									</span>
 								</div>
@@ -512,7 +497,7 @@ export function ActionsSection({
 						{sortedDeployments.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Deployments
 									</span>
 								</div>
@@ -525,7 +510,7 @@ export function ActionsSection({
 						{sortedChecks.length > 0 && (
 							<>
 								<div className="px-2.5 pb-1 pt-2.5">
-									<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+									<span className="text-micro font-medium tracking-wide text-muted-foreground">
 										Checks
 									</span>
 								</div>
@@ -541,7 +526,7 @@ export function ActionsSection({
 					</ScrollArea>
 				</div>
 			)}
-		</motion.section>
+		</section>
 	);
 }
 
@@ -759,9 +744,9 @@ function ActionStatusRow({
 	) => AppendContextPayloadResult | Promise<AppendContextPayloadResult>;
 }) {
 	const actionButtonClassName =
-		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
+		"size-5 rounded-sm text-muted-foreground opacity-55 transition-[opacity,color,background-color] hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5";
 	const appendActionButtonClassName =
-		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:bg-accent/60 hover:text-primary hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
+		"size-4 rounded-sm text-muted-foreground opacity-0 pointer-events-none group-hover/check-row:opacity-55 group-hover/check-row:pointer-events-auto group-focus-within/check-row:opacity-55 group-focus-within/check-row:pointer-events-auto hover:bg-accent/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3";
 
 	return (
 		<div className="group/check-row flex items-center justify-between gap-3 px-2.5 py-[3px] text-muted-foreground transition-colors hover:bg-accent/60">
@@ -769,13 +754,13 @@ function ActionStatusRow({
 				<StatusIcon status={item.status} />
 				<ProviderIcon provider={item.provider} />
 				<span
-					className="min-w-0 truncate whitespace-nowrap text-primary"
+					className="min-w-0 truncate whitespace-nowrap text-foreground"
 					title={item.name}
 				>
 					{item.name}
 				</span>
 				{item.duration && (
-					<span className="shrink-0 text-[10.5px] text-muted-foreground">
+					<span className="shrink-0 text-micro text-muted-foreground">
 						{item.duration}
 					</span>
 				)}

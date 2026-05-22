@@ -1,7 +1,9 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
+import { resolveCssColor } from "@/lib/css-color";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
@@ -185,16 +187,31 @@ export function suspendTerminalFit(): () => void {
 	};
 }
 
-/** Read --terminal-* and --foreground CSS variables and build an xterm ITheme. */
-function resolveTerminalTheme(): ITheme {
-	const s = getComputedStyle(document.documentElement);
-	const v = (suffix: string) =>
-		s.getPropertyValue(`--terminal-${suffix}`).trim();
+// Buffer xterm writes during heavy animations — each chunk's render RAF
+// otherwise competes with the drag's RAF.
+let terminalWriteSuspendCount = 0;
+const terminalWriteFlushListeners = new Set<() => void>();
 
-	// Match the app's global scrollbar colors (foreground @ 18%/30%/40%).
-	const fg = s.getPropertyValue("--foreground").trim();
+/** Buffer xterm writes across every mounted TerminalOutput. Idempotent release. */
+export function suspendTerminalWrites(): () => void {
+	terminalWriteSuspendCount++;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		terminalWriteSuspendCount--;
+		if (terminalWriteSuspendCount === 0) {
+			for (const listener of terminalWriteFlushListeners) listener();
+		}
+	};
+}
+
+function resolveTerminalTheme(): ITheme {
+	const v = (suffix: string) => resolveCssColor(`var(--terminal-${suffix})`);
 	const mix = (pct: number) =>
-		`color-mix(in oklch, ${fg} ${pct}%, transparent)`;
+		resolveCssColor(
+			`color-mix(in oklch, var(--foreground) ${pct}%, transparent)`,
+		);
 
 	return {
 		background: v("background"),
@@ -288,6 +305,25 @@ function TerminalOutputImpl({
 
 		terminal.loadAddon(fit);
 		terminal.open(container);
+
+		// GPU renderer — drops per-frame cost on low-spec laptops. DOM
+		// renderer does an O(visible_cells) layout/paint per write; WebGL
+		// blits from a glyph atlas. `contextlost` fires on GPU reset /
+		// long sleep / driver crash; we dispose and let xterm fall back
+		// to the built-in DOM renderer automatically.
+		let webgl: WebglAddon | null = null;
+		try {
+			const addon = new WebglAddon();
+			addon.onContextLoss(() => {
+				addon.dispose();
+				webgl = null;
+			});
+			terminal.loadAddon(addon);
+			webgl = addon;
+		} catch {
+			// WebGL unavailable (headless / very old GPU). DOM renderer stays.
+			webgl = null;
+		}
 
 		// Translate macOS Cmd combos to readline control codes.
 		terminal.attachCustomKeyEventHandler((event) => {
@@ -394,6 +430,17 @@ function TerminalOutputImpl({
 		const refitListener = () => runFit();
 		terminalRefitListeners.add(refitListener);
 
+		// Per-instance buffer for writes deferred via `suspendTerminalWrites`.
+		// Flushed in one xterm.write so ANSI escapes stay contiguous.
+		const suspendedWrites: string[] = [];
+		const flushSuspendedWrites = () => {
+			if (suspendedWrites.length === 0) return;
+			const joined = suspendedWrites.join("");
+			suspendedWrites.length = 0;
+			terminal.write(joined);
+		};
+		terminalWriteFlushListeners.add(flushSuspendedWrites);
+
 		// Re-resolve CSS variables when app light/dark mode changes.
 		const themeObserver = new MutationObserver(() => {
 			terminal.options.theme = resolveTerminalTheme();
@@ -408,9 +455,18 @@ function TerminalOutputImpl({
 
 		if (terminalRef) {
 			(terminalRef as React.MutableRefObject<TerminalHandle | null>).current = {
-				write: (data: string) => terminal.write(data),
+				write: (data: string) => {
+					if (terminalWriteSuspendCount > 0) {
+						suspendedWrites.push(data);
+						return;
+					}
+					terminal.write(data);
+				},
 				// Scrollback wipe only — `reset()` here would race with replay.
-				clear: () => terminal.clear(),
+				clear: () => {
+					suspendedWrites.length = 0;
+					terminal.clear();
+				},
 				dispose: () => terminal.dispose(),
 				refit: () => runFit(),
 				focus: () => terminal.focus(),
@@ -428,6 +484,8 @@ function TerminalOutputImpl({
 			themeObserver.disconnect();
 			resizeObserver.disconnect();
 			terminalRefitListeners.delete(refitListener);
+			terminalWriteFlushListeners.delete(flushSuspendedWrites);
+			webgl?.dispose();
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;

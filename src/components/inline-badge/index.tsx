@@ -46,8 +46,9 @@ export type InlineBadgeProps = {
 	onRemove?: () => void;
 	removeLabel?: string;
 	/**
-	 * 启用 text-kind preview 的就地编辑。失焦时调用一次，commit 新文本后
-	 * popover 自动关闭。仅当 preview.kind === "text" 时生效，其它类型忽略。
+	 * Enables in-place editing for text-kind previews. Called once on blur;
+	 * the popover closes automatically after the commit. Ignored unless
+	 * `preview.kind === "text"`.
 	 */
 	onEdit?: (nextText: string) => void;
 	/** Extra classes on the outer wrapper. */
@@ -88,8 +89,8 @@ export function InlineBadge({
 	});
 	const closeTimerRef = useRef<number | null>(null);
 	const hasFetchedRef = useRef(false);
-	// 编辑期间锁住 popover：textarea focus 时设为 true,
-	// 让 hover-leave 不会把正在编辑的卡片关掉
+	// Lock the popover while editing: set true on textarea focus so
+	// hover-leave doesn't close the card being edited.
 	const editingRef = useRef(false);
 
 	const editHandlers = useMemo(() => {
@@ -165,7 +166,7 @@ export function InlineBadge({
 
 	const scheduleClose = useCallback(() => {
 		if (!canPreview) return;
-		if (editingRef.current) return; // 编辑中不关
+		if (editingRef.current) return; // keep open while editing
 		clearCloseTimer();
 		closeTimerRef.current = window.setTimeout(() => {
 			setOpen(false);
@@ -178,7 +179,7 @@ export function InlineBadge({
 	const badge = (
 		<span
 			className={cn(
-				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-[14px] leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
+				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-body leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
 				nonSelectable && "select-none",
 				nonSelectable && !canPreview && "cursor-default",
 				canPreview && "cursor-interactive",

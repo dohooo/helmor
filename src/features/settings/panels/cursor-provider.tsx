@@ -149,7 +149,7 @@ export function CursorProviderPanel() {
 						onBlur={commitKey}
 						onChange={(event) => setKeyDraft(event.target.value)}
 						placeholder="Cursor API key"
-						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
+						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
 					/>
 					{!keyDraft && (
 						<Button
@@ -247,7 +247,7 @@ function ModelMultiSelect({
 				>
 					<span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
 						{enabled.length === 0 ? (
-							<span className="px-1 text-[12px] text-muted-foreground">
+							<span className="px-1 text-small text-muted-foreground">
 								{loading ? "Loading…" : "No models picked"}
 							</span>
 						) : (
@@ -255,7 +255,7 @@ function ModelMultiSelect({
 								<Badge
 									key={model.id}
 									variant="outline"
-									className="h-6 gap-1 rounded-md pr-1 text-[11px]"
+									className="h-6 gap-1 rounded-md pr-1 text-mini"
 									onClick={(event) => event.stopPropagation()}
 								>
 									{model.label}
@@ -304,10 +304,10 @@ function ModelMultiSelect({
 										className="items-start"
 									>
 										<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-											<span className="truncate text-[13px] leading-tight">
+											<span className="truncate text-ui leading-tight">
 												{model.label}
 											</span>
-											<span className="truncate font-mono text-[10px] leading-tight text-muted-foreground">
+											<span className="truncate font-mono text-micro leading-tight text-muted-foreground">
 												{model.id}
 											</span>
 										</div>

@@ -73,9 +73,9 @@ export function InteractionOptionRow({
 					)}
 				</span>
 				<div className="min-w-0 flex-1">
-					<p className="text-[13px] font-medium text-foreground">{label}</p>
+					<p className="text-ui font-medium text-foreground">{label}</p>
 					{description ? (
-						<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+						<p className="mt-0.5 text-mini leading-snug text-muted-foreground">
 							{description}
 						</p>
 					) : null}

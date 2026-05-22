@@ -1,10 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
-import type { ContextCard } from "./sources/types";
+import type { WorkspaceBranchIntent } from "./api";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export type DarkTheme = "default" | "midnight" | "forest" | "ember" | "aurora";
+export type ColorTheme =
+	| "default"
+	| "midnight"
+	| "forest"
+	| "ember"
+	| "aurora"
+	| "aubergine"
+	| "hoth"
+	| "choco-mint"
+	| "banana";
 
 /** Behavior when submitting a message while the agent is still responding.
  *  - `steer`: inject into the active turn (provider-native mid-turn steer).
@@ -151,38 +160,21 @@ export const DEFAULT_INBOX_REPO_CONFIG: InboxRepoSourceConfig = {
 	prLabels: "",
 };
 
-/** Cap on how many inbox cards the kanban view will keep open as
- *  main-content tabs (and persist across restarts). Beyond this the
- *  user gets a toast nudging them to close some — keeps the tab strip
- *  legible and the persisted blob bounded. */
-export const KANBAN_OPEN_INBOX_CARDS_MAX = 10;
+/** Per-repo work mode on the start surface. `chat` is a top-level toggle
+ *  (`chatModeActive`) because it doesn't belong to any repo. */
+export type StartSurfaceWorkMode = "worktree" | "local";
 
-/** Persisted UI state for the kanban view — the bits that should
- *  survive an app restart so the user lands back in the same place
- *  next time they open the kanban tab. Each field has a graceful
- *  fallback so a corrupt or partial blob still produces sane UI. */
-export type KanbanViewState = {
-	/** Whether new kanban workspaces land in "in progress" (immediate
-	 *  agent dispatch) or "backlog" (draft saved, no agent). */
+/** Persisted preferences for the workspace-start surface. */
+export type StartSurfacePreferences = {
+	/** Composer submit-mode: immediate dispatch or saved draft. */
 	createState: "in-progress" | "backlog";
-	/** Repository id last selected in the kanban header picker.
-	 *  Resolved against the current repo list on hydrate — falls back
-	 *  to the first repo when the saved id is no longer present. */
+	/** Last selected repository. */
 	repoId: string | null;
-	/** Inbox top-level provider tab id (e.g. "github", "linear"). Plain
-	 *  string here so settings.ts stays free of feature-module imports;
-	 *  consumers cast against their own narrower types. */
-	inboxProviderTab: string;
-	/** Inbox sub-tab id within the provider (e.g. "github_issue",
-	 *  "github_pr", "github_discussion"). */
-	inboxProviderSourceTab: string;
-	/** Branch selected in the kanban header, keyed by repository id. */
 	sourceBranchByRepoId: Record<string, string>;
-	/** GitHub inbox state filter keyed by source tab id. */
-	inboxStateFilterBySource: Record<string, string>;
-	/** Inbox cards open as main-content tabs at last app exit. Capped
-	 *  at `KANBAN_OPEN_INBOX_CARDS_MAX`. */
-	openInboxCards: ContextCard[];
+	modeByRepoId: Record<string, StartSurfaceWorkMode>;
+	branchIntentByRepoId: Record<string, WorkspaceBranchIntent>;
+	/** Top-level "Just chat" toggle. Independent of the selected repo. */
+	chatModeActive: boolean;
 };
 
 export type AppSettings = {
@@ -199,7 +191,10 @@ export type AppSettings = {
 	 *  When false, falls back to the default arrow. */
 	usePointerCursors: boolean;
 	theme: ThemeMode;
-	darkTheme: DarkTheme;
+	/** Color preset applied when the effective mode is `light`. */
+	lightTheme: ColorTheme;
+	/** Color preset applied when the effective mode is `dark`. */
+	darkTheme: ColorTheme;
 	notifications: boolean;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
@@ -240,12 +235,17 @@ export type AppSettings = {
 	 *  `CONTEXT_USAGE_AUTO_REVEAL_THRESHOLD`. */
 	alwaysShowContextUsage: boolean;
 	showUsageStats: boolean;
+	/** Opt-in: when the workspace's linked PR/MR transitions to merged,
+	 *  attempt to archive the workspace automatically. One-shot — runs
+	 *  exactly once at the merged-edge; skipped if the workspace has an
+	 *  active agent session or fails archive validation. */
+	autoArchiveOnMerge: boolean;
 	onboardingCompleted: boolean;
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
 	inboxSourceConfig: InboxSourceConfig;
-	kanbanViewState: KanbanViewState;
+	startSurfacePreferences: StartSurfacePreferences;
 	/** Sidebar grouping mode. Persisted to localStorage (sync read on boot
 	 *  to avoid the sidebar flashing the wrong grouping while SQLite-backed
 	 *  settings load asynchronously). */
@@ -257,15 +257,38 @@ export type AppSettings = {
 	sidebarSort: SidebarSort;
 };
 
-export const DEFAULT_KANBAN_VIEW_STATE: KanbanViewState = {
+export const DEFAULT_START_SURFACE_PREFERENCES: StartSurfacePreferences = {
 	createState: "in-progress",
 	repoId: null,
-	inboxProviderTab: "github",
-	inboxProviderSourceTab: "github_issue",
 	sourceBranchByRepoId: {},
-	inboxStateFilterBySource: {},
-	openInboxCards: [],
+	modeByRepoId: {},
+	branchIntentByRepoId: {},
+	chatModeActive: false,
 };
+
+/** Fallbacks for repos without a per-repo entry. */
+export const START_SURFACE_MODE_FALLBACK: StartSurfaceWorkMode = "worktree";
+export const START_SURFACE_BRANCH_INTENT_FALLBACK: WorkspaceBranchIntent =
+	"from_branch";
+
+/** Read a per-repo preference, falling back when missing. */
+export function readRepoPreference<V>(
+	record: Record<string, V>,
+	repoId: string | null | undefined,
+	fallback: V,
+): V {
+	if (!repoId) return fallback;
+	return record[repoId] ?? fallback;
+}
+
+/** Immutably set a per-repo entry. */
+export function writeRepoPreference<V>(
+	record: Record<string, V>,
+	repoId: string,
+	value: V,
+): Record<string, V> {
+	return { ...record, [repoId]: value };
+}
 
 /**
  * Percentage of the context window above which the ring auto-reveals
@@ -281,6 +304,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	terminalFontFamily: null,
 	usePointerCursors: true,
 	theme: "system",
+	lightTheme: "default",
 	darkTheme: "default",
 	notifications: true,
 	terminalHoverExpansion: true,
@@ -303,6 +327,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	claudeThinkingDisplay: "summarized",
 	alwaysShowContextUsage: true,
 	showUsageStats: true,
+	autoArchiveOnMerge: false,
 	onboardingCompleted: false,
 	shortcuts: {},
 	claudeCustomProviders: {
@@ -317,13 +342,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		cachedModels: null,
 	},
 	inboxSourceConfig: { accounts: {} },
-	kanbanViewState: DEFAULT_KANBAN_VIEW_STATE,
+	startSurfacePreferences: DEFAULT_START_SURFACE_PREFERENCES,
 	sidebarGrouping: "status",
 	sidebarRepoFilterIds: [],
 	sidebarSort: "custom",
 };
 
 export const THEME_STORAGE_KEY = "helmor-theme";
+export const LIGHT_THEME_STORAGE_KEY = "helmor-light-theme";
 export const DARK_THEME_STORAGE_KEY = "helmor-dark-theme";
 export const SIDEBAR_GROUPING_STORAGE_KEY = "helmor-sidebar-grouping";
 export const SIDEBAR_REPO_FILTER_STORAGE_KEY = "helmor-sidebar-repo-filter";
@@ -337,6 +363,7 @@ export const TERMINAL_FONT_FAMILY_STORAGE_KEY = "helmor-terminal-font-family";
  *  on the async SQLite round-trip. */
 const LOCALSTORAGE_KEYS = {
 	theme: THEME_STORAGE_KEY,
+	lightTheme: LIGHT_THEME_STORAGE_KEY,
 	darkTheme: DARK_THEME_STORAGE_KEY,
 	sidebarGrouping: SIDEBAR_GROUPING_STORAGE_KEY,
 	sidebarRepoFilterIds: SIDEBAR_REPO_FILTER_STORAGE_KEY,
@@ -356,12 +383,16 @@ const VALID_SIDEBAR_SORTS: readonly SidebarSort[] = [
 	"createdAt",
 ];
 
-const VALID_DARK_THEMES: readonly DarkTheme[] = [
+export const VALID_COLOR_THEMES: readonly ColorTheme[] = [
 	"default",
 	"midnight",
 	"forest",
 	"ember",
 	"aurora",
+	"aubergine",
+	"hoth",
+	"choco-mint",
+	"banana",
 ];
 
 // Synchronous theme read for flash-free splash boot. The full settings
@@ -382,13 +413,22 @@ function readLocalStorageString(key: string): string | null {
 	return v && v.length > 0 ? v : null;
 }
 
+function readColorTheme(key: string, fallback: ColorTheme): ColorTheme {
+	const raw = readLocalStorageString(key);
+	return VALID_COLOR_THEMES.includes(raw as ColorTheme)
+		? (raw as ColorTheme)
+		: fallback;
+}
+
 export function getPreloadedSettings(): AppSettings {
-	const darkTheme = (() => {
-		const raw = readLocalStorageString(DARK_THEME_STORAGE_KEY);
-		return VALID_DARK_THEMES.includes(raw as DarkTheme)
-			? (raw as DarkTheme)
-			: DEFAULT_SETTINGS.darkTheme;
-	})();
+	const lightTheme = readColorTheme(
+		LIGHT_THEME_STORAGE_KEY,
+		DEFAULT_SETTINGS.lightTheme,
+	);
+	const darkTheme = readColorTheme(
+		DARK_THEME_STORAGE_KEY,
+		DEFAULT_SETTINGS.darkTheme,
+	);
 	const sidebarGrouping = (() => {
 		const raw = readLocalStorageString(SIDEBAR_GROUPING_STORAGE_KEY);
 		return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)
@@ -404,6 +444,7 @@ export function getPreloadedSettings(): AppSettings {
 	return {
 		...DEFAULT_SETTINGS,
 		theme: getPreloadedTheme(),
+		lightTheme,
 		darkTheme,
 		sidebarGrouping,
 		sidebarRepoFilterIds: parseSidebarRepoFilterIds(
@@ -447,13 +488,42 @@ const SETTINGS_KEY_MAP: Record<
 	claudeThinkingDisplay: "app.claude_thinking_display",
 	alwaysShowContextUsage: "app.always_show_context_usage",
 	showUsageStats: "app.show_usage_stats",
+	autoArchiveOnMerge: "app.auto_archive_on_merge",
 	onboardingCompleted: "app.onboarding_completed",
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
 	inboxSourceConfig: "app.inbox_source_config",
-	kanbanViewState: "app.kanban_view_state",
+	startSurfacePreferences: "app.start_surface_preferences",
 };
+
+/** Renamed storage keys. Append-only; never reuse a string as a current key. */
+export const LEGACY_SETTING_KEYS = {
+	startSurfacePreferences: "app.kanban_view_state",
+} as const;
+
+/** Shim legacy keys under their current names and clear them in the DB. */
+function migrateLegacySettings(
+	raw: Record<string, string>,
+): Record<string, string> {
+	const writes: Record<string, string> = {};
+	const shimmed = { ...raw };
+	for (const [currentKey, legacyKey] of Object.entries(LEGACY_SETTING_KEYS)) {
+		const currentValue =
+			raw[SETTINGS_KEY_MAP[currentKey as keyof typeof SETTINGS_KEY_MAP]];
+		const legacyValue = raw[legacyKey];
+		if (currentValue !== undefined || legacyValue === undefined) continue;
+		shimmed[SETTINGS_KEY_MAP[currentKey as keyof typeof SETTINGS_KEY_MAP]] =
+			legacyValue;
+		writes[SETTINGS_KEY_MAP[currentKey as keyof typeof SETTINGS_KEY_MAP]] =
+			legacyValue;
+		writes[legacyKey] = "";
+	}
+	if (Object.keys(writes).length > 0) {
+		void invoke("update_app_settings", { settingsMap: writes }).catch(() => {});
+	}
+	return shimmed;
+}
 
 function parseSidebarRepoFilterIds(raw: string | undefined): string[] {
 	if (!raw) return DEFAULT_SETTINGS.sidebarRepoFilterIds;
@@ -685,56 +755,90 @@ function parseStringRecord(value: unknown): Record<string, string> {
 	);
 }
 
-function parseKanbanViewState(raw: string | undefined): KanbanViewState {
-	if (!raw) return DEFAULT_KANBAN_VIEW_STATE;
+/** Like `parseStringRecord`, with each value constrained to `allowed`. */
+function parseEnumRecord<V extends string>(
+	value: unknown,
+	allowed: readonly V[],
+): Record<string, V> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	const allowedSet = new Set<string>(allowed);
+	return Object.fromEntries(
+		Object.entries(value).filter(
+			([key, entry]) =>
+				key.length > 0 && typeof entry === "string" && allowedSet.has(entry),
+		),
+	) as Record<string, V>;
+}
+
+function parseStartSurfacePreferences(
+	raw: string | undefined,
+): StartSurfacePreferences {
+	if (!raw) return DEFAULT_START_SURFACE_PREFERENCES;
 	try {
 		const parsed = JSON.parse(raw) as unknown;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			return DEFAULT_KANBAN_VIEW_STATE;
+			return DEFAULT_START_SURFACE_PREFERENCES;
 		}
-		const o = parsed as Partial<KanbanViewState>;
-		const createState =
-			o.createState === "backlog" || o.createState === "in-progress"
-				? o.createState
-				: DEFAULT_KANBAN_VIEW_STATE.createState;
+		const o = parsed as Partial<StartSurfacePreferences> & {
+			mode?: unknown;
+			branchIntent?: unknown;
+			chatModeActive?: unknown;
+		};
 		const repoId = typeof o.repoId === "string" && o.repoId ? o.repoId : null;
-		const inboxProviderTab =
-			typeof o.inboxProviderTab === "string" && o.inboxProviderTab
-				? o.inboxProviderTab
-				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderTab;
-		const inboxProviderSourceTab =
-			typeof o.inboxProviderSourceTab === "string" && o.inboxProviderSourceTab
-				? o.inboxProviderSourceTab
-				: DEFAULT_KANBAN_VIEW_STATE.inboxProviderSourceTab;
-		const sourceBranchByRepoId = parseStringRecord(o.sourceBranchByRepoId);
-		const inboxStateFilterBySource = parseStringRecord(
-			o.inboxStateFilterBySource,
-		);
-		// Trust the persisted ContextCard array as long as it's an array
-		// of objects — the cards are written by the same code that reads
-		// them, and a deep schema check here would couple settings.ts to
-		// every field we add to ContextCard. Cap at the bound so an old
-		// blob from before the cap doesn't blow up the UI.
-		const openInboxCardsRaw = Array.isArray(o.openInboxCards)
-			? o.openInboxCards
-			: [];
-		const openInboxCards = openInboxCardsRaw
-			.filter(
-				(card): card is ContextCard =>
-					Boolean(card) && typeof card === "object" && !Array.isArray(card),
-			)
-			.slice(0, KANBAN_OPEN_INBOX_CARDS_MAX);
+		// Legacy `modeByRepoId` may still contain "chat" entries from before
+		// chat was promoted to a top-level toggle. Capture them so the user
+		// doesn't lose the "I was in Just Chat last session" state, then
+		// strip them out — modeByRepoId now only carries repo-bound modes.
+		const rawModeByRepoId = parseEnumRecord(o.modeByRepoId, [
+			"worktree",
+			"local",
+			"chat",
+		] as const);
+		const modeByRepoId: Record<string, StartSurfaceWorkMode> = {};
+		let migratedFromLegacyChat = false;
+		for (const [key, value] of Object.entries(rawModeByRepoId)) {
+			if (value === "chat") {
+				migratedFromLegacyChat = true;
+				continue;
+			}
+			modeByRepoId[key] = value;
+		}
+		const branchIntentByRepoId = parseEnumRecord(o.branchIntentByRepoId, [
+			"from_branch",
+			"use_branch",
+		] as const);
+		if (repoId && !modeByRepoId[repoId]) {
+			const legacyMode =
+				o.mode === "worktree" || o.mode === "local" ? o.mode : null;
+			if (legacyMode) modeByRepoId[repoId] = legacyMode;
+			if (o.mode === "chat") migratedFromLegacyChat = true;
+		}
+		if (repoId && !branchIntentByRepoId[repoId]) {
+			const legacyBranchIntent =
+				o.branchIntent === "from_branch" || o.branchIntent === "use_branch"
+					? o.branchIntent
+					: null;
+			if (legacyBranchIntent) branchIntentByRepoId[repoId] = legacyBranchIntent;
+		}
+		const chatModeActive =
+			typeof o.chatModeActive === "boolean"
+				? o.chatModeActive
+				: migratedFromLegacyChat;
 		return {
-			createState,
+			createState:
+				o.createState === "backlog" || o.createState === "in-progress"
+					? o.createState
+					: DEFAULT_START_SURFACE_PREFERENCES.createState,
 			repoId,
-			inboxProviderTab,
-			inboxProviderSourceTab,
-			sourceBranchByRepoId,
-			inboxStateFilterBySource,
-			openInboxCards,
+			sourceBranchByRepoId: parseStringRecord(o.sourceBranchByRepoId),
+			modeByRepoId,
+			branchIntentByRepoId,
+			chatModeActive,
 		};
 	} catch {
-		return DEFAULT_KANBAN_VIEW_STATE;
+		return DEFAULT_START_SURFACE_PREFERENCES;
 	}
 }
 
@@ -861,7 +965,8 @@ function readModelId(value: string | undefined): string | null {
 
 export async function loadSettings(): Promise<AppSettings> {
 	try {
-		const raw = await invoke<Record<string, string>>("get_app_settings");
+		const rawFromDb = await invoke<Record<string, string>>("get_app_settings");
+		const raw = migrateLegacySettings(rawFromDb);
 		const rawDefaultModelId = raw[SETTINGS_KEY_MAP.defaultModelId];
 		const rawReviewModelId = raw[SETTINGS_KEY_MAP.reviewModelId];
 		const rawReviewEffort = raw[SETTINGS_KEY_MAP.reviewEffort];
@@ -890,12 +995,14 @@ export async function loadSettings(): Promise<AppSettings> {
 			theme:
 				(localStorage.getItem(THEME_STORAGE_KEY) as AppSettings["theme"]) ??
 				DEFAULT_SETTINGS.theme,
-			darkTheme: (() => {
-				const raw = localStorage.getItem(DARK_THEME_STORAGE_KEY);
-				return VALID_DARK_THEMES.includes(raw as DarkTheme)
-					? (raw as DarkTheme)
-					: DEFAULT_SETTINGS.darkTheme;
-			})(),
+			lightTheme: readColorTheme(
+				LIGHT_THEME_STORAGE_KEY,
+				DEFAULT_SETTINGS.lightTheme,
+			),
+			darkTheme: readColorTheme(
+				DARK_THEME_STORAGE_KEY,
+				DEFAULT_SETTINGS.darkTheme,
+			),
 			sidebarGrouping: (() => {
 				const raw = localStorage.getItem(SIDEBAR_GROUPING_STORAGE_KEY);
 				return VALID_SIDEBAR_GROUPINGS.includes(raw as SidebarGrouping)
@@ -985,6 +1092,10 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.showUsageStats] !== undefined
 					? raw[SETTINGS_KEY_MAP.showUsageStats] === "true"
 					: DEFAULT_SETTINGS.showUsageStats,
+			autoArchiveOnMerge:
+				raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] !== undefined
+					? raw[SETTINGS_KEY_MAP.autoArchiveOnMerge] === "true"
+					: DEFAULT_SETTINGS.autoArchiveOnMerge,
 			onboardingCompleted:
 				raw[SETTINGS_KEY_MAP.onboardingCompleted] !== undefined
 					? raw[SETTINGS_KEY_MAP.onboardingCompleted] === "true"
@@ -999,8 +1110,8 @@ export async function loadSettings(): Promise<AppSettings> {
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
-			kanbanViewState: parseKanbanViewState(
-				raw[SETTINGS_KEY_MAP.kanbanViewState],
+			startSurfacePreferences: parseStartSurfacePreferences(
+				raw[SETTINGS_KEY_MAP.startSurfacePreferences],
 			),
 		};
 	} catch {
@@ -1042,7 +1153,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
 				key === "inboxSourceConfig" ||
-				key === "kanbanViewState"
+				key === "startSurfacePreferences"
 					? JSON.stringify(value)
 					: value === null
 						? ""

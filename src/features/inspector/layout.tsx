@@ -1,5 +1,4 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { createContext, useCallback, useContext } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,10 +29,8 @@ import {
 export const MIN_SECTION_HEIGHT = 48;
 export const DEFAULT_TABS_BODY_HEIGHT = 128;
 export const RESIZE_HIT_AREA = 10;
-export const TABS_ANIMATION_MS = 350;
-/** Apple-style easing — used consistently across panel toggle, chevron, and hover-zoom. */
+/** Apple-style easing for hover-zoom. */
 export const TABS_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
-export const TABS_EASING_CURVE = [0.32, 0.72, 0, 1] as const;
 
 /** 300ms is the industry-standard hover-intent threshold (VSCode/Material). */
 export const TABS_HOVER_ACTIVATION_MS = 300;
@@ -47,6 +44,13 @@ export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 /** 32px header (h-8) + 1px section border-b. */
 export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
+
+// CSS variables written on the inspector container by `useWorkspaceInspectorSidebar`.
+// Vars written directly by mousemove during drag — same strategy as
+// shell/use-panels.ts horizontal drag, skipping React per frame.
+export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
+export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
+export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
 
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
@@ -135,12 +139,12 @@ export function getInitialTabsHeight(defaultHeight: number): number {
 }
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
+	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-inspector-section-header px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
-	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+	"text-ui leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
 /** `px-3` + `gap-0` on tablist → uniform 24px gap between any two tabs. */
 const INSPECTOR_TAB_BUTTON_CLASS =
-	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
+	"relative inline-flex h-full cursor-interactive items-center justify-center gap-1.5 px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-0";
 
 /** Zoom state published to tab bodies (e.g. corner Stop/Rerun button). */
 type TabsZoomState = {
@@ -214,9 +218,6 @@ type InspectorTabsSectionProps = {
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
 	bodyHeight: number;
-	/** Enables the height transition only for explicit panel toggles. */
-	animatePanelToggle?: boolean;
-	isResizing?: boolean;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
@@ -241,23 +242,11 @@ export function InspectorTabsSection({
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
 	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
 	const { settings } = useSettings();
 	const newTerminalShortcut = getShortcut(settings.shortcuts, "terminal.new");
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
-	const chevronTransitionMs =
-		animatePanelToggle && !shouldReduceMotion ? TABS_ANIMATION_MS : 0;
 
 	const {
 		isHoverExpanded,
@@ -299,24 +288,20 @@ export function InspectorTabsSection({
 	}, [open, onAddTerminal, onToggle]);
 
 	return (
-		<motion.div
+		<div
 			ref={wrapperRef}
 			className={cn(
 				"relative flex min-h-0 shrink-0 flex-col",
 				!isZoomPresented && "overflow-hidden",
 			)}
-			initial={false}
-			animate={{
-				height: TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX + (open ? bodyHeight : 0),
-			}}
-			transition={panelTransition}
 			style={{
-				// The real content lives inside the absolutely-positioned child
-				// below, which contributes nothing to layout. Reserve header
-				// height when the panel is closed so the parent flex column
-				// keeps a stable footprint for us.
+				// Height via CSS var, written by useWorkspaceInspectorSidebar's
+				// mousemove during drag — skips React renders. Collapsed state pins
+				// to the header height to keep the parent flex column stable.
+				height: open
+					? `calc(${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px + var(${INSPECTOR_TABS_BODY_VAR}, ${bodyHeight}px))`
+					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
 				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-				willChange: isResizing ? undefined : "height",
 			}}
 		>
 			<div
@@ -324,10 +309,8 @@ export function InspectorTabsSection({
 				onMouseEnter={handleContainerMouseEnter}
 				onMouseLeave={handleContainerMouseLeave}
 				className={cn(
-					// `bg-sidebar` is the safety floor — it guarantees the zoomed
-					// area never shows through to the content underneath even if
-					// the inner section somehow doesn't cover the full box.
-					"absolute right-0 bottom-0 flex flex-col bg-sidebar",
+					// Safety floor for the zoomed area — matches the inspector chrome.
+					"absolute right-0 bottom-0 flex flex-col bg-inspector",
 					// Lift the zoomed container above the inspector resize separator
 					// (z-30), the inspector width handle (z-30), and the rest of the
 					// sidebar so it's the top-most layer in the app shell. Tied to
@@ -384,9 +367,9 @@ export function InspectorTabsSection({
 					// Run output spawns a terminal instead of a chat session.
 					data-focus-scope="terminal"
 					className={cn(
-						"relative flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-sidebar",
+						"relative flex min-h-0 flex-1 flex-col overflow-hidden border-b border-border/60 bg-inspector",
 						// Draw the top edge line on the section itself so it paints
-						// above the section's `bg-sidebar` and scales with the
+						// above the section's `bg-inspector` and scales with the
 						// container as it grows. Tied to `isZoomPresented` so the
 						// border stays drawn for the whole collapse animation too.
 						isZoomPresented && "border-t border-t-border/60",
@@ -511,7 +494,7 @@ export function InspectorTabsSection({
 														// stable on mask toggle). `transform-gpu` keeps it
 														// on its own compositing layer.
 														className={cn(
-															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-[12px] font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
+															"group/tab relative flex h-full min-w-[5rem] shrink-0 transform-gpu cursor-interactive items-center overflow-hidden px-3 text-small font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-0",
 															isActive && "text-foreground",
 														)}
 														onClick={() => handleTabClick(instance.id)}
@@ -608,7 +591,7 @@ export function InspectorTabsSection({
 									</TooltipTrigger>
 									<TooltipContent
 										side="bottom"
-										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 									>
 										<span>New terminal</span>
 										{newTerminalShortcut ? (
@@ -635,7 +618,7 @@ export function InspectorTabsSection({
 										strokeWidth={1.9}
 										style={{
 											transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-											transition: `transform ${chevronTransitionMs}ms ${TABS_EASING}`,
+											transition: "none",
 										}}
 									/>
 								</Button>
@@ -647,7 +630,7 @@ export function InspectorTabsSection({
 								aria-label="Inspector tabs body"
 								onMouseEnter={handleBodyMouseEnter}
 								onMouseDown={handleBodyMouseDown}
-								className="relative flex min-h-0 flex-1 flex-col bg-sidebar"
+								className="relative flex min-h-0 flex-1 flex-col bg-inspector"
 							>
 								<TabsZoomContext.Provider
 									value={{ isZoomPresented, isHoverExpanded }}
@@ -659,7 +642,7 @@ export function InspectorTabsSection({
 					</div>
 				</section>
 			</div>
-		</motion.div>
+		</div>
 	);
 }
 

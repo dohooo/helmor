@@ -74,7 +74,11 @@ pub async fn prewarm_slash_commands_for_repo(app: AppHandle, repo_id: String) ->
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AgentStreamEvent {
     /// Full snapshot — sent on finalization events (assistant, user, result).
     /// The frontend replaces its entire message array.
@@ -117,11 +121,8 @@ pub enum AgentStreamEvent {
         reason: String,
     },
     PermissionRequest {
-        #[serde(rename = "permissionId")]
         permission_id: String,
-        #[serde(rename = "toolName")]
         tool_name: String,
-        #[serde(rename = "toolInput")]
         tool_input: Value,
         title: Option<String>,
         description: Option<String>,

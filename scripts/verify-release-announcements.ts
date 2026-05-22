@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 type AnnouncementAction =
 	| { type: "openSettings"; section?: string }
-	| { type: "setRightSidebarMode"; mode: string };
+	| { type: "setRightSidebarMode"; mode: string }
+	| { type: "openStartPage" };
 
 type AnnouncementItem = {
 	text: string;
@@ -72,6 +73,7 @@ function assertItem(
 	) {
 		return;
 	}
+	if (action.type === "openStartPage") return;
 	fail(`${path} has an unsupported action value`);
 }
 

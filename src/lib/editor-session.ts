@@ -60,6 +60,10 @@ export type EditorSessionState = {
 	originalRef?: string;
 	/** Git ref for the modified (right) side. Omit to read from working tree. */
 	modifiedRef?: string;
+	/** Cached original side for returning from Edit to the previous diff view. */
+	diffOriginalText?: string;
+	/** Cached modified side for returning from Edit to the previous diff view. */
+	diffModifiedText?: string;
 	/** Markdown view mode. Ignored for non-markdown paths. */
 	viewMode?: EditorViewMode;
 };

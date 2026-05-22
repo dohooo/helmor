@@ -657,6 +657,16 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add session_messages.last_event_seq column")?;
     }
 
+    // 'from_branch' = fork a new branch; 'use_branch' = attach as-is.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "branch_intent")
+    {
+        connection
+            .execute_batch(
+                "ALTER TABLE workspaces ADD COLUMN branch_intent TEXT DEFAULT 'from_branch'",
+            )
+            .context("Failed to add workspaces.branch_intent column")?;
+    }
+
     Ok(())
 }
 
@@ -779,6 +789,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     display_order INTEGER NOT NULL DEFAULT 0,
     port_base INTEGER,
     port_count INTEGER,
+    branch_intent TEXT DEFAULT 'from_branch',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

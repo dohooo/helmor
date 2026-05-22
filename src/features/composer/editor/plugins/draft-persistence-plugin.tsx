@@ -9,6 +9,10 @@ import {
 import type { ComposerCustomTag } from "@/lib/composer-insert";
 import { $setEditorContent } from "../../editor-ops";
 import { $extractComposerContent } from "../utils";
+import {
+	HISTORY_RECALL_RESTORE_TAG,
+	HISTORY_RECALL_TAG,
+} from "./history-recall-plugin";
 
 const SAVE_DELAY_MS = 400;
 
@@ -48,6 +52,7 @@ export function DraftPersistencePlugin({
 	const initializedContextKeyRef = useRef<string | null>(null);
 	const saveTimerRef = useRef<number | null>(null);
 	const prevRestoreNonceRef = useRef(restoreNonce);
+	const recallActiveRef = useRef(false);
 
 	const clearDraftState = useCallback((targetContextKey: string) => {
 		clearPersistedDraft(targetContextKey);
@@ -59,6 +64,9 @@ export function DraftPersistencePlugin({
 				return;
 			}
 
+			if (recallActiveRef.current) {
+				return;
+			}
 			const editorState = editor.getEditorState().toJSON();
 			editor.read(() => {
 				const content = $extractComposerContent();
@@ -128,6 +136,7 @@ export function DraftPersistencePlugin({
 		if (previousContextKey && previousContextKey !== contextKey) {
 			cancelScheduledFlush();
 			flushDraft(previousContextKey);
+			recallActiveRef.current = false;
 			initializedContextKeyRef.current = null;
 		}
 
@@ -167,9 +176,25 @@ export function DraftPersistencePlugin({
 	}, [applyRestorePayload, restoreNonce]);
 
 	useEffect(() => {
-		return editor.registerUpdateListener(() => {
-			scheduleFlush(contextKey);
-		});
+		return editor.registerUpdateListener(
+			({ tags, dirtyElements, dirtyLeaves }) => {
+				// Recall plugin mutations carry HISTORY_RECALL_TAG — those are
+				// browsing previously-sent prompts, not authoring a new draft.
+				// Persisting them would overwrite the user's in-progress draft.
+				if (tags.has(HISTORY_RECALL_TAG)) {
+					recallActiveRef.current = true;
+					return;
+				}
+				if (tags.has(HISTORY_RECALL_RESTORE_TAG)) {
+					recallActiveRef.current = false;
+					return;
+				}
+				const hasContentChange = dirtyElements.size > 0 || dirtyLeaves.size > 0;
+				if (recallActiveRef.current && !hasContentChange) return;
+				if (hasContentChange) recallActiveRef.current = false;
+				scheduleFlush(contextKey);
+			},
+		);
 	}, [contextKey, editor, scheduleFlush]);
 
 	useEffect(() => {

@@ -1,10 +1,16 @@
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Check, ChevronDown, Monitor, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
 	type AppSettings,
-	type DarkTheme,
+	type ColorTheme,
 	resolveTheme,
 	type ThemeMode,
 } from "@/lib/settings";
@@ -14,7 +20,7 @@ import { FontSizeStepper } from "../components/font-size-stepper";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
 type ColorThemeOption = {
-	id: DarkTheme;
+	id: ColorTheme;
 	label: string;
 	bg: string;
 	accent: string;
@@ -22,10 +28,10 @@ type ColorThemeOption = {
 	lightAccent: string;
 };
 
-/// Swatch tints for the Color Theme row. Two stops per side so each
+/// Swatch tints for the Color Theme picker. Two stops per side so each
 /// preset reads as a distinct gradient circle — vivid in dark mode,
 /// softer in light mode.
-const DARK_THEME_OPTIONS: readonly ColorThemeOption[] = [
+const COLOR_THEME_OPTIONS: readonly ColorThemeOption[] = [
 	{
 		id: "default",
 		label: "Default",
@@ -66,7 +72,132 @@ const DARK_THEME_OPTIONS: readonly ColorThemeOption[] = [
 		lightBg: "oklch(0.80 0.10 289)",
 		lightAccent: "oklch(0.46 0.20 284)",
 	},
+	{
+		id: "aubergine",
+		label: "Aubergine",
+		bg: "oklch(0.46 0.20 295)",
+		accent: "oklch(0.22 0.06 320)",
+		lightBg: "oklch(0.84 0.06 320)",
+		lightAccent: "oklch(0.46 0.20 295)",
+	},
+	{
+		id: "hoth",
+		label: "Hoth",
+		bg: "oklch(0.55 0.05 230)",
+		accent: "oklch(0.25 0.02 230)",
+		lightBg: "oklch(0.86 0.02 230)",
+		lightAccent: "oklch(0.55 0.13 235)",
+	},
+	{
+		id: "choco-mint",
+		label: "Choco Mint",
+		bg: "oklch(0.62 0.12 175)",
+		accent: "oklch(0.26 0.04 50)",
+		lightBg: "oklch(0.84 0.02 65)",
+		lightAccent: "oklch(0.50 0.13 175)",
+	},
+	{
+		id: "banana",
+		label: "Banana",
+		bg: "oklch(0.80 0.13 70)",
+		accent: "oklch(0.30 0.06 75)",
+		lightBg: "oklch(0.92 0.04 90)",
+		lightAccent: "oklch(0.45 0.18 330)",
+	},
 ];
+
+function ThemeSwatch({
+	option,
+	isLight,
+	size = 18,
+}: {
+	option: ColorThemeOption;
+	isLight: boolean;
+	size?: number;
+}) {
+	const bg = isLight ? option.lightBg : option.bg;
+	const accent = isLight ? option.lightAccent : option.accent;
+	return (
+		<span
+			aria-hidden="true"
+			className="block shrink-0 rounded-full"
+			style={{
+				width: size,
+				height: size,
+				background: `linear-gradient(135deg, ${bg}, ${accent})`,
+			}}
+		/>
+	);
+}
+
+function ColorThemePicker({
+	value,
+	isLight,
+	onChange,
+}: {
+	value: ColorTheme;
+	isLight: boolean;
+	onChange: (next: ColorTheme) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const current =
+		COLOR_THEME_OPTIONS.find((o) => o.id === value) ?? COLOR_THEME_OPTIONS[0];
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="outline"
+					className="h-8 w-[180px] justify-between gap-2 px-2 text-ui font-normal"
+				>
+					<span className="flex min-w-0 items-center gap-2">
+						<ThemeSwatch option={current} isLight={isLight} size={16} />
+						<span className="truncate">{current.label}</span>
+					</span>
+					<ChevronDown
+						className="size-3.5 shrink-0 text-muted-foreground"
+						strokeWidth={1.8}
+					/>
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="end" sideOffset={4} className="w-[220px] p-1">
+				<div role="listbox" className="flex flex-col">
+					{COLOR_THEME_OPTIONS.map((opt) => {
+						const selected = opt.id === value;
+						return (
+							<button
+								key={opt.id}
+								type="button"
+								role="option"
+								aria-selected={selected}
+								onClick={() => {
+									onChange(opt.id);
+									setOpen(false);
+								}}
+								className={cn(
+									"flex h-8 cursor-interactive items-center justify-between gap-2 rounded-md px-2 text-ui text-foreground transition-colors hover:bg-accent",
+									selected && "bg-accent/60",
+								)}
+							>
+								<span className="flex min-w-0 items-center gap-2">
+									<ThemeSwatch option={opt} isLight={isLight} size={16} />
+									<span className="truncate">{opt.label}</span>
+								</span>
+								{selected ? (
+									<Check
+										className="size-3.5 shrink-0 text-muted-foreground"
+										strokeWidth={2}
+									/>
+								) : null}
+							</button>
+						);
+					})}
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
+}
 
 type EffectiveFonts = {
 	fontSans: string;
@@ -95,7 +226,13 @@ export function AppearancePanel({
 	settings,
 	updateSettings,
 }: AppearancePanelProps) {
+	// The picker edits the preset slot that matches the current effective
+	// mode — `lightTheme` and `darkTheme` are persisted independently, so
+	// flipping Theme between Light/Dark/System swaps which slot you see.
 	const isLight = resolveTheme(settings.theme) === "light";
+	const activeColorTheme = isLight ? settings.lightTheme : settings.darkTheme;
+	const updateActiveColorTheme = (next: ColorTheme) =>
+		updateSettings(isLight ? { lightTheme: next } : { darkTheme: next });
 
 	// Re-sample the live font stacks each time the user changes a
 	// font-affecting setting so the placeholders show what's actually
@@ -139,7 +276,7 @@ export function AppearancePanel({
 						<ToggleGroupItem
 							key={value}
 							value={value}
-							className="gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
+							className="gap-1.5 rounded-lg px-3 py-1.5 text-small font-medium text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground"
 						>
 							<Icon className="size-3.5" strokeWidth={1.8} />
 							{label}
@@ -150,33 +287,11 @@ export function AppearancePanel({
 
 			{/* ── Color theme ──────────────────────────────────────────────── */}
 			<SettingsRow title="Color Theme" description="Choose an accent palette">
-				<div className="flex gap-2">
-					{DARK_THEME_OPTIONS.map((opt) => {
-						const swatchBg = isLight ? opt.lightBg : opt.bg;
-						const swatchAccent = isLight ? opt.lightAccent : opt.accent;
-						const isSelected = settings.darkTheme === opt.id;
-						return (
-							<button
-								key={opt.id}
-								type="button"
-								title={opt.label}
-								aria-label={opt.label}
-								aria-pressed={isSelected}
-								className={cn(
-									"h-7 w-7 cursor-interactive rounded-full transition-transform duration-150",
-									isSelected ? "scale-105" : "hover:scale-105",
-								)}
-								style={{
-									background: `linear-gradient(135deg, ${swatchBg}, ${swatchAccent})`,
-									boxShadow: isSelected
-										? `0 0 0 2px var(--background), 0 0 0 3.5px ${swatchBg}`
-										: undefined,
-								}}
-								onClick={() => updateSettings({ darkTheme: opt.id })}
-							/>
-						);
-					})}
-				</div>
+				<ColorThemePicker
+					value={activeColorTheme}
+					isLight={isLight}
+					onChange={updateActiveColorTheme}
+				/>
 			</SettingsRow>
 
 			{/* ── Chat font size ────────────────────────────────────────────── */}

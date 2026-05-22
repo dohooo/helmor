@@ -51,7 +51,7 @@ export function RepoImportStep({
 					<h2 className="text-3xl font-semibold tracking-normal text-foreground">
 						Bring in your first repositories
 					</h2>
-					<p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
+					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
 						Start with a local project, or pull a remote repository from GitHub.
 						You can add more than one before entering Helmor.
 					</p>
@@ -72,12 +72,12 @@ export function RepoImportStep({
 								<FolderOpen className="size-5" />
 							)}
 						</div>
-						<div className="mt-4 text-sm font-medium text-foreground">
+						<div className="mt-4 text-body font-medium text-foreground">
 							{isAddingLocalRepository
 								? "Adding repository…"
 								: "Choose local project"}
 						</div>
-						<p className="mt-1 text-xs leading-5 text-muted-foreground">
+						<p className="mt-1 text-small leading-5 text-muted-foreground">
 							{isAddingLocalRepository
 								? "Pick a folder, then we'll wire it up."
 								: "Add a folder already on this machine."}
@@ -92,10 +92,10 @@ export function RepoImportStep({
 						<div className="flex size-10 items-center justify-center rounded-lg border border-border/50 bg-background text-foreground">
 							<Cloud className="size-5" />
 						</div>
-						<div className="mt-4 text-sm font-medium text-foreground">
+						<div className="mt-4 text-body font-medium text-foreground">
 							Import from GitHub
 						</div>
-						<p className="mt-1 text-xs leading-5 text-muted-foreground">
+						<p className="mt-1 text-small leading-5 text-muted-foreground">
 							Clone a remote project into Helmor.
 						</p>
 						{githubImportProgress !== null ? (
@@ -110,13 +110,16 @@ export function RepoImportStep({
 				</div>
 
 				{repoImportError ? (
-					<p role="alert" className="mt-3 text-center text-xs text-destructive">
+					<p
+						role="alert"
+						className="mt-3 text-center text-small text-destructive"
+					>
 						{repoImportError}
 					</p>
 				) : null}
 
 				<div className="mt-7 min-h-0 flex-1">
-					<div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+					<div className="mb-2 flex items-center justify-between text-small text-muted-foreground">
 						<span>Imported repositories</span>
 						{importedRepositories.length > 0 ? (
 							<span>{importedRepositories.length}</span>
@@ -136,10 +139,10 @@ export function RepoImportStep({
 											<Cloud className="size-3.5 text-muted-foreground" />
 										)}
 										<div className="min-w-0 flex-1">
-											<div className="truncate text-xs font-medium text-foreground">
+											<div className="truncate text-small font-medium text-foreground">
 												{repo.name}
 											</div>
-											<div className="truncate text-[11px] text-muted-foreground">
+											<div className="truncate text-mini text-muted-foreground">
 												{repo.detail}
 											</div>
 										</div>
@@ -158,7 +161,7 @@ export function RepoImportStep({
 								))}
 							</div>
 						) : (
-							<div className="flex h-full min-h-32 items-center justify-center text-center text-xs leading-5 text-muted-foreground">
+							<div className="flex h-full min-h-32 items-center justify-center text-center text-small leading-5 text-muted-foreground">
 								Choose a local folder or import from GitHub to build your first
 								queue.
 							</div>
@@ -172,7 +175,7 @@ export function RepoImportStep({
 						variant="ghost"
 						size="lg"
 						onClick={onBack}
-						className="h-11 gap-2 px-4 text-[0.95rem]"
+						className="h-11 gap-2 px-4 text-title"
 					>
 						<ArrowLeft data-icon="inline-start" className="size-4" />
 						Back
@@ -181,7 +184,7 @@ export function RepoImportStep({
 						type="button"
 						size="lg"
 						onClick={onComplete}
-						className="h-11 gap-2 px-4 text-[0.95rem]"
+						className="h-11 gap-2 px-4 text-title"
 					>
 						Let&apos;s ship
 						<ArrowRight data-icon="inline-end" className="size-4" />

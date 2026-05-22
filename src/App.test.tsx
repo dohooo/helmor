@@ -21,6 +21,19 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
+const SIDEBAR_WIDTH_VAR = "--shell-sidebar-width";
+const INSPECTOR_WIDTH_VAR = "--shell-inspector-width";
+
+// `use-panels.ts` writes the width vars on the pane element itself (not
+// documentElement) so the resize-driven style invalidation stays inside the
+// pane subtree — see comments in use-panels.ts for the why.
+function getShellWidthVar(name: string): string {
+	const target = name === SIDEBAR_WIDTH_VAR ? "sidebar" : "inspector";
+	const pane = document.querySelector(
+		`[data-shell-pane="${target}"]`,
+	) as HTMLElement | null;
+	return pane?.style.getPropertyValue(name) ?? "";
+}
 
 describe("App", () => {
 	beforeEach(() => {
@@ -75,10 +88,11 @@ describe("App", () => {
 		expect(shell).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
-		expect(sidebar).toHaveStyle({ width: "336px" });
-		expect(inspector).toHaveClass("bg-sidebar");
+		expect(inspector).toHaveClass("bg-inspector");
 		expect(inspector).toHaveClass("overflow-hidden");
-		expect(inspector).toHaveStyle({ width: "336px" });
+		// Width driven by CSS var — assert on the documentElement var, not inline style.
+		expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("336px");
+		expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("336px");
 		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
 		expect(
 			screen.getByLabelText("Inspector section Actions"),
@@ -104,10 +118,11 @@ describe("App", () => {
 		).toBeInTheDocument();
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
-		expect(inspectorResizeHandle).toHaveStyle({
-			right: "316px",
-			width: "20px",
-		});
+		// Position driven by CSS var; inline style is expressed as calc(var(...) - X).
+		expect(inspectorResizeHandle).toHaveStyle({ width: "20px" });
+		expect(inspectorResizeHandle.style.right).toBe(
+			`calc(var(--shell-inspector-width, 336px) - 20px)`,
+		);
 		expect(safeAreas).toHaveLength(1);
 		expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
@@ -130,10 +145,10 @@ describe("App", () => {
 			.querySelector("svg");
 
 		expect(tabsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 		expect(actionsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 
 		// Default: tabs section collapsed; changes + actions bodies present.
@@ -149,9 +164,6 @@ describe("App", () => {
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
-		expect(tabsChevron).toHaveStyle({
-			transition: "transform 350ms cubic-bezier(0.32, 0.72, 0, 1)",
-		});
 
 		// Clicking again collapses it back.
 		await user.click(tabsToggle);
@@ -182,14 +194,27 @@ describe("App", () => {
 			render(<App />);
 			await screen.findByRole("main", { name: "Application shell" });
 
+			// Section heights are driven by CSS variables on the inspector
+			// container so that mid-drag mousemove can update them without
+			// going through React. Verify the container has the right vars
+			// written via useLayoutEffect (synchronous, runs before first paint).
 			await waitFor(() => {
-				expect(screen.getByLabelText("Inspector section Git")).toHaveStyle({
-					height: "273px",
-				});
+				const container = screen.getByLabelText("Inspector section Git")
+					.parentElement as HTMLElement;
+				expect(
+					container.style.getPropertyValue("--inspector-changes-body-height"),
+				).toBe("240px");
 			});
-			expect(screen.getByLabelText("Inspector section Actions")).toHaveStyle({
-				height: "594px",
-			});
+			const container = screen.getByLabelText("Inspector section Git")
+				.parentElement as HTMLElement;
+			expect(
+				container.style.getPropertyValue("--inspector-actions-body-height"),
+			).toBe("561px");
+			expect(
+				container.style.getPropertyValue("--inspector-tabs-body-height"),
+			).toBe("0px");
+			// Tabs wrapper is collapsed (tabsOpen=false default) so its height
+			// is fixed at the section-header constant — not driven by the var.
 			const tabsWrapper = screen.getByLabelText("Inspector section Tabs")
 				.parentElement?.parentElement;
 			expect(tabsWrapper).toHaveStyle({
@@ -204,7 +229,6 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const sidebar = screen.getByLabelText("Workspace sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize sidebar",
 		});
@@ -217,15 +241,19 @@ describe("App", () => {
 
 		fireEvent.mouseMove(window, { clientX: 360 });
 
+		// During drag, width is driven via the CSS var (to avoid React renders),
+		// so assert on the documentElement var rather than inline width.
+		// Note: aria-valuenow doesn't update mid-drag (the separator doesn't
+		// re-render) — it syncs on mouseup.
 		await waitFor(() => {
-			expect(sidebar).toHaveStyle({ width: "360px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("360px");
 		});
 
 		fireEvent.mouseUp(window);
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
 		});
 
 		expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("360");
@@ -235,7 +263,6 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const inspector = screen.getByLabelText("Inspector sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize inspector sidebar",
 		});
@@ -249,14 +276,14 @@ describe("App", () => {
 		fireEvent.mouseMove(window, { clientX: 1172 });
 
 		await waitFor(() => {
-			expect(inspector).toHaveStyle({ width: "364px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
+			expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("364px");
 		});
 
 		fireEvent.mouseUp(window);
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
 		});
 
 		expect(window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY)).toBe(
@@ -271,11 +298,10 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		expect(screen.getByLabelText("Workspace sidebar")).toHaveStyle({
-			width: "404px",
-		});
-		expect(screen.getByLabelText("Inspector sidebar")).toHaveStyle({
-			width: "388px",
+		// Width is exposed via the CSS var; the React state sync writes it immediately after mount.
+		await waitFor(() => {
+			expect(getShellWidthVar(SIDEBAR_WIDTH_VAR)).toBe("404px");
+			expect(getShellWidthVar(INSPECTOR_WIDTH_VAR)).toBe("388px");
 		});
 		expect(
 			screen.getByRole("separator", { name: "Resize sidebar" }),
@@ -417,6 +443,11 @@ describe("App", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});

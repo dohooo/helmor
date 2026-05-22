@@ -69,7 +69,7 @@ export const FileTree = ({
 		>
 			<div
 				className={cn(
-					"rounded-lg border bg-background font-mono text-sm",
+					"rounded-lg border bg-background font-mono text-body",
 					className,
 				)}
 				role="tree"

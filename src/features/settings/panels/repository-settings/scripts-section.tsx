@@ -148,10 +148,10 @@ export function ScriptsSection({
 
 	return (
 		<div className="py-5">
-			<div className="text-[13px] font-medium leading-snug text-foreground">
+			<div className="text-ui font-medium leading-snug text-foreground">
 				Scripts
 			</div>
-			<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+			<div className="mt-1 text-small leading-snug text-muted-foreground">
 				Commands that run when workspaces are set up, run, or archived.
 			</div>
 
@@ -166,7 +166,7 @@ export function ScriptsSection({
 					onChange={handleSetupChange}
 					headerRight={
 						<div className="flex items-center gap-1.5">
-							<span className="text-[11px] font-medium text-muted-foreground">
+							<span className="text-mini font-medium text-muted-foreground">
 								Auto-run
 							</span>
 							<TooltipProvider>
@@ -203,7 +203,7 @@ export function ScriptsSection({
 					onChange={handleRunChange}
 					headerRight={
 						<div className="flex items-center gap-1.5">
-							<span className="text-[11px] font-medium text-muted-foreground">
+							<span className="text-mini font-medium text-muted-foreground">
 								Exclusive
 							</span>
 							<TooltipProvider>
@@ -265,7 +265,7 @@ function ScriptField({
 }) {
 	const textarea = (
 		<Textarea
-			className="mt-2 min-h-[72px] resize-y bg-app-base/30 font-mono text-[12px]"
+			className="mt-2 min-h-[72px] resize-y bg-app-base/30 font-mono text-small"
 			placeholder={placeholder}
 			value={value}
 			onChange={onChange}
@@ -278,10 +278,10 @@ function ScriptField({
 		<div>
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0">
-					<div className="text-[12px] font-medium text-app-foreground">
+					<div className="text-small font-medium text-app-foreground">
 						{label}
 					</div>
-					<div className="mt-0.5 text-[11px] text-muted-foreground">
+					<div className="mt-0.5 text-mini text-muted-foreground">
 						{description}
 					</div>
 				</div>

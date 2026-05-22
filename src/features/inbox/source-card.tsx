@@ -49,12 +49,12 @@ export const SourceCard = memo(function SourceCard({
 			)}
 		>
 			<div className="min-w-0 flex-1">
-				<div className="line-clamp-2 text-[13px] font-medium leading-[18px] text-foreground">
+				<div className="line-clamp-2 text-ui font-medium leading-[18px] text-foreground">
 					{card.title}
 				</div>
 			</div>
 
-			<div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
+			<div className="flex min-w-0 items-center justify-between gap-2 text-mini text-muted-foreground">
 				<div className="flex min-w-0 items-center gap-1.5">
 					<SourceIcon
 						source={card.source}

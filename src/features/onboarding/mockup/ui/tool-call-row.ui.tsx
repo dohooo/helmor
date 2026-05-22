@@ -23,14 +23,14 @@ export function ToolCallRowUI({
 	return (
 		<div
 			className={cn(
-				"my-1 flex w-fit max-w-full items-center gap-2 rounded-md bg-accent/35 px-2.5 py-1.5 text-[12px] text-muted-foreground",
+				"my-1 flex w-fit max-w-full items-center gap-2 rounded-md bg-accent/35 px-2.5 py-1.5 text-small text-muted-foreground",
 				className,
 			)}
 		>
 			{icon}
 			<span className="font-medium text-foreground">{name}</span>
 			{detail ? (
-				<span className="truncate font-mono text-[11px]">{detail}</span>
+				<span className="truncate font-mono text-mini">{detail}</span>
 			) : null}
 		</div>
 	);

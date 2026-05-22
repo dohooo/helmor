@@ -591,7 +591,11 @@ export class CodexAppServerManager implements SessionManager {
 		if (model) turnStartParams.model = model;
 		if (effortLevel) turnStartParams.effort = effortLevel;
 		if (effectiveFastMode) turnStartParams.serviceTier = "fast";
-		const codexMode = toCodexCollaborationMode(permissionMode, model);
+		const codexMode = toCodexCollaborationMode(
+			permissionMode,
+			model,
+			effortLevel,
+		);
 		if (codexMode) turnStartParams.collaborationMode = codexMode;
 		const codexApproval = toCodexApprovalPolicy(permissionMode);
 		if (codexApproval) turnStartParams.approvalPolicy = codexApproval;
@@ -1924,12 +1928,14 @@ function parseSkillsResponse(
 function toCodexCollaborationMode(
 	permissionMode: string | undefined,
 	model: string | undefined,
+	effortLevel: string | undefined,
 ): Record<string, unknown> | undefined {
 	if (permissionMode === "plan") {
 		return {
 			mode: "plan",
 			settings: {
 				...(model ? { model } : {}),
+				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
 			},
 		};
 	}
@@ -1943,6 +1949,7 @@ function toCodexCollaborationMode(
 			mode: "default",
 			settings: {
 				...(model ? { model } : {}),
+				...(effortLevel ? { reasoning_effort: effortLevel } : {}),
 			},
 		};
 	}
