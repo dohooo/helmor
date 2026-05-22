@@ -326,15 +326,6 @@ export async function createDiffEditor(options: {
 	};
 }
 
-/** Cache file contents so future switchFile calls resolve instantly (no IPC). */
-export function preWarmFileContents(
-	files: ReadonlyArray<{ absolutePath: string; content: string }>,
-) {
-	for (const file of files) {
-		fileContentCache.set(file.absolutePath, file.content);
-	}
-}
-
 export function syncVirtualFile(path: string, content: string) {
 	fileContentCache.set(path, content);
 }

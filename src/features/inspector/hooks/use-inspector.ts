@@ -356,7 +356,7 @@ export function useWorkspaceInspectorSidebar({
 		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
 		enabled: changesQueryEnabled,
 	});
-	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
+	const changes: InspectorFileItem[] = changesQuery.data ?? [];
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);

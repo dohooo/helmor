@@ -2,6 +2,4 @@
 "helmor": patch
 ---
 
-Make the Git Changes panel faster and more stable on large workspaces:
-- Lazy-load diff contents and virtualize the changes list to reduce CPU work.
-- Keep row animations from replaying during virtualized scrolling and preserve filename-specific icons.
+Stop eagerly prefetching every changed file's contents when opening the Git Changes panel — Monaco now reads files on demand instead, cutting CPU and IPC traffic on large workspaces.

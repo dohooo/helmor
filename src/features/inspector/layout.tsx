@@ -51,10 +51,6 @@ const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
 export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
 export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
-export const INSPECTOR_SECTION_HEIGHT_TRANSITION_CLASS =
-	"transition-[height] duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)]";
-export const INSPECTOR_SECTION_TOGGLE_ICON_CLASS =
-	"size-3.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]";
 
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
@@ -195,7 +191,6 @@ export function getGitSectionHeaderHighlightClass(
 type InspectorTabsSectionProps = {
 	wrapperRef: React.RefObject<HTMLDivElement | null>;
 	open: boolean;
-	resizing?: boolean;
 	onToggle: () => void;
 	activeTab: string;
 	onTabChange: (tab: string) => void;
@@ -235,7 +230,6 @@ type InspectorTabsSectionProps = {
 export function InspectorTabsSection({
 	wrapperRef,
 	open,
-	resizing = false,
 	onToggle,
 	activeTab,
 	onTabChange,
@@ -299,9 +293,6 @@ export function InspectorTabsSection({
 			className={cn(
 				"relative flex min-h-0 shrink-0 flex-col",
 				!isZoomPresented && "overflow-hidden",
-				resizing
-					? "transition-none"
-					: INSPECTOR_SECTION_HEIGHT_TRANSITION_CLASS,
 			)}
 			style={{
 				// Height via CSS var, written by useWorkspaceInspectorSidebar's
@@ -623,11 +614,12 @@ export function InspectorTabsSection({
 									className="shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 								>
 									<ChevronDown
-										className={cn(
-											INSPECTOR_SECTION_TOGGLE_ICON_CLASS,
-											!open && "-rotate-90",
-										)}
+										className="size-3.5"
 										strokeWidth={1.9}
+										style={{
+											transform: open ? "rotate(0deg)" : "rotate(-90deg)",
+											transition: "none",
+										}}
 									/>
 								</Button>
 							</div>

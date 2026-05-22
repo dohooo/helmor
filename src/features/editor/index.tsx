@@ -993,7 +993,7 @@ export function WorkspaceEditorSurface({
 						.fetchQuery(workspaceChangesQueryOptions(workspaceRootPath))
 						.catch(() => null)
 				: null;
-			const changedFile = changes?.items.find(
+			const changedFile = changes?.find(
 				(item) =>
 					normalizePath(item.absolutePath) === normalizePath(file.absolutePath),
 			);

@@ -111,10 +111,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 
-		apiMocks.listWorkspaceChanges.mockResolvedValue({
-			items: [],
-			prefetched: [],
-		});
+		apiMocks.listWorkspaceChanges.mockResolvedValue([]);
 		apiMocks.getWorkspaceForgeCheckInsertText.mockResolvedValue(
 			"Content Log:\ncheck output",
 		);

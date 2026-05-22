@@ -410,7 +410,6 @@ export function WorkspaceInspectorSidebar({
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
 				bodyHeight={changesHeight}
-				resizing={isResizing}
 			/>
 			{actionsOpen ? (
 				<HorizontalResizeHandle
@@ -434,7 +433,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				resizing={isResizing}
 			/>
 			{tabsOpen ? (
 				<HorizontalResizeHandle
@@ -458,7 +456,6 @@ export function WorkspaceInspectorSidebar({
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
 				bodyHeight={tabsBodyHeight}
-				resizing={isResizing}
 			>
 				<SetupTab
 					repoId={repoId ?? null}

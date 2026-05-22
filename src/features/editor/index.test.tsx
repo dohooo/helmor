@@ -155,10 +155,7 @@ describe("WorkspaceEditorSurface", () => {
 	beforeEach(() => {
 		runtimeMocks.reset();
 		apiMocks.listWorkspaceChanges.mockReset();
-		apiMocks.listWorkspaceChanges.mockResolvedValue({
-			items: [],
-			prefetched: [],
-		});
+		apiMocks.listWorkspaceChanges.mockResolvedValue([]);
 		apiMocks.listWorkspaceFiles.mockReset();
 		apiMocks.readEditorFile.mockReset();
 		apiMocks.readFileAtRef.mockReset();
@@ -406,23 +403,20 @@ describe("WorkspaceEditorSurface", () => {
 				committedDeletions: 0,
 			},
 		]);
-		apiMocks.listWorkspaceChanges.mockResolvedValue({
-			items: [
-				{
-					path: "src/utils.ts",
-					absolutePath: "/tmp/helmor-workspace/src/utils.ts",
-					name: "utils.ts",
-					status: "M",
-					stagedInsertions: 0,
-					stagedDeletions: 0,
-					unstagedInsertions: 3,
-					unstagedDeletions: 1,
-					committedInsertions: 0,
-					committedDeletions: 0,
-				},
-			],
-			prefetched: [],
-		});
+		apiMocks.listWorkspaceChanges.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 3,
+				unstagedDeletions: 1,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
 
 		render(
 			<TooltipProvider delayDuration={0}>
@@ -712,23 +706,20 @@ describe("WorkspaceEditorSurface", () => {
 				committedDeletions: 0,
 			},
 		]);
-		apiMocks.listWorkspaceChanges.mockResolvedValue({
-			items: [
-				{
-					path: "src/utils.ts",
-					absolutePath: "/tmp/helmor-workspace/src/utils.ts",
-					name: "utils.ts",
-					status: "M",
-					stagedInsertions: 0,
-					stagedDeletions: 0,
-					unstagedInsertions: 3,
-					unstagedDeletions: 1,
-					committedInsertions: 0,
-					committedDeletions: 0,
-				},
-			],
-			prefetched: [],
-		});
+		apiMocks.listWorkspaceChanges.mockResolvedValue([
+			{
+				path: "src/utils.ts",
+				absolutePath: "/tmp/helmor-workspace/src/utils.ts",
+				name: "utils.ts",
+				status: "M",
+				stagedInsertions: 0,
+				stagedDeletions: 0,
+				unstagedInsertions: 3,
+				unstagedDeletions: 1,
+				committedInsertions: 0,
+				committedDeletions: 0,
+			},
+		]);
 		apiMocks.readFileAtRef.mockResolvedValue("export const value = 0;\n");
 		apiMocks.readEditorFile.mockResolvedValue({
 			path: "/tmp/helmor-workspace/src/utils.ts",
