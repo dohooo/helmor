@@ -476,6 +476,7 @@ export function InspectorTabsSection({
 										activeRunActionId={activeRunActionId}
 										onSelectRunAction={onSelectRunAction}
 										onCreateRunAction={onCreateRunAction}
+										onOpenChange={handleTabContextMenuOpenChange}
 									/>
 									<span
 										aria-hidden="true"
@@ -732,6 +733,7 @@ function RunActionsDropdown({
 	activeRunActionId,
 	onSelectRunAction,
 	onCreateRunAction,
+	onOpenChange,
 }: {
 	activeTab: string;
 	workspaceId: string | null;
@@ -739,6 +741,11 @@ function RunActionsDropdown({
 	activeRunActionId: string | null;
 	onSelectRunAction: (id: string) => void;
 	onCreateRunAction: () => void;
+	// Bridges Radix's open-state to the hover-zoom controller. Without this,
+	// the portaled menu fires `mouseleave` on the tabs container the moment
+	// the cursor enters a menu item, collapsing the panel mid-open. Same
+	// fix as the tab right-click ContextMenu above.
+	onOpenChange?: (open: boolean) => void;
 }) {
 	// Resolve which radio value should be checked. Falls back to the first
 	// action when the persisted id is missing or stale (recently deleted).
@@ -747,7 +754,7 @@ function RunActionsDropdown({
 		runActions[0]?.id ??
 		"";
 	return (
-		<DropdownMenu>
+		<DropdownMenu onOpenChange={onOpenChange}>
 			<DropdownMenuTrigger asChild>
 				<button
 					type="button"
@@ -797,15 +804,15 @@ function RunActionsDropdown({
 						<DropdownMenuSeparator />
 					</>
 				)}
-				{/* Mirror the radio items' shape: label on the left, glyph
-				    pinned absolute-right so the icon column lines up with
-				    the `✓` checkmark above (same `pr-8 + right-2` slot). */}
-				<DropdownMenuItem onSelect={onCreateRunAction} className="pr-8">
+				{/* Leading-icon shape: glyph on the left, label after. Sits in
+				    the normal flex flow (gap-1.5 from the shared item class)
+				    rather than mirroring the radio rows' right-pinned `✓`
+				    column — this is an action row, not a selection row, so
+				    the icon-then-label reading order signals "do" instead of
+				    "current". */}
+				<DropdownMenuItem onSelect={onCreateRunAction} className="gap-2">
+					<Plus className="size-3" strokeWidth={1.8} />
 					<span>Create</span>
-					<Plus
-						className="pointer-events-none absolute right-2 size-3.5"
-						strokeWidth={1.8}
-					/>
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
