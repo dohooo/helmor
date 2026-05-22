@@ -48,9 +48,7 @@ import { resolveRepoPreferencePrompt } from "@/lib/repo-preferences-prompts";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import {
-	INSPECTOR_ACTIONS_BODY_VAR,
 	INSPECTOR_SECTION_HEADER_CLASS,
-	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_SECTION_TITLE_CLASS,
 } from "../layout";
 
@@ -109,7 +107,6 @@ type ActionsSectionProps = {
 	sectionRef?: React.RefObject<HTMLElement | null>;
 	open: boolean;
 	onToggle: () => void;
-	bodyHeight: number;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction?: () => Promise<void>;
 	currentSessionId?: string | null;
@@ -161,7 +158,6 @@ export function ActionsSection({
 	sectionRef,
 	open,
 	onToggle,
-	bodyHeight,
 	onCommitAction,
 	onReviewAction,
 	currentSessionId,
@@ -328,14 +324,7 @@ export function ActionsSection({
 			className={cn(
 				"flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar transition-colors",
 			)}
-			style={{
-				// Height via CSS var, written by mousemove during drag. Collapsed
-				// state pins to the header height (skips calc); fallback covers
-				// the mount frame before the layout effect writes the var.
-				height: open
-					? `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px))`
-					: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`,
-			}}
+			// Height written via `sectionRef` by `useWorkspaceInspectorSidebar`.
 		>
 			<div
 				className={cn(
@@ -365,13 +354,10 @@ export function ActionsSection({
 			</div>
 
 			{open && (
-				<div className="min-h-0">
+				<div className="min-h-0 flex-1">
 					<ScrollArea
 						aria-label="Actions panel body"
-						className="min-h-0 bg-muted/18 text-mini"
-						style={{
-							height: `var(${INSPECTOR_ACTIONS_BODY_VAR}, ${bodyHeight}px)`,
-						}}
+						className="h-full min-h-0 bg-muted/18 text-mini"
 					>
 						{showHelpersGroup && (
 							<>

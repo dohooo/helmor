@@ -364,16 +364,6 @@ function AppShell({
 		[],
 	);
 	const {
-		handleResizeKeyDown,
-		handleResizeStart,
-		inspectorWidth,
-		isInspectorResizing,
-		isSidebarResizing,
-		sidebarCollapsed,
-		sidebarWidth,
-		setSidebarCollapsed,
-	} = useShellPanels();
-	const {
 		settings: appSettings,
 		isLoaded: areSettingsLoaded,
 		updateSettings,
@@ -489,6 +479,16 @@ function AppShell({
 	const startLinkedDirectoriesController =
 		startSurface.startLinkedDirectoriesController;
 	const inspectorCollapsed = contextPanel.inspectorCollapsed;
+	const {
+		handleResizeKeyDown,
+		handleResizeStart,
+		inspectorWidth,
+		isInspectorResizing,
+		isSidebarResizing,
+		sidebarCollapsed,
+		sidebarWidth,
+		setSidebarCollapsed,
+	} = useShellPanels();
 	const rightSidebarMode = contextPanel.rightSidebarMode;
 	const workspacePreviewCard = contextPanel.workspacePreviewCard;
 	const workspacePreviewActive = contextPanel.workspacePreviewActive;
@@ -670,20 +670,19 @@ function AppShell({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	const handleOpenSettings = useCallback(
-		(initialSection?: SettingsSection): void => {
-			onOpenSettings(
-				selectedWorkspaceId,
-				selectedWorkspaceDetailQuery.data?.repoId ?? null,
-				initialSection,
-			);
-		},
-		[
-			onOpenSettings,
-			selectedWorkspaceDetailQuery.data?.repoId,
+	// Zero-arg: prop is bound directly to button onClick, so an arg would
+	// receive the click event. Use a separate helper if section-aware open
+	// is ever needed.
+	const handleOpenSettings = useCallback((): void => {
+		onOpenSettings(
 			selectedWorkspaceId,
-		],
-	);
+			selectedWorkspaceDetailQuery.data?.repoId ?? null,
+		);
+	}, [
+		onOpenSettings,
+		selectedWorkspaceDetailQuery.data?.repoId,
+		selectedWorkspaceId,
+	]);
 	const handleOpenAnnouncementSettings = useCallback(
 		(initialSection?: SettingsSection): void => {
 			onOpenSettings(null, null, initialSection);
@@ -722,6 +721,23 @@ function AppShell({
 		exitEditorMode: () => selectionActions.setViewMode("conversation"),
 	});
 	const editorSession = editorSessionState.editorSession;
+	// Stable identity so downstream `React.memo` boundaries hold.
+	const activeEditorTarget = useMemo(
+		() =>
+			editorSession
+				? {
+						path: editorSession.path,
+						originalRef: editorSession.originalRef,
+						modifiedRef: editorSession.modifiedRef,
+					}
+				: null,
+		[
+			editorSession?.path,
+			editorSession?.originalRef,
+			editorSession?.modifiedRef,
+			editorSession,
+		],
+	);
 	const handleOpenEditorFile = editorSessionActions.openFile;
 	const handleOpenFileReference = editorSessionActions.openFileReference;
 	const handleEditorSessionChange = editorSessionActions.changeSession;
@@ -1539,7 +1555,7 @@ function AppShell({
 											collapsed={sidebarCollapsed}
 											resizing={isSidebarResizing}
 											width={sidebarWidth}
-											onMouseDown={handleResizeStart("sidebar")}
+											onPointerDown={handleResizeStart("sidebar")}
 											onKeyDown={handleResizeKeyDown("sidebar")}
 										/>
 									</>
@@ -1784,7 +1800,7 @@ function AppShell({
 												collapsed={inspectorCollapsed}
 												resizing={isInspectorResizing}
 												width={inspectorWidth}
-												onMouseDown={handleResizeStart("inspector")}
+												onPointerDown={handleResizeStart("inspector")}
 												onKeyDown={handleResizeKeyDown("inspector")}
 											/>
 											<ShellInspectorPane
@@ -1826,15 +1842,7 @@ function AppShell({
 													selectedWorkspaceDetailQuery.data ?? null
 												}
 												displayedSessionId={displayedSessionId}
-												activeEditor={
-													editorSession
-														? {
-																path: editorSession.path,
-																originalRef: editorSession.originalRef,
-																modifiedRef: editorSession.modifiedRef,
-															}
-														: null
-												}
+												activeEditor={activeEditorTarget}
 												preferredEditor={preferredEditor}
 												onOpenEditorFile={handleOpenEditorFile}
 												onCommitAction={handleCommitAction}

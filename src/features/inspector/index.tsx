@@ -150,12 +150,11 @@ export function WorkspaceInspectorSidebar({
 }: WorkspaceInspectorSidebarProps) {
 	const queryClient = useQueryClient();
 	const {
-		actionsHeight,
 		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
-		changesHeight,
+		changesRef,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
@@ -167,7 +166,6 @@ export function WorkspaceInspectorSidebar({
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
-		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
@@ -503,6 +501,7 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<ChangesSection
+				sectionRef={changesRef}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceBranch={workspaceBranch ?? null}
@@ -519,7 +518,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
-				bodyHeight={changesHeight}
 			/>
 			{actionsOpen ? (
 				<HorizontalResizeHandle
@@ -535,7 +533,6 @@ export function WorkspaceInspectorSidebar({
 				sectionRef={actionsRef}
 				open={actionsOpen}
 				onToggle={handleToggleActions}
-				bodyHeight={actionsHeight}
 				onCommitAction={onCommitAction}
 				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
@@ -569,7 +566,6 @@ export function WorkspaceInspectorSidebar({
 				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
-				bodyHeight={tabsBodyHeight}
 			>
 				<SetupTab
 					repoId={repoId ?? null}

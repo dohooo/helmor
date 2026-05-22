@@ -19,7 +19,7 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
@@ -65,10 +65,6 @@ import {
 import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import {
-	INSPECTOR_CHANGES_BODY_VAR,
-	INSPECTOR_SECTION_HEADER_HEIGHT,
-} from "../layout";
 import { useChangesState } from "./changes/use-changes-state";
 import { useGitMutations } from "./changes/use-git-mutations";
 import { GitSectionHeader } from "./git-section-header";
@@ -105,11 +101,13 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
-	/** Height of the changes body (excluding the section header). */
-	bodyHeight: number;
+	/** Ref handed to the inspector's resize hook so it can write `style.height`
+	 * directly during drag, bypassing React and CSS custom-property
+	 * invalidation. */
+	sectionRef?: React.RefObject<HTMLElement | null>;
 };
 
-export function ChangesSection({
+function ChangesSectionImpl({
 	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
@@ -126,7 +124,7 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
-	bodyHeight,
+	sectionRef,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
 	const {
@@ -277,17 +275,12 @@ export function ChangesSection({
 
 	return (
 		<section
+			ref={sectionRef}
 			aria-label="Inspector section Git"
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			style={{
-				// Height var written by mousemove directly; fallback covers the first
-				// mount frame before the layout effect runs.
-				height: `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_CHANGES_BODY_VAR}, ${bodyHeight}px))`,
-				// Full containment isolates the file-list reflow (rows + Radix triggers
-				// + truncate spans) from the rest of the page during inspector drag.
-				// Section already has overflow-hidden, so `paint` doesn't change clipping.
-				contain: "layout style paint",
-			}}
+			// Height written via `sectionRef` by `useWorkspaceInspectorSidebar`
+			// — kept out of JSX so incidental re-renders can't clobber it.
+			style={{ contain: "layout style paint" }}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
@@ -398,6 +391,10 @@ export function ChangesSection({
 		</section>
 	);
 }
+
+// memo so root state changes that don't touch Changes props (e.g. opening
+// Settings) skip this subtree entirely.
+export const ChangesSection = memo(ChangesSectionImpl);
 
 type StageActionKind = "stage" | "unstage";
 

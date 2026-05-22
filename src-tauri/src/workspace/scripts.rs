@@ -991,8 +991,11 @@ mod tests {
         // kill_all held the map lock past the signal, the unregister
         // would have blocked and this join would hang.
         let _ = runner.join().unwrap();
+        // Real path is sub-second (PROCESS_TERM + PROCESS_KILL = 700ms
+        // upper bound). 5s headroom for CI load; a real regression
+        // (deadlock / missed signal) hangs indefinitely and still trips.
         assert!(
-            start.elapsed() < Duration::from_secs(3),
+            start.elapsed() < Duration::from_secs(5),
             "kill_all + reap took too long: {:?}",
             start.elapsed()
         );
@@ -1109,8 +1112,9 @@ mod tests {
 
         assert!(mgr.kill(&key), "kill should find the handle");
         let result = handle.join().unwrap();
+        // 5s headroom for CI load; real path is sub-second.
         assert!(
-            start.elapsed() < Duration::from_secs(3),
+            start.elapsed() < Duration::from_secs(5),
             "Stop took too long: {:?}",
             start.elapsed()
         );

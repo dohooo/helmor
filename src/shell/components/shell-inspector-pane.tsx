@@ -1,6 +1,7 @@
 // Right inspector pane — toggles between the workspace inspector tabs and
 // the context-cards sidebar (which serves both the start and the workspace
 // surface). Receives every piece of state it needs as props from AppShell.
+import { useLayoutEffect, useRef } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -108,8 +109,21 @@ export function ShellInspectorPane({
 		return `${remote}/${target}`;
 	})();
 
+	// Inline width written via ref so each remount re-applies it.
+	const asideRef = useRef<HTMLElement>(null);
+	const innerRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (asideRef.current) {
+			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
+		}
+		if (innerRef.current) {
+			innerRef.current.style.width = `${width}px`;
+		}
+	}, [width, collapsed]);
+
 	return (
 		<aside
+			ref={asideRef}
 			aria-hidden={collapsed}
 			aria-label="Inspector sidebar"
 			data-shell-pane="inspector"
@@ -120,24 +134,18 @@ export function ShellInspectorPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			// Width driven by a CSS var written on THIS element (not documentElement)
-			// during drag — keeps style invalidation inside the pane subtree.
-			// `contain: layout style` further isolates the inspector's inner layout
-			// (~4000 elements) from the outer shell. Skip `paint` so the tabs
-			// hover-zoom can still overflow (`has-[[data-tabs-zoomed=true]]:overflow-visible`).
-			style={{
-				contain: "layout style",
-				width: collapsed ? 0 : `var(--shell-inspector-width, ${width}px)`,
-			}}
+			// `paint` omitted so the tabs hover-zoom can overflow.
+			style={{ contain: "layout style" }}
 		>
 			<div
+				ref={innerRef}
+				data-shell-pane-inner="inspector"
 				className={cn(
 					"h-full shrink-0 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 					collapsed
 						? "translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `var(--shell-inspector-width, ${width}px)` }}
 			>
 				{rightSidebarMode === "context" ? (
 					<WorkspaceStartContextSidebar

@@ -55,13 +55,6 @@ export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
 
-// CSS variables written on the inspector container by `useWorkspaceInspectorSidebar`.
-// Vars written directly by mousemove during drag — same strategy as
-// shell/use-panels.ts horizontal drag, skipping React per frame.
-export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
-export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
-export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
-
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
 	"helmor.workspaceInspectorActionsOpen";
@@ -241,7 +234,6 @@ type InspectorTabsSectionProps = {
 	onToggleTerminalHoverZoom: (instanceId: string, disabled: boolean) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
-	bodyHeight: number;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
@@ -269,7 +261,6 @@ export function InspectorTabsSection({
 	onCloseTerminal,
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
-	bodyHeight,
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
@@ -322,15 +313,8 @@ export function InspectorTabsSection({
 				"relative flex min-h-0 shrink-0 flex-col",
 				!isZoomPresented && "overflow-hidden",
 			)}
-			style={{
-				// Height via CSS var, written by useWorkspaceInspectorSidebar's
-				// mousemove during drag — skips React renders. Collapsed state pins
-				// to the header height to keep the parent flex column stable.
-				height: open
-					? `calc(${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px + var(${INSPECTOR_TABS_BODY_VAR}, ${bodyHeight}px))`
-					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-			}}
+			// Height written via `wrapperRef` by `useWorkspaceInspectorSidebar`.
+			style={{ minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px` }}
 		>
 			<div
 				data-tabs-zoomed={isZoomPresented ? "true" : undefined}

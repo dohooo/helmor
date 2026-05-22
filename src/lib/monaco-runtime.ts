@@ -400,9 +400,8 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 	return runtimePromise;
 }
 
-// Sync Monaco theme with `<html>` class changes. Re-defines both themes on
-// every class mutation — light/dark toggle AND preset theme switch both flip
-// CSS variables, so the editor `colors` map must be recomputed.
+// Resync Monaco theme on `<html>` class changes; rAF-coalesced because one
+// user-visible switch flips multiple classes in a row.
 function installThemeObserver(monaco: MonacoModule) {
 	if (
 		typeof document === "undefined" ||
@@ -410,13 +409,18 @@ function installThemeObserver(monaco: MonacoModule) {
 	) {
 		return;
 	}
+	let scheduled = 0;
 	const syncTheme = () => {
+		scheduled = 0;
 		const nextTheme = detectInitialTheme();
 		defineHelmorThemes(monaco);
 		desiredTheme = nextTheme;
 		monaco.editor.setTheme(themeId(nextTheme));
 	};
-	const observer = new MutationObserver(syncTheme);
+	const observer = new MutationObserver(() => {
+		if (scheduled) return;
+		scheduled = requestAnimationFrame(syncTheme);
+	});
 	observer.observe(document.documentElement, {
 		attributes: true,
 		attributeFilter: ["class"],

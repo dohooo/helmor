@@ -441,9 +441,14 @@ function TerminalOutputImpl({
 		};
 		terminalWriteFlushListeners.add(flushSuspendedWrites);
 
-		// Re-resolve CSS variables when app light/dark mode changes.
+		// Resync xterm theme on `<html>` class changes; rAF-coalesced.
+		let themeScheduled = 0;
 		const themeObserver = new MutationObserver(() => {
-			terminal.options.theme = resolveTerminalTheme();
+			if (themeScheduled) return;
+			themeScheduled = requestAnimationFrame(() => {
+				themeScheduled = 0;
+				terminal.options.theme = resolveTerminalTheme();
+			});
 		});
 		themeObserver.observe(document.documentElement, {
 			attributes: true,
@@ -477,6 +482,10 @@ function TerminalOutputImpl({
 			if (fitTimer !== null) {
 				window.clearTimeout(fitTimer);
 				fitTimer = null;
+			}
+			if (themeScheduled) {
+				cancelAnimationFrame(themeScheduled);
+				themeScheduled = 0;
 			}
 			dataSub.dispose();
 			resizeSub.dispose();

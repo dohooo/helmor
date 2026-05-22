@@ -726,7 +726,57 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to rename legacy run actions to 'Default'")?;
     }
 
+    materialize_review_pr_model_defaults(connection)?;
+
     Ok(())
+}
+
+/// Promote NULL review_*/pr_* rows to explicit copies of the current
+/// defaults, so changing the default later doesn't drag them along.
+/// Idempotent via anti-join; gated on `app.default_model_id` being set.
+fn materialize_review_pr_model_defaults(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "settings") {
+        return Ok(());
+    }
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_model_id', value FROM settings
+            WHERE key = 'app.default_model_id' AND value != ''
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_model_id');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_model_id', value FROM settings
+            WHERE key = 'app.default_model_id' AND value != ''
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_model_id');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_effort', value FROM settings
+            WHERE key = 'app.default_effort' AND value != ''
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_effort');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_effort', value FROM settings
+            WHERE key = 'app.default_effort' AND value != ''
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_effort');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_fast_mode', value FROM settings
+            WHERE key = 'app.default_fast_mode'
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_fast_mode');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_fast_mode', value FROM settings
+            WHERE key = 'app.default_fast_mode'
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_fast_mode');
+            "#,
+        )
+        .context("Failed to materialize review/pr model defaults")
 }
 
 /// One-shot init for rows that still carry `display_order = 0` — the column
@@ -1626,5 +1676,129 @@ mod tests {
             stored.as_deref(),
             Some(r#"{"totalTokens":12,"maxTokens":100}"#)
         );
+    }
+
+    fn read_setting(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .ok()
+    }
+
+    fn insert_setting(conn: &Connection, key: &str, value: &str) {
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            [key, value],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn review_pr_defaults_materialized_when_default_model_set() {
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "claude-sonnet-4");
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "false");
+
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_effort").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_effort").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_fast_mode").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_fast_mode").as_deref(),
+            Some("false")
+        );
+
+        // Idempotent — second run is a no-op.
+        run_migrations(&conn).unwrap();
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn review_pr_defaults_skip_when_default_model_absent() {
+        // No default_model_id → no promotion (consumers handle the fallback).
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "true");
+
+        run_migrations(&conn).unwrap();
+
+        assert!(read_setting(&conn, "app.review_model_id").is_none());
+        assert!(read_setting(&conn, "app.pr_model_id").is_none());
+        assert!(read_setting(&conn, "app.review_effort").is_none());
+        assert!(read_setting(&conn, "app.pr_effort").is_none());
+        assert!(read_setting(&conn, "app.review_fast_mode").is_none());
+        assert!(read_setting(&conn, "app.pr_fast_mode").is_none());
+    }
+
+    #[test]
+    fn review_pr_defaults_preserve_existing_user_overrides() {
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "claude-sonnet-4");
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "false");
+        // User already decoupled review_model_id explicitly.
+        insert_setting(&conn, "app.review_model_id", "gpt-5");
+        insert_setting(&conn, "app.review_effort", "low");
+
+        run_migrations(&conn).unwrap();
+
+        // User overrides untouched.
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("gpt-5")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_effort").as_deref(),
+            Some("low")
+        );
+        // Other unset fields still get materialized.
+        assert_eq!(
+            read_setting(&conn, "app.pr_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_effort").as_deref(),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn review_pr_defaults_skip_empty_default_model_id() {
+        // Empty string == null sentinel.
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "");
+        insert_setting(&conn, "app.default_effort", "high");
+
+        run_migrations(&conn).unwrap();
+
+        assert!(read_setting(&conn, "app.review_model_id").is_none());
+        assert!(read_setting(&conn, "app.pr_model_id").is_none());
+        assert!(read_setting(&conn, "app.review_effort").is_none());
     }
 }
