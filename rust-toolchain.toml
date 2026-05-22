@@ -1,0 +1,13 @@
+[toolchain]
+# Pin the Rust toolchain for builds (local + CI + helmor-server
+# release pipeline). Without this, `dtolnay/rust-toolchain@stable`
+# picks whatever stable is current at workflow run time, which
+# means a Rust point release between two release cuts can silently
+# break a build that worked the day before.
+#
+# Bump cadence: pull the latest stable when we start a release cycle,
+# verify all three test suites pass locally, then commit. Avoid mid-
+# cycle bumps unless we hit a compiler bug.
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

@@ -88,13 +88,29 @@ jobs:
           echo "Building helmor-server ${version} for ${{ matrix.target }}"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Reads the channel from `rust-toolchain.toml` at the repo
+        # root so local dev, the test workflow, and this release
+        # pipeline all build against the same compiler — no silent
+        # drift when GitHub's `@stable` advances between release
+        # cuts. (dtolnay/rust-toolchain auto-detects the file when
+        # `toolchain` is unset.)
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master 2026-02
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache cargo registry + target
+        # ~8min cold compile on the linux arm64 cross-leg → ~1min
+        # warm. Significant when re-cutting a release after a fix.
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
       - name: Install cross (Linux arm64 only)
         if: matrix.cross
-        run: cargo install --locked cross
+        # Pinned version: every cross release is its own behaviour bump
+        # (different container images, sometimes different libc).
+        run: cargo install --locked --version 0.2.5 cross
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
@@ -109,6 +125,27 @@ jobs:
         # the runner directly.
         run: cross build --release --bin helmor-server --target ${{ matrix.target }}
 
+      - name: Smoke test binary (native only)
+        # Cross builds can't run on the host (container target arch).
+        # For native targets, run `--version` and confirm the binary
+        # prints the expected `helmor-server <semver>\nprotocol <semver>`
+        # shape `install.rs::probe_remote_version` parses. Catches the
+        # category of regression where `env!("CARGO_PKG_VERSION")` or
+        # the `protocol` macro stops emitting the right text.
+        if: ${{ !matrix.cross }}
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/helmor-server"
+          out=$("${bin}" --version)
+          echo "${out}"
+          # First line: helmor-server <semver>
+          # Second line: protocol <semver>
+          echo "${out}" | head -n1 | grep -E '^helmor-server [0-9]+\.[0-9]+\.[0-9]+' \
+            || { echo "smoke test: first line must be 'helmor-server <semver>'" >&2; exit 1; }
+          echo "${out}" | sed -n '2p' | grep -E '^protocol [0-9]+\.[0-9]+\.[0-9]+' \
+            || { echo "smoke test: second line must be 'protocol <semver>'" >&2; exit 1; }
+
       - name: Stage artifact
         id: stage
         run: |
@@ -119,10 +156,13 @@ jobs:
           mkdir -p "${dist}"
           src="src-tauri/target/${target}/release/helmor-server"
           test -x "${src}" || { echo "missing binary at ${src}"; exit 1; }
-          # Strip symbols to keep the tarball small. macOS uses BSD strip
-          # which doesn't accept --strip-unneeded; the unconditional form
-          # works on both.
-          strip "${src}"
+          # Strip symbols to keep the tarball small. `strip` is purely
+          # a size optimisation — a failure (BSD strip rejecting a
+          # specific binary form, missing `strip` on the runner, etc.)
+          # shouldn't tank the whole release. Warn + continue.
+          if ! strip "${src}" 2>/dev/null; then
+            echo "warning: strip failed on ${src}; shipping un-stripped binary" >&2
+          fi
           tarball="helmor-server-${version}-${target}.tar.gz"
           # Tar from the parent dir so the archive layout is
           # `helmor-server-<version>-<target>/helmor-server` — the
@@ -173,8 +213,17 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
+          # Expect exactly one tarball per matrix entry — anything else
+          # means a build leg silently dropped its artifact.
+          tarball_count=$(ls -1 *.tar.gz 2>/dev/null | wc -l)
+          sum_count=$(ls -1 *.tar.gz.sha256 2>/dev/null | wc -l)
+          if [ "${tarball_count}" -ne 4 ] || [ "${sum_count}" -ne 4 ]; then
+            echo "expected 4 tarballs + 4 sha files; got ${tarball_count} tarballs, ${sum_count} sums" >&2
+            ls -la
+            exit 1
+          fi
           # One canonical SHA256SUMS file the install.rs path downloads
-          # alongside the tarball. Sorted for reproducibility.
+          # alongside the tarball. Sorted by filename for reproducibility.
           rm -f SHA256SUMS
           # Each per-target .sha256 file is `<hash>  <tarball>`. Merge.
           cat *.tar.gz.sha256 | sort > SHA256SUMS
@@ -184,7 +233,11 @@ jobs:
           ls -lah
 
       - name: Create / update GitHub release
-        uses: softprops/action-gh-release@v2
+        # Pinned by commit SHA: this step has `contents: write`, which
+        # is the most powerful permission in this workflow. Floating
+        # tags on third-party actions are a known supply-chain risk for
+        # release pipelines.
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           # The tag is `helmor-server-v<version>`; the release name
           # mirrors it. Body autogenerates from commits between tags.
@@ -193,6 +246,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
