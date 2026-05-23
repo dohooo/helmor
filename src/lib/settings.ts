@@ -31,6 +31,38 @@ export type WorkspaceRightSidebarMode = "inspector" | "context";
 export type SidebarGrouping = "status" | "repo";
 export type SidebarSort = "custom" | "repoName" | "updatedAt" | "createdAt";
 
+/** Sound played alongside each desktop notification. `off` disables it. */
+export type NotificationSound =
+	| "off"
+	| "ding"
+	| "pop"
+	| "chime"
+	| "glass"
+	| "soft"
+	| "positive"
+	| "doorbell"
+	| "scifi"
+	| "bubble"
+	| "confirm"
+	| "elevator"
+	| "blip";
+
+export const VALID_NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
+	"off",
+	"ding",
+	"pop",
+	"chime",
+	"glass",
+	"soft",
+	"positive",
+	"doorbell",
+	"scifi",
+	"bubble",
+	"confirm",
+	"elevator",
+	"blip",
+];
+
 export type ShortcutOverrides = Record<string, string | null>;
 
 export type InboxIssueScope =
@@ -196,6 +228,9 @@ export type AppSettings = {
 	/** Color preset applied when the effective mode is `dark`. */
 	darkTheme: ColorTheme;
 	notifications: boolean;
+	/** Sound effect to play with each desktop notification.
+	 *  `off` keeps notifications silent. */
+	notificationSound: NotificationSound;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
 	lastWorkspaceId: string | null;
@@ -307,6 +342,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lightTheme: "default",
 	darkTheme: "default",
 	notifications: true,
+	notificationSound: "off",
 	terminalHoverExpansion: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
@@ -468,6 +504,7 @@ const SETTINGS_KEY_MAP: Record<
 	chatFontSize: "app.chat_font_size",
 	usePointerCursors: "app.use_pointer_cursors",
 	notifications: "app.notifications",
+	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
@@ -1022,6 +1059,12 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			notificationSound: (() => {
+				const v = raw[SETTINGS_KEY_MAP.notificationSound];
+				return VALID_NOTIFICATION_SOUNDS.includes(v as NotificationSound)
+					? (v as NotificationSound)
+					: DEFAULT_SETTINGS.notificationSound;
+			})(),
 			terminalHoverExpansion:
 				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
