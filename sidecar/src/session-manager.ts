@@ -96,8 +96,19 @@ export interface SlashCommandInfo {
  * happens inside each manager's resolver closure.
  */
 export type UserInputResolution =
-	| { action: "submit"; content: Record<string, unknown> }
-	| { action: "decline"; content?: Record<string, unknown> }
+	| {
+			action: "submit";
+			content: Record<string, unknown>;
+			/** Optional provider-specific meta (e.g. Codex MCP tool-call
+			 *  approval `{ persist: "session" | "always" }`). Round-trips
+			 *  back into the SDK response unchanged. */
+			meta?: Record<string, unknown>;
+	  }
+	| {
+			action: "decline";
+			content?: Record<string, unknown>;
+			meta?: Record<string, unknown>;
+	  }
 	| { action: "cancel" };
 
 /** Mirrors `ModelParameterDefinition` from @cursor/sdk. Single source of

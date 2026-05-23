@@ -15,12 +15,20 @@ const serverState = {
 	onNotification: null as
 		| null
 		| ((notification: { method: string; params?: unknown }) => void),
+	onRequest: null as
+		| null
+		| ((request: {
+				id: string | number;
+				method: string;
+				params?: unknown;
+		  }) => void),
 	onExit: null as null | ((code: number | null, signal: string | null) => void),
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
 	exitAfterTurnStarted: false,
 	instances: [] as MockCodexAppServer[],
+	responses: [] as Array<{ id: string | number; result: unknown }>,
 };
 const gitAccessState = {
 	directories: [] as string[],
@@ -115,14 +123,21 @@ class MockCodexAppServer {
 			method: string;
 			params?: unknown;
 		}) => void,
-		_onRequest: unknown,
+		onRequest: (request: {
+			id: string | number;
+			method: string;
+			params?: unknown;
+		}) => void,
 	): void {
 		serverState.onNotification = onNotification;
+		serverState.onRequest = onRequest;
 	}
 
 	setActiveRequestId(_id: string): void {}
 
-	sendResponse(_requestId: string | number, _result: unknown): void {}
+	sendResponse(requestId: string | number, result: unknown): void {
+		serverState.responses.push({ id: requestId, result });
+	}
 	kill(): void {
 		this.killed = true;
 	}
@@ -154,10 +169,12 @@ describe("CodexAppServerManager", () => {
 	beforeEach(() => {
 		serverState.requests = [];
 		serverState.onNotification = null;
+		serverState.onRequest = null;
 		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
+		serverState.responses = [];
 		gitAccessState.directories = [];
 		codexConfigState.result = {
 			kind: "alreadyEnabled",
@@ -726,6 +743,146 @@ describe("CodexAppServerManager", () => {
 		);
 		expect(events.find((e) => e.type === "aborted")).toBeUndefined();
 	});
+
+	test("forwards Codex MCP tool-call approval _meta to the frontend and round-trips persist back to Codex", async () => {
+		// Repro for https://github.com/dohooo/helmor/issues/639: the
+		// `mcpServer/elicitation/request` with `_meta.codex_approval_kind:
+		// "mcp_tool_call"` used to be forwarded with the meta stripped,
+		// which left the frontend rendering an "unsupported" panel with
+		// no Allow button. The sidecar now keeps the meta on the form
+		// payload and forwards the user's persist choice back to Codex.
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			// Real Codex parks the turn while it waits for the elicitation
+			// response, so the response must reach the manager BEFORE
+			// turn/completed (turn/completed clears pending inputs). We
+			// reproduce that here: fire elicit → resolve → let
+			// turn/completed run.
+			serverState.onRequest?.({
+				id: "rpc-elicit-1",
+				method: "mcpServer/elicitation/request",
+				params: {
+					threadId: "thread-1",
+					turnId: "turn-1",
+					serverName: "wave-mcp",
+					mode: "form",
+					message: "Allow tool call `say_hello`?",
+					requestedSchema: { type: "object", properties: {} },
+					_meta: {
+						codex_approval_kind: "mcp_tool_call",
+						persist: ["session", "always"],
+					},
+				},
+			});
+
+			const userInputEvent = events.find(
+				(e) => e.type === "userInputRequest",
+			) as Record<string, unknown> | undefined;
+			expect(userInputEvent).toBeDefined();
+			expect(userInputEvent?.source).toBe("wave-mcp");
+			const payload = userInputEvent?.payload as Record<string, unknown>;
+			expect(payload.kind).toBe("form");
+			expect(payload.meta).toEqual({
+				codex_approval_kind: "mcp_tool_call",
+				persist: ["session", "always"],
+			});
+
+			const userInputId = userInputEvent?.userInputId as string;
+			// User clicks "Allow for session" → submit + meta.persist=session.
+			const claimed = manager.resolveUserInput(userInputId, {
+				action: "submit",
+				content: {},
+				meta: { persist: "session" },
+			});
+			expect(claimed).toBe(true);
+		};
+
+		await manager.sendMessage(
+			"REQ-mcp-approval",
+			{
+				sessionId: "session-mcp-approval",
+				prompt: "use the wave mcp",
+				model: "gpt-5.5",
+				cwd: "/tmp",
+				resume: undefined,
+				// IMPORTANT: NOT bypassPermissions — otherwise the sidecar
+				// auto-accepts and never surfaces the prompt.
+				permissionMode: undefined,
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		// Sidecar responds to Codex with the MCP elicitation result shape,
+		// including _meta so Codex can persist the choice.
+		const response = serverState.responses.find((r) => r.id === "rpc-elicit-1");
+		expect(response?.result).toEqual({
+			action: "accept",
+			content: {},
+			_meta: { persist: "session" },
+		});
+	});
+
+	test("plain Allow on tool-call approval sends accept without _meta", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		serverState.beforeTurnCompleted = () => {
+			serverState.onRequest?.({
+				id: "rpc-elicit-2",
+				method: "mcpServer/elicitation/request",
+				params: {
+					threadId: "thread-1",
+					turnId: "turn-1",
+					serverName: "wave-mcp",
+					mode: "form",
+					message: "Allow tool call `say_hello`?",
+					requestedSchema: { type: "object", properties: {} },
+					_meta: { codex_approval_kind: "mcp_tool_call" },
+				},
+			});
+
+			const userInputEvent = events.find((e) => e.type === "userInputRequest");
+			const userInputId = userInputEvent?.userInputId as string;
+			manager.resolveUserInput(userInputId, {
+				action: "submit",
+				content: {},
+			});
+		};
+
+		await manager.sendMessage(
+			"REQ-mcp-approval-plain",
+			{
+				sessionId: "session-mcp-approval-plain",
+				prompt: "use the wave mcp",
+				model: "gpt-5.5",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "high",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		const response = serverState.responses.find((r) => r.id === "rpc-elicit-2");
+		expect(response?.result).toEqual({
+			action: "accept",
+			content: {},
+			_meta: null,
+		});
+	});
 });
 
 describe("parseGoalCommand", () => {
@@ -792,10 +949,12 @@ describe("CodexAppServerManager goal pre-flight", () => {
 	beforeEach(() => {
 		serverState.requests = [];
 		serverState.onNotification = null;
+		serverState.onRequest = null;
 		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
+		serverState.responses = [];
 		gitAccessState.directories = [];
 		codexConfigState.result = {
 			kind: "alreadyEnabled",

@@ -125,6 +125,11 @@ export type UserInputPayload =
 	| {
 			readonly kind: "form";
 			readonly schema: Record<string, unknown>;
+			/** Provider-specific hints attached to the form (e.g. Codex's
+			 *  `_meta.codex_approval_kind` flagging an MCP tool-call approval
+			 *  + advertised `persist` options). Round-trips back to the
+			 *  provider via the matching `respondToUserInput` `meta` field. */
+			readonly meta?: Record<string, unknown>;
 	  }
 	| {
 			readonly kind: "url";

@@ -487,11 +487,20 @@ export class CodexAppServerManager implements SessionManager {
 					: resolution.action === "decline"
 						? "decline"
 						: "cancel";
+			// Forward `_meta` so the user's persist choice (session/always)
+			// reaches Codex's MCP tool-call approval flow. The TUI wires the
+			// same `meta` field; see `mcp_tool_call.rs::parse_mcp_tool_approval_decision`.
+			const meta =
+				(resolution.action === "submit" || resolution.action === "decline") &&
+				resolution.meta &&
+				Object.keys(resolution.meta).length > 0
+					? resolution.meta
+					: null;
 			ctx.server.sendResponse(pending.jsonRpcId, {
 				action,
 				content:
 					resolution.action === "submit" ? (resolution.content ?? null) : null,
-				_meta: null,
+				_meta: meta,
 			});
 		} else {
 			const answers =
@@ -917,6 +926,17 @@ export class CodexAppServerManager implements SessionManager {
 							? p.message
 							: "Server requested input.";
 
+					// Codex tags MCP tool-call approvals via `_meta.codex_approval_kind`,
+					// and advertises persist options on `_meta.persist`. We forward
+					// the whole `_meta` object opaquely so the frontend can render
+					// the matching Allow / Allow-for-session / Always-allow UI and
+					// round-trip the chosen persist value back through `respondToUserInput`.
+					// See https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md#mcp-server-elicitations
+					const elicitationMeta =
+						p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
+							? (p._meta as Record<string, unknown>)
+							: undefined;
+
 					this.pendingUserInputs.set(userInputId, {
 						kind: "mcp-elicitation",
 						jsonRpcId: req.id,
@@ -944,13 +964,21 @@ export class CodexAppServerManager implements SessionManager {
 							userInputId,
 							serverName,
 							message,
-							{ kind: "form", schema },
+							{
+								kind: "form",
+								schema,
+								...(elicitationMeta ? { meta: elicitationMeta } : {}),
+							},
 						);
 					}
 					logger.debug(`Codex MCP elicitation request`, {
 						userInputId,
 						serverName,
 						mode: p.mode,
+						approvalKind:
+							typeof elicitationMeta?.codex_approval_kind === "string"
+								? elicitationMeta.codex_approval_kind
+								: undefined,
 					});
 					return;
 				}

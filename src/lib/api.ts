@@ -3020,12 +3020,14 @@ export async function respondToUserInput(
 	userInputId: string,
 	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
+	meta?: Record<string, unknown> | null,
 ): Promise<void> {
 	await invoke("respond_to_user_input", {
 		request: {
 			userInputId,
 			action,
 			content: content ?? null,
+			meta: meta ?? null,
 		},
 	});
 }

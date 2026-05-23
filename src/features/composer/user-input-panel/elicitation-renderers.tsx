@@ -9,6 +9,7 @@ import {
 	ExternalLink,
 	Globe,
 	Info,
+	Settings2,
 	ShieldQuestion,
 	X,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils";
 import type {
 	ElicitationFormField,
 	ElicitationFormViewModel,
+	ElicitationToolApprovalViewModel,
 	ElicitationUrlViewModel,
 	UnsupportedElicitationViewModel,
 } from "../elicitation-schema";
@@ -735,6 +737,101 @@ function UrlElicitationPanel({
 	);
 }
 
+/**
+ * Codex MCP tool-call approval panel. Mirrors the Codex TUI flow:
+ * the schema is intentionally empty, so the user only picks an action
+ * (Allow / Allow for session / Always allow / Cancel). The persist
+ * choice rides back to Codex via `_meta.persist` so Core can remember
+ * the decision for the session or permanently.
+ *
+ * No "Decline" button — Codex's `mcp_tool_call` approval flow doesn't
+ * expose Decline (see `mcp_server_elicitation.rs` in codex-rs/tui).
+ * Cancel maps to `action: "cancel"`, which Codex Core treats as "user
+ * cancelled this tool call".
+ */
+function ToolApprovalElicitationPanel({
+	userInput,
+	viewModel,
+	disabled,
+	onResponse,
+}: {
+	userInput: PendingUserInput;
+	viewModel: ElicitationToolApprovalViewModel;
+	disabled: boolean;
+	onResponse: UserInputResponseHandler;
+}) {
+	const handleAccept = useCallback(
+		(persist: "session" | "always" | null) => {
+			onResponse(userInput, "submit", {
+				content: {},
+				...(persist ? { meta: { persist } } : {}),
+			});
+		},
+		[userInput, onResponse],
+	);
+
+	return (
+		<UserInputCard>
+			<InteractionHeader
+				icon={Settings2}
+				title={viewModel.serverName}
+				description={
+					viewModel.message ||
+					"This MCP tool needs your approval before it can run."
+				}
+				trailing={
+					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
+						{viewModel.serverName}
+					</span>
+				}
+			/>
+
+			<InteractionFooter>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={disabled}
+					onClick={() => onResponse(userInput, "cancel")}
+				>
+					<X className="size-3.5" strokeWidth={2} />
+					<span>Cancel</span>
+				</Button>
+				{viewModel.allowAlways ? (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={disabled}
+						onClick={() => handleAccept("always")}
+					>
+						<Check className="size-3.5" strokeWidth={2} />
+						<span>Always allow</span>
+					</Button>
+				) : null}
+				{viewModel.allowSession ? (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={disabled}
+						onClick={() => handleAccept("session")}
+					>
+						<Check className="size-3.5" strokeWidth={2} />
+						<span>Allow for session</span>
+					</Button>
+				) : null}
+				<Button
+					variant="default"
+					size="sm"
+					disabled={disabled}
+					onClick={() => handleAccept(null)}
+				>
+					<Check className="size-3.5" strokeWidth={2} />
+					<span>Allow</span>
+				</Button>
+			</InteractionFooter>
+		</UserInputCard>
+	);
+}
+
 function UnsupportedElicitationPanel({
 	userInput,
 	viewModel,
@@ -793,6 +890,17 @@ export function ElicitationRenderer({
 	if (viewModel.kind === "url") {
 		return (
 			<UrlElicitationPanel
+				userInput={userInput}
+				viewModel={viewModel}
+				disabled={disabled}
+				onResponse={onResponse}
+			/>
+		);
+	}
+
+	if (viewModel.kind === "tool-approval") {
+		return (
+			<ToolApprovalElicitationPanel
 				userInput={userInput}
 				viewModel={viewModel}
 				disabled={disabled}

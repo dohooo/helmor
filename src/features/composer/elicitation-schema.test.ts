@@ -4,6 +4,7 @@ import { normalizeElicitation } from "./elicitation-schema";
 
 function createFormUserInput(
 	schema: Record<string, unknown>,
+	meta?: Record<string, unknown>,
 ): PendingUserInput {
 	return {
 		provider: "claude",
@@ -15,7 +16,7 @@ function createFormUserInput(
 		userInputId: "elicitation-form-1",
 		source: "design-server",
 		message: "Need structured input",
-		payload: { kind: "form", schema },
+		payload: { kind: "form", schema, ...(meta ? { meta } : {}) },
 	};
 }
 
@@ -220,6 +221,74 @@ describe("normalizeElicitation", () => {
 		if (result.kind === "form") {
 			expect(result.fields[0]?.label).toBe("myField");
 		}
+	});
+
+	it("routes Codex MCP tool-call approvals (empty schema + approval kind) to the tool-approval view model", () => {
+		// Reproduces https://github.com/dohooo/helmor/issues/639: Codex
+		// `mcpServer/elicitation/request` with empty schema + the
+		// `codex_approval_kind: "mcp_tool_call"` _meta tag used to fall
+		// through to `unsupported` (Cancel/Decline only — no Allow).
+		const result = normalizeElicitation({
+			provider: "codex",
+			modelId: "gpt-5.5-high",
+			resolvedModel: "gpt-5.5-high",
+			providerSessionId: "thread-1",
+			workingDirectory: "/tmp/helmor",
+			permissionMode: null,
+			userInputId: "codex-mcp-elicit-abc",
+			source: "wave-mcp",
+			message: "Allow tool call `say_hello`?",
+			payload: {
+				kind: "form",
+				schema: { type: "object", properties: {} },
+				meta: {
+					codex_approval_kind: "mcp_tool_call",
+					persist: ["session", "always"],
+				},
+			},
+		});
+
+		expect(result).toEqual({
+			kind: "tool-approval",
+			elicitationId: "codex-mcp-elicit-abc",
+			serverName: "wave-mcp",
+			message: "Allow tool call `say_hello`?",
+			allowSession: true,
+			allowAlways: true,
+		});
+	});
+
+	it("respects narrower persist advertisements on tool-call approvals", () => {
+		const onlySession = normalizeElicitation(
+			createFormUserInput(
+				{ type: "object", properties: {} },
+				{ codex_approval_kind: "mcp_tool_call", persist: "session" },
+			),
+		);
+		expect(onlySession).toMatchObject({
+			kind: "tool-approval",
+			allowSession: true,
+			allowAlways: false,
+		});
+
+		const noPersist = normalizeElicitation(
+			createFormUserInput(
+				{ type: "object", properties: {} },
+				{ codex_approval_kind: "mcp_tool_call" },
+			),
+		);
+		expect(noPersist).toMatchObject({
+			kind: "tool-approval",
+			allowSession: false,
+			allowAlways: false,
+		});
+	});
+
+	it("keeps non-approval empty-schema forms on the unsupported path", () => {
+		const result = normalizeElicitation(
+			createFormUserInput({ type: "object", properties: {} }),
+		);
+		expect(result.kind).toBe("unsupported");
 	});
 
 	it("marks non-required fields correctly", () => {
