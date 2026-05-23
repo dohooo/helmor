@@ -71,6 +71,7 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
+import { LocalLlmPanel } from "./panels/local-llm";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
@@ -582,9 +583,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 							)}
 
 							{activeSection === "experimental" && (
-								<div className="flex flex-col gap-3">
+								<SettingsGroup>
+									<LocalLlmPanel
+										settings={settings}
+										updateSettings={updateSettings}
+									/>
 									<CliInstallPanel />
-								</div>
+								</SettingsGroup>
 							)}
 
 							{activeSection === "import" && <ConductorImportPanel />}

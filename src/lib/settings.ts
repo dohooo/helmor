@@ -135,6 +135,16 @@ export type CursorProviderSettings = {
 	cachedModels: CursorCachedModel[] | null;
 };
 
+export type LocalLlmSettings = {
+	enabled: boolean;
+	model: string;
+	autoStart: boolean;
+	/** Per-catalog-entry runtime `-c` overrides. Absent key = use the
+	 *  catalog default. Backend keeps this map in sync via
+	 *  `setLocalLlmContextOverride`. */
+	contextOverrides?: Record<string, number>;
+};
+
 /** Per-account toggles for which item kinds the inbox should pull from
  * a given forge login. Keyed externally by `<provider>:<login>` (e.g.
  * `github:octocat`). Missing keys default to all `true` — newly added
@@ -279,6 +289,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	startSurfacePreferences: StartSurfacePreferences;
 	/** Sidebar grouping mode. Persisted to localStorage (sync read on boot
@@ -376,6 +387,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
+	},
+	localLlm: {
+		enabled: false,
+		model: "",
+		autoStart: true,
+		contextOverrides: {},
 	},
 	inboxSourceConfig: { accounts: {} },
 	startSurfacePreferences: DEFAULT_START_SURFACE_PREFERENCES,
@@ -530,6 +547,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
 	startSurfacePreferences: "app.start_surface_preferences",
 };
@@ -983,6 +1001,41 @@ function parseClaudeCustomProviderSettings(
 	}
 }
 
+function parseLocalLlmSettings(raw: string | undefined): LocalLlmSettings {
+	if (!raw) return DEFAULT_SETTINGS.localLlm;
+	try {
+		const parsed = JSON.parse(raw) as Partial<LocalLlmSettings>;
+		const overrides: Record<string, number> = {};
+		if (
+			parsed.contextOverrides &&
+			typeof parsed.contextOverrides === "object"
+		) {
+			for (const [key, value] of Object.entries(parsed.contextOverrides)) {
+				if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+					overrides[key] = value;
+				}
+			}
+		}
+		return {
+			enabled:
+				typeof parsed.enabled === "boolean"
+					? parsed.enabled
+					: DEFAULT_SETTINGS.localLlm.enabled,
+			model:
+				typeof parsed.model === "string"
+					? parsed.model
+					: DEFAULT_SETTINGS.localLlm.model,
+			autoStart:
+				typeof parsed.autoStart === "boolean"
+					? parsed.autoStart
+					: DEFAULT_SETTINGS.localLlm.autoStart,
+			contextOverrides: overrides,
+		};
+	} catch {
+		return DEFAULT_SETTINGS.localLlm;
+	}
+}
+
 /** Read an integer setting bounded to [min, max] with a default fallback.
  *  Used for font sizes so corrupted or out-of-range values can't render
  *  the UI unreadable. */
@@ -1150,6 +1203,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
@@ -1195,6 +1249,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
 				key === "startSurfacePreferences"
 					? JSON.stringify(value)

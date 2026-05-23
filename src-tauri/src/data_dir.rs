@@ -125,6 +125,23 @@ pub fn query_cache_dir() -> Result<PathBuf> {
     cache_dir("query")
 }
 
+/// Returns the directory where Helmor-managed GGUF model files live.
+///
+/// Deliberately kept separate from `~/.cache/huggingface/hub/` — we
+/// don't share that cache with other local-LLM tools because (a) we
+/// need pause/resume + integrity checks that the HF cache loader
+/// doesn't expose, (b) we want the user to be able to disable Local
+/// LLM and reclaim disk by deleting one folder we own, (c) multi-part
+/// download orchestration needs predictable, atomic rename semantics
+/// that the HF cache layout doesn't guarantee.
+pub fn local_llm_models_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("local-llm").join("models");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).context("Failed to create Local LLM models directory")?;
+    }
+    Ok(dir)
+}
+
 /// Returns the Conductor source database path for import.
 /// This is the real Conductor database on the local machine.
 pub fn conductor_source_db_path() -> Option<PathBuf> {

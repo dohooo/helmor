@@ -26,7 +26,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 rand = "0.10.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+    "stream",
+] }
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
@@ -42,11 +47,23 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "rt",
+    "sync",
+    "macros",
+    "time",
+] }
 notify = "7"
 notify-debouncer-full = "0.4"
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
+tracing-subscriber = { version = "0.3", features = [
+    "json",
+    "env-filter",
+    "chrono",
+] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
@@ -85,11 +102,11 @@ codegen-units = 256          # max intra-crate parallelism
 incremental = false          # required for sccache compatibility
 
 [profile.dev.package."*"]
-debug = false                # deps don't need debug info at all
+debug = false       # deps don't need debug info at all
 opt-level = 0
 codegen-units = 256
 
 [profile.dev.build-override]
-debug = false                # build scripts & proc-macros: fastest possible
+debug = false       # build scripts & proc-macros: fastest possible
 opt-level = 0
 codegen-units = 256
