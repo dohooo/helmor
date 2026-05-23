@@ -152,111 +152,165 @@ pub async fn generate_session_title(
         });
     }
 
-    let request_id = Uuid::new_v4().to_string();
-    // Skip the branch slug instruction in the prompt when we already know we
-    // won't apply it (local mode, already-renamed worktree, etc.). Saves a
-    // line of LLM output and the branch-rename instruction block of input.
-    let mut params = serde_json::json!({
-        "userMessage": request.user_message,
-        "branchRenamePrompt": branch_rename_prompt,
-        "generateBranch": should_generate_branch,
-    });
-    if let Some(model) = super::custom_providers::configured_models()
-        .into_iter()
-        .next()
-    {
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert(
-                "claudeModel".to_string(),
-                Value::String(model.cli_model.clone()),
-            );
-            obj.insert(
-                "claudeEnvironment".to_string(),
-                serde_json::json!({
-                    "ANTHROPIC_BASE_URL": model.base_url,
-                    "ANTHROPIC_AUTH_TOKEN": model.api_key,
-                }),
-            );
+    // Cascade head: try the bundled local LLM first. On any failure
+    // (server not running, timeout, parse mismatch) fall through to
+    // the sidecar's cloud cascade (custom-claude → claude → codex →
+    // cursor). `TITLE_TIMEOUT` inside `local_llm::title` caps the
+    // attempt at ~15s so a stuck cold load can't block this path long.
+    let local_result: Option<(String, Option<String>)> = {
+        let user_message = request.user_message.clone();
+        let branch_prompt = branch_rename_prompt.clone();
+        let generate_branch = should_generate_branch;
+        let app_for_local = app.clone();
+        let session_id_for_log = request.session_id.clone();
+        match tauri::async_runtime::spawn_blocking(move || {
+            let manager = app_for_local.state::<crate::local_llm::Manager>();
+            manager
+                .inner()
+                .generate_title(&user_message, branch_prompt.as_deref(), generate_branch)
+        })
+        .await
+        {
+            Ok(Ok((title, branch))) => {
+                tracing::info!(
+                    session_id = %session_id_for_log,
+                    generated_title = %title,
+                    generated_branch = branch.as_deref().unwrap_or(""),
+                    "generate_session_title produced by local LLM (sidecar cascade skipped)"
+                );
+                Some((title, branch))
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(
+                    session_id = %session_id_for_log,
+                    error = %error,
+                    "Local LLM title attempt failed; falling through to sidecar cascade"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session_id_for_log,
+                    error = %error,
+                    "Local LLM title task join failed; falling through to sidecar cascade"
+                );
+                None
+            }
         }
-    }
-    let sidecar_req = crate::sidecar::SidecarRequest {
-        id: request_id.clone(),
-        method: "generateTitle".to_string(),
-        params,
     };
 
-    let rx = sidecar.subscribe(&request_id);
-
-    if let Err(e) = sidecar.send(&sidecar_req) {
-        sidecar.unsubscribe(&request_id);
-        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
-    }
-
     let session_id = request.session_id.clone();
-    let result: (Option<String>, Option<String>) = tauri::async_runtime::spawn_blocking({
-        let rid = request_id;
-        let session_id_for_logs = session_id.clone();
-        move || {
-            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
-            let mut title: Option<String> = None;
-            let mut branch_name: Option<String> = None;
-
-            loop {
-                match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
-                    Ok(event) => match event.event_type() {
-                        "titleGenerated" => {
-                            title = event
-                                .raw
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .filter(|text| !text.is_empty());
-                            branch_name = event
-                                .raw
-                                .get("branchName")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .filter(|branch| !branch.is_empty());
-                            tracing::debug!(
-                                session_id = %session_id_for_logs,
-                                generated_title = title.as_deref().unwrap_or(""),
-                                generated_branch = branch_name.as_deref().unwrap_or(""),
-                                "generate_session_title received titleGenerated"
-                            );
-                            break;
-                        }
-                        "error" => {
-                            let message = event
-                                .raw
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("Unknown error");
-                            tracing::error!("generate_session_title: sidecar error: {message}");
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        tracing::error!(
-                            "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
-                        );
-                        break;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        tracing::error!("generate_session_title: sidecar disconnected");
-                        break;
-                    }
+    let (generated_title, generated_branch): (Option<String>, Option<String>) =
+        if let Some((title, branch)) = local_result {
+            (Some(title), branch)
+        } else {
+            let request_id = Uuid::new_v4().to_string();
+            // Skip the branch slug instruction in the prompt when we already know we
+            // won't apply it (local mode, already-renamed worktree, etc.). Saves a
+            // line of LLM output and the branch-rename instruction block of input.
+            let mut params = serde_json::json!({
+                "userMessage": request.user_message,
+                "branchRenamePrompt": branch_rename_prompt,
+                "generateBranch": should_generate_branch,
+            });
+            if let Some(model) = super::custom_providers::configured_models()
+                .into_iter()
+                .next()
+            {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert(
+                        "claudeModel".to_string(),
+                        Value::String(model.cli_model.clone()),
+                    );
+                    obj.insert(
+                        "claudeEnvironment".to_string(),
+                        serde_json::json!({
+                            "ANTHROPIC_BASE_URL": model.base_url,
+                            "ANTHROPIC_AUTH_TOKEN": model.api_key,
+                        }),
+                    );
                 }
             }
+            let sidecar_req = crate::sidecar::SidecarRequest {
+                id: request_id.clone(),
+                method: "generateTitle".to_string(),
+                params,
+            };
 
-            sidecar_state.unsubscribe(&rid);
-            (title, branch_name)
-        }
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?;
+            let rx = sidecar.subscribe(&request_id);
 
-    let (generated_title, generated_branch) = result;
+            if let Err(e) = sidecar.send(&sidecar_req) {
+                sidecar.unsubscribe(&request_id);
+                return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+            }
+
+            let session_id_for_task = session_id.clone();
+            tauri::async_runtime::spawn_blocking({
+                let rid = request_id;
+                let session_id_for_logs = session_id_for_task;
+                move || {
+                    let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> =
+                        app.state();
+                    let mut title: Option<String> = None;
+                    let mut branch_name: Option<String> = None;
+
+                    loop {
+                        match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
+                            Ok(event) => match event.event_type() {
+                                "titleGenerated" => {
+                                    title = event
+                                        .raw
+                                        .get("title")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                        .filter(|text| !text.is_empty());
+                                    branch_name = event
+                                        .raw
+                                        .get("branchName")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                        .filter(|branch| !branch.is_empty());
+                                    tracing::debug!(
+                                        session_id = %session_id_for_logs,
+                                        generated_title = title.as_deref().unwrap_or(""),
+                                        generated_branch = branch_name.as_deref().unwrap_or(""),
+                                        "generate_session_title received titleGenerated"
+                                    );
+                                    break;
+                                }
+                                "error" => {
+                                    let message = event
+                                        .raw
+                                        .get("message")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("Unknown error");
+                                    tracing::error!(
+                                        "generate_session_title: sidecar error: {message}"
+                                    );
+                                    break;
+                                }
+                                _ => {}
+                            },
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                tracing::error!(
+                                    "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
+                                );
+                                break;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                tracing::error!("generate_session_title: sidecar disconnected");
+                                break;
+                            }
+                        }
+                    }
+
+                    sidecar_state.unsubscribe(&rid);
+                    (title, branch_name)
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?
+        };
 
     if should_generate_title && generated_title.is_none() {
         tracing::error!(

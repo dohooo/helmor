@@ -125,6 +125,21 @@ export type DataInfo = {
 
 export type AgentProvider = "claude" | "codex" | "cursor";
 
+export type LocalLlmStatus = {
+	enabled: boolean;
+	runtimeFound: boolean;
+	runtimePath?: string | null;
+	starting: boolean;
+	running: boolean;
+	model: string;
+	apiModel: string;
+	contextSize: number;
+	gpuLayers: number;
+	reasoningMode: string;
+	endpoint?: string | null;
+	lastError?: string | null;
+};
+
 export type AgentModelOption = {
 	id: string;
 	provider: AgentProvider;
@@ -2702,6 +2717,193 @@ export async function revealPathInFinder(path: string): Promise<void> {
 
 export async function copyImageToClipboard(path: string): Promise<void> {
 	await invoke("copy_image_to_clipboard", { path });
+}
+
+export async function getLocalLlmStatus(): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("get_local_llm_status");
+}
+
+export async function startLocalLlm(): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("start_local_llm");
+}
+
+export async function stopLocalLlm(): Promise<void> {
+	await invoke("stop_local_llm");
+}
+
+export type LocalLlmCatalogEntry = {
+	id: string;
+	repo: string;
+	/** Every GGUF file required to load the model. Single-file models
+	 *  list one entry; multi-part shards (HF splits anything >50 GB)
+	 *  list all parts in load order. The downloader fetches them all
+	 *  and llama-server is pointed at part 1; it auto-discovers the
+	 *  rest. */
+	files: string[];
+	label: string;
+	quant: string;
+	bytes: number;
+	minRamGb: number;
+	recommendedForGb: number;
+	blurb: string;
+	/** Which subsystem the entry belongs to. Always "llm" today; kept
+	 *  as a discriminator so future entry kinds can land without
+	 *  churning every consumer. */
+	kind?: "llm";
+};
+
+export async function listLocalLlmCatalog(): Promise<LocalLlmCatalogEntry[]> {
+	return await invoke<LocalLlmCatalogEntry[]>("list_local_llm_catalog");
+}
+
+/** GGUF metadata snapshot for an arbitrary user-supplied `.gguf` file.
+ *  Lets the panel render real context limits + KV cache estimates for
+ *  Custom model paths (outside the curated catalog). When the file
+ *  can't be parsed (corrupt header, unsupported arch) the IPC errors
+ *  out and the UI falls back to a static "32K" hint. */
+export type LocalLlmModelInspection = {
+	architecture: string;
+	name: string | null;
+	contextLength: number;
+	kvBytesPerToken: number;
+	defaultContextTokens: number;
+};
+
+export async function inspectLocalLlmModel(
+	path: string,
+): Promise<LocalLlmModelInspection> {
+	return await invoke<LocalLlmModelInspection>("inspect_local_llm_model", {
+		path,
+	});
+}
+
+/** Read real GGUF metadata for a downloaded catalog entry. Returns
+ *  `null` when the file isn't on disk yet (panel falls back to the
+ *  catalog estimate). Lets the context selector show the same numbers
+ *  for catalog and custom models. */
+export async function inspectLocalLlmCatalogEntry(
+	entryId: string,
+): Promise<LocalLlmModelInspection | null> {
+	return await invoke<LocalLlmModelInspection | null>(
+		"inspect_local_llm_catalog_entry",
+		{ entryId },
+	);
+}
+
+export type LocalLlmHardwareSnapshot = {
+	cpuBrand: string;
+	totalRamGb: number;
+	osLabel: string;
+	arch: string;
+	/** Catalog entry id the hardware tier maps to. The panel paints a
+	 *  "Recommended" badge on exactly this card. Null when the catalog
+	 *  is empty or the OS is unsupported. */
+	recommendedEntryId: string | null;
+};
+
+export async function detectLocalLlmHardware(): Promise<LocalLlmHardwareSnapshot> {
+	return await invoke<LocalLlmHardwareSnapshot>("detect_local_llm_hardware");
+}
+
+export type LocalLlmDownloadState =
+	| "not_downloaded"
+	| "downloading"
+	| "paused"
+	| "downloaded"
+	| "failed";
+
+export type LocalLlmDownloadStatus = {
+	entryId: string;
+	state: LocalLlmDownloadState;
+	downloaded: number;
+	total: number;
+	error?: string;
+};
+
+/** Streaming event from the bundled download worker. The `kind`
+ *  discriminator matches the Rust enum variants. */
+export type LocalLlmDownloadEvent =
+	| { entryId: string; kind: "started"; total: number }
+	| {
+			entryId: string;
+			kind: "progress";
+			downloaded: number;
+			total: number;
+			bytesPerSec: number;
+	  }
+	| { entryId: string; kind: "paused"; downloaded: number; total: number }
+	| { entryId: string; kind: "cancelled"; total: number }
+	| {
+			entryId: string;
+			kind: "completed";
+			downloaded: number;
+			path: string;
+			sha256Verified: boolean;
+	  }
+	| {
+			entryId: string;
+			kind: "failed";
+			error: string;
+			retryable: boolean;
+	  };
+
+export async function subscribeLocalLlmDownloads(
+	onEvent: Channel<LocalLlmDownloadEvent>,
+): Promise<LocalLlmDownloadStatus[]> {
+	return await invoke<LocalLlmDownloadStatus[]>(
+		"subscribe_local_llm_downloads",
+		{
+			onEvent,
+		},
+	);
+}
+
+export async function listLocalLlmDownloads(): Promise<
+	LocalLlmDownloadStatus[]
+> {
+	return await invoke<LocalLlmDownloadStatus[]>("list_local_llm_downloads");
+}
+
+export async function startLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("start_local_llm_download", { entryId });
+}
+
+export async function pauseLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("pause_local_llm_download", { entryId });
+}
+
+export async function cancelLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("cancel_local_llm_download", { entryId });
+}
+
+export async function activateLocalLlmModel(
+	entryId: string,
+): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("activate_local_llm_model", { entryId });
+}
+
+export async function setLocalLlmContextOverride(
+	entryId: string,
+	contextTokens: number,
+): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("set_local_llm_context_override", {
+		entryId,
+		contextTokens,
+	});
+}
+
+/** Connection params for the running local LLM `llama-server`. Voice
+ *  Pilot reads this to POST OpenAI-compatible chat completions with
+ *  tool schemas directly to the user's configured local model. `null`
+ *  while the server is stopped / starting / crashed. */
+export type LocalLlmEndpoint = {
+	url: string;
+	token: string;
+	apiModel: string;
+};
+
+export async function getLocalLlmEndpoint(): Promise<LocalLlmEndpoint | null> {
+	return await invoke<LocalLlmEndpoint | null>("get_local_llm_endpoint");
 }
 
 /**

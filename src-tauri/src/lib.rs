@@ -3,6 +3,7 @@ pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
+pub mod downloads;
 pub mod error;
 pub mod feedback;
 pub mod forge;
@@ -10,6 +11,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
 pub mod mcp;
@@ -43,6 +45,7 @@ pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
 pub use workspace::workspaces;
 
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 /// Initialise the database schema (call once at startup).
@@ -72,6 +75,13 @@ pub fn run() {
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
+        .manage(local_llm::Manager::default())
+        // Top-level downloads manager. The local-LLM catalog is supplied
+        // through `CatalogAssetProvider`; the downloads module itself
+        // stays business-agnostic.
+        .manage(downloads::DownloadsManager::new(Arc::new(
+            local_llm::CatalogAssetProvider,
+        )))
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
@@ -213,6 +223,41 @@ pub fn run() {
             updater::spawn_interval_worker(app.handle().clone());
 
             agents::prewarm_slash_command_cache(app.handle());
+
+            // Reap any orphan llama-server from a prior Helmor process
+            // that was force-quit / crashed / hot-reloaded — its
+            // `local_llm::Manager::drop` never ran. Doing this BEFORE the
+            // auto-start guarantees we don't accumulate duplicates
+            // across dev reloads or unclean exits.
+            local_llm::sweep_orphan_server();
+
+            // Auto-start the bundled llama-server when the user has
+            // flipped Local LLM on in settings. Spawned so a slow
+            // first-time model download can't stall the rest of setup.
+            // `local_llm::Manager::drop` handles teardown on app exit.
+            let local_llm_handle = app.handle().clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("local-llm-autostart".into())
+                .spawn(move || {
+                    let settings = local_llm::load_settings();
+                    if !settings.enabled || !settings.auto_start {
+                        return;
+                    }
+                    let manager = local_llm_handle.state::<local_llm::Manager>();
+                    if let Err(error) = manager.start() {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "Local LLM auto-start failed"
+                        );
+                    }
+                })
+            {
+                tracing::error!(error = %error, "Failed to spawn local-llm autostart thread");
+            }
+
+            // Re-register the user's saved global hotkey at startup. Missing
+            // this leaves the hotkey unregistered after a cold launch until
+            // the user re-saves it in settings.
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
                     error = %format!("{error:#}"),
@@ -273,6 +318,21 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::local_llm_commands::detect_local_llm_hardware,
+            commands::local_llm_commands::get_local_llm_status,
+            commands::local_llm_commands::list_local_llm_catalog,
+            commands::local_llm_commands::inspect_local_llm_model,
+            commands::local_llm_commands::inspect_local_llm_catalog_entry,
+            commands::local_llm_commands::list_local_llm_downloads,
+            commands::local_llm_commands::subscribe_local_llm_downloads,
+            commands::local_llm_commands::start_local_llm_download,
+            commands::local_llm_commands::pause_local_llm_download,
+            commands::local_llm_commands::cancel_local_llm_download,
+            commands::local_llm_commands::activate_local_llm_model,
+            commands::local_llm_commands::set_local_llm_context_override,
+            commands::local_llm_commands::start_local_llm,
+            commands::local_llm_commands::stop_local_llm,
+            commands::local_llm_commands::get_local_llm_endpoint,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
