@@ -21,6 +21,8 @@ import {
 	SlackBrandIcon,
 } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
+import { SlackConnectState } from "@/features/inbox/slack-connect-button";
+import { useSlackWorkspaces } from "@/features/inbox/use-slack-workspaces";
 import type {
 	ForgeProvider,
 	InboxKind,
@@ -99,19 +101,20 @@ const PROVIDER_TABS: {
 	},
 ];
 
-const COMING_SOON_COPY: Record<
-	Exclude<ContextProviderTab, "github" | "gitlab">,
-	string[]
-> = {
+/** Tabs that still don't have any settings UI of their own and fall back
+ *  to the generic "Coming Soon" placeholder. Slack used to live here but
+ *  graduated: it now reuses `<SlackConnectState>` (unconnected) or shows
+ *  a connected acknowledgement, both rendered by `<SlackSettingsPanel>`. */
+type ComingSoonProvider = Exclude<
+	ContextProviderTab,
+	"github" | "gitlab" | "slack"
+>;
+
+const COMING_SOON_COPY: Record<ComingSoonProvider, string[]> = {
 	linear: [
 		"Pull in issues, specs, labels, and priorities.",
 		"Start workspaces directly from planned tasks.",
 		"Keep implementation context tied to product intent.",
-	],
-	slack: [
-		"Capture threads, decisions, and follow-up requests.",
-		"Convert discussions into actionable workspace prompts.",
-		"Preserve source context without copying long chat history.",
 	],
 	mobile: [
 		"Send tasks, links, and screenshots from your phone.",
@@ -391,11 +394,11 @@ export function InboxSettingsPanel({
 			/>
 
 			{!activeForgeProvider ? (
-				<ProviderComingSoon
-					provider={
-						activeProvider as Exclude<ContextProviderTab, "github" | "gitlab">
-					}
-				/>
+				activeProvider === "slack" ? (
+					<SlackSettingsPanel />
+				) : (
+					<ProviderComingSoon provider={activeProvider as ComingSoonProvider} />
+				)
 			) : forgeAccounts.length === 0 ? (
 				<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-6 py-10 text-center">
 					<div className="flex size-9 items-center justify-center rounded-lg border border-border/50 text-muted-foreground">
@@ -606,11 +609,7 @@ function ProviderTabs({
 	);
 }
 
-function ProviderComingSoon({
-	provider,
-}: {
-	provider: Exclude<ContextProviderTab, "github" | "gitlab">;
-}) {
+function ProviderComingSoon({ provider }: { provider: ComingSoonProvider }) {
 	return (
 		<div className="flex min-h-[360px] w-full items-center justify-center px-3 py-8">
 			<div className="flex w-full max-w-[380px] flex-col items-stretch text-muted-foreground/65">
@@ -632,6 +631,33 @@ function ProviderComingSoon({
 					))}
 				</ul>
 			</div>
+		</div>
+	);
+}
+
+/** Slack tab content inside Settings → Context.
+ *
+ *  No real settings to expose yet (filter / sort / per-channel toggles
+ *  are future work); this slot just mirrors the inbox empty-state
+ *  connect flow when zero workspaces are connected, and acknowledges
+ *  success otherwise. Reuses `<SlackConnectState>` so the import
+ *  affordance is identical on both surfaces. */
+function SlackSettingsPanel() {
+	const workspacesQuery = useSlackWorkspaces();
+	const connectedCount = workspacesQuery.data?.length ?? 0;
+	if (connectedCount === 0) {
+		// Constrain the connect card to the settings panel slot — its
+		// default `min-h-[calc(100vh-200px)]` is sized for the inbox
+		// sidebar's full viewport and would over-stretch here.
+		return <SlackConnectState className="min-h-[360px]" />;
+	}
+	return (
+		<div className="flex min-h-[360px] w-full items-center justify-center px-6 text-center">
+			<p className="text-small text-muted-foreground/65">
+				{connectedCount === 1
+					? "Slack is connected. Open the Context sidebar to browse your feed."
+					: `${connectedCount} Slack workspaces connected. Open the Context sidebar to browse your feed.`}
+			</p>
 		</div>
 	);
 }

@@ -8,6 +8,7 @@ import {
 	slackImportFromDesktop,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 /** Stable identifier for the desktop-import mutation. `SlackInboxSection`
@@ -21,18 +22,29 @@ export const SLACK_IMPORT_MUTATION_KEY = ["slack", "import"] as const;
 /** Empty-state CTA shown when the user has zero connected Slack
  *  workspaces. Reads the user's already-signed-in Slack desktop session
  *  — passkeys, SSO, admin 2FA are all already done by the desktop app,
- *  so we don't have to deal with them. */
+ *  so we don't have to deal with them.
+ *
+ *  `className` lets a different surface (e.g. the Settings → Context
+ *  panel) override the default viewport-height container. The inbox
+ *  uses the full sidebar height; settings uses a smaller fixed slot. */
 export function SlackConnectState({
 	onConnected,
+	className = "min-h-[calc(100vh-200px)]",
 }: {
 	onConnected?: (teamId: string) => void;
+	className?: string;
 }) {
 	const importMutation = useSlackImportMutation({
 		onImported: (workspace) => onConnected?.(workspace.teamId),
 	});
 
 	return (
-		<div className="flex min-h-[calc(100vh-200px)] flex-col items-center justify-center gap-4 px-6 text-center">
+		<div
+			className={cn(
+				"flex flex-col items-center justify-center gap-4 px-6 text-center",
+				className,
+			)}
+		>
 			<SlackBrandIcon className="text-muted-foreground/80" size={28} />
 			<div className="space-y-1">
 				<div className="text-ui font-medium text-foreground">
@@ -40,8 +52,7 @@ export function SlackConnectState({
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
 					Import directly from your signed-in Slack desktop app. Everything
-					stays local — your token, messages, and attachments never leave this
-					device.
+					stays local and secure on your device.
 				</div>
 			</div>
 			<Button
