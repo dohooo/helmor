@@ -587,6 +587,19 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         )
         .context("Failed to create repo_run_actions table")?;
 
+    // Optional graceful-stop command per run action. `stop_command` is a
+    // shell snippet helmor runs when the user clicks Stop, blocking the
+    // SIGTERM/SIGKILL of the main process until it exits (Force Stop
+    // re-click short-circuits). Nullable — existing rows are unaffected
+    // and continue to use today's `escalating_kill` flow.
+    if has_table(connection, "repo_run_actions")
+        && !has_column(connection, "repo_run_actions", "stop_command")
+    {
+        connection
+            .execute_batch("ALTER TABLE repo_run_actions ADD COLUMN stop_command TEXT")
+            .context("Failed to add repo_run_actions.stop_command column")?;
+    }
+
     // Backfill: every repo that has a non-empty `run_script` but no row in
     // `repo_run_actions` yet gets a single migrated action carrying the old
     // command + mode. Deterministic id (`legacy:<repo_id>`) keeps the

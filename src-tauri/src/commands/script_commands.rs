@@ -2,7 +2,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::repos::{self, RunAction};
-use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
+use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager, ScriptStop};
 
 use super::common::CmdResult;
 
@@ -90,6 +90,7 @@ pub async fn execute_repo_script(
             workspace_id,
             action.command,
             channel,
+            action.stop_command,
         )
         .await;
     }
@@ -123,10 +124,12 @@ pub async fn execute_repo_script(
         workspace_id,
         script,
         channel,
+        None,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_script(
     app: AppHandle,
     manager: State<'_, ScriptProcessManager>,
@@ -135,6 +138,7 @@ async fn spawn_script(
     workspace_id: Option<String>,
     script: String,
     channel: Channel<ScriptEvent>,
+    stop_command: Option<String>,
 ) -> CmdResult<()> {
     let (repo, workspace) = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
@@ -190,6 +194,16 @@ async fn spawn_script(
     };
     let mgr = manager.inner().clone();
 
+    // Build the graceful-stop bundle now (while we still own `context` /
+    // `working_dir` / `channel`). `None` keeps the pre-feature kill path
+    // exactly as it was: SIGTERM → 200ms → SIGKILL with no detour.
+    let script_stop = stop_command.map(|cmd| ScriptStop {
+        command: cmd,
+        event_tx: channel.clone(),
+        ctx: context.clone(),
+        working_dir: working_dir.clone(),
+    });
+
     // Setup-completion hook keys on the literal `"setup"` script_type — run
     // actions (which carry a `"run:<id>"` script_type now) never trigger it.
     let is_setup = script_type == "setup";
@@ -203,6 +217,7 @@ async fn spawn_script(
             &working_dir,
             &context,
             channel.clone(),
+            script_stop,
         ) {
             Ok(Some(0)) if is_setup => {
                 if let Some(ws_id) = &workspace_id {
@@ -291,10 +306,19 @@ pub async fn create_repo_run_action(
     name: String,
     command: String,
     mode: String,
+    stop_command: Option<String>,
 ) -> CmdResult<repos::RunAction> {
     let result = tauri::async_runtime::spawn_blocking({
         let repo_id = repo_id.clone();
-        move || repos::create_repo_run_action(&repo_id, name.trim(), command.trim(), &mode)
+        move || {
+            repos::create_repo_run_action(
+                &repo_id,
+                name.trim(),
+                command.trim(),
+                &mode,
+                stop_command,
+            )
+        }
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;
@@ -316,10 +340,19 @@ pub async fn update_repo_run_action(
     name: String,
     command: String,
     mode: String,
+    stop_command: Option<String>,
 ) -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking({
         let action_id = action_id.clone();
-        move || repos::update_repo_run_action(&action_id, name.trim(), command.trim(), &mode)
+        move || {
+            repos::update_repo_run_action(
+                &action_id,
+                name.trim(),
+                command.trim(),
+                &mode,
+                stop_command,
+            )
+        }
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e}"))??;

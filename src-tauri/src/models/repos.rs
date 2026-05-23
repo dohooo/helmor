@@ -821,6 +821,13 @@ pub struct RunAction {
     /// True when this action's name/command/mode come from a
     /// `helmor.json` declaration (settings UI shows the row read-only).
     pub from_project: bool,
+    /// Optional graceful-stop command. When set, clicking Stop runs this
+    /// shell snippet (same env + cwd as `command`) to completion before
+    /// helmor signals the main process. The user can short-circuit a
+    /// long-running cleanup by re-clicking Stop ("Force Stop"). `None`
+    /// preserves today's behavior exactly. JSON field name: `stopCommand`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -920,18 +927,26 @@ pub fn load_repo_scripts(repo_id: &str, workspace_id: Option<&str>) -> Result<Re
     } else {
         let mut stmt = connection
             .prepare(
-                "SELECT id, name, command, mode FROM repo_run_actions \
+                "SELECT id, name, command, mode, stop_command \
+                 FROM repo_run_actions \
                  WHERE repo_id = ?1 ORDER BY display_order ASC, created_at ASC, id ASC",
             )
             .with_context(|| format!("Failed to prepare run-actions lookup for {repo_id}"))?;
         let db_actions: Vec<RunAction> = stmt
             .query_map([repo_id], |row| {
+                let stop_command: Option<String> = row
+                    .get::<_, Option<String>>(4)?
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
                 Ok(RunAction {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     command: row.get(2)?,
                     mode: row.get(3)?,
                     from_project: false,
+                    stop_command,
                 })
             })
             .with_context(|| format!("Failed to load run actions for {repo_id}"))?
@@ -1032,6 +1047,7 @@ fn parse_project_run_actions(value: Option<&Value>, repo_id: &str) -> Vec<RunAct
             command: trimmed.to_string(),
             mode: "concurrent".to_string(),
             from_project: true,
+            stop_command: None,
         }];
     }
     if let Some(array) = value.as_array() {
@@ -1055,12 +1071,22 @@ fn parse_project_run_actions(value: Option<&Value>, repo_id: &str) -> Vec<RunAct
                     _ => "concurrent",
                 }
                 .to_string();
+                // Flat `stopCommand` — blank/missing strings drop the
+                // cleanup config entirely so we never half-configure a
+                // graceful stop.
+                let stop_command = obj
+                    .get("stopCommand")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
                 Some(RunAction {
                     id: format!("project:{repo_id}:{idx}"),
                     name: name.to_string(),
                     command: command.to_string(),
                     mode,
                     from_project: true,
+                    stop_command,
                 })
             })
             .collect();
@@ -1122,8 +1148,15 @@ pub fn create_repo_run_action(
     name: &str,
     command: &str,
     mode: &str,
+    stop_command: Option<String>,
 ) -> Result<RunAction> {
     let mode = validate_run_mode(mode)?;
+    // Trim blank / whitespace-only input to `None` — settings UI clears
+    // the row by emptying the input, and we don't persist a no-op.
+    let stop_command = stop_command.and_then(|s| {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
     let id = format!("run:{}", uuid::Uuid::new_v4());
     let connection = db::write_conn()?;
     let next_order: i64 = connection
@@ -1135,9 +1168,18 @@ pub fn create_repo_run_action(
         .with_context(|| format!("Failed to compute next display_order for {repo_id}"))?;
     connection
         .execute(
-            "INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![id, repo_id, name, command, mode, next_order],
+            "INSERT INTO repo_run_actions \
+             (id, repo_id, name, command, mode, display_order, stop_command) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                id,
+                repo_id,
+                name,
+                command,
+                mode,
+                next_order,
+                stop_command.as_deref(),
+            ],
         )
         .with_context(|| format!("Failed to insert run action for {repo_id}"))?;
     Ok(RunAction {
@@ -1146,25 +1188,34 @@ pub fn create_repo_run_action(
         command: command.to_string(),
         mode: mode.to_string(),
         from_project: false,
+        stop_command,
     })
 }
 
-/// Update an existing run action's name, command, and mode in place.
-/// Returns an error if no row matched — callers should treat that as
-/// "stale id, refresh the list" rather than swallowing it.
+/// Update an existing run action's name, command, mode, and graceful-stop
+/// config in place. Returns an error if no row matched — callers should
+/// treat that as "stale id, refresh the list" rather than swallowing it.
 pub fn update_repo_run_action(
     action_id: &str,
     name: &str,
     command: &str,
     mode: &str,
+    stop_command: Option<String>,
 ) -> Result<()> {
     let mode = validate_run_mode(mode)?;
+    let stop_command = stop_command.and_then(|s| {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
     let connection = db::write_conn()?;
     let updated = connection
         .execute(
-            "UPDATE repo_run_actions SET name = ?1, command = ?2, mode = ?3, \
-             updated_at = datetime('now') WHERE id = ?4",
-            rusqlite::params![name, command, mode, action_id],
+            "UPDATE repo_run_actions \
+             SET name = ?1, command = ?2, mode = ?3, \
+                 stop_command = ?4, \
+                 updated_at = datetime('now') \
+             WHERE id = ?5",
+            rusqlite::params![name, command, mode, stop_command.as_deref(), action_id,],
         )
         .with_context(|| format!("Failed to update run action {action_id}"))?;
     if updated != 1 {
@@ -1832,9 +1883,10 @@ mod tests {
         assert!(initial.run_actions.is_empty());
 
         // Create -> visible + ordered by insertion.
-        let dev = create_repo_run_action(&repo_id, "Dev", "npm run dev", "concurrent").unwrap();
+        let dev =
+            create_repo_run_action(&repo_id, "Dev", "npm run dev", "concurrent", None).unwrap();
         let tests =
-            create_repo_run_action(&repo_id, "Tests", "npm test", "non-concurrent").unwrap();
+            create_repo_run_action(&repo_id, "Tests", "npm test", "non-concurrent", None).unwrap();
 
         let loaded = load_repo_scripts(&repo_id, None).unwrap();
         assert_eq!(loaded.run_actions.len(), 2);
@@ -1842,10 +1894,11 @@ mod tests {
         assert_eq!(loaded.run_actions[1].name, "Tests");
         assert_eq!(loaded.run_actions[0].command, "npm run dev");
         assert_eq!(loaded.run_actions[0].mode, "concurrent");
+        assert!(loaded.run_actions[0].stop_command.is_none());
         assert!(!loaded.run_from_project);
 
         // Update one of them.
-        update_repo_run_action(&dev.id, "Dev Server", "pnpm dev", "non-concurrent").unwrap();
+        update_repo_run_action(&dev.id, "Dev Server", "pnpm dev", "non-concurrent", None).unwrap();
         let after_update = load_repo_scripts(&repo_id, None).unwrap();
         assert_eq!(after_update.run_actions[0].name, "Dev Server");
         assert_eq!(after_update.run_actions[0].command, "pnpm dev");
@@ -1866,9 +1919,91 @@ mod tests {
         // Invalid mode is rejected outright (column constraint is enforced
         // at the Rust layer, not by SQLite).
         assert!(
-            create_repo_run_action(&repo_id, "Bad", "echo", "wat").is_err(),
+            create_repo_run_action(&repo_id, "Bad", "echo", "wat", None).is_err(),
             "mode validation should reject unknown values"
         );
+    }
+
+    #[test]
+    fn run_actions_stop_command_round_trips_through_db() {
+        let env = crate::testkit::TestEnv::new("repos-run-actions-stop");
+        let repo_id = insert_test_repo(&env, "actions");
+
+        // Create with a stop command, then verify load + serde.
+        let with_stop = create_repo_run_action(
+            &repo_id,
+            "DB",
+            "supabase start && tail -f log",
+            "concurrent",
+            Some("supabase stop".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            with_stop.stop_command.as_deref(),
+            Some("supabase stop"),
+            "stop_command round-trips on create"
+        );
+
+        // Loaded action carries the same shape.
+        let loaded = load_repo_scripts(&repo_id, None).unwrap();
+        let row = loaded
+            .run_actions
+            .iter()
+            .find(|a| a.id == with_stop.id)
+            .expect("created row visible on reload");
+        assert_eq!(row.stop_command.as_deref(), Some("supabase stop"));
+
+        // Update drops the stop command (None) → loaded row has no stop.
+        update_repo_run_action(&with_stop.id, "DB", "echo", "concurrent", None).unwrap();
+        let cleared = load_repo_scripts(&repo_id, None).unwrap();
+        let row = cleared
+            .run_actions
+            .iter()
+            .find(|a| a.id == with_stop.id)
+            .unwrap();
+        assert!(
+            row.stop_command.is_none(),
+            "passing None on update clears stop_command"
+        );
+
+        // Blank string (only whitespace) is treated as None — settings
+        // UI clears the field by emptying the input, we must not persist
+        // an empty command.
+        update_repo_run_action(
+            &with_stop.id,
+            "DB",
+            "echo",
+            "concurrent",
+            Some("   ".to_string()),
+        )
+        .unwrap();
+        let reloaded = load_repo_scripts(&repo_id, None).unwrap();
+        let row = reloaded
+            .run_actions
+            .iter()
+            .find(|a| a.id == with_stop.id)
+            .unwrap();
+        assert!(
+            row.stop_command.is_none(),
+            "blank stop_command drops to None"
+        );
+
+        // Setting a fresh non-blank command updates cleanly.
+        update_repo_run_action(
+            &with_stop.id,
+            "DB",
+            "echo",
+            "concurrent",
+            Some("docker compose down".to_string()),
+        )
+        .unwrap();
+        let again = load_repo_scripts(&repo_id, None).unwrap();
+        let row = again
+            .run_actions
+            .iter()
+            .find(|a| a.id == with_stop.id)
+            .unwrap();
+        assert_eq!(row.stop_command.as_deref(), Some("docker compose down"));
     }
 
     #[test]
@@ -1916,5 +2051,42 @@ mod tests {
         assert!(parse_project_run_actions(None, repo_id).is_empty());
         assert!(parse_project_run_actions(Some(&Value::String("  ".into())), repo_id).is_empty());
         assert!(parse_project_run_actions(Some(&Value::Bool(true)), repo_id).is_empty());
+    }
+
+    #[test]
+    fn project_run_actions_parse_stop_command() {
+        let repo_id = "test-repo";
+
+        let array_value: Value = serde_json::from_str(
+            r#"[
+                {"name": "Cmd",      "command": "supabase start", "stopCommand": "supabase stop"},
+                {"name": "Blank",    "command": "echo",           "stopCommand": "  "},
+                {"name": "WrongTyp", "command": "echo",           "stopCommand": 42},
+                {"name": "NoStop",   "command": "echo"}
+            ]"#,
+        )
+        .unwrap();
+        let many = parse_project_run_actions(Some(&array_value), repo_id);
+        assert_eq!(many.len(), 4);
+
+        assert_eq!(
+            many[0].stop_command.as_deref(),
+            Some("supabase stop"),
+            "stopCommand parses"
+        );
+
+        assert!(
+            many[1].stop_command.is_none(),
+            "blank stopCommand drops to None"
+        );
+        assert!(
+            many[2].stop_command.is_none(),
+            "non-string stopCommand drops to None"
+        );
+        assert!(many[3].stop_command.is_none(), "no stopCommand key → None");
+
+        // String form never carries stop.
+        let single = parse_project_run_actions(Some(&Value::String("npm dev".into())), repo_id);
+        assert!(single[0].stop_command.is_none());
     }
 }

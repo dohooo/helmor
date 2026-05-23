@@ -1,0 +1,14 @@
+{
+	"items": [
+		{
+			"text": "Each run script can now declare an optional cleanup command that runs when you click Stop — handy for docker compose, supabase, or anything with external resources to tear down. A second Stop click force-kills if you don't want to wait.",
+			"action": {
+				"label": "Open Run scripts",
+				"value": {
+					"type": "openSettings",
+					"section": "repo:current"
+				}
+			}
+		}
+	]
+}

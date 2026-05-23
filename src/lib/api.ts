@@ -3122,6 +3122,10 @@ export type RunScriptMode = "concurrent" | "non-concurrent";
  * per repo (e.g. "Dev server", "Tests"); each gets its own dropdown entry
  * and PTY lifecycle. `fromProject` is true when the entry comes from a
  * `helmor.json` declaration — the settings UI renders it read-only.
+ *
+ * `stopCommand`: optional cleanup shell snippet. When set, clicking Stop
+ * runs this to completion (same env + cwd as `command`) before helmor
+ * signals the main process. Second Stop click short-circuits to SIGKILL.
  */
 export type RunAction = {
 	id: string;
@@ -3129,6 +3133,7 @@ export type RunAction = {
 	command: string;
 	mode: RunScriptMode;
 	fromProject: boolean;
+	stopCommand?: string;
 };
 
 export type RepoScripts = {
@@ -3157,6 +3162,9 @@ export type ScriptEvent =
 	| { type: "started"; pid: number; command: string }
 	| { type: "stdout"; data: string }
 	| { type: "stderr"; data: string }
+	/** Backend started running the configured `stopCommand`. Frontends
+	 * flip the Stop button to "Force Stop" until `exited` fires. */
+	| { type: "stopping" }
 	| { type: "exited"; code: number | null }
 	| { type: "error"; message: string };
 
@@ -3313,12 +3321,14 @@ export async function createRepoRunAction(
 	name: string,
 	command: string,
 	mode: RunScriptMode,
+	stopCommand?: string | null,
 ): Promise<RunAction> {
 	return invoke<RunAction>("create_repo_run_action", {
 		repoId,
 		name,
 		command,
 		mode,
+		stopCommand: stopCommand ?? null,
 	});
 }
 
@@ -3328,6 +3338,7 @@ export async function updateRepoRunAction(
 	name: string,
 	command: string,
 	mode: RunScriptMode,
+	stopCommand?: string | null,
 ): Promise<void> {
 	await invoke("update_repo_run_action", {
 		repoId,
@@ -3335,6 +3346,7 @@ export async function updateRepoRunAction(
 		name,
 		command,
 		mode,
+		stopCommand: stopCommand ?? null,
 	});
 }
 

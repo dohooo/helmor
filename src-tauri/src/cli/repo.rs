@@ -241,10 +241,16 @@ fn update_scripts(
             .cloned();
         match (next_run, first_db) {
             (Some(cmd), Some(action)) => {
-                repos::update_repo_run_action(&action.id, &action.name, &cmd, &action.mode)?;
+                repos::update_repo_run_action(
+                    &action.id,
+                    &action.name,
+                    &cmd,
+                    &action.mode,
+                    action.stop_command.clone(),
+                )?;
             }
             (Some(cmd), None) => {
-                repos::create_repo_run_action(&id, "Default", &cmd, "concurrent")?;
+                repos::create_repo_run_action(&id, "Default", &cmd, "concurrent", None)?;
             }
             (None, Some(action)) => {
                 repos::delete_repo_run_action(&action.id)?;

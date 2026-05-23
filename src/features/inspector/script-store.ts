@@ -17,6 +17,13 @@ type Listener = {
 	onStatusChange: (status: ScriptStatus) => void;
 	onUrlsChange?: (urls: string[]) => void;
 	/**
+	 * `true` while a configured `stopCommand` is running (Stop button
+	 * renders as "Force Stop"); `false` when it finishes or the entry is
+	 * reset by a fresh `startScript`. Only fires for actions that
+	 * configure a `stopCommand`.
+	 */
+	onStoppingChange?: (stopping: boolean) => void;
+	/**
 	 * Called at the start of a fresh `startScript` invocation. Gives any
 	 * already-attached listener a chance to clear its terminal so output from
 	 * a previous run is not mixed with the new run's chunks — important when
@@ -55,6 +62,10 @@ export type ScriptEntry = {
 	 * as new chunks arrive. Empty when the script hasn't printed any banner.
 	 */
 	urls: string[];
+	/** True while a configured `stopCommand` is running. Drives the
+	 * "Force Stop" button — a second Stop click while true escalates to
+	 * SIGKILL backend-side. */
+	stopping: boolean;
 };
 
 /** Append a chunk and evict from the head until under the byte cap. */
@@ -148,8 +159,20 @@ export function startScript(
 		status: "running",
 		exitCode: null,
 		urls: [],
+		stopping: false,
 	};
 	entries.set(k, entry);
+
+	// Flip `stopping` back to false (and notify) if the entry was mid-
+	// graceful-stop when this final event arrived. Called from every
+	// `exited` / `error` / `.catch` path so the Force Stop button label
+	// always clears on exit.
+	const clearStopping = () => {
+		if (entry.stopping) {
+			entry.stopping = false;
+			listeners.get(k)?.onStoppingChange?.(false);
+		}
+	};
 
 	listeners.get(k)?.onStatusChange("running");
 	// Reset URL listener to empty — previous run's URLs don't apply.
@@ -167,6 +190,10 @@ export function startScript(
 
 			switch (event.type) {
 				case "started":
+					break;
+				case "stopping":
+					entry.stopping = true;
+					listeners.get(k)?.onStoppingChange?.(true);
 					break;
 				case "stdout":
 				case "stderr": {
@@ -211,6 +238,7 @@ export function startScript(
 				case "exited":
 					entry.status = "exited";
 					entry.exitCode = event.code;
+					clearStopping();
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", event.code);
 					if (scriptType === "run") {
@@ -223,6 +251,7 @@ export function startScript(
 					entry.status = "exited";
 					// No exit code from the backend here — treat as failure.
 					entry.exitCode = entry.exitCode ?? 1;
+					clearStopping();
 					listeners.get(k)?.onChunk(msg);
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", entry.exitCode);
@@ -241,6 +270,7 @@ export function startScript(
 		appendChunk(entry, msg);
 		entry.status = "exited";
 		entry.exitCode = entry.exitCode ?? 1;
+		clearStopping();
 		listeners.get(k)?.onChunk(msg);
 		listeners.get(k)?.onStatusChange("exited");
 		emitStatus(k, "exited", entry.exitCode);

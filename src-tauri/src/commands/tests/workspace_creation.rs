@@ -1564,7 +1564,7 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
             ("db-setup", &harness.repo_id),
         )
         .unwrap();
-    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent")
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     // Finalize so the worktree exists, then rewrite the worktree's
@@ -1616,7 +1616,7 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
             ("db-setup", &harness.repo_id),
         )
         .unwrap();
-    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent")
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
@@ -1659,7 +1659,7 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
             ("db-setup", "db-archive", &harness.repo_id),
         )
         .unwrap();
-    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent")
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
