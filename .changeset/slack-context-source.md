@@ -4,7 +4,6 @@
 
 Add Slack as a Context source.
 
-- Import every workspace from your local Slack desktop session — no bot, no admin OAuth approval.
-- Browse a unified mentions + unread-DM activity feed in the sidebar, with a workspace switcher in the section header.
-- Search any workspace with a free-text box that accepts Slack's native operators (`from:@alice`, `in:#chan`, `has:link`, `is:thread`), and toggle results between Newest and Most relevant.
-- Click any item to preview the full thread in the existing content panel.
+- Import every workspace straight from your local Slack desktop session — no bot, no admin OAuth approval.
+- Browse a unified mentions + DM activity feed in the sidebar, search any workspace with Slack's native operators (`from:@alice`, `in:#chan`, `has:link`, `is:thread`), and click through to a full-fidelity thread preview with inline images and video.
+- Add a thread to context and the agent receives the conversation as structured prose plus every shared image as direct vision input — no Read-tool detour.
