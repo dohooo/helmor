@@ -84,10 +84,18 @@ export function handleImportResult(
 	const alreadyCount = result.alreadyConnected.length;
 	const failedCount = result.failed.length;
 
+	// Branch on outcome: "nothing happened" is a neutral default toast,
+	// any failed slot makes the whole batch destructive (we want the user
+	// to see the red affordance even if some succeeded), and a clean run
+	// must opt into the default variant explicitly — `pushWorkspaceToast`
+	// defaults to destructive when no variant is passed (it's the
+	// app-wide "action failed" channel), so leaving it `undefined` would
+	// render success in red.
 	if (importedCount === 0 && alreadyCount === 0 && failedCount === 0) {
 		pushToast(
 			"No signed-in Slack workspaces were found in your desktop app.",
 			"Nothing to import",
+			"default",
 		);
 		return;
 	}
@@ -108,7 +116,7 @@ export function handleImportResult(
 	pushToast(
 		message,
 		failedCount > 0 ? "Slack import: partial" : "Slack import",
-		failedCount > 0 ? "destructive" : undefined,
+		failedCount > 0 ? "destructive" : "default",
 	);
 }
 

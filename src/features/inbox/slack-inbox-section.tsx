@@ -83,10 +83,20 @@ export function SlackInboxSection({
 	// results when the user is actively typing. Always call both hooks
 	// (one will be disabled internally) so the rules-of-hooks order
 	// stays stable across the empty ↔ searching transition.
+	//
+	// We only feed the IPC layer an `activeTeamId` once it actually
+	// shows up in the workspaces list — otherwise an import + auto-
+	// select race can fire `slack_list_inbox_items` for a team_id the
+	// backend hasn't observed yet, yielding a spurious "workspace is
+	// not connected" toast right after a successful import.
 	const trimmedQuery = debouncedQuery.trim();
 	const isSearching = trimmedQuery.length > 0;
-	const activity = useSlackInboxItems(isSearching ? null : activeTeamId);
-	const searchResults = useSlackSearch(activeTeamId, trimmedQuery, sort);
+	const safeTeamId =
+		activeTeamId !== null && workspaces.some((w) => w.teamId === activeTeamId)
+			? activeTeamId
+			: null;
+	const activity = useSlackInboxItems(isSearching ? null : safeTeamId);
+	const searchResults = useSlackSearch(safeTeamId, trimmedQuery, sort);
 	const inbox = isSearching ? searchResults : activity;
 	const cards = useMemo<ContextCard[]>(
 		() =>
