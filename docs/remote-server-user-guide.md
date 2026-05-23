@@ -50,8 +50,12 @@ On the **remote** machine:
 
 - Linux (x86_64 or arm64) or macOS (arm64 or x86_64).
 - An SSH daemon you can log in to.
-- `curl` and `tar` on `$PATH`. (Default-installed on every supported
-  distro.)
+- A downloader on `$PATH` — either `curl` or `wget`. Helmor's
+  install script tries both before failing.
+- A SHA-256 hasher on `$PATH` — either `sha256sum` (default on
+  every Linux distro via GNU coreutils) or `shasum` (default on
+  macOS). Again, either works.
+- `tar` on `$PATH` (universal).
 - ~50 MB free under `$HOME/.helmor/server/`.
 - For agent workloads: the same `$HELMOR_SIDECAR_PATH` (or default
   managed location) where the `helmor-sidecar` binary will live.
@@ -125,26 +129,38 @@ After registering a remote, any workspace can be bound to it:
 1. Open the workspace context menu (right-click the workspace row in
    the sidebar).
 2. **Move to runtime → `<your remote>`**.
-3. A small **Move workspace** dialog appears asking for an optional
-   **Remote path**:
-   - Leave blank if the workspace sits at the same absolute path on
-     both sides (`~/code/foo` on macOS happens to map to
-     `/Users/d/code/foo`, which exists on a Linux remote with
-     `/home/d/code/foo` only if the layout happens to match).
-   - Otherwise type the absolute path on the remote
-     (`/home/dwork/code/foo`). Every workspace op — file reads,
-     `git status`, agent runs — uses this path on the daemon side
-     instead of the local one. Helmor itself does NOT copy files;
-     you're expected to have cloned / rsynced the workspace to the
-     destination yourself.
-4. Helmor updates the binding in the local DB and the sidebar row
+3. A small **Move workspace** dialog appears with three controls:
+   - **Remote path** (optional unless cloning) — the absolute path
+     on the remote (`/home/dwork/code/foo`). Leave blank if the
+     workspace sits at the same absolute path on both sides
+     (rarely true across macOS-Linux pairs — usually fill it in).
+     Every workspace op — file reads, `git status`, agent runs —
+     uses this path on the daemon side instead of the local one.
+   - **Clone from current binding** (toggle) — when on, Helmor
+     bundles the workspace's full `.git` on the source runtime
+     and streams it to the destination over the wire in 4 MiB
+     chunks (no 10 MiB single-shot ceiling). Chunked transfer
+     supports real repository histories.
+       * Requires **Remote path** to be set (the destination of
+         the `git clone`).
+       * Performance: budget roughly **0.5–2 seconds per MiB of
+         packed `.git`** end-to-end (bundle + ship + clone).
+   - **Cancel / Move workspace** — confirm or back out.
+4. If you've moved this workspace between hosts before, the
+   **Remote path** input pre-fills with the path you used last
+   time on the destination runtime. The memory is per-host:
+   moving from `dev.box` to `gpu.box` and back to `dev.box`
+   restores the original `dev.box` path automatically — no
+   re-typing.
+5. Helmor updates the binding in the local DB. The sidebar row
    gains a small chip showing the bound runtime
-   (`myproject @ dev-stage`). If a remote path is set, hovering the
-   chip shows it.
+   (`myproject @ dev-stage`). Hovering the chip shows the remote
+   path when one is set.
 
 Moving back to `local` (right-click → **Move to runtime → Local**)
-clears the binding entirely — both the runtime pin and any remote
-path override.
+clears the active binding. The per-host **path memory** is
+preserved — if you later move back to a remote you've used
+before, the dialog still pre-fills.
 
 Workspaces with no binding default to the built-in `local` runtime
 and run on your laptop, unchanged.
@@ -171,6 +187,20 @@ Helmor's resilience story leans on the daemon's event journal:
 
 A drop of <1s usually completes the reconnect inside one auto-loop
 tick (5s); the user sees the chip flicker amber and that's it.
+
+Two additional banners fire when the remote misbehaves
+persistently:
+
+- **Crash-loop banner**: appears when the daemon respawns 3+ times
+  in 5 minutes. Indicates a daemon-side bug or a misbehaving
+  sidecar; the banner exposes the recent restart timestamps and
+  points at the daemon log path for triage.
+- **Version drift banner**: appears when the daemon's
+  `helmor-server` binary is older than the desktop's expected
+  protocol-matched version (typically after the desktop upgrades
+  but the remote install didn't auto-renew). One-click
+  **Reinstall daemon** force-installs the matching binary and
+  reconnects.
 
 ## Troubleshooting
 
@@ -301,6 +331,29 @@ ssh <host> tail -f ~/.helmor/server/daemon.log
 Or from inside the desktop without an extra SSH session: the
 `daemon.tailLog` RPC is wired into the dev-only Runtime Debug
 panel (Settings → Developer → Runtime Debug → Daemon log).
+
+### Copy diagnostics (production support escape hatch)
+
+When something's wrong and you need to share state with someone
+without screen-sharing:
+
+1. **Settings → Remote Servers → your remote row → Diagnostics**.
+2. A JSON blob lands on your clipboard with everything a support
+   reviewer needs:
+   - Runtime state (connected / degraded / disconnected + reason).
+   - The daemon's reported version and protocol version.
+   - RPC pipe telemetry: requests sent, responses received,
+     notifications, decode errors, ping latency.
+   - Per-method RPC metrics: counts, error rates, p50/p99 latency.
+   - Last 50 lines of the daemon log.
+   - Desktop envelope: platform + user agent (no PII beyond that).
+3. Paste into the support thread / issue. No secrets cross the
+   wire — provider API keys live on the remote and never appear
+   in the blob.
+
+The button is disabled when the runtime isn't currently connected
+(the daemon can't answer the RPCs that fill the blob). Reconnect
+first if you need diagnostics from a degraded host.
 
 ## Security model
 

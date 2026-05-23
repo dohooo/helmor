@@ -122,6 +122,18 @@ runs on. Surfaced in the runtime diagnostics panel.
 | `workspace.search` | Codebase search (ripgrep-style under the hood). |
 | `workspace.startWatch` | Subscribe to per-file change notifications. |
 | `workspace.stopWatch` | Unsubscribe. |
+| `workspace.bundleBegin` | Track F3: open a chunked outbound transfer of the workspace's `.git`. Returns `transfer_id` + `total_size` + `sha256` + `chunk_count`. |
+| `workspace.bundleChunk` | Fetch one chunk of the bundle by index. |
+| `workspace.bundleEnd` | Release the server-side transfer state. |
+| `workspace.unbundleBegin` | Track F3: open a chunked inbound transfer + announce the target path on the destination runtime. |
+| `workspace.unbundleChunk` | Push one chunk in order. |
+| `workspace.unbundleFinish` | Verify the assembled SHA-256, run `git clone` into the target path. |
+
+The chunked transfer pair lifts the previous 10 MiB single-shot
+ceiling. Default chunk size is 4 MiB (caller-tunable up to 8 MiB),
+which stays inside the codec's 16 MiB frame budget after base64
+inflation. Total transfer size is capped at 2 GiB; transfers idle
+for >5 min are reaped by the server-side sweep.
 
 Full param + result shapes live in
 [`src-tauri/src/remote/methods.rs`](../src-tauri/src/remote/methods.rs).
@@ -348,6 +360,29 @@ with the original event payload + the daemon's monotonic seq.
 
 `seq` is per-session, never resets, drives the desktop's
 `since_seq` cursor on reattach.
+
+### Notification: `terminal.event`
+
+Every byte the remote PTY emits flows back keyed by `terminal_id`.
+The daemon holds a 256 KiB scrollback ring so a `terminal.attach`
+from a fresh client receives the buffered output before live
+streaming resumes.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "terminal.event",
+  "params": {
+    "terminalId": "uuid",
+    "kind": "data",
+    "bytes": "<base64>"
+  }
+}
+```
+
+`kind` is one of `data` (PTY stdout/stderr bytes), `exit` (process
+ended, includes `exitCode`), or `closed` (the daemon released the
+entry on a client-driven `terminal.close`).
 
 ## Errors
 

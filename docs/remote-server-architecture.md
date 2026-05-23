@@ -208,7 +208,7 @@ turns. The journal is best-effort; the local DB is authoritative.
   ([`src-tauri/src/agents/persistence.rs`](../src-tauri/src/agents/persistence.rs))
   absorbs any overlap.
 
-## 7. Auto-reconnect
+## 7. Auto-reconnect + drift detection
 
 When the liveness loop transitions a runtime to `Disconnected`, the
 auto-reconnect loop
@@ -223,6 +223,26 @@ and re-fire their discovery effects. `useWorkspaceRemoteReattach`
 threads the epoch through its `useEffect` deps so the chat thread
 automatically resumes from the journal on reconnect — no user
 action required.
+
+Two banners share the same publish/subscribe seam:
+
+- **Crash-loop guard** (Track E4) — the daemon emits a
+  `crash` event when it respawns; the desktop counts events within
+  a 5-minute window and surfaces "remote daemon crashed N times in
+  5 min" once the threshold trips. Source:
+  [`src-tauri/src/remote/server/crash_history.rs`](../src-tauri/src/remote/server/crash_history.rs)
+  + the frontend banner at
+  [`src/shell/components/remote-crash-loop-banner.tsx`](../src/shell/components/remote-crash-loop-banner.tsx).
+- **Version drift banner** — after every connect / reconnect, the
+  desktop compares the daemon's `runtime.health.version` against
+  its own `CARGO_PKG_VERSION`. If the daemon is *older*, the
+  desktop emits `UiMutationEvent::RemoteServerVersionDrift`; the
+  banner offers a single-click "Reinstall daemon" action that
+  force-installs the matching binary and reconnects. Decoupled
+  from protocol-version negotiation (§4) — protocol mismatch
+  auto-installs without user input; version drift is informational
+  + user-actioned. Source:
+  [`src/shell/components/remote-version-drift-banner.tsx`](../src/shell/components/remote-version-drift-banner.tsx).
 
 ## 8. Session state lifecycle
 
@@ -256,11 +276,17 @@ doesn't re-replay a finished session every time it opens.
 ## 9. Workspace bindings + path translation
 
 A workspace's binding (`workspace_runtime_bindings.json`) carries two
-fields:
+fields plus a sidecar memory table:
 
 - `runtimeName` — which runtime the workspace's ops route through.
 - `remotePath` (Track F2, optional) — the absolute path the daemon
   should resolve as the workspace root.
+- `rememberedPaths` (Track F2.1, optional) — sidecar table of
+  `(workspaceId, runtimeName) → remotePath` so a workspace that's
+  lived on multiple runtimes remembers each host's path
+  independently. Pre-fills the move-workspace dialog when the
+  operator rebinds back to a host they've used before. Memory
+  only flows into the UI; never reads runtime path resolution.
 
 Every workspace-op command in
 [`src-tauri/src/commands/remote_commands.rs`](../src-tauri/src/commands/remote_commands.rs)
@@ -282,8 +308,16 @@ Three precedence rules govern the override:
    desktop's filesystem.
 
 Cross-host moves (Track F3) populate `remote_path` via the move
-dialog. The dialog never copies files; the operator's expected to
-clone/rsync the workspace to the destination before binding.
+dialog and, when the operator ticks **Clone from current binding**,
+also run the chunked bundle/clone flow end-to-end:
+`workspace.bundleBegin` → N × `workspace.bundleChunk` on the source
+runtime → desktop ships the bytes through →
+`workspace.unbundleBegin` → N × `workspace.unbundleChunk` →
+`workspace.unbundleFinish` on the destination, which runs
+`git clone` into the new path. The 10 MiB single-shot ceiling is
+gone; chunked transfers handle real `.git` directories. With the
+toggle off the dialog only rebinds — the operator's expected to
+have copied files themselves.
 
 ## 9b. Local-runtime key vault (Track G, cross-platform)
 
@@ -358,6 +392,32 @@ service `com.helmor.api-keys`. The trait surfaces (`agent_set_auth`,
 `agent_auth_status`) default-bail on the local runtime so the desktop
 knows to consult the local settings inspector instead.
 
+## 10b. Observability (Track E)
+
+The daemon and the desktop publish enough state to triage a
+support thread without a screen-share session:
+
+- **Daemon log tail** — `daemon.tailLog(max_lines)` reads the last
+  N lines of `$HOME/.helmor/server/daemon.log` over the wire.
+  Surfaced inline in the dev-only Runtime Debug panel; bundled
+  into the diagnostics export (below) for production users.
+- **RPC metrics** — `runtime.metrics` returns per-method call
+  counts + error counts + p50/p99 latency from a bounded
+  in-memory ring (512 samples per method) plus the daemon's
+  uptime + recent restart timestamps. Source:
+  [`src-tauri/src/remote/server/metrics.rs`](../src-tauri/src/remote/server/metrics.rs).
+- **Diagnostics export (Track E3)** — the production Remote
+  Servers panel renders a per-row **Diagnostics** button that
+  fetches `daemon.tailLog(50)` + `runtime.metrics` +
+  `RuntimeDiagnostics` (state, RPC pipe telemetry, ping) in
+  parallel and writes one JSON blob to the clipboard. Shared
+  builder at
+  [`src/lib/diagnostics-payload.ts`](../src/lib/diagnostics-payload.ts);
+  the dev-only Runtime Debug panel uses the exact same function.
+  `Promise.allSettled` so a failed probe lands as
+  `{error: <message>}` in its slot rather than blanking the
+  whole export.
+
 ## 11. Connection options (Track G3)
 
 `RuntimeConnectionConfig::Ssh` carries a `forward_agent: bool` field
@@ -389,16 +449,16 @@ Variables the daemon and desktop honor:
 - **File sync**: the daemon serves the workspace files where they
   live on the remote. There is no local mirror. File operations
   (read/write/list) flow through `workspace_*` RPC methods.
-- **Cross-platform secret vault**: macOS Keychain is wired today.
-  Linux / Windows backends are on the roadmap — until they ship,
-  the desktop's local-runtime keys fall back to SQLite plaintext on
-  those platforms.
-- **Helmor-driven file transfer**: F3's clone-from-binding workflow
-  (run `git bundle` / `git clone` on the destination) is on the
-  roadmap; today the operator copies files into the remote path
-  themselves before binding.
 - **Web client**: out of scope. The Tauri desktop app is the only
   client.
+- **Settings sync**: Helmor settings don't propagate across hosts.
+  Each desktop install has its own settings; remote workspaces
+  inherit nothing UX-side from the host. Tracked as parity gap vs.
+  VS Code Remote-SSH / Zed Remote.
+- **Workspace path picker on the remote filesystem**: today the
+  wizard requires typing the workspace path. Browsing the remote
+  filesystem to pick is a roadmap item but not in scope of the
+  current shipping surface.
 
 ## See also
 
