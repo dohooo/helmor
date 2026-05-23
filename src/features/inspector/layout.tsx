@@ -1,5 +1,12 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, useCallback, useContext } from "react";
+import {
+	createContext,
+	type RefObject,
+	useCallback,
+	useContext,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -314,6 +321,40 @@ export function InspectorTabsSection({
 		[open, activeTab, onTabChange, onToggle],
 	);
 
+	// Run-tab dropdown open state is lifted here so the Run label button
+	// can also act as a trigger when the tab is already active — letting
+	// the user click anywhere on the active Run tab (not just the chevron)
+	// to open the action menu. While Run is inactive the label keeps its
+	// normal tab-switching role; only the chevron opens the menu.
+	const [runMenuOpen, setRunMenuOpen] = useState(false);
+	const runLabelRef = useRef<HTMLButtonElement>(null);
+
+	const handleRunMenuOpenChange = useCallback(
+		(next: boolean) => {
+			setRunMenuOpen(next);
+			// Keep the hover-zoom controller in the loop so the panel
+			// doesn't collapse mid-menu when the cursor enters a portaled
+			// item — same fix the chevron always relied on.
+			handleTabContextMenuOpenChange(next);
+		},
+		[handleTabContextMenuOpenChange],
+	);
+
+	const handleRunTabClick = useCallback(() => {
+		if (activeTab === "run") {
+			// Already on Run — the whole tab acts as the dropdown trigger.
+			// Toggle so a second click on the label closes the menu, matching
+			// the chevron's behaviour.
+			setRunMenuOpen((prev) => {
+				const next = !prev;
+				handleTabContextMenuOpenChange(next);
+				return next;
+			});
+			return;
+		}
+		handleTabClick("run");
+	}, [activeTab, handleTabClick, handleTabContextMenuOpenChange]);
+
 	// "+" / placeholder Terminal: spawning a terminal while the panel is
 	// collapsed would create one the user can't see — pop the panel open too.
 	const handleNewTerminalClick = useCallback(() => {
@@ -460,9 +501,16 @@ export function InspectorTabsSection({
 									<button
 										type="button"
 										role="tab"
+										ref={runLabelRef}
 										id="inspector-tab-run"
 										aria-controls="inspector-panel-run"
 										aria-selected={activeTab === "run"}
+										// Once Run is the active tab, the label doubles as the
+										// dropdown trigger; advertise that to assistive tech.
+										aria-haspopup={activeTab === "run" ? "menu" : undefined}
+										aria-expanded={
+											activeTab === "run" ? runMenuOpen : undefined
+										}
 										tabIndex={activeTab === "run" ? 0 : -1}
 										className={cn(
 											INSPECTOR_TAB_BUTTON_CLASS,
@@ -472,7 +520,7 @@ export function InspectorTabsSection({
 											"shrink-0 pr-1",
 											activeTab === "run" && "text-foreground",
 										)}
-										onClick={() => handleTabClick("run")}
+										onClick={handleRunTabClick}
 									>
 										<ScriptStatusIcon state={runScriptState} />
 										{/* Capped width + truncate so a long custom action
@@ -487,7 +535,9 @@ export function InspectorTabsSection({
 										activeRunActionId={activeRunActionId}
 										onSelectRunAction={onSelectRunAction}
 										onCreateRunAction={onCreateRunAction}
-										onOpenChange={handleTabContextMenuOpenChange}
+										open={runMenuOpen}
+										onOpenChange={handleRunMenuOpenChange}
+										labelRef={runLabelRef}
 									/>
 									<span
 										aria-hidden="true"
@@ -744,7 +794,9 @@ function RunActionsDropdown({
 	activeRunActionId,
 	onSelectRunAction,
 	onCreateRunAction,
+	open,
 	onOpenChange,
+	labelRef,
 }: {
 	activeTab: string;
 	workspaceId: string | null;
@@ -752,11 +804,17 @@ function RunActionsDropdown({
 	activeRunActionId: string | null;
 	onSelectRunAction: (id: string) => void;
 	onCreateRunAction: () => void;
-	// Bridges Radix's open-state to the hover-zoom controller. Without this,
-	// the portaled menu fires `mouseleave` on the tabs container the moment
-	// the cursor enters a menu item, collapsing the panel mid-open. Same
-	// fix as the tab right-click ContextMenu above.
-	onOpenChange?: (open: boolean) => void;
+	/** Controlled open state — lifted to the parent so the Run label can
+	 * also toggle this menu when the tab is active. */
+	open: boolean;
+	/** Combined sink: updates the lifted state AND bridges to the hover-zoom
+	 * controller (so the portaled menu doesn't collapse the panel the moment
+	 * the cursor enters a menu item). */
+	onOpenChange: (open: boolean) => void;
+	/** Reference to the Run-tab label button. Used by the menu's outside-
+	 * click handler so a click on the label is owned by the label's own
+	 * toggle rather than being auto-closed by Radix mid-toggle. */
+	labelRef: RefObject<HTMLButtonElement | null>;
 }) {
 	// Resolve which radio value should be checked. Falls back to the first
 	// action when the persisted id is missing or stale (recently deleted).
@@ -765,7 +823,7 @@ function RunActionsDropdown({
 		runActions[0]?.id ??
 		"";
 	return (
-		<DropdownMenu onOpenChange={onOpenChange}>
+		<DropdownMenu open={open} onOpenChange={onOpenChange}>
 			<DropdownMenuTrigger asChild>
 				<button
 					type="button"
@@ -797,7 +855,20 @@ function RunActionsDropdown({
 			    right edge lines up cleanly with the trigger. Min width is
 			    tight; Radix grows the panel to fit the longest item, so
 			    short labels stay compact. */}
-			<DropdownMenuContent align="end" className="min-w-[112px]">
+			<DropdownMenuContent
+				align="end"
+				className="min-w-[112px]"
+				onPointerDownOutside={(event) => {
+					// The Run-tab label is also a trigger when the tab is
+					// active. Without this guard, Radix would close the
+					// menu on the same pointerdown that the label's onClick
+					// is about to re-toggle, leaving it stuck open.
+					const target = event.target as Node | null;
+					if (target && labelRef.current?.contains(target)) {
+						event.preventDefault();
+					}
+				}}
+			>
 				{runActions.length > 0 && (
 					<>
 						<DropdownMenuRadioGroup
