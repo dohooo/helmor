@@ -331,6 +331,13 @@ pub fn users_conversations_dms(creds: &SlackCreds) -> Result<Vec<ConversationRow
 /// `search.messages`. The shape differs subtly between endpoints but the
 /// fields we read overlap, so a permissive `serde(default)` parse covers
 /// all three.
+///
+/// `text` is what Slack calls the "fallback" / legacy markdown body and
+/// is OFTEN EMPTY for bot messages (GitHub, Linear, Datadog, …) — those
+/// put their visible content in `attachments[]` instead. Newer Slack
+/// clients also publish bodies via `blocks[]` (the Block Kit format).
+/// Call [`extract_display_text`] to pull a usable preview from any of
+/// the three.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawMessage {
     #[serde(default)]
@@ -341,6 +348,15 @@ pub struct RawMessage {
     pub username_fallback: Option<String>,
     #[serde(default)]
     pub text: String,
+    /// Block Kit blocks. Stored as raw `Value` because the schema is
+    /// nested and we only walk a handful of paths.
+    #[serde(default)]
+    pub blocks: Vec<Value>,
+    /// Legacy attachment array used by every Slack bot integration we
+    /// care about (GitHub, Linear, …). Same reason for `Value` — too
+    /// many optional shapes to model strictly.
+    #[serde(default)]
+    pub attachments: Vec<Value>,
     #[serde(default)]
     pub thread_ts: Option<String>,
     #[serde(default)]
@@ -349,6 +365,170 @@ pub struct RawMessage {
     pub channel: Option<RawSearchChannel>,
     #[serde(default)]
     pub reactions: Vec<RawReaction>,
+}
+
+/// Best-effort "what should we put in a preview / detail body" for a
+/// Slack message. Tries:
+///
+///   1. `text` itself, if non-empty — fastest path, covers user messages.
+///   2. Block Kit `blocks[]` walk — recovers rich-text bodies where
+///      Slack only set `blocks` (no fallback text).
+///   3. `attachments[]` — bot messages (GitHub, Linear, …) live here.
+///      We prefer `attachments[].fallback` (the canonical single-line
+///      summary that bots set explicitly for plain-text rendering),
+///      then fall back to concatenating `pretext` / `title` / `text`.
+///
+/// Empty string when none of the above produces content (e.g. a message
+/// that is purely a file share with no caption — caller decides whether
+/// to render a placeholder).
+pub fn extract_display_text(raw: &RawMessage) -> String {
+    let primary = raw.text.trim();
+    if !primary.is_empty() {
+        return raw.text.clone();
+    }
+
+    let from_blocks = walk_blocks_for_text(&raw.blocks);
+    if !from_blocks.is_empty() {
+        return from_blocks;
+    }
+
+    walk_attachments_for_text(&raw.attachments)
+}
+
+/// Concatenate every plain-text leaf from a Block Kit block list. Slack
+/// supports a small number of element types that carry user-visible
+/// text; we cover the common cases and ignore the rest:
+///
+///   - `rich_text` block → `elements[].elements[].text`
+///   - `section`   block → `text.text`
+///   - `context`   block → `elements[].text`
+///   - `header`    block → `text.text`
+///
+/// Newlines preserved between top-level blocks. Empty leaves filtered.
+fn walk_blocks_for_text(blocks: &[Value]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "rich_text" => {
+                // rich_text wraps a list of "sub-blocks" (rich_text_section,
+                // rich_text_list, …) — each in turn has its own `elements`
+                // of inline tokens. Walk both levels.
+                if let Some(outer) = block.get("elements").and_then(Value::as_array) {
+                    for sub in outer {
+                        if let Some(inner) = sub.get("elements").and_then(Value::as_array) {
+                            let chunk: String = inner
+                                .iter()
+                                .filter_map(rich_text_element_text)
+                                .collect::<Vec<_>>()
+                                .join("");
+                            if !chunk.is_empty() {
+                                parts.push(chunk);
+                            }
+                        }
+                    }
+                }
+            }
+            "section" | "header" => {
+                if let Some(t) = block
+                    .get("text")
+                    .and_then(|t| t.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    let trimmed = t.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+            }
+            "context" => {
+                if let Some(elements) = block.get("elements").and_then(Value::as_array) {
+                    let chunk: String = elements
+                        .iter()
+                        .filter_map(|e| e.get("text").and_then(Value::as_str))
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !chunk.is_empty() {
+                        parts.push(chunk);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    parts.join("\n")
+}
+
+/// Inline rich-text element → text content. We round-trip user mentions
+/// (`<@U123>`), channel mentions (`<#C123|name>`), broadcasts
+/// (`<!channel>`), and links back into Slack mrkdwn so the frontend
+/// parser can keep handling them uniformly. Pure-text elements pass
+/// through verbatim.
+fn rich_text_element_text(element: &Value) -> Option<String> {
+    let kind = element.get("type").and_then(Value::as_str)?;
+    match kind {
+        "text" => element
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "user" => {
+            let user_id = element.get("user_id").and_then(Value::as_str)?;
+            Some(format!("<@{user_id}>"))
+        }
+        "channel" => {
+            let channel_id = element.get("channel_id").and_then(Value::as_str)?;
+            Some(format!("<#{channel_id}>"))
+        }
+        "broadcast" => {
+            let range = element
+                .get("range")
+                .and_then(Value::as_str)
+                .unwrap_or("channel");
+            Some(format!("<!{range}>"))
+        }
+        "link" => {
+            let url = element.get("url").and_then(Value::as_str)?;
+            let label = element.get("text").and_then(Value::as_str).unwrap_or(url);
+            if label == url {
+                Some(format!("<{url}>"))
+            } else {
+                Some(format!("<{url}|{label}>"))
+            }
+        }
+        "emoji" => element
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| format!(":{name}:")),
+        _ => None,
+    }
+}
+
+/// Bot-attachment text. Bots almost always set `fallback` to a single
+/// human-readable line ("[dosu-ai/dosu] Pull request opened by …") —
+/// that's our preferred preview. When fallback is absent we stitch
+/// `pretext` + `title` + `text` from the first attachment, mirroring
+/// what Slack desktop would show in the message column.
+fn walk_attachments_for_text(attachments: &[Value]) -> String {
+    for attachment in attachments {
+        if let Some(fallback) = attachment.get("fallback").and_then(Value::as_str) {
+            let trimmed = fallback.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        let parts: Vec<String> = ["pretext", "title", "text"]
+            .iter()
+            .filter_map(|k| attachment.get(*k).and_then(Value::as_str))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !parts.is_empty() {
+            return parts.join("\n");
+        }
+    }
+    String::new()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -607,6 +787,118 @@ mod tests {
     fn ts_to_millis_returns_zero_for_garbage() {
         assert_eq!(ts_to_millis(""), 0);
         assert_eq!(ts_to_millis("not-a-number"), 0);
+    }
+
+    fn raw_from_json(json: serde_json::Value) -> RawMessage {
+        serde_json::from_value(json).expect("Failed to deserialize RawMessage in test")
+    }
+
+    #[test]
+    fn extract_display_text_returns_text_when_present() {
+        let raw = raw_from_json(serde_json::json!({
+            "ts": "1700000000.000000",
+            "text": "hello team",
+        }));
+        assert_eq!(extract_display_text(&raw), "hello team");
+    }
+
+    #[test]
+    fn extract_display_text_falls_through_to_block_kit_rich_text() {
+        // A user message that only has Block Kit content (text is empty).
+        // Slack ships this shape for messages composed in the redesigned
+        // mobile / web composer.
+        let raw = raw_from_json(serde_json::json!({
+            "ts": "1700000000.000000",
+            "text": "",
+            "blocks": [
+                {
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_section",
+                            "elements": [
+                                { "type": "text", "text": "still tilted " },
+                                { "type": "emoji", "name": "joy" }
+                            ]
+                        }
+                    ]
+                }
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "still tilted :joy:");
+    }
+
+    #[test]
+    fn extract_display_text_round_trips_user_mentions_inside_rich_text() {
+        // Mentions land as their own element kind in Block Kit — we need
+        // to re-encode them as Slack mrkdwn so the frontend parser still
+        // sees `<@U123>` and can render the mention pill.
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "blocks": [
+                {
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_section",
+                            "elements": [
+                                { "type": "user", "user_id": "U123" },
+                                { "type": "text", "text": " ping" },
+                            ]
+                        }
+                    ]
+                }
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "<@U123> ping");
+    }
+
+    #[test]
+    fn extract_display_text_uses_attachment_fallback_for_bot_messages() {
+        // Shape lifted from a real GitHub bot mention: text is empty,
+        // body lives in `attachments[0].fallback`. The "@Mention in
+        // #channel" line in the UI is the kind label; the third line
+        // the user sees comes from this fallback.
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "attachments": [
+                {
+                    "color": "good",
+                    "fallback": "[dosu-ai/dosu] Pull request opened by jamestalton",
+                    "pretext": "ignored when fallback present",
+                }
+            ],
+        }));
+        assert_eq!(
+            extract_display_text(&raw),
+            "[dosu-ai/dosu] Pull request opened by jamestalton",
+        );
+    }
+
+    #[test]
+    fn extract_display_text_concatenates_attachment_fields_when_fallback_missing() {
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "attachments": [
+                {
+                    "pretext": "Heads up:",
+                    "title": "Deployment failed",
+                    "text": "See logs for details.",
+                }
+            ],
+        }));
+        assert_eq!(
+            extract_display_text(&raw),
+            "Heads up:\nDeployment failed\nSee logs for details.",
+        );
+    }
+
+    #[test]
+    fn extract_display_text_returns_empty_when_message_carries_only_attachments_or_files() {
+        // Pure-file share with no caption / blocks / attachment text.
+        // Caller decides how to placeholder this.
+        let raw = raw_from_json(serde_json::json!({ "text": "" }));
+        assert_eq!(extract_display_text(&raw), "");
     }
 
     #[test]

@@ -153,6 +153,7 @@ fn convert_search_match(
     let permalink = raw.permalink.clone().unwrap_or_default();
     let ts_millis = api::ts_to_millis(&raw.ts);
 
+    let snippet_source = api::extract_display_text(&raw);
     Ok(SlackInboxItem {
         id: format!("{}:{}:{}", team_id, channel.id, raw.ts),
         team_id: team_id.to_string(),
@@ -163,7 +164,7 @@ fn convert_search_match(
         thread_ts: raw.thread_ts,
         author_name: name,
         author_avatar_url: avatar_url,
-        text_snippet: truncate(&raw.text, MAX_SNIPPET_CHARS),
+        text_snippet: truncate(&snippet_source, MAX_SNIPPET_CHARS),
         ts_millis,
         permalink,
     })
@@ -218,6 +219,7 @@ fn snippet_for_dm(
         .flatten()
         .unwrap_or_default();
     let ts_millis = api::ts_to_millis(&message.ts);
+    let snippet_source = api::extract_display_text(&message);
     Ok(Some(SlackInboxItem {
         id: format!("{}:{}:{}", team_id, dm.id, message.ts),
         team_id: team_id.to_string(),
@@ -228,7 +230,7 @@ fn snippet_for_dm(
         thread_ts: message.thread_ts,
         author_name: name,
         author_avatar_url: avatar_url,
-        text_snippet: truncate(&message.text, MAX_SNIPPET_CHARS),
+        text_snippet: truncate(&snippet_source, MAX_SNIPPET_CHARS),
         ts_millis,
         permalink,
     }))

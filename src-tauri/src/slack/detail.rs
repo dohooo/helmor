@@ -66,6 +66,12 @@ pub fn get_thread_detail(
 fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackMessage {
     let (author_name, author_avatar_url) = resolve_author(team_id, creds, &raw);
     let ts_millis = api::ts_to_millis(&raw.ts);
+    // `raw.text` is empty for bot messages (GitHub etc.) and for richly
+    // composed messages where Slack only published the body via
+    // `blocks[]`. Walk the alternatives once here so the detail view
+    // never falls through to "(empty message)" for content that's
+    // visibly there in Slack.
+    let text = api::extract_display_text(&raw);
     let reactions = raw
         .reactions
         .into_iter()
@@ -76,7 +82,7 @@ fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackM
         user_id: raw.user_id.clone(),
         author_name,
         author_avatar_url,
-        text: raw.text,
+        text,
         ts_millis,
         reactions,
     }
