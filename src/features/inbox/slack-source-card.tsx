@@ -8,7 +8,11 @@ import {
 } from "@/components/ui/tooltip";
 import type { SlackInboxItem } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
-import { renderSlackText, type SlackEmoji } from "@/lib/slack-text";
+import {
+	formatSlackTextPlain,
+	renderSlackText,
+	type SlackEmoji,
+} from "@/lib/slack-text";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { buildCardContextPayload } from "./source-card";
@@ -43,7 +47,7 @@ export const SlackSourceCard = memo(function SlackSourceCard({
 	const meta = describeKind(item);
 	return (
 		<article
-			aria-label={`${item.authorName}: ${item.textSnippet}`}
+			aria-label={`${item.authorName}: ${formatSlackTextPlain(item.textSnippet)}`}
 			role={onOpen ? "button" : undefined}
 			tabIndex={onOpen ? 0 : undefined}
 			onClick={() => onOpen?.(card)}

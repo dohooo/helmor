@@ -277,6 +277,56 @@ export function SlackEmojiInline({
 	);
 }
 
+// ── Plain-text formatter ────────────────────────────────────────────────
+
+/** Rewrite Slack mrkdwn-style tokens into a plain readable string —
+ *  no React nodes, no markup. Use this for chip labels, tab titles,
+ *  aria-labels, composer submit text, and any other context where the
+ *  string is consumed as data rather than rendered through the pill
+ *  components.
+ *
+ *  Token replacement table:
+ *
+ *    <@U123|name>          → @name
+ *    <@U123>               → @U123
+ *    <#C123|name>          → #name
+ *    <#C123>               → #C123
+ *    <https://…|label>     → label
+ *    <https://…>           → https://…
+ *    :emoji:               → unicode if resolvable via `opts.emoji`,
+ *                            otherwise leave the `:name:` intact
+ *
+ *  Newlines are collapsed to single spaces — chip/tab consumers all
+ *  want single-line text. Empty inputs round-trip as empty strings. */
+export function formatSlackTextPlain(
+	text: string,
+	opts: { emoji?: Record<string, SlackEmoji> } = {},
+): string {
+	if (!text) return "";
+	const replaced = text
+		// User mention with label: <@U123|name> → @name
+		.replace(/<@[UW][A-Z0-9]+\|([^>]+)>/g, "@$1")
+		// User mention without label: <@U123> → @U123
+		.replace(/<@([UW][A-Z0-9]+)>/g, "@$1")
+		// Channel mention with label: <#C123|name> → #name
+		.replace(/<#[CGD][A-Z0-9]+\|([^>]+)>/g, "#$1")
+		// Channel mention without label: <#C123> → #C123
+		.replace(/<#([CGD][A-Z0-9]+)>/g, "#$1")
+		// URL with label: <https://…|label> → label
+		.replace(/<(?:https?|mailto):[^|>\s]+\|([^>]+)>/g, "$1")
+		// Bare URL: <https://…> → https://…
+		.replace(/<((?:https?|mailto):[^>\s]+)>/g, "$1")
+		// :emoji: → unicode when the workspace table is available
+		.replace(/:([a-z0-9_+-]+):/gi, (raw, name: string) => {
+			if (!opts.emoji) return raw;
+			const resolved = resolveEmoji(name, opts.emoji);
+			return resolved?.kind === "unicode" ? resolved.char : raw;
+		});
+	// Collapse runs of whitespace (including \n inside textSnippet) to
+	// single spaces so the result fits a one-line chip/tab cleanly.
+	return replaced.replace(/\s+/g, " ").trim();
+}
+
 // ── Markdown preprocess ─────────────────────────────────────────────────
 
 /** Rewrite Slack `:shortcode:` occurrences inside a markdown string so

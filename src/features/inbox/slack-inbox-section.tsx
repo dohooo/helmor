@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { SlackInboxItem, SlackSearchSort } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { formatSlackTextPlain } from "@/lib/slack-text";
 import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
 import { InboxActionMenuButton, InboxSearchField } from "./actions";
 import { InboxSourceLayout } from "./layout";
@@ -343,9 +344,16 @@ function slackItemToContextCard(
 	};
 }
 
+/** Single-line plain title used by the ContextCard. Flows into chip
+ *  labels, the chat-session tab title, aria-labels — anywhere that
+ *  consumes the string as data rather than rendering it through the
+ *  Slack token pill components. Strips `<@U…|name>`, `<#C…|name>`,
+ *  `<url|label>` tokens via `formatSlackTextPlain` so the chip reads
+ *  as natural text instead of leaking the raw mrkdwn. */
 function titleForItem(item: SlackInboxItem): string {
-	if (item.kind === "mention") {
-		return item.textSnippet || `${item.authorName} mentioned you`;
-	}
-	return item.textSnippet || `${item.authorName} sent a message`;
+	const cleaned = formatSlackTextPlain(item.textSnippet);
+	if (cleaned) return cleaned;
+	return item.kind === "mention"
+		? `${item.authorName} mentioned you`
+		: `${item.authorName} sent a message`;
 }
