@@ -357,6 +357,13 @@ pub struct RawMessage {
     /// many optional shapes to model strictly.
     #[serde(default)]
     pub attachments: Vec<Value>,
+    /// Files attached to a message (image / video / pdf / voice memo).
+    /// File-share messages have no body text — Slack's own UI just
+    /// shows the attached media preview. We use `files` to synthesize
+    /// a one-line placeholder ("📎 Image" etc.) so users see "this
+    /// message had a file" instead of "(empty message)".
+    #[serde(default)]
+    pub files: Vec<Value>,
     #[serde(default)]
     pub thread_ts: Option<String>,
     #[serde(default)]
@@ -392,7 +399,80 @@ pub fn extract_display_text(raw: &RawMessage) -> String {
         return from_blocks;
     }
 
-    walk_attachments_for_text(&raw.attachments)
+    let from_attachments = walk_attachments_for_text(&raw.attachments);
+    if !from_attachments.is_empty() {
+        return from_attachments;
+    }
+
+    let from_files = describe_files(&raw.files);
+    if !from_files.is_empty() {
+        return from_files;
+    }
+
+    // Final miss: log enough to debug what we're getting. Sampled at
+    // debug level so it stays quiet in release-style runs but surfaces
+    // immediately under `HELMOR_LOG=debug`.
+    tracing::debug!(
+        ts = %raw.ts,
+        block_count = raw.blocks.len(),
+        attachment_count = raw.attachments.len(),
+        file_count = raw.files.len(),
+        "Slack message yielded no display text — investigate shape",
+    );
+    String::new()
+}
+
+/// One-line synthesized placeholder for file-share messages.
+///   1 file  → "📎 Image"  /  "📎 Video"  /  "📎 PDF"  /  "📎 voice-memo.m4a"
+///   2+ files → "📎 3 files"  (we don't enumerate beyond the first kind)
+///
+/// We prefer the file's MIME-typed name where it's recognisable
+/// ("image", "video", "audio", "pdf"); fall back to the file's
+/// `title`/`name` for everything else (Word docs, .gitignore, etc.).
+fn describe_files(files: &[Value]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    if files.len() > 1 {
+        return format!("📎 {} files", files.len());
+    }
+    let first = &files[0];
+    if let Some(label) = file_kind_label(first) {
+        return format!("📎 {label}");
+    }
+    if let Some(name) = first
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| first.get("name").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
+    {
+        return format!("📎 {name}");
+    }
+    "📎 Attachment".to_string()
+}
+
+/// Map a Slack file object → human-readable kind. Slack already
+/// classifies common types via `filetype` (e.g. "png", "jpg", "mov")
+/// and via the broader `mimetype` family prefix.
+fn file_kind_label(file: &Value) -> Option<&'static str> {
+    let mime = file.get("mimetype").and_then(Value::as_str).unwrap_or("");
+    if mime.starts_with("image/gif") {
+        return Some("GIF");
+    }
+    if mime.starts_with("image/") {
+        return Some("Image");
+    }
+    if mime.starts_with("video/") {
+        return Some("Video");
+    }
+    if mime.starts_with("audio/") {
+        return Some("Voice clip");
+    }
+    if mime == "application/pdf" {
+        return Some("PDF");
+    }
+    None
 }
 
 /// Concatenate every plain-text leaf from a Block Kit block list. Slack
@@ -894,9 +974,57 @@ mod tests {
     }
 
     #[test]
-    fn extract_display_text_returns_empty_when_message_carries_only_attachments_or_files() {
-        // Pure-file share with no caption / blocks / attachment text.
-        // Caller decides how to placeholder this.
+    fn extract_display_text_synthesizes_placeholder_for_image_file_share() {
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "files": [
+                { "mimetype": "image/png", "name": "screenshot.png", "title": "Screenshot" }
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "📎 Image");
+    }
+
+    #[test]
+    fn extract_display_text_synthesizes_placeholder_for_video_file_share() {
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "files": [
+                { "mimetype": "video/mp4", "name": "clip.mp4" }
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "📎 Video");
+    }
+
+    #[test]
+    fn extract_display_text_counts_multiple_files() {
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "files": [
+                { "mimetype": "image/png" },
+                { "mimetype": "image/png" },
+                { "mimetype": "image/jpeg" },
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "📎 3 files");
+    }
+
+    #[test]
+    fn extract_display_text_falls_back_to_file_title_for_unknown_mimetypes() {
+        // .gitignore / Word docs / unknown formats — preserve the
+        // visible name rather than a generic placeholder.
+        let raw = raw_from_json(serde_json::json!({
+            "text": "",
+            "files": [
+                { "mimetype": "application/vnd.openxmlformats", "name": "Q3-plan.docx", "title": "Q3 plan" }
+            ],
+        }));
+        assert_eq!(extract_display_text(&raw), "📎 Q3 plan");
+    }
+
+    #[test]
+    fn extract_display_text_returns_empty_when_message_carries_no_recoverable_signal() {
+        // Truly bodyless message — caller decides to fall back to a UI
+        // placeholder ("(empty message)") if it wants.
         let raw = raw_from_json(serde_json::json!({ "text": "" }));
         assert_eq!(extract_display_text(&raw), "");
     }

@@ -64,9 +64,11 @@ export const BUILTIN_EMOJI: Record<string, string> = {
 	hugging_face: "🤗",
 	star_struck: "🤩",
 	partying_face: "🥳",
+	"star-struck": "🤩",
 	sunglasses: "😎",
 	nerd_face: "🤓",
 	thinking_face: "🤔",
+	stuck_out_tongue_closed_eyes: "😝",
 	face_with_monocle: "🧐",
 	zipper_mouth_face: "🤐",
 	shushing_face: "🤫",
@@ -101,6 +103,7 @@ export const BUILTIN_EMOJI: Record<string, string> = {
 
 	// Hearts / love
 	heart: "❤️",
+	red_heart: "❤️",
 	orange_heart: "🧡",
 	yellow_heart: "💛",
 	green_heart: "💚",
