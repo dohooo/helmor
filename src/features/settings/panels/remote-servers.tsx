@@ -24,7 +24,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { KeyRound, Plug, Plug2, ServerCog } from "lucide-react";
+import { ClipboardList, KeyRound, Plug, Plug2, ServerCog } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AddRemoteServerWizard } from "@/components/add-remote-server-wizard";
@@ -33,12 +33,16 @@ import { Button } from "@/components/ui/button";
 import {
 	disconnectRemoteRuntime,
 	getRemoteRuntimeAuthStatus,
+	getRemoteRuntimeDiagnostics,
+	getRemoteRuntimeMetrics,
 	listRemoteRuntimes,
 	type RuntimeAuthStatus,
 	type RuntimeEntry,
 	type RuntimeState,
 	reconnectRemoteRuntime,
+	tailRemoteDaemonLog,
 } from "@/lib/api";
+import { buildDiagnosticsPayload } from "@/lib/diagnostics-payload";
 
 export function RemoteServersPanel() {
 	const queryClient = useQueryClient();
@@ -91,6 +95,46 @@ export function RemoteServersPanel() {
 		mutationFn: (name: string) => reconnectRemoteRuntime(name),
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["remote-runtimes"] });
+		},
+		onError: (err) => toast.error(formatError(err)),
+	});
+
+	// Track E3 (production): bundle metrics + diagnostics + the last
+	// 50 daemon log lines into a JSON blob the operator can paste
+	// into a support thread. The same payload the dev-only Runtime
+	// Debug panel produces, surfaced inline on the production panel
+	// so support requests don't require switching panels (or being
+	// on a dev build at all).
+	const copyDiagnostics = useMutation({
+		mutationFn: async (name: string) => {
+			const [metricsResult, diagnosticsResult, logResult] =
+				await Promise.allSettled([
+					getRemoteRuntimeMetrics(name),
+					getRemoteRuntimeDiagnostics(name),
+					tailRemoteDaemonLog(name, 50),
+				]);
+			// Metrics is required to shape the payload (the helper
+			// reads `uptimeSecs / methods / recentStartsMs`). If it
+			// failed, fall back to an empty stub so the rest still
+			// goes through.
+			const metrics =
+				metricsResult.status === "fulfilled"
+					? metricsResult.value
+					: { uptimeSecs: 0, recentStartsMs: [], methods: [] };
+			const payload = buildDiagnosticsPayload({
+				runtime: name,
+				metrics,
+				diagnosticsResult,
+				logResult,
+				capturedAtMs: Date.now(),
+				platform: typeof navigator !== "undefined" ? navigator.platform : null,
+				userAgent:
+					typeof navigator !== "undefined" ? navigator.userAgent : null,
+			});
+			await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+		},
+		onSuccess: () => {
+			toast.success("Diagnostics copied to clipboard");
 		},
 		onError: (err) => toast.error(formatError(err)),
 	});
@@ -156,6 +200,11 @@ export function RemoteServersPanel() {
 							onDisconnect={() => disconnect.mutate(entry.name)}
 							onReconnect={() => reconnect.mutate(entry.name)}
 							onSetAuth={() => setAuthRuntime(entry.name)}
+							onCopyDiagnostics={() => copyDiagnostics.mutate(entry.name)}
+							diagnosticsPending={
+								copyDiagnostics.isPending &&
+								copyDiagnostics.variables === entry.name
+							}
 							pending={
 								(disconnect.isPending && disconnect.variables === entry.name) ||
 								(reconnect.isPending && reconnect.variables === entry.name)
@@ -189,16 +238,20 @@ function RemoteServerRow({
 	entry,
 	authStatus,
 	pending,
+	diagnosticsPending,
 	onDisconnect,
 	onReconnect,
 	onSetAuth,
+	onCopyDiagnostics,
 }: {
 	entry: RuntimeEntry;
 	authStatus: RuntimeAuthStatus | null;
 	pending: boolean;
+	diagnosticsPending: boolean;
 	onDisconnect: () => void;
 	onReconnect: () => void;
 	onSetAuth: () => void;
+	onCopyDiagnostics: () => void;
 }) {
 	const stateLabel = formatStateLabel(entry.state);
 	const reconnectable = entry.state.type !== "connected";
@@ -258,6 +311,19 @@ function RemoteServerRow({
 						Reconnect
 					</Button>
 				)}
+				<Button
+					size="sm"
+					variant="ghost"
+					disabled={
+						pending || diagnosticsPending || entry.state.type !== "connected"
+					}
+					onClick={onCopyDiagnostics}
+					data-testid={`remote-server-copy-diagnostics-${entry.name}`}
+					title="Copy a JSON diagnostics blob for support threads — bundles connection state, RPC metrics, and recent daemon log lines"
+				>
+					<ClipboardList className="mr-1.5 size-3" />
+					{diagnosticsPending ? "Copying…" : "Diagnostics"}
+				</Button>
 				<Button
 					size="sm"
 					variant="ghost"

@@ -30,7 +30,6 @@ import {
 	connectCommandRuntime,
 	connectLocalRuntime,
 	connectRemoteRuntime,
-	type DaemonTailLogResult,
 	disconnectRemoteRuntime,
 	getRemoteRuntimeDiagnostics,
 	getRemoteRuntimeMetrics,
@@ -68,6 +67,7 @@ import {
 	type WorkspaceStatusResult,
 	writeRemoteTerminal,
 } from "@/lib/api";
+import { buildDiagnosticsPayload } from "@/lib/diagnostics-payload";
 import { cn } from "@/lib/utils";
 import {
 	SettingsGroup,
@@ -2784,47 +2784,10 @@ function formatUptime(secs: number): string {
 	return `${hrs}h ${mins % 60}m`;
 }
 
-/// Track E3: shape the "Copy diagnostics" JSON blob from the
-/// metrics-section state + a freshly-fetched diagnostics + log-tail
-/// pair. Exported as a pure function so the unit test can assert the
-/// payload shape without driving the wizard click flow + clipboard
-/// stub. The handler itself just wires this up + writes to
-/// `navigator.clipboard`.
-export function buildDiagnosticsPayload(args: {
-	runtime: string;
-	metrics: RuntimeMetricsResult;
-	diagnosticsResult: PromiseSettledResult<RuntimeDiagnostics>;
-	logResult: PromiseSettledResult<DaemonTailLogResult>;
-	capturedAtMs: number;
-	platform: string | null;
-	userAgent: string | null;
-}) {
-	return {
-		capturedAtMs: args.capturedAtMs,
-		runtime: args.runtime,
-		desktop: {
-			platform: args.platform,
-			userAgent: args.userAgent,
-		},
-		// Runtime state + RPC pipe telemetry + ping. The protocol
-		// version + server version land here via `diagnostics.client`
-		// — that's the field reviewers ask for first when triaging
-		// "is this a protocol-mismatch issue?".
-		diagnostics:
-			args.diagnosticsResult.status === "fulfilled"
-				? args.diagnosticsResult.value
-				: { error: formatErrorMessage(args.diagnosticsResult.reason) },
-		metrics: {
-			uptimeSecs: args.metrics.uptimeSecs,
-			recentStartsMs: args.metrics.recentStartsMs,
-			methods: args.metrics.methods,
-		},
-		daemonLog:
-			args.logResult.status === "fulfilled"
-				? args.logResult.value
-				: { error: formatErrorMessage(args.logResult.reason) },
-	};
-}
+// Track E3 `buildDiagnosticsPayload` lives in
+// `src/lib/diagnostics-payload.ts` so the production Remote Servers
+// panel can build the same blob without bundling the rest of the
+// Runtime Debug surface.
 
 function RemotePortForwardSection({ entries }: { entries: RuntimeEntry[] }) {
 	const remotes = useMemo(() => entries.filter((e) => !e.isLocal), [entries]);

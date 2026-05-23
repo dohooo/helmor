@@ -10,6 +10,9 @@ const apiMocks = vi.hoisted(() => ({
 	reconnectRemoteRuntime: vi.fn(),
 	connectRemoteRuntime: vi.fn(),
 	listSshHosts: vi.fn(),
+	getRemoteRuntimeMetrics: vi.fn(),
+	getRemoteRuntimeDiagnostics: vi.fn(),
+	tailRemoteDaemonLog: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -21,11 +24,19 @@ vi.mock("@/lib/api", async (importOriginal) => {
 		reconnectRemoteRuntime: apiMocks.reconnectRemoteRuntime,
 		connectRemoteRuntime: apiMocks.connectRemoteRuntime,
 		listSshHosts: apiMocks.listSshHosts,
+		getRemoteRuntimeMetrics: apiMocks.getRemoteRuntimeMetrics,
+		getRemoteRuntimeDiagnostics: apiMocks.getRemoteRuntimeDiagnostics,
+		tailRemoteDaemonLog: apiMocks.tailRemoteDaemonLog,
 	};
 });
 
+const toastMocks = vi.hoisted(() => ({
+	success: vi.fn(),
+	error: vi.fn(),
+}));
+
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn() },
+	toast: toastMocks,
 }));
 
 import type { RuntimeEntry } from "@/lib/api";
@@ -165,5 +176,45 @@ describe("RemoteServersPanel", () => {
 		expect(
 			await screen.findByTestId("add-remote-server-wizard"),
 		).toBeInTheDocument();
+	});
+
+	it("Copy diagnostics button is enabled when the runtime is connected", async () => {
+		// Production polish (Track E3): the diagnostics export is
+		// reachable from the prod Remote Servers panel (not just the
+		// dev-only Runtime Debug panel). The actual payload shape is
+		// covered by `buildDiagnosticsPayload`'s unit tests in
+		// `runtime-debug.test.tsx`; here we just assert the surface
+		// exists + is gated on connection state.
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			{
+				name: "dev.box",
+				isLocal: false,
+				state: { type: "connected" },
+			},
+		]);
+		const { wrapper } = withClient();
+		render(<RemoteServersPanel />, { wrapper });
+		const copyBtn = await screen.findByTestId(
+			"remote-server-copy-diagnostics-dev.box",
+		);
+		expect(copyBtn).not.toBeDisabled();
+	});
+
+	it("Copy diagnostics button is disabled while the runtime is disconnected", async () => {
+		apiMocks.listRemoteRuntimes.mockResolvedValue([
+			LOCAL_ENTRY,
+			{
+				name: "vps",
+				isLocal: false,
+				state: { type: "disconnected", reason: "ssh closed" },
+			},
+		]);
+		const { wrapper } = withClient();
+		render(<RemoteServersPanel />, { wrapper });
+		const copyBtn = await screen.findByTestId(
+			"remote-server-copy-diagnostics-vps",
+		);
+		expect(copyBtn).toBeDisabled();
 	});
 });

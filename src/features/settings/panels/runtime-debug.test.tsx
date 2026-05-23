@@ -88,8 +88,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	};
 });
 
+import { buildDiagnosticsPayload } from "@/lib/diagnostics-payload";
 import {
-	buildDiagnosticsPayload,
 	parseArgvInput,
 	parseSshUrl,
 	previewSpawnedCommand,
