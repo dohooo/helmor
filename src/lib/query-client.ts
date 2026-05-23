@@ -148,6 +148,8 @@ export const helmorQueryKeys = {
 	activeStreams: ["activeStreams"] as const,
 	slackWorkspaces: ["slackWorkspaces"] as const,
 	slackInbox: (teamId: string) => ["slackInbox", teamId] as const,
+	slackSearch: (teamId: string, query: string, sort: string) =>
+		["slackSearch", teamId, query, sort] as const,
 	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
 		["slackThread", teamId, channelId, anchorTs] as const,
 };

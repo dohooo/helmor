@@ -403,14 +403,35 @@ pub fn conversations_replies(
     serde_json::from_value(raw).context("Failed to decode conversations.replies messages")
 }
 
+/// Sort modes accepted by `search.messages`. `Timestamp` is the
+/// "Newest first" toggle most users want for an inbox-style list;
+/// `Score` is Slack's relevance ranking and matches Slack's own
+/// default search behavior.
+#[derive(Debug, Clone, Copy)]
+pub enum SearchSort {
+    Timestamp,
+    Score,
+}
+
+impl SearchSort {
+    fn as_param(self) -> &'static str {
+        match self {
+            SearchSort::Timestamp => "timestamp",
+            SearchSort::Score => "score",
+        }
+    }
+}
+
 /// `search.messages` — full-text-ish search for messages the user can
-/// see. We use it for the `@me` mentions feed. Cursor pagination is
+/// see. Used for both the `@me` mentions feed (timestamp sort) and the
+/// interactive search box (caller-chosen sort). Cursor pagination is
 /// page-number based for this endpoint.
 pub fn search_messages(
     team_id: &str,
     creds: &SlackCreds,
     query: &str,
     page: u32,
+    sort: SearchSort,
 ) -> Result<SearchMessagesPage> {
     let page_string = page.to_string();
     let body = call(
@@ -421,8 +442,12 @@ pub fn search_messages(
             ("query", query),
             ("count", "30"),
             ("page", page_string.as_str()),
-            ("sort", "timestamp"),
+            ("sort", sort.as_param()),
             ("sort_dir", "desc"),
+            // Slack's search index defaults to a per-user typo
+            // tolerance ("did you mean"). For the interactive box we
+            // want exactly what was typed, no auto-rewrite.
+            ("highlight", "false"),
         ],
     )?;
     let messages = body

@@ -76,6 +76,63 @@ pub async fn slack_list_inbox_items(
     .await
 }
 
+/// Sort hint forwarded to `search.messages`. Mirrors
+/// `crate::slack::api::SearchSort` but stays string-shaped at the IPC
+/// boundary so the wire format is self-describing in logs.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SlackSearchSort {
+    /// Newest first — Slack's `sort=timestamp`. Default for the
+    /// inbox-style list users see when typing in the search box.
+    Newest,
+    /// Slack's `sort=score` — relevance ranking from the search index.
+    Relevance,
+}
+
+impl From<SlackSearchSort> for slack_api::SearchSort {
+    fn from(value: SlackSearchSort) -> Self {
+        match value {
+            SlackSearchSort::Newest => slack_api::SearchSort::Timestamp,
+            SlackSearchSort::Relevance => slack_api::SearchSort::Score,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn slack_search_messages(
+    app: AppHandle,
+    team_id: String,
+    query: String,
+    sort: Option<SlackSearchSort>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+) -> CmdResult<crate::slack::types::SlackInboxPage> {
+    let limit = limit.unwrap_or(30).clamp(1, 100);
+    let sort = sort.unwrap_or(SlackSearchSort::Newest).into();
+    let app_handle = app.clone();
+    let team_id_for_lookup = team_id.clone();
+    run_blocking(move || {
+        let workspace = slack_workspaces::get_workspace(&team_id_for_lookup)?
+            .with_context(|| format!("Slack workspace {team_id_for_lookup} is not connected"))?;
+        match inbox::search(&workspace.team_id, &query, sort, cursor.as_deref(), limit) {
+            Ok(page) => Ok(page),
+            Err(error) => {
+                if inbox::is_invalid_auth(&error) {
+                    let _ = credentials::clear_credentials(&workspace.team_id);
+                    ui_sync::publish(
+                        &app_handle,
+                        UiMutationEvent::SlackTokenInvalidated {
+                            team_id: workspace.team_id.clone(),
+                        },
+                    );
+                }
+                Err(error)
+            }
+        }
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn slack_get_thread_detail(
     app: AppHandle,

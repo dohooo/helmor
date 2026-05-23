@@ -1718,6 +1718,38 @@ export async function slackListInboxItems(args: {
 	}
 }
 
+/** Sort mode forwarded to Slack `search.messages`. Mirrors the backend
+ *  `SlackSearchSort` enum — keep these two in lockstep. */
+export type SlackSearchSort = "newest" | "relevance";
+
+/** Run a free-text query against `search.messages` for one workspace.
+ *  The query string is sent verbatim, so Slack search modifiers
+ *  (`from:@alice`, `in:#chan`, `has:link`, `is:thread`, quoted phrases,
+ *  `-` negation, `OR`, …) compose without us having to teach the UI
+ *  about each one. Empty input short-circuits to zero results to avoid
+ *  burning a request on a match-everything query. */
+export async function slackSearchMessages(args: {
+	teamId: string;
+	query: string;
+	sort?: SlackSearchSort;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_search_messages", {
+			teamId: args.teamId,
+			query: args.query,
+			sort: args.sort ?? "newest",
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't search Slack messages."),
+		);
+	}
+}
+
 export async function slackGetThreadDetail(args: {
 	teamId: string;
 	channelId: string;

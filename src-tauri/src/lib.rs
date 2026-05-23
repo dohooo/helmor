@@ -487,6 +487,7 @@ pub fn run() {
             commands::slack_commands::slack_list_workspaces,
             commands::slack_commands::slack_disconnect_workspace,
             commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_search_messages,
             commands::slack_commands::slack_get_thread_detail
         ])
         .build(tauri::generate_context!())

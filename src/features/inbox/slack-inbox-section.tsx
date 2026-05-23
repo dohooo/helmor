@@ -1,15 +1,33 @@
-import { Loader2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Loader2 } from "lucide-react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { SlackInboxItem } from "@/lib/api";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { SlackInboxItem, SlackSearchSort } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
+import { InboxActionMenuButton, InboxSearchField } from "./actions";
 import { InboxSourceLayout } from "./layout";
 import { SlackConnectState } from "./slack-connect-button";
 import { SlackWorkspaceSwitcher } from "./slack-workspace-switcher";
 import { SourceCard } from "./source-card";
+import { useDebouncedValue } from "./use-debounced-value";
 import { useSlackInboxItems } from "./use-slack-inbox-items";
+import { useSlackSearch } from "./use-slack-search";
 import { useSlackWorkspaces } from "./use-slack-workspaces";
+
+/** Sort-mode labels for the right-side dropdown. Order matches Slack's
+ *  own UI: timestamp first because the inbox is fundamentally a "what's
+ *  new" surface. */
+const SORT_OPTIONS: { id: SlackSearchSort; label: string }[] = [
+	{ id: "newest", label: "Newest" },
+	{ id: "relevance", label: "Most relevant" },
+];
 
 /** Self-contained Slack subtree of the Contexts sidebar. Owns:
  *
@@ -34,6 +52,9 @@ export function SlackInboxSection({
 	const workspacesQuery = useSlackWorkspaces();
 	const workspaces = workspacesQuery.data ?? [];
 	const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
+	const [searchInput, setSearchInput] = useState("");
+	const debouncedQuery = useDebouncedValue(searchInput, 250);
+	const [sort, setSort] = useState<SlackSearchSort>("newest");
 
 	// Auto-select the first workspace once the list resolves. Keeping the
 	// state local rather than persisted matches v1 scope: a hard reload
@@ -49,7 +70,24 @@ export function SlackInboxSection({
 		}
 	}, [workspaces, activeTeamId]);
 
-	const inbox = useSlackInboxItems(activeTeamId);
+	// Reset the search box when the user switches workspaces. Carrying a
+	// query across workspaces would hit the new workspace's `search.messages`
+	// with the wrong intent (the user's mental model is "this box belongs
+	// to the workspace I'm looking at").
+	useEffect(() => {
+		setSearchInput("");
+	}, [activeTeamId]);
+
+	// Two data sources behind one renderer: the activity feed (mentions
+	// + unread DMs) when the search box is empty, and `search.messages`
+	// results when the user is actively typing. Always call both hooks
+	// (one will be disabled internally) so the rules-of-hooks order
+	// stays stable across the empty ↔ searching transition.
+	const trimmedQuery = debouncedQuery.trim();
+	const isSearching = trimmedQuery.length > 0;
+	const activity = useSlackInboxItems(isSearching ? null : activeTeamId);
+	const searchResults = useSlackSearch(activeTeamId, trimmedQuery, sort);
+	const inbox = isSearching ? searchResults : activity;
 	const cards = useMemo<ContextCard[]>(
 		() =>
 			inbox.items.map((item) =>
@@ -60,6 +98,13 @@ export function SlackInboxSection({
 			),
 		[inbox.items, workspaces],
 	);
+
+	const activeSortLabel =
+		SORT_OPTIONS.find((option) => option.id === sort)?.label ??
+		SORT_OPTIONS[0].label;
+	const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+		setSearchInput(event.target.value);
+	};
 
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -82,13 +127,45 @@ export function SlackInboxSection({
 
 	const actions =
 		workspaces.length > 0 ? (
-			<div className="ml-auto">
+			<>
+				<InboxSearchField
+					value={searchInput}
+					onChange={handleSearchChange}
+					onClear={() => setSearchInput("")}
+					ariaLabel="Search Slack messages"
+				/>
+				{isSearching ? (
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<InboxActionMenuButton aria-label={`Sort by ${activeSortLabel}`}>
+								<span>{activeSortLabel}</span>
+								<ChevronDown className="size-3" strokeWidth={2} />
+							</InboxActionMenuButton>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end" className="w-36">
+							<DropdownMenuRadioGroup
+								value={sort}
+								onValueChange={(value) => setSort(value as SlackSearchSort)}
+							>
+								{SORT_OPTIONS.map((option) => (
+									<DropdownMenuRadioItem
+										key={option.id}
+										value={option.id}
+										className="text-mini"
+									>
+										{option.label}
+									</DropdownMenuRadioItem>
+								))}
+							</DropdownMenuRadioGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				) : null}
 				<SlackWorkspaceSwitcher
 					workspaces={workspaces}
 					activeTeamId={activeTeamId}
 					onSelect={setActiveTeamId}
 				/>
-			</div>
+			</>
 		) : null;
 
 	return (
@@ -133,7 +210,11 @@ export function SlackInboxSection({
 						) : null}
 					</>
 				) : (
-					<EmptyState onRefresh={inbox.refetch} />
+					<EmptyState
+						isSearching={isSearching}
+						query={trimmedQuery}
+						onRefresh={inbox.refetch}
+					/>
 				)}
 			</div>
 		</InboxSourceLayout>
@@ -177,22 +258,41 @@ function InboxErrorState({
 	);
 }
 
-function EmptyState({ onRefresh }: { onRefresh: () => void }) {
+function EmptyState({
+	isSearching,
+	query,
+	onRefresh,
+}: {
+	isSearching: boolean;
+	query: string;
+	onRefresh: () => void;
+}) {
+	// Two distinct empty states: searching with zero hits is a UX
+	// dead-end if we say "no new activity" — the user can see they
+	// just typed something. The activity-feed empty state stays
+	// reassuring ("nothing waiting for you"); the search empty state
+	// reminds them what they searched for.
+	const title = isSearching ? "No matches" : "No new activity";
+	const subtitle = isSearching
+		? `Nothing in this workspace matches "${query}".`
+		: "Mentions and unread DMs will appear here.";
 	return (
 		<div className="mt-10 flex flex-col items-center gap-2 px-6 text-center">
-			<div className="text-ui font-medium text-foreground">No new activity</div>
+			<div className="text-ui font-medium text-foreground">{title}</div>
 			<div className="text-small leading-5 text-muted-foreground">
-				Mentions and unread DMs will appear here.
+				{subtitle}
 			</div>
-			<Button
-				type="button"
-				variant="ghost"
-				size="sm"
-				onClick={onRefresh}
-				className="mt-1 cursor-interactive text-small"
-			>
-				Refresh
-			</Button>
+			{!isSearching ? (
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					onClick={onRefresh}
+					className="mt-1 cursor-interactive text-small"
+				>
+					Refresh
+				</Button>
+			) : null}
 		</div>
 	);
 }

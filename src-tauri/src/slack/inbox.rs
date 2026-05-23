@@ -12,7 +12,9 @@
 
 use anyhow::{bail, Result};
 
-use super::api::{self, ConversationRow, RawMessage, SearchMessagesPage, SlackApiError, UserInfo};
+use super::api::{
+    self, ConversationRow, RawMessage, SearchMessagesPage, SearchSort, SlackApiError, UserInfo,
+};
 use super::credentials::{self, SlackCreds};
 use super::types::{SlackInboxItem, SlackInboxItemKind, SlackInboxPage};
 
@@ -46,7 +48,7 @@ pub fn list_inbox_items(
     let SearchMessagesPage {
         matches,
         total_pages,
-    } = api::search_messages(team_id, &creds, &query, page)?;
+    } = api::search_messages(team_id, &creds, &query, page, SearchSort::Timestamp)?;
     let next_cursor = if page < total_pages {
         Some((page + 1).to_string())
     } else {
@@ -71,6 +73,61 @@ pub fn list_inbox_items(
 
     // Stable merge: most-recent first.
     items.sort_by_key(|item| std::cmp::Reverse(item.ts_millis));
+    items.truncate(limit as usize);
+
+    Ok(SlackInboxPage { items, next_cursor })
+}
+
+/// Free-text search entry point. Wraps `search.messages` with a
+/// caller-supplied query string and sort mode, returning the same
+/// `SlackInboxPage` shape the activity feed uses so the frontend can
+/// swap data sources without re-templating the list.
+///
+/// The user's input is passed through verbatim, so Slack search
+/// modifiers (`from:@alice`, `in:#eng`, `has:link`, `is:thread`,
+/// quoted phrases, `-` negation, etc.) compose naturally without us
+/// having to teach the UI about each operator. Cursor format mirrors
+/// the activity feed: a stringified page number.
+pub fn search(
+    team_id: &str,
+    query: &str,
+    sort: SearchSort,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<SlackInboxPage> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        // Empty query would match every message in the workspace —
+        // wasteful and not what the UI ever asks for. Treat as "no
+        // results" rather than burning a search request.
+        return Ok(SlackInboxPage {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    }
+    let creds = match credentials::load_credentials(team_id)? {
+        Some(c) => c,
+        None => bail!("No stored Slack credentials for team {team_id}"),
+    };
+    let page = cursor
+        .and_then(|c| c.parse::<u32>().ok())
+        .unwrap_or(1)
+        .max(1);
+
+    let SearchMessagesPage {
+        matches,
+        total_pages,
+    } = api::search_messages(team_id, &creds, trimmed, page, sort)?;
+    let next_cursor = if page < total_pages {
+        Some((page + 1).to_string())
+    } else {
+        None
+    };
+
+    let mut items: Vec<SlackInboxItem> = matches
+        .into_iter()
+        .filter_map(|raw| convert_search_match(team_id, &creds, raw).ok())
+        .collect();
     items.truncate(limit as usize);
 
     Ok(SlackInboxPage { items, next_cursor })

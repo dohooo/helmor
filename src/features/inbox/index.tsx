@@ -44,6 +44,7 @@ import { InboxSourceLayout } from "./layout";
 import { SlackInboxSection } from "./slack-inbox-section";
 import { SourceCard } from "./source-card";
 import { SourceIcon } from "./source-icon";
+import { useDebouncedValue } from "./use-debounced-value";
 import {
 	type InboxItemWithDetailRef,
 	type InboxKind,
@@ -196,15 +197,6 @@ export function forgeFilterIdForRepo(
 	const provider: ForgeProvider | null | undefined = repository?.forgeProvider;
 	if (provider === "gitlab") return "gitlab";
 	return "github";
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number) {
-	const [debouncedValue, setDebouncedValue] = useState(value);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setDebouncedValue(value), delayMs);
-		return () => window.clearTimeout(timer);
-	}, [value, delayMs]);
-	return debouncedValue;
 }
 
 export const InboxSidebar = memo(function InboxSidebar({
