@@ -341,19 +341,15 @@ export function InspectorTabsSection({
 	);
 
 	const handleRunTabClick = useCallback(() => {
-		if (activeTab === "run") {
-			// Already on Run — the whole tab acts as the dropdown trigger.
-			// Toggle so a second click on the label closes the menu, matching
-			// the chevron's behaviour.
-			setRunMenuOpen((prev) => {
-				const next = !prev;
-				handleTabContextMenuOpenChange(next);
-				return next;
-			});
+		if (activeTab !== "run") {
+			handleTabClick("run");
 			return;
 		}
-		handleTabClick("run");
-	}, [activeTab, handleTabClick, handleTabContextMenuOpenChange]);
+		// Already on Run — the whole tab acts as the dropdown trigger.
+		// Toggle so a second click on the label closes the menu, matching
+		// the chevron's behaviour.
+		handleRunMenuOpenChange(!runMenuOpen);
+	}, [activeTab, handleRunMenuOpenChange, handleTabClick, runMenuOpen]);
 
 	// "+" / placeholder Terminal: spawning a terminal while the panel is
 	// collapsed would create one the user can't see — pop the panel open too.
@@ -859,10 +855,12 @@ function RunActionsDropdown({
 				align="end"
 				className="min-w-[112px]"
 				onPointerDownOutside={(event) => {
-					// The Run-tab label is also a trigger when the tab is
-					// active. Without this guard, Radix would close the
-					// menu on the same pointerdown that the label's onClick
-					// is about to re-toggle, leaving it stuck open.
+					// Only when Run is the active tab does the label double as
+					// the dropdown trigger — and only then does Radix's
+					// outside-close race the label's own toggle. While Run is
+					// inactive the label is just a tab switcher, so letting
+					// Radix close the menu naturally is the right behaviour.
+					if (activeTab !== "run") return;
 					const target = event.target as Node | null;
 					if (target && labelRef.current?.contains(target)) {
 						event.preventDefault();
