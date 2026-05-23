@@ -279,12 +279,14 @@ impl SidecarTransport for RemoteSidecarTransport {
 
 impl RemoteSidecarTransport {
     /// Convenience: forward an abort over `agent.abort`. The
-    /// streaming pipeline today writes a `stopSession` SidecarRequest
-    /// when it wants to cancel; the abort path goes through `send`
-    /// (the request envelope reaches the remote sidecar verbatim).
-    /// This helper exists for callers that want a typed entry point
-    /// — phase 23d's reattach UX uses it.
-    #[allow(dead_code)] // Used in phase 23d's reattach path.
+    /// streaming pipeline today writes a `stopSession`
+    /// SidecarRequest when it wants to cancel — the abort path
+    /// goes through `send` (the request envelope reaches the
+    /// remote sidecar verbatim). This typed entry point exists
+    /// for future callers that want to abort by `request_id`
+    /// without constructing a `SidecarRequest`. Exercised by
+    /// `remote_transport_abort_forwards_through_agent_abort`.
+    #[allow(dead_code)] // Test-only call surface; intentional.
     pub fn abort(&self, request_id: &str) -> Result<()> {
         self.runtime
             .agent_abort(AgentAbortParams {

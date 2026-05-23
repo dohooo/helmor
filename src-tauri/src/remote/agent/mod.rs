@@ -763,10 +763,12 @@ struct EndedAgentSession {
     started_at_ms: i64,
     last_event_ms: i64,
     /// Phase 24t: high-water-mark seq the daemon issued for this
-    /// session, captured at the time it transitioned to ended. The
-    /// attach handler reads seqs back from the on-disk file, so this
-    /// is purely diagnostic — kept for log lines + future telemetry.
-    #[allow(dead_code)]
+    /// session, captured at the time it transitioned to ended.
+    /// Logged when the session moves to the ended-sessions table so
+    /// an operator chasing "where did the live tail end?" can
+    /// correlate the daemon's view with the desktop's last
+    /// persisted row. Not consumed by the replay path — the attach
+    /// handler reads seqs back from the on-disk JSONL.
     last_seq: u64,
     path: PathBuf,
 }
@@ -942,6 +944,12 @@ fn reader_loop(
                 .remove(&id);
             if let Some(active) = removed {
                 if let Some(ended) = build_ended_from_active(active) {
+                    tracing::info!(
+                        request_id = %ended.request_id,
+                        last_seq = %ended.last_seq,
+                        path = %ended.path.display(),
+                        "remote-runner: agent session moved to ended (replay-only) state",
+                    );
                     ended_sessions
                         .lock()
                         .expect("ended sessions mutex poisoned")

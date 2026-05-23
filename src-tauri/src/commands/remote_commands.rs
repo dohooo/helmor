@@ -107,10 +107,12 @@ impl RemoteAgentStreamSubscriptions {
             .is_some()
     }
 
-    /// Sorted snapshot of active request ids. Used by tests + by a
-    /// future operator-facing surface to render "currently
-    /// streaming N attached turns".
-    #[allow(dead_code)]
+    /// Sorted snapshot of active request ids. Exercised by the
+    /// unit tests at the bottom of this file; production callers
+    /// don't read this yet but the contract is exactly what a
+    /// future operator-facing "currently streaming N attached
+    /// turns" surface needs, so keep it shippable.
+    #[allow(dead_code)] // Test-only call surface; intentional.
     pub fn active_request_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
             .inner

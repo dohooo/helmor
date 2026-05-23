@@ -35,7 +35,6 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Runtime};
-use uuid::Uuid;
 
 use crate::pipeline::{MessagePipeline, PipelineEmit};
 
@@ -577,15 +576,6 @@ fn finalize_status(ctx: &ExchangeContext, status: &str, rid: &str) -> bool {
     }
 }
 
-/// Synthesise a fresh `request_id` when the caller doesn't know
-/// the daemon's id ahead of time. Reserved for the future "click
-/// any session, attach by helmor_session_id" surface — today's
-/// callers always know the daemon's request id.
-#[allow(dead_code)]
-pub(crate) fn fresh_request_id() -> String {
-    Uuid::new_v4().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,17 +800,6 @@ mod tests {
             }
             PipelineEmit::None => panic!("assistant event should emit Full, got None"),
         }
-    }
-
-    #[test]
-    fn fresh_request_id_returns_a_non_empty_unique_string() {
-        // Defence against a future regression that swaps the
-        // UUID generator for a stub returning "".
-        let a = fresh_request_id();
-        let b = fresh_request_id();
-        assert!(!a.is_empty());
-        assert!(!b.is_empty());
-        assert_ne!(a, b);
     }
 
     /// Mirror of the regular event loop's heartbeat handling:
