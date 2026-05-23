@@ -1,3 +1,4 @@
+import { useIsMutating } from "@tanstack/react-query";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,10 @@ import { formatSlackTextPlain } from "@/lib/slack-text";
 import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
 import { InboxActionMenuButton, InboxSearchField } from "./actions";
 import { InboxSourceLayout } from "./layout";
-import { SlackConnectState } from "./slack-connect-button";
+import {
+	SLACK_IMPORT_MUTATION_KEY,
+	SlackConnectState,
+} from "./slack-connect-button";
 import { SlackSourceCard } from "./slack-source-card";
 import { SlackWorkspaceSwitcher } from "./slack-workspace-switcher";
 import { useDebouncedValue } from "./use-debounced-value";
@@ -103,6 +107,16 @@ export function SlackInboxSection({
 	const emoji = useSlackEmojiMap(safeTeamId);
 	const myUserId =
 		workspaces.find((w) => w.teamId === safeTeamId)?.myUserId ?? null;
+	/** Non-zero while the desktop-import mutation is in flight, anywhere
+	 *  in the tree. We use this to keep the state machine below in the
+	 *  "loading" branch during import — without it, a stale
+	 *  `inbox.error` from the pre-import session (e.g. token rotated,
+	 *  workspace temporarily not connected) would render
+	 *  "Couldn't load · not connected" right after the user clicks
+	 *  Import, even though the import is exactly the thing that fixes
+	 *  the underlying problem. */
+	const isImporting =
+		useIsMutating({ mutationKey: SLACK_IMPORT_MUTATION_KEY }) > 0;
 
 	const activeSortLabel = SORT_OPTIONS.find((option) => option.id === sort)
 		?.label as string; // both SlackSearchSort values are in SORT_OPTIONS
@@ -181,7 +195,22 @@ export function SlackInboxSection({
 					/>
 				) : workspacesQuery.isLoading || activeTeamId === null ? (
 					<InboxLoadingState />
-				) : inbox.error ? (
+				) : // Import in flight overrides every other branch: any pre-
+				// existing inbox error (e.g. previous "workspace not
+				// connected" from a rotated token) becomes meaningless
+				// while the import is busy fixing exactly that state. The
+				// import's onSuccess will invalidate the inbox query
+				// afterwards, kicking a clean re-fetch.
+				isImporting ? (
+					<InboxLoadingState />
+				) : // Only surface the error UI when we have NO data to show.
+				// React Query keeps the previous successful payload around
+				// across a failed refetch — leaning on that lets a transient
+				// backend hiccup (e.g. focus-refetch right before the
+				// keychain is re-populated) NOT blank out the user's last-
+				// seen feed. Once a refetch lands successfully the error
+				// clears on its own.
+				inbox.error && !inbox.hasResolved ? (
 					<InboxErrorState error={inbox.error} onRetry={inbox.refetch} />
 				) : !inbox.hasResolved ? (
 					<InboxLoadingState />

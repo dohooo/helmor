@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { SlackBrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,16 @@ import {
 	type SlackWorkspace,
 	slackImportFromDesktop,
 } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
+
+/** Stable identifier for the desktop-import mutation. `SlackInboxSection`
+ *  reads it via `useIsMutating` to keep its state machine in the
+ *  "loading" branch while an import is in flight — otherwise a stale
+ *  `inbox.error` from before re-import would win and the user would
+ *  see "Couldn't load · workspace not connected" right after clicking
+ *  Import. */
+export const SLACK_IMPORT_MUTATION_KEY = ["slack", "import"] as const;
 
 /** Empty-state CTA shown when the user has zero connected Slack
  *  workspaces. Reads the user's already-signed-in Slack desktop session
@@ -30,8 +39,9 @@ export function SlackConnectState({
 					Connect a Slack workspace
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
-					Import directly from your signed-in Slack desktop app — no extra
-					login, all your workspaces at once.
+					Import directly from your signed-in Slack desktop app. Everything
+					stays local — your token, messages, and attachments never leave this
+					device.
 				</div>
 			</div>
 			<Button
@@ -51,11 +61,6 @@ export function SlackConnectState({
 					"Import from Slack desktop"
 				)}
 			</Button>
-			<p className="max-w-[280px] text-balance text-mini leading-4 text-muted-foreground/70">
-				Helmor reads as you, using the same session your Slack desktop app
-				already has. Depending on workspace security policy, admins may be
-				notified.
-			</p>
 		</div>
 	);
 }
@@ -107,15 +112,50 @@ function handleImportResult(
 
 /** Mutation factory the workspace switcher reuses to surface "Import
  *  from Slack desktop" as a one-click action when ≥1 workspace already
- *  exists. */
+ *  exists.
+ *
+ *  Side effects on success:
+ *  - Bumps the workspace + inbox + emoji caches for every team the
+ *    backend just imported or re-attached credentials for. Without
+ *    this, a re-import after a credential rotation leaves
+ *    `useSlackInboxItems` stuck on its previous `"workspace … is not
+ *    connected"` error, even though the import just fixed the
+ *    underlying keychain entry. (The `SlackWorkspacesChanged`
+ *    UI-mutation event covers the workspace list itself, but it
+ *    doesn't reach per-team inbox / emoji queries — that's what we
+ *    explicitly invalidate here.)
+ *  - The mutation is tagged with `SLACK_IMPORT_MUTATION_KEY` so the
+ *    inbox section can read the in-flight state via `useIsMutating`
+ *    and stay in the loading branch instead of showing a stale error
+ *    while the import runs. */
 export function useSlackImportMutation(opts?: {
 	onImported?: (workspace: SlackWorkspace) => void;
 }) {
 	const pushToast = useWorkspaceToast();
+	const queryClient = useQueryClient();
 	return useMutation({
+		mutationKey: SLACK_IMPORT_MUTATION_KEY,
 		mutationFn: slackImportFromDesktop,
 		onSuccess: (result) => {
 			handleImportResult(result, pushToast);
+			const teamsToRefresh = new Set<string>();
+			for (const w of result.imported) teamsToRefresh.add(w.teamId);
+			for (const w of result.alreadyConnected) teamsToRefresh.add(w.teamId);
+			for (const teamId of teamsToRefresh) {
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.slackInbox(teamId),
+				});
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.slackEmojiMap(teamId),
+				});
+			}
+			// `SlackWorkspacesChanged` already invalidates `slackWorkspaces`
+			// through the UI-sync bridge, but a defensive nudge here makes
+			// the success path self-contained regardless of event-bridge
+			// timing.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackWorkspaces,
+			});
 			const first = result.imported[0] ?? result.alreadyConnected[0];
 			if (first) opts?.onImported?.(first);
 		},
