@@ -92,8 +92,11 @@ const PROVIDER_TABS: {
 }[] = [
 	{ id: "github", label: "GitHub", icon: <GithubBrandIcon size={13} /> },
 	{ id: "gitlab", label: "GitLab", icon: <GitlabBrandIcon size={13} /> },
-	{ id: "linear", label: "Linear", icon: <LinearBrandIcon size={13} /> },
+	// Slack ships before Linear since it's the only non-forge provider
+	// with a real settings flow (connect / connected) — Linear is still
+	// "Coming Soon" copy.
 	{ id: "slack", label: "Slack", icon: <SlackBrandIcon size={13} /> },
+	{ id: "linear", label: "Linear", icon: <LinearBrandIcon size={13} /> },
 	{
 		id: "mobile",
 		label: "Mobile",
