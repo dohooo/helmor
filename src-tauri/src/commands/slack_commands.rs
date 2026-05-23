@@ -6,14 +6,19 @@
 //! was tried and abandoned (Slack actively blocks non-Electron
 //! webviews from completing auth).
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use anyhow::Context;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{ipc::Channel, AppHandle};
 
 use crate::models::slack_workspaces;
 use crate::slack::{
-    api as slack_api, credentials, desktop_scrape, detail, inbox, types::SlackWorkspace,
+    agent_context::{self, AgentContextInputs},
+    api as slack_api, credentials, desktop_scrape, detail, files as slack_files, inbox,
+    types::{SlackFileRef, SlackWorkspace},
 };
 use crate::ui_sync::{self, UiMutationEvent};
 
@@ -131,6 +136,135 @@ pub async fn slack_search_messages(
         }
     })
     .await
+}
+
+/// Progress notification streamed back to the frontend while the
+/// `slack_prepare_thread_context` command runs. Drives the "Preparing
+/// Slack context…" toast.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "stage", rename_all = "camelCase")]
+pub enum SlackPrepareProgress {
+    /// First step — calling `slack_get_thread_detail` to pull the
+    /// thread structure. No counts because we don't know how many
+    /// files there will be yet.
+    FetchingThread,
+    /// Pre-warming the file cache, one file at a time. `current` is
+    /// 0-indexed across the run; `total` stays stable across the
+    /// caching phase so the frontend can render an X/Y label.
+    CachingFiles { current: usize, total: usize },
+    /// All work done. The command's return value carries the final
+    /// enriched submit text.
+    Done,
+}
+
+/// Output of `slack_prepare_thread_context` — the enriched submit text
+/// destined for the composer + a count of files we successfully
+/// embedded so the frontend toast can summarise.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackPreparedContext {
+    pub submit_text: String,
+    pub files_total: usize,
+    pub files_cached: usize,
+}
+
+/// Drives the "Add to context" button on a Slack inbox card.
+///
+/// Walks: fetch the thread → for every image/gif/video poster file,
+/// hit `slack::files::resolve_to_path` to pre-warm the on-disk cache →
+/// stitch a prompt-friendly markdown string via
+/// `agent_context::format_thread_for_agent` and return it.
+///
+/// File-cache failures are non-fatal per-file: the bad file is just
+/// rendered with its name + permalink (no `Local path:` line) so the
+/// agent at least knows it existed. We report cache totals back so
+/// the frontend can surface partial-success toasts.
+#[tauri::command]
+pub async fn slack_prepare_thread_context(
+    progress: Channel<SlackPrepareProgress>,
+    team_id: String,
+    channel_id: String,
+    thread_ts: Option<String>,
+    anchor_ts: String,
+) -> CmdResult<SlackPreparedContext> {
+    run_blocking(move || {
+        let workspace = slack_workspaces::get_workspace(&team_id)?
+            .with_context(|| format!("Slack workspace {team_id} is not connected"))?;
+
+        let _ = progress.send(SlackPrepareProgress::FetchingThread);
+        let detail = detail::get_thread_detail(
+            &workspace.team_id,
+            &channel_id,
+            thread_ts.as_deref(),
+            &anchor_ts,
+        )
+        .context("Fetch Slack thread for context preparation")?;
+
+        // Collect every file we want to cache. Images and gifs use
+        // `preview_url` (the thumb), videos prefer `previewUrl` (which
+        // is `thumb_video` from detail.rs) — full video bytes are too
+        // big to pre-cache here.
+        let prefetch_targets: Vec<(String, String)> = detail
+            .messages
+            .iter()
+            .flat_map(|m| m.files.iter().map(file_prefetch_url))
+            .flatten()
+            .collect();
+        let total = prefetch_targets.len();
+
+        let mut cache_paths: HashMap<String, PathBuf> = HashMap::new();
+        for (i, (file_id, slack_url)) in prefetch_targets.iter().enumerate() {
+            let _ = progress.send(SlackPrepareProgress::CachingFiles { current: i, total });
+            match slack_files::resolve_to_path(slack_url) {
+                Ok(path) => {
+                    cache_paths.insert(file_id.clone(), path);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        file_id = %file_id,
+                        url = %slack_url,
+                        error = %format!("{error:#}"),
+                        "Failed to pre-cache Slack file for agent context",
+                    );
+                }
+            }
+        }
+
+        let submit_text = agent_context::format_thread_for_agent(
+            &detail,
+            &AgentContextInputs {
+                my_user_id: &workspace.my_user_id,
+                workspace_name: &workspace.team_name,
+                cache_paths: &cache_paths,
+                // Caps the rendered thread to keep the prompt bounded.
+                // 50 covers nearly every real conversation while still
+                // protecting against runaway megathread injection.
+                max_messages: 50,
+            },
+        );
+
+        let result = SlackPreparedContext {
+            submit_text,
+            files_total: total,
+            files_cached: cache_paths.len(),
+        };
+        let _ = progress.send(SlackPrepareProgress::Done);
+        Ok(result)
+    })
+    .await
+}
+
+/// Pick the URL we should pre-cache for one file. Returns `None` for
+/// categories we don't render inline (audio / pdf / other) — those
+/// still surface as a name + permalink chip in the prompt, but we
+/// don't burn the bandwidth pre-fetching them.
+fn file_prefetch_url(file: &SlackFileRef) -> Option<(String, String)> {
+    let category = file.category.as_str();
+    if !matches!(category, "image" | "gif" | "video") {
+        return None;
+    }
+    let url = file.preview_url.as_deref()?.to_string();
+    Some((file.id.clone(), url))
 }
 
 /// Return the workspace's custom-emoji map (`name -> image_url`).

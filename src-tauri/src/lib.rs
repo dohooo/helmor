@@ -527,7 +527,8 @@ pub fn run() {
             commands::slack_commands::slack_list_inbox_items,
             commands::slack_commands::slack_search_messages,
             commands::slack_commands::slack_get_thread_detail,
-            commands::slack_commands::slack_list_emoji
+            commands::slack_commands::slack_list_emoji,
+            commands::slack_commands::slack_prepare_thread_context
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

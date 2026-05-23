@@ -1,12 +1,16 @@
 import { AtSign, MessageCircle, MessagesSquare } from "lucide-react";
 import { memo } from "react";
-import { AppendContextButton } from "@/components/append-context-button";
+import { toast } from "sonner";
+import {
+	AppendContextButton,
+	type AppendContextPayload,
+} from "@/components/append-context-button";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { SlackInboxItem } from "@/lib/api";
+import { type SlackInboxItem, slackPrepareThreadContext } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
 import {
 	formatSlackTextPlain,
@@ -100,7 +104,7 @@ export const SlackSourceCard = memo(function SlackSourceCard({
 							subjectLabel={card.title}
 							ariaLabel="Add to context"
 							getPayload={() =>
-								buildCardContextPayload(card, appendContextTarget)
+								prepareSlackContextPayload(item, card, appendContextTarget)
 							}
 							errorTitle="Couldn't insert context card"
 							className={cn(
@@ -120,6 +124,107 @@ export const SlackSourceCard = memo(function SlackSourceCard({
 		</article>
 	);
 });
+
+/** Build the rich "add to context" payload for a Slack inbox card.
+ *
+ *  Unlike the generic `buildCardContextPayload` (which just stitches
+ *  `card.title` + `externalId` + `URL` into four lines), this fetches
+ *  the whole thread on demand, pre-warms every inline image/gif/video
+ *  poster into the local Slack file cache, and stitches a structured
+ *  prompt that includes absolute local paths next to each file. The
+ *  agent can `Read` those paths to see what the user is referencing.
+ *
+ *  A single sonner toast tracks progress: it switches from
+ *  "Preparing Slack context…" to "Caching images N/M" to a brief
+ *  success state, all under one stable toast id so it updates in
+ *  place instead of stacking. On failure we fall back to the basic
+ *  payload — better a degraded card than no card. */
+async function prepareSlackContextPayload(
+	item: SlackInboxItem,
+	card: ContextCard,
+	appendContextTarget: ComposerInsertTarget | undefined,
+): Promise<AppendContextPayload> {
+	const toastId = `slack-prepare:${item.id}`;
+	toast.loading("Preparing Slack context…", {
+		id: toastId,
+		description: "Fetching thread",
+	});
+	try {
+		const prepared = await slackPrepareThreadContext({
+			teamId: item.teamId,
+			channelId: item.channelId,
+			// Backend prefers replies when the anchor is itself a thread
+			// root; otherwise it falls back to channel history. We don't
+			// know thread_ts client-side, so let the backend decide.
+			threadTs: null,
+			anchorTs: item.ts,
+			onProgress: (event) => {
+				if (event.stage === "fetchingThread") {
+					toast.loading("Preparing Slack context…", {
+						id: toastId,
+						description: "Fetching thread",
+					});
+				} else if (event.stage === "cachingFiles") {
+					toast.loading("Preparing Slack context…", {
+						id: toastId,
+						description:
+							event.total === 0
+								? "No attachments to cache"
+								: `Caching attachments ${event.current + 1}/${event.total}`,
+					});
+				}
+			},
+		});
+
+		toast.success("Slack context ready", {
+			id: toastId,
+			description:
+				prepared.filesTotal === 0
+					? `Thread inlined`
+					: `Thread inlined · ${prepared.filesCached}/${prepared.filesTotal} files cached locally`,
+		});
+
+		// Build the same `custom-tag` insert shape as the generic path,
+		// but swap `submitText` for the enriched prompt so the agent
+		// sees the full thread instead of the 4-line summary. The
+		// preview (rendered inside the composer chip popover) keeps
+		// using the original text-mode preview built by the generic
+		// path — wholesale replacement would mismatch the chip's
+		// "image" / "code" preview kinds when we extend later.
+		const fallbackPayload = buildCardContextPayload(card, appendContextTarget);
+		if ("items" in fallbackPayload && fallbackPayload.items[0]) {
+			const first = fallbackPayload.items[0];
+			if (first.kind === "custom-tag") {
+				const updatedPreview =
+					first.preview && first.preview.kind === "text"
+						? { ...first.preview, text: prepared.submitText }
+						: first.preview;
+				return {
+					...fallbackPayload,
+					items: [
+						{
+							...first,
+							submitText: prepared.submitText,
+							preview: updatedPreview,
+						},
+						...fallbackPayload.items.slice(1),
+					],
+				};
+			}
+		}
+		return fallbackPayload;
+	} catch (error) {
+		toast.error("Couldn't prepare Slack context", {
+			id: toastId,
+			description:
+				error instanceof Error
+					? error.message
+					: "Falling back to summary-only context.",
+		});
+		// Degraded fallback so the user still gets something inserted.
+		return buildCardContextPayload(card, appendContextTarget);
+	}
+}
 
 function SlackAvatar({
 	name,

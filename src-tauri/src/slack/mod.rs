@@ -22,6 +22,7 @@
 //! captured pair (`token=xoxc-…` form field, `Cookie: d=xoxd-…`).
 //! Read-only in v1 — no posting, no reactions, no file writes.
 
+pub mod agent_context;
 pub mod api;
 pub mod credentials;
 pub mod desktop_scrape;

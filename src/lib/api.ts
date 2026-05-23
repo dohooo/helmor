@@ -1794,6 +1794,56 @@ export async function slackGetThreadDetail(args: {
 	}
 }
 
+/** Progress events streamed back by `slackPrepareThreadContext`. */
+export type SlackPrepareProgress =
+	| { stage: "fetchingThread" }
+	| { stage: "cachingFiles"; current: number; total: number }
+	| { stage: "done" };
+
+export type SlackPreparedContext = {
+	/** Final prompt-friendly string ready to inject into the composer.
+	 *  Includes per-file `Local path: /…` lines that the agent can read
+	 *  via its `Read` tool. */
+	submitText: string;
+	filesTotal: number;
+	filesCached: number;
+};
+
+/** Prepare a Slack thread for "Add to context" injection. Fetches the
+ *  full thread, pre-warms the on-disk Slack file cache for every
+ *  inline image/gif/video poster, then returns a formatted prompt
+ *  string with absolute local paths embedded so the spawned coding
+ *  agent can `Read` the files.
+ *
+ *  `onProgress` (when provided) receives streaming events: starting
+ *  with `fetchingThread`, then a series of `cachingFiles` with
+ *  monotonically increasing `current`, finishing with `done`. */
+export async function slackPrepareThreadContext(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+	onProgress?: (event: SlackPrepareProgress) => void;
+}): Promise<SlackPreparedContext> {
+	const progress = new Channel<SlackPrepareProgress>();
+	if (args.onProgress) {
+		progress.onmessage = args.onProgress;
+	}
+	try {
+		return await invoke<SlackPreparedContext>("slack_prepare_thread_context", {
+			progress,
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't prepare Slack context."),
+		);
+	}
+}
+
 /** Workspace custom-emoji map (`name -> image url`). Built-in unicode
  *  emojis are not included here — those ship bundled with the frontend.
  *  Aliases are resolved server-side, so every returned value is a real

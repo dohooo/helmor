@@ -53,6 +53,12 @@ pub struct SlackFileBytes {
 ///
 /// Errors are returned as-is — the protocol handler turns them into
 /// `404 Not Found` responses so the `<img>` falls back to its `alt`.
+///
+/// Cache-write failures are NON-fatal: we still hand the bytes back to
+/// the webview so the user sees the image; the next request will retry
+/// the write. The stricter [`resolve_to_path`] variant treats a
+/// missing cache file as an error because the spawned agent has no
+/// other way to read the file.
 pub fn resolve(uri: &str) -> Result<SlackFileBytes> {
     let slack_url = reconstruct_slack_url(uri)?;
     let extension = url_extension(&slack_url).unwrap_or("bin").to_string();
@@ -65,16 +71,8 @@ pub fn resolve(uri: &str) -> Result<SlackFileBytes> {
         });
     }
 
-    let team_id = extract_team_id(&slack_url)
-        .ok_or_else(|| anyhow!("slack-file URL has no recognisable team id: {slack_url}"))?;
-    let creds = credentials::load_credentials(&team_id)?
-        .ok_or_else(|| anyhow!("No Slack credentials for team {team_id}"))?;
-
-    let bytes = download_with_cookie(&slack_url, &creds)?;
+    let bytes = download_for_url(&slack_url)?;
     if let Err(write_err) = atomic_write(&cache_path, &bytes) {
-        // Cache failures are non-fatal — log + continue serving the
-        // bytes we already have in memory. The next request will retry
-        // the write.
         tracing::warn!(
             path = %cache_path.display(),
             error = %format!("{write_err:#}"),
@@ -86,6 +84,53 @@ pub fn resolve(uri: &str) -> Result<SlackFileBytes> {
         bytes,
         content_type: ext_to_mime(&extension),
     })
+}
+
+/// Pre-warm the cache for a Slack file URL and return its on-disk path.
+///
+/// Used by the "add to context" path: the spawned coding agent (Claude
+/// Code / Codex) runs as a separate process and cannot see the
+/// `slack-file://` webview protocol, but it CAN read absolute file
+/// paths via its `Read` tool. Pre-warming the cache and handing the
+/// path to the agent's prompt is the only way to expose Slack-hosted
+/// images to it.
+///
+/// Accepts either form of URL — `https://files.slack.com/…` or our
+/// own `slack-file://…` rewrite — because callers like the prepare
+/// command pull straight from `SlackFileRef.preview_url` which already
+/// holds the rewritten form.
+///
+/// Unlike [`resolve`], cache-write failures are FATAL here — without a
+/// readable on-disk path there's nothing useful to return to the
+/// agent prompt builder.
+pub fn resolve_to_path(url: &str) -> Result<PathBuf> {
+    let slack_url = if url.starts_with("slack-file://") {
+        reconstruct_slack_url(url)?
+    } else {
+        url.to_string()
+    };
+    let extension = url_extension(&slack_url).unwrap_or("bin").to_string();
+    let cache_path = cache_path_for(&slack_url, &extension)?;
+
+    if cache_path.is_file() {
+        return Ok(cache_path);
+    }
+
+    let bytes = download_for_url(&slack_url)?;
+    atomic_write(&cache_path, &bytes).context("Cache Slack file for agent prompt")?;
+    Ok(cache_path)
+}
+
+/// Shared download path: looks up creds for the team_id embedded in
+/// the URL, GETs the file with the workspace cookie, and returns the
+/// raw bytes. Caching is the caller's responsibility — they decide
+/// whether a write failure is fatal.
+fn download_for_url(slack_url: &str) -> Result<Vec<u8>> {
+    let team_id = extract_team_id(slack_url)
+        .ok_or_else(|| anyhow!("slack-file URL has no recognisable team id: {slack_url}"))?;
+    let creds = credentials::load_credentials(&team_id)?
+        .ok_or_else(|| anyhow!("No Slack credentials for team {team_id}"))?;
+    download_with_cookie(slack_url, &creds)
 }
 
 /// `slack-file://files-tmb/T056-F09.../image.png` → `https://files.slack.com/files-tmb/T056-F09.../image.png`.
