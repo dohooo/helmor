@@ -80,8 +80,6 @@ export function useSlackSearch(
 	return {
 		items,
 		hasNextPage: Boolean(result.hasNextPage),
-		isLoading: result.isLoading,
-		isFetching: result.isFetching,
 		isFetchingNextPage: result.isFetchingNextPage,
 		error: result.error,
 		hasResolved: result.data !== undefined,

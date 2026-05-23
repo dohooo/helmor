@@ -1590,11 +1590,10 @@ export type GitRefsChangedPayload = {
 // ────────────────────────────────────────────────────────────────────────
 // Slack context source (read-only v1).
 //
-// Wire shapes mirror `src-tauri/src/slack/types.rs` exactly. Auth is the
-// "EZ-Login" pattern — `slackConnectWorkspace` opens a Tauri secondary
-// window at app.slack.com, captures xoxc + xoxd after the user signs in,
-// and persists them via `keyring`. All reads then go through the Slack
-// Web API client in `src-tauri/src/slack/api.rs`.
+// Wire shapes mirror `src-tauri/src/slack/types.rs` exactly. Auth is
+// `slackImportFromDesktop` — we read the xoxc/xoxd pair out of the
+// user's local Slack desktop install. All reads then go through the
+// Slack Web API client in `src-tauri/src/slack/api.rs`.
 //
 // The frontend never sees the captured tokens; it only ever holds the
 // non-secret workspace metadata (team id / name / domain / our user id).

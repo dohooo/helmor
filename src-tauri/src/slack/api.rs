@@ -126,6 +126,16 @@ impl SlackApiError {
     }
 }
 
+/// `is_auth_failure` probe that ignores anything that isn't a Slack
+/// API error. The IPC layer uses this to decide whether to clear the
+/// keychain entry + emit `SlackTokenInvalidated`.
+pub fn is_invalid_auth(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<SlackApiError>()
+        .map(SlackApiError::is_auth_failure)
+        .unwrap_or(false)
+}
+
 /// Build the `Cookie` header. We send both `d` (the long-lived
 /// session cookie) and `d-s` (a sibling cookie set by Slack's web
 /// client; its value is unix-seconds-since-login minus 10. slackdump
@@ -149,10 +159,10 @@ fn cookie_header(creds: &SlackCreds) -> String {
 /// connection is a bot tell because real browsers only switch to
 /// multipart when actually uploading binary parts.
 ///
-/// Synchronous wrapper around async wreq via
-/// `tauri::async_runtime::block_on` so callers (currently all in
-/// `run_blocking` contexts) don't have to refactor.
-fn call(team_id: &str, creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+/// Synchronous wrapper around async wreq via the dedicated
+/// `http_runtime()` above — see that function's doc for why we don't
+/// reuse Tauri's runtime.
+fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Value> {
     let url = format!("{SLACK_API_BASE}/{method}");
     let mut form: Vec<(&str, &str)> = Vec::with_capacity(params.len() + 1);
     form.push(("token", creds.xoxc.as_str()));
@@ -199,7 +209,7 @@ fn call(team_id: &str, creds: &SlackCreds, method: &str, params: &[(&str, &str)]
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        tracing::warn!(team = %team_id, method = %method, error = %error, "Slack API call failed");
+        tracing::warn!(method = %method, error = %error, "Slack API call failed");
         return Err(SlackApiError {
             method: method.to_string(),
             error,
@@ -225,9 +235,7 @@ pub struct AuthTest {
 }
 
 pub fn auth_test(creds: &SlackCreds) -> Result<AuthTest> {
-    // team_id is unknown at this point so we pass an empty string for
-    // logging only.
-    let body = call("", creds, "auth.test", &[])?;
+    let body = call(creds, "auth.test", &[])?;
     let parsed: AuthTest =
         serde_json::from_value(body).context("Failed to decode auth.test response")?;
     if parsed.team_id.is_empty() {
@@ -248,7 +256,7 @@ pub fn users_info(team_id: &str, creds: &SlackCreds, user_id: &str) -> Result<Us
         }
     }
 
-    let body = call(team_id, creds, "users.info", &[("user", user_id)])?;
+    let body = call(creds, "users.info", &[("user", user_id)])?;
     let user = body
         .get("user")
         .ok_or_else(|| anyhow!("users.info response missing `user` field"))?;
@@ -300,9 +308,8 @@ pub struct ConversationRow {
     pub last_read: Option<String>,
 }
 
-pub fn users_conversations_dms(team_id: &str, creds: &SlackCreds) -> Result<Vec<ConversationRow>> {
+pub fn users_conversations_dms(creds: &SlackCreds) -> Result<Vec<ConversationRow>> {
     let body = call(
-        team_id,
         creds,
         "users.conversations",
         &[
@@ -362,7 +369,6 @@ pub struct RawReaction {
 /// Activity feed, (2) the detail view's "context around a single
 /// message" mode.
 pub fn conversations_history(
-    team_id: &str,
     creds: &SlackCreds,
     channel: &str,
     oldest: Option<&str>,
@@ -374,7 +380,7 @@ pub fn conversations_history(
     if let Some(o) = oldest {
         params.push(("oldest", o));
     }
-    let body = call(team_id, creds, "conversations.history", &params)?;
+    let body = call(creds, "conversations.history", &params)?;
     let raw = body
         .get("messages")
         .cloned()
@@ -385,13 +391,11 @@ pub fn conversations_history(
 /// `conversations.replies` — every message in a thread, including the
 /// root. Used by the detail view when the inbox item has a `thread_ts`.
 pub fn conversations_replies(
-    team_id: &str,
     creds: &SlackCreds,
     channel: &str,
     thread_ts: &str,
 ) -> Result<Vec<RawMessage>> {
     let body = call(
-        team_id,
         creds,
         "conversations.replies",
         &[("channel", channel), ("ts", thread_ts), ("limit", "200")],
@@ -427,7 +431,6 @@ impl SearchSort {
 /// interactive search box (caller-chosen sort). Cursor pagination is
 /// page-number based for this endpoint.
 pub fn search_messages(
-    team_id: &str,
     creds: &SlackCreds,
     query: &str,
     page: u32,
@@ -435,7 +438,6 @@ pub fn search_messages(
 ) -> Result<SearchMessagesPage> {
     let page_string = page.to_string();
     let body = call(
-        team_id,
         creds,
         "search.messages",
         &[
@@ -479,13 +481,8 @@ pub struct SearchMessagesPage {
 /// `conversations.info` — used to resolve a channel id to its `#name`
 /// when we don't already know it (e.g. mentions returning channels not
 /// in the DM list).
-pub fn conversations_info(team_id: &str, creds: &SlackCreds, channel: &str) -> Result<String> {
-    let body = call(
-        team_id,
-        creds,
-        "conversations.info",
-        &[("channel", channel)],
-    )?;
+pub fn conversations_info(creds: &SlackCreds, channel: &str) -> Result<String> {
+    let body = call(creds, "conversations.info", &[("channel", channel)])?;
     let name = body
         .get("channel")
         .and_then(|c| c.get("name"))
@@ -498,13 +495,11 @@ pub fn conversations_info(team_id: &str, creds: &SlackCreds, channel: &str) -> R
 /// `chat.getPermalink` — stable web URL for a message. We use this as
 /// the canonical `externalUrl` on every InboxItem.
 pub fn chat_get_permalink(
-    team_id: &str,
     creds: &SlackCreds,
     channel: &str,
     message_ts: &str,
 ) -> Result<Option<String>> {
     let body = call(
-        team_id,
         creds,
         "chat.getPermalink",
         &[("channel", channel), ("message_ts", message_ts)],

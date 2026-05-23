@@ -18,22 +18,8 @@ export function SlackConnectState({
 }: {
 	onConnected?: (teamId: string) => void;
 }) {
-	const pushToast = useWorkspaceToast();
-
-	const importMutation = useMutation({
-		mutationFn: slackImportFromDesktop,
-		onSuccess: (result) => {
-			handleImportResult(result, pushToast);
-			const first = result.imported[0] ?? result.alreadyConnected[0];
-			if (first) onConnected?.(first.teamId);
-		},
-		onError: (error) => {
-			const message =
-				error instanceof Error
-					? error.message
-					: "Couldn't read Slack desktop session.";
-			pushToast(message, "Import failed", "destructive");
-		},
+	const importMutation = useSlackImportMutation({
+		onImported: (workspace) => onConnected?.(workspace.teamId),
 	});
 
 	return (

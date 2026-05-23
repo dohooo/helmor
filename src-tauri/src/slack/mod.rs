@@ -13,16 +13,14 @@
 //! it. The desktop client has already completed all of those, so we
 //! reuse what's on disk.
 //!
-//! Credentials are stored in the OS keychain via the `keyring` crate;
+//! Credentials are stored in the macOS Keychain via `/usr/bin/security`
+//! (see `credentials.rs` for why we don't use the `keyring` crate);
 //! non-secret workspace metadata (team id / name / domain / our user
 //! id) goes into the `slack_workspaces` SQLite table.
 //!
 //! Live data is fetched by calling Slack's Web API directly with the
 //! captured pair (`token=xoxc-…` form field, `Cookie: d=xoxd-…`).
 //! Read-only in v1 — no posting, no reactions, no file writes.
-//!
-//! See `research_slack_context/research_report.md` for the trade-off
-//! analysis behind these choices.
 
 pub mod api;
 pub mod credentials;

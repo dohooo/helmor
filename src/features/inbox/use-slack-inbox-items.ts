@@ -17,8 +17,6 @@ const STALE_MS = 60_000;
 export type UseSlackInboxItemsResult = {
 	items: SlackInboxItem[];
 	hasNextPage: boolean;
-	isLoading: boolean;
-	isFetching: boolean;
 	isFetchingNextPage: boolean;
 	error: unknown;
 	hasResolved: boolean;
@@ -82,8 +80,6 @@ export function useSlackInboxItems(
 	return {
 		items,
 		hasNextPage: Boolean(query.hasNextPage),
-		isLoading: query.isLoading,
-		isFetching: query.isFetching,
 		isFetchingNextPage: query.isFetchingNextPage,
 		error: query.error,
 		hasResolved: query.data !== undefined,

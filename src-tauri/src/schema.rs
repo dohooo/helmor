@@ -949,10 +949,10 @@ CREATE TABLE IF NOT EXISTS session_messages (
 );
 
 -- Connected Slack workspaces (one row per workspace the user has
--- authorized). Credentials (xoxc + xoxd) live in the OS keychain via
--- `keyring`, never here. This table is just non-secret metadata so the
--- sidebar can list "which workspaces am I connected to" without doing a
--- keychain probe per render.
+-- imported). Credentials (xoxc + xoxd) live in the macOS Keychain via
+-- `crate::slack::credentials`, never here. This table is just
+-- non-secret metadata so the sidebar can list "which workspaces am I
+-- connected to" without doing a keychain probe per render.
 CREATE TABLE IF NOT EXISTS slack_workspaces (
     team_id TEXT PRIMARY KEY,
     team_name TEXT NOT NULL,

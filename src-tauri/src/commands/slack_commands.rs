@@ -60,7 +60,7 @@ pub async fn slack_list_inbox_items(
         ) {
             Ok(page) => Ok(page),
             Err(error) => {
-                if inbox::is_invalid_auth(&error) {
+                if slack_api::is_invalid_auth(&error) {
                     let _ = credentials::clear_credentials(&workspace.team_id);
                     ui_sync::publish(
                         &app_handle,
@@ -117,7 +117,7 @@ pub async fn slack_search_messages(
         match inbox::search(&workspace.team_id, &query, sort, cursor.as_deref(), limit) {
             Ok(page) => Ok(page),
             Err(error) => {
-                if inbox::is_invalid_auth(&error) {
+                if slack_api::is_invalid_auth(&error) {
                     let _ = credentials::clear_credentials(&workspace.team_id);
                     ui_sync::publish(
                         &app_handle,
@@ -147,7 +147,7 @@ pub async fn slack_get_thread_detail(
         match detail::get_thread_detail(&team_id, &channel_id, thread_ts.as_deref(), &anchor_ts) {
             Ok(detail) => Ok(detail),
             Err(error) => {
-                if inbox::is_invalid_auth(&error) {
+                if slack_api::is_invalid_auth(&error) {
                     let _ = credentials::clear_credentials(&team_id_for_emit);
                     ui_sync::publish(
                         &app_handle,
@@ -257,7 +257,7 @@ pub async fn slack_import_from_desktop(app: AppHandle) -> CmdResult<SlackImportR
                     }
                 }
                 Err(error) => {
-                    let reason = if inbox::is_invalid_auth(&error) {
+                    let reason = if slack_api::is_invalid_auth(&error) {
                         "Token rejected by Slack (signed out elsewhere?)".to_string()
                     } else {
                         format!("{error:#}")

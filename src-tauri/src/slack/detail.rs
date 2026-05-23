@@ -27,21 +27,23 @@ pub fn get_thread_detail(
 
     let (raw_messages, is_thread) = if let Some(thread) = thread_ts {
         (
-            api::conversations_replies(team_id, &creds, channel_id, thread)?,
+            api::conversations_replies(&creds, channel_id, thread)?,
             true,
         )
     } else {
-        // History fetched newest-first; we want oldest-first for
-        // rendering, so reverse below.
-        (
-            history_around_anchor(team_id, &creds, channel_id, anchor_ts)?,
-            false,
-        )
+        // Single-message preview: grab the last ~20 of channel history
+        // and flip newest-first → oldest-first for rendering. v1 takes
+        // the simple "last 20" slice — perfect-anchor centering can
+        // wait until we hear the UX demand it.
+        let mut messages = api::conversations_history(&creds, channel_id, None, 20)
+            .context("Failed to fetch channel history for detail view")?;
+        messages.reverse();
+        (messages, false)
     };
 
-    let channel_label = api::conversations_info(team_id, &creds, channel_id)
-        .unwrap_or_else(|_| channel_id.to_string());
-    let permalink = api::chat_get_permalink(team_id, &creds, channel_id, anchor_ts)
+    let channel_label =
+        api::conversations_info(&creds, channel_id).unwrap_or_else(|_| channel_id.to_string());
+    let permalink = api::chat_get_permalink(&creds, channel_id, anchor_ts)
         .ok()
         .flatten()
         .unwrap_or_default();
@@ -59,22 +61,6 @@ pub fn get_thread_detail(
         messages,
         permalink,
     })
-}
-
-fn history_around_anchor(
-    team_id: &str,
-    creds: &SlackCreds,
-    channel_id: &str,
-    _anchor_ts: &str,
-) -> Result<Vec<RawMessage>> {
-    // Slack's `conversations.history` returns newest-first; we want a
-    // small window of the most recent ~20 messages around the anchor
-    // for context. v1 takes the simple "last 20" slice — perfect-anchor
-    // centering can wait.
-    let mut messages = api::conversations_history(team_id, creds, channel_id, None, 20)
-        .context("Failed to fetch channel history for detail view")?;
-    messages.reverse();
-    Ok(messages)
 }
 
 fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackMessage {

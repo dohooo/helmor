@@ -12,9 +12,7 @@
 
 use anyhow::{bail, Result};
 
-use super::api::{
-    self, ConversationRow, RawMessage, SearchMessagesPage, SearchSort, SlackApiError, UserInfo,
-};
+use super::api::{self, ConversationRow, RawMessage, SearchMessagesPage, SearchSort, UserInfo};
 use super::credentials::{self, SlackCreds};
 use super::types::{SlackInboxItem, SlackInboxItemKind, SlackInboxPage};
 
@@ -48,7 +46,7 @@ pub fn list_inbox_items(
     let SearchMessagesPage {
         matches,
         total_pages,
-    } = api::search_messages(team_id, &creds, &query, page, SearchSort::Timestamp)?;
+    } = api::search_messages(&creds, &query, page, SearchSort::Timestamp)?;
     let next_cursor = if page < total_pages {
         Some((page + 1).to_string())
     } else {
@@ -117,7 +115,7 @@ pub fn search(
     let SearchMessagesPage {
         matches,
         total_pages,
-    } = api::search_messages(team_id, &creds, trimmed, page, sort)?;
+    } = api::search_messages(&creds, trimmed, page, sort)?;
     let next_cursor = if page < total_pages {
         Some((page + 1).to_string())
     } else {
@@ -175,7 +173,7 @@ fn convert_search_match(
 /// (running serially in the blocking pool also limits the rate
 /// naturally).
 fn unread_dm_snippets(team_id: &str, creds: &SlackCreds) -> Result<Vec<SlackInboxItem>> {
-    let dms = api::users_conversations_dms(team_id, creds)?;
+    let dms = api::users_conversations_dms(creds)?;
     let mut items = Vec::new();
     for dm in dms {
         if dm.unread_count_display == 0 {
@@ -205,14 +203,14 @@ fn snippet_for_dm(
     creds: &SlackCreds,
     dm: &ConversationRow,
 ) -> Result<Option<SlackInboxItem>> {
-    let latest = api::conversations_history(team_id, creds, &dm.id, dm.last_read.as_deref(), 1)?;
+    let latest = api::conversations_history(creds, &dm.id, dm.last_read.as_deref(), 1)?;
     let Some(message) = latest.into_iter().next() else {
         return Ok(None);
     };
     let label = dm_label(team_id, creds, dm)?;
     let author = resolve_author_name(team_id, creds, message.user_id.as_deref(), &message)
         .unwrap_or_else(|_| author_fallback(&message));
-    let permalink = api::chat_get_permalink(team_id, creds, &dm.id, &message.ts)
+    let permalink = api::chat_get_permalink(creds, &dm.id, &message.ts)
         .ok()
         .flatten()
         .unwrap_or_default();
@@ -281,16 +279,6 @@ fn truncate(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max).collect();
     out.push('…');
     out
-}
-
-/// `is_auth_failure` probe that ignores anything that isn't an auth
-/// error. The IPC layer uses this to decide whether to clear the keychain
-/// entry + emit `SlackTokenInvalidated`.
-pub fn is_invalid_auth(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<SlackApiError>()
-        .map(SlackApiError::is_auth_failure)
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
