@@ -15,7 +15,15 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import type { SerializedEditorState } from "lexical";
+import {
+	$createParagraphNode,
+	$createRangeSelection,
+	$createTextNode,
+	$getRoot,
+	$setSelection,
+	createEditor,
+	type SerializedEditorState,
+} from "lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentModelSection } from "@/lib/api";
 import { createHelmorQueryClient } from "@/lib/query-client";
@@ -191,6 +199,103 @@ describe("HistoryRecallPlugin", () => {
 			for (const spy of spies) spy.mockRestore();
 			root.remove();
 		}
+	});
+
+	describe("$caretParagraphPosition", () => {
+		function makeEditor() {
+			const editor = createEditor({ namespace: "test" });
+			const host = document.createElement("div");
+			editor.setRootElement(host);
+			return editor;
+		}
+
+		function readPosition(editor: ReturnType<typeof makeEditor>) {
+			let result: { atFirstParagraph: boolean; atLastParagraph: boolean } = {
+				atFirstParagraph: false,
+				atLastParagraph: false,
+			};
+			editor.getEditorState().read(() => {
+				result = historyRecallTestUtils.$caretParagraphPosition();
+			});
+			return result;
+		}
+
+		it("treats an empty editor as both first and last", () => {
+			const editor = makeEditor();
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: true,
+				atLastParagraph: true,
+			});
+		});
+
+		it("flags the middle paragraph as neither first nor last", () => {
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const p1 = $createParagraphNode().append($createTextNode("line 1"));
+					const p2 = $createParagraphNode();
+					const p3 = $createParagraphNode().append($createTextNode("line 3"));
+					root.append(p1, p2, p3);
+					const selection = $createRangeSelection();
+					selection.anchor.set(p2.getKey(), 0, "element");
+					selection.focus.set(p2.getKey(), 0, "element");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: false,
+				atLastParagraph: false,
+			});
+		});
+
+		it("flags the first paragraph correctly", () => {
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const t1 = $createTextNode("first");
+					const p1 = $createParagraphNode().append(t1);
+					const p2 = $createParagraphNode().append($createTextNode("second"));
+					root.append(p1, p2);
+					const selection = $createRangeSelection();
+					selection.anchor.set(t1.getKey(), 0, "text");
+					selection.focus.set(t1.getKey(), 0, "text");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: true,
+				atLastParagraph: false,
+			});
+		});
+
+		it("flags the last paragraph correctly", () => {
+			const editor = makeEditor();
+			editor.update(
+				() => {
+					const root = $getRoot();
+					root.clear();
+					const p1 = $createParagraphNode().append($createTextNode("first"));
+					const t2 = $createTextNode("second");
+					const p2 = $createParagraphNode().append(t2);
+					root.append(p1, p2);
+					const selection = $createRangeSelection();
+					selection.anchor.set(t2.getKey(), t2.getTextContentSize(), "text");
+					selection.focus.set(t2.getKey(), t2.getTextContentSize(), "text");
+					$setSelection(selection);
+				},
+				{ discrete: true },
+			);
+			expect(readPosition(editor)).toEqual({
+				atFirstParagraph: false,
+				atLastParagraph: true,
+			});
+		});
 	});
 
 	it("does nothing when history is empty", async () => {
