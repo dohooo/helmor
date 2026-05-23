@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { FileAudio, FileText, Paperclip, Play } from "lucide-react";
+import { FileAudio, FileText, Paperclip } from "lucide-react";
 import type { SlackFileRef } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -71,34 +71,31 @@ function ImagePreview({ file }: { file: SlackFileRef }) {
 }
 
 function VideoPreview({ file }: { file: SlackFileRef }) {
-	if (!file.previewUrl) return <FileChip file={file} />;
-	// We embed Slack's static `thumb_video` frame as a preview and
-	// gate playback behind a click — full `<video>` streaming through
-	// `slack-file://` works but downloading the bytes upfront on every
-	// thread render is wasteful. Click opens the file externally.
+	// `sourceUrl` is the original `url_private` rewritten to
+	// `slack-file://` — the protocol handler proxies it through the
+	// workspace cookie. Fall back to a chip when Slack didn't return
+	// a playable source (shouldn't happen for `video/*` mime, but defensive).
+	if (!file.sourceUrl) return <FileChip file={file} />;
 	return (
-		<button
-			type="button"
-			onClick={() => file.permalink && void openExternal(file.permalink, file)}
+		// biome-ignore lint/a11y/useMediaCaption: Slack uploads don't carry caption tracks and we have no way to author them in Helmor.
+		<video
+			controls
+			// `metadata` only fetches the MOOV atom (≤ a few hundred KB)
+			// up front. Bytes for actual playback stream in on demand
+			// once the user hits play. Without this, every thread mount
+			// would pull the full MP4 — wasteful on bandwidth.
+			preload="metadata"
+			// Slack's `thumb_video` static frame doubles as the
+			// `<video>` poster, so the bubble doesn't show a black box
+			// while the metadata loads.
+			poster={file.previewUrl ?? undefined}
 			className={cn(
-				"group relative overflow-hidden rounded-lg border border-border/60 bg-muted",
-				"cursor-interactive transition-colors",
-				"hover:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
+				"block max-h-[420px] w-full overflow-hidden rounded-lg border border-border/60 bg-black",
+				"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
 			)}
 		>
-			<img
-				src={file.previewUrl}
-				alt={file.name}
-				title={file.name}
-				loading="lazy"
-				className="block max-h-[420px] w-full object-cover"
-			/>
-			<div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/30 transition-colors group-hover:bg-black/40">
-				<div className="flex size-12 items-center justify-center rounded-full bg-white/90 text-foreground shadow-md">
-					<Play className="size-5 translate-x-[1px] fill-current" />
-				</div>
-			</div>
-		</button>
+			<source src={file.sourceUrl} type={file.mimetype ?? "video/mp4"} />
+		</video>
 	);
 }
 
