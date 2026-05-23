@@ -64,6 +64,8 @@ Context:
 - Run actions are named commands I can pick from the Inspector's Run dropdown. Cmd+R fires whichever action is currently selected.
 - One workspace can have several run actions (e.g. "Dev", "Tests", "Lint", "DB"). Each runs in its own PTY, independently startable / stoppable.
 - They are configured via the \`scripts.run\` array in helmor.json. Every entry must have a non-blank \`name\` and a non-blank \`command\` — entries missing either are silently ignored.
+- An entry may also carry an optional \`stopCommand\`: a short cleanup shell snippet that runs (same env + cwd as \`command\`) when I click Stop, before Helmor signals the main process. Use it when the main command leaves external state behind (containers up, services running, ports held by detached children). A second Stop click force-kills, so \`stopCommand\` should be short and non-interactive.
+- An entry may also carry an optional \`mode\`: \`"concurrent"\` (default) or \`"non-concurrent"\`. \`"non-concurrent"\` makes starting a new run of this action stop any other run of the same action across workspaces in the repo — the Exclusive toggle in the UI. Use it when the command binds a fixed port, holds a single named resource (a DB socket, a debugger port, a unique container name), or otherwise can't safely coexist with itself across workspaces.
 
 Required shape (use the array form, even when there is only one action):
 \`\`\`
@@ -71,7 +73,8 @@ Required shape (use the array form, even when there is only one action):
   "scripts": {
     "run": [
       { "name": "Dev",   "command": "npm run dev" },
-      { "name": "Tests", "command": "npm test" }
+      { "name": "Tests", "command": "npm test" },
+      { "name": "DB",    "command": "docker compose up", "stopCommand": "docker compose down", "mode": "non-concurrent" }
     ]
   }
 }
@@ -104,7 +107,9 @@ Rules:
 7. Do not quietly choose a heavy, destructive, or highly opinionated command when multiple reasonable defaults exist.
 8. For dev servers or local services, prefer HELMOR_PORT over hardcoded defaults so parallel workspaces do not collide. If the project needs multiple ports, use the range from HELMOR_PORT through HELMOR_PORT + HELMOR_PORT_COUNT - 1.
 9. Action names should be short, capitalized, and describe intent (e.g. "Dev", "Tests", "Lint", "DB"). Avoid duplicates.
-10. Ask at most 3 rounds of questions, and only when they materially change the lineup.
+10. Add \`stopCommand\` only for actions whose \`command\` leaves external state behind that won't be cleaned up by killing the process tree — typical cases are \`docker compose up\`, \`supabase start\`, or long-running services that detach. Skip \`stopCommand\` for plain dev servers, test runners, lint, and anything that exits cleanly on SIGTERM.
+11. Set \`"mode": "non-concurrent"\` only when the command can't safely run twice at once in the same repo — it binds a fixed port that doesn't read \`HELMOR_PORT\`, attaches to a single shared resource (named container, exclusive DB lock, debugger port), or otherwise has cross-workspace contention. Leave \`mode\` off (defaulting to concurrent) for everything that reads \`HELMOR_PORT\` or has no shared state — parallel workspaces are the whole point.
+12. Ask at most 3 rounds of questions, and only when they materially change the lineup.
 
 What to inspect:
 - helmor.json, conductor.json
@@ -121,6 +126,8 @@ Your flow:
    - what it likely does
    - who or what workflow it suits
    - whether it deserves to be its own named action, or could be folded into another
+   - whether it needs a \`stopCommand\` (per rule 10) and, if so, what that would be
+   - whether it needs \`"mode": "non-concurrent"\` (per rule 11)
 4. Recommend a lineup:
    - If only ONE candidate genuinely fits, propose a single-entry array (\`[{ "name": "Default", "command": "…" }]\`).
    - If 2+ fit, propose them all as named entries (\`[{ "name": "Dev", … }, { "name": "Tests", … }]\`).
