@@ -49,6 +49,10 @@ pub struct SlackInboxItem {
     /// Sender display name. `users.info` is called lazily and cached;
     /// when the cache misses we fall back to the raw user id.
     pub author_name: String,
+    /// Sender avatar (`image_72` from users.info), if resolvable. `None`
+    /// when the user lookup misses or the workspace strips profile
+    /// images. The frontend falls back to initials.
+    pub author_avatar_url: Option<String>,
     /// First ~280 chars of the message body. Slack mrkdwn is left
     /// as-is — the detail view does the real markdown rendering.
     pub text_snippet: String,

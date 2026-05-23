@@ -516,6 +516,82 @@ pub fn ts_to_millis(ts: &str) -> i64 {
     seconds.parse::<i64>().unwrap_or(0) * 1000
 }
 
+/// Workspace-wide custom-emoji TTL. Custom emoji change rarely — most
+/// workspaces touch them at most a few times a month — so a long TTL
+/// keeps `emoji.list` from hitting Slack on every inbox refresh.
+const EMOJI_LIST_TTL: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Default)]
+struct EmojiCache {
+    /// Keyed by team_id. The inner map is `name -> resolved image URL`.
+    /// Aliases are followed once before insertion so the consumer never
+    /// sees `"alias:other_name"` values.
+    entries: HashMap<String, (Instant, HashMap<String, String>)>,
+}
+
+fn emoji_cache() -> &'static Mutex<EmojiCache> {
+    static CACHE: OnceLock<Mutex<EmojiCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(EmojiCache::default()))
+}
+
+/// Resolve `alias:target` redirects against the raw `emoji.list` map.
+/// Slack disallows alias chains at the API level — if a stray one shows
+/// up the entry is dropped rather than risk a follow-loop. Aliases
+/// pointing at unknown targets are also dropped.
+fn resolve_emoji_aliases(raw: &HashMap<String, String>) -> HashMap<String, String> {
+    raw.iter()
+        .filter_map(|(name, value)| {
+            if let Some(target) = value.strip_prefix("alias:") {
+                raw.get(target)
+                    .filter(|t| !t.starts_with("alias:"))
+                    .map(|t| (name.clone(), t.clone()))
+            } else {
+                Some((name.clone(), value.clone()))
+            }
+        })
+        .collect()
+}
+
+/// `emoji.list` — every custom emoji visible to this workspace, returned
+/// as `name -> image_url`. The raw API yields a mix of direct image URLs
+/// and `"alias:other_name"` redirects; we follow each alias once before
+/// returning so the caller can do a straight lookup.
+///
+/// Cached per workspace with a 1h TTL. Custom emoji rarely change, and
+/// when they do, a stale entry just means a new emoji renders as a raw
+/// `:name:` pill until the next refresh — fine.
+pub fn emoji_list(team_id: &str, creds: &SlackCreds) -> Result<HashMap<String, String>> {
+    {
+        let cache = emoji_cache().lock().expect("emoji cache mutex poisoned");
+        if let Some((written, map)) = cache.entries.get(team_id) {
+            if written.elapsed() < EMOJI_LIST_TTL {
+                return Ok(map.clone());
+            }
+        }
+    }
+
+    let body = call(creds, "emoji.list", &[])?;
+    let raw = body
+        .get("emoji")
+        .ok_or_else(|| anyhow!("emoji.list response missing `emoji` envelope"))?;
+    let raw_map: HashMap<String, String> = raw
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(name, value)| value.as_str().map(|s| (name.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let resolved = resolve_emoji_aliases(&raw_map);
+
+    let mut cache = emoji_cache().lock().expect("emoji cache mutex poisoned");
+    cache
+        .entries
+        .insert(team_id.to_string(), (Instant::now(), resolved.clone()));
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,6 +607,46 @@ mod tests {
     fn ts_to_millis_returns_zero_for_garbage() {
         assert_eq!(ts_to_millis(""), 0);
         assert_eq!(ts_to_millis("not-a-number"), 0);
+    }
+
+    #[test]
+    fn emoji_alias_follows_one_hop_and_drops_dangling_targets() {
+        let mut raw = HashMap::new();
+        raw.insert("dosu-logo".to_string(), "https://cdn/dosu.png".to_string());
+        raw.insert(
+            "dosu".to_string(),
+            "alias:dosu-logo".to_string(), // valid alias
+        );
+        raw.insert(
+            "ghost-alias".to_string(),
+            "alias:nonexistent".to_string(), // dangling alias — should drop
+        );
+        raw.insert(
+            "loop-a".to_string(),
+            "alias:loop-b".to_string(), // alias to another alias — should drop
+        );
+        raw.insert(
+            "loop-b".to_string(),
+            "alias:loop-a".to_string(), // same; also drops
+        );
+        let resolved = resolve_emoji_aliases(&raw);
+        assert_eq!(
+            resolved.get("dosu-logo"),
+            Some(&"https://cdn/dosu.png".to_string()),
+        );
+        assert_eq!(
+            resolved.get("dosu"),
+            Some(&"https://cdn/dosu.png".to_string()),
+            "alias should follow to its target URL",
+        );
+        assert!(
+            !resolved.contains_key("ghost-alias"),
+            "dangling alias must not appear in the resolved map",
+        );
+        assert!(
+            !resolved.contains_key("loop-a") && !resolved.contains_key("loop-b"),
+            "multi-hop alias chains must not appear in the resolved map",
+        );
     }
 
     #[test]

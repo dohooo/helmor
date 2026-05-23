@@ -14,9 +14,10 @@ import type { ContextCard, SlackThreadMeta } from "@/lib/sources/types";
 import { InboxActionMenuButton, InboxSearchField } from "./actions";
 import { InboxSourceLayout } from "./layout";
 import { SlackConnectState } from "./slack-connect-button";
+import { SlackSourceCard } from "./slack-source-card";
 import { SlackWorkspaceSwitcher } from "./slack-workspace-switcher";
-import { SourceCard } from "./source-card";
 import { useDebouncedValue } from "./use-debounced-value";
+import { useSlackEmojiMap } from "./use-slack-emoji-map";
 import { useSlackInboxItems } from "./use-slack-inbox-items";
 import { useSlackSearch } from "./use-slack-search";
 import { useSlackWorkspaces } from "./use-slack-workspaces";
@@ -98,6 +99,12 @@ export function SlackInboxSection({
 	const activity = useSlackInboxItems(isSearching ? null : safeTeamId);
 	const searchResults = useSlackSearch(safeTeamId, trimmedQuery, sort);
 	const inbox = isSearching ? searchResults : activity;
+	const emoji = useSlackEmojiMap(safeTeamId);
+	const activeWorkspace = useMemo(
+		() => workspaces.find((w) => w.teamId === safeTeamId) ?? null,
+		[workspaces, safeTeamId],
+	);
+	const myUserId = activeWorkspace?.myUserId ?? null;
 	const cards = useMemo<ContextCard[]>(
 		() =>
 			inbox.items.map((item) =>
@@ -197,15 +204,22 @@ export function SlackInboxSection({
 				) : cards.length > 0 ? (
 					<>
 						<div className="flex w-full flex-col gap-2">
-							{cards.map((card) => (
-								<SourceCard
-									key={card.id}
-									card={card}
-									selected={card.id === selectedCardId}
-									onOpen={onOpenCard}
-									appendContextTarget={appendContextTarget}
-								/>
-							))}
+							{cards.map((card, index) => {
+								const item = inbox.items[index];
+								if (!item) return null;
+								return (
+									<SlackSourceCard
+										key={card.id}
+										item={item}
+										card={card}
+										myUserId={myUserId}
+										emoji={emoji}
+										selected={card.id === selectedCardId}
+										onOpen={onOpenCard}
+										appendContextTarget={appendContextTarget}
+									/>
+								);
+							})}
 						</div>
 						{inbox.hasNextPage ? (
 							<div

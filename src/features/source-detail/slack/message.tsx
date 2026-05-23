@@ -1,16 +1,37 @@
 import { Suspense } from "react";
 import { LazyStreamdown } from "@/components/streamdown-loader";
 import type { SlackMessage } from "@/lib/api";
+import {
+	inlineEmojiForMarkdown,
+	resolveEmoji,
+	type SlackEmoji,
+} from "@/lib/slack-text";
 import { formatRelativeTime } from "../common";
 
 /** Single Slack message bubble. Avatar + author + relative ts +
- *  mrkdwn-as-markdown body + flat reaction summary. Slack's mrkdwn is
- *  close enough to GFM that Streamdown renders most things correctly
- *  out of the box; the few syntactic gaps (e.g. `<@U123>` user pings)
- *  fall through as literal text in v1 — good enough for v1, formalising
- *  a full mrkdwn→md transformer is a v2 task. */
-export function SlackMessageBubble({ message }: { message: SlackMessage }) {
-	const body = message.text.trim() || "_(empty message)_";
+ *  mrkdwn-as-markdown body + flat reaction summary. We preprocess the
+ *  body so any `:shortcode:` Slack uses inline becomes either a unicode
+ *  emoji or a markdown `<img>` before reaching Streamdown — Streamdown
+ *  doesn't speak Slack mrkdwn natively. Mention/channel/url tokens
+ *  still flow through Streamdown unchanged (good enough for v1; a
+ *  full Slack mrkdwn → md transformer is a v2 task).
+ *
+ *  Reactions render as small pills (Slack's own visual contract): the
+ *  emoji icon followed by the count. Unknown shortcodes fall back to
+ *  the raw `:name:` text inside the pill. */
+export function SlackMessageBubble({
+	message,
+	emoji,
+}: {
+	message: SlackMessage;
+	/** Workspace emoji table (built-in unicode + custom). Pass `{}`
+	 *  while the workspace hasn't been resolved yet — emojis will then
+	 *  render as raw `:name:` text inside their pill, which is the
+	 *  same visual fallback Slack uses pre-load. */
+	emoji: Record<string, SlackEmoji>;
+}) {
+	const rawBody = message.text.trim() || "_(empty message)_";
+	const body = inlineEmojiForMarkdown(rawBody, emoji);
 	return (
 		<div className="flex gap-3 px-1 py-2">
 			<div className="shrink-0">
@@ -50,19 +71,56 @@ export function SlackMessageBubble({ message }: { message: SlackMessage }) {
 				{message.reactions.length > 0 ? (
 					<div className="mt-1 flex flex-wrap gap-1">
 						{message.reactions.map((r) => (
-							<span
+							<SlackReactionPill
 								key={r.name}
-								className="inline-flex items-center gap-1 rounded-full border border-border/60 px-1.5 py-0.5 text-mini text-muted-foreground"
-								title={`:${r.name}:`}
-							>
-								<span>:{r.name}:</span>
-								<span className="font-medium text-foreground">{r.count}</span>
-							</span>
+								name={r.name}
+								count={r.count}
+								emoji={emoji}
+							/>
 						))}
 					</div>
 				) : null}
 			</div>
 		</div>
+	);
+}
+
+/** A single reaction summary in the Slack badge-icon style: a small
+ *  rounded pill containing the resolved emoji + count. Three rendering
+ *  branches mirror `SlackEmojiInline`: unicode glyph, custom-image, and
+ *  unknown-shortcode fallback. Hover/title shows the raw `:name:` so
+ *  power users can still identify the underlying emoji. */
+function SlackReactionPill({
+	name,
+	count,
+	emoji,
+}: {
+	name: string;
+	count: number;
+	emoji: Record<string, SlackEmoji>;
+}) {
+	const resolved = resolveEmoji(name, emoji);
+	return (
+		<span
+			className="inline-flex items-center gap-1 rounded-full border border-border/60 px-1.5 py-0.5 text-mini text-muted-foreground"
+			title={`:${name}:`}
+		>
+			{resolved?.kind === "image" ? (
+				<img
+					src={resolved.url}
+					alt={`:${name}:`}
+					className="size-3.5 shrink-0"
+					loading="lazy"
+				/>
+			) : resolved?.kind === "unicode" ? (
+				<span className="text-ui leading-none" aria-label={`:${name}:`}>
+					{resolved.char}
+				</span>
+			) : (
+				<span>:{name}:</span>
+			)}
+			<span className="font-medium text-foreground">{count}</span>
+		</span>
 	);
 }
 

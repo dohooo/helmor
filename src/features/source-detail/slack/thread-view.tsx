@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
+import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
@@ -30,6 +31,7 @@ export function SlackThreadView({
 	appendContextTarget,
 }: SourceDetailProps) {
 	const parsed = parseCardId(card.id);
+	const emoji = useSlackEmojiMap(parsed?.teamId ?? null);
 	const detailQuery = useQuery({
 		queryKey: parsed
 			? helmorQueryKeys.slackThread(parsed.teamId, parsed.channelId, parsed.ts)
@@ -143,7 +145,7 @@ export function SlackThreadView({
 							</div>
 						) : (
 							detail.messages.map((m) => (
-								<SlackMessageBubble key={m.ts} message={m} />
+								<SlackMessageBubble key={m.ts} message={m} emoji={emoji} />
 							))
 						)}
 					</div>

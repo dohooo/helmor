@@ -94,7 +94,7 @@ type ForgeStateFilter = {
 	label: string;
 };
 
-const EXTERNAL_FILTER_IDS: ExternalFilterId[] = ["linear", "slack", "mobile"];
+const EXTERNAL_FILTER_IDS: ExternalFilterId[] = ["slack", "linear", "mobile"];
 
 /** If the user pastes a GitHub or GitLab issue/PR/MR URL into the
  *  search box, snap the sub-tab to the matching kind so the result

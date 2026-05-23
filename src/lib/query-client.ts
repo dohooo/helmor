@@ -152,6 +152,7 @@ export const helmorQueryKeys = {
 		["slackSearch", teamId, query, sort] as const,
 	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
 		["slackThread", teamId, channelId, anchorTs] as const,
+	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.

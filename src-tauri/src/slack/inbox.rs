@@ -147,8 +147,9 @@ fn convert_search_match(
         .map(|n| format!("#{n}"))
         .unwrap_or_else(|| channel.id.clone());
 
-    let author = resolve_author_name(team_id, creds, raw.user_id.as_deref(), &raw)
-        .unwrap_or_else(|_| author_fallback(&raw));
+    let ResolvedAuthor { name, avatar_url } =
+        resolve_author(team_id, creds, raw.user_id.as_deref(), &raw)
+            .unwrap_or_else(|_| ResolvedAuthor::fallback(&raw));
     let permalink = raw.permalink.clone().unwrap_or_default();
     let ts_millis = api::ts_to_millis(&raw.ts);
 
@@ -160,7 +161,8 @@ fn convert_search_match(
         kind: SlackInboxItemKind::Mention,
         ts: raw.ts,
         thread_ts: raw.thread_ts,
-        author_name: author,
+        author_name: name,
+        author_avatar_url: avatar_url,
         text_snippet: truncate(&raw.text, MAX_SNIPPET_CHARS),
         ts_millis,
         permalink,
@@ -208,8 +210,9 @@ fn snippet_for_dm(
         return Ok(None);
     };
     let label = dm_label(team_id, creds, dm)?;
-    let author = resolve_author_name(team_id, creds, message.user_id.as_deref(), &message)
-        .unwrap_or_else(|_| author_fallback(&message));
+    let ResolvedAuthor { name, avatar_url } =
+        resolve_author(team_id, creds, message.user_id.as_deref(), &message)
+            .unwrap_or_else(|_| ResolvedAuthor::fallback(&message));
     let permalink = api::chat_get_permalink(creds, &dm.id, &message.ts)
         .ok()
         .flatten()
@@ -223,7 +226,8 @@ fn snippet_for_dm(
         kind: SlackInboxItemKind::DirectMessage,
         ts: message.ts,
         thread_ts: message.thread_ts,
-        author_name: author,
+        author_name: name,
+        author_avatar_url: avatar_url,
         text_snippet: truncate(&message.text, MAX_SNIPPET_CHARS),
         ts_millis,
         permalink,
@@ -247,29 +251,54 @@ fn dm_label(team_id: &str, creds: &SlackCreds, dm: &ConversationRow) -> Result<S
     Ok(dm.name.clone().unwrap_or_else(|| dm.id.clone()))
 }
 
+/// Resolved author bundle — name + avatar URL together so we hit the
+/// cached `users.info` once per item instead of twice.
+struct ResolvedAuthor {
+    name: String,
+    avatar_url: Option<String>,
+}
+
+impl ResolvedAuthor {
+    /// Best-effort fallback when `users.info` is unreachable: keep the raw
+    /// user id / username fallback as the display name, drop the avatar.
+    fn fallback(raw: &RawMessage) -> Self {
+        let name = raw
+            .user_id
+            .clone()
+            .or_else(|| raw.username_fallback.clone())
+            .unwrap_or_else(|| "Slack".to_string());
+        Self {
+            name,
+            avatar_url: None,
+        }
+    }
+}
+
 /// Best-effort author lookup. The blocking call is safe because
 /// `users.info` is bounded and the result is cached for 5 min in-process.
-fn resolve_author_name(
+fn resolve_author(
     team_id: &str,
     creds: &SlackCreds,
     user_id: Option<&str>,
     raw: &RawMessage,
-) -> Result<String> {
+) -> Result<ResolvedAuthor> {
     if let Some(uid) = user_id {
-        let UserInfo { display_name, .. } = api::users_info(team_id, creds, uid)?;
-        return Ok(display_name);
+        let UserInfo {
+            display_name,
+            avatar_url,
+        } = api::users_info(team_id, creds, uid)?;
+        return Ok(ResolvedAuthor {
+            name: display_name,
+            avatar_url,
+        });
     }
     if let Some(name) = raw.username_fallback.as_deref() {
-        return Ok(name.to_string());
+        return Ok(ResolvedAuthor {
+            name: name.to_string(),
+            avatar_url: None,
+        });
     }
     Err(anyhow::anyhow!("no author hint available"))
-}
-
-fn author_fallback(raw: &RawMessage) -> String {
-    raw.user_id
-        .clone()
-        .or_else(|| raw.username_fallback.clone())
-        .unwrap_or_else(|| "Slack".to_string())
 }
 
 fn truncate(text: &str, max: usize) -> String {

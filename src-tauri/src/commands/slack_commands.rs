@@ -133,6 +133,47 @@ pub async fn slack_search_messages(
     .await
 }
 
+/// Return the workspace's custom-emoji map (`name -> image_url`).
+/// Built-in unicode emojis are NOT included — those are bundled
+/// frontend-side in `src/lib/slack-emoji-builtin.ts`. Aliases are
+/// followed once so callers see only direct URLs.
+///
+/// Cached in-process with a 1h TTL (`api::emoji_list`). On every call
+/// we still hit the cache first; the underlying API request only fires
+/// when the cache miss-or-expires.
+#[tauri::command]
+pub async fn slack_list_emoji(
+    app: AppHandle,
+    team_id: String,
+) -> CmdResult<std::collections::HashMap<String, String>> {
+    let app_handle = app.clone();
+    let team_id_for_lookup = team_id.clone();
+    run_blocking(move || {
+        let workspace = slack_workspaces::get_workspace(&team_id_for_lookup)?
+            .with_context(|| format!("Slack workspace {team_id_for_lookup} is not connected"))?;
+        let creds = match credentials::load_credentials(&workspace.team_id)? {
+            Some(c) => c,
+            None => anyhow::bail!("No stored Slack credentials for team {}", workspace.team_id),
+        };
+        match slack_api::emoji_list(&workspace.team_id, &creds) {
+            Ok(map) => Ok(map),
+            Err(error) => {
+                if slack_api::is_invalid_auth(&error) {
+                    let _ = credentials::clear_credentials(&workspace.team_id);
+                    ui_sync::publish(
+                        &app_handle,
+                        UiMutationEvent::SlackTokenInvalidated {
+                            team_id: workspace.team_id.clone(),
+                        },
+                    );
+                }
+                Err(error)
+            }
+        }
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn slack_get_thread_detail(
     app: AppHandle,

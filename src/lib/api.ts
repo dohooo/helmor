@@ -1618,6 +1618,9 @@ export type SlackInboxItem = {
 	ts: string;
 	threadTs: string | null;
 	authorName: string;
+	/** `image_72` from `users.info`. `null` when the user lookup misses
+	 *  or the workspace strips profile images. UI falls back to initials. */
+	authorAvatarUrl: string | null;
 	textSnippet: string;
 	tsMillis: number;
 	permalink: string;
@@ -1764,6 +1767,24 @@ export async function slackGetThreadDetail(args: {
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Couldn't load Slack thread."));
+	}
+}
+
+/** Workspace custom-emoji map (`name -> image url`). Built-in unicode
+ *  emojis are not included here — those ship bundled with the frontend.
+ *  Aliases are resolved server-side, so every returned value is a real
+ *  image URL. */
+export async function slackListEmoji(
+	teamId: string,
+): Promise<Record<string, string>> {
+	try {
+		return await invoke<Record<string, string>>("slack_list_emoji", {
+			teamId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack emoji catalogue."),
+		);
 	}
 }
 
