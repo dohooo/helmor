@@ -17,6 +17,7 @@ import {
 	chmodSync,
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -615,27 +616,62 @@ function stageLlamaCppBinaries(target: TargetInfo): string {
 	// Following them would balloon the bundle ~3× and break the
 	// upstream RPATH layout.
 	cpSync(binDir, dest, { recursive: true, dereference: false });
-	// Re-assert exec bit on every regular file — tarball preserves
-	// modes already, but cpSync between filesystems sometimes flips
-	// them and an un-executable `llama-server` would just fail to
-	// spawn with a confusing EACCES.
+
+	// Upstream tarball is the full llama.cpp toolbox — 25 CLIs + rpc-server
+	// + their per-tool `*-impl.dylib`s. We only call `llama-server` at
+	// runtime, so prune everything else: smaller bundle and ~10 Mach-O
+	// files to sign/notarize instead of ~40.
+	//
+	// The keep-list is intentionally hard-coded against LLAMA_VERSION:
+	// if a future bump introduces a new runtime dylib (e.g. a new ggml
+	// backend), dev launch of `llama-server` will fail immediately with
+	// `dyld: Library not loaded`, which is the cleanest signal to update
+	// this list. Closure was confirmed via `otool -L` on llama-server +
+	// every first-level dep.
+	const keepFiles = new Set(["llama-server", "LICENSE"]);
+	const keepDylibStems = new Set([
+		"libllama",
+		"libllama-common",
+		"libllama-server-impl",
+		"libmtmd",
+		"libggml",
+		"libggml-base",
+		"libggml-blas",
+		"libggml-cpu",
+		"libggml-metal",
+		"libggml-rpc",
+	]);
+	// Matches `libfoo.dylib`, `libfoo.0.dylib`, `libfoo.0.12.0.dylib`.
+	const dylibRe = /^(lib[a-zA-Z0-9-]+?)(?:\.[\d.]+)?\.dylib$/;
 	for (const entry of readdirSync(dest)) {
-		const path = join(dest, entry);
-		const stat = statSync(path);
-		if (
-			stat.isFile() &&
-			!entry.endsWith(".dylib") &&
-			!entry.endsWith(".metallib")
-		) {
-			chmodSync(path, 0o755);
-		}
+		if (keepFiles.has(entry)) continue;
+		const m = entry.match(dylibRe);
+		if (m && keepDylibStems.has(m[1]!)) continue;
+		rmSync(join(dest, entry), { force: true, recursive: true });
 	}
 
-	// `llama-server` needs `allow-jit` / `allow-unsigned-executable-memory`
-	// under hardened runtime (same JSC story as the Bun-compiled sidecar
-	// binaries) — without them the server process aborts at first GGUF
-	// load on signed builds.
-	maybeSignMacBinary(join(dest, "llama-server"), true);
+	// Re-assert exec bit on llama-server — tarball preserves modes
+	// already, but cpSync between filesystems sometimes flips them and
+	// an un-executable `llama-server` would just fail to spawn with a
+	// confusing EACCES.
+	chmodSync(join(dest, "llama-server"), 0o755);
+
+	// Sign every Mach-O file. Notarization rejects the bundle if ANY
+	// binary inside Resources/ is unsigned, lacks a secure timestamp,
+	// or (for executables) doesn't have hardened runtime. `llama-server`
+	// needs `allow-jit` / `allow-unsigned-executable-memory` because
+	// Metal compute does runtime codegen on Apple Silicon. Dylibs are
+	// signed without entitlements (codesign ignores them on libraries).
+	// `lstatSync` skips the dylib version symlinks (libfoo.dylib →
+	// libfoo.0.dylib → libfoo.0.12.0.dylib) — signing the real file
+	// covers all three names.
+	for (const entry of readdirSync(dest)) {
+		if (entry === "LICENSE") continue;
+		const path = join(dest, entry);
+		const stat = lstatSync(path);
+		if (!stat.isFile()) continue;
+		maybeSignMacBinary(path, !entry.endsWith(".dylib"));
+	}
 	return dest;
 }
 
