@@ -146,6 +146,10 @@ export const helmorQueryKeys = {
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 	activeStreams: ["activeStreams"] as const,
+	slackWorkspaces: ["slackWorkspaces"] as const,
+	slackInbox: (teamId: string) => ["slackInbox", teamId] as const,
+	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
+		["slackThread", teamId, channelId, anchorTs] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.

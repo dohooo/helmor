@@ -63,6 +63,16 @@ pub enum UiMutationEvent {
     /// `list_active_streams`. See `agents::streaming::active_streams` for
     /// the source of truth this notification mirrors.
     ActiveStreamsChanged,
+    /// Connected-Slack-workspace set changed (Connect / Disconnect).
+    /// Frontends invalidate the workspace list query and the inbox
+    /// queries for any affected team.
+    SlackWorkspacesChanged,
+    /// A Slack workspace's stored credentials no longer authenticate
+    /// (xoxc rotation, account logout, admin revoke). The frontend
+    /// surfaces a "Reconnect" affordance for this workspace.
+    SlackTokenInvalidated {
+        team_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +150,9 @@ mod tests {
                 permission_mode: None,
             },
             UiMutationEvent::ActiveStreamsChanged,
+            UiMutationEvent::SlackTokenInvalidated {
+                team_id: "T1".into(),
+            },
         ];
         for event in cases {
             let s = serde_json::to_string(&event).unwrap();

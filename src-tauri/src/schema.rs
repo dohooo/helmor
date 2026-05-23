@@ -948,6 +948,19 @@ CREATE TABLE IF NOT EXISTS session_messages (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Connected Slack workspaces (one row per workspace the user has
+-- authorized). Credentials (xoxc + xoxd) live in the OS keychain via
+-- `keyring`, never here. This table is just non-secret metadata so the
+-- sidebar can list "which workspaces am I connected to" without doing a
+-- keychain probe per render.
+CREATE TABLE IF NOT EXISTS slack_workspaces (
+    team_id TEXT PRIMARY KEY,
+    team_name TEXT NOT NULL,
+    team_domain TEXT NOT NULL,
+    my_user_id TEXT NOT NULL,
+    added_at INTEGER NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -1014,6 +1027,7 @@ mod tests {
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"session_messages".to_string()));
         assert!(tables.contains(&"settings".to_string()));
+        assert!(tables.contains(&"slack_workspaces".to_string()));
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { GitHubIssueView } from "./github/issue-view";
 import { GitHubPullRequestView } from "./github/pull-request-view";
 import { GitLabIssueView } from "./gitlab/issue-view";
 import { GitLabMergeRequestView } from "./gitlab/merge-request-view";
+import { SlackThreadView } from "./slack/thread-view";
 import { UnsupportedSourceView } from "./unsupported-view";
 
 // `memo` keeps the markdown render in `GitHubDetailPage` from re-running
@@ -55,8 +56,14 @@ export const SourceDetailView = memo(function SourceDetailView({
 					appendContextTarget={appendContextTarget}
 				/>
 			);
-		case "linear":
 		case "slack_thread":
+			return (
+				<SlackThreadView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
+		case "linear":
 			return <UnsupportedSourceView card={card} />;
 	}
 });

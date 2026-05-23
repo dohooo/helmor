@@ -20,11 +20,15 @@ dotenvy = "0.15"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+aes = "0.8"
 anyhow = "1"
 base64 = "0.22.1"
+cbc = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false }
 rand = "0.10.0"
 reqwest = { version = "0.12", default-features = false, features = [
     "blocking",
@@ -32,6 +36,17 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "stream",
 ] }
+rusty-leveldb = "3"
+sha1 = "0.10"
+# `wreq` (and the `wreq-util` companion) is a hard fork of `reqwest`
+# with built-in browser TLS / HTTP-2 fingerprint emulation. We use it
+# only for Slack: stock reqwest's rustls ClientHello bytes do not
+# match any real browser, and Slack's Cloudflare-fronted edge
+# classifies them as "spoofed_user_agent" / "unexpected_scraping" and
+# replies `invalid_auth` BEFORE inspecting the token. See
+# `korotovsky/slack-mcp-server#86`.
+wreq = { version = "5", default-features = false, features = ["json"] }
+wreq-util = "2"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
@@ -39,6 +54,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tauri = { version = "2", features = ["protocol-asset", "test", "devtools"] }
+tempfile = "3"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
@@ -51,6 +67,7 @@ tokio = { version = "1", features = [
     "fs",
     "io-util",
     "rt",
+    "rt-multi-thread",
     "sync",
     "macros",
     "time",

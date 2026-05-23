@@ -22,6 +22,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod slack;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
@@ -481,7 +482,12 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::slack_commands::slack_import_from_desktop,
+            commands::slack_commands::slack_list_workspaces,
+            commands::slack_commands::slack_disconnect_workspace,
+            commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_get_thread_detail
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -3,10 +3,8 @@ import {
 	ChevronDown,
 	Loader2,
 	Pickaxe,
-	Search,
 	SlidersHorizontal,
 	Smartphone,
-	X,
 } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +35,13 @@ import {
 import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
+import {
+	InboxActionIconButton,
+	InboxActionMenuButton,
+	InboxSearchField,
+} from "./actions";
+import { InboxSourceLayout } from "./layout";
+import { SlackInboxSection } from "./slack-inbox-section";
 import { SourceCard } from "./source-card";
 import { SourceIcon } from "./source-icon";
 import {
@@ -441,6 +446,92 @@ export const InboxSidebar = memo(function InboxSidebar({
 		filteredCards.length,
 	]);
 
+	const forgeActions = isForgeSource ? (
+		<>
+			<InboxSearchField
+				value={searchQuery}
+				onChange={handleSearchChange}
+				onClear={() => setSearchQuery("")}
+				ariaLabel={`Search ${activeForgeLabels.providerName} contexts`}
+			/>
+
+			{showForgeTypeSelect && activeKindLabels ? (
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<InboxActionIconButton
+							aria-label={`Filter by ${activeKindLabels.short}`}
+							title={activeKindLabels.short}
+						>
+							{(() => {
+								const source =
+									INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[
+										activeKindLabels.kind
+									];
+								return source ? (
+									<SourceIcon source={source} size={13} className="block" />
+								) : null;
+							})()}
+						</InboxActionIconButton>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-40">
+						<DropdownMenuRadioGroup
+							value={activeKindLabels.kind}
+							onValueChange={(value) => setForgeTypeFilter(value as InboxKind)}
+						>
+							{enabledKindLabels.map((entry) => {
+								const source =
+									INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[entry.kind];
+								return (
+									<DropdownMenuRadioItem
+										key={entry.kind}
+										value={entry.kind}
+										className="gap-2 text-mini"
+									>
+										{source ? (
+											<SourceIcon
+												source={source}
+												size={12}
+												className="shrink-0"
+											/>
+										) : null}
+										<span>{entry.short}</span>
+									</DropdownMenuRadioItem>
+								);
+							})}
+						</DropdownMenuRadioGroup>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			) : null}
+
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<InboxActionMenuButton>
+						<span>{activeStateFilter.label}</span>
+						<ChevronDown className="size-3" strokeWidth={2} />
+					</InboxActionMenuButton>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" className="w-28">
+					<DropdownMenuRadioGroup
+						value={activeStateFilter.id}
+						onValueChange={(value) =>
+							setStateFilter(value as ForgeStateFilterId)
+						}
+					>
+						{stateOptions.map((filter) => (
+							<DropdownMenuRadioItem
+								key={filter.id}
+								value={filter.id}
+								className="text-mini"
+							>
+								{filter.label}
+							</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+				</DropdownMenuContent>
+			</DropdownMenu>
+		</>
+	) : null;
+
 	return (
 		<div className={cn("h-full min-h-0 flex-col overflow-hidden", className)}>
 			{showWindowSafeTop ? (
@@ -526,131 +617,19 @@ export const InboxSidebar = memo(function InboxSidebar({
 				</div>
 			</div>
 
-			{isForgeSource ? (
-				<div className={cn("mt-1.5", horizontalPaddingClass)}>
-					<div className="flex h-7 min-w-0 items-center gap-1.5">
-						<div className="flex min-w-0 flex-1 items-center rounded-md border border-border/45 bg-background/35 px-1.5 text-muted-foreground transition-colors focus-within:border-border/80 focus-within:bg-background/55">
-							<Search className="size-3 shrink-0" strokeWidth={1.9} />
-							<input
-								type="text"
-								value={searchQuery}
-								onChange={handleSearchChange}
-								placeholder="Search"
-								aria-label={`Search ${activeForgeLabels.providerName} contexts`}
-								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-mini text-foreground outline-none placeholder:text-muted-foreground/70"
-							/>
-							{searchQuery ? (
-								<button
-									type="button"
-									aria-label="Clear search"
-									onClick={() => setSearchQuery("")}
-									className="flex size-4 cursor-interactive items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-								>
-									<X className="size-3" strokeWidth={2} />
-								</button>
-							) : null}
-						</div>
-
-						{showForgeTypeSelect && activeKindLabels ? (
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
-									<button
-										type="button"
-										aria-label={`Filter by ${activeKindLabels.short}`}
-										title={activeKindLabels.short}
-										className="inline-flex size-7 shrink-0 cursor-interactive items-center justify-center rounded-md border border-border/45 bg-background/35 text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
-									>
-										{(() => {
-											const source =
-												INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[
-													activeKindLabels.kind
-												];
-											return source ? (
-												<SourceIcon
-													source={source}
-													size={13}
-													className="block"
-												/>
-											) : null;
-										})()}
-									</button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end" className="w-40">
-									<DropdownMenuRadioGroup
-										value={activeKindLabels.kind}
-										onValueChange={(value) =>
-											setForgeTypeFilter(value as InboxKind)
-										}
-									>
-										{enabledKindLabels.map((entry) => {
-											const source =
-												INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[
-													entry.kind
-												];
-											return (
-												<DropdownMenuRadioItem
-													key={entry.kind}
-													value={entry.kind}
-													className="gap-2 text-mini"
-												>
-													{source ? (
-														<SourceIcon
-															source={source}
-															size={12}
-															className="shrink-0"
-														/>
-													) : null}
-													<span>{entry.short}</span>
-												</DropdownMenuRadioItem>
-											);
-										})}
-									</DropdownMenuRadioGroup>
-								</DropdownMenuContent>
-							</DropdownMenu>
-						) : null}
-
-						<DropdownMenu>
-							<DropdownMenuTrigger asChild>
-								<button
-									type="button"
-									className="inline-flex h-7 shrink-0 cursor-interactive items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-mini font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
-								>
-									<span>{activeStateFilter.label}</span>
-									<ChevronDown className="size-3" strokeWidth={2} />
-								</button>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end" className="w-28">
-								<DropdownMenuRadioGroup
-									value={activeStateFilter.id}
-									onValueChange={(value) =>
-										setStateFilter(value as ForgeStateFilterId)
-									}
-								>
-									{stateOptions.map((filter) => (
-										<DropdownMenuRadioItem
-											key={filter.id}
-											value={filter.id}
-											className="text-mini"
-										>
-											{filter.label}
-										</DropdownMenuRadioItem>
-									))}
-								</DropdownMenuRadioGroup>
-							</DropdownMenuContent>
-						</DropdownMenu>
-					</div>
-				</div>
-			) : null}
-
-			<div
-				ref={scrollContainerRef}
-				className={cn(
-					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-width:thin]",
-					horizontalPaddingClass,
-					isForgeSource ? "mt-1" : "mt-[7px]",
-				)}
-			>
-				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
+			{selectedSource === "slack" ? (
+				<SlackInboxSection
+					onOpenCard={onOpenCard}
+					selectedCardId={selectedCardId}
+					appendContextTarget={appendContextTarget}
+					horizontalPaddingClass={horizontalPaddingClass}
+				/>
+			) : (
+				<InboxSourceLayout
+					ref={scrollContainerRef}
+					horizontalPaddingClass={horizontalPaddingClass}
+					actions={forgeActions}
+				>
 					{isComingSoonSource ? (
 						<div className="flex min-h-[calc(100vh-150px)] w-full items-center justify-center px-3">
 							<div className="flex w-full max-w-[250px] flex-col items-stretch text-muted-foreground/65">
@@ -739,8 +718,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 							repoFilter={repoFilter ?? null}
 						/>
 					)}
-				</div>
-			</div>
+				</InboxSourceLayout>
+			)}
 		</div>
 	);
 });

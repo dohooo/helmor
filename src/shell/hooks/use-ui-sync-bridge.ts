@@ -198,6 +198,29 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.activeStreams,
 			});
 			return;
+		case "slackWorkspacesChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackWorkspaces,
+			});
+			// New connections also affect the activity feed (now has data)
+			// and disconnections clear the cached items — kill every
+			// `slackInbox` query in one sweep rather than tracking which
+			// team_ids belong to which mutation.
+			void queryClient.invalidateQueries({
+				predicate: (query) => query.queryKey[0] === "slackInbox",
+			});
+			return;
+		case "slackTokenInvalidated":
+			// Token already wiped on the backend; bust the cache so the
+			// inbox UI re-fetches and surfaces the auth error state /
+			// "Reconnect" affordance.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackInbox(event.teamId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackWorkspaces,
+			});
+			return;
 	}
 }
 

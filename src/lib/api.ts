@@ -1587,6 +1587,155 @@ export type GitRefsChangedPayload = {
 	workspaceId: string;
 };
 
+// ────────────────────────────────────────────────────────────────────────
+// Slack context source (read-only v1).
+//
+// Wire shapes mirror `src-tauri/src/slack/types.rs` exactly. Auth is the
+// "EZ-Login" pattern — `slackConnectWorkspace` opens a Tauri secondary
+// window at app.slack.com, captures xoxc + xoxd after the user signs in,
+// and persists them via `keyring`. All reads then go through the Slack
+// Web API client in `src-tauri/src/slack/api.rs`.
+//
+// The frontend never sees the captured tokens; it only ever holds the
+// non-secret workspace metadata (team id / name / domain / our user id).
+// ────────────────────────────────────────────────────────────────────────
+
+export type SlackWorkspace = {
+	teamId: string;
+	teamName: string;
+	teamDomain: string;
+	myUserId: string;
+	addedAt: number;
+};
+
+export type SlackInboxItemKind = "mention" | "direct_message";
+
+export type SlackInboxItem = {
+	id: string;
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	kind: SlackInboxItemKind;
+	ts: string;
+	threadTs: string | null;
+	authorName: string;
+	textSnippet: string;
+	tsMillis: number;
+	permalink: string;
+};
+
+export type SlackInboxPage = {
+	items: SlackInboxItem[];
+	nextCursor: string | null;
+};
+
+export type SlackReactionSummary = {
+	name: string;
+	count: number;
+};
+
+export type SlackMessage = {
+	ts: string;
+	userId: string | null;
+	authorName: string;
+	authorAvatarUrl: string | null;
+	text: string;
+	tsMillis: number;
+	reactions: SlackReactionSummary[];
+};
+
+export type SlackThreadDetail = {
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	isThread: boolean;
+	messages: SlackMessage[];
+	permalink: string;
+};
+
+export type SlackImportFailure = {
+	teamId: string;
+	teamName: string;
+	reason: string;
+};
+
+export type SlackImportResult = {
+	imported: SlackWorkspace[];
+	failed: SlackImportFailure[];
+	alreadyConnected: SlackWorkspace[];
+};
+
+/** Read the user's local Slack desktop session (macOS only in v1) and
+ *  import every workspace whose token still authenticates. Strictly
+ *  better UX than the webview-based connect flow when it works because
+ *  it reuses whatever auth state Slack desktop already negotiated —
+ *  passkeys, SSO, admin-enforced 2FA all become non-issues. */
+export async function slackImportFromDesktop(): Promise<SlackImportResult> {
+	try {
+		return await invoke<SlackImportResult>("slack_import_from_desktop");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't read Slack desktop session."),
+		);
+	}
+}
+
+export async function slackListWorkspaces(): Promise<SlackWorkspace[]> {
+	try {
+		return await invoke<SlackWorkspace[]>("slack_list_workspaces");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack workspaces."),
+		);
+	}
+}
+
+export async function slackDisconnectWorkspace(teamId: string): Promise<void> {
+	try {
+		await invoke<void>("slack_disconnect_workspace", { teamId });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't disconnect Slack workspace."),
+		);
+	}
+}
+
+export async function slackListInboxItems(args: {
+	teamId: string;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_list_inbox_items", {
+			teamId: args.teamId,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack inbox items."),
+		);
+	}
+}
+
+export async function slackGetThreadDetail(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+}): Promise<SlackThreadDetail> {
+	try {
+		return await invoke<SlackThreadDetail>("slack_get_thread_detail", {
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Couldn't load Slack thread."));
+	}
+}
+
 export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
@@ -1610,7 +1759,9 @@ export type UiMutationEvent =
 			modelId: string | null;
 			permissionMode: string | null;
 	  }
-	| { type: "activeStreamsChanged" };
+	| { type: "activeStreamsChanged" }
+	| { type: "slackWorkspacesChanged" }
+	| { type: "slackTokenInvalidated"; teamId: string };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
