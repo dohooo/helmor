@@ -561,10 +561,24 @@ const CHECKSUM_MISMATCH_MARKER: &str = "HELMOR_INSTALL_CHECKSUM_MISMATCH";
 /// re-spawning ssh.
 ///
 /// The script drops `set -e` because we want to detect specific
-/// failure modes and emit distinguishing sentinels rather than have
-/// the shell exit on the first non-zero status. `set -u -o pipefail`
-/// stays — unset vars are real bugs, and we want pipe failures to
-/// surface as a non-zero exit on the relevant line.
+/// failure modes and emit distinguishing sentinels rather than
+/// have the shell exit on the first non-zero status. `set -u -o
+/// pipefail` stays — unset vars are real bugs, and we want pipe
+/// failures to surface as a non-zero exit on the relevant line.
+///
+/// Cross-platform tool dispatch:
+///   * **Downloader**: prefer `curl` (default on macOS + most
+///     Linux distros), fall back to `wget` (Alpine-minimal +
+///     some legacy images).
+///   * **SHA256 verification**: prefer `sha256sum` (GNU coreutils,
+///     default on virtually every Linux distro), fall back to
+///     `shasum -a 256` (macOS BSD default; also present on some
+///     Linux distros via Perl). The script function below tries
+///     both and reports a distinct failure mode if neither is on
+///     `$PATH`.
+///   * **Install**: `cp` + `chmod` rather than `install(1)` —
+///     `cp` is in coreutils, `install` is sometimes split out
+///     (e.g. `coreutils` vs `coreutils-base` on some musl images).
 fn build_download_script(expected_protocol: &str, target: &str) -> String {
     let tarball = format!("helmor-server-{expected_protocol}-{target}.tar.gz");
     let tag = format!("helmor-server-v{expected_protocol}");
@@ -578,16 +592,43 @@ fn build_download_script(expected_protocol: &str, target: &str) -> String {
         r#"set -uo pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-if ! curl -fsSL -o "$tmp/{tarball}" "{tarball_url}"; then
+
+# Downloader dispatch — curl preferred, wget as a fallback.
+download() {{
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$1" "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$1" "$2"
+  else
+    echo "HELMOR_INSTALL_DOWNLOAD_FAILED no_downloader" >&2
+    return 1
+  fi
+}}
+
+# SHA-256 dispatch — sha256sum (GNU coreutils, Linux default)
+# preferred, shasum -a 256 (BSD / macOS default) as fallback. The
+# stdin format both accept is `<hex>  <filename>` per line.
+verify_sha256() {{
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c -
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -c -
+  else
+    echo "HELMOR_INSTALL_NO_SHA256_TOOL" >&2
+    return 2
+  fi
+}}
+
+if ! download "$tmp/{tarball}" "{tarball_url}"; then
   echo "HELMOR_INSTALL_DOWNLOAD_FAILED tarball" >&2
   exit 70
 fi
-if ! curl -fsSL -o "$tmp/SHA256SUMS" "{sums_url}"; then
+if ! download "$tmp/SHA256SUMS" "{sums_url}"; then
   echo "HELMOR_INSTALL_DOWNLOAD_FAILED sums" >&2
   exit 70
 fi
 cd "$tmp"
-if ! grep -F " {tarball}" SHA256SUMS | shasum -a 256 -c - >/dev/null 2>&1; then
+if ! grep -F " {tarball}" SHA256SUMS | verify_sha256 >/dev/null 2>&1; then
   echo "{CHECKSUM_MISMATCH_MARKER} {tarball}" >&2
   exit 65
 fi
@@ -595,8 +636,14 @@ if ! tar xzf {tarball}; then
   echo "HELMOR_INSTALL_EXTRACT_FAILED" >&2
   exit 71
 fi
-if ! install -m 0755 helmor-server-{expected_protocol}-{target}/helmor-server "{REMOTE_INSTALL_BINARY}"; then
-  echo "HELMOR_INSTALL_INSTALL_FAILED" >&2
+# `cp` + `chmod` rather than `install(1)` — `install` is sometimes
+# split out of the base coreutils package on minimal images.
+if ! cp helmor-server-{expected_protocol}-{target}/helmor-server "{REMOTE_INSTALL_BINARY}"; then
+  echo "HELMOR_INSTALL_INSTALL_FAILED cp" >&2
+  exit 72
+fi
+if ! chmod 0755 "{REMOTE_INSTALL_BINARY}"; then
+  echo "HELMOR_INSTALL_INSTALL_FAILED chmod" >&2
   exit 72
 fi
 "#
@@ -1360,5 +1407,36 @@ mod tests {
         assert!(script.contains("HELMOR_INSTALL_DOWNLOAD_FAILED"));
         assert!(script.contains("HELMOR_INSTALL_EXTRACT_FAILED"));
         assert!(script.contains("HELMOR_INSTALL_INSTALL_FAILED"));
+    }
+
+    #[test]
+    fn download_script_uses_portable_tool_dispatch_for_curl_and_sha256() {
+        // Cross-platform audit: minimal Linux images (Alpine,
+        // some Debian variants) ship only `wget`/`sha256sum` while
+        // macOS ships `curl`/`shasum`. The script must try both
+        // pairs so the auto-install works on the long tail of
+        // remote shapes — not just the macOS-runs-CI default.
+        let script = build_download_script("0.1.0", "x86_64-unknown-linux-gnu");
+        // Downloader: curl preferred, wget fallback, both referenced.
+        assert!(
+            script.contains("command -v curl") && script.contains("command -v wget"),
+            "script must probe for curl then wget"
+        );
+        // SHA-256: sha256sum preferred (Linux), shasum fallback (macOS).
+        assert!(
+            script.contains("command -v sha256sum") && script.contains("command -v shasum"),
+            "script must probe for sha256sum then shasum"
+        );
+        // Both checks must surface a distinct error if neither
+        // tool is available — so the desktop's failure path can
+        // log "you need a downloader" not "checksum mismatch".
+        assert!(script.contains("HELMOR_INSTALL_NO_SHA256_TOOL"));
+        // Install step uses cp + chmod (not `install(1)`) so the
+        // script works on minimal images where install is split
+        // out of the base coreutils package.
+        assert!(
+            script.contains("cp helmor-server-") && script.contains("chmod 0755"),
+            "install step must use cp + chmod rather than install(1)"
+        );
     }
 }
