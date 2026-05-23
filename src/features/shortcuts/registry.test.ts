@@ -116,6 +116,22 @@ describe("shortcut registry", () => {
 		expect(new Set<ShortcutId>(ids).size).toBe(ids.length);
 	});
 
+	it("registers the Remote Servers shortcut with a non-conflicting default", () => {
+		// Parity polish vs Zed Remote / VS Code Remote-SSH command-palette
+		// entries: discoverable hotkey path into Settings -> Remote
+		// Servers. Mnemonic R; Mod+R alone is taken by `feedback.send`,
+		// so we use Mod+Shift+R.
+		const definition = SHORTCUT_DEFINITIONS.find(
+			(d) => d.id === "settings.openRemoteServers",
+		);
+		expect(definition).toBeDefined();
+		expect(definition?.defaultHotkey).toBe("Mod+Shift+R");
+		expect(definition?.scopes).toEqual(["app"]);
+		// And it must not collide with anything else out of the box.
+		const conflicts = getShortcutConflicts({});
+		expect(conflicts.disabledIds.has("settings.openRemoteServers")).toBe(false);
+	});
+
 	it("lets Shift+Tab dual-bind across start-composer and workspace-composer", () => {
 		// `composer.togglePlanMode` lives on workspace-composer and
 		// `startSurface.cycleRepository` lives on start-composer. They share

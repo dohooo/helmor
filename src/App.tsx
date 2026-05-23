@@ -1212,6 +1212,14 @@ function AppShell({
 				callback: handleOpenSettings,
 			},
 			{
+				// Discoverability for the remote-runner feature — same
+				// shape Zed / VS Code use as "Open Remote Workspace" in
+				// their command palettes. Helmor doesn't have a generic
+				// palette today, so a dedicated hotkey is the analogue.
+				id: "settings.openRemoteServers" as const,
+				callback: () => handleOpenAnnouncementSettings("remote-servers"),
+			},
+			{
 				id: "workspace.copyPath" as const,
 				callback: handleCopyWorkspacePath,
 				enabled: Boolean(workspaceRootPath),

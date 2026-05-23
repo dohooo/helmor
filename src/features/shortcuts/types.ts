@@ -16,6 +16,7 @@ export type ShortcutId =
 	| "session.reopenClosed"
 	| "script.run"
 	| "settings.open"
+	| "settings.openRemoteServers"
 	| "theme.toggle"
 	| "sidebar.left.toggle"
 	| "sidebar.right.toggle"

@@ -193,6 +193,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "settings.openRemoteServers",
+		title: "Open Remote Servers settings",
+		group: "System",
+		defaultHotkey: "Mod+Shift+R",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "global.hotkey",
 		title: "Global hotkey",
 		description: "Show/hide Helmor from anywhere.",
