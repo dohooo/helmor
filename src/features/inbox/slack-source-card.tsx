@@ -176,22 +176,39 @@ async function prepareSlackContextPayload(
 			},
 		});
 
+		// Summarise what the agent will actually see: the thread chip
+		// plus N image attachments (vision input). A partial-failure
+		// count (some files failed to cache) surfaces in the
+		// description so the user understands when a few images
+		// silently fell off the wire.
+		const attachedCount = prepared.imagePaths.length;
+		const totalImageCandidates = prepared.filesTotal;
+		const summary = (() => {
+			if (totalImageCandidates === 0) return "Thread inlined";
+			if (attachedCount === totalImageCandidates) {
+				return attachedCount === 1
+					? "Thread inlined · 1 image attached"
+					: `Thread inlined · ${attachedCount} images attached`;
+			}
+			return `Thread inlined · ${attachedCount}/${totalImageCandidates} images attached (rest unavailable)`;
+		})();
 		toast.success("Slack context ready", {
 			id: toastId,
-			description:
-				prepared.filesTotal === 0
-					? `Thread inlined`
-					: `Thread inlined · ${prepared.filesCached}/${prepared.filesTotal} files cached locally`,
+			description: summary,
 		});
 
 		// Build the same `custom-tag` insert shape as the generic path,
 		// but swap `submitText` for the enriched prompt so the agent
-		// sees the full thread instead of the 4-line summary. The
-		// preview (rendered inside the composer chip popover) keeps
-		// using the original text-mode preview built by the generic
-		// path — wholesale replacement would mismatch the chip's
-		// "image" / "code" preview kinds when we extend later.
+		// sees the full thread instead of the 4-line summary. We then
+		// APPEND one `kind: "image"` insert item per cached attachment
+		// — the composer renders each as an ImageBadgeNode (hover-able
+		// preview chip), and the existing submit pipeline lifts every
+		// imagePath into the message's vision input array.
 		const fallbackPayload = buildCardContextPayload(card, appendContextTarget);
+		const imageItems = prepared.imagePaths.map((path) => ({
+			kind: "image" as const,
+			path,
+		}));
 		if ("items" in fallbackPayload && fallbackPayload.items[0]) {
 			const first = fallbackPayload.items[0];
 			if (first.kind === "custom-tag") {
@@ -208,6 +225,7 @@ async function prepareSlackContextPayload(
 							preview: updatedPreview,
 						},
 						...fallbackPayload.items.slice(1),
+						...imageItems,
 					],
 				};
 			}

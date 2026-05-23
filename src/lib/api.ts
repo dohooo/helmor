@@ -1801,12 +1801,21 @@ export type SlackPrepareProgress =
 	| { stage: "done" };
 
 export type SlackPreparedContext = {
-	/** Final prompt-friendly string ready to inject into the composer.
-	 *  Includes per-file `Local path: /…` lines that the agent can read
-	 *  via its `Read` tool. */
+	/** Final prompt-friendly string ready to inject into the composer
+	 *  as a single `custom-tag`. Mentions each image / gif / video
+	 *  poster file with a parallel `Attached as image (local path: …)`
+	 *  hint — the actual pixels reach the agent through the image
+	 *  attachments below, not via this text. */
 	submitText: string;
 	filesTotal: number;
 	filesCached: number;
+	/** Absolute local paths of every cached image / gif / video poster
+	 *  in chronological message order, de-duped by Slack file id.
+	 *  Frontend wraps each in a `kind: "image"` ComposerInsertItem so
+	 *  the composer's existing pipeline carries them to the spawned
+	 *  agent as vision input (Claude image block / Codex localImage
+	 *  part) — agent sees pixels without invoking the Read tool. */
+	imagePaths: string[];
 };
 
 /** Prepare a Slack thread for "Add to context" injection. Fetches the

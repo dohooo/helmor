@@ -128,6 +128,35 @@ pub fn format_thread_for_agent(
     out.trim_end().to_string()
 }
 
+/// Collect the cached local paths of every image / gif / video-poster
+/// in the thread, in chronological message order then per-message
+/// declaration order. De-duped by Slack file id (same file shared by
+/// multiple replies appears once). Files without a corresponding
+/// `cache_paths` entry (cache write failed, or category we don't
+/// pre-warm like PDFs / audio) are skipped.
+///
+/// The output drives the frontend's `kind: "image"` ComposerInsertItem
+/// expansion — preserve ordering so the chips line up with the order
+/// the agent sees them mentioned in `submit_text`.
+pub fn collect_image_paths(
+    detail: &SlackThreadDetail,
+    cache_paths: &HashMap<String, PathBuf>,
+) -> Vec<String> {
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut paths: Vec<String> = Vec::new();
+    for message in &detail.messages {
+        for file in &message.files {
+            if !seen.insert(file.id.clone()) {
+                continue;
+            }
+            if let Some(path) = cache_paths.get(&file.id) {
+                paths.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    paths
+}
+
 fn select_messages(messages: &[SlackMessage], max: usize) -> Vec<(usize, &SlackMessage)> {
     if messages.len() <= max || max == 0 {
         return messages.iter().enumerate().collect();
@@ -204,12 +233,21 @@ fn render_file(file: &SlackFileRef, cache_paths: &HashMap<String, PathBuf>) -> O
     };
     match (path, category) {
         (Some(local_path), "image" | "gif" | "video") => Some(format!(
-            "  ▸ {kind_label}: {name}{dims}\n    Local path: {path}\n    (Use the Read tool to view this {tool_hint}.)",
+            // Two-channel framing: the image is already attached to
+            // this turn's user message as a vision input (Claude
+            // image block / Codex localImage part), so the agent sees
+            // pixels without invoking any tool. The local path is
+            // kept as a fallback for the cases where vision isn't
+            // available — Codex mid-turn `turn/steer` drops images,
+            // and an agent that wants a fresh look can always Read
+            // the file. Phrasing intentionally avoids "Use the Read
+            // tool to view this image", which would falsely imply
+            // the agent must call Read to see the picture.
+            "  ▸ {kind_label}: {name}{dims}\n    Attached as image (local path: {path})",
             kind_label = kind_label,
             name = file.name,
             dims = dims,
             path = local_path.display(),
-            tool_hint = if category == "video" { "poster frame" } else { "image" },
         )),
         _ => Some(format!(
             "  ▸ {kind_label}: {name}{dims}{permalink}",
@@ -486,8 +524,15 @@ mod tests {
             },
         );
         assert!(out.contains("Image: screenshot.png (1920×1080)"));
-        assert!(out.contains("Local path: /tmp/helmor/cache/slack-files/abc.png"));
-        assert!(out.contains("Use the Read tool"));
+        // New phrasing: the image is attached as vision input upstream
+        // (Claude image block / Codex localImage part); the local path
+        // is a fallback channel, not the primary access route. Must
+        // NOT tell the agent to "Use the Read tool" — that would
+        // imply Read is required, which is wrong now.
+        assert!(
+            out.contains("Attached as image (local path: /tmp/helmor/cache/slack-files/abc.png)",)
+        );
+        assert!(!out.contains("Use the Read tool"));
     }
 
     #[test]
@@ -555,5 +600,128 @@ mod tests {
         );
         assert!(out.contains("10 messages total, 7 elided"));
         assert!(out.contains("[… 7 earlier messages elided …]"));
+    }
+
+    fn file_ref(id: &str, name: &str) -> SlackFileRef {
+        SlackFileRef {
+            id: id.to_string(),
+            name: name.to_string(),
+            mimetype: Some("image/png".to_string()),
+            category: "image".to_string(),
+            preview_url: None,
+            source_url: None,
+            permalink: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn collect_image_paths_preserves_chronological_order() {
+        // Three messages with images interleaved with a text-only
+        // reply. The output must enumerate paths in the order the
+        // agent will encounter the file references inside `submit_text`.
+        let mut msg1 = make_msg(1, "U1", "alice", "first");
+        msg1.files.push(file_ref("F1", "first.png"));
+        msg1.files.push(file_ref("F2", "second.png"));
+        let msg2 = make_msg(2, "U2", "bob", "just text");
+        let mut msg3 = make_msg(3, "U1", "alice", "third");
+        msg3.files.push(file_ref("F3", "third.png"));
+
+        let detail = SlackThreadDetail {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            channel_label: "#eng".into(),
+            is_thread: true,
+            permalink: String::new(),
+            messages: vec![msg1, msg2, msg3],
+        };
+        let mut cache_paths = HashMap::new();
+        cache_paths.insert("F1".into(), PathBuf::from("/cache/first.png"));
+        cache_paths.insert("F2".into(), PathBuf::from("/cache/second.png"));
+        cache_paths.insert("F3".into(), PathBuf::from("/cache/third.png"));
+
+        let paths = collect_image_paths(&detail, &cache_paths);
+        assert_eq!(
+            paths,
+            vec![
+                "/cache/first.png".to_string(),
+                "/cache/second.png".to_string(),
+                "/cache/third.png".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn collect_image_paths_dedupes_by_file_id_across_messages() {
+        // Slack file shares can be re-attached to multiple replies
+        // (forward, "this still applies" reposts). The vec should
+        // include each file id exactly once — the first occurrence
+        // wins so chip ordering matches the earliest mention in text.
+        let mut msg1 = make_msg(1, "U1", "alice", "look");
+        msg1.files.push(file_ref("F1", "screenshot.png"));
+        let mut msg2 = make_msg(2, "U2", "bob", "+1");
+        msg2.files.push(file_ref("F1", "screenshot.png"));
+        msg2.files.push(file_ref("F2", "other.png"));
+
+        let detail = SlackThreadDetail {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            channel_label: "#eng".into(),
+            is_thread: true,
+            permalink: String::new(),
+            messages: vec![msg1, msg2],
+        };
+        let mut cache_paths = HashMap::new();
+        cache_paths.insert("F1".into(), PathBuf::from("/cache/F1.png"));
+        cache_paths.insert("F2".into(), PathBuf::from("/cache/F2.png"));
+
+        let paths = collect_image_paths(&detail, &cache_paths);
+        assert_eq!(
+            paths,
+            vec!["/cache/F1.png".to_string(), "/cache/F2.png".to_string()],
+        );
+    }
+
+    #[test]
+    fn collect_image_paths_skips_files_without_cached_path() {
+        // A cache-write failure (e.g. transient network error on the
+        // Slack CDN) leaves the file out of `cache_paths`. It must
+        // not appear in `image_paths` — the corresponding chip would
+        // otherwise be a broken <img>. The thread text still mentions
+        // the file via the `_ =>` arm of `render_file`, so the agent
+        // knows it existed.
+        let mut msg = make_msg(1, "U1", "alice", "look");
+        msg.files.push(file_ref("F1", "good.png"));
+        msg.files.push(file_ref("F2", "bad.png"));
+
+        let detail = SlackThreadDetail {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            channel_label: "#eng".into(),
+            is_thread: true,
+            permalink: String::new(),
+            messages: vec![msg],
+        };
+        let mut cache_paths = HashMap::new();
+        cache_paths.insert("F1".into(), PathBuf::from("/cache/good.png"));
+        // F2 deliberately missing — cache write failed.
+
+        let paths = collect_image_paths(&detail, &cache_paths);
+        assert_eq!(paths, vec!["/cache/good.png".to_string()]);
+    }
+
+    #[test]
+    fn collect_image_paths_empty_when_no_files() {
+        let detail = SlackThreadDetail {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            channel_label: "#eng".into(),
+            is_thread: true,
+            permalink: String::new(),
+            messages: vec![make_msg(1, "U1", "alice", "text only")],
+        };
+        let cache_paths = HashMap::new();
+        assert!(collect_image_paths(&detail, &cache_paths).is_empty());
     }
 }

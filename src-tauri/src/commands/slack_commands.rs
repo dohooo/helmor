@@ -158,14 +158,23 @@ pub enum SlackPrepareProgress {
 }
 
 /// Output of `slack_prepare_thread_context` — the enriched submit text
-/// destined for the composer + a count of files we successfully
-/// embedded so the frontend toast can summarise.
+/// destined for the composer + the cached image paths the frontend
+/// should attach as `kind: "image"` insert items so the agent gets
+/// them as vision input (not just a text reference).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlackPreparedContext {
     pub submit_text: String,
     pub files_total: usize,
     pub files_cached: usize,
+    /// Absolute local paths of every cached image / gif / video-poster
+    /// in the thread. Ordering: chronological by message, then by
+    /// per-message declaration order. De-duped by Slack file id so a
+    /// re-shared attachment appears once even if it crosses multiple
+    /// replies. Frontend wraps each path in a `kind: "image"`
+    /// ComposerInsertItem; the existing composer pipeline carries it
+    /// to the spawned agent as a vision attachment.
+    pub image_paths: Vec<String>,
 }
 
 /// Drives the "Add to context" button on a Slack inbox card.
@@ -243,10 +252,15 @@ pub async fn slack_prepare_thread_context(
             },
         );
 
+        // Order + dedup logic lives in `agent_context::collect_image_paths`
+        // so it can be unit-tested without spinning up workspace creds.
+        let image_paths = agent_context::collect_image_paths(&detail, &cache_paths);
+
         let result = SlackPreparedContext {
             submit_text,
             files_total: total,
             files_cached: cache_paths.len(),
+            image_paths,
         };
         let _ = progress.send(SlackPrepareProgress::Done);
         Ok(result)
