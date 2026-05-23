@@ -206,6 +206,13 @@ type InspectorTabsSectionProps = {
 	tabActions?: React.ReactNode;
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
+	/**
+	 * Text rendered inside the Run tab. "Run" for the single-action case
+	 * (the dropdown carries identity); the active action's name when the
+	 * workspace has multiple configured, so the user can tell at a glance
+	 * which output buffer is on-screen once the placeholder copy is gone.
+	 */
+	runTabLabel: string;
 	/** Current workspace id — needed so each Run-tab dropdown item can
 	 * subscribe to its own action's live status (per-action loading /
 	 * success / failure glyph). `null` outside a workspace context — the
@@ -258,6 +265,7 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
+	runTabLabel,
 	workspaceId,
 	runActions,
 	activeRunActionId,
@@ -467,7 +475,10 @@ export function InspectorTabsSection({
 										onClick={() => handleTabClick("run")}
 									>
 										<ScriptStatusIcon state={runScriptState} />
-										Run
+										{/* Capped width + truncate so a long custom action
+										    name (helmor.json) can't push the dropdown chevron
+										    off-screen or stretch the tab past its neighbours. */}
+										<span className="max-w-[8rem] truncate">{runTabLabel}</span>
 									</button>
 									<RunActionsDropdown
 										activeTab={activeTab}

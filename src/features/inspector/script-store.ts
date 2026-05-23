@@ -33,7 +33,11 @@ type Listener = {
 	onReset?: () => void;
 };
 
-type StatusListener = (status: ScriptStatus, exitCode: number | null) => void;
+type StatusListener = (
+	status: ScriptStatus,
+	exitCode: number | null,
+	userStopped: boolean,
+) => void;
 
 /**
  * Max bytes of stdout/stderr retained per script entry. Long-running dev
@@ -66,6 +70,15 @@ export type ScriptEntry = {
 	 * "Force Stop" button — a second Stop click while true escalates to
 	 * SIGKILL backend-side. */
 	stopping: boolean;
+	/**
+	 * True once the user clicks Stop on this run. The backend kills the
+	 * process via SIGTERM, which produces a non-zero exit code (typically
+	 * 143). Without this flag the icon would derive "failure" — but a
+	 * user-initiated stop is intentional, not a crash. The status hook
+	 * collapses {exited + userStopped} back to "idle" so the tab returns
+	 * to its pre-run glyph. Cleared on the next `startScript`.
+	 */
+	userStopped: boolean;
 };
 
 /** Append a chunk and evict from the head until under the byte cap. */
@@ -100,9 +113,9 @@ const workspaceRunListeners = new Map<string, Set<StatusListener>>();
 
 function emitStatus(k: string, status: ScriptStatus, exitCode: number | null) {
 	const subs = statusListeners.get(k);
-	if (subs) {
-		for (const sub of subs) sub(status, exitCode);
-	}
+	if (!subs) return;
+	const userStopped = entries.get(k)?.userStopped ?? false;
+	for (const sub of subs) sub(status, exitCode, userStopped);
 }
 
 function emitWorkspaceRunStatus(
@@ -112,7 +125,10 @@ function emitWorkspaceRunStatus(
 ) {
 	const subs = workspaceRunListeners.get(workspaceId);
 	if (!subs) return;
-	for (const sub of subs) sub(status, exitCode);
+	// Workspace-level listeners (sidebar row dot) don't care about user-
+	// initiated stops — they only need to know "is anything live here?"
+	// — so pass `false` unconditionally.
+	for (const sub of subs) sub(status, exitCode, false);
 }
 
 /**
@@ -160,6 +176,7 @@ export function startScript(
 		exitCode: null,
 		urls: [],
 		stopping: false,
+		userStopped: false,
 	};
 	entries.set(k, entry);
 
@@ -286,6 +303,11 @@ export function stopScript(
 	workspaceId: string,
 	actionId?: string | null,
 ) {
+	// Mark before firing the backend stop so the eventual `exited` event
+	// — which will arrive with a non-zero exit code (SIGTERM = 143) —
+	// is correctly attributed to the user and not surfaced as a failure.
+	const entry = entries.get(key(workspaceId, scriptType, actionId));
+	if (entry) entry.userStopped = true;
 	void stopRepoScript(repoId, scriptType, workspaceId, actionId ?? null);
 }
 

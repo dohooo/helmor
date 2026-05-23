@@ -188,6 +188,19 @@ export function WorkspaceInspectorSidebar({
 		null;
 	const activeRunActionId = activeAction?.id ?? null;
 
+	// Run-tab label. With a single action (the common case) we keep the
+	// generic "Run" — the action's name is already inlined in the empty-
+	// state heading and the dropdown radio, so doubling it on the tab is
+	// just noise. With multiple actions configured, the tab borrows the
+	// active action's name so the user can tell at a glance which action
+	// the live output belongs to once the script is running (the empty-
+	// state cue is gone by then). Falls back to "Run" if the action's
+	// name is blank.
+	const runTabLabel =
+		runActions.length > 1 && activeAction?.name?.trim()
+			? activeAction.name.trim()
+			: "Run";
+
 	const handleSelectRunAction = useCallback(
 		(actionId: string) => {
 			if (!workspaceId) return;
@@ -571,6 +584,7 @@ export function WorkspaceInspectorSidebar({
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
+				runTabLabel={runTabLabel}
 				workspaceId={workspaceId ?? null}
 				runActions={runActions}
 				activeRunActionId={activeRunActionId}
