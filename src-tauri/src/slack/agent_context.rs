@@ -18,16 +18,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::types::{SlackFileRef, SlackMessage, SlackThreadDetail};
 
-/// One file the caller has pre-warmed into the local cache. `path`
-/// being `None` means the cache write failed (or the category wasn't
-/// pre-warmed — e.g. PDFs) — in which case we describe the file by
-/// name + permalink only and the agent skips it.
-#[derive(Debug, Clone)]
-pub struct PreparedFile {
-    pub id: String,
-    pub path: Option<PathBuf>,
-}
-
 /// Inputs the formatter needs alongside the raw thread.
 pub struct AgentContextInputs<'a> {
     /// `auth.test` user id for the active workspace. Determines which
@@ -271,7 +261,7 @@ fn render_file(file: &SlackFileRef, cache_paths: &HashMap<String, PathBuf>) -> O
 /// Same token replacement table as the TS counterpart in
 /// `src/lib/slack-text.tsx`; keep them in sync if either side adds
 /// support for a new Slack escape.
-pub fn format_text_plain(text: &str) -> String {
+fn format_text_plain(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let mut i = 0;

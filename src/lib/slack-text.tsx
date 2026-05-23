@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
  *  `image` = workspace custom emoji served from the Slack CDN. */
 export type SlackEmoji =
 	| { kind: "unicode"; char: string }
-	| { kind: "image"; url: string; name: string };
+	| { kind: "image"; url: string };
 
 export type SlackTextOptions = {
 	/** Slack user id of the currently authenticated user. Mentions
@@ -74,7 +74,7 @@ const SKIN_TONE_SUFFIX = /::?skin-tone-[2-6]$|-skin-tone-[2-6]$/i;
  *  the suffix to fall back to the base emoji. Custom workspace emojis
  *  never use this suffix — they're whole names — so this is a no-op
  *  for them. */
-export function stripSkinTone(name: string): string {
+function stripSkinTone(name: string): string {
 	return name.replace(SKIN_TONE_SUFFIX, "");
 }
 
@@ -168,7 +168,7 @@ function renderToken(
 
 // ── Token components ────────────────────────────────────────────────────
 
-export function SlackUserMention({
+function SlackUserMention({
 	userId,
 	label,
 	myUserId,
@@ -200,7 +200,7 @@ export function SlackUserMention({
 	);
 }
 
-export function SlackChannelChip({
+function SlackChannelChip({
 	channelId,
 	label,
 	className,
@@ -222,13 +222,7 @@ export function SlackChannelChip({
 	);
 }
 
-export function SlackLink({
-	href,
-	children,
-}: {
-	href: string;
-	children: ReactNode;
-}) {
+function SlackLink({ href, children }: { href: string; children: ReactNode }) {
 	return (
 		<a
 			href={href}
@@ -242,7 +236,7 @@ export function SlackLink({
 	);
 }
 
-export function SlackEmojiInline({
+function SlackEmojiInline({
 	name,
 	emoji,
 }: {

@@ -2,18 +2,6 @@ import { Search, X } from "lucide-react";
 import { type ChangeEvent, type ComponentProps, forwardRef } from "react";
 import { cn } from "@/lib/utils";
 
-export function InboxActionsRow({
-	className,
-	...props
-}: ComponentProps<"div">) {
-	return (
-		<div
-			className={cn("flex h-7 min-w-0 items-center gap-1.5", className)}
-			{...props}
-		/>
-	);
-}
-
 export function InboxSearchField({
 	value,
 	onChange,

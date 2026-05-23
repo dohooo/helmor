@@ -170,11 +170,10 @@ fn convert_search_match(
     })
 }
 
-/// Unread DM/MPIM list → one SlackInboxItem per channel using its latest
-/// message as the snippet. Bounded fanout: we cap at 4 concurrent
-/// channels per refresh to stay under Slack's per-token burst threshold
-/// (running serially in the blocking pool also limits the rate
-/// naturally).
+/// Unread DM/MPIM list → one SlackInboxItem per channel using its
+/// latest message as the snippet. Serial fetch — the blocking pool
+/// is one connection, so this naturally stays under Slack's
+/// per-token burst threshold.
 fn unread_dm_snippets(team_id: &str, creds: &SlackCreds) -> Result<Vec<SlackInboxItem>> {
     let dms = api::users_conversations_dms(creds)?;
     let mut items = Vec::new();

@@ -1797,8 +1797,7 @@ export async function slackGetThreadDetail(args: {
 /** Progress events streamed back by `slackPrepareThreadContext`. */
 export type SlackPrepareProgress =
 	| { stage: "fetchingThread" }
-	| { stage: "cachingFiles"; current: number; total: number }
-	| { stage: "done" };
+	| { stage: "cachingFiles"; current: number; total: number };
 
 export type SlackPreparedContext = {
 	/** Final prompt-friendly string ready to inject into the composer

@@ -4,7 +4,6 @@ import {
 	formatSlackTextPlain,
 	resolveEmoji,
 	type SlackEmoji,
-	stripSkinTone,
 } from "./slack-text";
 
 function emojiTable(): Record<string, SlackEmoji> {
@@ -89,17 +88,6 @@ describe("formatSlackTextPlain", () => {
 	});
 });
 
-describe("stripSkinTone", () => {
-	it("removes -skin-tone-N suffix", () => {
-		expect(stripSkinTone("raised_hands-skin-tone-3")).toBe("raised_hands");
-		expect(stripSkinTone("heart_hands-skin-tone-6")).toBe("heart_hands");
-	});
-
-	it("returns names unchanged when no suffix is present", () => {
-		expect(stripSkinTone("raised_hands")).toBe("raised_hands");
-	});
-});
-
 describe("resolveEmoji", () => {
 	it("returns the unicode entry for built-in shortcodes", () => {
 		const result = resolveEmoji("joy", emojiTable());
@@ -117,13 +105,11 @@ describe("resolveEmoji", () => {
 			joy: {
 				kind: "image",
 				url: "https://emoji/joy.png",
-				name: "joy",
 			},
 		};
 		expect(resolveEmoji("joy", merged)).toEqual({
 			kind: "image",
 			url: "https://emoji/joy.png",
-			name: "joy",
 		});
 	});
 

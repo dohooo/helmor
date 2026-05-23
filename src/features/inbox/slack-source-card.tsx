@@ -1,5 +1,4 @@
 import { AtSign, MessageCircle, MessagesSquare } from "lucide-react";
-import { memo } from "react";
 import { toast } from "sonner";
 import {
 	AppendContextButton,
@@ -28,7 +27,7 @@ import { buildCardContextPayload } from "./source-card";
  *  hand back into the same `ContextCard` for `onOpen` /
  *  `appendContextTarget` so the detail panel and composer integration
  *  stay unchanged. */
-export const SlackSourceCard = memo(function SlackSourceCard({
+export function SlackSourceCard({
 	item,
 	card,
 	myUserId,
@@ -123,7 +122,7 @@ export const SlackSourceCard = memo(function SlackSourceCard({
 			</Tooltip>
 		</article>
 	);
-});
+}
 
 /** Build the rich "add to context" payload for a Slack inbox card.
  *

@@ -60,9 +60,8 @@ export function SlackConnectState({
 	);
 }
 
-/** Render the result of a desktop-import attempt as a workspace toast.
- *  Split out so the workspace switcher can reuse the same UX. */
-export function handleImportResult(
+/** Render the result of a desktop-import attempt as a workspace toast. */
+function handleImportResult(
 	result: SlackImportResult,
 	pushToast: ReturnType<typeof useWorkspaceToast>,
 ) {

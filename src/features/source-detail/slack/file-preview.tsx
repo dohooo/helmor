@@ -51,7 +51,7 @@ function ImagePreview({ file }: { file: SlackFileRef }) {
 	return (
 		<button
 			type="button"
-			onClick={() => sourceUrl && void openExternal(sourceUrl, file)}
+			onClick={() => sourceUrl && void openExternal(sourceUrl)}
 			className={cn(
 				"group relative overflow-hidden rounded-lg border border-border/60 bg-muted",
 				"cursor-interactive transition-colors",
@@ -110,7 +110,7 @@ function FileChip({ file }: { file: SlackFileRef }) {
 	return (
 		<button
 			type="button"
-			onClick={() => href && void openExternal(href, file)}
+			onClick={() => href && void openExternal(href)}
 			className={cn(
 				"flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted px-2.5 py-2 text-mini text-foreground",
 				"cursor-interactive transition-colors",
@@ -121,24 +121,8 @@ function FileChip({ file }: { file: SlackFileRef }) {
 		>
 			<Icon className="size-4 shrink-0 text-muted-foreground" strokeWidth={2} />
 			<span className="truncate">{file.name}</span>
-			{file.mimetype ? (
-				<span className="shrink-0 text-muted-foreground/70">
-					· {kindLabel(file.category)}
-				</span>
-			) : null}
 		</button>
 	);
-}
-
-function kindLabel(category: SlackFileRef["category"]): string {
-	switch (category) {
-		case "audio":
-			return "Audio";
-		case "pdf":
-			return "PDF";
-		default:
-			return "File";
-	}
 }
 
 /** Open a file's source URL in the user's browser. For the
@@ -147,7 +131,7 @@ function kindLabel(category: SlackFileRef["category"]): string {
  *  (which has its own Slack session) can authenticate. The Slack
  *  `permalink` is already a public Slack web URL — pass it through
  *  unchanged. */
-async function openExternal(url: string, _file: SlackFileRef) {
+async function openExternal(url: string) {
 	const target = url.startsWith("slack-file://")
 		? `https://files.slack.com/${url.slice("slack-file://".length)}`
 		: url;

@@ -152,9 +152,6 @@ pub enum SlackPrepareProgress {
     /// 0-indexed across the run; `total` stays stable across the
     /// caching phase so the frontend can render an X/Y label.
     CachingFiles { current: usize, total: usize },
-    /// All work done. The command's return value carries the final
-    /// enriched submit text.
-    Done,
 }
 
 /// Output of `slack_prepare_thread_context` — the enriched submit text
@@ -262,7 +259,6 @@ pub async fn slack_prepare_thread_context(
             files_cached: cache_paths.len(),
             image_paths,
         };
-        let _ = progress.send(SlackPrepareProgress::Done);
         Ok(result)
     })
     .await
@@ -295,23 +291,20 @@ pub async fn slack_list_emoji(
     team_id: String,
 ) -> CmdResult<std::collections::HashMap<String, String>> {
     let app_handle = app.clone();
-    let team_id_for_lookup = team_id.clone();
     run_blocking(move || {
-        let workspace = slack_workspaces::get_workspace(&team_id_for_lookup)?
-            .with_context(|| format!("Slack workspace {team_id_for_lookup} is not connected"))?;
-        let creds = match credentials::load_credentials(&workspace.team_id)? {
+        let creds = match credentials::load_credentials(&team_id)? {
             Some(c) => c,
-            None => anyhow::bail!("No stored Slack credentials for team {}", workspace.team_id),
+            None => anyhow::bail!("Slack workspace {team_id} is not connected"),
         };
-        match slack_api::emoji_list(&workspace.team_id, &creds) {
+        match slack_api::emoji_list(&team_id, &creds) {
             Ok(map) => Ok(map),
             Err(error) => {
                 if slack_api::is_invalid_auth(&error) {
-                    let _ = credentials::clear_credentials(&workspace.team_id);
+                    let _ = credentials::clear_credentials(&team_id);
                     ui_sync::publish(
                         &app_handle,
                         UiMutationEvent::SlackTokenInvalidated {
-                            team_id: workspace.team_id.clone(),
+                            team_id: team_id.clone(),
                         },
                     );
                 }
@@ -352,7 +345,7 @@ pub async fn slack_get_thread_detail(
     .await
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlackImportResult {
     /// Workspaces that scraped + auth_test'd successfully and are now
@@ -365,7 +358,7 @@ pub struct SlackImportResult {
     pub already_connected: Vec<SlackWorkspace>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlackImportFailure {
     pub team_id: String,

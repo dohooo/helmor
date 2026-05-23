@@ -178,25 +178,6 @@ fn find_slack_data_dir() -> Option<PathBuf> {
     best.map(|(p, _)| p)
 }
 
-/// Standalone Slack stores its Safe Storage key under
-/// account="Slack"; Mac App Store stores it under account="Slack App
-/// Store Key". We probe both, matching candidate order — but use the
-/// data-dir's path shape to bias which one to try first so a fresh
-/// keychain prompt only fires for the right account.
-#[cfg(target_os = "macos")]
-fn keychain_accounts_for(data_dir: &Path) -> &'static [&'static str] {
-    if data_dir
-        .to_string_lossy()
-        .contains("com.tinyspeck.slackmacgap")
-    {
-        // Sandboxed Mac App Store build first.
-        &["Slack App Store Key", "Slack"]
-    } else {
-        // Standalone build first.
-        &["Slack", "Slack App Store Key"]
-    }
-}
-
 /// Parsed entry inside `localConfig_v2.teams.<team_id>`.
 #[derive(Debug, Clone)]
 struct TeamFromLeveldb {
@@ -464,7 +445,19 @@ fn read_safe_storage_key(data_dir: &Path) -> Result<Vec<u8>> {
     // and macOS remembers the approval. The user explicitly clicked
     // "Import from Slack desktop", so an extra OS-level confirmation
     // is acceptable UX.
-    let accounts = keychain_accounts_for(data_dir);
+    // "Slack" first for the standalone build; "Slack App Store Key"
+    // first for the sandboxed Mac App Store build (it stores under a
+    // different keychain account name). Path-based bias keeps the
+    // OS-level access prompt to a single allow-click for whichever
+    // account exists.
+    let accounts: &[&str] = if data_dir
+        .to_string_lossy()
+        .contains("com.tinyspeck.slackmacgap")
+    {
+        &["Slack App Store Key", "Slack"]
+    } else {
+        &["Slack", "Slack App Store Key"]
+    };
     let mut last_err: Option<String> = None;
     for account in accounts {
         match try_read_keychain_password(account) {

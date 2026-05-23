@@ -30,8 +30,3 @@ pub mod detail;
 pub mod files;
 pub mod inbox;
 pub mod types;
-
-pub use credentials::{clear_credentials, load_credentials, store_credentials, SlackCreds};
-pub use types::{
-    SlackInboxItem, SlackInboxItemKind, SlackInboxPage, SlackThreadDetail, SlackWorkspace,
-};

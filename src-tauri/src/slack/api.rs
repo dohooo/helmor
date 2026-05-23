@@ -414,16 +414,8 @@ pub fn extract_display_text(raw: &RawMessage) -> String {
         return from_files;
     }
 
-    // Final miss: log enough to debug what we're getting. Sampled at
-    // debug level so it stays quiet in release-style runs but surfaces
-    // immediately under `HELMOR_LOG=debug`.
-    tracing::debug!(
-        ts = %raw.ts,
-        block_count = raw.blocks.len(),
-        attachment_count = raw.attachments.len(),
-        file_count = raw.files.len(),
-        "Slack message yielded no display text — investigate shape",
-    );
+    // Empty body, no blocks/attachments/files we know how to render —
+    // the caller picks a fallback (e.g. the channel-level summary).
     String::new()
 }
 
@@ -637,11 +629,8 @@ pub struct RawFile {
     /// Image thumbnails sized by long edge. We pick `thumb_720` for the
     /// detail preview and fall back through the others if that's
     /// missing (small avatars / animated gifs sometimes skip the
-    /// larger sizes).
-    #[serde(default)]
-    pub thumb_64: Option<String>,
-    #[serde(default)]
-    pub thumb_80: Option<String>,
+    /// larger sizes). We never need `thumb_64` / `thumb_80` (the chip
+    /// renderer would rather have no preview than a postage stamp).
     #[serde(default)]
     pub thumb_160: Option<String>,
     #[serde(default)]
@@ -663,8 +652,6 @@ pub struct RawFile {
     /// file (open externally); never embedded inline.
     #[serde(default)]
     pub url_private: Option<String>,
-    #[serde(default)]
-    pub url_private_download: Option<String>,
 }
 
 impl RawFile {
@@ -675,7 +662,7 @@ impl RawFile {
     /// from this — they should be served from `url_private` directly
     /// so the animation plays.
     pub fn preview_url(&self) -> Option<&str> {
-        if let Some(candidate) = [
+        [
             self.thumb_720.as_deref(),
             self.thumb_800.as_deref(),
             self.thumb_960.as_deref(),
@@ -687,10 +674,6 @@ impl RawFile {
         .into_iter()
         .flatten()
         .next()
-        {
-            return Some(candidate);
-        }
-        None
     }
 
     /// Mimetype category (`image / video / audio / pdf / other`). Drives

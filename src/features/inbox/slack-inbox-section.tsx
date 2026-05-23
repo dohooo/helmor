@@ -1,5 +1,5 @@
 import { ChevronDown, Loader2 } from "lucide-react";
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -101,28 +101,11 @@ export function SlackInboxSection({
 	const searchResults = useSlackSearch(safeTeamId, trimmedQuery, sort);
 	const inbox = isSearching ? searchResults : activity;
 	const emoji = useSlackEmojiMap(safeTeamId);
-	const activeWorkspace = useMemo(
-		() => workspaces.find((w) => w.teamId === safeTeamId) ?? null,
-		[workspaces, safeTeamId],
-	);
-	const myUserId = activeWorkspace?.myUserId ?? null;
-	const cards = useMemo<ContextCard[]>(
-		() =>
-			inbox.items.map((item) =>
-				slackItemToContextCard(
-					item,
-					workspaces.find((w) => w.teamId === item.teamId)?.teamName ?? "Slack",
-				),
-			),
-		[inbox.items, workspaces],
-	);
+	const myUserId =
+		workspaces.find((w) => w.teamId === safeTeamId)?.myUserId ?? null;
 
-	const activeSortLabel =
-		SORT_OPTIONS.find((option) => option.id === sort)?.label ??
-		SORT_OPTIONS[0].label;
-	const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
-		setSearchInput(event.target.value);
-	};
+	const activeSortLabel = SORT_OPTIONS.find((option) => option.id === sort)
+		?.label as string; // both SlackSearchSort values are in SORT_OPTIONS
 
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -148,7 +131,7 @@ export function SlackInboxSection({
 			<>
 				<InboxSearchField
 					value={searchInput}
-					onChange={handleSearchChange}
+					onChange={(e) => setSearchInput(e.target.value)}
 					onClear={() => setSearchInput("")}
 					ariaLabel="Search Slack messages"
 				/>
@@ -202,12 +185,15 @@ export function SlackInboxSection({
 					<InboxErrorState error={inbox.error} onRetry={inbox.refetch} />
 				) : !inbox.hasResolved ? (
 					<InboxLoadingState />
-				) : cards.length > 0 ? (
+				) : inbox.items.length > 0 ? (
 					<>
 						<div className="flex w-full flex-col gap-2">
-							{cards.map((card, index) => {
-								const item = inbox.items[index];
-								if (!item) return null;
+							{inbox.items.map((item) => {
+								const card = slackItemToContextCard(
+									item,
+									workspaces.find((w) => w.teamId === item.teamId)?.teamName ??
+										"Slack",
+								);
 								return (
 									<SlackSourceCard
 										key={card.id}
