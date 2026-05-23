@@ -26,6 +26,7 @@ pub mod api;
 pub mod credentials;
 pub mod desktop_scrape;
 pub mod detail;
+pub mod files;
 pub mod inbox;
 pub mod types;
 

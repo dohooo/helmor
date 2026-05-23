@@ -38,7 +38,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Real Chrome 131 UA — matches `Emulation::Chrome131`. Both
 /// User-Agent and TLS fingerprint MUST advertise the same browser
 /// version, otherwise Slack's edge flags the mismatch.
-const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+pub const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /// Soft cap on per-user info caching. Channels with hundreds of distinct
 /// authors are rare in a single inbox refresh; this stays small on
 /// purpose because the cache is per-process and we don't want it
@@ -359,11 +359,11 @@ pub struct RawMessage {
     pub attachments: Vec<Value>,
     /// Files attached to a message (image / video / pdf / voice memo).
     /// File-share messages have no body text — Slack's own UI just
-    /// shows the attached media preview. We use `files` to synthesize
-    /// a one-line placeholder ("📎 Image" etc.) so users see "this
-    /// message had a file" instead of "(empty message)".
+    /// shows the attached media preview. The thread-detail view embeds
+    /// these directly via the `slack-file://` protocol; inbox snippets
+    /// fall back to a `📎 N files` placeholder via `describe_files`.
     #[serde(default)]
-    pub files: Vec<Value>,
+    pub files: Vec<RawFile>,
     #[serde(default)]
     pub thread_ts: Option<String>,
     #[serde(default)]
@@ -374,21 +374,17 @@ pub struct RawMessage {
     pub reactions: Vec<RawReaction>,
 }
 
-/// Best-effort "what should we put in a preview / detail body" for a
-/// Slack message. Tries:
+/// Recover the user-visible body of a Slack message, without
+/// synthesising a file placeholder. Walks:
 ///
-///   1. `text` itself, if non-empty — fastest path, covers user messages.
-///   2. Block Kit `blocks[]` walk — recovers rich-text bodies where
-///      Slack only set `blocks` (no fallback text).
-///   3. `attachments[]` — bot messages (GitHub, Linear, …) live here.
-///      We prefer `attachments[].fallback` (the canonical single-line
-///      summary that bots set explicitly for plain-text rendering),
-///      then fall back to concatenating `pretext` / `title` / `text`.
+///   1. `text` if non-empty.
+///   2. Block Kit `blocks[]` (rich-text composer output).
+///   3. `attachments[]` (bot messages — GitHub, Linear, …).
 ///
-/// Empty string when none of the above produces content (e.g. a message
-/// that is purely a file share with no caption — caller decides whether
-/// to render a placeholder).
-pub fn extract_display_text(raw: &RawMessage) -> String {
+/// Empty string when no textual body is recoverable — caller decides
+/// whether to fall back to a file-placeholder string or to render an
+/// inline file preview.
+pub fn extract_message_body(raw: &RawMessage) -> String {
     let primary = raw.text.trim();
     if !primary.is_empty() {
         return raw.text.clone();
@@ -399,9 +395,18 @@ pub fn extract_display_text(raw: &RawMessage) -> String {
         return from_blocks;
     }
 
-    let from_attachments = walk_attachments_for_text(&raw.attachments);
-    if !from_attachments.is_empty() {
-        return from_attachments;
+    walk_attachments_for_text(&raw.attachments)
+}
+
+/// Best-effort "what should we put in a preview / detail body" for a
+/// Slack message. Calls `extract_message_body` first, then synthesises
+/// a file placeholder (`📎 N files`) when the message is purely a
+/// file share. Used by the inbox list to summarise messages on a
+/// single line.
+pub fn extract_display_text(raw: &RawMessage) -> String {
+    let body = extract_message_body(raw);
+    if !body.is_empty() {
+        return body;
     }
 
     let from_files = describe_files(&raw.files);
@@ -424,12 +429,12 @@ pub fn extract_display_text(raw: &RawMessage) -> String {
 
 /// One-line synthesized placeholder for file-share messages.
 ///   1 file  → "📎 Image"  /  "📎 Video"  /  "📎 PDF"  /  "📎 voice-memo.m4a"
-///   2+ files → "📎 3 files"  (we don't enumerate beyond the first kind)
+///   2+ files → "📎 3 files"  (we don't enumerate beyond the count)
 ///
 /// We prefer the file's MIME-typed name where it's recognisable
 /// ("image", "video", "audio", "pdf"); fall back to the file's
 /// `title`/`name` for everything else (Word docs, .gitignore, etc.).
-fn describe_files(files: &[Value]) -> String {
+fn describe_files(files: &[RawFile]) -> String {
     if files.is_empty() {
         return String::new();
     }
@@ -440,39 +445,25 @@ fn describe_files(files: &[Value]) -> String {
     if let Some(label) = file_kind_label(first) {
         return format!("📎 {label}");
     }
-    if let Some(name) = first
-        .get("title")
-        .and_then(Value::as_str)
+    let display = first
+        .title
+        .as_deref()
         .filter(|s| !s.is_empty())
-        .or_else(|| first.get("name").and_then(Value::as_str))
+        .or(first.name.as_deref())
         .filter(|s| !s.is_empty())
-    {
-        return format!("📎 {name}");
-    }
-    "📎 Attachment".to_string()
+        .unwrap_or("Attachment");
+    format!("📎 {display}")
 }
 
-/// Map a Slack file object → human-readable kind. Slack already
-/// classifies common types via `filetype` (e.g. "png", "jpg", "mov")
-/// and via the broader `mimetype` family prefix.
-fn file_kind_label(file: &Value) -> Option<&'static str> {
-    let mime = file.get("mimetype").and_then(Value::as_str).unwrap_or("");
-    if mime.starts_with("image/gif") {
-        return Some("GIF");
+fn file_kind_label(file: &RawFile) -> Option<&'static str> {
+    match file.category() {
+        FileCategory::Gif => Some("GIF"),
+        FileCategory::Image => Some("Image"),
+        FileCategory::Video => Some("Video"),
+        FileCategory::Audio => Some("Voice clip"),
+        FileCategory::Pdf => Some("PDF"),
+        FileCategory::Other => None,
     }
-    if mime.starts_with("image/") {
-        return Some("Image");
-    }
-    if mime.starts_with("video/") {
-        return Some("Video");
-    }
-    if mime.starts_with("audio/") {
-        return Some("Voice clip");
-    }
-    if mime == "application/pdf" {
-        return Some("PDF");
-    }
-    None
 }
 
 /// Concatenate every plain-text leaf from a Block Kit block list. Slack
@@ -622,6 +613,114 @@ pub struct RawSearchChannel {
 pub struct RawReaction {
     pub name: String,
     pub count: u32,
+}
+
+/// One file attachment as Slack reports it on a message. Mirrors only
+/// the subset we render in the detail view — Slack returns ~30 more
+/// fields per file (transcripts, conversion progress, sharing info)
+/// that we ignore.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawFile {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub mimetype: Option<String>,
+    #[serde(default)]
+    pub permalink: Option<String>,
+    #[serde(default)]
+    pub original_w: Option<u32>,
+    #[serde(default)]
+    pub original_h: Option<u32>,
+    /// Image thumbnails sized by long edge. We pick `thumb_720` for the
+    /// detail preview and fall back through the others if that's
+    /// missing (small avatars / animated gifs sometimes skip the
+    /// larger sizes).
+    #[serde(default)]
+    pub thumb_64: Option<String>,
+    #[serde(default)]
+    pub thumb_80: Option<String>,
+    #[serde(default)]
+    pub thumb_160: Option<String>,
+    #[serde(default)]
+    pub thumb_360: Option<String>,
+    #[serde(default)]
+    pub thumb_480: Option<String>,
+    #[serde(default)]
+    pub thumb_720: Option<String>,
+    #[serde(default)]
+    pub thumb_800: Option<String>,
+    #[serde(default)]
+    pub thumb_960: Option<String>,
+    #[serde(default)]
+    pub thumb_1024: Option<String>,
+    /// Video files include a static-frame preview here.
+    #[serde(default)]
+    pub thumb_video: Option<String>,
+    /// Original-resolution download. Used when the user wants the full
+    /// file (open externally); never embedded inline.
+    #[serde(default)]
+    pub url_private: Option<String>,
+    #[serde(default)]
+    pub url_private_download: Option<String>,
+}
+
+impl RawFile {
+    /// Best preview URL ≤ ~720 px on the long edge. We bias toward
+    /// `thumb_720` because Slack thread-detail panels are ~700 px wide;
+    /// fall through smaller and then up so we always pick *something*
+    /// when the file has thumbs at all. Animated GIFs return `None`
+    /// from this — they should be served from `url_private` directly
+    /// so the animation plays.
+    pub fn preview_url(&self) -> Option<&str> {
+        if let Some(candidate) = [
+            self.thumb_720.as_deref(),
+            self.thumb_800.as_deref(),
+            self.thumb_960.as_deref(),
+            self.thumb_480.as_deref(),
+            self.thumb_360.as_deref(),
+            self.thumb_1024.as_deref(),
+            self.thumb_160.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        {
+            return Some(candidate);
+        }
+        None
+    }
+
+    /// Mimetype category (`image / video / audio / pdf / other`). Drives
+    /// the frontend's choice of renderer.
+    pub fn category(&self) -> FileCategory {
+        let mime = self.mimetype.as_deref().unwrap_or("");
+        if mime == "image/gif" {
+            FileCategory::Gif
+        } else if mime.starts_with("image/") {
+            FileCategory::Image
+        } else if mime.starts_with("video/") {
+            FileCategory::Video
+        } else if mime.starts_with("audio/") {
+            FileCategory::Audio
+        } else if mime == "application/pdf" {
+            FileCategory::Pdf
+        } else {
+            FileCategory::Other
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileCategory {
+    Image,
+    Gif,
+    Video,
+    Audio,
+    Pdf,
+    Other,
 }
 
 /// `conversations.history` — the latest N messages in a channel (or DM).
@@ -978,7 +1077,7 @@ mod tests {
         let raw = raw_from_json(serde_json::json!({
             "text": "",
             "files": [
-                { "mimetype": "image/png", "name": "screenshot.png", "title": "Screenshot" }
+                { "id": "F1", "mimetype": "image/png", "name": "screenshot.png", "title": "Screenshot" }
             ],
         }));
         assert_eq!(extract_display_text(&raw), "📎 Image");
@@ -989,7 +1088,7 @@ mod tests {
         let raw = raw_from_json(serde_json::json!({
             "text": "",
             "files": [
-                { "mimetype": "video/mp4", "name": "clip.mp4" }
+                { "id": "F1", "mimetype": "video/mp4", "name": "clip.mp4" }
             ],
         }));
         assert_eq!(extract_display_text(&raw), "📎 Video");
@@ -1000,9 +1099,9 @@ mod tests {
         let raw = raw_from_json(serde_json::json!({
             "text": "",
             "files": [
-                { "mimetype": "image/png" },
-                { "mimetype": "image/png" },
-                { "mimetype": "image/jpeg" },
+                { "id": "F1", "mimetype": "image/png" },
+                { "id": "F2", "mimetype": "image/png" },
+                { "id": "F3", "mimetype": "image/jpeg" },
             ],
         }));
         assert_eq!(extract_display_text(&raw), "📎 3 files");
@@ -1015,7 +1114,7 @@ mod tests {
         let raw = raw_from_json(serde_json::json!({
             "text": "",
             "files": [
-                { "mimetype": "application/vnd.openxmlformats", "name": "Q3-plan.docx", "title": "Q3 plan" }
+                { "id": "F1", "mimetype": "application/vnd.openxmlformats", "name": "Q3-plan.docx", "title": "Q3 plan" }
             ],
         }));
         assert_eq!(extract_display_text(&raw), "📎 Q3 plan");

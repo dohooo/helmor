@@ -107,6 +107,42 @@ pub struct SlackMessage {
     pub text: String,
     pub ts_millis: i64,
     pub reactions: Vec<SlackReactionSummary>,
+    /// File attachments (image / video / pdf / other). Inline previews
+    /// for image + video are rendered via the `slack-file://` custom
+    /// protocol; other categories show as a link with file name +
+    /// kind icon. Empty when the message has no file shares.
+    pub files: Vec<SlackFileRef>,
+}
+
+/// Minimal projection of a Slack file used by the frontend renderer.
+/// Different from `RawFile` (which has every Slack-side field): keeps
+/// only the bits the UI needs, with the preview URL already rewritten
+/// into our `slack-file://` custom protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackFileRef {
+    pub id: String,
+    /// Display name shown next to non-image files. For images / videos
+    /// it surfaces as the tooltip/alt fallback.
+    pub name: String,
+    pub mimetype: Option<String>,
+    /// `"image" | "gif" | "video" | "audio" | "pdf" | "other"` — drives
+    /// the frontend's renderer choice. Stringly-typed at the wire level
+    /// because TS unions are easier to consume than tagged enums.
+    pub category: String,
+    /// Custom-protocol URL (`slack-file://files-tmb/T…-F…/…`) the
+    /// webview can hit directly. Populated for image + gif + video;
+    /// `None` for non-renderable categories.
+    pub preview_url: Option<String>,
+    /// Original-resolution Slack URL (rewritten to `slack-file://`).
+    /// Used when the user clicks through an image for full size, or as
+    /// the source for `<video>` playback.
+    pub source_url: Option<String>,
+    /// Stable Slack web link — opens the file in the user's browser
+    /// (with their existing Slack session) for non-renderable kinds.
+    pub permalink: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

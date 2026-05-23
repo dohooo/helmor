@@ -7,6 +7,7 @@ import {
 	type SlackEmoji,
 } from "@/lib/slack-text";
 import { formatRelativeTime } from "../common";
+import { SlackFilePreviewGrid } from "./file-preview";
 
 /** Single Slack message bubble. Avatar + author + relative ts +
  *  mrkdwn-as-markdown body + flat reaction summary. We preprocess the
@@ -30,8 +31,13 @@ export function SlackMessageBubble({
 	 *  same visual fallback Slack uses pre-load. */
 	emoji: Record<string, SlackEmoji>;
 }) {
-	const rawBody = message.text.trim() || "_(empty message)_";
-	const body = inlineEmojiForMarkdown(rawBody, emoji);
+	const trimmedText = message.text.trim();
+	// Only fall back to the "(empty message)" placeholder when the
+	// message has neither a textual body nor any file attachments.
+	// File-only messages render their attachments inline instead.
+	const placeholderNeeded = !trimmedText && message.files.length === 0;
+	const rawBody = trimmedText || (placeholderNeeded ? "_(empty message)_" : "");
+	const body = rawBody ? inlineEmojiForMarkdown(rawBody, emoji) : "";
 	return (
 		<div className="flex gap-3 px-1 py-2">
 			<div className="shrink-0">
@@ -59,15 +65,18 @@ export function SlackMessageBubble({
 						{formatRelativeTime(message.tsMillis)}
 					</span>
 				</div>
-				<div className="conversation-markdown mt-0.5 break-words text-ui leading-6 text-foreground">
-					<Suspense
-						fallback={<div className="whitespace-pre-wrap">{body}</div>}
-					>
-						<LazyStreamdown className="conversation-streamdown" mode="static">
-							{body}
-						</LazyStreamdown>
-					</Suspense>
-				</div>
+				{body ? (
+					<div className="conversation-markdown mt-0.5 break-words text-ui leading-6 text-foreground">
+						<Suspense
+							fallback={<div className="whitespace-pre-wrap">{body}</div>}
+						>
+							<LazyStreamdown className="conversation-streamdown" mode="static">
+								{body}
+							</LazyStreamdown>
+						</Suspense>
+					</div>
+				) : null}
+				<SlackFilePreviewGrid files={message.files} />
 				{message.reactions.length > 0 ? (
 					<div className="mt-1 flex flex-wrap gap-1">
 						{message.reactions.map((r) => (

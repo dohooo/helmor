@@ -1636,6 +1636,29 @@ export type SlackReactionSummary = {
 	count: number;
 };
 
+/** Inline file attachment surfaced in the thread detail view. Preview
+ *  URLs are pre-rewritten into our `slack-file://` custom protocol so
+ *  the webview can fetch them through the workspace cookie proxy. */
+export type SlackFileRef = {
+	id: string;
+	name: string;
+	mimetype: string | null;
+	/** Renderer hint. Drives whether we embed `<img>`, `<video>`, or a
+	 *  download link. */
+	category: "image" | "gif" | "video" | "audio" | "pdf" | "other";
+	/** Inline thumbnail / static frame, sized for the detail panel.
+	 *  `null` for categories we don't preview inline. */
+	previewUrl: string | null;
+	/** Full-resolution source for click-through or `<video>` playback.
+	 *  Always lives on the `slack-file://` protocol. */
+	sourceUrl: string | null;
+	/** Slack web link — opens the file in the user's browser, useful for
+	 *  PDFs and unsupported file types. */
+	permalink: string | null;
+	width: number | null;
+	height: number | null;
+};
+
 export type SlackMessage = {
 	ts: string;
 	userId: string | null;
@@ -1644,6 +1667,7 @@ export type SlackMessage = {
 	text: string;
 	tsMillis: number;
 	reactions: SlackReactionSummary[];
+	files: SlackFileRef[];
 };
 
 export type SlackThreadDetail = {
