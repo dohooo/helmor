@@ -22,6 +22,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod slack;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
@@ -48,6 +49,16 @@ pub use workspace::workspaces;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
+/// Fallback `404 Not Found` response with an empty body. Used by the
+/// custom-protocol handlers when the upstream fetch fails — the
+/// webview falls back to the `<img alt="">` text gracefully.
+fn empty_404() -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(404)
+        .body(Vec::new())
+        .expect("404 response builder is infallible")
+}
+
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
     db::init_connection(conn, true).expect("Failed to apply PRAGMA init");
@@ -65,7 +76,35 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build());
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Inline Slack file previews. The webview hits
+        // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
+        // through the workspace cookie, and stream the bytes back as a
+        // normal HTTP response. Cached on disk after the first fetch.
+        .register_asynchronous_uri_scheme_protocol("slack-file", |_app, request, responder| {
+            let uri = request.uri().to_string();
+            std::thread::spawn(move || {
+                let response = match slack::files::resolve(&uri) {
+                    Ok(file) => tauri::http::Response::builder()
+                        .header("Content-Type", file.content_type)
+                        // Slack file URLs are content-stable — bytes
+                        // never change for a given URL — so let the
+                        // webview cache them aggressively.
+                        .header("Cache-Control", "public, max-age=2592000, immutable")
+                        .body(file.bytes)
+                        .unwrap_or_else(|_| empty_404()),
+                    Err(error) => {
+                        tracing::warn!(
+                            uri = %uri,
+                            error = %format!("{error:#}"),
+                            "slack-file protocol fetch failed",
+                        );
+                        empty_404()
+                    }
+                };
+                responder.respond(response);
+            });
+        });
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -481,7 +520,15 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::slack_commands::slack_import_from_desktop,
+            commands::slack_commands::slack_list_workspaces,
+            commands::slack_commands::slack_disconnect_workspace,
+            commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_search_messages,
+            commands::slack_commands::slack_get_thread_detail,
+            commands::slack_commands::slack_list_emoji,
+            commands::slack_commands::slack_prepare_thread_context
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

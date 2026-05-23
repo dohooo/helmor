@@ -1587,6 +1587,289 @@ export type GitRefsChangedPayload = {
 	workspaceId: string;
 };
 
+// ────────────────────────────────────────────────────────────────────────
+// Slack context source (read-only v1).
+//
+// Wire shapes mirror `src-tauri/src/slack/types.rs` exactly. Auth is
+// `slackImportFromDesktop` — we read the xoxc/xoxd pair out of the
+// user's local Slack desktop install. All reads then go through the
+// Slack Web API client in `src-tauri/src/slack/api.rs`.
+//
+// The frontend never sees the captured tokens; it only ever holds the
+// non-secret workspace metadata (team id / name / domain / our user id).
+// ────────────────────────────────────────────────────────────────────────
+
+export type SlackWorkspace = {
+	teamId: string;
+	teamName: string;
+	teamDomain: string;
+	myUserId: string;
+	addedAt: number;
+};
+
+export type SlackInboxItemKind = "mention" | "direct_message";
+
+export type SlackInboxItem = {
+	id: string;
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	kind: SlackInboxItemKind;
+	ts: string;
+	threadTs: string | null;
+	authorName: string;
+	/** `image_72` from `users.info`. `null` when the user lookup misses
+	 *  or the workspace strips profile images. UI falls back to initials. */
+	authorAvatarUrl: string | null;
+	textSnippet: string;
+	tsMillis: number;
+	permalink: string;
+};
+
+export type SlackInboxPage = {
+	items: SlackInboxItem[];
+	nextCursor: string | null;
+};
+
+export type SlackReactionSummary = {
+	name: string;
+	count: number;
+};
+
+/** Inline file attachment surfaced in the thread detail view. Preview
+ *  URLs are pre-rewritten into our `slack-file://` custom protocol so
+ *  the webview can fetch them through the workspace cookie proxy. */
+export type SlackFileRef = {
+	id: string;
+	name: string;
+	mimetype: string | null;
+	/** Renderer hint. Drives whether we embed `<img>`, `<video>`, or a
+	 *  download link. */
+	category: "image" | "gif" | "video" | "audio" | "pdf" | "other";
+	/** Inline thumbnail / static frame, sized for the detail panel.
+	 *  `null` for categories we don't preview inline. */
+	previewUrl: string | null;
+	/** Full-resolution source for click-through or `<video>` playback.
+	 *  Always lives on the `slack-file://` protocol. */
+	sourceUrl: string | null;
+	/** Slack web link — opens the file in the user's browser, useful for
+	 *  PDFs and unsupported file types. */
+	permalink: string | null;
+	width: number | null;
+	height: number | null;
+};
+
+export type SlackMessage = {
+	ts: string;
+	userId: string | null;
+	authorName: string;
+	authorAvatarUrl: string | null;
+	text: string;
+	tsMillis: number;
+	reactions: SlackReactionSummary[];
+	files: SlackFileRef[];
+};
+
+export type SlackThreadDetail = {
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	isThread: boolean;
+	messages: SlackMessage[];
+	permalink: string;
+};
+
+export type SlackImportFailure = {
+	teamId: string;
+	teamName: string;
+	reason: string;
+};
+
+export type SlackImportResult = {
+	imported: SlackWorkspace[];
+	failed: SlackImportFailure[];
+	alreadyConnected: SlackWorkspace[];
+};
+
+/** Read the user's local Slack desktop session (macOS only in v1) and
+ *  import every workspace whose token still authenticates. Strictly
+ *  better UX than the webview-based connect flow when it works because
+ *  it reuses whatever auth state Slack desktop already negotiated —
+ *  passkeys, SSO, admin-enforced 2FA all become non-issues. */
+export async function slackImportFromDesktop(): Promise<SlackImportResult> {
+	try {
+		return await invoke<SlackImportResult>("slack_import_from_desktop");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't read Slack desktop session."),
+		);
+	}
+}
+
+export async function slackListWorkspaces(): Promise<SlackWorkspace[]> {
+	try {
+		return await invoke<SlackWorkspace[]>("slack_list_workspaces");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack workspaces."),
+		);
+	}
+}
+
+export async function slackDisconnectWorkspace(teamId: string): Promise<void> {
+	try {
+		await invoke<void>("slack_disconnect_workspace", { teamId });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't disconnect Slack workspace."),
+		);
+	}
+}
+
+export async function slackListInboxItems(args: {
+	teamId: string;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_list_inbox_items", {
+			teamId: args.teamId,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack inbox items."),
+		);
+	}
+}
+
+/** Sort mode forwarded to Slack `search.messages`. Mirrors the backend
+ *  `SlackSearchSort` enum — keep these two in lockstep. */
+export type SlackSearchSort = "newest" | "relevance";
+
+/** Run a free-text query against `search.messages` for one workspace.
+ *  The query string is sent verbatim, so Slack search modifiers
+ *  (`from:@alice`, `in:#chan`, `has:link`, `is:thread`, quoted phrases,
+ *  `-` negation, `OR`, …) compose without us having to teach the UI
+ *  about each one. Empty input short-circuits to zero results to avoid
+ *  burning a request on a match-everything query. */
+export async function slackSearchMessages(args: {
+	teamId: string;
+	query: string;
+	sort?: SlackSearchSort;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_search_messages", {
+			teamId: args.teamId,
+			query: args.query,
+			sort: args.sort ?? "newest",
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't search Slack messages."),
+		);
+	}
+}
+
+export async function slackGetThreadDetail(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+}): Promise<SlackThreadDetail> {
+	try {
+		return await invoke<SlackThreadDetail>("slack_get_thread_detail", {
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Couldn't load Slack thread."));
+	}
+}
+
+/** Progress events streamed back by `slackPrepareThreadContext`. */
+export type SlackPrepareProgress =
+	| { stage: "fetchingThread" }
+	| { stage: "cachingFiles"; current: number; total: number };
+
+export type SlackPreparedContext = {
+	/** Final prompt-friendly string ready to inject into the composer
+	 *  as a single `custom-tag`. Mentions each image / gif / video
+	 *  poster file with a parallel `Attached as image (local path: …)`
+	 *  hint — the actual pixels reach the agent through the image
+	 *  attachments below, not via this text. */
+	submitText: string;
+	filesTotal: number;
+	filesCached: number;
+	/** Absolute local paths of every cached image / gif / video poster
+	 *  in chronological message order, de-duped by Slack file id.
+	 *  Frontend wraps each in a `kind: "image"` ComposerInsertItem so
+	 *  the composer's existing pipeline carries them to the spawned
+	 *  agent as vision input (Claude image block / Codex localImage
+	 *  part) — agent sees pixels without invoking the Read tool. */
+	imagePaths: string[];
+};
+
+/** Prepare a Slack thread for "Add to context" injection. Fetches the
+ *  full thread, pre-warms the on-disk Slack file cache for every
+ *  inline image/gif/video poster, then returns a formatted prompt
+ *  string with absolute local paths embedded so the spawned coding
+ *  agent can `Read` the files.
+ *
+ *  `onProgress` (when provided) receives streaming events: starting
+ *  with `fetchingThread`, then a series of `cachingFiles` with
+ *  monotonically increasing `current`, finishing with `done`. */
+export async function slackPrepareThreadContext(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+	onProgress?: (event: SlackPrepareProgress) => void;
+}): Promise<SlackPreparedContext> {
+	const progress = new Channel<SlackPrepareProgress>();
+	if (args.onProgress) {
+		progress.onmessage = args.onProgress;
+	}
+	try {
+		return await invoke<SlackPreparedContext>("slack_prepare_thread_context", {
+			progress,
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't prepare Slack context."),
+		);
+	}
+}
+
+/** Workspace custom-emoji map (`name -> image url`). Built-in unicode
+ *  emojis are not included here — those ship bundled with the frontend.
+ *  Aliases are resolved server-side, so every returned value is a real
+ *  image URL. */
+export async function slackListEmoji(
+	teamId: string,
+): Promise<Record<string, string>> {
+	try {
+		return await invoke<Record<string, string>>("slack_list_emoji", {
+			teamId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack emoji catalogue."),
+		);
+	}
+}
+
 export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
@@ -1610,7 +1893,9 @@ export type UiMutationEvent =
 			modelId: string | null;
 			permissionMode: string | null;
 	  }
-	| { type: "activeStreamsChanged" };
+	| { type: "activeStreamsChanged" }
+	| { type: "slackWorkspacesChanged" }
+	| { type: "slackTokenInvalidated"; teamId: string };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
