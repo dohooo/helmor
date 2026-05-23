@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.24.0
+
+### Minor Changes
+
+- [#647](https://github.com/dohooo/helmor/pull/647) [`dc6da55`](https://github.com/dohooo/helmor/commit/dc6da55dcd268c43420316f52b27acdbf1454770) Thanks [@dohooo](https://github.com/dohooo)! - Add an optional `stopCommand` per run action that runs as graceful cleanup when you click Stop, with a second click force-killing the process if you don't want to wait.
+
+- [#650](https://github.com/dohooo/helmor/pull/650) [`1912328`](https://github.com/dohooo/helmor/commit/1912328489b52358d34c4216e31759cb867dd68f) Thanks [@natllian](https://github.com/natllian)! - Add an experimental Local LLM panel that runs session title and branch name generation on-device through a bundled llama-server.
+
+### Patch Changes
+
+- [#645](https://github.com/dohooo/helmor/pull/645) [`4564bd8`](https://github.com/dohooo/helmor/commit/4564bd896cb609bd16ee060cd52f3149cf6dc8c4) Thanks [@natllian](https://github.com/natllian)! - Fix the composer's ArrowUp accidentally recalling the previous prompt when the caret crossed into a blank line in the middle of a multi-paragraph draft.
+
+- [#648](https://github.com/dohooo/helmor/pull/648) [`1ef46cb`](https://github.com/dohooo/helmor/commit/1ef46cb37fc201be65db3c88bf83f9e02430817b) Thanks [@natllian](https://github.com/natllian)! - Add an optional sound effect that plays alongside each desktop notification, with 12 sounds to choose from in Settings → General.
+
 ## 0.23.6
 
 ### Patch Changes
