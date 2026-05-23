@@ -5,7 +5,7 @@ import {
 	type SlackInboxPage,
 	slackListInboxItems,
 } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import { helmorQueryKeys, PERSIST_META } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 
 const PAGE_SIZE = 30;
@@ -54,6 +54,14 @@ export function useSlackInboxItems(
 				? (lastPage.nextCursor ?? undefined)
 				: undefined,
 		staleTime: STALE_MS,
+		// Persist across cold start so switching to the Slack tab after
+		// app launch shows the last-seen feed instantly (stale-while-
+		// revalidate). The persisted blob covers every page the user
+		// fetched in the previous session — typically just page 1 at
+		// 30 items × ~1 KB. Background refetch on focus (per the
+		// global `refetchOnWindowFocus: true` default) replaces the
+		// hydrated snapshot once Slack responds.
+		meta: PERSIST_META,
 	});
 
 	const pushToast = useWorkspaceToast();

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { slackListEmoji } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
+import { helmorQueryKeys, PERSIST_META } from "@/lib/query-client";
 import { BUILTIN_EMOJI } from "@/lib/slack-emoji-builtin";
 import type { SlackEmoji } from "@/lib/slack-text";
 
@@ -17,7 +17,15 @@ const STALE_MS = 30 * 60_000;
  *
  *  Workspace custom emojis OVERRIDE built-in unicode entries — that
  *  matches Slack desktop's precedence rule (if a workspace publishes a
- *  custom `:tada:`, Slack uses that instead of 🎉). */
+ *  custom `:tada:`, Slack uses that instead of 🎉).
+ *
+ *  Persisted across cold start. Without this, every cold load of the
+ *  Slack inbox shows `:dosu-logo:` etc. as raw text pills for the
+ *  first ~500 ms while `emoji.list` round-trips through Slack. The
+ *  table is ~200 entries × ~120 bytes (name + URL) ≈ 25 KB — well
+ *  under the persister's bounded-size budget. New custom emojis the
+ *  workspace publishes between cold starts surface within
+ *  `STALE_MS` after the next focus refetch. */
 export function useSlackEmojiMap(
 	teamId: string | null,
 ): Record<string, SlackEmoji> {
@@ -31,6 +39,7 @@ export function useSlackEmojiMap(
 			return slackListEmoji(teamId);
 		},
 		staleTime: STALE_MS,
+		meta: PERSIST_META,
 	});
 
 	return useMemo<Record<string, SlackEmoji>>(() => {
