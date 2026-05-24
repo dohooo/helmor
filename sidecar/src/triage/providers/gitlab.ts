@@ -1,5 +1,4 @@
 // GitLab provider — thin wrapper over the Rust `forge.*` host bridge.
-// Mirrors github.ts; backend dispatch keys on provider="gitlab".
 
 import { Type } from "@earendil-works/pi-ai";
 

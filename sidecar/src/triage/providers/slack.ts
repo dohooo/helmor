@@ -1,7 +1,4 @@
 // Slack provider — thin wrapper over the Rust slack host bridge.
-// Multi-workspace by design: the agent first calls slack_list_workspaces
-// to enumerate connected teams, then keys every subsequent call on the
-// chosen team_id.
 
 import { Type } from "@earendil-works/pi-ai";
 

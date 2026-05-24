@@ -1,7 +1,4 @@
 // GitHub provider — thin wrapper over the Rust `forge.*` host bridge.
-// We reuse the same `list_inbox_items` / `get_inbox_item_detail` surfaces
-// the rest of Helmor (inbox UI etc.) consumes, so triage never duplicates
-// gh-CLI parsing logic.
 
 import { Type } from "@earendil-works/pi-ai";
 

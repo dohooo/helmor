@@ -1,5 +1,4 @@
-// Runs one tick: provider preflight → mount tools → PI agent loop →
-// collect proposals. Emits progress events for Rust to surface in the UI.
+// Runs one triage tick and collects proposals.
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import {
@@ -52,20 +51,13 @@ function preview(value: unknown, max = PREVIEW_CHARS): string {
 
 export interface RunTriageOutcome {
 	proposals: TriageProposal[];
-	/// The agent's final assistant text, captured from the last
-	/// `message_end` event with `role: "assistant"`. Surfaced to the UI as
-	/// the "nothing actionable" tooltip so the user can see why the agent
-	/// decided not to propose anything.
+	// Agent's final assistant text, shown as the "nothing actionable" tooltip.
 	finalMessage: string | null;
-	/// True when the user clicked Stop. Distinguishes a cancelled tick
-	/// from a normal "no proposals" finish so the UI can flag it.
+	// True when the user clicked Stop.
 	cancelled: boolean;
 }
 
-/// Handle to the currently-running tick, so the stdin dispatcher can
-/// abort it when the user clicks Stop. Only one tick runs at a time
-/// (`TICK_IN_FLIGHT` on the Rust side enforces this), so a single
-/// module-level slot is enough.
+// Handle to the currently-running tick for Stop. Only one tick runs at a time.
 let activeTick: { tickId: string; abort: () => void } | null = null;
 
 export function abortCurrentTick(tickId?: string): boolean {
@@ -97,8 +89,7 @@ function extractAssistantText(message: unknown): string | null {
 }
 
 export interface RunTriageHooks {
-	/** Called whenever a tool execution starts or a turn starts.
-	 *  Sidecar dispatcher uses this to emit a `triageProgress` event. */
+	// Emits a `triageProgress` event on tool/turn start.
 	emitProgress(payload: {
 		turn?: number;
 		tool?: string;
@@ -127,9 +118,7 @@ export async function runTriageTick(
 	const providerHints: string[] = [];
 	const disabledProviders: { displayName: string; reason: string }[] = [];
 
-	// Resolve a non-null time floor for every provider. If the DB has no
-	// checkpoint yet (cold start), fall back to "now - 48h" so the agent
-	// never gets a "scan all of history" budget on the first run.
+	// Cold-start fallback so a missing checkpoint doesn't trigger a full-history scan.
 	const coldStartFloor = new Date(
 		Date.now() - COLD_START_LOOKBACK_HOURS * 3_600_000,
 	).toISOString();
@@ -255,9 +244,7 @@ export async function runTriageTick(
 				break;
 			}
 			case "message_end": {
-				// Stash every assistant text — the *last* one we see (after the
-				// agent loop terminates without further tool_calls) is the
-				// model's stated reason for stopping.
+				// Keep the last assistant text as the model's stated reason for stopping.
 				const text = extractAssistantText((e as { message?: unknown }).message);
 				if (text) lastAssistantText = text;
 				break;
@@ -284,8 +271,6 @@ export async function runTriageTick(
 			aborted,
 			cancelledByUser,
 			turnsRun: turnIndex,
-			// Persist the agent's full final message in jsonl — this is the
-			// only post-hoc record of its reasoning, so don't truncate.
 			finalMessage: lastAssistantText,
 		});
 		return {
@@ -295,11 +280,8 @@ export async function runTriageTick(
 		};
 	} finally {
 		activeTick = null;
-		// Always clean up scratch — every prior return path leaked the dir
-		// when the agent aborted by cap or threw post-drain.
 		await scratch.dispose();
 	}
 }
 
-// Re-export so the dispatcher can verify a provider exists if needed.
 export { PROVIDERS };

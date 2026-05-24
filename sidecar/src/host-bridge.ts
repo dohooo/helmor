@@ -1,9 +1,4 @@
 // Reverse IPC: call Helmor's Rust host from the sidecar.
-//
-// Symmetric to `SidecarRequest` but inverted — sidecar emits `hostRequest`
-// on stdout, Rust dispatches by `method`, writes `hostResponse` back to
-// sidecar stdin. The main stdin loop forwards `hostResponse` events here
-// via `resolveHostResponse`.
 
 import { randomUUID } from "node:crypto";
 

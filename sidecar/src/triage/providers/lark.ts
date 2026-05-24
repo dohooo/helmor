@@ -1,6 +1,4 @@
 // Lark provider — thin wrapper over the Rust `lark.*` host bridge.
-// The Rust side handles the `lark-cli` shell-out; we just shape the
-// markdown the agent sees in scratch.
 
 import { Type } from "@earendil-works/pi-ai";
 

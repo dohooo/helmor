@@ -14,8 +14,6 @@ export function handleStopTriageTick(
 		typeof rawParams.tickId === "string" ? rawParams.tickId : undefined;
 	const stopped = abortCurrentTick(tickId);
 	logger.info(`[${requestId}] stopTriageTick`, { tickId, stopped });
-	// `runTriageTick` will emit its own `end` once the abort lands; we
-	// just ack the stop request so the Rust caller's listener resolves.
 	emitter.end(requestId);
 }
 

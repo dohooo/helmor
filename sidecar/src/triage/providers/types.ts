@@ -1,5 +1,4 @@
-// Provider abstraction. Each integration (lark/gitlab/github/...) implements
-// this. Adding a provider = drop a file + register it.
+// Provider abstraction for triage integrations.
 
 import type { ScratchSession } from "../scratch";
 
@@ -14,7 +13,6 @@ export interface PreflightResult {
 }
 
 // Loosely typed tool — concrete shape comes from pi-ai/pi-agent-core.
-// Each provider returns these and the agent loop uses them as-is.
 export type AgentTool = unknown;
 
 export interface TriageProvider {

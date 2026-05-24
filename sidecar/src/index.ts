@@ -85,9 +85,7 @@ const writeStdoutEvent = (event: object): void => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 };
 const emitter = createSidecarEmitter(writeStdoutEvent);
-// Wire the reverse IPC writer so triage providers can `callHost(...)`
-// into Rust. Rust replies with `{ type: "hostResponse" }` on stdin,
-// detected in the main loop below.
+// Wire reverse IPC so triage providers can `callHost(...)` into Rust.
 setHostWriter(writeStdoutEvent);
 
 // ---------------------------------------------------------------------------
@@ -540,14 +538,12 @@ let requestCount = 0;
 for await (const line of rl) {
 	if (!line.trim()) continue;
 
-	// Sniff reverse-channel responses before the JSON-RPC parser chokes
-	// on the non-id shape. Rust writes these in response to `callHost(...)`
-	// from any provider tool.
+	// Sniff reverse-channel hostResponse before the JSON-RPC parser sees it.
 	let pre: unknown;
 	try {
 		pre = JSON.parse(line);
 	} catch {
-		// fall through — parseRequest will surface the error properly.
+		// parseRequest will surface the error.
 	}
 	if (
 		pre !== null &&
