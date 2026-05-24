@@ -664,7 +664,7 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("opens the workspace start composer on Command+N", async () => {
+	it("opens the workspace start composer in worktree mode on Command+N", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
@@ -677,6 +677,8 @@ describe("App global navigation shortcuts", () => {
 		expect(
 			screen.getByRole("button", { name: "New Workspace" }),
 		).toBeDisabled();
+		// Mode picker trigger reflects the forced worktree mode.
+		expect(await screen.findByText("New worktree")).toBeInTheDocument();
 	});
 
 	it("focuses the start composer on Command+L", async () => {
@@ -699,7 +701,7 @@ describe("App global navigation shortcuts", () => {
 		});
 	});
 
-	it("opens the add repository menu on Command+Shift+N", async () => {
+	it("opens the workspace start composer in Just-chat mode on Command+Shift+N", async () => {
 		await renderAppReady();
 
 		fireEvent.keyDown(window, {
@@ -709,7 +711,31 @@ describe("App global navigation shortcuts", () => {
 			shiftKey: true,
 		});
 
-		await screen.findByRole("menuitem", { name: /Open project/i });
+		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
+		// Default persisted mode is `worktree`; the trigger label flipping to
+		// "Just chat" proves the Cmd+Shift+N transient override applied.
+		expect(await screen.findByText("Just chat")).toBeInTheDocument();
+	});
+
+	it("Command+N flips back to worktree even after a prior Command+Shift+N", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "n",
+			code: "KeyN",
+			metaKey: true,
+			shiftKey: true,
+		});
+		expect(await screen.findByText("Just chat")).toBeInTheDocument();
+
+		fireEvent.keyDown(window, {
+			key: "n",
+			code: "KeyN",
+			metaKey: true,
+		});
+		// Pressing Cmd+N while the start surface is already up replaces the
+		// transient override; the trigger label flips back to worktree.
+		expect(await screen.findByText("New worktree")).toBeInTheDocument();
 	});
 
 	it("toggles the context panel on Option+Command+C", async () => {

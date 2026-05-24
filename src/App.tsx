@@ -447,6 +447,7 @@ function AppShell({
 			repositories,
 			pushToast: pushWorkspaceToast,
 			getViewMode: () => selectionActions.getSnapshot().viewMode,
+			viewMode: selection.viewMode,
 			openWorkspaceStart: () => selectionActions.openStart(),
 			setViewMode: (mode) => selectionActions.setViewMode(mode),
 			selectWorkspace: (id) => handleSelectWorkspace(id),
@@ -1226,7 +1227,16 @@ function AppShell({
 			},
 			{
 				id: "workspace.new" as const,
-				callback: () => publishShellEvent({ type: "open-new-workspace" }),
+				// Force the start composer into worktree mode for this open;
+				// the persisted default mode is left untouched.
+				callback: () =>
+					publishShellEvent({ type: "open-new-workspace", mode: "worktree" }),
+			},
+			{
+				id: "workspace.justChat" as const,
+				// Same as `workspace.new` but lands in Just-chat mode.
+				callback: () =>
+					publishShellEvent({ type: "open-new-workspace", mode: "chat" }),
 			},
 			{
 				id: "workspace.addRepository" as const,

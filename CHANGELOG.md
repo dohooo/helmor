@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.25.0
+
+### Minor Changes
+
+- [#654](https://github.com/dohooo/helmor/pull/654) [`bf80653`](https://github.com/dohooo/helmor/commit/bf80653ed47c960447e3ce04ec8f3f281c44d9fd) Thanks [@dohooo](https://github.com/dohooo)! - Add Slack as a Context source.
+
+  - Import every workspace straight from your local Slack desktop session — no bot, no admin OAuth approval.
+  - Browse a unified mentions + DM activity feed in the sidebar, search any workspace with Slack's native operators (`from:@alice`, `in:#chan`, `has:link`, `is:thread`), and click through to a full-fidelity thread preview with inline images and video.
+  - Add a thread to context and the agent receives the conversation as structured prose plus every shared image as direct vision input — no Read-tool detour.
+
+### Patch Changes
+
+- [#652](https://github.com/dohooo/helmor/pull/652) [`6fa372f`](https://github.com/dohooo/helmor/commit/6fa372f3f22b2a10d84b401ab9548f703cc5ed64) Thanks [@natllian](https://github.com/natllian)! - Fix Codex MCP tool-call approvals showing no Allow button. The empty-schema elicitation with `_meta.codex_approval_kind: "mcp_tool_call"` now renders Allow / Allow-for-session / Always-allow / Decline, and the persist choice round-trips back so Codex remembers it.
+
+- [#656](https://github.com/dohooo/helmor/pull/656) [`a285c65`](https://github.com/dohooo/helmor/commit/a285c65cd54b04888378ae6815be7bc97bb59813) Thanks [@dohooo](https://github.com/dohooo)! - Refresh the new-workspace keyboard shortcuts:
+
+  - Cmd+N opens the start composer directly in worktree mode.
+  - Cmd+Shift+N now opens the start composer in Just-chat mode.
+  - The previous Cmd+Shift+N "Add repository" binding is unbound by default and can be re-bound in Settings → Shortcuts.
+
+- [#653](https://github.com/dohooo/helmor/pull/653) [`c420b83`](https://github.com/dohooo/helmor/commit/c420b83ce302bf1e1ed20d0c8666d44c443b77d1) Thanks [@dohooo](https://github.com/dohooo)! - Polish the inspector's Run tab:
+  - Manually stopping a script no longer marks the run as failed — the tab icon returns to its idle state.
+  - Show the active action's name on the Run tab when a workspace has multiple configured, so users can tell which script's output is on screen.
+  - Clicking anywhere on the active Run tab now opens the action menu — no need to aim for the chevron.
+
 ## 0.24.0
 
 ### Minor Changes
