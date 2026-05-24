@@ -450,6 +450,10 @@ pub struct CreateSessionOverrides<'a> {
     pub model: Option<&'a str>,
     pub effort_level: Option<&'a str>,
     pub fast_mode: Option<bool>,
+    /// Caller-provided UUID for the new `sessions.id`, so pre-existing
+    /// `cache/paste/<seed>/` files end up owned by this session.
+    /// Malformed → fresh UUID (see `lifecycle::resolve_seed_session_id`).
+    pub seed_session_id: Option<&'a str>,
 }
 
 pub fn create_session(
@@ -492,7 +496,8 @@ pub fn create_session(
         bail!("Workspace {workspace_id} does not exist");
     }
 
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id =
+        crate::workspace::lifecycle::resolve_seed_session_id(overrides.seed_session_id);
     let title = default_session_title_for_action_kind_with_workspace(
         &transaction,
         workspace_id,

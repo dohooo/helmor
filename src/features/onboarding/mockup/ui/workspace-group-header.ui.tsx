@@ -35,7 +35,7 @@ export function WorkspaceGroupHeaderUI({
 		<button
 			type="button"
 			className={cn(
-				"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
+				"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60",
 				"py-1",
 				canCollapse ? "cursor-interactive" : "cursor-default",
 			)}
@@ -59,7 +59,7 @@ export function WorkspaceGroupHeaderUI({
 				<span className="relative flex h-5 min-w-5 items-center justify-center">
 					<Badge
 						variant="secondary"
-						className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+						className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano leading-none transition-opacity group-hover/trigger:opacity-0"
 					>
 						{count}
 					</Badge>

@@ -77,12 +77,21 @@ struct SidecarProcess {
 }
 
 #[derive(Debug, Default)]
-struct BundledAgentPaths {
-    claude_bin: Option<PathBuf>,
-    codex_bin: Option<PathBuf>,
+pub struct BundledAgentPaths {
+    pub claude_bin: Option<PathBuf>,
+    pub codex_bin: Option<PathBuf>,
 }
 
-fn resolve_bundled_agent_paths() -> BundledAgentPaths {
+/// Resolve the bundled Claude/Codex CLI binaries shipped inside the
+/// `.app` (release builds only — returns empty in dev). Used both by
+/// the sidecar boot path (to pass `HELMOR_*_BIN_PATH` env vars) and by
+/// onboarding so login-status checks + login terminals don't depend on
+/// the user having the CLIs on PATH.
+///
+/// Dev intentionally returns empty so callers fall back to PATH — Helmor
+/// should not silently prefer one of the sidecar's `node_modules`
+/// binaries over whatever the developer has installed.
+pub fn resolve_bundled_agent_paths() -> BundledAgentPaths {
     std::env::current_exe()
         .ok()
         .and_then(|exe| resolve_bundled_agent_paths_for_exe(&exe))

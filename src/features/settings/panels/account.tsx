@@ -109,7 +109,7 @@ export function AccountPanel({
 						</TooltipTrigger>
 						<TooltipContent
 							side="top"
-							className="max-w-xs whitespace-normal text-[11px] leading-snug"
+							className="max-w-xs whitespace-normal text-mini leading-snug"
 						>
 							{errorMessage}
 						</TooltipContent>
@@ -118,12 +118,12 @@ export function AccountPanel({
 			) : null}
 			<SettingsGroup>
 				{accountsQuery.isPending ? (
-					<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-muted-foreground">
+					<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
 						<Loader2 className="size-3.5 animate-spin" />
 						Loading accounts…
 					</div>
 				) : sortedAccounts.length === 0 ? (
-					<div className="py-5 text-center text-[12px] text-muted-foreground">
+					<div className="py-5 text-center text-small text-muted-foreground">
 						No accounts connected yet.
 					</div>
 				) : (
@@ -180,7 +180,7 @@ function AccountRow({ account }: { account: ForgeAccount }) {
 					src={account.avatarUrl}
 					alt={account.login}
 					fallback={initialsFor(displayName)}
-					fallbackClassName="bg-muted text-[15px] font-semibold uppercase text-muted-foreground"
+					fallbackClassName="bg-muted text-title font-semibold uppercase text-muted-foreground"
 				/>
 				<span className="absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center rounded-full bg-background ring-2 ring-background">
 					{providerBadge}
@@ -188,10 +188,10 @@ function AccountRow({ account }: { account: ForgeAccount }) {
 			</div>
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2">
-					<span className="truncate text-[13px] font-semibold text-foreground">
+					<span className="truncate text-ui font-semibold text-foreground">
 						{displayName}
 					</span>
-					<span className="truncate text-[12px] text-muted-foreground">
+					<span className="truncate text-small text-muted-foreground">
 						@{account.login}
 					</span>
 				</div>
@@ -201,12 +201,12 @@ function AccountRow({ account }: { account: ForgeAccount }) {
 				 * height regardless of which fields are populated. */}
 				<div className="mt-0.5 flex min-h-[18px] items-center gap-1.5">
 					{account.email ? (
-						<div className="min-w-0 truncate text-[12px] text-muted-foreground">
+						<div className="min-w-0 truncate text-small text-muted-foreground">
 							{account.email}
 						</div>
 					) : null}
 					{showHostCaption ? (
-						<div className="shrink-0 truncate text-[11px] text-muted-foreground/70">
+						<div className="shrink-0 truncate text-mini text-muted-foreground/70">
 							{account.host}
 						</div>
 					) : null}

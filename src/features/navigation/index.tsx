@@ -6,6 +6,7 @@ import {
 	FolderPlus,
 	Globe,
 	LoaderCircle,
+	MessageCircle,
 	Plus,
 } from "lucide-react";
 import {
@@ -32,10 +33,16 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
-import type { WorkspaceGroup, WorkspaceRow, WorkspaceStatus } from "@/lib/api";
-import type { SidebarGrouping } from "@/lib/settings";
+import type {
+	RepositoryCreateOption,
+	WorkspaceGroup,
+	WorkspaceRow,
+	WorkspaceStatus,
+} from "@/lib/api";
+import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { workspaceStatusFromGroupId } from "@/lib/workspace-helpers";
+import { useShellEvent } from "@/shell/event-bus";
 import { WorkspaceAvatar } from "./avatar";
 import { CloneFromUrlDialog } from "./clone-from-url-dialog";
 import { RepoDragGhost, WorkspaceDragGhost } from "./dnd/drag-ghosts";
@@ -56,6 +63,7 @@ import {
 	GroupIcon,
 } from "./shared";
 import { repoIdFromGroupId } from "./sidebar-projection";
+import { SidebarViewPopover } from "./sidebar-view-popover";
 
 // ---------------------------------------------------------------------------
 // Virtual list item types
@@ -107,13 +115,20 @@ function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	groups,
 	archivedRows,
+	availableRepositories = [],
 	sidebarGrouping = "status",
+	sidebarRepoFilterIds = [],
+	sidebarSort = "custom",
+	onSidebarGroupingChange,
+	onSidebarRepoFilterChange,
+	onSidebarSortChange,
 	addingRepository,
 	selectedWorkspaceId,
 	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
+	sidebarFilterShortcut,
 	creatingWorkspaceRepoId,
 	onAddRepository,
 	onOpenCloneDialog,
@@ -141,13 +156,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 }: {
 	groups: WorkspaceGroup[];
 	archivedRows: WorkspaceRow[];
+	availableRepositories?: RepositoryCreateOption[];
 	sidebarGrouping?: SidebarGrouping;
+	sidebarRepoFilterIds?: string[];
+	sidebarSort?: SidebarSort;
+	onSidebarGroupingChange?: (grouping: SidebarGrouping) => void;
+	onSidebarRepoFilterChange?: (repoIds: string[]) => void;
+	onSidebarSortChange?: (sort: SidebarSort) => void;
 	addingRepository?: boolean;
 	selectedWorkspaceId?: string | null;
 	busyWorkspaceIds?: Set<string>;
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
+	sidebarFilterShortcut?: string | null;
 	creatingWorkspaceRepoId?: string | null;
 	onAddRepository?: () => void;
 	onOpenCloneDialog?: () => void;
@@ -186,6 +208,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	restoringWorkspaceId?: string | null;
 }) {
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
+	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
+		useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const dndPolicy = useMemo<WorkspaceDndPolicy>(
 		() =>
@@ -194,15 +218,23 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						// Repo mode: same-bucket reorder + drag-to-pin /
 						// drag-to-backlog + the inverse (un-pin / un-backlog) back
 						// to the row's own repo bucket. No cross-repo moves.
+						// Chat rows are quarantined to the Chats bucket — they
+						// can only be reordered inside it.
 						canDragRow: (_row, sourceGroupId) =>
 							sourceGroupId === "pinned" ||
 							sourceGroupId === "backlog" ||
+							sourceGroupId === "chats" ||
 							repoIdFromGroupId(sourceGroupId) !== null,
 						canDropIntoGroup: (
 							sourceGroupId,
 							targetGroupId,
 							{ sourceRepoId },
 						) => {
+							// Chats is its own world: only chat-bucket rows
+							// drop in, and they can't leak elsewhere.
+							if (sourceGroupId === "chats" || targetGroupId === "chats") {
+								return sourceGroupId === "chats" && targetGroupId === "chats";
+							}
 							if (targetGroupId === "pinned") return true;
 							if (targetGroupId === "backlog") return true;
 							const targetRepoId = repoIdFromGroupId(targetGroupId);
@@ -219,17 +251,31 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}
 				: {
 						// Status mode: any lane + pinned (drag to pin / unpin).
+						// Chats sits alongside but isolated: chat rows can
+						// only reorder within "chats", and no other source
+						// can drop into it.
 						canDragRow: (_row, sourceGroupId) =>
 							sourceGroupId === "pinned" ||
+							sourceGroupId === "chats" ||
 							workspaceStatusFromGroupId(sourceGroupId) !== null,
-						canDropIntoGroup: (_sourceGroupId, targetGroupId) =>
-							targetGroupId === "pinned" ||
-							workspaceStatusFromGroupId(targetGroupId) !== null,
+						canDropIntoGroup: (sourceGroupId, targetGroupId) => {
+							if (sourceGroupId === "chats" || targetGroupId === "chats") {
+								return sourceGroupId === "chats" && targetGroupId === "chats";
+							}
+							return (
+								targetGroupId === "pinned" ||
+								workspaceStatusFromGroupId(targetGroupId) !== null
+							);
+						},
 					},
 		[sidebarGrouping],
 	);
+	// Drag-to-reorder is only meaningful under custom sort: the dragged
+	// position would otherwise be immediately overruled by the active sort
+	// key. Disable the gesture entirely instead of pretending it works.
+	const dragReorderEnabled = sidebarSort === "custom";
 	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
-		onMoveWorkspace: onMoveWorkspaceInSidebar,
+		onMoveWorkspace: dragReorderEnabled ? onMoveWorkspaceInSidebar : undefined,
 		policy: dndPolicy,
 	});
 	const {
@@ -237,7 +283,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		dropIndicator: repoDropIndicator,
 		startRepoDragGesture,
 	} = useRepoDnd({
-		onMoveRepo: onMoveRepositoryInSidebar,
+		onMoveRepo: dragReorderEnabled ? onMoveRepositoryInSidebar : undefined,
 	});
 	const activeRepoDragId = repoDragState?.repoId ?? null;
 	const repoDropBeforeId = repoDropIndicator?.beforeRepoId ?? null;
@@ -533,6 +579,15 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				continue;
 			}
 
+			// The Chats bucket has no kanban semantics — when no chat
+			// workspaces exist, drop the section entirely (header + gap)
+			// so the sidebar isn't littered with an always-empty bucket.
+			// Status / repo buckets keep their empty header because users
+			// rely on them as drop targets for the next drag.
+			if (group.id === "chats" && group.rows.length === 0) {
+				continue;
+			}
+
 			// Emit the repo-drop placeholder before this group when this is
 			// the chosen drop target. `repoDropBeforeId === null` means "after
 			// the last repo bucket"; the natural anchor for that is right
@@ -782,6 +837,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			);
 	}, [addRepositoryBusy, createBusy, workspaceActionsBusy]);
 
+	useShellEvent("open-sidebar-filter", () => {
+		setIsSidebarViewPopoverOpen(true);
+	});
+
 	// ── Toggle section ────────────────────────────────────────────────
 	const toggleSection = useCallback((groupId: string) => {
 		setSectionOpenState((current) => ({
@@ -822,11 +881,20 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					? item.group.rows[0]
 					: undefined;
 
+				// The dedicated "chats" bucket has no kanban semantics —
+				// surface it with a MessageCircle glyph that mirrors the
+				// chat-mode UI elsewhere (start-page picker, panel header).
+				const isChatGroup = item.group.id === "chats";
 				const headerLabel = (
 					<span className="flex items-center gap-2">
 						{isArchived ? (
 							<Archive
 								className="size-[14px] shrink-0 text-[var(--workspace-sidebar-status-backlog)]"
+								strokeWidth={1.9}
+							/>
+						) : isChatGroup ? (
+							<MessageCircle
+								className="size-[14px] shrink-0 text-muted-foreground"
 								strokeWidth={1.9}
 							/>
 						) : isRepoGroup ? (
@@ -844,7 +912,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				);
 
 				const headerClassName = cn(
-					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-[13px] font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
+					"group/trigger flex w-full select-none items-center justify-between rounded-lg px-2 text-ui font-semibold tracking-[-0.01em] text-foreground hover:bg-accent/60 py-1",
 				);
 
 				// Repo header: no chevron/badge, but the header still toggles
@@ -854,7 +922,8 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					const repoToggleSection = () => {
 						if (item.canCollapse) toggleSection(item.groupId);
 					};
-					const repoDndHandleEnabled = Boolean(onMoveRepositoryInSidebar);
+					const repoDndHandleEnabled =
+						Boolean(onMoveRepositoryInSidebar) && dragReorderEnabled;
 					return (
 						<div
 							role="button"
@@ -906,7 +975,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="flex h-[24px] items-center rounded-md px-2 text-[12px] leading-none"
+										className="flex h-[24px] items-center rounded-md px-2 text-small leading-none"
 									>
 										New workspace in {item.group.label}
 									</TooltipContent>
@@ -934,7 +1003,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<span className="relative flex h-5 min-w-5 items-center justify-center">
 								<Badge
 									variant="secondary"
-									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none transition-opacity group-hover/trigger:opacity-0"
+									className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano leading-none transition-opacity group-hover/trigger:opacity-0"
 								>
 									{item.group.rows.length}
 								</Badge>
@@ -979,7 +1048,9 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onTogglePin={onTogglePin}
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
 						groupId={item.groupId}
-						onDragPointerDown={startDragGesture}
+						onDragPointerDown={
+							dragReorderEnabled ? startDragGesture : undefined
+						}
 						disableHoverCard={isAnyDragging}
 						archivingWorkspaceIds={archivingWorkspaceIds}
 						markingUnreadWorkspaceId={markingUnreadWorkspaceId}
@@ -1048,11 +1119,24 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			</div>
 
 			<div className="mt-1 flex items-center justify-between px-3">
-				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
 
 				<div className="flex items-center gap-1 text-muted-foreground">
+					<SidebarViewPopover
+						repositories={availableRepositories}
+						grouping={sidebarGrouping}
+						selectedRepoIds={sidebarRepoFilterIds}
+						sort={sidebarSort}
+						open={isSidebarViewPopoverOpen}
+						onOpenChange={setIsSidebarViewPopoverOpen}
+						shortcut={sidebarFilterShortcut}
+						onGroupingChange={onSidebarGroupingChange}
+						onRepoFilterChange={onSidebarRepoFilterChange}
+						onSortChange={onSidebarSortChange}
+					/>
+
 					<DropdownMenu
 						open={isAddRepositoryMenuOpen}
 						onOpenChange={setIsAddRepositoryMenuOpen}
@@ -1089,7 +1173,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 							<TooltipContent
 								side="top"
 								sideOffset={4}
-								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
 								<span>Add repository</span>
 								{addRepositoryShortcut ? (
@@ -1151,7 +1235,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						<TooltipContent
 							side="top"
 							sideOffset={4}
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>Create new workspace</span>
 							{newWorkspaceShortcut ? (

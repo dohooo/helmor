@@ -57,7 +57,7 @@ export type WorkspaceRowUIProps = {
 };
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-interactive",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-ui cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -233,7 +233,7 @@ export function WorkspaceRowHoverActionsUI({
 				<TooltipContent
 					side="top"
 					sideOffset={8}
-					className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+					className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 				>
 					<span>{actionLabel}</span>
 				</TooltipContent>
@@ -264,7 +264,7 @@ export function WorkspaceRowHoverActionsUI({
 					<TooltipContent
 						side="top"
 						sideOffset={8}
-						className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+						className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 					>
 						<span>Delete permanently</span>
 					</TooltipContent>

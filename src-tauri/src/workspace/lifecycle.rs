@@ -14,7 +14,7 @@ use crate::{
     git_ops, helpers,
     models::workspaces as workspace_models,
     repos,
-    workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_state::{WorkspaceBranchIntent, WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
 };
 
@@ -87,6 +87,7 @@ pub struct PrepareWorkspaceResponse {
     /// run with cwd=`/`, writing transcripts into the wrong Claude
     /// project bucket and breaking subsequent resume.
     pub working_directory: Option<String>,
+    pub branch_intent: WorkspaceBranchIntent,
 }
 
 /// Response from the slow Phase 2 (git worktree + scaffold + setup probe).
@@ -121,20 +122,32 @@ pub struct TargetBranchConflict {
     pub remote: String,
 }
 
-/// Phase 1 of workspace creation: all the fast (<20ms total) preparatory
-/// work. Validates the source repo, allocates a unique directory name,
-/// computes the branch name, inserts the initializing DB row + initial
-/// session, and loads repo-level scripts. Returns the full metadata the
-/// frontend needs to paint the final UI state.
-///
-/// Phase 2 (`finalize_workspace_from_repo_impl`) creates the actual git
-/// worktree on disk and flips the workspace row from `Initializing` to
-/// `Ready` / `SetupPending`. It can run in the background while the UI
-/// already shows the workspace.
+/// Caller-provided UUID for the new session row, or a freshly minted
+/// one. Malformed seeds (anything outside `[0-9a-f-]`, >64 chars) are
+/// rejected so path traversal can't reach the workspace row.
+pub(crate) fn resolve_seed_session_id(seed: Option<&str>) -> String {
+    let trimmed = seed.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(value) = trimmed {
+        if value.chars().all(|c| c.is_ascii_hexdigit() || c == '-') && value.len() <= 64 {
+            return value.to_string();
+        }
+        tracing::warn!(
+            seed_len = value.len(),
+            "prepare_*_impl: rejecting malformed seed_session_id; generating fresh UUID",
+        );
+    }
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// Phase 1: fast prep (DB row + metadata). Phase 2 materializes the
+/// worktree. `branch_intent::FromBranch` treats `source_branch` as the
+/// fork base; `UseBranch` treats it as the existing branch to attach to.
 pub fn prepare_workspace_from_repo_impl(
     repo_id: &str,
     source_branch: Option<&str>,
+    branch_intent: WorkspaceBranchIntent,
     initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -155,23 +168,50 @@ pub fn prepare_workspace_from_repo_impl(
 
     let directory_name = helpers::allocate_directory_name_for_repo(repo_id)?;
     let branch_settings = crate::repos::load_repo_branch_prefix_settings(repo_id)?;
-    let branch = helpers::branch_name_for_directory(&directory_name, &branch_settings);
-    // Picker selection (or repo default). Stored as both
-    // `initialization_parent_branch` and `intended_target_branch`
-    // (branch from X → merge back to X). Phase 2 uses init_parent as start_ref.
-    let base_branch = source_branch
+
+    let trimmed_source = source_branch
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .or_else(|| {
-            repository
-                .default_branch
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-        })
+        .map(ToOwned::to_owned);
+    let repo_default_branch = repository
+        .default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
+
+    let (branch, base_branch) = match branch_intent {
+        WorkspaceBranchIntent::FromBranch => {
+            let generated = helpers::branch_name_for_directory(&directory_name, &branch_settings);
+            let base = trimmed_source.unwrap_or_else(|| repo_default_branch.clone());
+            (generated, base)
+        }
+        WorkspaceBranchIntent::UseBranch => {
+            let picked = trimmed_source.ok_or_else(|| {
+                coded(ErrorCode::BranchNotFound)
+                    .context("UseBranch requires a source branch, but none was provided")
+            })?;
+
+            // Defense-in-depth: a remote push of `<prefix>/<celestial>` from
+            // a prior workspace could surface in the picker. Unlikely, but
+            // attaching to it would clobber our fresh allocation.
+            let generated = helpers::branch_name_for_directory(&directory_name, &branch_settings);
+            if picked == generated {
+                bail!(
+                    "Refusing to use auto-generated branch name `{picked}`; pick an existing branch."
+                );
+            }
+
+            preflight_use_branch(&repo_root, &remote, &picked)?;
+
+            // TODO: when reusing a branch with a known upstream (e.g. `develop`),
+            // derive `intended_target_branch` from `git rev-parse --symbolic-full-name
+            // <picked>@{upstream}` instead of falling back to the repo default.
+            (picked, repo_default_branch.clone())
+        }
+    };
+
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
     let timestamp = db::current_timestamp()?;
 
     workspace_models::insert_initializing_workspace_and_session(
@@ -181,6 +221,7 @@ pub fn prepare_workspace_from_repo_impl(
         &directory_name,
         &branch,
         &base_branch,
+        branch_intent,
         initial_status,
         &timestamp,
     )?;
@@ -196,13 +237,12 @@ pub fn prepare_workspace_from_repo_impl(
             tracing::warn!(%error, "Failed to load repo scripts during prepare; defaulting to empty");
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: true,
-                run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         }
     };
@@ -220,7 +260,37 @@ pub fn prepare_workspace_from_repo_impl(
         repo_scripts,
         // Worktree dir doesn't exist yet — finalize fills this in.
         working_directory: None,
+        branch_intent,
     })
+}
+
+/// Verify branch exists (local or remote) and isn't checked out elsewhere.
+///
+/// TODO: `verify_remote_ref_exists` only reads the local `refs/remotes/<remote>/`
+/// cache, so a branch that exists upstream but was pushed since the last fetch
+/// will be misreported as `BranchNotFound`. Either pre-fetch the picked branch
+/// here, or surface a "couldn't verify — try fetch" hint in the UI.
+fn preflight_use_branch(repo_root: &Path, remote: &str, branch: &str) -> Result<()> {
+    let local_exists = git_ops::verify_branch_exists(repo_root, branch).is_ok();
+    let remote_exists =
+        git_ops::verify_remote_ref_exists(repo_root, remote, branch).unwrap_or(false);
+
+    if !local_exists && !remote_exists {
+        return Err(coded(ErrorCode::BranchNotFound).context(format!(
+            "Branch `{branch}` not found locally or on remote `{remote}`."
+        )));
+    }
+
+    if local_exists {
+        if let Some(holder) = git_ops::worktree_holding_branch(repo_root, branch)? {
+            return Err(coded(ErrorCode::BranchInUse).context(format!(
+                "Branch `{branch}` is already checked out at {}.",
+                holder.display()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// One-shot local workspace creation. Skips the prepare/finalize split
@@ -238,6 +308,7 @@ pub fn prepare_local_workspace_impl(
     repo_id: &str,
     source_branch: Option<&str>,
     initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
 ) -> Result<PrepareWorkspaceResponse> {
     let repository = repos::load_repository_by_id(repo_id)?
         .with_context(|| format!("Repository not found: {repo_id}"))?;
@@ -255,6 +326,13 @@ pub fn prepare_local_workspace_impl(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| current_branch.clone());
+    let base_branch = repository
+        .default_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "main".to_string());
 
     // Tracked-only check — `git checkout` is fine with untracked files.
     if target_branch != current_branch
@@ -269,18 +347,20 @@ pub fn prepare_local_workspace_impl(
     // Local shares the repo root; empty directory_name is fine.
     let directory_name = String::new();
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
     let timestamp = db::current_timestamp()?;
 
-    // DB insert before any git mutation, so partial failures roll back cleanly.
+    // DB insert before any git mutation. Local mode tags as UseBranch
+    // so archive doesn't delete the user's branch.
     workspace_models::insert_initializing_workspace_and_session_with_mode(
         &repository,
         &workspace_id,
         &session_id,
         &directory_name,
         &target_branch,
-        &target_branch,
+        &base_branch,
         crate::workspace_state::WorkspaceMode::Local,
+        WorkspaceBranchIntent::UseBranch,
         initial_status,
         &timestamp,
     )?;
@@ -307,13 +387,12 @@ pub fn prepare_local_workspace_impl(
         repos::load_repo_scripts(repo_id, Some(&workspace_id)).unwrap_or_else(|_| {
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: false,
-                run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         });
 
@@ -324,13 +403,99 @@ pub fn prepare_local_workspace_impl(
         repo_name: repository.name,
         directory_name,
         branch: target_branch.clone(),
-        default_branch: target_branch,
+        // Field name is legacy; value is the initial PR/review base.
+        default_branch: base_branch,
         state: WorkspaceState::Ready,
         repo_scripts,
         // Local mode operates directly on the repo root — already on disk,
         // safe to return immediately so the caller doesn't need to wait
         // for finalize (which is a no-op for local).
         working_directory: Some(repo_root.display().to_string()),
+        branch_intent: WorkspaceBranchIntent::UseBranch,
+    })
+}
+
+/// One-shot Chat workspace creation. Chat-mode workspaces aren't bound
+/// to any repository — they're a scratch directory under
+/// `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for an
+/// agent CLI session. No git init, no branch, no setup script — the
+/// row is inserted directly in `Ready` state and the caller can hand
+/// off to the agent immediately.
+///
+/// Returns a `PrepareWorkspaceResponse` shaped like the worktree/local
+/// equivalents so the frontend's optimistic-render code can reuse the
+/// same path. The companion `finalize_workspace_from_repo` is a no-op
+/// for chat workspaces (the row is already `Ready`).
+pub fn prepare_chat_workspace_impl(
+    initial_status: WorkspaceStatus,
+    seed_session_id: Option<&str>,
+) -> Result<PrepareWorkspaceResponse> {
+    // Lazy-upsert the synthetic `__chat__` repo row on first chat
+    // creation. Doing it here (rather than at schema migration time)
+    // keeps `repos` empty for tests that don't touch the chat path and
+    // sidesteps schema-version juggling in legacy migration tests.
+    crate::repos::ensure_system_chat_repo()?;
+    let repository = repos::load_repository_by_id(crate::models::repos::SYSTEM_CHAT_REPO_ID)?
+        .with_context(|| {
+            format!(
+                "Synthetic chat repository row missing after upsert. id={}",
+                crate::models::repos::SYSTEM_CHAT_REPO_ID
+            )
+        })?;
+
+    let (directory_name, working_directory) = helpers::allocate_chat_workspace_dir()?;
+    let workspace_id = uuid::Uuid::new_v4().to_string();
+    let session_id = resolve_seed_session_id(seed_session_id);
+    let timestamp = db::current_timestamp()?;
+
+    // The scratch dir is already on disk; anything that fails from here
+    // on must clean it up before bubbling so retries don't accumulate
+    // empty `new-chat-N` directories.
+    if let Err(error) = workspace_models::insert_chat_workspace_and_session(
+        &repository,
+        &workspace_id,
+        &session_id,
+        &directory_name,
+        initial_status,
+        &timestamp,
+    ) {
+        let _ = fs::remove_dir_all(&working_directory);
+        return Err(error);
+    }
+
+    // Flip to Ready immediately — there's no worktree / setup phase.
+    if let Err(error) =
+        workspace_models::update_workspace_state(&workspace_id, WorkspaceState::Ready, &timestamp)
+    {
+        let _ = workspace_models::delete_workspace_and_session_rows(&workspace_id);
+        let _ = fs::remove_dir_all(&working_directory);
+        return Err(error);
+    }
+
+    Ok(PrepareWorkspaceResponse {
+        workspace_id,
+        initial_session_id: session_id,
+        repo_id: repository.id,
+        repo_name: repository.name,
+        directory_name,
+        // Chat workspaces have no branch — empty string keeps the type
+        // shape stable for the frontend. The header gates on
+        // `workspace.mode === "chat"` and doesn't read this field.
+        branch: String::new(),
+        default_branch: String::new(),
+        state: WorkspaceState::Ready,
+        // No setup/run scripts for chat mode — return the empty shape.
+        repo_scripts: repos::RepoScripts {
+            setup_script: None,
+            archive_script: None,
+            setup_from_project: false,
+            run_from_project: false,
+            archive_from_project: false,
+            auto_run_setup: false,
+            run_actions: Vec::new(),
+        },
+        working_directory: Some(working_directory.display().to_string()),
+        branch_intent: WorkspaceBranchIntent::UseBranch,
     })
 }
 
@@ -345,12 +510,13 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
 
-    // Local workspaces never need worktree materialisation. Short-circuit
-    // unconditionally — even an orphaned `Initializing` local row (left by
-    // a partially-failed prepare) must not enter the worktree-creation
-    // path below, where a failure would route into
+    // Non-worktree workspaces never need worktree materialisation.
+    // Short-circuit unconditionally — even an orphaned `Initializing`
+    // row (left by a partially-failed prepare) must not enter the
+    // worktree-creation path below, where a failure would route into
     // `cleanup_failed_created_workspace(repo_root, root_path, ...)`.
-    if record.mode == WorkspaceMode::Local {
+    // Covers both Local (operates on user repo) and Chat (scratch dir).
+    if record.mode != WorkspaceMode::Worktree {
         let working_directory = helpers::workspace_path(&record)?.display().to_string();
         return Ok(FinalizeWorkspaceResponse {
             workspace_id: workspace_id.to_string(),
@@ -411,25 +577,49 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
         }
 
         git_ops::ensure_git_repository(&repo_root)?;
-        let start_ref = git_ops::default_branch_ref(&remote, &base_branch);
-        git_ops::verify_commitish_exists(
-            &repo_root,
-            &start_ref,
-            &format!("Base branch is missing in source repo: {base_branch}"),
-        )?;
-        match git_ops::create_worktree_from_start_point(
-            &repo_root,
-            &workspace_dir,
-            &branch,
-            &start_ref,
-        ) {
-            Ok(_) => {
+
+        match record.branch_intent {
+            WorkspaceBranchIntent::FromBranch => {
+                // Prefer the remote ref (canonical published base) and
+                // fall back to a local ref if the user picked a local-only
+                // branch — keeps `wip/poc`-style bases working without a
+                // round-trip to push first.
+                let remote_ref = git_ops::default_branch_ref(&remote, &base_branch);
+                let start_ref = if git_ops::verify_commitish_exists(
+                    &repo_root,
+                    &remote_ref,
+                    "remote ref missing",
+                )
+                .is_ok()
+                {
+                    remote_ref
+                } else {
+                    git_ops::verify_branch_exists(&repo_root, &base_branch).with_context(|| {
+                        format!("Base branch is missing in source repo: {base_branch}")
+                    })?;
+                    base_branch.clone()
+                };
+                git_ops::create_worktree_from_start_point(
+                    &repo_root,
+                    &workspace_dir,
+                    &branch,
+                    &start_ref,
+                )?;
                 created_worktree = true;
             }
-            Err(error) => {
-                return Err(error);
+            WorkspaceBranchIntent::UseBranch => {
+                // Re-check vs. Phase 1 race (another worktree may have grabbed
+                // the branch in between).
+                if let Some(holder) = git_ops::worktree_holding_branch(&repo_root, &branch)? {
+                    return Err(coded(ErrorCode::BranchInUse).context(format!(
+                        "Branch `{branch}` is already checked out at {} — cannot attach a new worktree.",
+                        holder.display()
+                    )));
+                }
+                git_ops::create_worktree_attached(&repo_root, &workspace_dir, &branch)?;
+                created_worktree = true;
             }
-        };
+        }
 
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"
@@ -461,12 +651,15 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
     match finalize_result {
         Ok(response) => Ok(response),
         Err(error) => {
+            // Only FromBranch owns the branch — UseBranch must not delete it.
+            let owns_branch = matches!(record.branch_intent, WorkspaceBranchIntent::FromBranch);
             cleanup_failed_created_workspace(
                 workspace_id,
                 &repo_root,
                 &workspace_dir,
                 &branch,
                 created_worktree,
+                owns_branch,
             );
             Err(error)
         }
@@ -661,7 +854,13 @@ pub fn move_local_workspace_to_worktree_impl(
 /// the old-shape response. Used by CLI, MCP, and `add_repository_from_local_path`
 /// — all non-UI callers that do not benefit from the prepare/finalize split.
 pub fn create_workspace_from_repo_impl(repo_id: &str) -> Result<CreateWorkspaceResponse> {
-    let prepared = prepare_workspace_from_repo_impl(repo_id, None, WorkspaceStatus::default())?;
+    let prepared = prepare_workspace_from_repo_impl(
+        repo_id,
+        None,
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::default(),
+        None,
+    )?;
     let finalized = finalize_workspace_from_repo_impl(&prepared.workspace_id)?;
 
     Ok(CreateWorkspaceResponse {
@@ -688,12 +887,16 @@ pub fn cleanup_orphaned_initializing_workspaces(max_age_seconds: i64) -> Result<
         let repo_root_value = record.root_path.as_deref().unwrap_or("").trim();
         let repo_root = PathBuf::from(repo_root_value);
         // Local-mode orphans: never touch the worktree path (it's the
-        // user's actual repo). Just remove the DB row.
-        if record.mode == crate::workspace_state::WorkspaceMode::Local {
+        // user's actual repo). Chat-mode orphans: the scratch dir is
+        // owned by helmor, but the cleanup logic below targets git
+        // worktrees only, so skip it too — the empty scratch dir is
+        // cheap to GC out-of-band.
+        if record.mode != crate::workspace_state::WorkspaceMode::Worktree {
             let _ = workspace_models::delete_workspace_and_session_rows(&record.id);
             tracing::info!(
                 workspace_id = %record.id,
-                "Cleaned up orphaned initializing local workspace (DB only)",
+                mode = %record.mode,
+                "Cleaned up orphaned initializing non-worktree workspace (DB only)",
             );
             continue;
         }
@@ -709,6 +912,7 @@ pub fn cleanup_orphaned_initializing_workspaces(max_age_seconds: i64) -> Result<
             }
         };
         let branch = record.branch.as_deref().unwrap_or("");
+        let owns_branch = matches!(record.branch_intent, WorkspaceBranchIntent::FromBranch);
 
         cleanup_failed_created_workspace(
             &record.id,
@@ -716,6 +920,7 @@ pub fn cleanup_orphaned_initializing_workspaces(max_age_seconds: i64) -> Result<
             &workspace_dir,
             branch,
             workspace_dir.exists(),
+            owns_branch,
         );
 
         tracing::info!(
@@ -844,6 +1049,21 @@ pub fn prepare_archive_plan(workspace_id: &str) -> Result<ArchivePreparedPlan> {
         );
     }
 
+    // Chat workspaces have no repo / branch / git worktree — archive is
+    // a pure DB state flip. Return a placeholder plan so the manager's
+    // prepared/start handshake still works; `execute_archive_plan`
+    // short-circuits before touching any of these fields when
+    // `mode != Worktree`.
+    if record.mode != WorkspaceMode::Worktree {
+        let workspace_dir = helpers::workspace_path(&record).unwrap_or_default();
+        return Ok(ArchivePreparedPlan {
+            workspace_id: workspace_id.to_string(),
+            repo_root: PathBuf::new(),
+            branch: String::new(),
+            workspace_dir,
+        });
+    }
+
     let repo_root = helpers::non_empty(&record.root_path)
         .map(PathBuf::from)
         .with_context(|| format!("Workspace {workspace_id} is missing repo root_path"))?;
@@ -885,11 +1105,12 @@ pub fn validate_archive_workspace(workspace_id: &str) -> Result<()> {
 }
 
 pub fn archive_workspace_impl(workspace_id: &str) -> Result<ArchiveWorkspaceResponse> {
-    // Local workspaces: archive is purely a DB state flip. We MUST NOT
-    // touch the worktree (it's the user's repo) or delete the branch
-    // (the user / other local workspaces may still be using it).
+    // Non-worktree workspaces: archive is purely a DB state flip. We
+    // MUST NOT touch the worktree (Local: it's the user's repo; Chat:
+    // it's a scratch dir we'd rather keep around for diagnostic
+    // reasons) or delete branches.
     if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
-        if record.mode == WorkspaceMode::Local {
+        if record.mode != WorkspaceMode::Worktree {
             if !is_archive_eligible_state(record.state) {
                 bail!(
                     "Workspace is not archive-ready: {workspace_id} (state: {})",
@@ -915,15 +1136,17 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
     let workspace_dir = &plan.workspace_dir;
     let workspace_id = &plan.workspace_id;
 
-    // CRITICAL safety check: for local-mode workspaces, `workspace_dir`
-    // IS the user's repo root. The downstream `remove_worktree` would
-    // rename + delete the user's repo. Short-circuit to a DB-only flip
-    // here BEFORE we touch anything on disk. The frontend's
+    // CRITICAL safety check: for non-worktree workspaces, `workspace_dir`
+    // points at something we must not blow away (Local: the user's repo;
+    // Chat: helmor's scratch dir). The downstream `remove_worktree`
+    // would rename + delete it. Short-circuit to a DB-only flip here
+    // BEFORE we touch anything on disk. The frontend's
     // `archive_workspace_impl` already does this; this is a second
-    // line of defence for the kanban / queue path that goes through
+    // line of defence for the archive path that goes through
     // `prepare_archive_plan` + this function.
-    if let Some(record) = workspace_models::load_workspace_record_by_id(workspace_id)? {
-        if record.mode == WorkspaceMode::Local {
+    let record = workspace_models::load_workspace_record_by_id(workspace_id)?;
+    if let Some(record) = record.as_ref() {
+        if record.mode != WorkspaceMode::Worktree {
             workspace_models::update_archived_workspace_state(workspace_id, "")?;
             return Ok(ArchiveWorkspaceResponse {
                 archived_workspace_id: workspace_id.clone(),
@@ -931,6 +1154,11 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
             });
         }
     }
+    // Missing row defaults to `true` so legacy / orphaned rows still get
+    // their branch cleaned up by the worktree-removal path below.
+    let archive_owns_branch = record
+        .map(|r| matches!(r.branch_intent, WorkspaceBranchIntent::FromBranch))
+        .unwrap_or(true);
 
     let timing = std::time::Instant::now();
     if !repo_root.is_dir() {
@@ -966,23 +1194,31 @@ pub fn execute_archive_plan(plan: &ArchivePreparedPlan) -> Result<ArchiveWorkspa
         "Archive worktree removal finished"
     );
 
-    let branch_delete_started = std::time::Instant::now();
-    git_ops::run_git(
-        [
-            "-C",
-            &repo_root.display().to_string(),
-            "branch",
-            "-D",
+    if archive_owns_branch {
+        let branch_delete_started = std::time::Instant::now();
+        git_ops::run_git(
+            [
+                "-C",
+                &repo_root.display().to_string(),
+                "branch",
+                "-D",
+                branch,
+            ],
+            None,
+        )
+        .ok();
+        tracing::debug!(
+            workspace_id,
+            elapsed_ms = branch_delete_started.elapsed().as_millis(),
+            "Archive: branch delete finished"
+        );
+    } else {
+        tracing::info!(
+            workspace_id,
             branch,
-        ],
-        None,
-    )
-    .ok();
-    tracing::debug!(
-        workspace_id,
-        elapsed_ms = branch_delete_started.elapsed().as_millis(),
-        "Archive: branch delete finished"
-    );
+            "Archive: skipping branch delete (UseBranch)",
+        );
+    }
 
     let db_started = std::time::Instant::now();
     if let Err(error) =
@@ -1060,9 +1296,9 @@ pub fn validate_restore_workspace(workspace_id: &str) -> Result<ValidateRestoreR
     let record = workspace_models::load_workspace_record_by_id(workspace_id)?
         .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
         .with_context(|| format!("Workspace not found: {workspace_id}"))?;
-    // Local restore is a pure DB state flip — no git involved, so no
-    // target-branch conflict is ever possible.
-    if record.mode == WorkspaceMode::Local {
+    // Non-worktree restore is a pure DB state flip — no git involved,
+    // so no target-branch conflict is ever possible.
+    if record.mode != WorkspaceMode::Worktree {
         return Ok(ValidateRestoreResponse {
             target_branch_conflict: None,
         });
@@ -1108,10 +1344,10 @@ pub fn restore_workspace_impl(
     workspace_id: &str,
     target_branch_override: Option<&str>,
 ) -> Result<RestoreWorkspaceResponse> {
-    // Local workspaces aren't materialised as a worktree — restoring
-    // one is purely a DB state flip. Skip every git operation (branch
-    // creation, worktree creation, archive_commit verification, …)
-    // that the worktree path performs.
+    // Non-worktree workspaces aren't materialised as a worktree —
+    // restoring one is purely a DB state flip. Skip every git
+    // operation (branch creation, worktree creation, archive_commit
+    // verification, …) that the worktree path performs.
     {
         let record = workspace_models::load_workspace_record_by_id(workspace_id)?
             .ok_or_else(|| coded(ErrorCode::WorkspaceNotFound))
@@ -1119,7 +1355,7 @@ pub fn restore_workspace_impl(
         if record.state != WorkspaceState::Archived {
             bail!("Workspace is not archived: {workspace_id}");
         }
-        if record.mode == WorkspaceMode::Local {
+        if record.mode != WorkspaceMode::Worktree {
             workspace_models::update_restored_workspace_state(
                 workspace_id,
                 target_branch_override,
@@ -1282,6 +1518,7 @@ fn cleanup_failed_created_workspace(
     workspace_dir: &Path,
     branch: &str,
     created_worktree: bool,
+    owns_branch: bool,
 ) {
     // Refuse to touch the source repo even if a caller mis-routed a
     // local-mode record into this worktree-creation cleanup path.
@@ -1293,7 +1530,8 @@ fn cleanup_failed_created_workspace(
         let _ = fs::remove_dir_all(workspace_dir);
     }
 
-    if !branch.is_empty() {
+    // Branch deletion is FromBranch-only.
+    if owns_branch && !branch.is_empty() {
         let _ = git_ops::remove_branch(repo_root, branch);
     }
     let _ = workspace_models::delete_workspace_and_session_rows(workspace_id);

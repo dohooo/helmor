@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceGroup, WorkspaceSummary } from "@/lib/api";
 import {
+	applySidebarView,
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
 	projectSidebarLists,
@@ -505,6 +506,352 @@ describe("projectVisualSidebar", () => {
 		// for both groupings.
 		expect(repo.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
 		expect(status.archivedRows.map((r) => r.id)).toEqual(["ws-a"]);
+	});
+});
+
+describe("applySidebarView", () => {
+	const projected = {
+		groups: [
+			{
+				id: "progress",
+				label: "In progress",
+				tone: "progress",
+				rows: [
+					{
+						id: "ws-beta-old",
+						title: "Beta old",
+						state: "ready",
+						repoId: "repo-beta",
+						repoName: "Beta",
+						createdAt: "2024-01-01T00:00:00Z",
+						updatedAt: "2024-01-03T00:00:00Z",
+					},
+					{
+						id: "ws-alpha-new",
+						title: "Alpha new",
+						state: "ready",
+						repoId: "repo-alpha",
+						repoName: "Alpha",
+						createdAt: "2024-01-04T00:00:00Z",
+						updatedAt: "2024-01-02T00:00:00Z",
+					},
+				],
+			},
+			{
+				id: "done",
+				label: "Done",
+				tone: "done",
+				rows: [
+					{
+						id: "ws-gamma",
+						title: "Gamma",
+						state: "ready",
+						repoId: "repo-gamma",
+						repoName: "Gamma",
+						createdAt: "2024-01-02T00:00:00Z",
+						updatedAt: "2024-01-05T00:00:00Z",
+					},
+				],
+			},
+		],
+		archivedRows: [
+			{
+				id: "ws-archived-alpha",
+				title: "Archived alpha",
+				state: "archived",
+				repoId: "repo-alpha",
+				repoName: "Alpha",
+				createdAt: "2024-01-05T00:00:00Z",
+				updatedAt: "2024-01-06T00:00:00Z",
+			},
+			{
+				id: "ws-archived-beta",
+				title: "Archived beta",
+				state: "archived",
+				repoId: "repo-beta",
+				repoName: "Beta",
+				createdAt: "2024-01-06T00:00:00Z",
+				updatedAt: "2024-01-01T00:00:00Z",
+			},
+		],
+	} satisfies ReturnType<typeof projectSidebarLists>;
+
+	it("filters live and archived rows by multiple repositories", () => {
+		const result = applySidebarView(projected, {
+			repoFilterIds: ["repo-alpha", "repo-gamma"],
+			sort: "custom",
+		});
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"progress",
+			"done",
+		]);
+		expect(
+			result.groups.flatMap((group) => group.rows.map((row) => row.id)),
+		).toEqual(["ws-alpha-new", "ws-gamma"]);
+		expect(result.archivedRows.map((row) => row.id)).toEqual([
+			"ws-archived-alpha",
+		]);
+	});
+
+	it("ignores stale persisted repository ids", () => {
+		const result = applySidebarView(projected, {
+			repoFilterIds: ["repo-missing"],
+			sort: "custom",
+		});
+
+		expect(
+			result.groups.flatMap((group) => group.rows.map((row) => row.id)),
+		).toEqual(["ws-beta-old", "ws-alpha-new", "ws-gamma"]);
+	});
+
+	it("keeps a known empty repository filter active", () => {
+		const result = applySidebarView(projected, {
+			availableRepoIds: ["repo-empty"],
+			repoFilterIds: ["repo-empty"],
+			sort: "custom",
+		});
+
+		expect(result.groups.map((group) => [group.id, group.rows])).toEqual([
+			["progress", []],
+			["done", []],
+		]);
+		expect(result.archivedRows).toEqual([]);
+	});
+
+	it("keeps empty status drop targets while filtering", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{
+						id: "pinned",
+						label: "Pinned",
+						tone: "pinned",
+						rows: [],
+					},
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [
+							{
+								id: "ws-alpha",
+								title: "Alpha",
+								state: "ready",
+								repoId: "repo-alpha",
+								repoName: "Alpha",
+							},
+						],
+					},
+					{
+						id: "review",
+						label: "In review",
+						tone: "review",
+						rows: [],
+					},
+					{
+						id: "backlog",
+						label: "Backlog",
+						tone: "backlog",
+						rows: [],
+					},
+				],
+				archivedRows: [],
+			},
+			{ repoFilterIds: ["repo-alpha"], sort: "custom" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"pinned",
+			"progress",
+			"review",
+			"backlog",
+		]);
+	});
+
+	it("removes empty repo buckets while keeping pinned and backlog drop targets", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{ id: "pinned", label: "Pinned", tone: "pinned", rows: [] },
+					{
+						id: `${REPO_GROUP_PREFIX}repo-alpha`,
+						label: "Alpha",
+						tone: "pinned",
+						rows: [
+							{
+								id: "ws-alpha",
+								title: "Alpha",
+								state: "ready",
+								repoId: "repo-alpha",
+								repoName: "Alpha",
+							},
+						],
+					},
+					{
+						id: `${REPO_GROUP_PREFIX}repo-beta`,
+						label: "Beta",
+						tone: "pinned",
+						rows: [
+							{
+								id: "ws-beta",
+								title: "Beta",
+								state: "ready",
+								repoId: "repo-beta",
+								repoName: "Beta",
+							},
+						],
+					},
+					{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
+				],
+				archivedRows: [],
+			},
+			{ repoFilterIds: ["repo-alpha"], sort: "custom" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"pinned",
+			`${REPO_GROUP_PREFIX}repo-alpha`,
+			"backlog",
+		]);
+	});
+
+	it("keeps custom order unchanged", () => {
+		const result = applySidebarView(projected, { sort: "custom" });
+
+		expect(result.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-beta-old",
+			"ws-alpha-new",
+		]);
+	});
+
+	it("sorts rows by repository name", () => {
+		const result = applySidebarView(projected, { sort: "repoName" });
+
+		expect(result.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-alpha-new",
+			"ws-beta-old",
+		]);
+	});
+
+	it("sorts rows by last updated and created time newest first", () => {
+		const byUpdated = applySidebarView(projected, { sort: "updatedAt" });
+		const byCreated = applySidebarView(projected, { sort: "createdAt" });
+
+		expect(byUpdated.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-beta-old",
+			"ws-alpha-new",
+		]);
+		expect(byCreated.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-alpha-new",
+			"ws-beta-old",
+		]);
+	});
+
+	it("keeps status groups in semantic order while sorting rows inside them", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{
+						id: "done",
+						label: "Done",
+						tone: "done",
+						rows: [
+							projected.groups[0]!.rows[0]!,
+							projected.groups[0]!.rows[1]!,
+						],
+					},
+					{
+						id: "review",
+						label: "In review",
+						tone: "review",
+						rows: [projected.groups[1]!.rows[0]!],
+					},
+					{
+						id: "progress",
+						label: "In progress",
+						tone: "progress",
+						rows: [],
+					},
+					{
+						id: "backlog",
+						label: "Backlog",
+						tone: "backlog",
+						rows: [],
+					},
+					{
+						id: "canceled",
+						label: "Canceled",
+						tone: "canceled",
+						rows: [],
+					},
+				],
+				archivedRows: [],
+			},
+			{ sort: "repoName" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"done",
+			"review",
+			"progress",
+			"backlog",
+			"canceled",
+		]);
+		expect(result.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-alpha-new",
+			"ws-beta-old",
+		]);
+	});
+
+	it("sorts repo buckets without moving pinned and backlog sections", () => {
+		const result = applySidebarView(
+			{
+				groups: [
+					{ id: "pinned", label: "Pinned", tone: "pinned", rows: [] },
+					{
+						id: `${REPO_GROUP_PREFIX}repo-beta`,
+						label: "Beta",
+						tone: "pinned",
+						rows: [projected.groups[0]!.rows[0]!],
+					},
+					{
+						id: `${REPO_GROUP_PREFIX}repo-alpha`,
+						label: "Alpha",
+						tone: "pinned",
+						rows: [projected.groups[0]!.rows[1]!],
+					},
+					{ id: "backlog", label: "Backlog", tone: "backlog", rows: [] },
+				],
+				archivedRows: [],
+			},
+			{ sort: "repoName" },
+		);
+
+		expect(result.groups.map((group) => group.id)).toEqual([
+			"pinned",
+			`${REPO_GROUP_PREFIX}repo-alpha`,
+			`${REPO_GROUP_PREFIX}repo-beta`,
+			"backlog",
+		]);
+	});
+
+	it("always sorts archived rows by updatedAt DESC regardless of sidebarSort", () => {
+		// Same archived input under each sort key should produce the same
+		// order — newest updatedAt first. Custom/repoName/createdAt all
+		// must not leak into the archived section.
+		const expectedArchivedOrder = ["ws-archived-alpha", "ws-archived-beta"];
+		for (const sort of [
+			"custom",
+			"repoName",
+			"updatedAt",
+			"createdAt",
+		] as const) {
+			const result = applySidebarView(projected, { sort });
+			expect(result.archivedRows.map((row) => row.id)).toEqual(
+				expectedArchivedOrder,
+			);
+		}
 	});
 });
 

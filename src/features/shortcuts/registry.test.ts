@@ -123,4 +123,30 @@ describe("shortcut registry", () => {
 		const ids = SHORTCUT_DEFINITIONS.map((definition) => definition.id);
 		expect(new Set<ShortcutId>(ids).size).toBe(ids.length);
 	});
+
+	it("lets Shift+Tab dual-bind across start-composer and workspace-composer", () => {
+		// `composer.togglePlanMode` lives on workspace-composer and
+		// `startSurface.cycleRepository` lives on start-composer. They share
+		// Shift+Tab on purpose — sibling leaf scopes mustn't be flagged as
+		// overlapping or both would be auto-disabled at boot.
+		const planMode = SHORTCUT_DEFINITIONS.find(
+			(definition) => definition.id === "composer.togglePlanMode",
+		);
+		const cycleRepo = SHORTCUT_DEFINITIONS.find(
+			(definition) => definition.id === "startSurface.cycleRepository",
+		);
+		expect(planMode?.defaultHotkey).toBe("Shift+Tab");
+		expect(cycleRepo?.defaultHotkey).toBe("Shift+Tab");
+		expect(planMode?.scopes).toEqual(["workspace-composer"]);
+		expect(cycleRepo?.scopes).toEqual(["start-composer"]);
+		expect(scopesOverlap(planMode?.scopes ?? [], cycleRepo?.scopes ?? [])).toBe(
+			false,
+		);
+
+		const conflicts = getShortcutConflicts({});
+		expect(conflicts.disabledIds.has("composer.togglePlanMode")).toBe(false);
+		expect(conflicts.disabledIds.has("startSurface.cycleRepository")).toBe(
+			false,
+		);
+	});
 });

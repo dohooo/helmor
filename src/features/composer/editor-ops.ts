@@ -14,6 +14,31 @@ import type {
 	ComposerInsertItem,
 } from "@/lib/composer-insert";
 
+export type ComposerContentPart =
+	| { kind: "text"; text: string }
+	| { kind: "image"; path: string }
+	| { kind: "file"; path: string }
+	| { kind: "customTag"; customTag: ComposerCustomTag };
+
+function $appendComposerContentPart(
+	paragraph: ReturnType<typeof $createParagraphNode>,
+	part: ComposerContentPart,
+) {
+	if (part.kind === "text") {
+		if (part.text) paragraph.append($createTextNode(part.text));
+		return;
+	}
+	if (part.kind === "image") {
+		paragraph.append($createImageBadgeNode(part.path));
+		return;
+	}
+	if (part.kind === "file") {
+		paragraph.append($createFileBadgeNode(part.path));
+		return;
+	}
+	paragraph.append($createCustomTagBadgeNode(part.customTag));
+}
+
 export function $setEditorContent(
 	draft: string,
 	images: string[],
@@ -43,6 +68,16 @@ export function $setEditorContent(
 			paragraph.append($createTextNode(" "));
 		}
 		paragraph.append($createCustomTagBadgeNode(customTag));
+	}
+	root.append(paragraph);
+}
+
+export function $setEditorContentParts(parts: readonly ComposerContentPart[]) {
+	const root = $getRoot();
+	root.clear();
+	const paragraph = $createParagraphNode();
+	for (const part of parts) {
+		$appendComposerContentPart(paragraph, part);
 	}
 	root.append(paragraph);
 }

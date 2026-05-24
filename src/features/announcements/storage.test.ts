@@ -1,82 +1,51 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
 	dismissReleaseAnnouncement,
 	isFirstHelmorBoot,
+	LAST_DISMISSED_RELEASE_VERSION_STORAGE_KEY,
 	LAST_SEEN_INSTALL_VERSION_STORAGE_KEY,
-	readDismissedReleaseAnnouncementVersions,
+	readLastDismissedReleaseVersion,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
 } from "./storage";
 
-describe("dismissed-announcements storage", () => {
+describe("dismissed-release-version storage", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 	});
 
-	it("returns an empty set when nothing is stored", () => {
-		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
-	it("returns the persisted versions as a Set", () => {
+	it("returns null when nothing is stored", () => {
+		expect(readLastDismissedReleaseVersion()).toBeNull();
+	});
+
+	it("returns the persisted watermark version", () => {
 		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify(["0.20.0", "0.21.0"]),
+			LAST_DISMISSED_RELEASE_VERSION_STORAGE_KEY,
+			"0.21.0",
 		);
-		const dismissed = readDismissedReleaseAnnouncementVersions();
-		expect([...dismissed].sort()).toEqual(["0.20.0", "0.21.0"]);
+		expect(readLastDismissedReleaseVersion()).toBe("0.21.0");
 	});
 
-	it("maps legacy dismissed ids to their release versions", () => {
-		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify(["2026-05-11-2300"]),
-		);
-		expect([...readDismissedReleaseAnnouncementVersions()]).toEqual(["0.21.0"]);
-	});
-
-	it("recovers gracefully from invalid JSON", () => {
-		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			"{not json",
-		);
-		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
-	});
-
-	it("ignores non-array stored values", () => {
-		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify({ rogue: "shape" }),
-		);
-		expect(readDismissedReleaseAnnouncementVersions().size).toBe(0);
-	});
-
-	it("filters out non-string entries from the persisted array", () => {
-		window.localStorage.setItem(
-			DISMISSED_RELEASE_ANNOUNCEMENTS_STORAGE_KEY,
-			JSON.stringify(["valid", 42, null, "also-valid"]),
-		);
-		expect([...readDismissedReleaseAnnouncementVersions()].sort()).toEqual([
-			"also-valid",
-			"valid",
-		]);
-	});
-
-	it("appends a version without losing previously dismissed ones", () => {
+	it("dismissing a newer version raises the watermark", () => {
 		dismissReleaseAnnouncement("0.20.0");
 		dismissReleaseAnnouncement("0.21.0");
-		expect([...readDismissedReleaseAnnouncementVersions()].sort()).toEqual([
-			"0.20.0",
-			"0.21.0",
-		]);
+		expect(readLastDismissedReleaseVersion()).toBe("0.21.0");
 	});
 
-	it("is idempotent — dismissing the same version twice doesn't duplicate it", () => {
+	it("dismissing an older version does not lower the watermark", () => {
+		dismissReleaseAnnouncement("0.21.0");
+		dismissReleaseAnnouncement("0.20.0");
+		expect(readLastDismissedReleaseVersion()).toBe("0.21.0");
+	});
+
+	it("dismissing the same version twice is a no-op", () => {
 		dismissReleaseAnnouncement("0.21.0");
 		dismissReleaseAnnouncement("0.21.0");
-		const dismissed = readDismissedReleaseAnnouncementVersions();
-		expect(dismissed.size).toBe(1);
-		expect(dismissed.has("0.21.0")).toBe(true);
+		expect(readLastDismissedReleaseVersion()).toBe("0.21.0");
 	});
 
 	it("doesn't throw when localStorage.setItem fails", () => {
@@ -88,7 +57,7 @@ describe("dismissed-announcements storage", () => {
 		const consoleErrorSpy = vi
 			.spyOn(console, "error")
 			.mockImplementation(() => {});
-		expect(() => dismissReleaseAnnouncement("x")).not.toThrow();
+		expect(() => dismissReleaseAnnouncement("0.21.0")).not.toThrow();
 		expect(consoleErrorSpy).toHaveBeenCalled();
 		setItemSpy.mockRestore();
 		consoleErrorSpy.mockRestore();

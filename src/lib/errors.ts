@@ -8,7 +8,9 @@ export type ErrorCode =
 	| "Unknown"
 	| "WorkspaceBroken"
 	| "WorkspaceNotFound"
-	| "ForgeOnboarding";
+	| "ForgeOnboarding"
+	| "BranchInUse"
+	| "BranchNotFound";
 
 export type CodedError = {
 	code: ErrorCode;
@@ -20,7 +22,9 @@ function isErrorCode(value: unknown): value is ErrorCode {
 		value === "Unknown" ||
 		value === "WorkspaceBroken" ||
 		value === "WorkspaceNotFound" ||
-		value === "ForgeOnboarding"
+		value === "ForgeOnboarding" ||
+		value === "BranchInUse" ||
+		value === "BranchNotFound"
 	);
 }
 

@@ -74,7 +74,11 @@ pub async fn prewarm_slash_commands_for_repo(app: AppHandle, repo_id: String) ->
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AgentStreamEvent {
     /// Full snapshot — sent on finalization events (assistant, user, result).
     /// The frontend replaces its entire message array.
@@ -108,11 +112,8 @@ pub enum AgentStreamEvent {
         reason: String,
     },
     PermissionRequest {
-        #[serde(rename = "permissionId")]
         permission_id: String,
-        #[serde(rename = "toolName")]
         tool_name: String,
-        #[serde(rename = "toolInput")]
         tool_input: Value,
         title: Option<String>,
         description: Option<String>,
@@ -135,7 +136,6 @@ pub enum AgentStreamEvent {
         session_id: Option<String>,
         working_directory: String,
         permission_mode: Option<String>,
-        #[serde(rename = "userInputId")]
         user_input_id: String,
         source: String,
         message: String,
@@ -500,6 +500,9 @@ pub struct UserInputResponseRequest {
     /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
+    /// Provider-specific meta (e.g. Codex `{ persist: "session" }`). Opaque.
+    #[serde(default)]
+    pub meta: Option<Value>,
 }
 
 #[tauri::command]
@@ -519,6 +522,7 @@ pub async fn respond_to_user_input(
             "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
+            "meta": request.meta,
         }),
     };
     sidecar

@@ -7,17 +7,13 @@ use std::{
 use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
-use super::{
-    support::allowed_workspace_roots,
-    types::{EditorFileListItem, EditorFilePrefetchItem, EditorFilesWithContentResponse},
-};
+use super::{support::allowed_workspace_roots, types::EditorFileListItem};
 use crate::{
     bail_coded, db,
     error::{AnyhowCodedExt, ErrorCode},
     git_ops, workspace_state,
 };
 
-const MAX_PREFETCH_BYTES: u64 = 1_048_576;
 /// Cap how big an untracked file we'll read just to count lines. Keeps the
 /// inspector poll cheap when someone drops a multi-GB blob into the worktree.
 const MAX_UNTRACKED_LINECOUNT_BYTES: u64 = 4 * 1_048_576;
@@ -192,31 +188,6 @@ pub fn list_workspace_changes(workspace_root_path: &str) -> Result<Vec<EditorFil
         .collect();
 
     Ok(items)
-}
-
-pub fn list_workspace_changes_with_content(
-    workspace_root_path: &str,
-) -> Result<EditorFilesWithContentResponse> {
-    let items = list_workspace_changes(workspace_root_path)?;
-    let prefetched = items
-        .iter()
-        .filter(|item| item.status != "D")
-        .filter_map(|item| {
-            let path = Path::new(&item.absolute_path);
-            let metadata = fs::metadata(path).ok()?;
-            if metadata.len() > MAX_PREFETCH_BYTES {
-                return None;
-            }
-            let bytes = fs::read(path).ok()?;
-            let content = String::from_utf8(bytes).ok()?;
-            Some(EditorFilePrefetchItem {
-                absolute_path: item.absolute_path.clone(),
-                content,
-            })
-        })
-        .collect();
-
-    Ok(EditorFilesWithContentResponse { items, prefetched })
 }
 
 fn validate_workspace_relative_path(

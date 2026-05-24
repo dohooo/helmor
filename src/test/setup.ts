@@ -9,6 +9,49 @@ import { vi } from "vitest";
 // is unchanged.
 configure({ asyncUtilTimeout: 3000 });
 
+if (typeof window !== "undefined" && !window.localStorage) {
+	const store = new Map<string, string>();
+	const localStorageMock = Object.create(Storage.prototype) as Storage;
+	Object.defineProperties(localStorageMock, {
+		clear: {
+			value: () => store.clear(),
+			configurable: true,
+		},
+		getItem: {
+			value: (key: string) => store.get(key) ?? null,
+			configurable: true,
+		},
+		key: {
+			value: (index: number) => Array.from(store.keys())[index] ?? null,
+			configurable: true,
+		},
+		length: {
+			get: () => store.size,
+			configurable: true,
+		},
+		removeItem: {
+			value: (key: string) => {
+				store.delete(key);
+			},
+			configurable: true,
+		},
+		setItem: {
+			value: (key: string, value: string) => {
+				store.set(key, String(value));
+			},
+			configurable: true,
+		},
+	});
+	Object.defineProperty(window, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+	Object.defineProperty(globalThis, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+}
+
 // React 19.2's dev build schedules passive-effect work through
 // `setImmediate`, and its callback reads `window.event` (react-dom's
 // `schedulerEvent = window.event;` at react-dom-client.development.js L17920).
@@ -159,8 +202,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_workspace_files":
 				return [];
-			case "list_workspace_changes_with_content":
-				return { items: [], prefetched: [] };
+			case "list_workspace_changes":
+				return [];
 			case "list_slash_commands":
 				return [];
 			case "list_workspace_linked_directories":
@@ -271,6 +314,10 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 if (typeof HTMLCanvasElement !== "undefined") {
 	Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 		configurable: true,
+		// `src/lib/css-color.ts` resolves CSS values via canvas (gradient
+		// sentinel + getImageData). jsdom doesn't ship a canvas backend, so we
+		// stub the methods it touches with shapes that exercise the same code
+		// paths without crashing.
 		value: vi.fn(() => ({
 			measureText: (text: string) => ({
 				width: text.length * 8,
@@ -291,6 +338,14 @@ if (typeof HTMLCanvasElement !== "undefined") {
 			lineTo: () => {},
 			stroke: () => {},
 			fillText: () => {},
+			createLinearGradient: () => ({
+				addColorStop: () => {},
+			}),
+			getImageData: () => ({
+				data: new Uint8ClampedArray([0, 0, 0, 255]),
+			}),
+			fillStyle: "",
+			globalCompositeOperation: "source-over",
 			font: "",
 			textBaseline: "alphabetic",
 		})),

@@ -72,6 +72,16 @@ export type ElicitationUrlViewModel = {
 	host: string | null;
 };
 
+/** Codex MCP tool-call approval (empty schema + `_meta.codex_approval_kind: "mcp_tool_call"`). `allowSession` / `allowAlways` mirror `_meta.persist`. */
+export type ElicitationToolApprovalViewModel = {
+	kind: "tool-approval";
+	elicitationId: string;
+	serverName: string;
+	message: string;
+	allowSession: boolean;
+	allowAlways: boolean;
+};
+
 export type UnsupportedElicitationViewModel = {
 	kind: "unsupported";
 	elicitationId: string;
@@ -83,6 +93,7 @@ export type UnsupportedElicitationViewModel = {
 export type ElicitationViewModel =
 	| ElicitationFormViewModel
 	| ElicitationUrlViewModel
+	| ElicitationToolApprovalViewModel
 	| UnsupportedElicitationViewModel;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -348,6 +359,29 @@ export function normalizeElicitation(
 	const normalizedFields = entries
 		.map(([key, value]) => normalizeFormField(key, value, requiredKeys))
 		.filter((field): field is ElicitationFormField => field !== null);
+
+	// Codex MCP tool-call approval — route to dedicated panel, not `unsupported` (#639).
+	const meta = isRecord(userInput.payload.meta) ? userInput.payload.meta : null;
+	const isMcpToolCallApproval =
+		meta?.codex_approval_kind === "mcp_tool_call" && entries.length === 0;
+	if (isMcpToolCallApproval) {
+		const persist = meta?.persist;
+		const persistValues = Array.isArray(persist)
+			? persist.filter((v): v is string => typeof v === "string")
+			: typeof persist === "string"
+				? [persist]
+				: [];
+		const allowSession = persistValues.includes("session");
+		const allowAlways = persistValues.includes("always");
+		return {
+			kind: "tool-approval",
+			elicitationId,
+			serverName,
+			message,
+			allowSession,
+			allowAlways,
+		};
+	}
 	const supportedKeys = new Set(normalizedFields.map((field) => field.key));
 	const unsupportedRequiredKeys = Array.from(requiredKeys).filter(
 		(key) => key in properties && !supportedKeys.has(key),

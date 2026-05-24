@@ -22,6 +22,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 const SIDEBAR_WIDTH_STORAGE_KEY = "helmor.workspaceSidebarWidth";
 const INSPECTOR_WIDTH_STORAGE_KEY = "helmor.workspaceInspectorWidth";
 
+// `use-panels.ts` writes inline `style.width` directly on the pane element
+// (not as a CSS custom property) so the per-frame drag work doesn't trigger a
+// WebKit subtree-wide style invalidation. The test reads back the same inline
+// width to confirm React state → inline-style sync via `useLayoutEffect`.
+function getPaneInlineWidth(target: "sidebar" | "inspector"): string {
+	const pane = document.querySelector(
+		`[data-shell-pane="${target}"]`,
+	) as HTMLElement | null;
+	return pane?.style.width ?? "";
+}
+
 describe("App", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -75,10 +86,11 @@ describe("App", () => {
 		expect(shell).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
-		expect(sidebar).toHaveStyle({ width: "336px" });
-		expect(inspector).toHaveClass("bg-sidebar");
+		expect(inspector).toHaveClass("bg-inspector");
 		expect(inspector).toHaveClass("overflow-hidden");
-		expect(inspector).toHaveStyle({ width: "336px" });
+		// Width driven by CSS var — assert on the documentElement var, not inline style.
+		expect(getPaneInlineWidth("sidebar")).toBe("336px");
+		expect(getPaneInlineWidth("inspector")).toBe("336px");
 		expect(screen.getByLabelText("Inspector section Git")).toBeInTheDocument();
 		expect(
 			screen.getByLabelText("Inspector section Actions"),
@@ -104,10 +116,10 @@ describe("App", () => {
 		).toBeInTheDocument();
 		expect(resizeHandle).toHaveAttribute("aria-valuenow", "336");
 		expect(inspectorResizeHandle).toHaveAttribute("aria-valuenow", "336");
-		expect(inspectorResizeHandle).toHaveStyle({
-			right: "316px",
-			width: "20px",
-		});
+		// Position is written as inline `right` directly on the handle
+		// (`useShellPanels.writePaneSize` keeps a `width - hitArea` offset).
+		expect(inspectorResizeHandle).toHaveStyle({ width: "20px" });
+		expect(inspectorResizeHandle.style.right).toBe("316px");
 		expect(safeAreas).toHaveLength(1);
 		expect(groupsScrollRegion).toHaveClass("overflow-y-auto");
 		expect(groupsScrollRegion).toHaveClass("flex-1");
@@ -130,10 +142,10 @@ describe("App", () => {
 			.querySelector("svg");
 
 		expect(tabsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 		expect(actionsChevron).toHaveStyle({
-			transition: "transform 0ms cubic-bezier(0.32, 0.72, 0, 1)",
+			transition: "none",
 		});
 
 		// Default: tabs section collapsed; changes + actions bodies present.
@@ -149,9 +161,6 @@ describe("App", () => {
 		expect(screen.getByLabelText("Changes panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Actions panel body")).toBeInTheDocument();
 		expect(screen.getByLabelText("Inspector tabs body")).toBeInTheDocument();
-		expect(tabsChevron).toHaveStyle({
-			transition: "transform 350ms cubic-bezier(0.32, 0.72, 0, 1)",
-		});
 
 		// Clicking again collapses it back.
 		await user.click(tabsToggle);
@@ -182,14 +191,25 @@ describe("App", () => {
 			render(<App />);
 			await screen.findByRole("main", { name: "Application shell" });
 
+			// Section heights are written directly as inline `style.height` so
+			// mid-drag mousemove can update them without going through React.
+			// CSS custom properties are avoided because WebKit invalidates the
+			// entire subtree's computed style on any `setProperty()`, which
+			// caps inspector drags at ~28 FPS once the panel has many nodes.
+			// Verify the layout effect wrote the correct heights synchronously
+			// (runs before first paint). Container is 900px tall with 3 section
+			// headers (33×3=99), leaving 801px body budget. Defaults: changes
+			// body 240, actions body absorbs slack (801−240=561), tabs body 0.
 			await waitFor(() => {
 				expect(screen.getByLabelText("Inspector section Git")).toHaveStyle({
-					height: "273px",
+					height: "273px", // 33 header + 240 body
 				});
 			});
 			expect(screen.getByLabelText("Inspector section Actions")).toHaveStyle({
-				height: "594px",
+				height: "594px", // 33 header + 561 body (slack absorber)
 			});
+			// Tabs wrapper is collapsed (tabsOpen=false default) so its height
+			// is pinned to the section-header constant.
 			const tabsWrapper = screen.getByLabelText("Inspector section Tabs")
 				.parentElement?.parentElement;
 			expect(tabsWrapper).toHaveStyle({
@@ -204,28 +224,37 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const sidebar = screen.getByLabelText("Workspace sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize sidebar",
 		});
 
-		fireEvent.mouseDown(resizeHandle, { clientX: 336 });
+		// `useShellPanels` drives drag via pointer events + `setPointerCapture`
+		// — so subsequent pointermove/pointerup must target the capture node
+		// (the separator), not `window`.
+		fireEvent.pointerDown(resizeHandle, {
+			pointerId: 1,
+			button: 0,
+			clientX: 336,
+		});
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("ew-resize");
 		});
 
-		fireEvent.mouseMove(window, { clientX: 360 });
+		fireEvent.pointerMove(resizeHandle, { pointerId: 1, clientX: 360 });
 
+		// During drag, width is driven via inline `style.width` on the pane;
+		// aria-valuenow only syncs on pointerup (the separator doesn't re-render
+		// mid-drag).
 		await waitFor(() => {
-			expect(sidebar).toHaveStyle({ width: "360px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+			expect(getPaneInlineWidth("sidebar")).toBe("360px");
 		});
 
-		fireEvent.mouseUp(window);
+		fireEvent.pointerUp(resizeHandle, { pointerId: 1 });
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
 		});
 
 		expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("360");
@@ -235,28 +264,31 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		const inspector = screen.getByLabelText("Inspector sidebar");
 		const resizeHandle = screen.getByRole("separator", {
 			name: "Resize inspector sidebar",
 		});
 
-		fireEvent.mouseDown(resizeHandle, { clientX: 1200 });
+		fireEvent.pointerDown(resizeHandle, {
+			pointerId: 1,
+			button: 0,
+			clientX: 1200,
+		});
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("ew-resize");
 		});
 
-		fireEvent.mouseMove(window, { clientX: 1172 });
+		fireEvent.pointerMove(resizeHandle, { pointerId: 1, clientX: 1172 });
 
 		await waitFor(() => {
-			expect(inspector).toHaveStyle({ width: "364px" });
-			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
+			expect(getPaneInlineWidth("inspector")).toBe("364px");
 		});
 
-		fireEvent.mouseUp(window);
+		fireEvent.pointerUp(resizeHandle, { pointerId: 1 });
 
 		await waitFor(() => {
 			expect(document.body.style.cursor).toBe("");
+			expect(resizeHandle).toHaveAttribute("aria-valuenow", "364");
 		});
 
 		expect(window.localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY)).toBe(
@@ -271,11 +303,10 @@ describe("App", () => {
 		render(<App />);
 		await screen.findByRole("main", { name: "Application shell" });
 
-		expect(screen.getByLabelText("Workspace sidebar")).toHaveStyle({
-			width: "404px",
-		});
-		expect(screen.getByLabelText("Inspector sidebar")).toHaveStyle({
-			width: "388px",
+		// Width is exposed via the CSS var; the React state sync writes it immediately after mount.
+		await waitFor(() => {
+			expect(getPaneInlineWidth("sidebar")).toBe("404px");
+			expect(getPaneInlineWidth("inspector")).toBe("388px");
 		});
 		expect(
 			screen.getByRole("separator", { name: "Resize sidebar" }),
@@ -417,6 +448,11 @@ describe("App", () => {
 		);
 
 		await user.click(screen.getByRole("button", { name: "Archive workspace" }));
+		expect(onArchiveWorkspace).not.toHaveBeenCalled();
+
+		await user.click(
+			screen.getByRole("button", { name: "Confirm archive workspace" }),
+		);
 
 		expect(onArchiveWorkspace).toHaveBeenCalledWith("ready-workspace");
 	});

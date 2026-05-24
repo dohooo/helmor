@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { __resetStreamingStoreForTests } from "@/features/conversation/state/streaming-store";
 import type {
 	ActiveStreamSummary,
 	AgentModelOption,
@@ -15,6 +16,7 @@ import type {
 	QueuedSubmitContext,
 	SubmitQueueApi,
 } from "@/lib/use-submit-queue";
+import { __resetSubmitQueueForTests } from "@/lib/use-submit-queue";
 import { WorkspaceToastProvider } from "@/lib/workspace-toast-context";
 import { useConversationStreaming } from "./use-streaming";
 
@@ -172,6 +174,8 @@ function assistantMessage(
 
 describe("useConversationStreaming", () => {
 	beforeEach(() => {
+		__resetStreamingStoreForTests();
+		__resetSubmitQueueForTests();
 		apiMocks.generateSessionTitle.mockReset();
 		apiMocks.loadRepoPreferences.mockReset();
 		apiMocks.loadSessionThreadMessages.mockReset();
@@ -332,6 +336,7 @@ describe("useConversationStreaming", () => {
 			"tool-1",
 			"submit",
 			{ questions: [], answers: { Q: "A" } },
+			undefined,
 		);
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
@@ -505,7 +510,7 @@ describe("useConversationStreaming", () => {
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
 
-	it("scopes the local sending flag to its own context key so siblings stay idle", async () => {
+	it("isSending scopes to its own context; busySessionIds is the shared app-level set", async () => {
 		const streamCallbacks: Array<(event: unknown) => void> = [];
 		apiMocks.startAgentMessageStream.mockImplementation(
 			async (_payload: unknown, onEvent: (event: unknown) => void) => {
@@ -556,8 +561,14 @@ describe("useConversationStreaming", () => {
 
 		expect(result.current.running.isSending).toBe(true);
 		expect(result.current.running.busySessionIds.has("session-1")).toBe(true);
+		// `isSending` stays scoped to the consuming context — the sibling at
+		// a different contextKey is NOT sending.
 		expect(result.current.emptySibling.isSending).toBe(false);
-		expect(result.current.emptySibling.busySessionIds.size).toBe(0);
+		// `busySessionIds` is the app-wide busy set derived from the shared
+		// streaming store; both hook instances see the same answer here.
+		expect(result.current.emptySibling.busySessionIds.has("session-1")).toBe(
+			true,
+		);
 
 		act(() => {
 			streamCallbacks[0]({
@@ -1483,6 +1494,7 @@ describe("useConversationStreaming", () => {
 			"elicitation-1",
 			"submit",
 			{ name: "Helmor" },
+			undefined,
 		);
 		expect(result.current.pendingUserInput).toBeNull();
 		expect(result.current.isSending).toBe(true);

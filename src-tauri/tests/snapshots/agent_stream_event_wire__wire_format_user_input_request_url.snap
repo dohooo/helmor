@@ -4,14 +4,14 @@ expression: "to_value(AgentStreamEvent::UserInputRequest\n{\n    provider: \"cla
 ---
 kind: userInputRequest
 message: Finish auth
-model_id: opus-1m
+modelId: opus-1m
 payload:
   kind: url
   url: "https://example.com/authorize"
-permission_mode: ~
+permissionMode: ~
 provider: claude
-resolved_model: claude-opus-4-20250514
-session_id: provider-session-1
+resolvedModel: claude-opus-4-20250514
+sessionId: provider-session-1
 source: auth-server
 userInputId: elicitation-2
-working_directory: /tmp/helmor
+workingDirectory: /tmp/helmor

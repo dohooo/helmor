@@ -27,7 +27,7 @@ export function InspectorFolderHeaderUI({
 	rightSlot,
 }: InspectorFolderHeaderUIProps) {
 	return (
-		<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
+		<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-mini font-semibold tracking-[-0.01em] text-muted-foreground">
 			<Button
 				type="button"
 				variant="ghost"
@@ -50,7 +50,7 @@ export function InspectorFolderHeaderUI({
 			{rightSlot}
 			<Badge
 				variant="secondary"
-				className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none"
+				className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano leading-none"
 			>
 				{count}
 			</Badge>

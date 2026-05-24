@@ -32,8 +32,8 @@ export function ConfirmDialog({
 				className="max-w-[320px] gap-0 p-4"
 				showCloseButton={false}
 			>
-				<DialogTitle className="text-[13px] font-semibold">{title}</DialogTitle>
-				<DialogDescription className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+				<DialogTitle className="text-ui font-semibold">{title}</DialogTitle>
+				<DialogDescription className="mt-1.5 text-small leading-relaxed text-muted-foreground">
 					{description}
 				</DialogDescription>
 				<div className="mt-3 flex justify-end gap-2">

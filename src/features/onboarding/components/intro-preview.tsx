@@ -41,7 +41,7 @@ export function IntroPreview({
 					type="button"
 					size="lg"
 					onClick={onNext}
-					className="mt-7 h-10 gap-2 px-3.5 text-[0.875rem]"
+					className="mt-7 h-10 gap-2 px-3.5 text-body"
 				>
 					Explore
 					<ArrowRight data-icon="inline-end" className="size-4" />

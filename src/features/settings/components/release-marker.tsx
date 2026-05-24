@@ -36,7 +36,7 @@ export function SettingsReleaseBadge({
 		<Badge
 			variant="secondary"
 			className={cn(
-				"h-4 rounded-full px-1.5 py-0 text-[10px] font-medium leading-none",
+				"h-4 rounded-full px-1.5 py-0 text-micro font-medium leading-none",
 				RELEASE_MARKER_CLASSES[marker.kind],
 				className,
 			)}

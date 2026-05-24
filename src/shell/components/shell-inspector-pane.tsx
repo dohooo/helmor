@@ -1,19 +1,22 @@
 // Right inspector pane — toggles between the workspace inspector tabs and
 // the context-cards sidebar (which serves both the start and the workspace
 // surface). Receives every piece of state it needs as props from AppShell.
+import { useLayoutEffect, useRef } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import type { PendingPromptForSession } from "@/features/commit/hooks/use-commit-lifecycle";
 import { WorkspaceInspectorSidebar } from "@/features/inspector";
+import type { SettingsSection } from "@/features/settings";
 import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
 import type {
 	ChangeRequestInfo,
+	DetectedEditor,
 	RepositoryCreateOption,
 	WorkspaceDetail,
 } from "@/lib/api";
-import type { DiffOpenOptions } from "@/lib/editor-session";
+import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
@@ -48,7 +51,8 @@ type Props = {
 	workspaceRootPath: string | null;
 	selectedWorkspaceDetail: WorkspaceDetail | null;
 	displayedSessionId: string | null;
-	editorSessionPath: string | null;
+	activeEditor: ActiveEditorTarget | null;
+	preferredEditor: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	onCommitAction: (mode: WorkspaceCommitButtonMode) => Promise<void>;
 	onReviewAction: () => Promise<void>;
@@ -57,7 +61,7 @@ type Props = {
 	commitButtonState: CommitButtonState | undefined;
 	workspaceChangeRequest: ChangeRequestInfo | null;
 	workspaceForgeIsRefreshing: boolean;
-	onOpenSettings: () => void;
+	onOpenSettings: (initialSection?: SettingsSection) => void;
 };
 
 export function ShellInspectorPane({
@@ -83,7 +87,8 @@ export function ShellInspectorPane({
 	workspaceRootPath,
 	selectedWorkspaceDetail,
 	displayedSessionId,
-	editorSessionPath,
+	activeEditor,
+	preferredEditor,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -104,27 +109,43 @@ export function ShellInspectorPane({
 		return `${remote}/${target}`;
 	})();
 
+	// Inline width written via ref so each remount re-applies it.
+	const asideRef = useRef<HTMLElement>(null);
+	const innerRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (asideRef.current) {
+			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
+		}
+		if (innerRef.current) {
+			innerRef.current.style.width = `${width}px`;
+		}
+	}, [width, collapsed]);
+
 	return (
 		<aside
+			ref={asideRef}
 			aria-hidden={collapsed}
 			aria-label="Inspector sidebar"
+			data-shell-pane="inspector"
 			className={cn(
-				"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
+				"relative h-full shrink-0 overflow-hidden bg-inspector has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
 				resizing
 					? "transition-none"
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			style={{ width: collapsed ? 0 : `${width}px` }}
+			// `paint` omitted so the tabs hover-zoom can overflow.
+			style={{ contain: "layout style" }}
 		>
 			<div
+				ref={innerRef}
+				data-shell-pane-inner="inspector"
 				className={cn(
 					"h-full shrink-0 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 					collapsed
 						? "translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${width}px` }}
 			>
 				{rightSidebarMode === "context" ? (
 					<WorkspaceStartContextSidebar
@@ -161,13 +182,17 @@ export function ShellInspectorPane({
 						workspaceSetupCompletedAt={
 							selectedWorkspaceDetail?.setupCompletedAt ?? null
 						}
+						workspaceActiveRunActionId={
+							selectedWorkspaceDetail?.activeRunActionId ?? null
+						}
 						repoId={selectedWorkspaceDetail?.repoId ?? null}
 						workspaceBranch={selectedWorkspaceDetail?.branch ?? null}
 						workspaceRemote={selectedWorkspaceDetail?.remote ?? null}
 						workspaceRemoteUrl={selectedWorkspaceDetail?.remoteUrl ?? null}
 						workspaceTargetBranch={targetBranch}
 						editorMode={editorMode}
-						activeEditorPath={editorSessionPath}
+						activeEditor={activeEditor}
+						preferredEditor={preferredEditor}
 						onOpenEditorFile={onOpenEditorFile}
 						onCommitAction={onCommitAction}
 						onReviewAction={onReviewAction}

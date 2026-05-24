@@ -13,7 +13,7 @@
         var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme:dark)').matches)
         if (dark) root.classList.add('dark')
         root.style.colorScheme = dark ? 'dark' : 'light'
-        var ct = ls.getItem('helmor-dark-theme') || 'default'
+        var ct = ls.getItem(dark ? 'helmor-dark-theme' : 'helmor-light-theme') || 'default'
         if (ct !== 'default') root.classList.add(`theme-${ct}`)
         // User font overrides
         var ui = ls.getItem('helmor-ui-font-family')

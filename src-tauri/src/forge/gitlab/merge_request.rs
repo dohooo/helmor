@@ -161,6 +161,40 @@ pub(super) fn determine_squash_choice(context: &GitlabContext) -> SquashChoice {
     SquashChoice::for_option(value.get("squash_option").and_then(|v| v.as_str()))
 }
 
+/// Map GitLab's `detailed_merge_status` to GitHub's `mergeStateStatus`
+/// enum, so the frontend shares one merge-blocked code path across
+/// providers. Returns `None` for transient/unknown states, `mergeable`,
+/// `not_open`, and conflict states (the latter ride on
+/// `mergeable = "CONFLICTING"` instead).
+///
+/// Ref: <https://docs.gitlab.com/api/merge_requests/>
+pub(super) fn gitlab_merge_state_status(mr: &GitlabMergeRequest) -> Option<String> {
+    let status = mr.detailed_merge_status.as_deref()?;
+    let mapped: &str = match status {
+        "need_rebase" => "BEHIND",
+        "draft_status" => "DRAFT",
+        "not_approved"
+        | "requested_changes"
+        | "discussions_not_resolved"
+        | "merge_request_blocked"
+        | "locked_paths"
+        | "locked_lfs_files"
+        | "security_policy_violations"
+        | "jira_association_missing"
+        | "title_regex"
+        | "merge_time"
+        | "commits_status" => "BLOCKED",
+        // `ci_still_running` lands here, but `checks-running` outranks
+        // merge-blocked so users won't see "Unstable" mid-pipeline.
+        "ci_must_pass"
+        | "ci_still_running"
+        | "status_checks_must_pass"
+        | "security_policy_pipeline_check" => "UNSTABLE",
+        _ => return None,
+    };
+    Some(mapped.to_string())
+}
+
 /// Map GitLab's merge status to the same three-way enum GitHub's
 /// `mergeable` field uses (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`).
 pub(super) fn gitlab_mergeable(mr: &GitlabMergeRequest) -> Option<String> {
@@ -237,6 +271,62 @@ mod tests {
         for option in [Some("never"), Some("default_off"), None, Some("garbled")] {
             assert_eq!(SquashChoice::for_option(option), SquashChoice::Default);
         }
+    }
+
+    #[test]
+    fn maps_gitlab_detailed_merge_status_to_github_merge_state_status() {
+        // Every documented value of `detailed_merge_status` should land in
+        // exactly one of: BEHIND / DRAFT / BLOCKED / UNSTABLE / None.
+        // Source: https://docs.gitlab.com/api/merge_requests/
+        let cases: &[(&str, Option<&str>)] = &[
+            // BEHIND
+            ("need_rebase", Some("BEHIND")),
+            // DRAFT
+            ("draft_status", Some("DRAFT")),
+            // BLOCKED — approvals / reviews / discussions
+            ("not_approved", Some("BLOCKED")),
+            ("requested_changes", Some("BLOCKED")),
+            ("discussions_not_resolved", Some("BLOCKED")),
+            // BLOCKED — cross-MR / locks / project policy
+            ("merge_request_blocked", Some("BLOCKED")),
+            ("locked_paths", Some("BLOCKED")),
+            ("locked_lfs_files", Some("BLOCKED")),
+            ("security_policy_violations", Some("BLOCKED")),
+            ("jira_association_missing", Some("BLOCKED")),
+            ("title_regex", Some("BLOCKED")),
+            ("merge_time", Some("BLOCKED")),
+            ("commits_status", Some("BLOCKED")),
+            // UNSTABLE — CI / status checks
+            ("ci_must_pass", Some("UNSTABLE")),
+            ("ci_still_running", Some("UNSTABLE")),
+            ("status_checks_must_pass", Some("UNSTABLE")),
+            ("security_policy_pipeline_check", Some("UNSTABLE")),
+            // No mapping — happy path, transient, conflict, closed
+            ("mergeable", None),
+            ("checking", None),
+            ("unchecked", None),
+            ("preparing", None),
+            ("approvals_syncing", None),
+            ("conflict", None),
+            ("not_open", None),
+            // Unknown value (forward-compat with GitLab adding new states)
+            ("future_gitlab_status", None),
+        ];
+
+        for (status, expected) in cases {
+            let mr = mr_with_merge_status(None, Some(status), None);
+            assert_eq!(
+                gitlab_merge_state_status(&mr).as_deref(),
+                *expected,
+                "detailed_merge_status={status}"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_state_status_is_none_when_detailed_status_missing() {
+        let mr = mr_with_merge_status(Some("can_be_merged"), None, None);
+        assert_eq!(gitlab_merge_state_status(&mr), None);
     }
 
     #[test]

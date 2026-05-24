@@ -27,8 +27,9 @@ const SCRIPT_ACTION_COPY: Record<
 		icon: Hammer,
 	},
 	run: {
-		title: "Create run script",
-		description: "Default command launched with Cmd+R.",
+		title: "Create run actions",
+		description:
+			"Named commands you'll pick from the Inspector's Run dropdown.",
 		icon: Play,
 	},
 	archive: {
@@ -108,17 +109,17 @@ export function EmptyState({
 									<Icon className="size-5" strokeWidth={1.75} />
 								</span>
 								<span className="flex min-w-0 flex-1 flex-col">
-									<span className="block text-[12.5px] font-medium leading-[1.4] tracking-[-0.005em] text-foreground">
+									<span className="block text-small font-medium leading-[1.4] tracking-[-0.005em] text-foreground">
 										{item.title}
 									</span>
-									<span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted-foreground">
+									<span className="mt-0.5 block text-mini leading-[1.5] text-muted-foreground">
 										{item.description}
 									</span>
 								</span>
 							</button>
 						);
 					})}
-					<p className="mt-2 flex w-full items-center justify-center gap-1.5 whitespace-nowrap text-[11.5px] leading-[1.55] text-muted-foreground">
+					<p className="mt-2 flex w-full items-center justify-center gap-1.5 whitespace-nowrap text-mini leading-[1.55] text-muted-foreground">
 						<Lightbulb
 							className="size-3 text-foreground/80"
 							fill="currentColor"

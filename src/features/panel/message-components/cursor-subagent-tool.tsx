@@ -99,7 +99,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 				onClick={() => expandable && setOpen((v) => !v)}
 				disabled={!expandable}
 				className={cn(
-					"flex w-full flex-wrap items-center gap-x-1.5 gap-y-0 py-0.5 text-left text-[12px] text-muted-foreground",
+					"flex w-full flex-wrap items-center gap-x-1.5 gap-y-0 py-0.5 text-left text-small text-muted-foreground",
 					expandable ? "cursor-interactive" : "cursor-default",
 				)}
 			>
@@ -119,7 +119,7 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 					</span>
 				) : null}
 				{model ? (
-					<span className="ml-auto shrink-0 text-[11px] text-muted-foreground/40">
+					<span className="ml-auto shrink-0 text-mini text-muted-foreground/40">
 						{model}
 					</span>
 				) : null}
@@ -138,24 +138,24 @@ export const CursorSubagentToolCall = memo(function CursorSubagentToolCall({
 				<div className="ml-5 mt-1 flex flex-col gap-2 border-l border-border/30 pl-3">
 					{prompt ? (
 						<div className="flex flex-col gap-1">
-							<span className="text-[11px] uppercase tracking-wide text-muted-foreground/50">
+							<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
 								Prompt
 							</span>
-							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-[12px] leading-5 text-muted-foreground/85">
+							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
 								{prompt}
 							</div>
 						</div>
 					) : null}
 					<div className="flex flex-col gap-1">
-						<span className="text-[11px] uppercase tracking-wide text-muted-foreground/50">
+						<span className="text-mini uppercase tracking-wide text-muted-foreground/50">
 							Result
 						</span>
 						{resultText ? (
-							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-[12px] leading-5 text-muted-foreground/85">
+							<div className="whitespace-pre-wrap break-words rounded-md bg-accent/35 px-2.5 py-1.5 text-small leading-5 text-muted-foreground/85">
 								{resultText}
 							</div>
 						) : (
-							<div className="flex items-center gap-1.5 rounded-md bg-accent/20 px-2.5 py-1.5 text-[12px] text-muted-foreground/60">
+							<div className="flex items-center gap-1.5 rounded-md bg-accent/20 px-2.5 py-1.5 text-small text-muted-foreground/60">
 								{live ? (
 									<>
 										<LoaderCircle

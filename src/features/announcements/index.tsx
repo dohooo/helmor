@@ -4,6 +4,7 @@ import {
 	ExternalLinkIcon,
 	PanelRightOpenIcon,
 	SettingsIcon,
+	SquarePenIcon,
 	XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -22,7 +23,7 @@ import releaseAnnouncementCatalog from "@/features/announcements/release-announc
 import {
 	dismissReleaseAnnouncement,
 	isFirstHelmorBoot,
-	readDismissedReleaseAnnouncementVersions,
+	readLastDismissedReleaseVersion,
 	readLastSeenInstallVersion,
 	writeLastSeenInstallVersion,
 } from "@/features/announcements/storage";
@@ -38,12 +39,14 @@ type ReleaseAnnouncementToastHostProps = {
 	onOpenChangelog: () => void;
 	onOpenSettings: (section?: SettingsSection) => void;
 	onSetRightSidebarMode: (mode: WorkspaceRightSidebarMode) => void;
+	onOpenStartPage: () => void;
 };
 
 export function ReleaseAnnouncementToastHost({
 	onOpenChangelog,
 	onOpenSettings,
 	onSetRightSidebarMode,
+	onOpenStartPage,
 }: ReleaseAnnouncementToastHostProps) {
 	const shownVersionsRef = useRef<string | null>(null);
 	const [announcement, setAnnouncement] = useState<ReleaseAnnouncement | null>(
@@ -62,7 +65,7 @@ export function ReleaseAnnouncementToastHost({
 			// classified as a fresh install — meaning the very toast that
 			// introduces the announcement system is never seen by anyone.
 			isFirstHelmorBoot: isFirstHelmorBoot(),
-			dismissedReleaseVersions: readDismissedReleaseAnnouncementVersions(),
+			lastDismissedReleaseVersion: readLastDismissedReleaseVersion(),
 		});
 		// Always advance: bootstraps first-install (so we never re-evaluate
 		// fresh installs as upgrades) and prevents re-showing the same
@@ -88,15 +91,18 @@ export function ReleaseAnnouncementToastHost({
 			case "openSettings":
 				onOpenSettings(action.section);
 				break;
+			case "openStartPage":
+				onOpenStartPage();
+				break;
 		}
 	};
 
 	const close = () => {
-		// Multi-version when the user skipped releases — dismiss every version so the
-		// next launch doesn't replay the same backlog.
-		for (const version of announcement.releaseVersions) {
-			dismissReleaseAnnouncement(version);
-		}
+		// releaseVersions is sorted newest-first; the watermark stored by
+		// dismissReleaseAnnouncement collapses older versions too, so one
+		// call covers a skipped-version backlog.
+		const newest = announcement.releaseVersions[0];
+		if (newest) dismissReleaseAnnouncement(newest);
 		setAnnouncement(null);
 	};
 
@@ -134,7 +140,7 @@ function ReleaseAnnouncementToast({
 						autoplay={false}
 						className="shrink-0 opacity-90"
 					/>
-					<div className="truncate text-[13px] font-semibold leading-none text-foreground">
+					<div className="truncate text-ui font-semibold leading-none text-foreground">
 						New in v{announcement.version}
 					</div>
 				</div>
@@ -220,7 +226,7 @@ function ReleaseAnnouncementListItem({
 	const action = item.action;
 
 	return (
-		<li className="grid grid-cols-[18px_1fr] gap-[2px] text-[12px] leading-relaxed text-muted-foreground">
+		<li className="grid grid-cols-[18px_1fr] gap-[2px] text-small leading-relaxed text-muted-foreground">
 			<span
 				className="leading-relaxed text-muted-foreground/70"
 				aria-hidden="true"
@@ -232,7 +238,7 @@ function ReleaseAnnouncementListItem({
 				{action ? (
 					<button
 						type="button"
-						className="ml-1.5 inline cursor-interactive align-baseline text-[12px] leading-[inherit] font-semibold text-foreground hover:underline"
+						className="ml-1.5 inline cursor-interactive align-baseline text-small leading-[inherit] font-semibold text-foreground hover:underline"
 						onClick={() => onRunAction(action.value)}
 					>
 						<ActionIcon
@@ -259,6 +265,8 @@ function ActionIcon({
 			return <PanelRightOpenIcon className={className} />;
 		case "openSettings":
 			return <SettingsIcon className={className} />;
+		case "openStartPage":
+			return <SquarePenIcon className={className} />;
 	}
 }
 

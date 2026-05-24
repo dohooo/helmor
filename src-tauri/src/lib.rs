@@ -1,15 +1,20 @@
 pub mod agents;
 pub mod cli;
+pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
+pub mod downloads;
 pub mod error;
 pub mod executor_studio;
+pub mod feedback;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod local_llm;
 pub mod logging;
+pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
@@ -18,9 +23,11 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod slack;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
+pub mod voice_planner;
 pub mod workspace;
 
 #[cfg(test)]
@@ -41,7 +48,18 @@ pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
 pub use workspace::workspaces;
 
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
+
+/// Fallback `404 Not Found` response with an empty body. Used by the
+/// custom-protocol handlers when the upstream fetch fails — the
+/// webview falls back to the `<img alt="">` text gracefully.
+fn empty_404() -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(404)
+        .body(Vec::new())
+        .expect("404 response builder is infallible")
+}
 
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
@@ -59,7 +77,36 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Inline Slack file previews. The webview hits
+        // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
+        // through the workspace cookie, and stream the bytes back as a
+        // normal HTTP response. Cached on disk after the first fetch.
+        .register_asynchronous_uri_scheme_protocol("slack-file", |_app, request, responder| {
+            let uri = request.uri().to_string();
+            std::thread::spawn(move || {
+                let response = match slack::files::resolve(&uri) {
+                    Ok(file) => tauri::http::Response::builder()
+                        .header("Content-Type", file.content_type)
+                        // Slack file URLs are content-stable — bytes
+                        // never change for a given URL — so let the
+                        // webview cache them aggressively.
+                        .header("Cache-Control", "public, max-age=2592000, immutable")
+                        .body(file.bytes)
+                        .unwrap_or_else(|_| empty_404()),
+                    Err(error) => {
+                        tracing::warn!(
+                            uri = %uri,
+                            error = %format!("{error:#}"),
+                            "slack-file protocol fetch failed",
+                        );
+                        empty_404()
+                    }
+                };
+                responder.respond(response);
+            });
+        });
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -67,9 +114,17 @@ pub fn run() {
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(executor_studio::ManagedExecutor::new())
+        .manage(voice_planner::ManagedPlanner::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
+        .manage(local_llm::Manager::default())
+        // Top-level downloads manager. The local-LLM catalog is supplied
+        // through `CatalogAssetProvider`; the downloads module itself
+        // stays business-agnostic.
+        .manage(downloads::DownloadsManager::new(Arc::new(
+            local_llm::CatalogAssetProvider,
+        )))
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
@@ -97,6 +152,13 @@ pub fn run() {
             // Build read/write connection pools (must happen after schema).
             db::init_pools()?;
 
+            // Refresh the synthetic chat repo's display name in case the
+            // canonical value moved between releases. No-op for installs
+            // that have never created a chat workspace (no row to update).
+            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
+                tracing::warn!(%error, "Failed to refresh chat repo name");
+            }
+
             tracing::info!(
                 mode = data_dir::data_mode_label(),
                 data = %db_path.display(),
@@ -118,6 +180,20 @@ pub fn run() {
                     })
                     .ok();
             }
+
+            // GC orphan `cache/paste/<id>/` buckets. Off the main thread
+            // — slow IO can't stall startup. Legacy `paste-cache/` and
+            // `query-cache/` at the data-dir root are intentionally
+            // left alone (historical messages embed absolute paths into
+            // them).
+            std::thread::Builder::new()
+                .name("helmor-paste-cache-sweep".into())
+                .spawn(|| {
+                    if let Err(error) = maintenance::paste_cache::sweep() {
+                        tracing::warn!(error = %error, "paste-cache sweep failed");
+                    }
+                })
+                .ok();
 
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
@@ -260,6 +336,41 @@ pub fn run() {
             updater::spawn_interval_worker(app.handle().clone());
 
             agents::prewarm_slash_command_cache(app.handle());
+
+            // Reap any orphan llama-server from a prior Helmor process
+            // that was force-quit / crashed / hot-reloaded — its
+            // `local_llm::Manager::drop` never ran. Doing this BEFORE the
+            // auto-start guarantees we don't accumulate duplicates
+            // across dev reloads or unclean exits.
+            local_llm::sweep_orphan_server();
+
+            // Auto-start the bundled llama-server when the user has
+            // flipped Local LLM on in settings. Spawned so a slow
+            // first-time model download can't stall the rest of setup.
+            // `local_llm::Manager::drop` handles teardown on app exit.
+            let local_llm_handle = app.handle().clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("local-llm-autostart".into())
+                .spawn(move || {
+                    let settings = local_llm::load_settings();
+                    if !settings.enabled || !settings.auto_start {
+                        return;
+                    }
+                    let manager = local_llm_handle.state::<local_llm::Manager>();
+                    if let Err(error) = manager.start() {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "Local LLM auto-start failed"
+                        );
+                    }
+                })
+            {
+                tracing::error!(error = %error, "Failed to spawn local-llm autostart thread");
+            }
+
+            // Re-register the user's saved global hotkey at startup. Missing
+            // this leaves the hotkey unregistered after a cold launch until
+            // the user re-saves it in settings.
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
                     error = %format!("{error:#}"),
@@ -314,6 +425,7 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_chat_workspace,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
@@ -327,6 +439,23 @@ pub fn run() {
             commands::mcp_commands::remove_mcp_source,
             commands::mcp_commands::open_mcp_studio_window,
             commands::mcp_commands::open_mcp_oauth_external,
+            commands::planner_commands::start_planner_turn,
+            commands::planner_commands::abort_planner_turn,
+            commands::local_llm_commands::detect_local_llm_hardware,
+            commands::local_llm_commands::get_local_llm_status,
+            commands::local_llm_commands::list_local_llm_catalog,
+            commands::local_llm_commands::inspect_local_llm_model,
+            commands::local_llm_commands::inspect_local_llm_catalog_entry,
+            commands::local_llm_commands::list_local_llm_downloads,
+            commands::local_llm_commands::subscribe_local_llm_downloads,
+            commands::local_llm_commands::start_local_llm_download,
+            commands::local_llm_commands::pause_local_llm_download,
+            commands::local_llm_commands::cancel_local_llm_download,
+            commands::local_llm_commands::activate_local_llm_model,
+            commands::local_llm_commands::set_local_llm_context_override,
+            commands::local_llm_commands::start_local_llm,
+            commands::local_llm_commands::stop_local_llm,
+            commands::local_llm_commands::get_local_llm_endpoint,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
@@ -376,7 +505,6 @@ pub fn run() {
             commands::repository_commands::load_repo_preferences,
             commands::repository_commands::update_repo_scripts,
             commands::repository_commands::update_repo_auto_run_setup,
-            commands::repository_commands::update_repo_run_script_mode,
             commands::repository_commands::update_repo_preferences,
             commands::repository_commands::delete_repository,
             commands::repository_commands::move_repository_in_sidebar,
@@ -385,6 +513,11 @@ pub fn run() {
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
+            commands::script_commands::create_repo_run_action,
+            commands::script_commands::update_repo_run_action,
+            commands::script_commands::delete_repo_run_action,
+            commands::script_commands::reorder_repo_run_actions,
+            commands::script_commands::set_workspace_active_run_action,
             commands::terminal_commands::spawn_terminal,
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
@@ -409,6 +542,7 @@ pub fn run() {
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::list_branches_for_workspace_picker,
             commands::workspace_commands::get_repo_current_branch,
             commands::workspace_commands::create_and_checkout_branch,
             commands::workspace_commands::move_local_workspace_to_worktree,
@@ -422,10 +556,8 @@ pub fn run() {
             commands::workspace_commands::pin_workspace,
             commands::workspace_commands::unpin_workspace,
             commands::editor_commands::list_editor_files,
-            commands::editor_commands::list_editor_files_with_content,
             commands::editor_commands::list_workspace_files,
             commands::editor_commands::list_workspace_changes,
-            commands::editor_commands::list_workspace_changes_with_content,
             commands::editor_commands::discard_workspace_file,
             commands::editor_commands::stage_workspace_file,
             commands::editor_commands::unstage_workspace_file,
@@ -440,6 +572,7 @@ pub fn run() {
             commands::workspace_commands::list_workspace_candidate_directories,
             commands::workspace_commands::trigger_workspace_fetch,
             commands::editors::detect_installed_editors,
+            commands::editors::open_file_in_editor,
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
@@ -449,6 +582,9 @@ pub fn run() {
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
+            commands::feedback_commands::fork_helmor_upstream,
+            commands::feedback_commands::create_helmor_issue,
+            commands::feedback_commands::find_existing_helmor_repo,
             commands::system_commands::save_pasted_image,
             commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,
@@ -472,7 +608,15 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::slack_commands::slack_import_from_desktop,
+            commands::slack_commands::slack_list_workspaces,
+            commands::slack_commands::slack_disconnect_workspace,
+            commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_search_messages,
+            commands::slack_commands::slack_get_thread_detail,
+            commands::slack_commands::slack_list_emoji,
+            commands::slack_commands::slack_prepare_thread_context
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

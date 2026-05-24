@@ -34,7 +34,7 @@ export function FontSizeStepper({
 			>
 				<Minus className="size-3.5" strokeWidth={2} />
 			</Button>
-			<span className="w-12 text-center text-[14px] font-semibold tabular-nums text-foreground">
+			<span className="w-12 text-center text-body font-semibold tabular-nums text-foreground">
 				{value}
 				{unit}
 			</span>

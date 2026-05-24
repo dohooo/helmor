@@ -11,6 +11,10 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	type MergeBlockedReason,
+	mergeBlockedShortLabel,
+} from "@/lib/commit-button-logic";
 import { cn } from "@/lib/utils";
 
 export type CommitButtonState = "idle" | "busy" | "done" | "error" | "disabled";
@@ -20,6 +24,8 @@ export type WorkspaceCommitButtonMode =
 	| "push"
 	| "fix"
 	| "resolve-conflicts"
+	| "checks-running"
+	| "merge-blocked"
 	| "merge"
 	| "open-pr"
 	| "merged"
@@ -40,6 +46,8 @@ interface WorkspaceCommitButtonProps {
 	errorDurationMs?: number;
 	menuItems?: WorkspaceCommitAction[];
 	changeRequestName?: string;
+	/** Drives the idle label when `mode === "merge-blocked"`. */
+	mergeBlockedReason?: MergeBlockedReason | null;
 	className?: string;
 	onCommit?: () => void | Promise<void>;
 	onStateChange?: (nextState: CommitButtonState) => void;
@@ -77,6 +85,20 @@ const STATIC_STATE_LABELS: Record<
 		error: "Retry",
 		disabled: "Resolve Conflicts",
 	},
+	"checks-running": {
+		idle: "Checks Running",
+		busy: "Merging...",
+		done: "Merged",
+		error: "Retry",
+		disabled: "Checks Running",
+	},
+	"merge-blocked": {
+		idle: "Merge Blocked",
+		busy: "Merging...",
+		done: "Merged",
+		error: "Retry",
+		disabled: "Merge Blocked",
+	},
 	merge: {
 		idle: "Merge",
 		busy: "Merging...",
@@ -104,6 +126,7 @@ export function getCommitButtonLabel(
 	mode: WorkspaceCommitButtonMode,
 	state: CommitButtonState,
 	changeRequestName: string,
+	mergeBlockedReason?: MergeBlockedReason | null,
 ): string {
 	if (mode === "create-pr") {
 		switch (state) {
@@ -130,6 +153,14 @@ export function getCommitButtonLabel(
 			case "disabled":
 				return `Open ${changeRequestName}`;
 		}
+	}
+	// Busy/done/error keep the generic "Merging…" / "Merged" / "Retry".
+	if (
+		mode === "merge-blocked" &&
+		mergeBlockedReason &&
+		(state === "idle" || state === "disabled")
+	) {
+		return mergeBlockedShortLabel(mergeBlockedReason);
 	}
 	return STATIC_STATE_LABELS[mode][state];
 }
@@ -195,6 +226,9 @@ function getButtonVariant(
 		case "resolve-conflicts":
 		case "merge":
 			return "default";
+		case "checks-running":
+		case "merge-blocked":
+			return "outline";
 		default:
 			return "outline";
 	}
@@ -225,6 +259,10 @@ function getModeClassName(
 			return "bg-clip-border bg-[var(--workspace-pr-closed-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-closed-accent)]";
 		case "resolve-conflicts":
 			return "bg-clip-border bg-[var(--workspace-pr-conflicts-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-conflicts-accent)]";
+		case "checks-running":
+			return "border-[var(--workspace-pr-checks-running-accent)] bg-transparent text-[var(--workspace-pr-checks-running-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-checks-running-accent)]";
+		case "merge-blocked":
+			return "border-[var(--workspace-pr-closed-accent)] bg-transparent text-[var(--workspace-pr-closed-accent)] transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-transparent hover:text-[var(--workspace-pr-closed-accent)]";
 		case "merge":
 			return "bg-clip-border bg-[var(--workspace-pr-open-accent)] text-white transition-[background-color,border-color,color,box-shadow,opacity] duration-300 ease-out hover:bg-[var(--workspace-pr-open-accent)]";
 		// Ghost: outline + transparent + the same pure accent the PR badge
@@ -250,6 +288,10 @@ function getModeIcon(mode: WorkspaceCommitButtonMode) {
 			return null;
 		case "resolve-conflicts":
 			return null;
+		case "checks-running":
+			return null;
+		case "merge-blocked":
+			return null;
 		case "merge":
 		case "merged":
 			return null;
@@ -269,6 +311,7 @@ export function WorkspaceCommitButton({
 	errorDurationMs = 1200,
 	menuItems,
 	changeRequestName = "PR",
+	mergeBlockedReason = null,
 	className,
 	onCommit,
 	onStateChange,
@@ -339,13 +382,21 @@ export function WorkspaceCommitButton({
 	const hasMenuItems =
 		mode !== "fix" &&
 		mode !== "resolve-conflicts" &&
+		mode !== "checks-running" &&
+		mode !== "merge-blocked" &&
 		mode !== "merge" &&
 		mode !== "open-pr" &&
 		mode !== "merged" &&
 		mode !== "closed" &&
 		resolvedMenuItems.length > 0;
 	const mainText =
-		mainLabel ?? getCommitButtonLabel(mode, currentState, changeRequestName);
+		mainLabel ??
+		getCommitButtonLabel(
+			mode,
+			currentState,
+			changeRequestName,
+			mergeBlockedReason,
+		);
 	const mainIcon = getModeIcon(mode);
 	const optionsAriaLabel =
 		mode === "commit-and-push"
@@ -356,15 +407,19 @@ export function WorkspaceCommitButton({
 					? "Fix CI options"
 					: mode === "resolve-conflicts"
 						? "Resolve conflicts options"
-						: mode === "merge"
-							? "Merge options"
-							: mode === "open-pr"
-								? `Open ${changeRequestName} options`
-								: mode === "merged"
-									? "Merged options"
-									: mode === "closed"
-										? "Closed options"
-										: `Create ${changeRequestName} options`;
+						: mode === "checks-running"
+							? "Checks running options"
+							: mode === "merge-blocked"
+								? "Merge blocked options"
+								: mode === "merge"
+									? "Merge options"
+									: mode === "open-pr"
+										? `Open ${changeRequestName} options`
+										: mode === "merged"
+											? "Merged options"
+											: mode === "closed"
+												? "Closed options"
+												: `Create ${changeRequestName} options`;
 
 	const mainButton = (
 		<Button

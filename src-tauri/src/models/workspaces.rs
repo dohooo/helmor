@@ -5,7 +5,7 @@ use crate::{
     repos,
     workspace::sidebar_order,
     workspace_pr_sync::PrSyncState,
-    workspace_state::{WorkspaceMode, WorkspaceState},
+    workspace_state::{WorkspaceBranchIntent, WorkspaceMode, WorkspaceState},
     workspace_status::WorkspaceStatus,
 };
 
@@ -29,6 +29,9 @@ pub struct WorkspaceRecord {
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
     pub mode: WorkspaceMode,
+    /// `FromBranch`: workspace owns the branch (safe to delete on archive).
+    /// `UseBranch`: branch is reused, must not be deleted.
+    pub branch_intent: WorkspaceBranchIntent,
     pub pinned_at: Option<String>,
     pub active_session_id: Option<String>,
     pub active_session_title: Option<String>,
@@ -66,6 +69,11 @@ pub struct WorkspaceRecord {
     /// workspace. `None` means setup was never run (or was skipped
     /// because the repo has no setup script).
     pub setup_completed_at: Option<String>,
+    /// `repo_run_actions.id` the user last picked from the Run-tab dropdown
+    /// in this workspace. `None` means "use the first action" — both for
+    /// fresh workspaces and for ones whose previously-active action was
+    /// deleted (the loader auto-clears stale ids).
+    pub active_run_action_id: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -150,6 +158,7 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.initialization_parent_branch,
       w.intended_target_branch,
       COALESCE(w.mode, 'worktree') AS mode,
+      COALESCE(w.branch_intent, 'from_branch') AS branch_intent,
       w.pinned_at,
       w.active_session_id,
       s.title AS active_session_title,
@@ -172,7 +181,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.created_at,
       w.updated_at,
       wss.last_user_message_at,
-      w.setup_completed_at
+      w.setup_completed_at,
+      w.active_run_action_id
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -231,6 +241,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
     directory_name: &str,
     branch: &str,
     default_branch: &str,
+    branch_intent: WorkspaceBranchIntent,
     status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
@@ -242,6 +253,7 @@ pub(crate) fn insert_initializing_workspace_and_session(
         branch,
         default_branch,
         WorkspaceMode::Worktree,
+        branch_intent,
         status,
         timestamp,
     )
@@ -256,6 +268,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     branch: &str,
     default_branch: &str,
     mode: WorkspaceMode,
+    branch_intent: WorkspaceBranchIntent,
     status: WorkspaceStatus,
     timestamp: &str,
 ) -> Result<()> {
@@ -290,12 +303,13 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
               initialization_parent_branch,
               intended_target_branch,
               mode,
+              branch_intent,
               display_order,
               status,
               unread,
               created_at,
               updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?13)
             "#,
             (
                 workspace_id,
@@ -307,6 +321,7 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
                 default_branch,
                 default_branch,
                 mode,
+                branch_intent,
                 next_order,
                 status,
                 timestamp,
@@ -337,6 +352,102 @@ pub(crate) fn insert_initializing_workspace_and_session_with_mode(
     transaction
         .commit()
         .context("Failed to commit create-workspace transaction")
+}
+
+/// Insert a Chat-mode workspace + its initial session in a single
+/// transaction. Chat workspaces have no branch and no parent/intended
+/// target branch — those columns stay NULL. `repository_id` points at
+/// the synthetic `SYSTEM_CHAT_REPO_ID` row.
+///
+/// `directory_name` stores the relative scratch path
+/// (`"YYYY-MM-DD/new-chat[-N]"`); `helpers::workspace_path` joins it
+/// under `chats_dir` to resolve the absolute cwd at read time.
+pub(crate) fn insert_chat_workspace_and_session(
+    repository: &repos::RepositoryRecord,
+    workspace_id: &str,
+    session_id: &str,
+    directory_name: &str,
+    status: WorkspaceStatus,
+    timestamp: &str,
+) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let transaction = connection
+        .transaction()
+        .context("Failed to start create-chat-workspace transaction")?;
+
+    let next_order = transaction
+        .query_row(
+            r#"
+                SELECT COALESCE(MAX(display_order), 0) + ?2
+                FROM workspaces
+                WHERE state <> ?1
+                  AND pinned_at IS NULL
+                  AND COALESCE(status, 'in-progress') = ?3
+                "#,
+            rusqlite::params![WorkspaceState::Archived, sidebar_order::ORDER_STEP, status],
+            |row| row.get::<_, i64>(0),
+        )
+        .context("Failed to compute next workspace display order")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO workspaces (
+              id,
+              repository_id,
+              directory_name,
+              active_session_id,
+              branch,
+              state,
+              initialization_parent_branch,
+              intended_target_branch,
+              mode,
+              branch_intent,
+              display_order,
+              status,
+              unread,
+              created_at,
+              updated_at
+            ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, NULL, ?6, ?7, ?8, ?9, 0, ?10, ?10)
+            "#,
+            (
+                workspace_id,
+                repository.id.as_str(),
+                directory_name,
+                session_id,
+                WorkspaceState::Initializing,
+                WorkspaceMode::Chat,
+                WorkspaceBranchIntent::UseBranch,
+                next_order,
+                status,
+                timestamp,
+            ),
+        )
+        .context("Failed to insert chat workspace")?;
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO sessions (
+              id,
+              workspace_id,
+              title,
+              status,
+              permission_mode,
+              unread_count,
+              fast_mode,
+              created_at,
+              updated_at,
+              is_hidden
+            ) VALUES (?1, ?2, 'Untitled', 'idle', 'default', 0, 0, ?3, ?3, 0)
+            "#,
+            (session_id, workspace_id, timestamp),
+        )
+        .context("Failed to insert initial chat session")?;
+
+    transaction
+        .commit()
+        .context("Failed to commit create-chat-workspace transaction")
 }
 
 /// Atomically convert a local-mode workspace into a worktree-mode one.
@@ -578,28 +689,51 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         initialization_parent_branch: row.get(13)?,
         intended_target_branch: row.get(14)?,
         mode: row.get(15)?,
-        pinned_at: row.get(16)?,
-        active_session_id: row.get(17)?,
-        active_session_title: row.get(18)?,
-        active_session_agent_type: row.get(19)?,
-        active_session_status: row.get(20)?,
-        primary_session_id: row.get(21)?,
-        primary_session_title: row.get(22)?,
-        primary_session_agent_type: row.get(23)?,
-        pr_title: row.get(24)?,
-        pr_sync_state: row.get(25)?,
-        pr_url: row.get(26)?,
-        archive_commit: row.get(27)?,
-        session_count: row.get(28)?,
-        message_count: row.get(29)?,
-        remote: row.get(30)?,
-        forge_provider: row.get(31)?,
-        forge_login: row.get(32)?,
-        display_order: row.get(33)?,
-        repo_sidebar_order: row.get(34)?,
-        created_at: row.get(35)?,
-        updated_at: row.get(36)?,
-        last_user_message_at: row.get(37)?,
-        setup_completed_at: row.get(38)?,
+        branch_intent: row.get(16)?,
+        pinned_at: row.get(17)?,
+        active_session_id: row.get(18)?,
+        active_session_title: row.get(19)?,
+        active_session_agent_type: row.get(20)?,
+        active_session_status: row.get(21)?,
+        primary_session_id: row.get(22)?,
+        primary_session_title: row.get(23)?,
+        primary_session_agent_type: row.get(24)?,
+        pr_title: row.get(25)?,
+        pr_sync_state: row.get(26)?,
+        pr_url: row.get(27)?,
+        archive_commit: row.get(28)?,
+        session_count: row.get(29)?,
+        message_count: row.get(30)?,
+        remote: row.get(31)?,
+        forge_provider: row.get(32)?,
+        forge_login: row.get(33)?,
+        display_order: row.get(34)?,
+        repo_sidebar_order: row.get(35)?,
+        created_at: row.get(36)?,
+        updated_at: row.get(37)?,
+        last_user_message_at: row.get(38)?,
+        setup_completed_at: row.get(39)?,
+        active_run_action_id: row.get(40)?,
     })
+}
+
+/// Persist the user-picked active run-action id for a workspace. Passing
+/// `None` clears the column (read sites fall back to the first action).
+pub fn update_workspace_active_run_action(
+    workspace_id: &str,
+    action_id: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE workspaces SET active_run_action_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            (action_id, workspace_id),
+        )
+        .with_context(|| format!("Failed to update active_run_action_id for {workspace_id}"))?;
+
+    if updated != 1 {
+        bail!("Workspace not found: {workspace_id}");
+    }
+
+    Ok(())
 }

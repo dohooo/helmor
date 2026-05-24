@@ -446,7 +446,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -546,7 +546,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -722,7 +722,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -833,7 +833,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -1030,6 +1030,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 				workspaceId: "ws-1",
 				code: "Unknown",
 				message: "archive failed later",
+				origin: "manual",
 			});
 		});
 
@@ -1096,7 +1097,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 				{ ...workspaceGroups[0], rows: [workspaceGroups[0].rows[1]] },
 			];
 			archivedFromServer = [makeArchivedSummary("ws-1")];
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1", origin: "manual" });
 		});
 
 		await waitFor(() => {
@@ -1156,7 +1157,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		});
 
 		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1", origin: "manual" });
 		});
 
 		await waitFor(() => {
@@ -1368,7 +1369,7 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 		// next test (and `resetSidebarMutationGate` papers over it).
 		act(() => {
 			resolveStart?.();
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1" });
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-1", origin: "manual" });
 		});
 	});
 
@@ -1619,6 +1620,109 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 		expect(isSidebarMutationInFlight()).toBe(false);
 	});
 
+	it("auto-archive success reconciles the sidebar without a pendingArchive", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		let archivedFromServer: WorkspaceSummary[] = [];
+		let groupsFromServer = workspaceGroups;
+		apiMocks.loadWorkspaceGroups.mockImplementation(
+			async () => groupsFromServer,
+		);
+		apiMocks.loadArchivedWorkspaces.mockImplementation(
+			async () => archivedFromServer,
+		);
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: null,
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast: vi.fn(),
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+		const groupsCallsBefore = apiMocks.loadWorkspaceGroups.mock.calls.length;
+		const archivedCallsBefore =
+			apiMocks.loadArchivedWorkspaces.mock.calls.length;
+
+		// Auto-archive fires without ever going through handleArchiveWorkspace,
+		// so no pendingArchive / gate exists. The success listener must drive
+		// the sidebar reconcile itself.
+		act(() => {
+			groupsFromServer = [
+				{ ...workspaceGroups[0], rows: [workspaceGroups[0].rows[1]] },
+			];
+			archivedFromServer = [makeArchivedSummary("ws-1")];
+			apiMocks.emitArchiveSucceeded({
+				workspaceId: "ws-1",
+				origin: "autoAfterMerge",
+			});
+		});
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+				"ws-2",
+			]);
+		});
+		expect(result.current.archivedRows.map((row) => row.id)).toEqual(["ws-1"]);
+		expect(apiMocks.loadWorkspaceGroups.mock.calls.length).toBeGreaterThan(
+			groupsCallsBefore,
+		);
+		expect(apiMocks.loadArchivedWorkspaces.mock.calls.length).toBeGreaterThan(
+			archivedCallsBefore,
+		);
+	});
+
+	it("auto-archive failure pushes a plain toast (no permanent-delete recovery)", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const pushWorkspaceToast = vi.fn();
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace: vi.fn(),
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.groups[0]?.rows).toHaveLength(2));
+
+		act(() => {
+			apiMocks.emitArchiveFailed({
+				workspaceId: "ws-1",
+				code: "Unknown",
+				message: "merge race lost",
+				origin: "autoAfterMerge",
+			});
+		});
+
+		await waitFor(() => expect(pushWorkspaceToast).toHaveBeenCalled());
+		// Plain variant + no destructive action — the user didn't ask for this
+		// archive, so the "Permanently Delete" recovery toast is wrong here.
+		const [, title, variant, opts] = pushWorkspaceToast.mock.calls[0] as [
+			string,
+			string,
+			string | undefined,
+			{ action?: unknown } | undefined,
+		];
+		expect(title).toMatch(/auto-archive failed/i);
+		expect(variant ?? "default").toBe("default");
+		expect(opts?.action).toBeUndefined();
+		// Row must NOT be moved or rolled back — it was never optimistically
+		// archived in the first place.
+		expect(result.current.groups[0]?.rows.map((row) => row.id)).toEqual([
+			"ws-1",
+			"ws-2",
+		]);
+	});
+
 	it("archive failure listener releases the gate (no leak)", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -1645,6 +1749,7 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 				workspaceId: "ws-1",
 				code: "Unknown",
 				message: "archive worker exited",
+				origin: "manual",
 			});
 		});
 		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
@@ -1745,14 +1850,14 @@ describe("useWorkspacesSidebarController × sidebar-mutation-gate", () => {
 
 		// Releasing only one of the archives must NOT drop the gate yet.
 		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-a" });
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-a", origin: "manual" });
 		});
 		await new Promise((r) => setTimeout(r, 20));
 		expect(isSidebarMutationInFlight()).toBe(true);
 
 		// Releasing the second one finally drops the gate.
 		act(() => {
-			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-b" });
+			apiMocks.emitArchiveSucceeded({ workspaceId: "ws-b", origin: "manual" });
 		});
 		await waitFor(() => expect(isSidebarMutationInFlight()).toBe(false));
 	});

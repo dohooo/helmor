@@ -35,8 +35,8 @@ export function SetupItem({
 				{icon}
 			</div>
 			<div className="min-w-0 flex-1">
-				<div className="text-sm font-medium text-foreground">{label}</div>
-				<p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+				<div className="text-body font-medium text-foreground">{label}</div>
+				<p className="mt-0.5 text-small leading-5 text-muted-foreground">
 					{description}
 				</p>
 				<div
@@ -48,7 +48,7 @@ export function SetupItem({
 					}`}
 				>
 					<div className="overflow-hidden">
-						<p className="text-[11px] leading-4 text-destructive">{error}</p>
+						<p className="text-mini leading-4 text-destructive">{error}</p>
 					</div>
 				</div>
 			</div>
@@ -58,7 +58,7 @@ export function SetupItem({
 				<Button
 					type="button"
 					size="sm"
-					className="h-7 shrink-0 px-2 text-xs"
+					className="h-7 shrink-0 px-2 text-small"
 					onClick={onAction}
 					disabled={disabled || busy}
 				>

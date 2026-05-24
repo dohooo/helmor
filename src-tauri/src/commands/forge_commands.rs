@@ -239,6 +239,8 @@ pub async fn spawn_forge_cli_auth_terminal(
         workspace_path: None,
         workspace_name: None,
         default_branch: None,
+        port_base: None,
+        port_count: None,
     };
     let mgr = manager.inner().clone();
     let script_type = forge_cli_auth_script_type(provider, &host, &instance_id);
@@ -342,18 +344,23 @@ pub async fn refresh_workspace_change_request(
     app: tauri::AppHandle,
 ) -> CmdResult<Option<ChangeRequestInfo>> {
     let lookup_workspace_id = workspace_id.clone();
-    let (result, workspace_status_changed) = run_blocking(move || {
+    let (result, outcome) = run_blocking(move || {
         let result = forge::refresh_workspace_change_request(&lookup_workspace_id)?;
-        let changed =
+        let outcome =
             crate::workspaces::sync_workspace_pr_state(&lookup_workspace_id, result.as_ref())?;
-        Ok::<_, anyhow::Error>((result, changed))
+        Ok::<_, anyhow::Error>((result, outcome))
     })
     .await?;
-    if workspace_status_changed {
+    if outcome.changed {
         ui_sync::publish(
             &app,
-            UiMutationEvent::WorkspaceChangeRequestChanged { workspace_id },
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: workspace_id.clone(),
+            },
         );
+    }
+    if outcome.transitioned_to_merged {
+        crate::workspace::archive::try_auto_archive_after_merge(&app, &workspace_id);
     }
     Ok(result)
 }
@@ -408,18 +415,23 @@ async fn run_change_request_action(
     action: fn(&str) -> anyhow::Result<Option<ChangeRequestInfo>>,
 ) -> CmdResult<Option<ChangeRequestInfo>> {
     let sync_workspace_id = workspace_id.clone();
-    let (result, workspace_status_changed) = run_blocking(move || {
+    let (result, outcome) = run_blocking(move || {
         let result = action(&sync_workspace_id)?;
-        let changed =
+        let outcome =
             crate::workspaces::sync_workspace_pr_state(&sync_workspace_id, result.as_ref())?;
-        Ok::<_, anyhow::Error>((result, changed))
+        Ok::<_, anyhow::Error>((result, outcome))
     })
     .await?;
-    if workspace_status_changed {
+    if outcome.changed {
         ui_sync::publish(
             &app,
-            UiMutationEvent::WorkspaceChangeRequestChanged { workspace_id },
+            UiMutationEvent::WorkspaceChangeRequestChanged {
+                workspace_id: workspace_id.clone(),
+            },
         );
+    }
+    if outcome.transitioned_to_merged {
+        crate::workspace::archive::try_auto_archive_after_merge(&app, &workspace_id);
     }
     Ok(result)
 }

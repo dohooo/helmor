@@ -1,14 +1,21 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
+import type { SettingsSection } from "@/features/settings";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
-import type { ChangeRequestInfo } from "@/lib/api";
-import type { DiffOpenOptions } from "@/lib/editor-session";
+import {
+	type ChangeRequestInfo,
+	type DetectedEditor,
+	setWorkspaceActiveRunAction,
+} from "@/lib/api";
+import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useWorkspaceInspectorSidebar } from "./hooks/use-inspector";
@@ -30,6 +37,42 @@ import {
 	type TerminalInstance,
 } from "./terminal-store";
 
+/**
+ * Text the Run-tab dropdown's "Create" item pre-loads into a fresh
+ * session's composer. `intro` is the line the user finishes in place
+ * (caret lands at its end); `body` is everything below the separator
+ * — the agent reads it to know which file to edit and which shape to
+ * emit. Keep `intro` short and complete-able; keep `body` strict so
+ * the agent always produces the new array-of-actions form.
+ */
+const CREATE_RUN_ACTION_PREFILL = {
+	intro: "I want to create a run action that ",
+	body: [
+		"Please add a new run action to this workspace by editing `helmor.json`.",
+		"",
+		"Required shape — `scripts.run` is an array. Each entry MUST have a non-blank `name` and a non-blank `command`:",
+		"",
+		"```",
+		"{",
+		'  "scripts": {',
+		'    "run": [',
+		'      { "name": "Default", "command": "..." }',
+		"    ]",
+		"  }",
+		"}",
+		"```",
+		"",
+		"Rules:",
+		"- If `helmor.json` does not exist, create it with the shape above.",
+		'- If `helmor.json.scripts.run` is the legacy string form (e.g. `"run": "npm dev"`), convert it to the array form first (preserve the old command under `{ "name": "Default", "command": "<old string>" }`), then append the new one.',
+		"- If `scripts.run` already contains an entry with the same name, ask me before overwriting.",
+		"- For dev servers / local services, prefer `$HELMOR_PORT` over hardcoded port defaults so parallel workspaces don't collide.",
+		'- Action names should be short, capitalized, intent-describing (e.g. "Dev", "Tests", "Lint", "DB").',
+		"",
+		"Only modify `helmor.json`. Don't touch source files. End with a short summary of what you wrote.",
+	].join("\n"),
+} as const;
+
 type WorkspaceInspectorSidebarProps = {
 	workspaceId?: string | null;
 	repoId?: string | null;
@@ -43,8 +86,14 @@ type WorkspaceInspectorSidebarProps = {
 	 * was never run (or skipped); drives the Setup tab placeholder copy
 	 * and the "default to Run tab" behaviour after restart. */
 	workspaceSetupCompletedAt?: string | null;
+	/** Persisted active-run-action id from `WorkspaceDetail.activeRunActionId`.
+	 * Null falls back to the first action (or "no action" when the list is
+	 * empty). Drives which action Cmd+R / the Run-tab button targets and
+	 * which radio item is pre-checked in the Run dropdown. */
+	workspaceActiveRunActionId?: string | null;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
+	preferredEditor?: DetectedEditor | null;
 	onOpenEditorFile(path: string, options?: DiffOpenOptions): void;
 	onOpenMockReview?: (path: string) => void;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -65,7 +114,13 @@ type WorkspaceInspectorSidebarProps = {
 	 * the forge action status — drives the git-header shimmer. Owned by App.
 	 */
 	forgeIsRefreshing?: boolean;
-	onOpenSettings?: () => void;
+	/**
+	 * Open the global settings dialog. When `initialSection` is provided
+	 * the dialog jumps straight to that section — used by the Run-tab
+	 * dropdown to land on the current repo's scripts panel instead of the
+	 * default landing section.
+	 */
+	onOpenSettings?: (initialSection?: SettingsSection) => void;
 };
 
 export function WorkspaceInspectorSidebar({
@@ -77,9 +132,11 @@ export function WorkspaceInspectorSidebar({
 	workspaceRemoteUrl,
 	workspaceState,
 	workspaceSetupCompletedAt,
+	workspaceActiveRunActionId,
 	repoId,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
+	preferredEditor = null,
 	onOpenEditorFile,
 	onCommitAction,
 	onReviewAction,
@@ -91,26 +148,24 @@ export function WorkspaceInspectorSidebar({
 	forgeIsRefreshing = false,
 	onOpenSettings,
 }: WorkspaceInspectorSidebarProps) {
+	const queryClient = useQueryClient();
 	const {
-		actionsHeight,
 		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
-		changesHeight,
+		changesRef,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
-		tabsBodyHeight,
 		tabsOpen,
 		tabsWrapperRef,
 	} = useWorkspaceInspectorSidebar({
@@ -118,7 +173,89 @@ export function WorkspaceInspectorSidebar({
 		workspaceId: workspaceId ?? null,
 		repoId: repoId ?? null,
 		workspaceState: workspaceState ?? null,
+		workspaceActiveRunActionId: workspaceActiveRunActionId ?? null,
 	});
+
+	// Resolve which run action drives the dropdown's checked entry, the Run
+	// tab's status icon, and the Run / Cmd+R lifecycle. Defaults to the
+	// first action when the persisted id is missing (fresh workspace) or
+	// stale (user deleted the previously-active action). `null` only when
+	// the repo has no run actions configured at all.
+	const runActions = repoScripts?.runActions ?? [];
+	const activeAction =
+		runActions.find((a) => a.id === workspaceActiveRunActionId) ??
+		runActions[0] ??
+		null;
+	const activeRunActionId = activeAction?.id ?? null;
+
+	// Run-tab label. With a single action (the common case) we keep the
+	// generic "Run" — the action's name is already inlined in the empty-
+	// state heading and the dropdown radio, so doubling it on the tab is
+	// just noise. With multiple actions configured, the tab borrows the
+	// active action's name so the user can tell at a glance which action
+	// the live output belongs to once the script is running (the empty-
+	// state cue is gone by then). Falls back to "Run" if the action's
+	// name is blank.
+	const runTabLabel =
+		runActions.length > 1 && activeAction?.name?.trim()
+			? activeAction.name.trim()
+			: "Run";
+
+	const handleSelectRunAction = useCallback(
+		(actionId: string) => {
+			if (!workspaceId) return;
+			// Switch tabs so the user sees the new action's output buffer.
+			setActiveTab("run");
+			void setWorkspaceActiveRunAction(workspaceId, actionId);
+			// Optimistically refresh workspace detail so the radio updates
+			// immediately; the backend doesn't emit a mutation event for
+			// active-id changes (workspace-local preference, not shared).
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
+			});
+		},
+		[workspaceId, setActiveTab, queryClient],
+	);
+
+	// "Open Scripts" — the right target for every empty-state CTA in the
+	// inspector ("Add setup script" / "Add run script" / Create-action
+	// fallback). Opens the current repo's settings panel and then fires
+	// the scroll anchor inside `RepositorySettingsPanel` so the Scripts
+	// section is visible immediately. We wait one frame so the panel has
+	// mounted before dispatching the scroll event.
+	const handleOpenRepoScripts = useCallback(() => {
+		if (repoId) {
+			onOpenSettings?.(`repo:${repoId}`);
+		} else {
+			onOpenSettings?.();
+		}
+		requestAnimationFrame(() => {
+			window.dispatchEvent(new CustomEvent("helmor:scroll-to-repo-scripts"));
+		});
+	}, [onOpenSettings, repoId]);
+
+	const handleCreateRunAction = useCallback(() => {
+		// Without a workspace context we can't open a fresh chat session;
+		// fall back to the Scripts editor in the current repo's settings
+		// panel so the user has somewhere actionable to go.
+		if (!workspaceId) {
+			handleOpenRepoScripts();
+			return;
+		}
+		// Open a fresh session in this workspace with the composer
+		// pre-loaded so the user just has to finish the intro line and
+		// hit send — see the matching listener in
+		// `features/panel/container.tsx`.
+		window.dispatchEvent(
+			new CustomEvent("helmor:create-prefilled-session", {
+				detail: {
+					workspaceId,
+					intro: CREATE_RUN_ACTION_PREFILL.intro,
+					body: CREATE_RUN_ACTION_PREFILL.body,
+				},
+			}),
+		);
+	}, [handleOpenRepoScripts, workspaceId]);
 
 	// Fire setup auto-run / auto-complete at the sidebar level so it runs even
 	// when the Setup tab isn't mounted (tabsOpen=false).
@@ -148,12 +285,14 @@ export function WorkspaceInspectorSidebar({
 		workspaceId ?? null,
 		"setup",
 		!!repoScripts?.setupScript?.trim(),
+		null,
 		workspaceSetupCompletedAt ?? null,
 	);
 	const runScriptState = useScriptStatus(
 		workspaceId ?? null,
 		"run",
-		!!repoScripts?.runScript?.trim(),
+		runActions.length > 0,
+		activeRunActionId,
 	);
 
 	// Live list of Terminal sub-tabs for the current workspace, observed at
@@ -374,12 +513,12 @@ export function WorkspaceInspectorSidebar({
 		? terminalInstances.find((t) => t.id === activeTab)
 		: undefined;
 	const canHoverExpand = isTerminalTabActive
-		? !activeTerminalInstance?.hoverZoomDisabled
-		: scriptTabState === "running" ||
-			scriptTabState === "success" ||
-			scriptTabState === "failure";
-
-	const handleOpenSettings = onOpenSettings ?? (() => {});
+		? appSettings.terminalHoverExpansion &&
+			!activeTerminalInstance?.hoverZoomDisabled
+		: appSettings.terminalHoverExpansion &&
+			(scriptTabState === "running" ||
+				scriptTabState === "success" ||
+				scriptTabState === "failure");
 
 	return (
 		<div
@@ -390,6 +529,7 @@ export function WorkspaceInspectorSidebar({
 			)}
 		>
 			<ChangesSection
+				sectionRef={changesRef}
 				workspaceId={workspaceId ?? null}
 				workspaceRootPath={workspaceRootPath ?? null}
 				workspaceBranch={workspaceBranch ?? null}
@@ -397,7 +537,8 @@ export function WorkspaceInspectorSidebar({
 				workspaceTargetBranch={workspaceTargetBranch ?? null}
 				changes={changes}
 				editorMode={editorMode}
-				activeEditorPath={activeEditorPath}
+				activeEditor={activeEditor}
+				preferredEditor={preferredEditor}
 				onOpenEditorFile={onOpenEditorFile}
 				flashingPaths={flashingPaths}
 				onCommitAction={onCommitAction}
@@ -405,9 +546,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
 				forgeIsRefreshing={forgeIsRefreshing}
-				bodyHeight={changesHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			/>
 			{actionsOpen ? (
 				<HorizontalResizeHandle
@@ -423,8 +561,6 @@ export function WorkspaceInspectorSidebar({
 				sectionRef={actionsRef}
 				open={actionsOpen}
 				onToggle={handleToggleActions}
-				bodyHeight={actionsHeight}
-				isResizing={isResizing}
 				onCommitAction={onCommitAction}
 				onReviewAction={onReviewAction}
 				currentSessionId={currentSessionId ?? null}
@@ -432,7 +568,6 @@ export function WorkspaceInspectorSidebar({
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest ?? null}
-				animatePanelToggle={isPanelToggleAnimating}
 			/>
 			{tabsOpen ? (
 				<HorizontalResizeHandle
@@ -449,15 +584,18 @@ export function WorkspaceInspectorSidebar({
 				tabActions={runTabActions}
 				setupScriptState={setupScriptState}
 				runScriptState={runScriptState}
+				runTabLabel={runTabLabel}
+				workspaceId={workspaceId ?? null}
+				runActions={runActions}
+				activeRunActionId={activeRunActionId}
+				onSelectRunAction={handleSelectRunAction}
+				onCreateRunAction={handleCreateRunAction}
 				terminalInstances={terminalInstances}
 				onAddTerminal={handleAddTerminal}
 				onCloseTerminal={handleCloseTerminal}
 				onToggleTerminalHoverZoom={handleToggleTerminalHoverZoom}
 				canSpawnTerminal={canSpawnTerminal}
 				canHoverExpand={canHoverExpand}
-				bodyHeight={tabsBodyHeight}
-				animatePanelToggle={isPanelToggleAnimating}
-				isResizing={isResizing}
 			>
 				<SetupTab
 					repoId={repoId ?? null}
@@ -465,14 +603,17 @@ export function WorkspaceInspectorSidebar({
 					setupScript={repoScripts?.setupScript ?? null}
 					setupCompletedAt={workspaceSetupCompletedAt ?? null}
 					isActive={activeTab === "setup"}
-					onOpenSettings={handleOpenSettings}
+					onOpenSettings={handleOpenRepoScripts}
 				/>
 				<RunTab
 					repoId={repoId ?? null}
 					workspaceId={workspaceId ?? null}
-					runScript={repoScripts?.runScript ?? null}
+					activeRunActionId={activeRunActionId}
+					activeRunActionName={activeAction?.name ?? null}
+					runScript={activeAction?.command ?? null}
+					hasAnyRunAction={runActions.length > 0}
 					isActive={activeTab === "run"}
-					onOpenSettings={handleOpenSettings}
+					onOpenSettings={handleOpenRepoScripts}
 					onStatusChange={setRunStatus}
 					onUrlsChange={setRunUrls}
 				/>

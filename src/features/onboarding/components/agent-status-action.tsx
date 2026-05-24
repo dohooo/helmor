@@ -26,7 +26,7 @@ export function AgentStatusAction({
 			type="button"
 			size="sm"
 			className={cn(
-				"group h-7 shrink-0 px-2 text-xs",
+				"group h-7 shrink-0 px-2 text-small",
 				waiting &&
 					"bg-muted-foreground/70 text-background hover:bg-primary hover:text-primary-foreground",
 			)}

@@ -125,6 +125,8 @@ export type UserInputPayload =
 	| {
 			readonly kind: "form";
 			readonly schema: Record<string, unknown>;
+			/** Provider-specific hints (e.g. Codex `_meta`). Round-trips back via `respondToUserInput`'s `meta`. */
+			readonly meta?: Record<string, unknown>;
 	  }
 	| {
 			readonly kind: "url";

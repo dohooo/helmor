@@ -13,6 +13,7 @@ type WorkspacesSidebarContainerProps = {
 	interactionRequiredWorkspaceIds?: Set<string>;
 	newWorkspaceShortcut?: string | null;
 	addRepositoryShortcut?: string | null;
+	sidebarFilterShortcut?: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace?: () => void;
 	onAddRepositoryNeedsStart?: (repositoryId: string) => void;
@@ -36,6 +37,7 @@ export const WorkspacesSidebarContainer = memo(
 		interactionRequiredWorkspaceIds,
 		newWorkspaceShortcut,
 		addRepositoryShortcut,
+		sidebarFilterShortcut,
 		onSelectWorkspace,
 		onOpenNewWorkspace,
 		onAddRepositoryNeedsStart,
@@ -46,10 +48,14 @@ export const WorkspacesSidebarContainer = memo(
 			addingRepository,
 			archivingWorkspaceIds,
 			archivedRows,
+			availableRepositories,
 			creatingWorkspaceRepoId,
 			cloneDefaultDirectory,
 			groups,
 			sidebarGrouping,
+			sidebarRepoFilterIds,
+			sidebarSort,
+			updateSettings,
 			handleAddRepository,
 			handleArchiveWorkspace,
 			handleCloneFromUrl,
@@ -78,7 +84,19 @@ export const WorkspacesSidebarContainer = memo(
 			<WorkspacesSidebar
 				groups={groups}
 				archivedRows={archivedRows}
+				availableRepositories={availableRepositories}
 				sidebarGrouping={sidebarGrouping}
+				sidebarRepoFilterIds={sidebarRepoFilterIds}
+				sidebarSort={sidebarSort}
+				onSidebarGroupingChange={(sidebarGrouping) => {
+					void updateSettings({ sidebarGrouping });
+				}}
+				onSidebarRepoFilterChange={(sidebarRepoFilterIds) => {
+					void updateSettings({ sidebarRepoFilterIds });
+				}}
+				onSidebarSortChange={(sidebarSort) => {
+					void updateSettings({ sidebarSort });
+				}}
 				addingRepository={addingRepository}
 				archivingWorkspaceIds={archivingWorkspaceIds}
 				selectedWorkspaceId={selectedWorkspaceId}
@@ -86,6 +104,7 @@ export const WorkspacesSidebarContainer = memo(
 				interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 				newWorkspaceShortcut={newWorkspaceShortcut}
 				addRepositoryShortcut={addRepositoryShortcut}
+				sidebarFilterShortcut={sidebarFilterShortcut}
 				creatingWorkspaceRepoId={creatingWorkspaceRepoId}
 				onAddRepository={() => {
 					void handleAddRepository();

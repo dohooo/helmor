@@ -1,12 +1,14 @@
 // Left workspace sidebar — workspaces list, app-update button, sidebar
 // collapse, and the settings entry button at the bottom.
 import { PanelLeftClose } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { FeedbackButton } from "@/features/feedback";
 import { WorkspacesSidebarContainer } from "@/features/navigation/container";
 import { SettingsButton } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
@@ -27,6 +29,7 @@ type Props = {
 	interactionRequiredWorkspaceIds: Set<string>;
 	newWorkspaceShortcut: string | null;
 	addRepositoryShortcut: string | null;
+	sidebarFilterShortcut: string | null;
 	leftSidebarToggleShortcut: string | null;
 	appUpdateStatus: AppUpdateStatus | null;
 	appSettings: AppSettings;
@@ -35,6 +38,7 @@ type Props = {
 	onAddRepositoryNeedsStart: (repositoryId: string) => void;
 	onMoveLocalToWorktree: (workspaceId: string) => void;
 	onCollapseSidebar: () => void;
+	onOpenFeedback: () => void;
 	onOpenSettings: () => void;
 	pushWorkspaceToast: PushWorkspaceToast;
 };
@@ -49,6 +53,7 @@ export function ShellSidebarPane({
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
 	addRepositoryShortcut,
+	sidebarFilterShortcut,
 	leftSidebarToggleShortcut,
 	appUpdateStatus,
 	appSettings,
@@ -57,14 +62,29 @@ export function ShellSidebarPane({
 	onAddRepositoryNeedsStart,
 	onMoveLocalToWorktree,
 	onCollapseSidebar,
+	onOpenFeedback,
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
+	// Inline width written via ref so each remount re-applies it.
+	const asideRef = useRef<HTMLElement>(null);
+	const innerRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (asideRef.current) {
+			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
+		}
+		if (innerRef.current) {
+			innerRef.current.style.width = `${width}px`;
+		}
+	}, [width, collapsed]);
+
 	return (
 		<aside
+			ref={asideRef}
 			aria-hidden={collapsed}
 			aria-label="Workspace sidebar"
 			data-helmor-sidebar-root
+			data-shell-pane="sidebar"
 			className={cn(
 				"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
 				resizing
@@ -72,16 +92,16 @@ export function ShellSidebarPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			style={{ width: collapsed ? 0 : `${width}px` }}
 		>
 			<div
+				ref={innerRef}
+				data-shell-pane-inner="sidebar"
 				className={cn(
 					"relative flex h-full shrink-0 flex-col transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 					collapsed
 						? "-translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${width}px` }}
 			>
 				<div className="min-h-0 flex-1">
 					<WorkspacesSidebarContainer
@@ -91,6 +111,7 @@ export function ShellSidebarPane({
 						interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
 						newWorkspaceShortcut={newWorkspaceShortcut}
 						addRepositoryShortcut={addRepositoryShortcut}
+						sidebarFilterShortcut={sidebarFilterShortcut}
 						onSelectWorkspace={onSelectWorkspace}
 						onOpenNewWorkspace={onOpenNewWorkspace}
 						onAddRepositoryNeedsStart={onAddRepositoryNeedsStart}
@@ -114,7 +135,7 @@ export function ShellSidebarPane({
 						</TooltipTrigger>
 						<TooltipContent
 							side="bottom"
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 						>
 							<span>Collapse left sidebar</span>
 							{leftSidebarToggleShortcut ? (
@@ -126,11 +147,12 @@ export function ShellSidebarPane({
 						</TooltipContent>
 					</Tooltip>
 				</div>
-				<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
+				<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
 					<SettingsButton
 						onClick={onOpenSettings}
 						shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
 					/>
+					<FeedbackButton onClick={onOpenFeedback} />
 				</div>
 			</div>
 		</aside>

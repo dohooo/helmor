@@ -1,0 +1,12 @@
+---
+source: tests/schema_migrations.rs
+expression: workspaces_port_columns(&connection)
+---
+- - port_base
+  - INTEGER
+  - 0
+  - ~
+- - port_count
+  - INTEGER
+  - 0
+  - ~

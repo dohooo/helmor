@@ -81,6 +81,21 @@ pub enum ToolKind {
     // `run()` arms below still ack with `{ok: true}` as a safety net.
     WaitForUser,
     EndSession,
+    // ─── Phase-0 PoC ────────────────────────────────────────────────
+    // Temporary harness for validating "external response.create can
+    // drive rt to speak short lines after a tool ack". The Rust handler
+    // returns a minimal delegated-style ack; the frontend dispatcher
+    // detects this name and runs the timed injection sequence. Strip
+    // this variant + the matching frontend branch once Phase 0 closes.
+    StartPlannerPoc,
+    // ─── Phase-1 production delegate ────────────────────────────────
+    // The real "rt as voice frontend, planner as reasoning backend"
+    // entry point. rt sees this tool, calls it with the user's
+    // transcript, and is then expected to speak a one-line ack and
+    // stay quiet. The dispatcher takes the transcript, kicks off the
+    // GPT-5 planner via `start_planner_turn`, and injects `say` /
+    // `final` events back into rt as they arrive.
+    AskPlanner,
     // ─── Helmor native typed tools ──────────────────────────────────
     // Internal app/workspace operations run directly in-process. Do not
     // route these through Executor; the typed Rust handlers below call
@@ -234,6 +249,8 @@ impl ToolKind {
         Self::ApproveMcpCall,
         Self::WaitForUser,
         Self::EndSession,
+        Self::StartPlannerPoc,
+        Self::AskPlanner,
         Self::DescribeLocalTools,
         Self::ListWorkspaces,
         Self::ShowWorkspace,
@@ -1114,6 +1131,44 @@ impl ToolKind {
                            Produces no audio output. Not a CLI command — this is a synthetic \
                            'stay silent' signal handled inside the voice tool dispatcher.",
             },
+            Self::StartPlannerPoc => ToolMetadata {
+                name: "start_planner_poc",
+                parameters: json!({ "type": "object", "properties": {}, "required": [] }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "Phase-0 PoC harness. Call this ONLY when the user explicitly asks to \
+                           'start the planner test' / 'run the poc' / 'run the planner poc' / \
+                           '启动 planner 测试'. After the tool returns the delegated ack, \
+                           speak ONE short acknowledgment in the user's language (e.g. \
+                           'starting the test.' / '开始测试。') — do NOT keep talking. The \
+                           dispatcher will inject five short lines on its own; you must stay \
+                           quiet until they finish or the user interrupts. Synthetic harness, \
+                           not a production capability — strip this tool after the PoC closes.",
+            },
+            Self::AskPlanner => ToolMetadata {
+                name: "ask_planner",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "transcript": {
+                            "type": "string",
+                            "description": "Verbatim user utterance to delegate to the planner. Pass the user's words as transcribed — do not rewrite or summarize."
+                        }
+                    },
+                    "required": ["transcript"]
+                }),
+                cli_path: None,
+                invalidates: &[],
+                use_when: "Delegate the user's request to the planner agent. Call this for \
+                           ANY substantive request — questions, lookups, actions — instead \
+                           of trying to answer or pick a Helmor tool yourself. After the \
+                           tool returns the delegated ack, speak ONE short acknowledgment \
+                           in the user's language ('on it.' / '好的。') and STOP. The \
+                           dispatcher will inject the planner's interim updates and final \
+                           answer as separate spoken responses; you must stay silent until \
+                           the user speaks again. DO NOT call this for trivial signals \
+                           handled by wait_for_user / end_session / capture_screen.",
+            },
             Self::EndSession => ToolMetadata {
                 name: "end_session",
                 parameters: json!({ "type": "object", "properties": {}, "required": [] }),
@@ -1175,6 +1230,31 @@ impl ToolKind {
             // a clean ack so the model's output channel doesn't stall.
             Self::WaitForUser | Self::EndSession => Ok(VoiceToolResult {
                 data: json!({ "ok": true }),
+                ..Default::default()
+            }),
+            // PoC: the Rust side just returns an instant "delegated" ack.
+            // The frontend dispatcher recognises the tool name and runs
+            // the timed injection sequence on its own. We deliberately
+            // mirror the production `ask_planner` ack shape here so the
+            // model is trained on the same envelope it will see later.
+            Self::StartPlannerPoc => Ok(VoiceToolResult {
+                data: json!({
+                    "status": "delegated",
+                    "ack": "Planner PoC sequence will begin shortly."
+                }),
+                ..Default::default()
+            }),
+            // Phase-1: same shape as StartPlannerPoc — instant delegated
+            // ack. The frontend recognises the tool name, takes the
+            // `transcript` argument, and starts a real GPT-5 planner
+            // turn via `start_planner_turn`. From rt's perspective the
+            // tool just succeeded and the dispatcher will inject the
+            // planner's spoken output as separate `response.create`s.
+            Self::AskPlanner => Ok(VoiceToolResult {
+                data: json!({
+                    "status": "delegated",
+                    "ack": "Planner is on it."
+                }),
                 ..Default::default()
             }),
         }
@@ -2777,9 +2857,32 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
     let repo = crate::repos::load_repository_by_id(&repo_id)?
         .with_context(|| format!("run_workspace_script: repo `{repo_id}` not found"))?;
     let scripts = crate::repos::load_repo_scripts(&repo_id, Some(&workspace_id))?;
-    let script = match script_type {
-        "setup" => scripts.setup_script.clone(),
-        "run" => scripts.run_script.clone(),
+    // Adapter for the new multi-action run model (post-main merge): for
+    // `run`, the voice tool just picks the first declared action. The
+    // GUI lets the user pick an action_id; the voice tool doesn't have
+    // that affordance yet, and the planner (Phase 2) will own this
+    // routing more precisely.
+    let (script, process_type, stop_command, mode) = match script_type {
+        "setup" => (
+            scripts.setup_script.clone(),
+            "setup".to_string(),
+            None,
+            "concurrent".to_string(),
+        ),
+        "run" => {
+            let Some(action) = scripts.run_actions.first().cloned() else {
+                anyhow::bail!(
+                    "run_workspace_script: no run script configured for repo `{}`",
+                    repo.name,
+                );
+            };
+            (
+                Some(action.command),
+                format!("run:{}", action.id),
+                action.stop_command,
+                action.mode,
+            )
+        }
         _ => unreachable!(),
     };
     let Some(script) = script.filter(|s| !s.trim().is_empty()) else {
@@ -2791,9 +2894,9 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
 
     // Non-concurrent run mode: stop the previous run-script in this repo
     // before kicking off a new one. Mirrors the GUI Tauri command.
-    if script_type == "run" && scripts.run_script_mode == "non-concurrent" {
+    if script_type == "run" && mode == "non-concurrent" {
         ctx.scripts_manager
-            .kill_others_in_repo(&repo_id, "run", Some(&workspace_id));
+            .kill_others_in_repo(&repo_id, &process_type, Some(&workspace_id));
     }
 
     let workspace_root = crate::workspace::helpers::workspace_path(&workspace).ok();
@@ -2801,11 +2904,31 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| repo.root_path.clone());
+
+    // Best-effort port range allocation for HELMOR_PORT[_COUNT].
+    // Failing here must not block voice-triggered runs — scripts that
+    // don't read the env vars work as before.
+    let port_range = match crate::workspace::port_allocation::ensure_workspace_port_range(
+        &workspace_id,
+    ) {
+        Ok(range) => range,
+        Err(error) => {
+            tracing::warn!(
+                workspace_id = %workspace_id,
+                %error,
+                "Voice run_workspace_script: port range allocation failed; continuing without HELMOR_PORT"
+            );
+            None
+        }
+    };
+
     let context = crate::workspace::scripts::ScriptContext {
         root_path: repo.root_path.clone(),
         workspace_path: Some(working_dir.clone()),
         workspace_name: Some(workspace.directory_name.clone()),
         default_branch: repo.default_branch.clone(),
+        port_base: port_range.map(|r| r.base),
+        port_count: port_range.map(|r| r.count),
     };
 
     // PTY events go nowhere — `Channel::new(|_| Ok(()))` is the
@@ -2814,9 +2937,18 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
     let channel: Channel<crate::workspace::scripts::ScriptEvent> =
         Channel::new(|_: InvokeResponseBody| Ok(()));
 
+    // Graceful-stop bundle for run actions that declare one.
+    let script_stop = stop_command.map(|cmd| crate::workspace::scripts::ScriptStop {
+        command: cmd,
+        event_tx: channel.clone(),
+        ctx: context.clone(),
+        working_dir: working_dir.clone(),
+    });
+
     let mgr = ctx.scripts_manager.clone();
     let app = ctx.app.clone();
     let script_type_owned = script_type.to_string();
+    let process_type_owned = process_type;
     let workspace_id_owned = workspace_id.clone();
     let repo_id_owned = repo_id.clone();
     let working_dir_owned = working_dir.clone();
@@ -2827,12 +2959,13 @@ fn run_workspace_script(args: Value, ctx: &VoiceToolContext) -> Result<VoiceTool
         match crate::workspace::scripts::run_script(
             &mgr,
             &repo_id_owned,
-            &script_type_owned,
+            &process_type_owned,
             Some(&workspace_id_owned),
             &script_owned,
             &working_dir_owned,
             &context_owned,
             channel,
+            script_stop,
         ) {
             // Mirror execute_repo_script: a successful setup finalizes
             // the workspace's `setup_completed_at` marker + nudges the
@@ -3122,6 +3255,12 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         ToolKind::CaptureScreen => "Capture focused window by default; use screen only when asked.",
         ToolKind::WaitForUser => "Stay silent for background audio or non-addressed speech.",
         ToolKind::EndSession => "End voice mode after speaking a short goodbye.",
+        ToolKind::StartPlannerPoc => {
+            "Phase-0 PoC: kick off the timed-injection harness. Use only on explicit user request; ack once and stay quiet."
+        }
+        ToolKind::AskPlanner => {
+            "Delegate the user's request to the planner agent. Call for any substantive request; ack once ('on it.' / '好的。') and stay quiet."
+        }
     }
 }
 
@@ -3935,6 +4074,7 @@ mod tests {
             vec![
                 "approve_mcp_call",
                 "archive_workspace",
+                "ask_planner",
                 "call_mcp_tool",
                 "capture_screen",
                 "create_workspace",
@@ -3956,6 +4096,7 @@ mod tests {
                 "send_prompt",
                 "set_workspace_status",
                 "show_workspace",
+                "start_planner_poc",
                 "stop_session",
                 "wait_for_user",
             ]

@@ -110,7 +110,7 @@ export function CloneFromUrlDialog({
 		>
 			<DialogContent className="gap-3 p-4 sm:max-w-sm">
 				<DialogHeader>
-					<DialogTitle className="text-[13px] font-medium tracking-[-0.01em]">
+					<DialogTitle className="text-ui font-medium tracking-[-0.01em]">
 						Clone from URL
 					</DialogTitle>
 				</DialogHeader>
@@ -124,7 +124,7 @@ export function CloneFromUrlDialog({
 					<div className="flex flex-col gap-1">
 						<Label
 							htmlFor="clone-git-url"
-							className="text-[12px] font-medium tracking-[-0.01em]"
+							className="text-small font-medium tracking-[-0.01em]"
 						>
 							Git URL
 						</Label>
@@ -139,13 +139,13 @@ export function CloneFromUrlDialog({
 							autoCorrect="off"
 							spellCheck={false}
 							disabled={isSubmitting}
-							className="h-7 text-[13px] md:text-[13px]"
+							className="h-7 text-ui"
 						/>
 					</div>
 					<div className="flex flex-col gap-1">
 						<Label
 							htmlFor="clone-location"
-							className="text-[12px] font-medium tracking-[-0.01em]"
+							className="text-small font-medium tracking-[-0.01em]"
 						>
 							Clone location
 						</Label>
@@ -162,7 +162,7 @@ export function CloneFromUrlDialog({
 								autoCorrect="off"
 								spellCheck={false}
 								disabled={isSubmitting}
-								className="h-7 text-[13px] md:text-[13px]"
+								className="h-7 text-ui"
 							/>
 							<Button
 								type="button"
@@ -180,7 +180,7 @@ export function CloneFromUrlDialog({
 					{errorMessage ? (
 						<p
 							role="alert"
-							className="text-destructive text-[12px] leading-snug"
+							className="text-destructive text-small leading-snug"
 						>
 							{errorMessage}
 						</p>

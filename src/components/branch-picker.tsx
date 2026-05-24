@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/command";
 import { CommandPopoverContent } from "@/components/ui/command-popover";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
+import type { BranchPickerEntry, WorkspaceBranchIntent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // Scoped thin scrollbar: 3px, sits in the right padding gap.
@@ -29,27 +30,54 @@ const scrollbarStyle = `
  * `renderFooter` receives a `close` helper so the footer item can
  * dismiss the popover before opening a follow-up dialog.
  */
+/** Pick the effective source of a branch entry under the given intent.
+ *  Used by the start-page pill (decides `origin/` prefix), NOT the
+ *  picker rows themselves — picker rows use one unified icon. */
+export function resolveBranchSource(
+	entry: { hasLocal: boolean; hasRemote: boolean },
+	intent: WorkspaceBranchIntent,
+): "local" | "remote" {
+	if (intent === "use_branch") {
+		// git DWIM is local-first when attaching; remote only when no local.
+		return entry.hasLocal ? "local" : "remote";
+	}
+	// FromBranch: prefer the canonical published base, fall back to local.
+	return entry.hasRemote ? "remote" : "local";
+}
+
 export function BranchPickerPopover({
 	currentBranch,
 	branches,
+	entries,
 	loading,
 	onOpen,
 	onSelect,
 	align = "start",
 	children,
 	renderFooter,
+	onCloseAutoFocus,
 }: {
 	currentBranch: string;
-	branches: string[];
+	/** Flat branch names. Used when `entries` is not provided. */
+	branches?: string[];
+	/** Source-tagged entries; only the `name` field is used for rendering. */
+	entries?: BranchPickerEntry[];
 	loading: boolean;
 	onOpen: () => void;
 	onSelect: (branch: string) => void;
 	align?: "start" | "center" | "end";
 	children: React.ReactNode;
 	renderFooter?: (helpers: { close: () => void }) => React.ReactNode;
+	/** Forwarded to the underlying popover content. Call `event.preventDefault()`
+	 *  when the trigger is wrapped in a Tooltip — otherwise focus return reopens it. */
+	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const close = () => setOpen(false);
+
+	const names: string[] = entries
+		? entries.map((entry) => entry.name)
+		: (branches ?? []);
 
 	return (
 		<Popover
@@ -60,13 +88,17 @@ export function BranchPickerPopover({
 			}}
 		>
 			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<CommandPopoverContent align={align} className="w-[260px]">
+			<CommandPopoverContent
+				align={align}
+				className="w-[260px]"
+				onCloseAutoFocus={onCloseAutoFocus}
+			>
 				<style>{scrollbarStyle}</style>
 				<div className="branch-picker">
 					<CommandInput placeholder="Search branches..." />
 					<CommandList className="max-h-52 px-1" style={{ marginRight: -3 }}>
-						{loading && branches.length === 0 ? (
-							<div className="flex items-center justify-center gap-2 py-5 text-[12px] text-muted-foreground">
+						{loading && names.length === 0 ? (
+							<div className="flex items-center justify-center gap-2 py-5 text-small text-muted-foreground">
 								<LoaderCircle
 									className="size-3.5 animate-spin"
 									strokeWidth={2}
@@ -75,16 +107,16 @@ export function BranchPickerPopover({
 							</div>
 						) : null}
 						<CommandEmpty>No branches found</CommandEmpty>
-						{branches.map((branch) => (
+						{names.map((name) => (
 							<CommandItem
-								key={branch}
-								value={branch}
-								data-checked={branch === currentBranch ? "true" : undefined}
+								key={name}
+								value={name}
+								data-checked={name === currentBranch ? "true" : undefined}
 								onSelect={() => {
-									onSelect(branch);
+									onSelect(name);
 									setOpen(false);
 								}}
-								className="gap-2 rounded-lg text-[12px]"
+								className="gap-2 rounded-lg text-small"
 							>
 								<GitBranch
 									className="size-3.5 shrink-0 text-muted-foreground"
@@ -93,10 +125,10 @@ export function BranchPickerPopover({
 								<span
 									className={cn(
 										"min-w-0 flex-1 truncate",
-										branch === currentBranch && "font-semibold",
+										name === currentBranch && "font-semibold",
 									)}
 								>
-									{branch}
+									{name}
 								</span>
 							</CommandItem>
 						))}

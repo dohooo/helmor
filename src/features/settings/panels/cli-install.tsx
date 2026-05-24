@@ -53,7 +53,7 @@ export function CliInstallPanel() {
 				description={
 					<>
 						Install the{" "}
-						<code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+						<code className="rounded bg-muted px-1 py-0.5 text-mini">
 							{commandName}
 						</code>{" "}
 						command as a symlink to this app&apos;s bundled CLI so terminal
@@ -61,7 +61,7 @@ export function CliInstallPanel() {
 						{isManaged ? (
 							<SettingsNotice tone="ok">
 								Installed at{" "}
-								<code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+								<code className="rounded bg-muted px-1.5 py-0.5 text-mini">
 									{status?.installPath}
 								</code>
 							</SettingsNotice>
@@ -69,7 +69,7 @@ export function CliInstallPanel() {
 						{isStale ? (
 							<SettingsNotice tone="warn">
 								Existing CLI at{" "}
-								<code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+								<code className="rounded bg-muted px-1.5 py-0.5 text-mini">
 									{status?.installPath}
 								</code>{" "}
 								is not managed by this app. Reinstall to point it at the bundled

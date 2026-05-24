@@ -53,7 +53,7 @@ export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 				</TooltipTrigger>
 				<TooltipContent
 					side="bottom"
-					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 				>
 					<span>Export session as image</span>
 				</TooltipContent>
@@ -226,7 +226,7 @@ function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 
 				<div className="min-h-0 overflow-y-auto">
 					{isLoading ? (
-						<div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-[12px] text-muted-foreground">
+						<div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-small text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
 							<span>Rendering snapshot…</span>
 						</div>
@@ -237,7 +237,7 @@ function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 							className="block h-auto w-full rounded-md"
 						/>
 					) : status === "error" ? (
-						<div className="flex h-full min-h-[200px] items-center justify-center text-[12px] text-muted-foreground">
+						<div className="flex h-full min-h-[200px] items-center justify-center text-small text-muted-foreground">
 							Failed to render snapshot.
 						</div>
 					) : null}

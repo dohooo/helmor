@@ -74,8 +74,8 @@ export const Reasoning = memo(
 		// the same regardless of whether the user was watching when the
 		// stream ended — previously a transition-only `setIsOpen(false)`
 		// effect collapsed live observers but left switched-away viewers
-		// with an expanded block, which both surprises users (per their
-		// "thinking 输出完之后自动收起" expectation) and inflates
+		// with an expanded block, which both surprises users (the expected
+		// behavior is "collapse thinking once output finishes") and inflates
 		// `totalRowsHeight` against the layout estimator.
 		const resolvedDefaultOpen = hasContent
 			? (defaultOpen ?? lifecycle === "streaming")
@@ -184,7 +184,7 @@ export const ReasoningTrigger = memo(
 			return (
 				<div
 					className={cn(
-						"inline-flex max-w-full items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground",
+						"inline-flex max-w-full items-center gap-1.5 py-0.5 text-small text-muted-foreground",
 						className,
 					)}
 				>
@@ -197,7 +197,7 @@ export const ReasoningTrigger = memo(
 		return (
 			<CollapsibleTrigger
 				className={cn(
-					"group/reasoning inline-flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden",
+					"group/reasoning inline-flex max-w-full cursor-interactive items-center gap-1.5 py-0.5 text-small text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden",
 					className,
 				)}
 				{...props}

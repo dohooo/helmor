@@ -4,11 +4,12 @@ import type { PendingUserInput } from "@/features/conversation/pending-user-inpu
  * Generic options the frontend can attach when resolving a parked
  * `userInputRequest`. The `content` field carries whatever the matching
  * sub-renderer produced — its shape is per-kind (AUQ updatedInput, MCP
- * elicitation content map, or empty for url-mode). The sidecar's
- * resolver closure knows what to do with it.
+ * elicitation content map, or empty for url-mode). `meta` is opaque
+ * provider-specific metadata (e.g. Codex `{ persist: "session" | "always" }`).
  */
 export type UserInputResponseOptions = {
 	content?: Record<string, unknown>;
+	meta?: Record<string, unknown>;
 };
 
 export type UserInputResponseHandler = (

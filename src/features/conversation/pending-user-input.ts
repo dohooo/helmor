@@ -35,6 +35,8 @@ export type PendingUserInputPayload =
 	| {
 			kind: "form";
 			schema: Record<string, unknown>;
+			/** Provider-specific hints (e.g. Codex `_meta`). Round-trips back via `respondToUserInput`'s `meta`. */
+			meta?: Record<string, unknown>;
 	  }
 	| {
 			kind: "url";
@@ -74,7 +76,11 @@ function normalizePayload(
 	if (kind === "form") {
 		const schema = isRecord(raw.schema) ? raw.schema : null;
 		if (!schema) return null;
-		return { kind, schema };
+		return {
+			kind,
+			schema,
+			...(isRecord(raw.meta) ? { meta: raw.meta } : {}),
+		};
 	}
 
 	if (kind === "url") {
@@ -93,6 +99,10 @@ export function buildPendingUserInput(
 	const userInputId = event.userInputId?.trim();
 	const modelId = event.modelId || fallbackModelId || null;
 	if (!userInputId || !modelId) {
+		console.warn(
+			"[conversation] userInputRequest dropped: missing userInputId/modelId",
+			{ userInputId, modelId, hasFallback: Boolean(fallbackModelId) },
+		);
 		return null;
 	}
 
@@ -100,8 +110,21 @@ export function buildPendingUserInput(
 		event.payload as Record<string, unknown> | undefined,
 	);
 	if (!payload) {
+		console.warn(
+			"[conversation] userInputRequest dropped: payload normalization failed",
+			{
+				userInputId,
+				rawPayloadKind: (event.payload as { kind?: unknown })?.kind,
+			},
+		);
 		return null;
 	}
+
+	console.info("[conversation] userInputRequest accepted", {
+		userInputId,
+		payloadKind: payload.kind,
+		source: event.source,
+	});
 
 	return {
 		provider: event.provider,

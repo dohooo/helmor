@@ -1,5 +1,8 @@
 import {
+	abortPlannerTurn,
+	type PlannerEvent,
 	runVoiceTool,
+	startPlannerTurn,
 	type VoiceDispatchActionKind,
 	type VoiceDispatchWorkspaceAction,
 	type VoiceToolEnvelope,
@@ -34,6 +37,8 @@ type ToolName =
 	| "approve_mcp_call"
 	| "wait_for_user"
 	| "end_session"
+	| "start_planner_poc"
+	| "ask_planner"
 	| "describe_local_tools"
 	| "list_workspaces"
 	| "show_workspace"
@@ -60,6 +65,28 @@ export type AgentMutationKind = VoiceToolMutationKind;
 
 const MIN_RESPONSE_CREATE_REMAINING_TOKENS = 5_000;
 const MAX_RATE_LIMIT_WAIT_MS = 15_000;
+
+// ─── Phase-0 PoC harness ─────────────────────────────────────────────
+// Validates that external `response.create` calls can drive `gpt-realtime-2`
+// to speak a sequence of short lines after a tool ack — the foundation
+// for the planned "rt = voice frontend, planner = reasoning backend"
+// architecture. Five lines, one per turn, serialised on `response.done`.
+// Strip this block (and the `start_planner_poc` tool) once Phase 0 closes.
+const POC_LINES: readonly string[] = [
+	"Hmm, let me think about that for a moment.",
+	"Still looking — checking the workspaces now.",
+	"Halfway there. Cross-referencing what I found.",
+	"Almost done. Just pulling the last bit of context.",
+	"All set. That's the end of the test sequence.",
+];
+
+/** Strict, single-line speaking instruction. We deliberately pin the
+ *  text via "exactly" + quotes because rt likes to paraphrase otherwise.
+ *  Tone hint kept short — long instructions blow the per-response
+ *  budget when these fire back-to-back. */
+function buildPocInstruction(line: string): string {
+	return `Speak exactly this single short line in a natural voice, then stop. Do not add anything before or after it: "${line}"`;
+}
 
 function sleep(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -164,12 +191,178 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 	const callsByResponseId = new Map<string, string[]>();
 	let tokenBudget: TokenBudget | null = null;
 	let disposed = false;
+	// Say queue — shared mechanism between the Phase-0 PoC harness and
+	// the Phase-1 planner integration. Items are drained one per
+	// `response.done`, or eagerly when a planner Say arrives while no
+	// response is in flight. Cleared on user interruption, response
+	// cancel, or dispatcher reset.
+	let pocQueue: string[] = [];
+	let pocActive = false;
+	// Planner state. `activePlannerTurnId` is set when we kick off a
+	// planner turn via `ask_planner`; cleared on `Done` / `Error` or on
+	// abort. Used so user interruption can cancel the in-flight GPT-5
+	// stream rather than just clearing already-emitted say events.
+	let activePlannerTurnId: string | null = null;
+	// `responseInFlight` mirrors the server-side "one active response at
+	// a time" invariant. Planner events arriving while a response is
+	// already playing get queued; when the queue is drained and rt is
+	// idle, the next Say fires immediately rather than waiting for the
+	// next organic response.done.
+	let responseInFlight = false;
 
 	function reset() {
 		disposed = true;
 		pendingByCallId.clear();
 		callsByResponseId.clear();
 		tokenBudget = null;
+		pocQueue = [];
+		pocActive = false;
+		if (activePlannerTurnId) {
+			void abortPlannerTurn(activePlannerTurnId).catch(() => {});
+			activePlannerTurnId = null;
+		}
+		responseInFlight = false;
+	}
+
+	function clearPocQueue(reason: string) {
+		if (pocQueue.length === 0 && !pocActive && activePlannerTurnId === null) {
+			return;
+		}
+		diag("poc-queue-cleared", {
+			reason,
+			remaining: pocQueue.length,
+			hadActivePlanner: activePlannerTurnId !== null,
+		});
+		pocQueue = [];
+		pocActive = false;
+		// If a planner turn is still in flight, abort it so GPT-5 stops
+		// emitting more say/final events into a queue we just emptied.
+		if (activePlannerTurnId) {
+			const turnId = activePlannerTurnId;
+			activePlannerTurnId = null;
+			void abortPlannerTurn(turnId).catch((e) =>
+				diag("planner-abort-failed", { turnId, error: String(e) }),
+			);
+		}
+	}
+
+	function pumpPocQueue() {
+		if (disposed) return;
+		if (pocQueue.length === 0) {
+			if (pocActive && activePlannerTurnId === null) {
+				// Queue drained AND no planner is still streaming — safe
+				// to flip pocActive off. If a planner is active we keep
+				// the flag so a late Say still fires through the same
+				// "pump on response.done" path.
+				diag("poc-queue-drained", {});
+				pocActive = false;
+			}
+			return;
+		}
+		const line = pocQueue.shift() as string;
+		// Diagnostic note: idx is 1-based for the PoC harness (5 fixed
+		// lines), but for planner-sourced lines we don't know the total
+		// count up front, so just report queue position.
+		diag("poc-inject", { line, remaining: pocQueue.length });
+		// Optimistic flag — set before send so a fresh Say arriving
+		// before we see `response.created` won't double-fire.
+		responseInFlight = true;
+		opts.send({
+			type: "response.create",
+			response: {
+				output_modalities: ["audio"],
+				instructions: buildPocInstruction(line),
+				// `metadata` rides through `response.done` unchanged so we
+				// can tell PoC/planner-driven responses apart from organic
+				// ones in the diag stream. Useful when correlating timing.
+				metadata: {
+					kind: activePlannerTurnId ? "planner-say" : "poc-filler",
+				},
+			},
+		});
+	}
+
+	function pumpIfIdle() {
+		if (disposed || pocQueue.length === 0 || responseInFlight) return;
+		pumpPocQueue();
+	}
+
+	function handlePlannerEvent(event: PlannerEvent) {
+		if (disposed) return;
+		switch (event.kind) {
+			case "started":
+				diag("planner-started", { turnId: event.turnId });
+				break;
+			case "say":
+				diag("planner-say-received", {
+					turnId: event.turnId,
+					text: event.text,
+				});
+				if (activePlannerTurnId !== event.turnId) {
+					// Stale event from a turn we already aborted — ignore.
+					return;
+				}
+				pocQueue.push(event.text);
+				pumpIfIdle();
+				break;
+			case "final":
+				diag("planner-final-received", {
+					turnId: event.turnId,
+					text: event.text,
+				});
+				if (activePlannerTurnId !== event.turnId) return;
+				pocQueue.push(event.text);
+				pumpIfIdle();
+				break;
+			case "status":
+				diag("planner-status", { turnId: event.turnId, note: event.note });
+				break;
+			case "error":
+				diag("planner-error", {
+					turnId: event.turnId,
+					message: event.message,
+				});
+				if (activePlannerTurnId === event.turnId) {
+					// Bubble a short user-facing line so rt says something
+					// instead of just going silent.
+					pocQueue.push("Sorry, the planner ran into an error.");
+					pumpIfIdle();
+				}
+				break;
+			case "done":
+				diag("planner-done", { turnId: event.turnId });
+				if (activePlannerTurnId === event.turnId) {
+					activePlannerTurnId = null;
+				}
+				break;
+		}
+	}
+
+	function kickoffPlannerTurn(transcript: string) {
+		// If a previous planner turn is still running, abort it before
+		// starting the new one — the user wouldn't expect two parallel
+		// agents speaking through the same voice.
+		if (activePlannerTurnId) {
+			const stale = activePlannerTurnId;
+			diag("planner-superseded", { previous: stale });
+			void abortPlannerTurn(stale).catch(() => {});
+		}
+		pocActive = true;
+		pocQueue = [];
+		startPlannerTurn(transcript, handlePlannerEvent)
+			.then((accepted) => {
+				if (disposed) {
+					void abortPlannerTurn(accepted.turnId).catch(() => {});
+					return;
+				}
+				activePlannerTurnId = accepted.turnId;
+				diag("planner-turn-accepted", { turnId: accepted.turnId });
+			})
+			.catch((err) => {
+				diag("planner-turn-start-failed", { error: String(err) });
+				pocQueue.push("Sorry, the planner is unavailable.");
+				pumpIfIdle();
+			});
 	}
 
 	function responseCreateDelayMs() {
@@ -190,6 +383,37 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 		if (!eventType) return;
 		if (eventType === "rate_limits.updated") {
 			tokenBudget = readTokenBudget(event) ?? tokenBudget;
+		}
+
+		// Track response lifecycle so the planner-side `pumpIfIdle` can
+		// know whether the data channel is free for a fresh response.
+		if (eventType === "response.created") {
+			responseInFlight = true;
+		} else if (
+			eventType === "response.done" ||
+			eventType === "response.cancelled"
+		) {
+			responseInFlight = false;
+		}
+
+		// PoC / planner interruption: user started speaking — drain the
+		// queue AND abort the in-flight planner turn so rt can react to
+		// them instead of plowing through filler lines or playing a
+		// stale answer.
+		if (
+			eventType === "input_audio_buffer.speech_started" &&
+			(pocActive || activePlannerTurnId !== null)
+		) {
+			clearPocQueue("user-speech-started");
+		}
+		// Server force-cancel: bail on the rest of the queue — sending
+		// more `response.create` events into a cancelled state usually
+		// races with the server-side teardown.
+		if (
+			eventType === "response.cancelled" &&
+			(pocActive || activePlannerTurnId !== null)
+		) {
+			clearPocQueue("response-cancelled");
 		}
 
 		// Targeted server-side echo. We *don't* echo every event type
@@ -304,7 +528,15 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			if (!responseId) return;
 			const callIds = callsByResponseId.get(responseId);
 			callsByResponseId.delete(responseId);
-			if (!callIds || callIds.length === 0) return;
+			if (!callIds || callIds.length === 0) {
+				// No tool calls on this response — it was either an
+				// organic rt utterance or a PoC-driven filler completing.
+				// Either way, if the PoC queue still has items, this is
+				// our cue to fire the next one. `pumpPocQueue` is a no-op
+				// when the queue is empty / inactive.
+				pumpPocQueue();
+				return;
+			}
 			// `response.done` also fires for cancelled / failed responses.
 			// Only execute tools for completed responses; for everything
 			// else, drop the pending state so we don't run stale calls.
@@ -326,7 +558,32 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// Fire-and-forget — execution races forward off the event
 			// loop. Errors are caught inside `executeCalls` so a single
 			// bad tool can't abort the whole response.
-			void executeCalls(calls, opts, responseCreateDelayMs, () => disposed);
+			void executeCalls(calls, opts, responseCreateDelayMs, () => disposed, {
+				onPocArm: () => {
+					// PoC batch entry: populate the queue so that when
+					// the natural `response.create` (the one that lets
+					// rt voice its ack) finishes, the queue starts
+					// draining. We deliberately do NOT call `pumpPocQueue`
+					// here — we want the first injection to fire AFTER
+					// the ack response.done, not in parallel with it.
+					pocQueue = [...POC_LINES];
+					pocActive = true;
+					diag("poc-armed", { queued: pocQueue.length });
+				},
+				onAskPlanner: (transcript) => {
+					// Planner batch entry: fire-and-forget the start RPC.
+					// `kickoffPlannerTurn` resolves the turn id and wires
+					// the event channel; subsequent planner Say events
+					// land back here via `handlePlannerEvent` and feed
+					// the same queue the PoC uses.
+					if (!transcript?.trim()) {
+						diag("planner-skip", { reason: "empty-transcript" });
+						return;
+					}
+					diag("planner-armed", { transcriptChars: transcript.length });
+					kickoffPlannerTurn(transcript);
+				},
+			});
 			return;
 		}
 	}
@@ -337,12 +594,43 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 /** Run every function_call collected from one `response.done`, in
  *  parallel, then submit outputs + a single `response.create` to nudge
  *  the model into speaking the answer. */
+type ExecuteCallsHooks = {
+	/** Called when the batch contains `start_planner_poc`. Lets the
+	 *  dispatcher closure arm its PoC queue before tool results are
+	 *  submitted, so the natural ack response.done finds the queue
+	 *  ready to drain. */
+	onPocArm?: () => void;
+	/** Called when the batch contains `ask_planner`, with the parsed
+	 *  transcript argument. Lets the dispatcher closure kick off the
+	 *  GPT-5 planner stream while rt voices its short ack. */
+	onAskPlanner?: (transcript: string) => void;
+};
+
 async function executeCalls(
 	calls: PendingCall[],
 	opts: DispatcherOptions,
 	getResponseCreateDelayMs?: () => number,
 	isDisposed?: () => boolean,
+	hooks?: ExecuteCallsHooks,
 ) {
+	// Phase-0 PoC: detect the marker tool in this batch and hand control
+	// of the post-result `response.create` chain to the dispatcher's PoC
+	// queue. The Rust handler already returned a delegated ack — rt will
+	// voice that ack via the existing tail-of-turn `response.create`, and
+	// each subsequent `response.done` will pump the next line out.
+	const isPocBatch = calls.some((c) => c.name === "start_planner_poc");
+	if (isPocBatch && hooks?.onPocArm) {
+		hooks.onPocArm();
+	}
+	// Phase-1 planner: detect ask_planner, extract the transcript arg,
+	// and signal the dispatcher closure to start the GPT-5 turn.
+	const askPlannerCall = calls.find((c) => c.name === "ask_planner");
+	if (askPlannerCall && hooks?.onAskPlanner) {
+		const parsed = parseArgs(askPlannerCall.argsBuffer);
+		const transcript =
+			typeof parsed.transcript === "string" ? parsed.transcript : "";
+		hooks.onAskPlanner(transcript);
+	}
 	for (const c of calls) {
 		console.log(
 			"[helmor voice] tool call →",

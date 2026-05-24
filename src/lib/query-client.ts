@@ -28,7 +28,7 @@ import {
 	listRepositories,
 	listSlashCommands,
 	listWorkspaceCandidateDirectories,
-	listWorkspaceChangesWithContent,
+	listWorkspaceChanges,
 	listWorkspaceFiles,
 	listWorkspaceLinkedDirectories,
 	loadAgentModelSections,
@@ -146,6 +146,13 @@ export const helmorQueryKeys = {
 	workspaceCandidateDirectories: (excludeWorkspaceId: string | null) =>
 		["workspaceCandidateDirectories", excludeWorkspaceId ?? ""] as const,
 	activeStreams: ["activeStreams"] as const,
+	slackWorkspaces: ["slackWorkspaces"] as const,
+	slackInbox: (teamId: string) => ["slackInbox", teamId] as const,
+	slackSearch: (teamId: string, query: string, sort: string) =>
+		["slackSearch", teamId, query, sort] as const,
+	slackThread: (teamId: string, channelId: string, anchorTs: string) =>
+		["slackThread", teamId, channelId, anchorTs] as const,
+	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.
@@ -913,7 +920,7 @@ export function workspaceForgeRefetchInterval(
 export function workspaceChangesQueryOptions(workspaceRootPath: string) {
 	return queryOptions({
 		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
-		queryFn: () => listWorkspaceChangesWithContent(workspaceRootPath),
+		queryFn: () => listWorkspaceChanges(workspaceRootPath),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,

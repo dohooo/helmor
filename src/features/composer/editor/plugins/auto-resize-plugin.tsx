@@ -95,7 +95,16 @@ export function AutoResizePlugin({
 		// Run once immediately so changes to `shrinkBy` (e.g. voice toggle
 		// with no editor activity) take effect without waiting for typing.
 		apply();
-		const unsubscribe = editor.registerUpdateListener(apply);
+		const unsubscribe = editor.registerUpdateListener(
+			({ dirtyElements, dirtyLeaves }) => {
+				// Skip selection-only updates (click, arrow keys). Re-measuring
+				// on every selection change toggles overflow on/off via
+				// height="auto", which clobbers scrollTop and breaks native
+				// caret-into-view scroll. (From origin/main.)
+				if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
+				apply();
+			},
+		);
 		return () => {
 			if (rafId != null) cancelAnimationFrame(rafId);
 			unsubscribe();

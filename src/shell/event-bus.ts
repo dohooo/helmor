@@ -7,13 +7,19 @@
 // during the gradual migration.
 import { useEffect, useRef } from "react";
 import type { SettingsSection } from "@/features/settings/types";
+import type { WorkspaceMode } from "@/lib/api";
 
 export type ShellEvent =
 	| { type: "open-settings"; section?: SettingsSection }
 	| { type: "reload-settings" }
 	| { type: "open-model-picker" }
-	| { type: "open-new-workspace" }
+	// `mode` is a one-shot override: when set, the start surface forces the
+	// composer into that mode for this open without touching the user's
+	// persisted default (`startSurfacePreferences`). Unset = honor the
+	// persisted default.
+	| { type: "open-new-workspace"; mode?: WorkspaceMode }
 	| { type: "open-add-repository" }
+	| { type: "open-sidebar-filter" }
 	| { type: "run-script" }
 	| { type: "focus-composer" }
 	| { type: "toggle-context-panel" }

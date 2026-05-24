@@ -12,12 +12,12 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Font stacks. `--font-sans-user` / `--font-mono-user` are written by
- * `useThemeApplication` when the user picks a custom family in
- * Appearance settings; absent, the cascade falls through to the bundled
- * Geist variable fonts. This is a single source of truth — every other
- * `--font-sans`/`--font-mono` declaration in this file chains through
- * the same var() to keep the override consistent.
+ * Font stacks. `--font-sans-user`, `--font-mono-user`, and
+ * `--font-terminal-user` are written by `useThemeApplication` when the user
+ * picks a custom family in Appearance settings; absent, the cascade falls
+ * through to the bundled Geist variable fonts. This is a single source of
+ * truth, every other `--font-sans`/`--font-mono` declaration in this file
+ * chains through the same var() to keep the override consistent.
  */
 @theme {
 	--font-sans:
@@ -26,6 +26,8 @@
 	--font-mono:
 		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
 		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--font-terminal:
+		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
 }
 
 :root {
@@ -114,6 +116,26 @@ body {
  */
 .conversation-scroll-area [data-slot="scroll-area-scrollbar"] {
 	animation: conversation-scrollbar-fade-in 300ms ease-out 400ms both;
+}
+
+.monaco-editor .find-widget .button,
+.monaco-editor .find-widget .monaco-custom-toggle {
+	cursor: var(--helmor-interactive-cursor) !important;
+}
+
+/* Restore Monaco's 22×22 action buttons that tailwind preflight (border-box)
+   collapses to 16×16. Toggles already size right under border-box — including
+   them here bloats `.codicon-find-selection` to 30×30 and breaks row alignment. */
+.monaco-editor .find-widget .button {
+	box-sizing: content-box;
+}
+
+/* Monaco 0.55 ships the close button inside `.find-actions`, but the stock CSS
+   still reserves a 25px right margin on `.find-part`/`.replace-part` for the
+   old absolute-positioned close — leaving ~29px of dead space after `×`. */
+.monaco-editor .find-widget > .find-part,
+.monaco-editor .find-widget > .replace-part {
+	margin-right: 0;
 }
 
 .inbox-coming-soon-pickaxe {
@@ -677,38 +699,139 @@ body {
 	--font-mono:
 		var(--font-mono-user, "Geist Mono Variable"), ui-monospace, "SF Mono",
 		SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	--color-sidebar-ring: var(--sidebar-ring);
-	--color-sidebar-border: var(--sidebar-border);
-	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-	--color-sidebar-accent: var(--sidebar-accent);
-	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-	--color-sidebar-primary: var(--sidebar-primary);
-	--color-sidebar-foreground: var(--sidebar-foreground);
-	--color-sidebar: var(--sidebar);
-	--color-chart-5: var(--chart-5);
-	--color-chart-4: var(--chart-4);
-	--color-chart-3: var(--chart-3);
-	--color-chart-2: var(--chart-2);
-	--color-chart-1: var(--chart-1);
-	--color-ring: var(--ring);
-	--color-input: var(--input);
-	--color-border: var(--border);
-	--color-destructive: var(--destructive);
-	--color-accent-foreground: var(--accent-foreground);
-	--color-accent: var(--accent);
-	--color-muted-foreground: var(--muted-foreground);
-	--color-muted: var(--muted);
-	--color-secondary-foreground: var(--secondary-foreground);
-	--color-secondary: var(--secondary);
-	--color-primary-foreground: var(--primary-foreground);
-	--color-primary: var(--primary);
-	--color-popover-foreground: var(--popover-foreground);
-	--color-popover: var(--popover);
-	--color-card-foreground: var(--card-foreground);
-	--color-card: var(--card);
-	--color-foreground: var(--foreground);
+	--font-terminal:
+		var(--font-terminal-user, "GeistMono"), "SF Mono", Monaco, Menlo, monospace;
+
+	/* ── Shadcn/ui interface utilities (ecosystem protocol layer) ─────── */
 	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-chart-1: var(--chart-1);
+	--color-chart-2: var(--chart-2);
+	--color-chart-3: var(--chart-3);
+	--color-chart-4: var(--chart-4);
+	--color-chart-5: var(--chart-5);
 	--color-plan: var(--plan);
+
+	/* ── Base layer utilities ──────────────────────────────────────────── */
+	--color-bg-base: var(--bg-base);
+	--color-bg-surface: var(--bg-surface);
+	--color-bg-elevated: var(--bg-elevated);
+	--color-bg-overlay: var(--bg-overlay);
+	--color-fg-default: var(--fg-default);
+	--color-fg-muted: var(--fg-muted);
+	--color-fg-subtle: var(--fg-subtle);
+	--color-fg-disabled: var(--fg-disabled);
+	--color-fg-on-accent: var(--fg-on-accent);
+	--color-border-default: var(--border-default);
+	--color-border-subtle: var(--border-subtle);
+	--color-border-strong: var(--border-strong);
+	--color-accent-default: var(--accent-default);
+	--color-accent-hover: var(--accent-hover);
+	--color-accent-muted: var(--accent-muted);
+	--color-accent-muted-fg: var(--accent-muted-fg);
+	--color-status-success: var(--status-success);
+	--color-status-success-fg: var(--status-success-fg);
+	--color-status-warning: var(--status-warning);
+	--color-status-warning-fg: var(--status-warning-fg);
+	--color-status-danger: var(--status-danger);
+	--color-status-danger-fg: var(--status-danger-fg);
+	--color-status-info: var(--status-info);
+	--color-status-info-fg: var(--status-info-fg);
+
+	/* ── Region layer utilities ────────────────────────────────────────────
+	   Bg-heavy by design — fg/border consume Base utilities (text-foreground
+	   / border-border) globally. See color-theme.css for the rationale. */
+	/* Titlebar */
+	--color-titlebar: var(--titlebar-bg);
+
+	/* Sidebar (left nav) */
+	--color-sidebar-bg: var(--sidebar-bg);
+	--color-sidebar-fg: var(--sidebar-fg);
+	--color-sidebar-fg-muted: var(--sidebar-fg-muted);
+	--color-sidebar-section-header-fg: var(--sidebar-section-header-fg);
+	--color-sidebar-item-hover: var(--sidebar-item-hover-bg);
+	--color-sidebar-item-active: var(--sidebar-item-active-bg);
+	--color-sidebar-item-active-fg: var(--sidebar-item-active-fg);
+
+	/* Panel (middle, chat thread) */
+	--color-panel: var(--panel-bg);
+	--color-panel-header: var(--panel-header-bg);
+	--color-panel-message-user: var(--panel-message-user-bg);
+	--color-panel-message-assistant: var(--panel-message-assistant-bg);
+	--color-panel-message-assistant-fg: var(--panel-message-assistant-fg);
+	--color-panel-code: var(--panel-code-bg);
+
+	/* Inspector (right) */
+	--color-inspector: var(--inspector-bg);
+	--color-inspector-section-header: var(--inspector-section-header-bg);
+	--color-inspector-row-hover: var(--inspector-row-hover-bg);
+
+	/* Composer */
+	--color-composer: var(--composer-bg);
+
+	/* Editor (Monaco shell) */
+	--color-editor-chrome: var(--editor-chrome-bg);
+	--color-editor-tab-active: var(--editor-tab-active-bg);
+	--color-editor-content: var(--editor-content-bg);
+	--color-editor-content-fg: var(--editor-content-fg);
+	--color-editor-gutter: var(--editor-gutter-bg);
+	--color-editor-gutter-fg: var(--editor-gutter-fg);
+	--color-editor-line-active: var(--editor-line-active-bg);
+	--color-editor-selection: var(--editor-selection-bg);
+
+	/* Terminal chrome (ANSI palette consumed via getComputedStyle, not utilities) */
+	--color-terminal-chrome: var(--terminal-chrome-bg);
+
+	/* Statusbar */
+	--color-statusbar: var(--statusbar-bg);
+
+	/* Settings */
+	--color-settings-nav: var(--settings-nav-bg);
+	--color-settings-nav-item-hover: var(--settings-nav-item-hover-bg);
+	--color-settings-nav-item-active: var(--settings-nav-item-active-bg);
+	--color-settings-content: var(--settings-content-bg);
+
+	/* Badge / presence */
+	--color-badge: var(--badge-bg);
+	--color-badge-fg: var(--badge-fg);
+	--color-presence-online: var(--presence-online);
+	--color-presence-away: var(--presence-away);
+
+	/* Typography scale — exposes color-theme.css tokens as Tailwind utilities. */
+	--text-nano: var(--text-nano);
+	--text-micro: var(--text-micro);
+	--text-mini: var(--text-mini);
+	--text-small: var(--text-small);
+	--text-ui: var(--text-ui);
+	--text-body: var(--text-body);
+	--text-title: var(--text-title);
+	--text-heading: var(--text-heading);
+
+	/* ── Geometry ──────────────────────────────────────────────────────── */
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);

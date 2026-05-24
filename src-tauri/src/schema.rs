@@ -48,11 +48,16 @@ const DEAD_COLUMNS: &[(&str, &str)] = &[
     ("repos", "conductor_config"),
     ("repos", "custom_prompt_code_review"),
     ("repos", "icon"),
-    // `branch_prefix_type` and `run_script_mode` were once stubs here.
-    // Both have since been revived as real per-repo columns (multi-account
-    // refactor and non-concurrent run mode respectively) — keep them OUT
-    // of this list so they survive startup.
+    // `branch_prefix_type` was once a stub here. It has since been
+    // revived as a real per-repo column (multi-account refactor) — keep
+    // it OUT of this list so it survives startup.
     ("repos", "storage_version"),
+    // Retired with the multi run-action migration. Each repo now stores
+    // its run scripts as rows in `repo_run_actions`; the legacy single
+    // `run_script` + `run_script_mode` columns are backfilled in
+    // `run_migrations` and then dropped here.
+    ("repos", "run_script"),
+    ("repos", "run_script_mode"),
     // workspaces: legacy fields with no read path in production.
     ("workspaces", "big_terminal_mode"),
     ("workspaces", "initialization_files_copied"),
@@ -460,17 +465,6 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add branch_prefix_type column")?;
     }
 
-    // Migration: per-repo run-script mode. 'concurrent' (default) preserves
-    // the historical behavior of allowing multiple workspaces in the same
-    // repo to run their scripts at once. 'non-concurrent' makes a new run
-    // stop any other run script in the same repo first — convenient when
-    // the script binds a fixed port.
-    if has_table(connection, "repos") && !has_column(connection, "repos", "run_script_mode") {
-        connection
-            .execute_batch("ALTER TABLE repos ADD COLUMN run_script_mode TEXT DEFAULT 'concurrent'")
-            .context("Failed to add run_script_mode column")?;
-    }
-
     if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "pr_sync_state")
     {
         connection
@@ -538,6 +532,123 @@ fn run_migrations(connection: &Connection) -> Result<()> {
                 .execute_batch("ALTER TABLE workspaces DROP COLUMN derived_status")
                 .context("Failed to drop workspace derived_status column")?;
         }
+
+        // Normalize legacy status spellings on existing rows. Older builds
+        // wrote "in-review" / "cancelled"; the canonical form is
+        // "review" / "canceled". The SELECT-time COALESCE only handles
+        // NULL, so without this the legacy string survives and the
+        // frontend's status-dot dict lookup misses (rendering a
+        // transparent, visually grey-white dot).
+        connection
+            .execute_batch(
+                "UPDATE workspaces SET status = 'review' WHERE status = 'in-review';\
+                 UPDATE workspaces SET status = 'canceled' WHERE status = 'cancelled';\
+                 UPDATE workspaces SET status = 'in-progress' WHERE status NOT IN ('in-progress', 'done', 'review', 'backlog', 'canceled');",
+            )
+            .context("Failed to normalize workspace status values")?;
+    }
+
+    // Multi run-action support: each repo gets a list of named run scripts
+    // instead of a single `run_script`. The migration must run BEFORE
+    // `drop_dead_schema` so the backfill can still read the legacy
+    // `repos.run_script` / `run_script_mode` columns — `drop_dead_schema`
+    // is what actually retires them (see `DEAD_COLUMNS`).
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "active_run_action_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN active_run_action_id TEXT")
+            .context("Failed to add workspaces.active_run_action_id column")?;
+    }
+
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS repo_run_actions (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'concurrent',
+                display_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
+                ON repo_run_actions(repo_id, display_order);
+            CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
+                AFTER UPDATE ON repo_run_actions
+                BEGIN
+                    UPDATE repo_run_actions SET updated_at = datetime('now')
+                    WHERE id = NEW.id;
+                END;
+            "#,
+        )
+        .context("Failed to create repo_run_actions table")?;
+
+    // Optional graceful-stop command per run action. `stop_command` is a
+    // shell snippet helmor runs when the user clicks Stop, blocking the
+    // SIGTERM/SIGKILL of the main process until it exits (Force Stop
+    // re-click short-circuits). Nullable — existing rows are unaffected
+    // and continue to use today's `escalating_kill` flow.
+    if has_table(connection, "repo_run_actions")
+        && !has_column(connection, "repo_run_actions", "stop_command")
+    {
+        connection
+            .execute_batch("ALTER TABLE repo_run_actions ADD COLUMN stop_command TEXT")
+            .context("Failed to add repo_run_actions.stop_command column")?;
+    }
+
+    // Backfill: every repo that has a non-empty `run_script` but no row in
+    // `repo_run_actions` yet gets a single migrated action carrying the old
+    // command + mode. Deterministic id (`legacy:<repo_id>`) keeps the
+    // migration idempotent across restarts and stable for any active-id
+    // references we later add. After this block both legacy columns are
+    // listed in `DEAD_COLUMNS` and get dropped by `drop_dead_schema` below.
+    if has_table(connection, "repos")
+        && has_table(connection, "repo_run_actions")
+        && has_column(connection, "repos", "run_script")
+    {
+        let has_mode = has_column(connection, "repos", "run_script_mode");
+        let mode_expr = if has_mode {
+            "COALESCE(NULLIF(run_script_mode, ''), 'concurrent')"
+        } else {
+            "'concurrent'"
+        };
+        connection
+            .execute_batch(&format!(
+                r#"
+                INSERT INTO repo_run_actions (id, repo_id, name, command, mode, display_order)
+                SELECT
+                    'legacy:' || id,
+                    id,
+                    'Default',
+                    run_script,
+                    {mode_expr},
+                    0
+                FROM repos
+                WHERE run_script IS NOT NULL
+                  AND TRIM(run_script) != ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM repo_run_actions WHERE repo_run_actions.repo_id = repos.id
+                  );
+                "#
+            ))
+            .context("Failed to backfill repo_run_actions from repos.run_script")?;
+
+        // One-shot rename for installs that backfilled with the earlier
+        // label ("Run"). Targeted by id pattern + exact-match name so it
+        // never touches a row the user manually renamed.
+        connection
+            .execute_batch(
+                r#"
+                UPDATE repo_run_actions
+                SET name = 'Default'
+                WHERE id LIKE 'legacy:%' AND name = 'Run';
+                "#,
+            )
+            .context("Failed to rename legacy run actions to 'Default'")?;
     }
 
     drop_dead_schema(connection)?;
@@ -591,7 +702,82 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     seed_workspace_display_orders(connection)?;
 
+    // Per-workspace port range. `port_base`/`port_count` get assigned the
+    // first time a script env is built for the workspace (lazy allocation
+    // in `workspace::port_allocation`). NULL means "not yet allocated" —
+    // legacy rows stay NULL until they next run a script.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_base") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_base INTEGER")
+            .context("Failed to add workspaces.port_base column")?;
+    }
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "port_count") {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN port_count INTEGER")
+            .context("Failed to add workspaces.port_count column")?;
+    }
+
+    // 'from_branch' = fork a new branch; 'use_branch' = attach as-is.
+    if has_table(connection, "workspaces") && !has_column(connection, "workspaces", "branch_intent")
+    {
+        connection
+            .execute_batch(
+                "ALTER TABLE workspaces ADD COLUMN branch_intent TEXT DEFAULT 'from_branch'",
+            )
+            .context("Failed to add workspaces.branch_intent column")?;
+    }
+
+    materialize_review_pr_model_defaults(connection)?;
+
     Ok(())
+}
+
+/// Promote NULL review_*/pr_* rows to explicit copies of the current
+/// defaults, so changing the default later doesn't drag them along.
+/// Idempotent via anti-join; gated on `app.default_model_id` being set.
+fn materialize_review_pr_model_defaults(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "settings") {
+        return Ok(());
+    }
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_model_id', value FROM settings
+            WHERE key = 'app.default_model_id' AND value != ''
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_model_id');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_model_id', value FROM settings
+            WHERE key = 'app.default_model_id' AND value != ''
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_model_id');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_effort', value FROM settings
+            WHERE key = 'app.default_effort' AND value != ''
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_effort');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_effort', value FROM settings
+            WHERE key = 'app.default_effort' AND value != ''
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_effort');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.review_fast_mode', value FROM settings
+            WHERE key = 'app.default_fast_mode'
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.review_fast_mode');
+
+            INSERT INTO settings (key, value)
+            SELECT 'app.pr_fast_mode', value FROM settings
+            WHERE key = 'app.default_fast_mode'
+              AND EXISTS (SELECT 1 FROM settings WHERE key = 'app.default_model_id' AND value != '')
+              AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'app.pr_fast_mode');
+            "#,
+        )
+        .context("Failed to materialize review/pr model defaults")
 }
 
 /// One-shot init for rows that still carry `display_order = 0` — the column
@@ -655,7 +841,6 @@ CREATE TABLE IF NOT EXISTS repos (
     setup_script TEXT,
     archive_script TEXT,
     display_order INTEGER DEFAULT 0,
-    run_script TEXT,
     remote TEXT,
     custom_prompt_create_pr TEXT,
     custom_prompt_review TEXT,
@@ -669,7 +854,6 @@ CREATE TABLE IF NOT EXISTS repos (
     forge_login TEXT,
     branch_prefix_type TEXT,
     branch_prefix_custom TEXT,
-    run_script_mode TEXT DEFAULT 'concurrent',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -711,9 +895,27 @@ CREATE TABLE IF NOT EXISTS workspaces (
     mode TEXT DEFAULT 'worktree',
     setup_completed_at TEXT,
     display_order INTEGER NOT NULL DEFAULT 0,
+    port_base INTEGER,
+    port_count INTEGER,
+    branch_intent TEXT DEFAULT 'from_branch',
+    active_run_action_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS repo_run_actions (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'concurrent',
+    display_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repo_run_actions_repo
+    ON repo_run_actions(repo_id, display_order);
 
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -746,6 +948,19 @@ CREATE TABLE IF NOT EXISTS session_messages (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Connected Slack workspaces (one row per workspace the user has
+-- imported). Credentials (xoxc + xoxd) live in the macOS Keychain via
+-- `crate::slack::credentials`, never here. This table is just
+-- non-secret metadata so the sidebar can list "which workspaces am I
+-- connected to" without doing a keychain probe per render.
+CREATE TABLE IF NOT EXISTS slack_workspaces (
+    team_id TEXT PRIMARY KEY,
+    team_name TEXT NOT NULL,
+    team_domain TEXT NOT NULL,
+    my_user_id TEXT NOT NULL,
+    added_at INTEGER NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
@@ -770,6 +985,13 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_updated_at
     AFTER UPDATE ON sessions
     BEGIN
         UPDATE sessions SET updated_at = datetime('now')
+        WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS update_repo_run_actions_updated_at
+    AFTER UPDATE ON repo_run_actions
+    BEGIN
+        UPDATE repo_run_actions SET updated_at = datetime('now')
         WHERE id = NEW.id;
     END;
 
@@ -805,6 +1027,7 @@ mod tests {
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"session_messages".to_string()));
         assert!(tables.contains(&"settings".to_string()));
+        assert!(tables.contains(&"slack_workspaces".to_string()));
     }
 
     #[test]
@@ -1138,6 +1361,7 @@ mod tests {
                     root_path TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     storage_version INTEGER DEFAULT 1,
+                    run_script TEXT,
                     run_script_mode TEXT DEFAULT 'concurrent',
                     custom_prompt_code_review TEXT,
                     conductor_config TEXT,
@@ -1413,35 +1637,44 @@ mod tests {
     }
 
     #[test]
-    fn run_script_mode_present_on_fresh_install() {
+    fn legacy_run_script_columns_are_dropped_on_fresh_install() {
+        // New installs never carry the retired columns. SCHEMA_SQL omits
+        // them and `drop_dead_schema` would clean them up anyway.
         let (connection, _dir) = open_test_db();
         ensure_schema(&connection).unwrap();
-        assert!(column_exists(&connection, "repos", "run_script_mode"));
+        assert!(!column_exists(&connection, "repos", "run_script"));
+        assert!(!column_exists(&connection, "repos", "run_script_mode"));
     }
 
     #[test]
-    fn run_script_mode_retained_from_legacy_schema() {
-        // Conductor DBs already carry this column. Migration must keep it
-        // (and any persisted value) rather than dropping it.
+    fn legacy_run_script_columns_backfill_into_repo_run_actions_then_drop() {
+        // Legacy DBs carry `run_script` + `run_script_mode`. Migration
+        // must move their values into `repo_run_actions` before
+        // `drop_dead_schema` retires the columns.
         let (connection, _dir) = open_test_db();
         create_legacy_schema(&connection);
         connection
             .execute(
-                "INSERT INTO repos (id, name, run_script_mode) VALUES ('r1', 'x', 'non-concurrent')",
+                "INSERT INTO repos (id, name, run_script, run_script_mode) VALUES ('r1', 'x', 'npm dev', 'non-concurrent')",
                 [],
             )
             .unwrap();
 
         run_migrations(&connection).unwrap();
-        assert!(column_exists(&connection, "repos", "run_script_mode"));
 
-        let mode: String = connection
+        assert!(!column_exists(&connection, "repos", "run_script"));
+        assert!(!column_exists(&connection, "repos", "run_script_mode"));
+
+        let (id, name, command, mode): (String, String, String, String) = connection
             .query_row(
-                "SELECT run_script_mode FROM repos WHERE id = 'r1'",
+                "SELECT id, name, command, mode FROM repo_run_actions WHERE repo_id = 'r1'",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
+        assert_eq!(id, "legacy:r1");
+        assert_eq!(name, "Default");
+        assert_eq!(command, "npm dev");
         assert_eq!(mode, "non-concurrent");
     }
 
@@ -1466,5 +1699,129 @@ mod tests {
             stored.as_deref(),
             Some(r#"{"totalTokens":12,"maxTokens":100}"#)
         );
+    }
+
+    fn read_setting(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .ok()
+    }
+
+    fn insert_setting(conn: &Connection, key: &str, value: &str) {
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            [key, value],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn review_pr_defaults_materialized_when_default_model_set() {
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "claude-sonnet-4");
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "false");
+
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_effort").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_effort").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_fast_mode").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_fast_mode").as_deref(),
+            Some("false")
+        );
+
+        // Idempotent — second run is a no-op.
+        run_migrations(&conn).unwrap();
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn review_pr_defaults_skip_when_default_model_absent() {
+        // No default_model_id → no promotion (consumers handle the fallback).
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "true");
+
+        run_migrations(&conn).unwrap();
+
+        assert!(read_setting(&conn, "app.review_model_id").is_none());
+        assert!(read_setting(&conn, "app.pr_model_id").is_none());
+        assert!(read_setting(&conn, "app.review_effort").is_none());
+        assert!(read_setting(&conn, "app.pr_effort").is_none());
+        assert!(read_setting(&conn, "app.review_fast_mode").is_none());
+        assert!(read_setting(&conn, "app.pr_fast_mode").is_none());
+    }
+
+    #[test]
+    fn review_pr_defaults_preserve_existing_user_overrides() {
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "claude-sonnet-4");
+        insert_setting(&conn, "app.default_effort", "high");
+        insert_setting(&conn, "app.default_fast_mode", "false");
+        // User already decoupled review_model_id explicitly.
+        insert_setting(&conn, "app.review_model_id", "gpt-5");
+        insert_setting(&conn, "app.review_effort", "low");
+
+        run_migrations(&conn).unwrap();
+
+        // User overrides untouched.
+        assert_eq!(
+            read_setting(&conn, "app.review_model_id").as_deref(),
+            Some("gpt-5")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.review_effort").as_deref(),
+            Some("low")
+        );
+        // Other unset fields still get materialized.
+        assert_eq!(
+            read_setting(&conn, "app.pr_model_id").as_deref(),
+            Some("claude-sonnet-4")
+        );
+        assert_eq!(
+            read_setting(&conn, "app.pr_effort").as_deref(),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn review_pr_defaults_skip_empty_default_model_id() {
+        // Empty string == null sentinel.
+        let (conn, _dir) = open_test_db();
+        ensure_schema(&conn).unwrap();
+        insert_setting(&conn, "app.default_model_id", "");
+        insert_setting(&conn, "app.default_effort", "high");
+
+        run_migrations(&conn).unwrap();
+
+        assert!(read_setting(&conn, "app.review_model_id").is_none());
+        assert!(read_setting(&conn, "app.pr_model_id").is_none());
+        assert!(read_setting(&conn, "app.review_effort").is_none());
     }
 }

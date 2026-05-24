@@ -621,12 +621,21 @@ for await (const line of rl) {
 					| "decline"
 					| "cancel";
 				const content = optionalObject(params, "content");
+				const meta = optionalObject(params, "meta");
 				logger.debug(`[${id}] userInputResponse`, { userInputId, action });
 				const resolution: UserInputResolution =
 					action === "submit"
-						? { action, content: content ?? {} }
+						? {
+								action,
+								content: content ?? {},
+								...(meta ? { meta } : {}),
+							}
 						: action === "decline"
-							? { action, ...(content ? { content } : {}) }
+							? {
+									action,
+									...(content ? { content } : {}),
+									...(meta ? { meta } : {}),
+								}
 							: { action: "cancel" };
 				const claimed =
 					claudeManager.resolveUserInput(userInputId, resolution) ||

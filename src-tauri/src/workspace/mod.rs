@@ -3,6 +3,7 @@ pub(crate) mod branching;
 pub mod files;
 pub mod helpers;
 pub(crate) mod lifecycle;
+pub mod port_allocation;
 pub mod pr_sync;
 pub mod scripts;
 pub mod sidebar_order;

@@ -8,6 +8,7 @@ import {
 	ChevronRightIcon,
 	CloudIcon,
 	CopyIcon,
+	ExternalLinkIcon,
 	FolderOpenIcon,
 	LaptopIcon,
 	LinkIcon,
@@ -18,8 +19,7 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
@@ -33,16 +33,30 @@ import {
 } from "@/components/ui/context-menu";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
 } from "@/features/commit/button";
 import {
 	type ChangeRequestInfo,
+	type DetectedEditor,
 	type ForgeDetection,
+	openFileInEditor,
 	revealPathInFinder,
 } from "@/lib/api";
-import type { DiffOpenOptions, InspectorFileItem } from "@/lib/editor-session";
+import { getMergeBlockedReason } from "@/lib/commit-button-logic";
+import {
+	type ActiveEditorTarget,
+	type DiffOpenOptions,
+	INDEX_REF,
+	type InspectorFileItem,
+	isActiveEditorTarget,
+} from "@/lib/editor-session";
 import {
 	helmorQueryKeys,
 	workspaceForgeActionStatusQueryOptions,
@@ -51,11 +65,6 @@ import {
 import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import {
-	INSPECTOR_SECTION_HEADER_HEIGHT,
-	TABS_ANIMATION_MS,
-	TABS_EASING_CURVE,
-} from "../layout";
 import { useChangesState } from "./changes/use-changes-state";
 import { useGitMutations } from "./changes/use-git-mutations";
 import { GitSectionHeader } from "./git-section-header";
@@ -82,7 +91,8 @@ type ChangesSectionProps = {
 	workspaceTargetBranch: string | null;
 	changes: InspectorFileItem[];
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
+	preferredEditor?: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
 	flashingPaths: Set<string>;
 	onCommitAction?: (mode: WorkspaceCommitButtonMode) => Promise<void>;
@@ -91,15 +101,13 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
-	/** Height of the changes body (excluding the section header). */
-	bodyHeight: number;
-	/** Enables the height transition only for explicit panel toggles. */
-	animatePanelToggle?: boolean;
-	/** Suppresses the height transition while the user is dragging a divider. */
-	isResizing?: boolean;
+	/** Ref handed to the inspector's resize hook so it can write `style.height`
+	 * directly during drag, bypassing React and CSS custom-property
+	 * invalidation. */
+	sectionRef?: React.RefObject<HTMLElement | null>;
 };
 
-export function ChangesSection({
+function ChangesSectionImpl({
 	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
@@ -107,7 +115,8 @@ export function ChangesSection({
 	workspaceTargetBranch,
 	changes,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
+	preferredEditor = null,
 	onOpenEditorFile,
 	flashingPaths,
 	onCommitAction,
@@ -115,18 +124,8 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
-	bodyHeight,
-	animatePanelToggle = false,
-	isResizing,
+	sectionRef,
 }: ChangesSectionProps) {
-	const shouldReduceMotion = useReducedMotion();
-	const panelTransition = {
-		duration:
-			animatePanelToggle && !isResizing && !shouldReduceMotion
-				? TABS_ANIMATION_MS / 1000
-				: 0,
-		ease: TABS_EASING_CURVE,
-	};
 	const queryClient = useQueryClient();
 	const {
 		changesOpen,
@@ -253,24 +252,41 @@ export function ChangesSection({
 		await onCommitAction(commitButtonMode);
 	}, [commitButtonMode, onCommitAction]);
 
+	const handleOpenExternalEditor = useCallback(
+		(path: string) => {
+			if (!preferredEditor) {
+				pushToast("Select a default editor before opening files.", "No editor");
+				return;
+			}
+			void openFileInEditor(path, preferredEditor.id).catch((error) => {
+				pushToast(
+					error instanceof Error ? error.message : String(error),
+					`Failed to open ${preferredEditor.name}`,
+				);
+			});
+		},
+		[preferredEditor, pushToast],
+	);
+
 	// Header shimmer is owned by App: it knows when the change-request and
 	// forge-action-status queries are on their *first* cold fetch (vs. just a
 	// background refresh or a placeholder render).
 	const isForgeRefreshing = workspaceId !== null && forgeIsRefreshing;
 
 	return (
-		<motion.section
+		<section
+			ref={sectionRef}
 			aria-label="Inspector section Git"
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			initial={false}
-			animate={{ height: INSPECTOR_SECTION_HEADER_HEIGHT + bodyHeight }}
-			transition={panelTransition}
-			style={{ willChange: isResizing ? undefined : "height" }}
+			// Height written via `sectionRef` by `useWorkspaceInspectorSidebar`
+			// — kept out of JSX so incidental re-renders can't clobber it.
+			style={{ contain: "layout style paint" }}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
 				commitButtonState={commitButtonState}
 				changeRequest={changeRequest}
+				mergeBlockedReason={getMergeBlockedReason(forgeStatusQuery.data)}
 				changeRequestName={changeRequestName}
 				forgeRemoteState={forgeStatusQuery.data?.remoteState ?? null}
 				forgeDetection={forgeDetection}
@@ -287,7 +303,7 @@ export function ChangesSection({
 
 			<ScrollArea
 				aria-label="Changes panel body"
-				className="min-h-0 flex-1 bg-muted/20 font-mono text-[11.5px]"
+				className="min-h-0 flex-1 bg-muted/20 font-mono text-mini"
 			>
 				{hasUncommittedChanges && (
 					<>
@@ -304,11 +320,14 @@ export function ChangesSection({
 								onStageAction={unstageFile}
 								onBatchAction={unstageAll}
 								editorMode={editorMode}
-								activeEditorPath={activeEditorPath}
+								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
+								onOpenExternalEditor={handleOpenExternalEditor}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
+								originalRef="HEAD"
+								modifiedRef={INDEX_REF}
 							/>
 						)}
 						{unstagedChanges.length > 0 && (
@@ -331,11 +350,13 @@ export function ChangesSection({
 								onBatchAction={stageAll}
 								onDiscard={discardFile}
 								editorMode={editorMode}
-								activeEditorPath={activeEditorPath}
+								activeEditor={activeEditor}
 								onOpenEditorFile={onOpenEditorFile}
+								onOpenExternalEditor={handleOpenExternalEditor}
 								flashingPaths={flashingPaths}
 								workspaceBranch={workspaceBranch}
 								workspaceRemoteUrl={workspaceRemoteUrl}
+								originalRef={INDEX_REF}
 							/>
 						)}
 					</>
@@ -352,8 +373,9 @@ export function ChangesSection({
 						treeView={branchDiffTreeView}
 						onToggleTreeView={() => toggleBranchDiffTreeView()}
 						editorMode={editorMode}
-						activeEditorPath={activeEditorPath}
+						activeEditor={activeEditor}
 						onOpenEditorFile={onOpenEditorFile}
+						onOpenExternalEditor={handleOpenExternalEditor}
 						flashingPaths={flashingPaths}
 						workspaceBranch={workspaceBranch}
 						workspaceRemoteUrl={workspaceRemoteUrl}
@@ -361,14 +383,18 @@ export function ChangesSection({
 				)}
 
 				{!hasChanges && (
-					<div className="px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+					<div className="px-3 py-3 text-mini leading-5 text-muted-foreground">
 						No changes on this branch yet.
 					</div>
 				)}
 			</ScrollArea>
-		</motion.section>
+		</section>
 	);
 }
+
+// memo so root state changes that don't touch Changes props (e.g. opening
+// Settings) skip this subtree entirely.
+export const ChangesSection = memo(ChangesSectionImpl);
 
 type StageActionKind = "stage" | "unstage";
 
@@ -386,11 +412,14 @@ function ChangesGroup({
 	onBatchAction,
 	onDiscard,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	workspaceBranch,
 	workspaceRemoteUrl,
+	originalRef,
+	modifiedRef,
 }: {
 	label: string;
 	icon?: React.ReactNode;
@@ -405,15 +434,41 @@ function ChangesGroup({
 	onBatchAction?: () => void;
 	onDiscard?: (path: string) => void;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
+	/** Git ref for the original (left) side. Staged → "HEAD"; Unstaged → INDEX_REF. */
+	originalRef?: string;
+	/** Git ref for the modified (right) side. Staged → INDEX_REF; Unstaged → undefined
+	 * (so the editor reads the working tree from disk). */
+	modifiedRef?: string;
 }) {
+	const handleOpenFile = useCallback(
+		(path: string, options?: DiffOpenOptions) => {
+			onOpenEditorFile(path, {
+				fileStatus: options?.fileStatus ?? "M",
+				originalRef,
+				modifiedRef,
+			});
+		},
+		[onOpenEditorFile, originalRef, modifiedRef],
+	);
+	// Same file can appear in Staged AND Unstaged. The selection highlight
+	// belongs to whichever area's bases match the open editor — comparing
+	// path alone lights up both rows simultaneously.
+	const activeEditorPath = isActiveEditorTarget(
+		activeEditor,
+		originalRef,
+		modifiedRef,
+	)
+		? activeEditor.path
+		: null;
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-mini font-semibold tracking-[-0.01em] text-muted-foreground">
 				<Button
 					type="button"
 					variant="ghost"
@@ -451,7 +506,7 @@ function ChangesGroup({
 				)}
 				<Badge
 					variant="secondary"
-					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] font-semibold"
+					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano font-semibold"
 				>
 					{count}
 				</Badge>
@@ -463,7 +518,8 @@ function ChangesGroup({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -476,7 +532,8 @@ function ChangesGroup({
 							changes={changes}
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
-							onOpenEditorFile={onOpenEditorFile}
+							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							action={action}
 							onStageAction={onStageAction}
@@ -501,8 +558,9 @@ function BranchDiffSection({
 	treeView,
 	onToggleTreeView,
 	editorMode,
-	activeEditorPath,
+	activeEditor,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	workspaceBranch,
 	workspaceRemoteUrl,
@@ -516,26 +574,36 @@ function BranchDiffSection({
 	treeView: boolean;
 	onToggleTreeView: () => void;
 	editorMode: boolean;
-	activeEditorPath?: string | null;
+	activeEditor?: ActiveEditorTarget | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	workspaceBranch: string | null;
 	workspaceRemoteUrl: string | null;
 }) {
+	const remoteOriginalRef = targetBranch ?? undefined;
+	const remoteModifiedRef = "HEAD";
 	const handleOpenFile = useCallback(
 		(path: string, options?: DiffOpenOptions) => {
 			onOpenEditorFile(path, {
 				fileStatus: options?.fileStatus ?? "M",
-				originalRef: targetBranch ?? undefined,
-				modifiedRef: "HEAD",
+				originalRef: remoteOriginalRef,
+				modifiedRef: remoteModifiedRef,
 			});
 		},
-		[onOpenEditorFile, targetBranch],
+		[onOpenEditorFile, remoteOriginalRef, remoteModifiedRef],
 	);
+	const activeEditorPath = isActiveEditorTarget(
+		activeEditor,
+		remoteOriginalRef,
+		remoteModifiedRef,
+	)
+		? activeEditor.path
+		: null;
 
 	return (
 		<div>
-			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-[11.5px] font-semibold tracking-[-0.01em] text-muted-foreground">
+			<div className="group/header flex w-full items-center gap-1 py-1 pl-1 pr-2 text-mini font-semibold tracking-[-0.01em] text-muted-foreground">
 				<Button
 					type="button"
 					variant="ghost"
@@ -561,7 +629,7 @@ function BranchDiffSection({
 				<ViewToggleButton treeView={treeView} onToggle={onToggleTreeView} />
 				<Badge
 					variant="secondary"
-					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-[9.5px] leading-none"
+					className="h-4 min-w-[16px] justify-center rounded-full px-1 text-nano leading-none"
 				>
 					{loading ? (
 						<LoaderCircleIcon className="size-2.5 animate-spin" />
@@ -578,7 +646,7 @@ function BranchDiffSection({
 					)}
 				>
 					{loading && changes.length === 0 ? (
-						<div className="px-2 py-2 text-[10.5px] text-muted-foreground">
+						<div className="px-2 py-2 text-micro text-muted-foreground">
 							Switching target branch…
 						</div>
 					) : treeView ? (
@@ -587,6 +655,7 @@ function BranchDiffSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							workspaceBranch={workspaceBranch}
 							workspaceRemoteUrl={workspaceRemoteUrl}
@@ -597,6 +666,7 @@ function BranchDiffSection({
 							editorMode={editorMode}
 							activeEditorPath={activeEditorPath}
 							onOpenEditorFile={handleOpenFile}
+							onOpenExternalEditor={onOpenExternalEditor}
 							flashingPaths={flashingPaths}
 							workspaceBranch={workspaceBranch}
 							workspaceRemoteUrl={workspaceRemoteUrl}
@@ -648,6 +718,7 @@ function ChangesTreeView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -659,6 +730,7 @@ function ChangesTreeView({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -693,6 +765,7 @@ function ChangesTreeView({
 				editorMode={editorMode}
 				activeEditorPath={activeEditorPath}
 				onOpenEditorFile={onOpenEditorFile}
+				onOpenExternalEditor={onOpenExternalEditor}
 				flashingPaths={flashingPaths}
 				action={action}
 				onStageAction={onStageAction}
@@ -723,6 +796,7 @@ function TreeNodeList({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -737,6 +811,7 @@ function TreeNodeList({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -764,7 +839,9 @@ function TreeNodeList({
 						<div key={node.path}>
 							<div
 								className="flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
-								style={{ paddingLeft: `${depth * 12 + 8}px` }}
+								style={{
+									paddingLeft: `${depth * 12 + 8}px`,
+								}}
 								onClick={() => onToggle(node.path)}
 								onKeyDown={(event) => {
 									if (event.key === "Enter" || event.key === " ") {
@@ -798,6 +875,7 @@ function TreeNodeList({
 									editorMode={editorMode}
 									activeEditorPath={activeEditorPath}
 									onOpenEditorFile={onOpenEditorFile}
+									onOpenExternalEditor={onOpenExternalEditor}
 									flashingPaths={flashingPaths}
 									action={action}
 									onStageAction={onStageAction}
@@ -823,7 +901,9 @@ function TreeNodeList({
 									? "bg-accent text-foreground"
 									: "bg-muted/60 text-foreground"),
 						)}
-						style={{ paddingLeft: `${depth * 12 + 22}px` }}
+						style={{
+							paddingLeft: `${depth * 12 + 22}px`,
+						}}
 						role="treeitem"
 						tabIndex={0}
 						onClick={() =>
@@ -851,6 +931,7 @@ function TreeNodeList({
 							<StageActionSlot
 								file={file}
 								action={action}
+								onOpenExternalEditor={onOpenExternalEditor}
 								onStageAction={onStageAction}
 								onDiscard={onDiscard}
 							/>
@@ -883,6 +964,7 @@ function ChangesFlatView({
 	editorMode,
 	activeEditorPath,
 	onOpenEditorFile,
+	onOpenExternalEditor,
 	flashingPaths,
 	action,
 	onStageAction,
@@ -894,6 +976,7 @@ function ChangesFlatView({
 	editorMode: boolean;
 	activeEditorPath?: string | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
+	onOpenExternalEditor: (path: string) => void;
 	flashingPaths: Set<string>;
 	action?: StageActionKind;
 	onStageAction?: (path: string) => void;
@@ -903,91 +986,98 @@ function ChangesFlatView({
 }) {
 	const hasStage = !!action && !!onStageAction;
 	const hasDiscard = !!onDiscard;
-	const hasAction = hasStage || hasDiscard;
 
 	return (
 		<div className="py-0.5">
-			{changes.map((change) => (
-				<FileRowContextMenu
-					key={change.path}
-					file={change}
-					workspaceBranch={workspaceBranch}
-					workspaceRemoteUrl={workspaceRemoteUrl}
-				>
-					<div
-						className={cn(
-							"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-							change.absolutePath === activeEditorPath &&
-								(editorMode
-									? "bg-accent text-foreground"
-									: "bg-muted/60 text-foreground"),
-						)}
-						role="button"
-						tabIndex={0}
-						onClick={() =>
-							onOpenEditorFile(change.absolutePath, {
-								fileStatus: change.status,
-							})
-						}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" || event.key === " ") {
-								event.preventDefault();
+			{changes.map((change) => {
+				const canOpenExternalEditor = change.status !== "D";
+				const hasHoverAction = canOpenExternalEditor || hasStage || hasDiscard;
+
+				return (
+					<FileRowContextMenu
+						key={change.path}
+						file={change}
+						workspaceBranch={workspaceBranch}
+						workspaceRemoteUrl={workspaceRemoteUrl}
+					>
+						<div
+							className={cn(
+								"group/row flex cursor-interactive items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
+								change.absolutePath === activeEditorPath &&
+									(editorMode
+										? "bg-accent text-foreground"
+										: "bg-muted/60 text-foreground"),
+							)}
+							role="button"
+							tabIndex={0}
+							onClick={() =>
 								onOpenEditorFile(change.absolutePath, {
 									fileStatus: change.status,
-								});
+								})
 							}
-						}}
-					>
-						<img
-							src={getMaterialFileIcon(change.name)}
-							alt=""
-							className="size-4 shrink-0"
-						/>
-						<span className="min-w-0 max-w-[60%] truncate">
-							<ShinyFlash active={flashingPaths.has(change.path)}>
-								{change.name}
-							</ShinyFlash>
-						</span>
-						<span
-							className={cn(
-								"min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground",
-								hasAction && "group-hover/row:hidden",
-							)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									onOpenEditorFile(change.absolutePath, {
+										fileStatus: change.status,
+									});
+								}
+							}}
 						>
-							{change.path.includes("/")
-								? change.path.slice(0, change.path.lastIndexOf("/"))
-								: ""}
-						</span>
-						<span
-							className={cn(
-								"flex shrink-0 items-center gap-1 tabular-nums",
-								hasAction && "group-hover/row:hidden",
-							)}
-						>
-							<LineStats
-								insertions={change.insertions}
-								deletions={change.deletions}
+							<img
+								src={getMaterialFileIcon(change.name)}
+								alt=""
+								className="size-4 shrink-0"
 							/>
+							<span className="min-w-0 max-w-[60%] truncate">
+								<ShinyFlash active={flashingPaths.has(change.path)}>
+									{change.name}
+								</ShinyFlash>
+							</span>
 							<span
 								className={cn(
-									"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
-									STATUS_COLORS[change.status],
+									"min-w-0 flex-1 truncate text-right text-micro text-muted-foreground",
+									hasHoverAction && "group-hover/row:hidden",
 								)}
 							>
-								{change.status}
+								{change.path.includes("/")
+									? change.path.slice(0, change.path.lastIndexOf("/"))
+									: ""}
 							</span>
-						</span>
-						{hasAction && (
-							<RowHoverActions
-								path={change.path}
-								action={action}
-								onStageAction={onStageAction}
-								onDiscard={onDiscard}
-							/>
-						)}
-					</div>
-				</FileRowContextMenu>
-			))}
+							<span
+								className={cn(
+									"flex shrink-0 items-center gap-1 tabular-nums",
+									hasHoverAction && "group-hover/row:hidden",
+								)}
+							>
+								<LineStats
+									insertions={change.insertions}
+									deletions={change.deletions}
+								/>
+								<span
+									className={cn(
+										"inline-flex h-4 w-4 items-center justify-center text-micro font-semibold",
+										STATUS_COLORS[change.status],
+									)}
+								>
+									{change.status}
+								</span>
+							</span>
+							{hasHoverAction && (
+								<RowHoverActions
+									path={change.path}
+									absolutePath={change.absolutePath}
+									canOpenExternalEditor={canOpenExternalEditor}
+									action={hasStage ? action : undefined}
+									onOpenExternalEditor={onOpenExternalEditor}
+									onStageAction={hasStage ? onStageAction : undefined}
+									onDiscard={hasDiscard ? onDiscard : undefined}
+								/>
+							)}
+						</div>
+					</FileRowContextMenu>
+				);
+			})}
 		</div>
 	);
 }
@@ -995,42 +1085,48 @@ function ChangesFlatView({
 function StageActionSlot({
 	file,
 	action,
+	onOpenExternalEditor,
 	onStageAction,
 	onDiscard,
 }: {
 	file: ChangeRow;
 	action?: StageActionKind;
+	onOpenExternalEditor: (path: string) => void;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
 }) {
 	const hasStage = !!action && !!onStageAction;
 	const hasDiscard = !!onDiscard;
-	const hasAction = hasStage || hasDiscard;
+	const canOpenExternalEditor = file.status !== "D";
+	const hasHoverAction = canOpenExternalEditor || hasStage || hasDiscard;
 
 	return (
 		<>
 			<span
 				className={cn(
 					"ml-auto flex shrink-0 items-center gap-1.5",
-					hasAction && "group-hover/row:hidden",
+					hasHoverAction && "group-hover/row:hidden",
 				)}
 			>
 				<LineStats insertions={file.insertions} deletions={file.deletions} />
 				<span
 					className={cn(
-						"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+						"inline-flex h-4 w-4 items-center justify-center text-micro font-semibold",
 						STATUS_COLORS[file.status],
 					)}
 				>
 					{file.status}
 				</span>
 			</span>
-			{hasAction && (
+			{hasHoverAction && (
 				<RowHoverActions
 					path={file.path}
-					action={action}
-					onStageAction={onStageAction}
-					onDiscard={onDiscard}
+					absolutePath={file.absolutePath}
+					canOpenExternalEditor={canOpenExternalEditor}
+					action={hasStage ? action : undefined}
+					onOpenExternalEditor={onOpenExternalEditor}
+					onStageAction={hasStage ? onStageAction : undefined}
+					onDiscard={hasDiscard ? onDiscard : undefined}
 				/>
 			)}
 		</>
@@ -1039,17 +1135,37 @@ function StageActionSlot({
 
 function RowHoverActions({
 	path,
+	absolutePath,
+	canOpenExternalEditor,
 	action,
+	onOpenExternalEditor,
 	onStageAction,
 	onDiscard,
 }: {
 	path: string;
+	absolutePath: string;
+	canOpenExternalEditor: boolean;
 	action?: StageActionKind;
+	onOpenExternalEditor: (path: string) => void;
 	onStageAction?: (path: string) => void;
 	onDiscard?: (path: string) => void;
 }) {
 	return (
 		<span className="ml-auto hidden items-center gap-0.5 group-hover/row:inline-flex">
+			{canOpenExternalEditor && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<RowIconButton
+							aria-label="Open in editor"
+							onClick={() => onOpenExternalEditor(absolutePath)}
+							className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+						>
+							<ExternalLinkIcon className="size-3.5" strokeWidth={2} />
+						</RowIconButton>
+					</TooltipTrigger>
+					<TooltipContent side="top">Open in editor</TooltipContent>
+				</Tooltip>
+			)}
 			{onDiscard && (
 				<RowIconButton
 					aria-label="Discard file changes"
@@ -1222,15 +1338,25 @@ function LineStats({
 	}
 
 	return (
-		<span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
+		<span className="flex shrink-0 items-center gap-1 text-micro tabular-nums">
 			{insertions > 0 && (
 				<span className="text-chart-2">
-					+<NumberTicker value={insertions} className="text-chart-2" />
+					+
+					<NumberTicker
+						value={insertions}
+						animateOnMount={false}
+						className="text-chart-2"
+					/>
 				</span>
 			)}
 			{deletions > 0 && (
 				<span className="text-destructive">
-					−<NumberTicker value={deletions} className="text-destructive" />
+					−
+					<NumberTicker
+						value={deletions}
+						animateOnMount={false}
+						className="text-destructive"
+					/>
 				</span>
 			)}
 		</span>

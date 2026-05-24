@@ -120,7 +120,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 
 	return (
 		<HelmorProfiler id="WorkspacePanel">
-			<div className="flex min-h-0 flex-1 flex-col bg-transparent">
+			<div className="flex min-h-0 flex-1 flex-col bg-panel">
 				<WorkspacePanelHeader
 					workspace={workspace}
 					changeRequest={changeRequest}

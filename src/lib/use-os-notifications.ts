@@ -1,9 +1,11 @@
 import { useCallback, useRef } from "react";
+import { playNotificationSound } from "@/lib/notification-sound";
 import type { AppSettings } from "@/lib/settings";
 
 type NotifyFn = (opts: { title: string; body: string }) => void;
 
-/** Sends native OS notifications, gated by the `notifications` setting. */
+/** Sends native OS notifications, gated by the `notifications` setting.
+ *  Also plays the user's chosen sound effect (when not "off"). */
 export function useOsNotifications(settings: AppSettings): NotifyFn {
 	const permissionRequestedRef = useRef(false);
 
@@ -26,11 +28,12 @@ export function useOsNotifications(settings: AppSettings): NotifyFn {
 
 					if (!granted) return;
 					sendNotification({ title, body });
+					playNotificationSound(settings.notificationSound);
 				} catch (err) {
 					console.warn("[os-notification] failed to send:", err);
 				}
 			})();
 		},
-		[settings.notifications],
+		[settings.notifications, settings.notificationSound],
 	);
 }

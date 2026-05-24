@@ -228,7 +228,7 @@ export function ContextBar({
 					// editor begins.
 					className="flex items-center border-b border-dashed border-border/55 px-4 pb-2 pt-0.5"
 				>
-					<span className="shrink-0 pr-2 font-mono text-[10.5px] uppercase tracking-[0.06em] text-muted-foreground">
+					<span className="shrink-0 pr-2 font-mono text-micro uppercase tracking-[0.06em] text-muted-foreground">
 						context
 					</span>
 					<div
@@ -272,9 +272,9 @@ export function ContextBar({
 							role="tooltip"
 							data-slot="context-bar-tooltip"
 							style={{ left: tooltip.left, top: tooltip.top }}
-							className="pointer-events-none fixed z-[100] max-w-[420px] overflow-hidden truncate rounded-md bg-foreground/95 px-2 py-1 font-mono text-[11px] text-background shadow-lg"
+							className="pointer-events-none fixed z-[100] max-w-[420px] overflow-hidden truncate rounded-md bg-foreground/95 px-2 py-1 font-mono text-mini text-background shadow-lg"
 						>
-							<span className="mr-2 text-[9.5px] uppercase tracking-[0.06em] opacity-60">
+							<span className="mr-2 text-nano uppercase tracking-[0.06em] opacity-60">
 								path
 							</span>
 							{tooltip.path}
@@ -328,7 +328,7 @@ function Chip({
 				// naturally sizes to avatar + name + gap + close button.
 				// `bg-color` is the only transitioning property now (for the
 				// hover highlight); everything else is instant.
-				className="group/chip inline-flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12px] leading-tight outline-none transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--workspace-pr-merged-accent)_35%,transparent)]"
+				className="group/chip inline-flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-small leading-tight outline-none transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--workspace-pr-merged-accent)_35%,transparent)]"
 			>
 				{directory.repoIconSrc || directory.repoInitials ? (
 					<WorkspaceAvatar
@@ -336,7 +336,7 @@ function Chip({
 						repoInitials={directory.repoInitials ?? null}
 						repoName={directory.repoName ?? null}
 						title={displayName}
-						className="size-3.5"
+						className="size-4"
 					/>
 				) : (
 					<FolderIcon />

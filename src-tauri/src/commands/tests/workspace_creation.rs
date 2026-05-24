@@ -1,6 +1,6 @@
 use super::support::*;
 use crate::workspace::sidebar_order;
-use crate::workspace_state::{WorkspaceMode, WorkspaceState};
+use crate::workspace_state::{WorkspaceBranchIntent, WorkspaceMode, WorkspaceState};
 use crate::workspace_status::WorkspaceStatus;
 
 #[test]
@@ -96,11 +96,13 @@ fn prepare_local_workspace_keeps_current_branch_when_source_is_none() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
     assert_eq!(response.state, WorkspaceState::Ready);
     assert_eq!(response.branch, "main");
+    assert_eq!(response.default_branch, "main");
     assert_eq!(response.directory_name, "");
     // Local mode: prepare returns the cwd immediately so the start-page
     // submit flow can pin it onto the pending payload without waiting for
@@ -157,15 +159,33 @@ fn prepare_local_workspace_switches_branch_when_source_differs() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
     assert_eq!(response.state, WorkspaceState::Ready);
     assert_eq!(response.branch, "develop");
+    assert_eq!(response.default_branch, "main");
 
     // Verify the source repo's HEAD actually moved.
     let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
     assert_eq!(head, "develop");
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (branch, init_parent, target_branch): (String, String, String) = connection
+        .query_row(
+            r#"
+            SELECT branch, initialization_parent_branch, intended_target_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&response.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(branch, "develop");
+    assert_eq!(init_parent, "main");
+    assert_eq!(target_branch, "main");
 }
 
 #[test]
@@ -187,10 +207,12 @@ fn prepare_local_workspace_checks_out_remote_only_branch_via_dwim() {
         &harness.repo_id,
         Some("remote-only"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
     assert_eq!(response.branch, "remote-only");
+    assert_eq!(response.default_branch, "main");
     let head = crate::git_ops::current_branch_name(&harness.source_repo_root).unwrap();
     assert_eq!(head, "remote-only");
     // DWIM should have created a local tracking branch.
@@ -516,6 +538,7 @@ fn prepare_local_workspace_rejects_dirty_tracked_changes() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -541,6 +564,7 @@ fn prepare_local_workspace_allows_untracked_files_when_switching_branch() {
         &harness.repo_id,
         Some("develop"),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     assert_eq!(response.branch, "develop");
@@ -562,6 +586,7 @@ fn prepare_local_workspace_rolls_back_db_when_checkout_fails() {
         &harness.repo_id,
         Some(nonexistent),
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap_err();
     assert!(format!("{err:#}").to_lowercase().contains("checkout"));
@@ -586,6 +611,7 @@ fn finalize_workspace_from_repo_no_ops_for_local_workspace() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -621,6 +647,7 @@ fn finalize_workspace_short_circuits_for_orphaned_initializing_local_row() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     // Force the row back into Initializing to mimic the orphaned state.
@@ -726,10 +753,14 @@ fn create_workspace_from_repo_cleans_up_after_worktree_failure() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
+    // Squat each star-name slot with a *file* (not a directory). The
+    // allocator's on-disk dedupe only filters out directories, so it still
+    // picks a star name, then finalize's `workspace_dir.exists()` guard
+    // trips and the combined create path's cleanup runs.
     for name in helpers::WORKSPACE_NAMES {
-        let dir = harness.workspace_dir(name);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("keep.txt"), "keep").unwrap();
+        let path = harness.workspace_dir(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "squat").unwrap();
     }
 
     let error = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap_err();
@@ -768,7 +799,9 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -814,7 +847,11 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
         Some("bun install")
     );
     assert_eq!(
-        prepared.repo_scripts.run_script.as_deref(),
+        prepared
+            .repo_scripts
+            .run_actions
+            .first()
+            .map(|a| a.command.as_str()),
         Some("bun run dev")
     );
     assert_eq!(prepared.repo_scripts.archive_script, None);
@@ -832,7 +869,9 @@ fn finalize_workspace_transitions_initializing_to_ready_and_creates_worktree() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let workspace_dir = harness.workspace_dir(&prepared.directory_name);
@@ -879,7 +918,9 @@ fn finalize_workspace_reports_setup_pending_when_helmor_json_has_setup() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -900,7 +941,9 @@ fn finalize_workspace_stays_ready_when_helmor_json_has_setup_but_auto_run_disabl
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -920,7 +963,9 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -949,10 +994,10 @@ fn finalize_workspace_cleans_up_row_on_worktree_failure() {
 
 #[test]
 fn execute_archive_plan_short_circuits_for_local_workspace() {
-    // CRITICAL regression test: `execute_archive_plan` is the path used
-    // by the queue / kanban-style archive flow. For local mode it MUST
-    // skip the worktree removal — `remove_worktree` would rename + delete
-    // the user's actual repo (since workspace_dir == repo_root).
+    // CRITICAL regression test: `execute_archive_plan` is the archive
+    // flow's path. For local mode it MUST skip worktree removal —
+    // `remove_worktree` would rename + delete the user's actual repo
+    // (since workspace_dir == repo_root).
     let _guard = TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -961,6 +1006,7 @@ fn execute_archive_plan_short_circuits_for_local_workspace() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
@@ -999,6 +1045,7 @@ fn archive_local_workspace_only_updates_db() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     fs::write(harness.source_repo_root.join("user.txt"), "important").unwrap();
@@ -1039,6 +1086,7 @@ fn restore_local_workspace_only_flips_state() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
@@ -1103,6 +1151,7 @@ fn validate_restore_local_workspace_short_circuits_to_no_conflict() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::archive_workspace_impl(&prepared.workspace_id).unwrap();
@@ -1123,6 +1172,7 @@ fn move_local_workspace_to_worktree_carries_uncommitted_changes() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1207,6 +1257,7 @@ fn move_local_workspace_to_worktree_works_on_clean_local() {
         &harness.repo_id,
         None,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1230,7 +1281,9 @@ fn move_local_workspace_to_worktree_rejects_worktree_mode_workspace() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1287,7 +1340,9 @@ fn finalize_workspace_is_idempotent_for_ready_workspace() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let first = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1315,7 +1370,9 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
     let stale = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let connection = Connection::open(harness.db_path()).unwrap();
@@ -1330,7 +1387,9 @@ fn cleanup_orphaned_initializing_workspaces_purges_old_rows_and_cascades_session
     let fresh = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1382,7 +1441,9 @@ fn git_action_status_returns_fresh_defaults_for_initializing_workspace() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1414,6 +1475,38 @@ fn git_action_status_returns_fresh_defaults_for_initializing_workspace() {
 }
 
 #[test]
+fn git_action_status_returns_quiet_status_for_chat_workspace() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _harness = CreateTestHarness::new();
+
+    // Chat workspaces are scratch dirs with no git binding. A naive
+    // `git status` call would emit `WorkspaceBroken` on every poll;
+    // the short-circuit must catch chat mode before running git.
+    let prepared =
+        crate::workspace::lifecycle::prepare_chat_workspace_impl(WorkspaceStatus::InProgress, None)
+            .unwrap();
+
+    let status = tauri::async_runtime::block_on(
+        crate::commands::editor_commands::get_workspace_git_action_status(
+            prepared.workspace_id.clone(),
+        ),
+    )
+    .expect("get_workspace_git_action_status should succeed for chat workspace");
+
+    assert_eq!(status.uncommitted_count, 0);
+    assert_eq!(status.conflict_count, 0);
+    assert_eq!(status.behind_target_count, 0);
+    assert_eq!(status.ahead_of_remote_count, 0);
+    assert_eq!(status.sync_status, git_ops::WorkspaceSyncStatus::UpToDate);
+    assert_eq!(
+        status.push_status,
+        git_ops::WorkspacePushStatus::Unpublished,
+    );
+}
+
+#[test]
 fn pr_lookups_short_circuit_for_initializing_workspace_without_network() {
     let _guard = TEST_LOCK
         .lock()
@@ -1423,7 +1516,9 @@ fn pr_lookups_short_circuit_for_initializing_workspace_without_network() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
 
@@ -1455,7 +1550,8 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    // Commit a repo-root helmor.json and seed a DB script override — both
+    // Commit a repo-root helmor.json and seed DB-level script overrides
+    // (both `setup_script` and a `repo_run_actions` row) — every one
     // should be SHADOWED by the worktree's own helmor.json.
     harness.commit_repo_files(&[(
         "helmor.json",
@@ -1464,9 +1560,11 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2 WHERE id = ?3",
-            ("db-setup", "db-run", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1 WHERE id = ?2",
+            ("db-setup", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     // Finalize so the worktree exists, then rewrite the worktree's
@@ -1474,7 +1572,9 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1488,7 +1588,10 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
     let scripts =
         crate::repos::load_repo_scripts(&harness.repo_id, Some(&prepared.workspace_id)).unwrap();
     assert_eq!(scripts.setup_script.as_deref(), Some("worktree-setup"));
-    assert_eq!(scripts.run_script.as_deref(), Some("worktree-run"));
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("worktree-run")
+    );
     assert!(scripts.setup_from_project);
     assert!(scripts.run_from_project);
 }
@@ -1509,15 +1612,19 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2 WHERE id = ?3",
-            ("db-setup", "db-run", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1 WHERE id = ?2",
+            ("db-setup", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     let worktree_dir = harness.workspace_dir(&prepared.directory_name);
@@ -1528,8 +1635,11 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
     // setup: worktree absent → falls to repo root.
     assert_eq!(scripts.setup_script.as_deref(), Some("source-root-setup"));
     assert!(scripts.setup_from_project);
-    // run: no project value anywhere → falls to DB.
-    assert_eq!(scripts.run_script.as_deref(), Some("db-run"));
+    // run: no project value anywhere → falls to DB action.
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("db-run")
+    );
     assert!(!scripts.run_from_project);
 }
 
@@ -1545,15 +1655,19 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3 WHERE id = ?4",
-            ("db-setup", "db-run", "db-archive", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1, archive_script = ?2 WHERE id = ?3",
+            ("db-setup", "db-archive", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1561,7 +1675,10 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
     let scripts =
         crate::repos::load_repo_scripts(&harness.repo_id, Some(&prepared.workspace_id)).unwrap();
     assert_eq!(scripts.setup_script.as_deref(), Some("db-setup"));
-    assert_eq!(scripts.run_script.as_deref(), Some("db-run"));
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("db-run")
+    );
     assert_eq!(scripts.archive_script.as_deref(), Some("db-archive"));
     assert!(!scripts.setup_from_project);
     assert!(!scripts.run_from_project);
@@ -1583,14 +1700,18 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
     let keep = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&keep.workspace_id).unwrap();
     let drop = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&drop.workspace_id).unwrap();
@@ -1661,7 +1782,9 @@ fn cleanup_orphaned_initializing_workspaces_skips_non_initializing_states() {
     let prepared = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::InProgress,
+        None,
     )
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
@@ -1698,9 +1821,13 @@ fn prepare_local_workspace_with_backlog_initial_status_lands_in_backlog() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    let response =
-        workspaces::prepare_local_workspace_impl(&harness.repo_id, None, WorkspaceStatus::Backlog)
-            .unwrap();
+    let response = workspaces::prepare_local_workspace_impl(
+        &harness.repo_id,
+        None,
+        WorkspaceStatus::Backlog,
+        None,
+    )
+    .unwrap();
 
     let connection = Connection::open(harness.db_path()).unwrap();
     let status: String = connection
@@ -1727,7 +1854,9 @@ fn prepare_workspace_from_repo_with_backlog_initial_status_lands_in_backlog() {
     let response = workspaces::prepare_workspace_from_repo_impl(
         &harness.repo_id,
         None,
+        WorkspaceBranchIntent::FromBranch,
         WorkspaceStatus::Backlog,
+        None,
     )
     .unwrap();
 
@@ -1740,4 +1869,267 @@ fn prepare_workspace_from_repo_with_backlog_initial_status_lands_in_backlog() {
         )
         .unwrap();
     assert_eq!(status, "backlog");
+}
+
+// ---- UseBranch (reuse existing branch as new workspace) ----
+
+#[test]
+fn prepare_workspace_use_branch_stores_existing_branch_verbatim() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    // Seed a non-default branch the user could reasonably want to reuse
+    // (e.g. a teammate's PR branch checked into the local repo).
+    harness.create_remote_branch_with_file("feature/reuse-me", "reuse.txt", "x");
+
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("feature/reuse-me"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+
+    // The workspace's branch is the EXACT picker selection — no prefix /
+    // celestial fork. `default_branch` echoes the repo default (the
+    // best-guess merge target).
+    assert_eq!(prepared.branch, "feature/reuse-me");
+    assert_eq!(prepared.default_branch, "main");
+    assert_eq!(prepared.branch_intent, WorkspaceBranchIntent::UseBranch);
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (branch, init_parent, target, intent): (String, String, String, String) = connection
+        .query_row(
+            "SELECT branch, initialization_parent_branch, intended_target_branch, branch_intent
+             FROM workspaces WHERE id = ?1",
+            [&prepared.workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(branch, "feature/reuse-me");
+    assert_eq!(init_parent, "main");
+    assert_eq!(target, "main");
+    assert_eq!(intent, "use_branch");
+}
+
+#[test]
+fn prepare_workspace_use_branch_errors_when_branch_missing() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let err = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("nope/does-not-exist"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap_err();
+
+    let code = crate::error::extract_code(&err);
+    assert_eq!(code, crate::error::ErrorCode::BranchNotFound);
+}
+
+#[test]
+fn prepare_workspace_use_branch_errors_when_branch_already_checked_out_elsewhere() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("feature/in-use", "f.txt", "x");
+
+    // Materialise the branch in a worktree so the picker conflicts.
+    let prior = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("feature/in-use"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    workspaces::finalize_workspace_from_repo_impl(&prior.workspace_id).unwrap();
+
+    let err = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("feature/in-use"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap_err();
+
+    let code = crate::error::extract_code(&err);
+    assert_eq!(code, crate::error::ErrorCode::BranchInUse);
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature/in-use"),
+        "error message should name the branch: {msg}"
+    );
+}
+
+#[test]
+fn prepare_workspace_use_branch_errors_when_source_branch_omitted() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let err = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        None,
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap_err();
+
+    // No branch picked → BranchNotFound (we can't reuse what isn't named).
+    let code = crate::error::extract_code(&err);
+    assert_eq!(code, crate::error::ErrorCode::BranchNotFound);
+}
+
+#[test]
+fn finalize_workspace_use_branch_attaches_worktree_to_existing_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("feature/attach-me", "attach.txt", "hello");
+
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("feature/attach-me"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+
+    // Worktree dir exists and has the branch's file (proving we attached
+    // to the existing branch's commit, not forked off main).
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    assert!(workspace_dir.join("attach.txt").exists());
+    let head_branch = git_ops::current_branch_name(&workspace_dir).unwrap();
+    assert_eq!(head_branch, "feature/attach-me");
+}
+
+#[test]
+fn finalize_workspace_use_branch_does_not_delete_branch_on_failure() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+    harness.create_remote_branch_with_file("feature/keep-me", "k.txt", "x");
+
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("feature/keep-me"),
+        WorkspaceBranchIntent::UseBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+
+    // Force finalize to fail by pre-populating the target worktree dir.
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    fs::create_dir_all(&workspace_dir).unwrap();
+    fs::write(workspace_dir.join("squat.txt"), "squat").unwrap();
+
+    let err = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap_err();
+    assert!(err.to_string().contains("already exists"));
+
+    // The reused branch MUST still exist — cleanup is only allowed to
+    // drop branches the workspace itself created (FromBranch).
+    git_ops::verify_branch_exists(&harness.source_repo_root, "feature/keep-me")
+        .expect("UseBranch cleanup must never delete the reused branch");
+}
+
+// ---- Local-only base fallback (FromBranch) ----
+
+#[test]
+fn finalize_workspace_from_branch_falls_back_to_local_ref_when_remote_missing() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // Create a branch locally but DON'T fetch — so `refs/remotes/origin/<x>`
+    // doesn't cache it. The remote (which is the repo itself) has it, but
+    // our local cache doesn't reflect that — simulating "branch not yet
+    // visible on origin from this client's POV".
+    let root = harness.source_repo_root.to_str().unwrap();
+    git_ops::run_git(["-C", root, "checkout", "-b", "wip/local-only"], None).unwrap();
+    fs::write(harness.source_repo_root.join("wip.txt"), "wip").unwrap();
+    git_ops::run_git(["-C", root, "add", "wip.txt"], None).unwrap();
+    git_ops::run_git(
+        [
+            "-C",
+            root,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Helmor",
+            "-c",
+            "user.email=helmor@example.com",
+            "commit",
+            "-m",
+            "wip",
+        ],
+        None,
+    )
+    .unwrap();
+    git_ops::run_git(["-C", root, "checkout", "main"], None).unwrap();
+    // NOTE: no `git fetch origin` here — keeps `refs/remotes/origin/wip/local-only` absent.
+
+    let prepared = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        Some("wip/local-only"),
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    let finalized = workspaces::finalize_workspace_from_repo_impl(&prepared.workspace_id).unwrap();
+    assert_eq!(finalized.final_state, WorkspaceState::Ready);
+
+    // The new celestial branch was forked off the local base — verify the
+    // base's file made it into the worktree.
+    let workspace_dir = harness.workspace_dir(&prepared.directory_name);
+    assert!(workspace_dir.join("wip.txt").exists());
+}
+
+// ---- list_branches_for_workspace_picker ----
+
+#[test]
+fn list_branch_picker_entries_tags_local_and_remote_correctly() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // `main` exists both local and remote (initial repo setup pushes to origin).
+    harness.create_remote_branch_with_file("feature/published", "p.txt", "x");
+    // Create a local-only branch (no fetch after).
+    let root = harness.source_repo_root.to_str().unwrap();
+    git_ops::run_git(["-C", root, "branch", "wip/local-only"], None).unwrap();
+
+    let entries = workspaces::list_branch_picker_entries(&harness.source_repo_root, "origin");
+
+    let by_name: std::collections::HashMap<&str, (bool, bool)> = entries
+        .iter()
+        .map(|e| (e.name.as_str(), (e.has_local, e.has_remote)))
+        .collect();
+
+    // `main` and `feature/published`: both local + remote.
+    assert_eq!(by_name.get("main"), Some(&(true, true)));
+    assert_eq!(by_name.get("feature/published"), Some(&(true, true)));
+    // `wip/local-only`: local-only (we never fetched it into origin/).
+    assert_eq!(by_name.get("wip/local-only"), Some(&(true, false)));
 }

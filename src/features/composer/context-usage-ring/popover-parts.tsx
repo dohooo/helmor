@@ -22,8 +22,8 @@ export function UsageHeader({
 	const hasTokens = used !== null && max !== null;
 	return (
 		<div className="flex items-center justify-between">
-			<div className="text-[14px] font-semibold text-foreground">Context</div>
-			<div className="text-[12px] tabular-nums text-muted-foreground">
+			<div className="text-body font-semibold text-foreground">Context</div>
+			<div className="text-small tabular-nums text-muted-foreground">
 				{hasTokens ? (
 					<>
 						{formatTokens(used)}/{formatTokens(max)}
@@ -87,7 +87,7 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 				: "bg-foreground/70";
 	return (
 		<div className={cn("flex flex-col gap-1", muted && "opacity-60")}>
-			<div className="flex items-center justify-between text-[12px]">
+			<div className="flex items-center justify-between text-small">
 				<span className="text-foreground">{window.label ?? "Limit"}</span>
 				<span className="font-medium tabular-nums text-foreground">
 					{Math.round(window.leftPercent)}% left
@@ -100,7 +100,7 @@ export function LimitRow({ window }: { window: RateLimitWindowDisplay }) {
 				/>
 			</div>
 			{window.resetsAt !== null ? (
-				<div className="text-[11px] text-muted-foreground">
+				<div className="text-mini text-muted-foreground">
 					{window.expired ? "Pending refresh — " : "Resets "}
 					{formatResetsAt(window.resetsAt)}
 				</div>
@@ -125,7 +125,7 @@ export function CategoryList({
 			{sorted.map((c) => (
 				<div
 					key={c.name}
-					className="flex items-center justify-between text-[12px]"
+					className="flex items-center justify-between text-small"
 				>
 					<span className="truncate text-muted-foreground">{c.name}</span>
 					<span className="tabular-nums text-muted-foreground">
@@ -147,7 +147,7 @@ function formatCategoryPercent(tokens: number, maxTokens: number): string {
 /** Footer note shown when the Claude session has auto-compact enabled. */
 export function AutoCompactNote() {
 	return (
-		<div className="text-[11px] text-muted-foreground">
+		<div className="text-mini text-muted-foreground">
 			Auto-compacts older turns when the window fills.
 		</div>
 	);

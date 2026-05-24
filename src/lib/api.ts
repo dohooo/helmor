@@ -25,7 +25,7 @@ export type WorkspaceState =
 
 /**
  * Mirror of the Rust `WorkspaceStatus` enum
- * (`src-tauri/src/workspace/status.rs`). Drives the sidebar kanban
+ * (`src-tauri/src/workspace/status.rs`). Drives the sidebar status
  * lanes and PR-driven auto-status transitions.
  */
 export type WorkspaceStatus =
@@ -125,6 +125,21 @@ export type DataInfo = {
 
 export type AgentProvider = "claude" | "codex" | "cursor";
 
+export type LocalLlmStatus = {
+	enabled: boolean;
+	runtimeFound: boolean;
+	runtimePath?: string | null;
+	starting: boolean;
+	running: boolean;
+	model: string;
+	apiModel: string;
+	contextSize: number;
+	gpuLayers: number;
+	reasoningMode: string;
+	endpoint?: string | null;
+	lastError?: string | null;
+};
+
 export type AgentModelOption = {
 	id: string;
 	provider: AgentProvider;
@@ -200,6 +215,10 @@ export type WorkspaceSummary = {
 	prSyncState?: PrSyncState;
 	prUrl?: string | null;
 	pinnedAt?: string | null;
+	/** Sparse sidebar order. Mirrors `WorkspaceRow.displayOrder`; carried
+	 * through the archived list so restore can predict the live-group
+	 * position without waiting for refetch. */
+	displayOrder?: number;
 	sessionCount?: number;
 	messageCount?: number;
 	createdAt: string;
@@ -330,6 +349,10 @@ export type WorkspaceDetail = {
 	 * setup script). Drives the inspector's Setup tab "ran in another
 	 * session" notice and the default-tab heuristic on workspace switch. */
 	setupCompletedAt?: string | null;
+	/** `RunAction.id` the user last picked from the Run-tab dropdown in
+	 * this workspace. NULL means "use the first action" — either fresh,
+	 * or because the previously-active action was deleted. */
+	activeRunActionId?: string | null;
 };
 
 export type WorkspaceSessionSummary = {
@@ -376,14 +399,22 @@ export type PrepareArchiveWorkspaceResponse = {
 	workspaceId: string;
 };
 
+/** Mirrors `workspace::archive::ArchiveOrigin`. `manual` drives the existing
+ *  `pendingArchives` + `archiveGate` UI flow; `autoAfterMerge` has no
+ *  optimistic state and needs the controller to reconcile + use a calmer
+ *  failure toast on its own. */
+export type ArchiveOrigin = "manual" | "autoAfterMerge";
+
 export type ArchiveExecutionFailedPayload = {
 	workspaceId: string;
 	code: ErrorCode;
 	message: string;
+	origin: ArchiveOrigin;
 };
 
 export type ArchiveExecutionSucceededPayload = {
 	workspaceId: string;
+	origin: ArchiveOrigin;
 };
 
 export type CreateWorkspaceResponse = {
@@ -409,6 +440,8 @@ export type PrepareWorkspaceResponse = {
 	 *  immediately. Worktree mode: null until finalize materialises the
 	 *  worktree — callers MUST then read `FinalizeWorkspaceResponse.workingDirectory`. */
 	workingDirectory: string | null;
+	/** Echo of the branch-intent the workspace was created with. */
+	branchIntent: WorkspaceBranchIntent;
 };
 
 export type FinalizeWorkspaceResponse = {
@@ -437,16 +470,6 @@ export type EditorFileStatResponse = {
 	isFile: boolean;
 	mtimeMs: number | null;
 	size: number | null;
-};
-
-export type EditorFilePrefetchItem = {
-	absolutePath: string;
-	content: string;
-};
-
-export type EditorFilesWithContentResponse = {
-	items: InspectorFileItem[];
-	prefetched: EditorFilePrefetchItem[];
 };
 
 export type AppUpdateStage =
@@ -784,6 +807,8 @@ export type AgentLoginStatusResult = {
 	claude: boolean;
 	codex: boolean;
 	cursor: boolean;
+	codexProvider?: string | null;
+	codexAuthMethod?: "login" | "apiKey" | string | null;
 };
 
 export async function getAgentLoginStatus(): Promise<AgentLoginStatusResult> {
@@ -979,7 +1004,7 @@ export async function listCursorModels(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox (kanban-mode left sidebar)
+// Inbox (start-surface left sidebar)
 // ---------------------------------------------------------------------------
 
 export type InboxItemSource =
@@ -1398,6 +1423,32 @@ export async function listBranchesForLocalPicker(
 	}
 }
 
+/** One row of the start-page branch picker. */
+export type BranchPickerEntry = {
+	name: string;
+	hasLocal: boolean;
+	hasRemote: boolean;
+};
+
+/**
+ * Merged local + remote branches with source flags so the picker can
+ * show an icon and the pill can decide whether to prefix with `origin/`.
+ * Pure local fs reads — no network.
+ */
+export async function listBranchesForWorkspacePicker(
+	repoId: string,
+): Promise<BranchPickerEntry[]> {
+	try {
+		return await invoke<BranchPickerEntry[]>(
+			"list_branches_for_workspace_picker",
+			{ repoId },
+		);
+	} catch (error) {
+		console.warn("[helmor] listBranchesForWorkspacePicker failed:", error);
+		return [];
+	}
+}
+
 /**
  * `git checkout -b <branch>` against the repo's source path. Caller is
  * responsible for refreshing whatever query feeds the branch picker.
@@ -1432,8 +1483,17 @@ export async function moveLocalWorkspaceToWorktree(
 	);
 }
 
-/** How a workspace's filesystem is provisioned. */
-export type WorkspaceMode = "worktree" | "local";
+/**
+ * How a workspace's filesystem is provisioned.
+ * - `worktree`: a dedicated git worktree with its own auto-named branch.
+ * - `local`: operates directly on the source repo's root path.
+ * - `chat`: a scratch dir under `<data_dir>/chats/<YYYY-MM-DD>/<name>`
+ *   with no git context. "Just Chat" mode from the start page.
+ */
+export type WorkspaceMode = "worktree" | "local" | "chat";
+
+/** `from_branch`: fork off the picked base. `use_branch`: attach to it. */
+export type WorkspaceBranchIntent = "from_branch" | "use_branch";
 
 export type UpdateIntendedTargetBranchResponse = {
 	/** True if the workspace's local branch was hard-reset to origin/<target>. */
@@ -1541,6 +1601,289 @@ export type GitRefsChangedPayload = {
 	workspaceId: string;
 };
 
+// ────────────────────────────────────────────────────────────────────────
+// Slack context source (read-only v1).
+//
+// Wire shapes mirror `src-tauri/src/slack/types.rs` exactly. Auth is
+// `slackImportFromDesktop` — we read the xoxc/xoxd pair out of the
+// user's local Slack desktop install. All reads then go through the
+// Slack Web API client in `src-tauri/src/slack/api.rs`.
+//
+// The frontend never sees the captured tokens; it only ever holds the
+// non-secret workspace metadata (team id / name / domain / our user id).
+// ────────────────────────────────────────────────────────────────────────
+
+export type SlackWorkspace = {
+	teamId: string;
+	teamName: string;
+	teamDomain: string;
+	myUserId: string;
+	addedAt: number;
+};
+
+export type SlackInboxItemKind = "mention" | "direct_message";
+
+export type SlackInboxItem = {
+	id: string;
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	kind: SlackInboxItemKind;
+	ts: string;
+	threadTs: string | null;
+	authorName: string;
+	/** `image_72` from `users.info`. `null` when the user lookup misses
+	 *  or the workspace strips profile images. UI falls back to initials. */
+	authorAvatarUrl: string | null;
+	textSnippet: string;
+	tsMillis: number;
+	permalink: string;
+};
+
+export type SlackInboxPage = {
+	items: SlackInboxItem[];
+	nextCursor: string | null;
+};
+
+export type SlackReactionSummary = {
+	name: string;
+	count: number;
+};
+
+/** Inline file attachment surfaced in the thread detail view. Preview
+ *  URLs are pre-rewritten into our `slack-file://` custom protocol so
+ *  the webview can fetch them through the workspace cookie proxy. */
+export type SlackFileRef = {
+	id: string;
+	name: string;
+	mimetype: string | null;
+	/** Renderer hint. Drives whether we embed `<img>`, `<video>`, or a
+	 *  download link. */
+	category: "image" | "gif" | "video" | "audio" | "pdf" | "other";
+	/** Inline thumbnail / static frame, sized for the detail panel.
+	 *  `null` for categories we don't preview inline. */
+	previewUrl: string | null;
+	/** Full-resolution source for click-through or `<video>` playback.
+	 *  Always lives on the `slack-file://` protocol. */
+	sourceUrl: string | null;
+	/** Slack web link — opens the file in the user's browser, useful for
+	 *  PDFs and unsupported file types. */
+	permalink: string | null;
+	width: number | null;
+	height: number | null;
+};
+
+export type SlackMessage = {
+	ts: string;
+	userId: string | null;
+	authorName: string;
+	authorAvatarUrl: string | null;
+	text: string;
+	tsMillis: number;
+	reactions: SlackReactionSummary[];
+	files: SlackFileRef[];
+};
+
+export type SlackThreadDetail = {
+	teamId: string;
+	channelId: string;
+	channelLabel: string;
+	isThread: boolean;
+	messages: SlackMessage[];
+	permalink: string;
+};
+
+export type SlackImportFailure = {
+	teamId: string;
+	teamName: string;
+	reason: string;
+};
+
+export type SlackImportResult = {
+	imported: SlackWorkspace[];
+	failed: SlackImportFailure[];
+	alreadyConnected: SlackWorkspace[];
+};
+
+/** Read the user's local Slack desktop session (macOS only in v1) and
+ *  import every workspace whose token still authenticates. Strictly
+ *  better UX than the webview-based connect flow when it works because
+ *  it reuses whatever auth state Slack desktop already negotiated —
+ *  passkeys, SSO, admin-enforced 2FA all become non-issues. */
+export async function slackImportFromDesktop(): Promise<SlackImportResult> {
+	try {
+		return await invoke<SlackImportResult>("slack_import_from_desktop");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't read Slack desktop session."),
+		);
+	}
+}
+
+export async function slackListWorkspaces(): Promise<SlackWorkspace[]> {
+	try {
+		return await invoke<SlackWorkspace[]>("slack_list_workspaces");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack workspaces."),
+		);
+	}
+}
+
+export async function slackDisconnectWorkspace(teamId: string): Promise<void> {
+	try {
+		await invoke<void>("slack_disconnect_workspace", { teamId });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't disconnect Slack workspace."),
+		);
+	}
+}
+
+export async function slackListInboxItems(args: {
+	teamId: string;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_list_inbox_items", {
+			teamId: args.teamId,
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack inbox items."),
+		);
+	}
+}
+
+/** Sort mode forwarded to Slack `search.messages`. Mirrors the backend
+ *  `SlackSearchSort` enum — keep these two in lockstep. */
+export type SlackSearchSort = "newest" | "relevance";
+
+/** Run a free-text query against `search.messages` for one workspace.
+ *  The query string is sent verbatim, so Slack search modifiers
+ *  (`from:@alice`, `in:#chan`, `has:link`, `is:thread`, quoted phrases,
+ *  `-` negation, `OR`, …) compose without us having to teach the UI
+ *  about each one. Empty input short-circuits to zero results to avoid
+ *  burning a request on a match-everything query. */
+export async function slackSearchMessages(args: {
+	teamId: string;
+	query: string;
+	sort?: SlackSearchSort;
+	cursor?: string | null;
+	limit?: number;
+}): Promise<SlackInboxPage> {
+	try {
+		return await invoke<SlackInboxPage>("slack_search_messages", {
+			teamId: args.teamId,
+			query: args.query,
+			sort: args.sort ?? "newest",
+			cursor: args.cursor ?? null,
+			limit: args.limit ?? 30,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't search Slack messages."),
+		);
+	}
+}
+
+export async function slackGetThreadDetail(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+}): Promise<SlackThreadDetail> {
+	try {
+		return await invoke<SlackThreadDetail>("slack_get_thread_detail", {
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(describeInvokeError(error, "Couldn't load Slack thread."));
+	}
+}
+
+/** Progress events streamed back by `slackPrepareThreadContext`. */
+export type SlackPrepareProgress =
+	| { stage: "fetchingThread" }
+	| { stage: "cachingFiles"; current: number; total: number };
+
+export type SlackPreparedContext = {
+	/** Final prompt-friendly string ready to inject into the composer
+	 *  as a single `custom-tag`. Mentions each image / gif / video
+	 *  poster file with a parallel `Attached as image (local path: …)`
+	 *  hint — the actual pixels reach the agent through the image
+	 *  attachments below, not via this text. */
+	submitText: string;
+	filesTotal: number;
+	filesCached: number;
+	/** Absolute local paths of every cached image / gif / video poster
+	 *  in chronological message order, de-duped by Slack file id.
+	 *  Frontend wraps each in a `kind: "image"` ComposerInsertItem so
+	 *  the composer's existing pipeline carries them to the spawned
+	 *  agent as vision input (Claude image block / Codex localImage
+	 *  part) — agent sees pixels without invoking the Read tool. */
+	imagePaths: string[];
+};
+
+/** Prepare a Slack thread for "Add to context" injection. Fetches the
+ *  full thread, pre-warms the on-disk Slack file cache for every
+ *  inline image/gif/video poster, then returns a formatted prompt
+ *  string with absolute local paths embedded so the spawned coding
+ *  agent can `Read` the files.
+ *
+ *  `onProgress` (when provided) receives streaming events: starting
+ *  with `fetchingThread`, then a series of `cachingFiles` with
+ *  monotonically increasing `current`, finishing with `done`. */
+export async function slackPrepareThreadContext(args: {
+	teamId: string;
+	channelId: string;
+	threadTs: string | null;
+	anchorTs: string;
+	onProgress?: (event: SlackPrepareProgress) => void;
+}): Promise<SlackPreparedContext> {
+	const progress = new Channel<SlackPrepareProgress>();
+	if (args.onProgress) {
+		progress.onmessage = args.onProgress;
+	}
+	try {
+		return await invoke<SlackPreparedContext>("slack_prepare_thread_context", {
+			progress,
+			teamId: args.teamId,
+			channelId: args.channelId,
+			threadTs: args.threadTs,
+			anchorTs: args.anchorTs,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't prepare Slack context."),
+		);
+	}
+}
+
+/** Workspace custom-emoji map (`name -> image url`). Built-in unicode
+ *  emojis are not included here — those ship bundled with the frontend.
+ *  Aliases are resolved server-side, so every returned value is a real
+ *  image URL. */
+export async function slackListEmoji(
+	teamId: string,
+): Promise<Record<string, string>> {
+	try {
+		return await invoke<Record<string, string>>("slack_list_emoji", {
+			teamId,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Couldn't load Slack emoji catalogue."),
+		);
+	}
+}
+
 export type UiMutationEvent =
 	| { type: "workspaceListChanged" }
 	| { type: "workspaceChanged"; workspaceId: string }
@@ -1564,6 +1907,7 @@ export type UiMutationEvent =
 	| { type: "workspaceChangeRequestChanged"; workspaceId: string }
 	| { type: "repositoryListChanged" }
 	| { type: "repositoryChanged"; repoId: string }
+	| { type: "repoRunActionsChanged"; repoId: string }
 	| { type: "settingsChanged"; key: string | null }
 	| {
 			type: "pendingCliSendQueued";
@@ -1573,7 +1917,9 @@ export type UiMutationEvent =
 			modelId: string | null;
 			permissionMode: string | null;
 	  }
-	| { type: "activeStreamsChanged" };
+	| { type: "activeStreamsChanged" }
+	| { type: "slackWorkspacesChanged" }
+	| { type: "slackTokenInvalidated"; teamId: string };
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
@@ -1792,6 +2138,13 @@ export async function openWorkspaceInEditor(
 	await invoke("open_workspace_in_editor", { workspaceId, editor });
 }
 
+export async function openFileInEditor(
+	path: string,
+	editor: string,
+): Promise<void> {
+	await invoke("open_file_in_editor", { path, editor });
+}
+
 export async function openWorkspaceInFinder(
 	workspaceId: string,
 ): Promise<void> {
@@ -1886,27 +2239,13 @@ export async function listWorkspaceFiles(
 	}
 }
 
-export async function listEditorFilesWithContent(
+export async function listWorkspaceChanges(
 	workspaceRootPath: string,
-): Promise<EditorFilesWithContentResponse> {
+): Promise<InspectorFileItem[]> {
 	try {
-		return await invoke<EditorFilesWithContentResponse>(
-			"list_editor_files_with_content",
-			{ workspaceRootPath },
-		);
-	} catch (error) {
-		throw new Error(describeInvokeError(error, "Unable to list editor files."));
-	}
-}
-
-export async function listWorkspaceChangesWithContent(
-	workspaceRootPath: string,
-): Promise<EditorFilesWithContentResponse> {
-	try {
-		return await invoke<EditorFilesWithContentResponse>(
-			"list_workspace_changes_with_content",
-			{ workspaceRootPath },
-		);
+		return await invoke<InspectorFileItem[]>("list_workspace_changes", {
+			workspaceRootPath,
+		});
 	} catch (error) {
 		throw new Error(
 			describeInvokeError(error, "Unable to list workspace changes."),
@@ -2026,6 +2365,7 @@ export type ForgeActionStatus = {
 	changeRequest: ChangeRequestInfo | null;
 	reviewDecision?: string | null;
 	mergeable?: string | null;
+	mergeStateStatus?: string | null;
 	deployments: ForgeActionItem[];
 	checks: ForgeActionItem[];
 	remoteState: "ok" | "noPr" | "unauthenticated" | "unavailable" | "error";
@@ -2288,21 +2628,27 @@ export async function createWorkspaceFromRepo(
  * session, and returns all metadata plus repo-level scripts. The
  * frontend paints with this response immediately — no placeholders.
  *
- * `sourceBranch` (optional): branch to branch the new workspace from. When
- * omitted, the repo's default branch is used. The kanban "create" flow
- * forwards the user's branch picker selection here.
+ * `sourceBranch` is the fork base for `from_branch` (default) or the
+ * branch to attach to for `use_branch` (required).
  */
 export async function prepareWorkspaceFromRepo(
 	repoId: string,
 	sourceBranch?: string | null,
 	mode?: WorkspaceMode | null,
+	branchIntent?: WorkspaceBranchIntent | null,
 	initialStatus?: WorkspaceStatus | null,
+	/** Pre-allocated session UUID, so pre-submit paste-cache files
+	 *  (`cache/paste/<seedSessionId>/`) end up owned by the new session.
+	 *  Omit unless the caller is pre-allocating. */
+	seedSessionId?: string | null,
 ): Promise<PrepareWorkspaceResponse> {
 	return invoke<PrepareWorkspaceResponse>("prepare_workspace_from_repo", {
 		repoId,
 		sourceBranch: sourceBranch ?? null,
 		mode: mode ?? null,
+		branchIntent: branchIntent ?? null,
 		initialStatus: initialStatus ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -2317,6 +2663,24 @@ export async function finalizeWorkspaceFromRepo(
 ): Promise<FinalizeWorkspaceResponse> {
 	return invoke<FinalizeWorkspaceResponse>("finalize_workspace_from_repo", {
 		workspaceId,
+	});
+}
+
+/**
+ * One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+ * bound to any repo — they're a scratch dir under
+ * `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+ * AI chat session. No `finalize_*` follow-up — the row is `ready`
+ * immediately.
+ */
+export async function prepareChatWorkspace(
+	initialStatus?: WorkspaceStatus | null,
+	/** See `prepareWorkspaceFromRepo`'s `seedSessionId`. */
+	seedSessionId?: string | null,
+): Promise<PrepareWorkspaceResponse> {
+	return invoke<PrepareWorkspaceResponse>("prepare_chat_workspace", {
+		initialStatus: initialStatus ?? null,
+		seedSessionId: seedSessionId ?? null,
 	});
 }
 
@@ -2626,13 +2990,17 @@ export type AgentStreamEvent =
 	| { kind: "error"; message: string; persisted: boolean; internal: boolean };
 
 /**
- * Save a pasted clipboard image (base64) to a temp file and return its path.
+ * Save a pasted clipboard image (base64) under `cache/paste/<sessionId>/`
+ * and return its absolute path. Callers without a real `sessions.id`
+ * (StartPage composer) must pre-allocate a UUID and submit with the
+ * same value so the bucket gets owned by the new session.
  */
 export async function savePastedImage(
 	data: string,
 	mediaType: string,
+	sessionId: string,
 ): Promise<string> {
-	return invoke<string>("save_pasted_image", { data, mediaType });
+	return invoke<string>("save_pasted_image", { data, mediaType, sessionId });
 }
 
 /**
@@ -2658,6 +3026,193 @@ export async function revealPathInFinder(path: string): Promise<void> {
 
 export async function copyImageToClipboard(path: string): Promise<void> {
 	await invoke("copy_image_to_clipboard", { path });
+}
+
+export async function getLocalLlmStatus(): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("get_local_llm_status");
+}
+
+export async function startLocalLlm(): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("start_local_llm");
+}
+
+export async function stopLocalLlm(): Promise<void> {
+	await invoke("stop_local_llm");
+}
+
+export type LocalLlmCatalogEntry = {
+	id: string;
+	repo: string;
+	/** Every GGUF file required to load the model. Single-file models
+	 *  list one entry; multi-part shards (HF splits anything >50 GB)
+	 *  list all parts in load order. The downloader fetches them all
+	 *  and llama-server is pointed at part 1; it auto-discovers the
+	 *  rest. */
+	files: string[];
+	label: string;
+	quant: string;
+	bytes: number;
+	minRamGb: number;
+	recommendedForGb: number;
+	blurb: string;
+	/** Which subsystem the entry belongs to. Always "llm" today; kept
+	 *  as a discriminator so future entry kinds can land without
+	 *  churning every consumer. */
+	kind?: "llm";
+};
+
+export async function listLocalLlmCatalog(): Promise<LocalLlmCatalogEntry[]> {
+	return await invoke<LocalLlmCatalogEntry[]>("list_local_llm_catalog");
+}
+
+/** GGUF metadata snapshot for an arbitrary user-supplied `.gguf` file.
+ *  Lets the panel render real context limits + KV cache estimates for
+ *  Custom model paths (outside the curated catalog). When the file
+ *  can't be parsed (corrupt header, unsupported arch) the IPC errors
+ *  out and the UI falls back to a static "32K" hint. */
+export type LocalLlmModelInspection = {
+	architecture: string;
+	name: string | null;
+	contextLength: number;
+	kvBytesPerToken: number;
+	defaultContextTokens: number;
+};
+
+export async function inspectLocalLlmModel(
+	path: string,
+): Promise<LocalLlmModelInspection> {
+	return await invoke<LocalLlmModelInspection>("inspect_local_llm_model", {
+		path,
+	});
+}
+
+/** Read real GGUF metadata for a downloaded catalog entry. Returns
+ *  `null` when the file isn't on disk yet (panel falls back to the
+ *  catalog estimate). Lets the context selector show the same numbers
+ *  for catalog and custom models. */
+export async function inspectLocalLlmCatalogEntry(
+	entryId: string,
+): Promise<LocalLlmModelInspection | null> {
+	return await invoke<LocalLlmModelInspection | null>(
+		"inspect_local_llm_catalog_entry",
+		{ entryId },
+	);
+}
+
+export type LocalLlmHardwareSnapshot = {
+	cpuBrand: string;
+	totalRamGb: number;
+	osLabel: string;
+	arch: string;
+	/** Catalog entry id the hardware tier maps to. The panel paints a
+	 *  "Recommended" badge on exactly this card. Null when the catalog
+	 *  is empty or the OS is unsupported. */
+	recommendedEntryId: string | null;
+};
+
+export async function detectLocalLlmHardware(): Promise<LocalLlmHardwareSnapshot> {
+	return await invoke<LocalLlmHardwareSnapshot>("detect_local_llm_hardware");
+}
+
+export type LocalLlmDownloadState =
+	| "not_downloaded"
+	| "downloading"
+	| "paused"
+	| "downloaded"
+	| "failed";
+
+export type LocalLlmDownloadStatus = {
+	entryId: string;
+	state: LocalLlmDownloadState;
+	downloaded: number;
+	total: number;
+	error?: string;
+};
+
+/** Streaming event from the bundled download worker. The `kind`
+ *  discriminator matches the Rust enum variants. */
+export type LocalLlmDownloadEvent =
+	| { entryId: string; kind: "started"; total: number }
+	| {
+			entryId: string;
+			kind: "progress";
+			downloaded: number;
+			total: number;
+			bytesPerSec: number;
+	  }
+	| { entryId: string; kind: "paused"; downloaded: number; total: number }
+	| { entryId: string; kind: "cancelled"; total: number }
+	| {
+			entryId: string;
+			kind: "completed";
+			downloaded: number;
+			path: string;
+			sha256Verified: boolean;
+	  }
+	| {
+			entryId: string;
+			kind: "failed";
+			error: string;
+			retryable: boolean;
+	  };
+
+export async function subscribeLocalLlmDownloads(
+	onEvent: Channel<LocalLlmDownloadEvent>,
+): Promise<LocalLlmDownloadStatus[]> {
+	return await invoke<LocalLlmDownloadStatus[]>(
+		"subscribe_local_llm_downloads",
+		{
+			onEvent,
+		},
+	);
+}
+
+export async function listLocalLlmDownloads(): Promise<
+	LocalLlmDownloadStatus[]
+> {
+	return await invoke<LocalLlmDownloadStatus[]>("list_local_llm_downloads");
+}
+
+export async function startLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("start_local_llm_download", { entryId });
+}
+
+export async function pauseLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("pause_local_llm_download", { entryId });
+}
+
+export async function cancelLocalLlmDownload(entryId: string): Promise<void> {
+	await invoke("cancel_local_llm_download", { entryId });
+}
+
+export async function activateLocalLlmModel(
+	entryId: string,
+): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("activate_local_llm_model", { entryId });
+}
+
+export async function setLocalLlmContextOverride(
+	entryId: string,
+	contextTokens: number,
+): Promise<LocalLlmStatus> {
+	return await invoke<LocalLlmStatus>("set_local_llm_context_override", {
+		entryId,
+		contextTokens,
+	});
+}
+
+/** Connection params for the running local LLM `llama-server`. Voice
+ *  Pilot reads this to POST OpenAI-compatible chat completions with
+ *  tool schemas directly to the user's configured local model. `null`
+ *  while the server is stopped / starting / crashed. */
+export type LocalLlmEndpoint = {
+	url: string;
+	token: string;
+	apiModel: string;
+};
+
+export async function getLocalLlmEndpoint(): Promise<LocalLlmEndpoint | null> {
+	return await invoke<LocalLlmEndpoint | null>("get_local_llm_endpoint");
 }
 
 /**
@@ -2856,12 +3411,14 @@ export async function respondToUserInput(
 	userInputId: string,
 	action: "submit" | "decline" | "cancel",
 	content?: Record<string, unknown> | null,
+	meta?: Record<string, unknown> | null,
 ): Promise<void> {
 	await invoke("respond_to_user_input", {
 		request: {
 			userInputId,
 			action,
 			content: content ?? null,
+			meta: meta ?? null,
 		},
 	});
 }
@@ -2947,6 +3504,8 @@ export async function createSession(
 		effortLevel?: string | null;
 		/** Pin `fast_mode` at creation; null/undefined defaults to false. */
 		fastMode?: boolean | null;
+		/** Pre-allocated session UUID; see `prepareWorkspaceFromRepo`. */
+		seedSessionId?: string | null;
 	},
 ): Promise<CreateSessionResponse> {
 	return invoke<CreateSessionResponse>("create_session", {
@@ -2956,6 +3515,7 @@ export async function createSession(
 		model: options?.model ?? null,
 		effortLevel: options?.effortLevel ?? null,
 		fastMode: options?.fastMode ?? null,
+		seedSessionId: options?.seedSessionId ?? null,
 	});
 }
 
@@ -3152,21 +3712,36 @@ export async function loadHiddenSessions(
 
 export type RunScriptMode = "concurrent" | "non-concurrent";
 
+/**
+ * One named run script for a repository. Multiple actions can be defined
+ * per repo (e.g. "Dev server", "Tests"); each gets its own dropdown entry
+ * and PTY lifecycle. `fromProject` is true when the entry comes from a
+ * `helmor.json` declaration — the settings UI renders it read-only.
+ *
+ * `stopCommand`: optional cleanup shell snippet. When set, clicking Stop
+ * runs this to completion (same env + cwd as `command`) before helmor
+ * signals the main process. Second Stop click short-circuits to SIGKILL.
+ */
+export type RunAction = {
+	id: string;
+	name: string;
+	command: string;
+	mode: RunScriptMode;
+	fromProject: boolean;
+	stopCommand?: string;
+};
+
 export type RepoScripts = {
 	setupScript?: string | null;
-	runScript?: string | null;
 	archiveScript?: string | null;
 	setupFromProject: boolean;
+	/** True when ANY run action was declared in `helmor.json`. */
 	runFromProject: boolean;
 	archiveFromProject: boolean;
 	/** Auto-run the setup script on workspace creation. Defaults to true. */
 	autoRunSetup: boolean;
-	/**
-	 * "non-concurrent" makes a new run stop any other run script in the
-	 * same repo first — useful when the script binds a fixed port.
-	 * Defaults to "concurrent".
-	 */
-	runScriptMode: RunScriptMode;
+	/** All run actions for this repo, in display order. */
+	runActions: RunAction[];
 };
 
 export type RepoPreferences = {
@@ -3182,6 +3757,9 @@ export type ScriptEvent =
 	| { type: "started"; pid: number; command: string }
 	| { type: "stdout"; data: string }
 	| { type: "stderr"; data: string }
+	/** Backend started running the configured `stopCommand`. Frontends
+	 * flip the Stop button to "Force Stop" until `exited` fires. */
+	| { type: "stopping" }
 	| { type: "exited"; code: number | null }
 	| { type: "error"; message: string };
 
@@ -3211,13 +3789,11 @@ export async function loadRepoScripts(
 export async function updateRepoScripts(
 	repoId: string,
 	setupScript: string | null,
-	runScript: string | null,
 	archiveScript: string | null,
 ): Promise<void> {
 	await invoke("update_repo_scripts", {
 		repoId,
 		setupScript,
-		runScript,
 		archiveScript,
 	});
 }
@@ -3227,13 +3803,6 @@ export async function updateRepoAutoRunSetup(
 	enabled: boolean,
 ): Promise<void> {
 	await invoke("update_repo_auto_run_setup", { repoId, enabled });
-}
-
-export async function updateRepoRunScriptMode(
-	repoId: string,
-	mode: RunScriptMode,
-): Promise<void> {
-	await invoke("update_repo_run_script_mode", { repoId, mode });
 }
 
 export async function loadRepoPreferences(
@@ -3254,11 +3823,19 @@ export async function updateRepoPreferences(
 	});
 }
 
+/**
+ * `actionId` is required when `scriptType === "run"` (each named run
+ * action has its own PTY lifecycle). For setup / archive scripts it's
+ * ignored — they remain single per repo. The backend will fall back to
+ * the first run action when no id is supplied, only to keep older
+ * callers compiling; new code should always pass one explicitly.
+ */
 export async function executeRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run",
 	onEvent: (event: ScriptEvent) => void,
 	workspaceId?: string | null,
+	actionId?: string | null,
 ): Promise<void> {
 	const channel = new Channel<ScriptEvent>();
 	channel.onmessage = onEvent;
@@ -3266,6 +3843,7 @@ export async function executeRepoScript(
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		channel,
 	});
 }
@@ -3274,11 +3852,13 @@ export async function stopRepoScript(
 	repoId: string,
 	scriptType: "setup" | "run",
 	workspaceId?: string | null,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("stop_repo_script", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 	});
 }
 
@@ -3296,11 +3876,13 @@ export async function writeRepoScriptStdin(
 	scriptType: "setup" | "run",
 	workspaceId: string | null,
 	data: string,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("write_repo_script_stdin", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		data,
 	});
 }
@@ -3315,13 +3897,75 @@ export async function resizeRepoScript(
 	workspaceId: string | null,
 	cols: number,
 	rows: number,
+	actionId?: string | null,
 ): Promise<boolean> {
 	return invoke<boolean>("resize_repo_script", {
 		repoId,
 		scriptType,
 		workspaceId: workspaceId ?? null,
+		actionId: actionId ?? null,
 		cols,
 		rows,
+	});
+}
+
+// ---- Run actions CRUD ----
+
+export async function createRepoRunAction(
+	repoId: string,
+	name: string,
+	command: string,
+	mode: RunScriptMode,
+	stopCommand?: string | null,
+): Promise<RunAction> {
+	return invoke<RunAction>("create_repo_run_action", {
+		repoId,
+		name,
+		command,
+		mode,
+		stopCommand: stopCommand ?? null,
+	});
+}
+
+export async function updateRepoRunAction(
+	repoId: string,
+	actionId: string,
+	name: string,
+	command: string,
+	mode: RunScriptMode,
+	stopCommand?: string | null,
+): Promise<void> {
+	await invoke("update_repo_run_action", {
+		repoId,
+		actionId,
+		name,
+		command,
+		mode,
+		stopCommand: stopCommand ?? null,
+	});
+}
+
+export async function deleteRepoRunAction(
+	repoId: string,
+	actionId: string,
+): Promise<void> {
+	await invoke("delete_repo_run_action", { repoId, actionId });
+}
+
+export async function reorderRepoRunActions(
+	repoId: string,
+	orderedIds: string[],
+): Promise<void> {
+	await invoke("reorder_repo_run_actions", { repoId, orderedIds });
+}
+
+export async function setWorkspaceActiveRunAction(
+	workspaceId: string,
+	actionId: string | null,
+): Promise<void> {
+	await invoke("set_workspace_active_run_action", {
+		workspaceId,
+		actionId,
 	});
 }
 
@@ -3397,7 +4041,6 @@ export async function resizeTerminal(
 
 export { DEFAULT_WORKSPACE_GROUPS };
 
-// ---------------------------------------------------------------------------
 // MCP / Executor (Settings → MCP panel + Studio window)
 // ---------------------------------------------------------------------------
 
@@ -3458,6 +4101,78 @@ export async function removeMcpSource(sourceId: string): Promise<void> {
 
 export async function openMcpStudioWindow(): Promise<{ label: string }> {
 	return await invoke<{ label: string }>("open_mcp_studio_window");
+}
+
+// ---------------------------------------------------------------------------
+// Voice planner (Phase 1)
+// ---------------------------------------------------------------------------
+
+/** Mirror of `voice_planner::events::PlannerEvent`. The tag field
+ *  matches Rust's `#[serde(tag = "kind", rename_all = "camelCase")]`. */
+export type PlannerEvent =
+	| { kind: "started"; turnId: string }
+	| { kind: "say"; turnId: string; text: string }
+	| { kind: "final"; turnId: string; text: string }
+	| { kind: "status"; turnId: string; note: string }
+	| { kind: "error"; turnId: string; message: string }
+	| { kind: "done"; turnId: string };
+
+export type PlannerTurnAccepted = { turnId: string };
+
+/** Start a new planner turn. Returns synchronously with the turn id;
+ *  events arrive on the supplied callback until the turn ends. Caller
+ *  should keep a reference to the returned channel/turnId so it can
+ *  call `abortPlannerTurn` for interruption. */
+export async function startPlannerTurn(
+	transcript: string,
+	onEvent: (event: PlannerEvent) => void,
+): Promise<PlannerTurnAccepted> {
+	const channel = new Channel<PlannerEvent>();
+	channel.onmessage = onEvent;
+	return await invoke<PlannerTurnAccepted>("start_planner_turn", {
+		transcript,
+		onEvent: channel,
+	});
+}
+
+export async function abortPlannerTurn(turnId: string): Promise<void> {
+	await invoke("abort_planner_turn", { turnId });
+}
+
+// ---------------------------------------------------------------------------
+// Feedback / "Quick fix" contribution flow
+// ---------------------------------------------------------------------------
+
+export type ForkResult = {
+	owner: string;
+	repo: string;
+	cloneUrl: string;
+	htmlUrl: string;
+};
+
+export type ExistingHelmorRepo = {
+	repoId: string;
+	repoName: string;
+};
+
+export async function forkHelmorUpstream(): Promise<ForkResult> {
+	return invoke<ForkResult>("fork_helmor_upstream");
+}
+
+export type IssueResult = {
+	url: string;
+	number: number;
+};
+
+export async function createHelmorIssue(
+	title: string,
+	body: string,
+): Promise<IssueResult> {
+	return invoke<IssueResult>("create_helmor_issue", { title, body });
+}
+
+export async function findExistingHelmorRepo(): Promise<ExistingHelmorRepo | null> {
+	return invoke<ExistingHelmorRepo | null>("find_existing_helmor_repo");
 }
 
 function describeInvokeError(error: unknown, fallback: string): string {

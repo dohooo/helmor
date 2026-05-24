@@ -1,6 +1,6 @@
 import {
 	type KeyboardEvent,
-	type MouseEvent,
+	type PointerEvent as ReactPointerEvent,
 	useCallback,
 	useEffect,
 	useState,
@@ -9,17 +9,43 @@ import {
 	clampSidebarWidth,
 	getInitialSidebarWidth,
 	INSPECTOR_WIDTH_STORAGE_KEY,
+	SIDEBAR_RESIZE_HIT_AREA,
 	SIDEBAR_RESIZE_STEP,
 	SIDEBAR_WIDTH_STORAGE_KEY,
 } from "@/shell/layout";
 
 type ResizeTarget = "sidebar" | "inspector";
 
-type ResizeState = {
-	pointerX: number;
-	sidebarWidth: number;
-	target: ResizeTarget;
-};
+// Module-level resize state store. Kept out of React state so subscribers
+// don't re-render on drag start/end — they only flush via the listener.
+type ResizeListener = (active: boolean) => void;
+const resizeListeners = new Set<ResizeListener>();
+let resizingActive = false;
+
+export function isShellResizing(): boolean {
+	return resizingActive;
+}
+
+export function onShellResize(listener: ResizeListener): () => void {
+	resizeListeners.add(listener);
+	return () => {
+		resizeListeners.delete(listener);
+	};
+}
+
+function setResizingActive(active: boolean) {
+	if (resizingActive === active) return;
+	resizingActive = active;
+	for (const listener of resizeListeners) {
+		listener(active);
+	}
+}
+
+// Non-drag inline width writes live in the pane components (they own
+// ref + useLayoutEffect so re-mounts always re-write). Drag-time writes
+// happen inside `handleResizeStart`. CSS variables are avoided here
+// because WebKit invalidates the whole subtree's computed style on every
+// `setProperty()`.
 
 export function useShellPanels() {
 	const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
@@ -27,7 +53,11 @@ export function useShellPanels() {
 	const [inspectorWidth, setInspectorWidth] = useState(() =>
 		getInitialSidebarWidth(INSPECTOR_WIDTH_STORAGE_KEY),
 	);
-	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+	// Drives the `resizing` UI prop on separators; the drag state machine
+	// itself lives in the `handleResizeStart` closure.
+	const [resizingTarget, setResizingTarget] = useState<ResizeTarget | null>(
+		null,
+	);
 
 	useEffect(() => {
 		try {
@@ -57,73 +87,117 @@ export function useShellPanels() {
 		}
 	}, [inspectorWidth]);
 
-	useEffect(() => {
-		if (!resizeState) {
-			return;
-		}
-
-		let pendingWidth: number | null = null;
-		let rafId: number | null = null;
-		const flush = () => {
-			rafId = null;
-			if (pendingWidth === null) return;
-			const nextWidth = pendingWidth;
-			pendingWidth = null;
-			if (resizeState.target === "sidebar") {
-				setSidebarWidth(nextWidth);
-			} else {
-				setInspectorWidth(nextWidth);
-			}
-		};
-
-		const handleMouseMove = (event: globalThis.MouseEvent) => {
-			const deltaX = event.clientX - resizeState.pointerX;
-			const rawWidth =
-				resizeState.target === "sidebar"
-					? resizeState.sidebarWidth + deltaX
-					: resizeState.sidebarWidth - deltaX;
-			pendingWidth = clampSidebarWidth(rawWidth);
-			if (rafId === null) {
-				rafId = window.requestAnimationFrame(flush);
-			}
-		};
-		const handleMouseUp = () => {
-			if (rafId !== null) {
-				window.cancelAnimationFrame(rafId);
-				rafId = null;
-			}
-			flush();
-			setResizeState(null);
-		};
-		const previousCursor = document.body.style.cursor;
-		const previousUserSelect = document.body.style.userSelect;
-
-		document.body.style.cursor = "ew-resize";
-		document.body.style.userSelect = "none";
-
-		window.addEventListener("mousemove", handleMouseMove);
-		window.addEventListener("mouseup", handleMouseUp);
-
-		return () => {
-			if (rafId !== null) {
-				window.cancelAnimationFrame(rafId);
-			}
-			document.body.style.cursor = previousCursor;
-			document.body.style.userSelect = previousUserSelect;
-			window.removeEventListener("mousemove", handleMouseMove);
-			window.removeEventListener("mouseup", handleMouseUp);
-		};
-	}, [resizeState]);
-
 	const handleResizeStart = useCallback(
-		(target: ResizeTarget) => (event: MouseEvent<HTMLDivElement>) => {
+		(target: ResizeTarget) => (event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0) return;
 			event.preventDefault();
-			setResizeState({
-				pointerX: event.clientX,
-				sidebarWidth: target === "sidebar" ? sidebarWidth : inspectorWidth,
-				target,
-			});
+
+			// Pointer capture routes all subsequent pointer events back here
+			// even when the cursor leaves the OS window. Swallow the
+			// `NotFoundError` synthetic `PointerEvent`s throw in tests.
+			const node = event.currentTarget;
+			const pointerId = event.pointerId;
+			try {
+				node.setPointerCapture(pointerId);
+			} catch {}
+
+			const startX = event.clientX;
+			const startWidth = target === "sidebar" ? sidebarWidth : inspectorWidth;
+			const targetPane = document.querySelector<HTMLElement>(
+				`[data-shell-pane="${target}"]`,
+			);
+			const targetInner = document.querySelector<HTMLElement>(
+				`[data-shell-pane-inner="${target}"]`,
+			);
+
+			let pendingWidth: number = startWidth;
+			let rafId: number | null = null;
+
+			// Drag-time inline writes — bypass React render + CSS-var
+			// invalidation to keep per-frame cost in the microsecond range.
+			const flushInlineSize = () => {
+				rafId = null;
+				const widthPx = `${pendingWidth}px`;
+				if (targetPane) targetPane.style.width = widthPx;
+				if (targetInner) targetInner.style.width = widthPx;
+				if (target === "sidebar") {
+					node.style.left = `${pendingWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`;
+				} else {
+					node.style.right = `${pendingWidth - SIDEBAR_RESIZE_HIT_AREA}px`;
+				}
+			};
+
+			const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+				if (moveEvent.pointerId !== pointerId) return;
+				const deltaX = moveEvent.clientX - startX;
+				const rawWidth =
+					target === "sidebar" ? startWidth + deltaX : startWidth - deltaX;
+				pendingWidth = clampSidebarWidth(rawWidth);
+				if (rafId === null) {
+					rafId = window.requestAnimationFrame(flushInlineSize);
+				}
+			};
+
+			const previousCursor = document.body.style.cursor;
+			const previousUserSelect = document.body.style.userSelect;
+			document.body.style.cursor = "ew-resize";
+			document.body.style.userSelect = "none";
+
+			// Full-window overlay absorbs hit-testing so WebKit's `:hover`
+			// recompute doesn't cascade through the inspector subtree on
+			// every mousemove. Must stay `pointer-events: auto` — pointer
+			// capture handles event routing but not hit-test freezing.
+			const overlay = document.createElement("div");
+			overlay.style.position = "fixed";
+			overlay.style.inset = "0";
+			overlay.style.zIndex = "2147483647";
+			overlay.style.cursor = "ew-resize";
+			overlay.setAttribute("data-helmor-resize-overlay", "");
+			overlay.setAttribute("aria-hidden", "true");
+			document.body.appendChild(overlay);
+
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+
+				if (rafId !== null) {
+					window.cancelAnimationFrame(rafId);
+					rafId = null;
+				}
+				flushInlineSize();
+
+				if (target === "sidebar") {
+					setSidebarWidth(pendingWidth);
+				} else {
+					setInspectorWidth(pendingWidth);
+				}
+
+				try {
+					node.releasePointerCapture(pointerId);
+				} catch {}
+				node.removeEventListener("pointermove", handlePointerMove);
+				node.removeEventListener("pointerup", finish);
+				node.removeEventListener("pointercancel", finish);
+				node.removeEventListener("lostpointercapture", finish);
+
+				document.body.style.cursor = previousCursor;
+				document.body.style.userSelect = previousUserSelect;
+				overlay.remove();
+
+				setResizingTarget(null);
+				setResizingActive(false);
+			};
+
+			node.addEventListener("pointermove", handlePointerMove);
+			node.addEventListener("pointerup", finish);
+			// W3C fallbacks for OS-pre-empted gestures / capture lost without
+			// a normal pointerup.
+			node.addEventListener("pointercancel", finish);
+			node.addEventListener("lostpointercapture", finish);
+
+			setResizingTarget(target);
+			setResizingActive(true);
 		},
 		[sidebarWidth, inspectorWidth],
 	);
@@ -165,8 +239,8 @@ export function useShellPanels() {
 		handleResizeKeyDown,
 		handleResizeStart,
 		inspectorWidth,
-		isInspectorResizing: resizeState?.target === "inspector",
-		isSidebarResizing: resizeState?.target === "sidebar",
+		isInspectorResizing: resizingTarget === "inspector",
+		isSidebarResizing: resizingTarget === "sidebar",
 		sidebarCollapsed,
 		sidebarWidth,
 		setInspectorWidth,

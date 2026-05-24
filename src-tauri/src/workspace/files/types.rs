@@ -58,17 +58,3 @@ pub struct EditorFileListItem {
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EditorFilePrefetchItem {
-    pub absolute_path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EditorFilesWithContentResponse {
-    pub items: Vec<EditorFileListItem>,
-    pub prefetched: Vec<EditorFilePrefetchItem>,
-}

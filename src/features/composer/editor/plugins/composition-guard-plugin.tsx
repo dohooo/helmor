@@ -134,8 +134,8 @@ export function CompositionGuardPlugin() {
 				clearCompositionKey();
 				return;
 			}
-			// Mixed-script commits (e.g. "你好 world") contain real spaces —
-			// hand those to Lexical unchanged.
+			// Mixed-script commits (CJK followed by a space and Latin text)
+			// contain real spaces — hand those to Lexical unchanged.
 			if (!isAbandonedImeAsciiBuffer(data)) {
 				clearCompositionKey();
 				return;

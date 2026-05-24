@@ -5,6 +5,7 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { resolveCssColor } from "@/lib/css-color";
 
 type MonacoModule = typeof Monaco;
 type StandaloneEditor = Monaco.editor.IStandaloneCodeEditor;
@@ -12,6 +13,38 @@ type StandaloneDiffEditor = Monaco.editor.IStandaloneDiffEditor;
 
 type MonacoRuntime = {
 	monaco: MonacoModule;
+};
+
+type TsDiagnosticsDefaults = {
+	setDiagnosticsOptions(options: {
+		noSemanticValidation: boolean;
+		noSyntaxValidation: boolean;
+		noSuggestionDiagnostics: boolean;
+	}): void;
+};
+
+type JsonDiagnosticsDefaults = {
+	setDiagnosticsOptions(options: { validate: boolean }): void;
+};
+
+type ValidationDefaults = {
+	setOptions(options: { validate: boolean }): void;
+};
+
+type MonacoLanguageDefaults = MonacoModule & {
+	languages: MonacoModule["languages"] & {
+		typescript: {
+			typescriptDefaults: TsDiagnosticsDefaults;
+			javascriptDefaults: TsDiagnosticsDefaults;
+		};
+		json: { jsonDefaults: JsonDiagnosticsDefaults };
+		css: {
+			cssDefaults: ValidationDefaults;
+			scssDefaults: ValidationDefaults;
+			lessDefaults: ValidationDefaults;
+		};
+		html: { htmlDefaults: ValidationDefaults };
+	};
 };
 
 type DisposableLike = {
@@ -23,7 +56,10 @@ type FileEditorController = {
 	dispose(): void;
 	getValue(): string;
 	setValue(value: string): void;
+	setReadOnly(readOnly: boolean): void;
 	revealPosition(line?: number, column?: number): void;
+	/** Move keyboard focus into the editor's hidden textarea. */
+	focus(): void;
 	onDidChangeModelContent(callback: (value: string) => void): DisposableLike;
 	/** Swap the active model. Returns false if no cached model and no content provided. */
 	switchFile(
@@ -42,6 +78,8 @@ type DiffEditorController = {
 		modifiedText: string;
 		inline: boolean;
 	}): void;
+	/** Move keyboard focus into the modified-side textarea. */
+	focus(): void;
 };
 
 let runtimePromise: Promise<MonacoRuntime> | null = null;
@@ -71,6 +109,7 @@ export async function createFileEditor(options: {
 	content: string;
 	line?: number;
 	column?: number;
+	readOnly?: boolean;
 }): Promise<FileEditorController> {
 	const runtime = await ensureRuntime();
 	const { monaco } = runtime;
@@ -87,21 +126,39 @@ export async function createFileEditor(options: {
 	const editor = monaco.editor.create(options.container, {
 		automaticLayout: true,
 		bracketPairColorization: { enabled: true },
+		codeLens: false,
+		colorDecorators: false,
+		contextmenu: false,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
 		fontSize: 13,
+		folding: false,
+		glyphMargin: false,
+		hover: { enabled: false },
+		lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
 		lineHeight: 21,
+		links: false,
 		minimap: { enabled: false },
 		model,
+		occurrencesHighlight: "off",
 		padding: { top: 14, bottom: 24 },
-		renderValidationDecorations: "editable",
+		parameterHints: { enabled: false },
+		quickSuggestions: false,
+		readOnly: Boolean(options.readOnly),
+		readOnlyMessage: { value: "Click Edit to modify this file." },
+		renderValidationDecorations: "off",
 		scrollBeyondLastLine: false,
+		selectionHighlight: false,
 		smoothScrolling: true,
+		suggestOnTriggerCharacters: false,
 		tabSize: 2,
 		theme: themeId(desiredTheme),
 		wordWrap: "on",
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	revealEditorPosition(editor, options.line, options.column);
 
@@ -110,7 +167,11 @@ export async function createFileEditor(options: {
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
+			// editor.dispose() does NOT release the bound model — leaking it
+			// keeps the file text + tokenization state alive across opens.
+			currentModel.dispose();
 		},
 		getValue() {
 			return currentModel.getValue();
@@ -122,8 +183,14 @@ export async function createFileEditor(options: {
 
 			currentModel.setValue(value);
 		},
+		setReadOnly(readOnly: boolean) {
+			editor.updateOptions({ readOnly });
+		},
 		revealPosition(line?: number, column?: number) {
 			revealEditorPosition(editor, line, column);
+		},
+		focus() {
+			editor.focus();
 		},
 		onDidChangeModelContent(callback) {
 			return currentModel.onDidChangeContent(() => {
@@ -188,26 +255,41 @@ export async function createDiffEditor(options: {
 
 	const editor = monaco.editor.createDiffEditor(options.container, {
 		automaticLayout: true,
+		codeLens: false,
+		colorDecorators: false,
+		contextmenu: false,
 		enableSplitViewResizing: true,
 		fontFamily:
 			'"SF Mono","Monaco","Cascadia Mono","Roboto Mono","Menlo",monospace',
 		fontLigatures: true,
 		fontSize: 13,
+		folding: false,
+		glyphMargin: false,
 		hideUnchangedRegions: {
 			enabled: true,
 			contextLineCount: 4,
 			minimumLineCount: 2,
 			revealLineCount: 3,
 		},
+		hover: { enabled: false },
+		lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
 		lineHeight: 21,
+		links: false,
 		minimap: { enabled: false },
+		occurrencesHighlight: "off",
 		originalEditable: false,
 		padding: { top: 14, bottom: 24 },
+		parameterHints: { enabled: false },
+		quickSuggestions: false,
 		readOnly: true,
+		renderValidationDecorations: "off",
+		renderIndicators: false,
 		renderOverviewRuler: false,
 		renderSideBySide: !options.inline,
 		scrollBeyondLastLine: false,
+		selectionHighlight: false,
 		smoothScrolling: true,
+		suggestOnTriggerCharacters: false,
 		theme: themeId(desiredTheme),
 	});
 
@@ -215,10 +297,14 @@ export async function createDiffEditor(options: {
 		original: originalModel,
 		modified: modifiedModel,
 	});
+	const findWidgetTooltipPatch = suppressFindWidgetCloseTooltip(
+		options.container,
+	);
 
 	return {
 		editor,
 		dispose() {
+			findWidgetTooltipPatch.dispose();
 			editor.dispose();
 			originalModel.dispose();
 			modifiedModel.dispose();
@@ -232,20 +318,69 @@ export async function createDiffEditor(options: {
 			}
 			editor.updateOptions({ renderSideBySide: !inline });
 		},
+		focus() {
+			// Modified side carries the user's edits when they jump to Edit mode,
+			// so it's the more useful focus target than the read-only original.
+			editor.getModifiedEditor().focus();
+		},
 	};
-}
-
-/** Cache file contents so future switchFile calls resolve instantly (no IPC). */
-export function preWarmFileContents(
-	files: ReadonlyArray<{ absolutePath: string; content: string }>,
-) {
-	for (const file of files) {
-		fileContentCache.set(file.absolutePath, file.content);
-	}
 }
 
 export function syncVirtualFile(path: string, content: string) {
 	fileContentCache.set(path, content);
+}
+
+function suppressFindWidgetCloseTooltip(
+	container: HTMLElement,
+): DisposableLike {
+	const abortController =
+		typeof AbortController === "undefined" ? null : new AbortController();
+	const patchedElements = new WeakSet<HTMLElement>();
+	const stopHover = (event: Event) => {
+		event.stopImmediatePropagation();
+	};
+
+	const patchHoverTargets = () => {
+		const targets = container.querySelectorAll<HTMLElement>(
+			[
+				".find-widget > .button.codicon-widget-close",
+				".find-widget .codicon-find-selection",
+			].join(","),
+		);
+		for (const target of targets) {
+			target.removeAttribute("title");
+			if (patchedElements.has(target) || !abortController) continue;
+			patchedElements.add(target);
+			target.addEventListener("mouseover", stopHover, {
+				capture: true,
+				signal: abortController.signal,
+			});
+		}
+	};
+
+	patchHoverTargets();
+	if (typeof MutationObserver === "undefined") {
+		return {
+			dispose() {
+				abortController?.abort();
+			},
+		};
+	}
+
+	const observer = new MutationObserver(patchHoverTargets);
+	observer.observe(container, {
+		attributes: true,
+		childList: true,
+		subtree: true,
+		attributeFilter: ["title", "class"],
+	});
+
+	return {
+		dispose() {
+			abortController?.abort();
+			observer.disconnect();
+		},
+	};
 }
 
 async function ensureRuntime(): Promise<MonacoRuntime> {
@@ -256,6 +391,7 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 			installMonacoEnvironment();
 			installEditorTheme(monaco);
 			installThemeObserver(monaco);
+			disableLanguageDiagnostics(monaco);
 
 			return { monaco };
 		})();
@@ -264,9 +400,8 @@ async function ensureRuntime(): Promise<MonacoRuntime> {
 	return runtimePromise;
 }
 
-// Sync Monaco's theme with the app's `dark` class on <html>. Avoids having
-// callers import this module just to push a theme update, which would pull
-// Monaco's runtime into the critical path on every theme change.
+// Resync Monaco theme on `<html>` class changes; rAF-coalesced because one
+// user-visible switch flips multiple classes in a row.
 function installThemeObserver(monaco: MonacoModule) {
 	if (
 		typeof document === "undefined" ||
@@ -274,20 +409,51 @@ function installThemeObserver(monaco: MonacoModule) {
 	) {
 		return;
 	}
+	let scheduled = 0;
 	const syncTheme = () => {
+		scheduled = 0;
 		const nextTheme = detectInitialTheme();
-		if (nextTheme === desiredTheme) {
-			return;
-		}
+		defineHelmorThemes(monaco);
 		desiredTheme = nextTheme;
 		monaco.editor.setTheme(themeId(nextTheme));
 	};
-	const observer = new MutationObserver(syncTheme);
+	const observer = new MutationObserver(() => {
+		if (scheduled) return;
+		scheduled = requestAnimationFrame(syncTheme);
+	});
 	observer.observe(document.documentElement, {
 		attributes: true,
 		attributeFilter: ["class"],
 	});
-	syncTheme();
+}
+
+function disableLanguageDiagnostics(monaco: MonacoModule) {
+	const defaults = monaco as unknown as MonacoLanguageDefaults;
+	defaults.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+		noSemanticValidation: true,
+		noSyntaxValidation: true,
+		noSuggestionDiagnostics: true,
+	});
+	defaults.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+		noSemanticValidation: true,
+		noSyntaxValidation: true,
+		noSuggestionDiagnostics: true,
+	});
+	defaults.languages.json.jsonDefaults.setDiagnosticsOptions({
+		validate: false,
+	});
+	defaults.languages.css.cssDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.css.scssDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.css.lessDefaults.setOptions({
+		validate: false,
+	});
+	defaults.languages.html.htmlDefaults.setOptions({
+		validate: false,
+	});
 }
 
 function installMonacoEnvironment() {
@@ -324,107 +490,127 @@ function installMonacoEnvironment() {
 	};
 }
 
+// Syntax highlighting rules — kept hard-coded so code colors stay stable
+// across the active app theme. (Locked, per the theme-system design.) Only
+// the editor chrome (background, gutter, widgets, scrollbar, diff) follows
+// CSS variables.
+const SYNTAX_RULES_DARK = [
+	{ token: "comment", foreground: "868584" },
+	{ token: "string", foreground: "c9b18f" },
+	{ token: "keyword", foreground: "c5a3a8" },
+	{ token: "number", foreground: "c6b48a" },
+	{ token: "regexp", foreground: "9ea693" },
+	{ token: "type.identifier", foreground: "a9b0c6" },
+	{ token: "identifier", foreground: "faf9f6" },
+	{ token: "delimiter", foreground: "afaeac" },
+];
+const SYNTAX_RULES_LIGHT = [
+	{ token: "comment", foreground: "7a7775" },
+	{ token: "string", foreground: "8a6b3d" },
+	{ token: "keyword", foreground: "8a3d51" },
+	{ token: "number", foreground: "8a6e2f" },
+	{ token: "regexp", foreground: "5a6b3d" },
+	{ token: "type.identifier", foreground: "3d4d75" },
+	{ token: "identifier", foreground: "1a1918" },
+	{ token: "delimiter", foreground: "5a5857" },
+];
+
+const cssVarColor = (name: string, alphaOverride?: number) =>
+	resolveCssColor(`var(${name})`, alphaOverride);
+
+function buildHelmorTheme(isDark: boolean) {
+	const editorBg = cssVarColor("--editor-content-bg");
+	const editorFg = cssVarColor("--editor-content-fg");
+	const lineActive = cssVarColor("--editor-line-active-bg");
+	const selection = cssVarColor("--editor-selection-bg");
+	const cursor = cssVarColor("--editor-cursor");
+	const gutterBg = cssVarColor("--editor-gutter-bg");
+	const gutterFg = cssVarColor("--editor-gutter-fg");
+	const widgetBg = cssVarColor("--bg-overlay");
+	const widgetBorder = cssVarColor("--border-default");
+	const scrollbarBase = cssVarColor("--fg-default", 0.15);
+	const scrollbarHover = cssVarColor("--fg-default", 0.25);
+	const scrollbarActive = cssVarColor("--fg-default", 0.35);
+	const indentGuide = cssVarColor("--border-subtle");
+	const indentGuideActive = cssVarColor("--border-strong");
+	// Diff colors come from the workspace status palette — semantic and locked,
+	// so they match the sidebar PR badges across every theme. Alpha is layered
+	// on top to dim them into editor-overlay use.
+	const diffInsertLine = cssVarColor("--workspace-pr-open-accent", 0.09);
+	const diffInsertText = cssVarColor(
+		"--workspace-pr-open-accent",
+		isDark ? 0.25 : 0.2,
+	);
+	const diffRemoveLine = cssVarColor("--workspace-pr-closed-accent", 0.09);
+	const diffRemoveText = cssVarColor(
+		"--workspace-pr-closed-accent",
+		isDark ? 0.25 : 0.2,
+	);
+	const diffGutterInsert = cssVarColor("--workspace-pr-open-accent", 0.15);
+	const diffGutterRemove = cssVarColor("--workspace-pr-closed-accent", 0.15);
+	const diffOverviewInsert = cssVarColor("--workspace-pr-open-accent", 0.6);
+	const diffOverviewRemove = cssVarColor("--workspace-pr-closed-accent", 0.6);
+	const diffDiagonal = cssVarColor("--fg-default", isDark ? 0.03 : 0.04);
+
+	return {
+		base: (isDark ? "vs-dark" : "vs") as "vs" | "vs-dark",
+		inherit: true,
+		rules: isDark ? SYNTAX_RULES_DARK : SYNTAX_RULES_LIGHT,
+		colors: {
+			"editor.background": editorBg,
+			"editor.foreground": editorFg,
+			"editor.lineHighlightBackground": lineActive,
+			"editor.lineHighlightBorder": "#00000000",
+			"editor.selectionBackground": selection,
+			"editor.inactiveSelectionBackground": cssVarColor(
+				"--editor-selection-bg",
+				0.5,
+			),
+			"editor.wordHighlightBackground": cssVarColor(
+				"--editor-selection-bg",
+				0.4,
+			),
+			"editor.wordHighlightStrongBackground": cssVarColor(
+				"--editor-selection-bg",
+				0.55,
+			),
+			"editorCursor.foreground": cursor,
+			"editorWhitespace.foreground": cssVarColor("--fg-disabled"),
+			"editorIndentGuide.background1": indentGuide,
+			"editorIndentGuide.activeBackground1": indentGuideActive,
+			"editorLineNumber.foreground": gutterFg,
+			"editorLineNumber.activeForeground": editorFg,
+			"editorGutter.background": gutterBg,
+			"editorWidget.background": widgetBg,
+			"editorWidget.border": widgetBorder,
+			"editorSuggestWidget.background": widgetBg,
+			"editorSuggestWidget.border": widgetBorder,
+			"editorHoverWidget.background": widgetBg,
+			"editorHoverWidget.border": widgetBorder,
+			"scrollbarSlider.background": scrollbarBase,
+			"scrollbarSlider.hoverBackground": scrollbarHover,
+			"scrollbarSlider.activeBackground": scrollbarActive,
+			"minimap.background": editorBg,
+			"diffEditor.insertedLineBackground": diffInsertLine,
+			"diffEditor.insertedTextBackground": diffInsertText,
+			"diffEditor.removedLineBackground": diffRemoveLine,
+			"diffEditor.removedTextBackground": diffRemoveText,
+			"diffEditorGutter.insertedLineBackground": diffGutterInsert,
+			"diffEditorGutter.removedLineBackground": diffGutterRemove,
+			"diffEditorOverview.insertedForeground": diffOverviewInsert,
+			"diffEditorOverview.removedForeground": diffOverviewRemove,
+			"diffEditor.diagonalFill": diffDiagonal,
+		},
+	};
+}
+
+function defineHelmorThemes(monaco: MonacoModule) {
+	monaco.editor.defineTheme("helmor-editor-dark", buildHelmorTheme(true));
+	monaco.editor.defineTheme("helmor-editor-light", buildHelmorTheme(false));
+}
+
 function installEditorTheme(monaco: MonacoModule) {
-	monaco.editor.defineTheme("helmor-editor-dark", {
-		base: "vs-dark",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "868584" },
-			{ token: "string", foreground: "c9b18f" },
-			{ token: "keyword", foreground: "c5a3a8" },
-			{ token: "number", foreground: "c6b48a" },
-			{ token: "regexp", foreground: "9ea693" },
-			{ token: "type.identifier", foreground: "a9b0c6" },
-			{ token: "identifier", foreground: "faf9f6" },
-			{ token: "delimiter", foreground: "afaeac" },
-		],
-		colors: {
-			"editor.background": "#161514",
-			"editor.foreground": "#FAF9F6",
-			"editor.lineHighlightBackground": "#1f1e1d",
-			"editor.lineHighlightBorder": "#00000000",
-			"editor.selectionBackground": "#353534",
-			"editor.inactiveSelectionBackground": "#2a2928",
-			"editor.wordHighlightBackground": "#35353488",
-			"editor.wordHighlightStrongBackground": "#45454588",
-			"editorCursor.foreground": "#FAF9F6",
-			"editorWhitespace.foreground": "#595755",
-			"editorIndentGuide.background1": "#2b2a29",
-			"editorIndentGuide.activeBackground1": "#4b4946",
-			"editorLineNumber.foreground": "#868584",
-			"editorLineNumber.activeForeground": "#FAF9F6",
-			"editorGutter.background": "#161514",
-			"editorWidget.background": "#1e1d1c",
-			"editorWidget.border": "#343332",
-			"editorSuggestWidget.background": "#1e1d1c",
-			"editorSuggestWidget.border": "#343332",
-			"editorHoverWidget.background": "#1e1d1c",
-			"editorHoverWidget.border": "#343332",
-			"scrollbarSlider.background": "#faf9f626",
-			"scrollbarSlider.hoverBackground": "#faf9f640",
-			"scrollbarSlider.activeBackground": "#faf9f655",
-			"minimap.background": "#161514",
-			"diffEditor.insertedLineBackground": "#2ea04318",
-			"diffEditor.insertedTextBackground": "#2ea04340",
-			"diffEditor.removedLineBackground": "#da363318",
-			"diffEditor.removedTextBackground": "#da363340",
-			"diffEditorGutter.insertedLineBackground": "#2ea04326",
-			"diffEditorGutter.removedLineBackground": "#da363326",
-			"diffEditorOverview.insertedForeground": "#2ea04399",
-			"diffEditorOverview.removedForeground": "#da363399",
-			"diffEditor.diagonalFill": "#faf9f608",
-		},
-	});
-	monaco.editor.defineTheme("helmor-editor-light", {
-		base: "vs",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "7a7775" },
-			{ token: "string", foreground: "8a6b3d" },
-			{ token: "keyword", foreground: "8a3d51" },
-			{ token: "number", foreground: "8a6e2f" },
-			{ token: "regexp", foreground: "5a6b3d" },
-			{ token: "type.identifier", foreground: "3d4d75" },
-			{ token: "identifier", foreground: "1a1918" },
-			{ token: "delimiter", foreground: "5a5857" },
-		],
-		colors: {
-			"editor.background": "#FFFFFF",
-			"editor.foreground": "#1a1918",
-			"editor.lineHighlightBackground": "#f4f3f1",
-			"editor.lineHighlightBorder": "#00000000",
-			"editor.selectionBackground": "#c9d9ef",
-			"editor.inactiveSelectionBackground": "#dde3ec",
-			"editor.wordHighlightBackground": "#c9d9ef88",
-			"editor.wordHighlightStrongBackground": "#a8c1e288",
-			"editorCursor.foreground": "#1a1918",
-			"editorWhitespace.foreground": "#c7c5c2",
-			"editorIndentGuide.background1": "#eceae6",
-			"editorIndentGuide.activeBackground1": "#c7c5c2",
-			"editorLineNumber.foreground": "#a4a19d",
-			"editorLineNumber.activeForeground": "#1a1918",
-			"editorGutter.background": "#FFFFFF",
-			"editorWidget.background": "#f8f7f5",
-			"editorWidget.border": "#e4e2de",
-			"editorSuggestWidget.background": "#f8f7f5",
-			"editorSuggestWidget.border": "#e4e2de",
-			"editorHoverWidget.background": "#f8f7f5",
-			"editorHoverWidget.border": "#e4e2de",
-			"scrollbarSlider.background": "#1a191826",
-			"scrollbarSlider.hoverBackground": "#1a191840",
-			"scrollbarSlider.activeBackground": "#1a191855",
-			"minimap.background": "#FFFFFF",
-			"diffEditor.insertedLineBackground": "#2ea04318",
-			"diffEditor.insertedTextBackground": "#2ea04333",
-			"diffEditor.removedLineBackground": "#da363318",
-			"diffEditor.removedTextBackground": "#da363333",
-			"diffEditorGutter.insertedLineBackground": "#2ea04326",
-			"diffEditorGutter.removedLineBackground": "#da363326",
-			"diffEditorOverview.insertedForeground": "#2ea04399",
-			"diffEditorOverview.removedForeground": "#da363399",
-			"diffEditor.diagonalFill": "#1a19180a",
-		},
-	});
+	defineHelmorThemes(monaco);
 	monaco.editor.setTheme(themeId(desiredTheme));
 }
 

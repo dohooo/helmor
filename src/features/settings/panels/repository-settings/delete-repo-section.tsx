@@ -34,11 +34,11 @@ export function DeleteRepoSection({
 	return (
 		<>
 			<div className="py-5">
-				<div className="flex items-center gap-2 text-[13px] font-medium leading-snug text-foreground">
+				<div className="flex items-center gap-2 text-ui font-medium leading-snug text-foreground">
 					<Trash2 className="size-3.5 text-destructive" strokeWidth={1.8} />
 					Delete Repository
 				</div>
-				<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+				<div className="mt-1 text-small leading-snug text-muted-foreground">
 					Permanently remove this repository and all its workspaces, sessions,
 					and messages.
 				</div>
@@ -54,7 +54,7 @@ export function DeleteRepoSection({
 					Delete Repository
 				</Button>
 				{error && (
-					<div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+					<div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-small text-destructive">
 						{error}
 					</div>
 				)}

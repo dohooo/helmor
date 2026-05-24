@@ -42,6 +42,7 @@ import {
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
+import { readSessionThread } from "@/lib/session-thread-cache";
 import { useSettings } from "@/lib/settings";
 import type { QueuedSubmit } from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,10 @@ import {
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
+import {
+	extractInputHistoryFromThread,
+	type InputHistoryEntry,
+} from "./input-history";
 import type { PermissionPanelProps } from "./permission-panel";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
@@ -116,15 +121,15 @@ type WorkspaceComposerContainerProps = {
 	repoId?: string | null;
 	disabled: boolean;
 	/** When true, treat the composer as available even if no workspace is
-	 *  selected — the bottom composer in kanban mode uses this so it can
-	 *  collect a prompt before any workspace exists. */
+	 *  selected — the start-surface composer uses this so it can collect
+	 *  a prompt before any workspace exists. */
 	forceAvailable?: boolean;
 	/** Custom placeholder text. When omitted, the composer falls back to
 	 *  the default "Ask to make changes…" copy. */
 	placeholder?: string;
 	/** Override the composer's context key. Without this the key falls
 	 *  back to `getComposerContextKey(displayedWorkspaceId, displayedSessionId)`.
-	 *  The kanban view supplies a per-repo key so each repo keeps its
+	 *  The start surface supplies a per-repo key so each repo keeps its
 	 *  own draft. */
 	contextKeyOverride?: string;
 	onStop?: () => void;
@@ -169,11 +174,13 @@ type WorkspaceComposerContainerProps = {
 		followUpBehaviorOverride?: "queue" | "steer";
 		startSubmitMode?: StartSubmitMode;
 		/** Snapshot of the editor's full Lexical state at submit time, so
-		 *  callers that need to round-trip chips/text/images (e.g. the kanban
-		 *  "backlog" handler that copies the draft into a freshly-created
-		 *  session's `sessions.draft_state`) can do so without re-encoding
-		 *  the badge nodes. */
+		 *  callers that need to round-trip chips/text/images (e.g. the
+		 *  start-composer "backlog" handler that copies the draft into a
+		 *  freshly-created session's `sessions.draft_state`) can do so
+		 *  without re-encoding the badge nodes. */
 		editorStateSnapshot?: SerializedEditorState;
+		/** Mount-time provisional session id (see `ComposerSubmitPayload`). */
+		provisionalSessionId?: string;
 	}) => void;
 	/** Prompt queued by an external caller to auto-submit once the displayed
 	 *  session matches `sessionId`. Per-session config (model / effort /
@@ -207,6 +214,11 @@ type WorkspaceComposerContainerProps = {
 		directories: readonly string[];
 		onChange: (next: readonly string[]) => void;
 	} | null;
+	/** Surface-specific focus scope. `start-composer` on the workspace-start
+	 *  page, `workspace-composer` everywhere else. Drives the composer's
+	 *  `data-focus-scope` and gates surface-only hotkeys (plan-mode toggle
+	 *  vs cycle-repository). */
+	focusScope?: "start-composer" | "workspace-composer";
 };
 
 const noopUserInputResponse: UserInputResponseHandler = () => {};
@@ -259,23 +271,33 @@ export const WorkspaceComposerContainer = memo(
 		onToggleContextPanel,
 		startSubmitMenu = false,
 		linkedDirectoriesController = null,
+		focusScope = "workspace-composer",
 	}: WorkspaceComposerContainerProps) {
 		const queryClient = useQueryClient();
 		const { settings, updateSettings } = useSettings();
+		// Per-session input recall list. Resolved lazily from the live
+		// thread cache on every ArrowUp/Down — the plugin doesn't subscribe,
+		// so cache mutations between key presses are picked up automatically
+		// without re-rendering the composer.
+		const getInputHistory = useCallback((): readonly InputHistoryEntry[] => {
+			if (!displayedSessionId) return [];
+			const thread = readSessionThread(queryClient, displayedSessionId);
+			return extractInputHistoryFromThread(thread);
+		}, [displayedSessionId, queryClient]);
 		const startSubmitMode: StartSubmitMode =
-			settings.kanbanViewState.createState === "backlog"
+			settings.startSurfacePreferences.createState === "backlog"
 				? "saveForLater"
 				: "startNow";
 		const handleStartSubmitModeChange = useCallback(
 			(mode: StartSubmitMode) => {
 				void updateSettings({
-					kanbanViewState: {
-						...settings.kanbanViewState,
+					startSurfacePreferences: {
+						...settings.startSurfacePreferences,
 						createState: mode === "saveForLater" ? "backlog" : "in-progress",
 					},
 				});
 			},
-			[settings.kanbanViewState, updateSettings],
+			[settings.startSurfacePreferences, updateSettings],
 		);
 		const modelSectionsQuery = useQuery(agentModelSectionsQueryOptions());
 		const workspaceDetailQuery = useQuery({
@@ -718,6 +740,7 @@ export const WorkspaceComposerContainer = memo(
 					oppositeFollowUp?: boolean;
 					startSubmitMode?: StartSubmitMode;
 					editorStateSnapshot?: SerializedEditorState;
+					provisionalSessionId?: string;
 				},
 			) => {
 				if (!effectiveModel) {
@@ -745,6 +768,7 @@ export const WorkspaceComposerContainer = memo(
 					followUpBehaviorOverride,
 					startSubmitMode: options?.startSubmitMode,
 					editorStateSnapshot: options?.editorStateSnapshot,
+					provisionalSessionId: options?.provisionalSessionId,
 				});
 			},
 			[
@@ -951,7 +975,7 @@ export const WorkspaceComposerContainer = memo(
 							sending ? (
 								<ShimmerText
 									durationMs={1900}
-									className="truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground"
+									className="truncate text-small font-medium tracking-[0.02em] text-muted-foreground"
 								>
 									Working...
 								</ShimmerText>
@@ -962,7 +986,7 @@ export const WorkspaceComposerContainer = memo(
 										strokeWidth={1.8}
 										aria-hidden="true"
 									/>
-									<span className="truncate text-[12px] font-medium tracking-[0.01em] text-muted-foreground">
+									<span className="truncate text-small font-medium tracking-[0.01em] text-muted-foreground">
 										{autoCloseHelpText}
 									</span>
 								</>
@@ -1089,6 +1113,8 @@ export const WorkspaceComposerContainer = memo(
 						startSubmitMenu={startSubmitMenu}
 						startSubmitMode={startSubmitMode}
 						onStartSubmitModeChange={handleStartSubmitModeChange}
+						focusScope={focusScope}
+						getInputHistory={getInputHistory}
 					/>
 				</div>
 			</div>

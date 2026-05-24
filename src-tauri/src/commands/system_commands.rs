@@ -47,6 +47,10 @@ pub struct AgentLoginStatus {
     pub claude: bool,
     pub codex: bool,
     pub cursor: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_auth_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,8 +392,10 @@ fn helmor_skills_status() -> anyhow::Result<HelmorSkillsStatus> {
     Ok(helmor_skills_status_for_agents(&ready_skill_agents(
         &AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            codex_provider: None,
+            codex_auth_method: None,
         },
     )))
 }
@@ -422,18 +428,14 @@ pub fn get_cli_status() -> CmdResult<CliStatus> {
     Ok(cli_status_for_paths(&install_path, &cli_binary))
 }
 
-/// File-backed React Query persister storage. The cache lives in the
-/// data dir (next to `helmor.db`) instead of localStorage, so it isn't
-/// bound by the webview's ~5–10 MB localStorage quota. The frontend
-/// addresses each cache key as a distinct file under
-/// `<data_dir>/query-cache/<key>` — only one key is in use today
-/// (`helmor-query-cache`), but the namespacing keeps the door open for
-/// the persister's optional `entries()` extension.
+/// File-backed React Query persister storage. The cache lives at
+/// `<data_dir>/cache/query/` instead of localStorage so it isn't bound
+/// by the webview's ~5–10 MB localStorage quota. The frontend addresses
+/// each cache key as a distinct file under this dir — only one key is
+/// in use today (`helmor-query-cache`), but the namespacing keeps the
+/// door open for the persister's optional `entries()` extension.
 fn query_cache_dir() -> anyhow::Result<PathBuf> {
-    let dir = data_dir::data_dir()?.join("query-cache");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create query cache dir at {dir:?}"))?;
-    Ok(dir)
+    data_dir::query_cache_dir()
 }
 
 /// Reject anything that could escape the cache dir (`..`, `/`, etc.) —
@@ -526,8 +528,10 @@ pub async fn install_helmor_skills() -> CmdResult<HelmorSkillsStatus> {
     run_blocking(|| {
         let login = AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex_auth_status().ready,
             cursor: cursor_login_ready(),
+            codex_provider: None,
+            codex_auth_method: None,
         };
         let agents = ready_skill_agents(&login);
         let command = helmor_skills_install_command(&agents);
@@ -652,10 +656,13 @@ pub async fn open_agent_login_terminal(provider: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn get_agent_login_status() -> CmdResult<AgentLoginStatus> {
     run_blocking(|| {
+        let codex = codex_auth_status();
         Ok(AgentLoginStatus {
             claude: claude_login_ready(),
-            codex: codex_login_ready(),
+            codex: codex.ready,
             cursor: cursor_login_ready(),
+            codex_provider: codex.provider,
+            codex_auth_method: codex.auth_method.map(str::to_string),
         })
     })
     .await
@@ -682,8 +689,24 @@ fn cursor_login_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the binary to spawn for an agent CLI subcommand.
+///
+/// Prefers the bundled binary under `Helmor.app/Contents/Resources/vendor/`
+/// so onboarding works on machines that don't have `claude` / `codex` on
+/// PATH. Falls back to the bare command name (PATH lookup) for dev builds
+/// and as a last resort.
+fn resolve_agent_binary(provider: &str) -> PathBuf {
+    let bundled = sidecar::resolve_bundled_agent_paths();
+    let bundled_path = match provider {
+        "claude" => bundled.claude_bin,
+        "codex" => bundled.codex_bin,
+        _ => None,
+    };
+    bundled_path.unwrap_or_else(|| PathBuf::from(provider))
+}
+
 fn claude_login_ready() -> bool {
-    match std::process::Command::new("claude")
+    match std::process::Command::new(resolve_agent_binary("claude"))
         .args(["auth", "status"])
         .output()
     {
@@ -705,8 +728,39 @@ fn claude_login_ready() -> bool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexAuthStatus {
+    ready: bool,
+    provider: Option<String>,
+    auth_method: Option<&'static str>,
+}
+
+fn codex_auth_status() -> CodexAuthStatus {
+    if codex_login_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: None,
+            auth_method: Some("login"),
+        };
+    }
+
+    if let Some(provider) = codex_api_key_provider_ready() {
+        return CodexAuthStatus {
+            ready: true,
+            provider: Some(provider),
+            auth_method: Some("apiKey"),
+        };
+    }
+
+    CodexAuthStatus {
+        ready: false,
+        provider: None,
+        auth_method: None,
+    }
+}
+
 fn codex_login_ready() -> bool {
-    match std::process::Command::new("codex")
+    match std::process::Command::new(resolve_agent_binary("codex"))
         .args(["login", "status"])
         .output()
     {
@@ -747,12 +801,31 @@ fn parse_codex_login_status(output: &str) -> bool {
     normalized.contains("logged in") && !normalized.contains("not logged in")
 }
 
-fn agent_login_command(provider: &str) -> anyhow::Result<&'static str> {
-    match provider {
-        "claude" => Ok("claude auth login"),
-        "codex" => Ok("codex login"),
+fn codex_api_key_provider_ready() -> Option<String> {
+    let config = std::fs::read_to_string(crate::codex_config::config_path()).ok()?;
+    let provider = crate::codex_config::active_api_key_provider(&config)?;
+    env_var_is_present(&provider.env_key).then_some(provider.name)
+}
+
+fn env_var_is_present(key: &str) -> bool {
+    std::env::var_os(key)
+        .map(|value| !value.to_string_lossy().trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn agent_login_command(provider: &str) -> anyhow::Result<String> {
+    let args = match provider {
+        "claude" => "auth login",
+        "codex" => "login",
         _ => anyhow::bail!("Unknown agent provider: {provider}"),
-    }
+    };
+    // Quote the resolved binary path so spaces in `Helmor.app` survive
+    // both the embedded PTY shell and AppleScript's `do shell script`.
+    Ok(format!(
+        "{} {}",
+        shell_quote(&resolve_agent_binary(provider)),
+        args
+    ))
 }
 
 fn agent_login_script_type(provider: &str, instance_id: &str) -> String {
@@ -769,7 +842,7 @@ pub async fn spawn_agent_login_terminal(
     instance_id: String,
     channel: Channel<ScriptEvent>,
 ) -> CmdResult<()> {
-    let command = agent_login_command(&provider)?.to_string();
+    let command = agent_login_command(&provider)?;
     tracing::info!(
         provider = %provider,
         instance_id = %instance_id,
@@ -802,6 +875,8 @@ pub async fn spawn_agent_login_terminal(
         workspace_path: None,
         workspace_name: None,
         default_branch: None,
+        port_base: None,
+        port_count: None,
     };
     let mgr = manager.inner().clone();
     let script_type = agent_login_script_type(&provider, &instance_id);
@@ -896,7 +971,7 @@ pub async fn resize_agent_login_terminal(
 #[cfg(target_os = "macos")]
 fn open_agent_login_terminal_impl(provider: &str) -> anyhow::Result<()> {
     let command = agent_login_command(provider)?;
-    let script_command = applescript_string(command);
+    let script_command = applescript_string(&command);
     let output = std::process::Command::new("osascript")
         .arg("-e")
         .arg("tell application \"Terminal\" to activate")
@@ -945,8 +1020,15 @@ pub async fn drain_pending_cli_sends() -> CmdResult<Vec<service::PendingCliSend>
     run_blocking(service::drain_pending_cli_sends).await
 }
 
+/// `session_id` is the composer's bound `sessions.id` or its provisional
+/// UUID. Required — paste-cache GC keys on it (see
+/// `maintenance::paste_cache`).
 #[tauri::command]
-pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<String> {
+pub async fn save_pasted_image(
+    data: String,
+    media_type: String,
+    session_id: String,
+) -> CmdResult<String> {
     run_blocking(move || {
         use std::fs;
         use uuid::Uuid;
@@ -958,7 +1040,10 @@ pub async fn save_pasted_image(data: String, media_type: String) -> CmdResult<St
             _ => "png",
         };
 
-        let paste_dir = crate::data_dir::data_dir()?.join("paste-cache");
+        // <paste-cache>/<session_id>/paste-<uuid>.<ext>; destination_dir
+        // bails on path-unsafe ids.
+        let paste_root = crate::data_dir::paste_cache_dir()?;
+        let paste_dir = crate::maintenance::paste_cache::destination_dir(&paste_root, &session_id)?;
         fs::create_dir_all(&paste_dir).context("Failed to create paste-cache directory")?;
 
         let filename = format!("paste-{}.{}", Uuid::new_v4(), ext);
@@ -1158,7 +1243,22 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
         );
     }
 
-    // 3. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
+    // 3. Signal every Run-tab script and embedded-terminal PTY so dev
+    //    servers, watch processes, and shell sessions don't outlive
+    //    Helmor as orphan process trees. Unconditional (not gated on
+    //    `force`) — even a normal quit needs to clean up the processes
+    //    Helmor itself spawned. Each handle's owning `run_script` thread
+    //    reaps its own `Child`, so we just need to deliver the signal.
+    let scripts = app.state::<ScriptProcessManager>();
+    let signaled = scripts.kill_all();
+    if signaled > 0 {
+        tracing::info!(
+            signaled,
+            "request_quit: signaled live script/terminal handles"
+        );
+    }
+
+    // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
     let sidecar = app.state::<sidecar::ManagedSidecar>();
     let (cooperative, escalation) = if force {
         (
@@ -1263,7 +1363,10 @@ pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResu
         // --- Filesystem cleanup (best-effort) ----------------------------
         let mut dirs_removed = Vec::new();
 
-        let dirs_to_clear = [data_dir.join("workspaces"), data_dir.join("paste-cache")];
+        let dirs_to_clear = [
+            data_dir.join("workspaces"),
+            data_dir.join("cache").join("paste"),
+        ];
 
         for dir in &dirs_to_clear {
             if dir.is_dir() {

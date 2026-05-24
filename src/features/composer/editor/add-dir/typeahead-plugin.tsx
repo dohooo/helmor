@@ -13,7 +13,7 @@
  *
  * Backspace at the leading edge of the post-pill text (or immediately
  * after the pill when no text has been typed) deletes the pill in one
- * keystroke — matches the user's decision to "一次删掉" the pill.
+ * keystroke — matches the user's "delete in one shot" expectation.
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -316,7 +316,7 @@ export function AddDirTypeaheadPlugin({
 									))}
 								</CommandGroup>
 							</CommandList>
-							<div className="border-t border-border/40 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+							<div className="border-t border-border/40 px-3 py-1.5 font-mono text-mini text-muted-foreground">
 								<span>↑↓ navigate · ↵ select · esc cancel</span>
 							</div>
 						</Command>
@@ -343,7 +343,7 @@ function PickerRow({
 }): ReactNode {
 	const entry = option.entry;
 	const commonCn = cn(
-		"min-w-0 gap-2.5 rounded-lg px-2.5 py-2 text-[13px]",
+		"min-w-0 gap-2.5 rounded-lg px-2.5 py-2 text-ui",
 		isSelected && "bg-muted text-foreground",
 	);
 	if (entry.kind === "browse") {
@@ -366,7 +366,7 @@ function PickerRow({
 				<span className="min-w-0 flex-1 truncate font-medium text-muted-foreground">
 					Browse folder…
 				</span>
-				<span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+				<span className="shrink-0 whitespace-nowrap text-small text-muted-foreground">
 					pick any directory on disk
 				</span>
 			</CommandItem>
@@ -400,12 +400,12 @@ function PickerRow({
 				{c.branch ? humanizeBranch(c.branch) : c.title}
 			</span>
 			{c.branch ? (
-				<span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10.5px] text-[var(--workspace-sidebar-branch)]">
+				<span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-micro text-[var(--workspace-sidebar-branch)]">
 					<BranchIcon /> {c.branch}
 				</span>
 			) : null}
 			{entry.alreadyLinked ? (
-				<span className="ml-1 shrink-0 font-mono text-[10px] text-muted-foreground">
+				<span className="ml-1 shrink-0 font-mono text-micro text-muted-foreground">
 					linked
 				</span>
 			) : null}

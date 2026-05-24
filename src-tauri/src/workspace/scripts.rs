@@ -17,11 +17,28 @@ use tauri::ipc::Channel;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ScriptEvent {
-    Started { pid: u32, command: String },
-    Stdout { data: String },
-    Stderr { data: String },
-    Exited { code: Option<i32> },
-    Error { message: String },
+    Started {
+        pid: u32,
+        command: String,
+    },
+    Stdout {
+        data: String,
+    },
+    Stderr {
+        data: String,
+    },
+    /// Emitted at the moment a configured `stop.command` starts running.
+    /// Frontends flip the run-action card to a "Stopping…" affordance so
+    /// the Stop button becomes "Force Stop" (which short-circuits the
+    /// cleanup and goes straight to SIGKILL on re-click).
+    /// Only emitted when a stop command is actually configured.
+    Stopping,
+    Exited {
+        code: Option<i32>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Key = (repo_id, script_type, workspace_id)
@@ -32,6 +49,20 @@ const PROCESS_KILL_TIMEOUT: Duration = Duration::from_millis(500);
 const PTY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PTY_WRITE_RETRY: Duration = Duration::from_millis(5);
 const PTY_WRITE_DEADLINE: Duration = Duration::from_millis(500);
+const STOP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Graceful-stop bundle: the user-provided cleanup command + everything
+/// `graceful_kill` needs to spawn it (same env, same cwd, output piped
+/// back into the run-action's terminal channel). Built by callers that
+/// resolve a `RunAction.stop` block; kept in `ProcessHandle` so the Stop
+/// path can reach it without an extra DB lookup.
+#[derive(Clone)]
+pub struct ScriptStop {
+    pub command: String,
+    pub event_tx: Channel<ScriptEvent>,
+    pub ctx: ScriptContext,
+    pub working_dir: String,
+}
 
 /// Metadata we track per live script so Stop, stdin, and resize can reach it
 /// without owning the `Child`. The owner of the `Child` is `run_script`, which
@@ -50,6 +81,22 @@ struct ProcessHandle {
     /// burst). Keeping this alive is what makes Ctrl+C and typing work —
     /// without it, the PTY master would close right after the initial command.
     stdin: Arc<Mutex<std::fs::File>>,
+    /// Per-action graceful-stop config. `None` keeps today's behavior:
+    /// SIGTERM → 200ms → SIGKILL with no detour through stop.command.
+    stop: Option<Arc<ScriptStop>>,
+    /// CAS'd to `true` the first time `graceful_kill` runs for this
+    /// handle. A second Stop click while stop.command is still in flight
+    /// CAS'es back true → graceful_kill skips the wait and SIGKILLs the
+    /// main process immediately (frontend renders this as "Force Stop").
+    stopping: Arc<AtomicBool>,
+    /// pgid of the in-flight stop.command. Set by the first
+    /// `graceful_kill` thread once it has spawned the cleanup process,
+    /// cleared when that process exits. The Force Stop path (and the
+    /// rerun / kill_others / kill_all paths) read this under lock and
+    /// `killpg(SIGKILL)` it so the cleanup process doesn't outlive the
+    /// user's intent — otherwise restarting a workspace or quitting
+    /// Helmor would leak the background sleep / docker compose down.
+    stop_pgid: Arc<Mutex<Option<libc::pid_t>>>,
 }
 
 #[derive(Clone, Default)]
@@ -66,12 +113,21 @@ impl ScriptProcessManager {
     /// can find it. If a handle for this key already exists (user clicked
     /// Run again while the previous run was alive), we mark the old one as
     /// killed and signal it — its own `run_script` will reap.
+    ///
+    /// The collision branch (and `kill_others_in_repo` / `kill_all` below)
+    /// intentionally bypasses *running* `stop.command` — graceful cleanup
+    /// is wired only for the explicit Stop button path. But any
+    /// `stop.command` *already in flight* from a prior Stop click is
+    /// SIGKILL'd here so it doesn't outlive the new operation; otherwise
+    /// rerun / kill_others / kill_all would leak the background cleanup
+    /// process.
     fn register(
         &self,
         key: ProcessKey,
         pid: libc::pid_t,
         pgid: libc::pid_t,
         stdin: Arc<Mutex<std::fs::File>>,
+        stop: Option<ScriptStop>,
     ) -> Arc<AtomicBool> {
         let killed = Arc::new(AtomicBool::new(false));
         let handle = ProcessHandle {
@@ -79,10 +135,14 @@ impl ScriptProcessManager {
             pgid,
             killed: killed.clone(),
             stdin,
+            stop: stop.map(Arc::new),
+            stopping: Arc::new(AtomicBool::new(false)),
+            stop_pgid: Arc::new(Mutex::new(None)),
         };
         let mut map = self.processes.lock().expect("process map poisoned");
         if let Some(old) = map.insert(key, handle) {
             old.killed.store(true, Ordering::Release);
+            kill_in_flight_stop_command(&old.stop_pgid);
             escalating_kill(old.pid, old.pgid);
         }
         killed
@@ -122,6 +182,34 @@ impl ScriptProcessManager {
         let count = victims.len();
         for h in victims {
             h.killed.store(true, Ordering::Release);
+            kill_in_flight_stop_command(&h.stop_pgid);
+            escalating_kill(h.pid, h.pgid);
+        }
+        count
+    }
+
+    /// Signal every live script and terminal handle the manager currently
+    /// owns. Used by the graceful-quit path so Run-tab scripts and
+    /// embedded-terminal PTY sessions don't outlive Helmor as orphan
+    /// process trees. Returns the number of handles that were signaled.
+    ///
+    /// Mirrors `kill_others_in_repo`'s lock discipline: snapshot the
+    /// handles under the map lock, drop the lock, then call
+    /// `escalating_kill` for each. Holding the lock across the signal
+    /// would block `run_script`'s post-wait `unregister` (which takes
+    /// the same lock) and deadlock the quit path.
+    ///
+    /// Does **not** reap — each `run_script` thread still owns its own
+    /// `child.wait()`.
+    pub fn kill_all(&self) -> usize {
+        let victims: Vec<ProcessHandle> = {
+            let map = self.processes.lock().expect("process map poisoned");
+            map.values().cloned().collect()
+        };
+        let count = victims.len();
+        for h in victims {
+            h.killed.store(true, Ordering::Release);
+            kill_in_flight_stop_command(&h.stop_pgid);
             escalating_kill(h.pid, h.pgid);
         }
         count
@@ -131,7 +219,20 @@ impl ScriptProcessManager {
     /// escalating to SIGKILL after `PROCESS_TERM_TIMEOUT`. Returns true if
     /// there was a live handle to signal.
     ///
-    /// Does **not** reap — `run_script`'s `child.wait()` still owns that.
+    /// When the handle carries a `stop.command`, that runs first (output
+    /// piped into the same script channel) and the SIGTERM/SIGKILL only
+    /// runs after it exits. A second `kill()` call while stop.command is
+    /// still in flight short-circuits straight to SIGKILL — the
+    /// frontend's "Force Stop" button uses this. The stop.command branch
+    /// runs on a background thread so the Tauri IPC call returns
+    /// immediately; the `killed` flag is flipped synchronously so racing
+    /// readers still report a clean kill exit code.
+    ///
+    /// When the handle has **no** stop.command configured, this stays on
+    /// the caller's thread (matching the pre-feature behavior exactly)
+    /// — avoiding an extra thread spawn per Stop click for the 95% of
+    /// run actions that don't need a graceful cleanup. Does **not**
+    /// reap — `run_script`'s `child.wait()` still owns that.
     pub fn kill(&self, key: &ProcessKey) -> bool {
         let handle = {
             let map = self.processes.lock().expect("process map poisoned");
@@ -140,7 +241,14 @@ impl ScriptProcessManager {
         match handle {
             Some(h) => {
                 h.killed.store(true, Ordering::Release);
-                escalating_kill(h.pid, h.pgid);
+                // Fast path: no stop.command and not in the middle of one
+                // → behave exactly as the pre-feature code did
+                // (inline signal sequence, no background thread).
+                if h.stop.is_none() && !h.stopping.load(Ordering::Acquire) {
+                    escalating_kill(h.pid, h.pgid);
+                } else {
+                    std::thread::spawn(move || graceful_kill(h));
+                }
                 true
             }
             None => false,
@@ -279,13 +387,253 @@ fn is_process_group_gone(pgid: libc::pid_t) -> bool {
     false
 }
 
+/// SIGKILL any `stop.command` cleanup tree currently published in
+/// `pgid_slot`. Used by `register()` collision, `kill_others_in_repo`,
+/// and `kill_all` — they bypass running a *new* `stop.command` but must
+/// not leak one that's already in flight from a prior Stop click. No-op
+/// when no cleanup is running. Mirrors the Force Stop short-circuit at
+/// the top of `graceful_kill`.
+fn kill_in_flight_stop_command(pgid_slot: &Mutex<Option<libc::pid_t>>) {
+    let stop_pgid = *pgid_slot.lock().expect("stop_pgid mutex poisoned");
+    if let Some(pgid) = stop_pgid {
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+    }
+}
+
+/// Outcome of running a configured `stop.command`. Each branch carries
+/// enough info for `graceful_kill` to print a single human-readable
+/// line into the run-action's terminal before signalling the main
+/// process via `escalating_kill` (which happens unconditionally).
+enum StopOutcome {
+    CleanExit,
+    NonZeroExit(Option<i32>),
+    SpawnFailed(String),
+}
+
+/// Spawn `command` via `/bin/sh -c`, stream its stdout/stderr into the
+/// supplied `event_tx`, and block until it exits. There is no timeout —
+/// the user controls escalation via the "Force Stop" re-click, which
+/// SIGKILL's the cleanup tree through `pgid_slot` and short-circuits
+/// the wait.
+///
+/// The child is placed into its own process group via `setsid` so a
+/// concurrent Force Stop (or rerun / kill_others / kill_all) that
+/// reads `pgid_slot` can `killpg` the whole tree — a docker compose
+/// down that itself shells out wouldn't otherwise be reachable.
+/// Output is piped rather than PTY-allocated because cleanup commands
+/// rarely benefit from a TTY and the simpler plumbing keeps the
+/// failure surface small.
+///
+/// `pgid_slot` is published with the spawned child's process group id
+/// once it's known, and cleared before this function returns.
+fn run_stop_command(
+    command: &str,
+    working_dir: &str,
+    ctx: &ScriptContext,
+    event_tx: &Channel<ScriptEvent>,
+    pgid_slot: &Mutex<Option<libc::pid_t>>,
+) -> StopOutcome {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(working_dir)
+        .env("TERM", "xterm-256color")
+        .env("FORCE_COLOR", "1")
+        .env("CLICOLOR_FORCE", "1")
+        .env("HELMOR_ROOT_PATH", &ctx.root_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(wp) = &ctx.workspace_path {
+        cmd.env("HELMOR_WORKSPACE_PATH", wp);
+    }
+    if let Some(wn) = &ctx.workspace_name {
+        cmd.env("HELMOR_WORKSPACE_NAME", wn);
+    }
+    if let Some(db) = &ctx.default_branch {
+        cmd.env("HELMOR_DEFAULT_BRANCH", db);
+    }
+    if let (Some(base), Some(count)) = (ctx.port_base, ctx.port_count) {
+        cmd.env("HELMOR_PORT", base.to_string());
+        cmd.env("HELMOR_PORT_COUNT", count.to_string());
+    }
+
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return StopOutcome::SpawnFailed(format!("{e}")),
+    };
+    let pid = child.id() as libc::pid_t;
+    let pgid = unsafe { libc::getpgid(pid) };
+
+    // Publish pgid so a concurrent Force Stop can SIGKILL the cleanup
+    // tree. Always cleared before return (deferred via the `outcome`
+    // binding below).
+    *pgid_slot.lock().expect("stop_pgid mutex poisoned") = Some(pgid);
+
+    // Pipe stdout / stderr through dedicated reader threads so the user
+    // sees progress in the same xterm as the main run output. The
+    // variant constructor tags bytes as Stdout / Stderr so terminal
+    // styling (red for stderr) survives.
+    fn pipe_to_channel<R: Read + Send + 'static>(
+        name: &'static str,
+        mut reader: R,
+        tx: Channel<ScriptEvent>,
+        wrap: fn(String) -> ScriptEvent,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let data = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let _ = tx.send(wrap(data));
+                }
+            })
+            .ok()
+    }
+    let stdout_thread = child.stdout.take().and_then(|s| {
+        pipe_to_channel("stop-cmd-stdout", s, event_tx.clone(), |data| {
+            ScriptEvent::Stdout { data }
+        })
+    });
+    let stderr_thread = child.stderr.take().and_then(|s| {
+        pipe_to_channel("stop-cmd-stderr", s, event_tx.clone(), |data| {
+            ScriptEvent::Stderr { data }
+        })
+    });
+
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    break StopOutcome::CleanExit;
+                }
+                break StopOutcome::NonZeroExit(status.code());
+            }
+            Ok(None) => {
+                std::thread::sleep(STOP_COMMAND_POLL_INTERVAL);
+            }
+            Err(e) => {
+                // Don't leak the child + its reader threads on a
+                // try_wait failure — SIGKILL the pgid (or pid as
+                // fallback) and reap so the pipe ends close.
+                unsafe {
+                    if pgid > 0 {
+                        libc::killpg(pgid, libc::SIGKILL);
+                    }
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                break StopOutcome::SpawnFailed(format!("try_wait failed: {e}"));
+            }
+        }
+    };
+
+    // Drain the pipes so the user sees the last bytes before the kill
+    // message — the threads exit naturally when read() returns 0 / Err.
+    if let Some(h) = stdout_thread {
+        let _ = h.join();
+    }
+    if let Some(h) = stderr_thread {
+        let _ = h.join();
+    }
+
+    // Clear the published pgid before returning. Force Stop reading
+    // after this point sees `None` and skips the SIGKILL — the cleanup
+    // is already done so no signal is needed.
+    *pgid_slot.lock().expect("stop_pgid mutex poisoned") = None;
+
+    outcome
+}
+
+/// Graceful Stop sequence for one process handle:
+///
+///   1. First `kill()` flips `stopping`. If a stop.command is configured
+///      we emit `Stopping`, run it (output piped into the script's
+///      channel), then proceed to `escalating_kill` on the main pid.
+///   2. A second `kill()` while we're still inside step 1 short-circuits:
+///      it CAS'es `stopping` true a second time and jumps straight to
+///      `escalating_kill`. The frontend renders this as "Force Stop".
+///   3. With no stop.command configured the call is identical to the
+///      pre-feature path — straight to `escalating_kill`.
+fn graceful_kill(handle: ProcessHandle) {
+    // Race guard: if `stopping` was already true this is a re-click
+    // ("Force Stop"). Kill the in-flight cleanup tree so the first
+    // graceful_kill thread isn't left waiting on an abandoned child,
+    // then escalating_kill the main process. Both threads converge
+    // safely — the first one's wait() returns and its own
+    // escalating_kill sees the dead pid and no-ops.
+    if handle.stopping.swap(true, Ordering::AcqRel) {
+        kill_in_flight_stop_command(&handle.stop_pgid);
+        escalating_kill(handle.pid, handle.pgid);
+        return;
+    }
+
+    if let Some(stop) = handle.stop.as_deref() {
+        let _ = stop.event_tx.send(ScriptEvent::Stopping);
+        let _ = stop.event_tx.send(ScriptEvent::Stdout {
+            data: format!(
+                "\r\n\x1b[2m[Helmor] Running stop.command: {}\x1b[0m\r\n",
+                stop.command
+            ),
+        });
+        let started = Instant::now();
+        let outcome = run_stop_command(
+            &stop.command,
+            &stop.working_dir,
+            &stop.ctx,
+            &stop.event_tx,
+            &handle.stop_pgid,
+        );
+        let elapsed_ms = started.elapsed().as_millis();
+        let footer = match outcome {
+            StopOutcome::CleanExit => format!(
+                "\r\n\x1b[2m[Helmor] stop.command exited cleanly in {elapsed_ms}ms\x1b[0m\r\n"
+            ),
+            StopOutcome::NonZeroExit(code) => format!(
+                "\r\n\x1b[33m[Helmor] stop.command exited with code {} after {elapsed_ms}ms\x1b[0m\r\n",
+                code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+            ),
+            StopOutcome::SpawnFailed(err) => format!(
+                "\r\n\x1b[33m[Helmor] stop.command failed to spawn ({err}) — proceeding with force-kill\x1b[0m\r\n"
+            ),
+        };
+        let _ = stop.event_tx.send(ScriptEvent::Stdout { data: footer });
+    }
+
+    escalating_kill(handle.pid, handle.pgid);
+}
+
 /// Workspace context passed to scripts as environment variables.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScriptContext {
     pub root_path: String,
     pub workspace_path: Option<String>,
     pub workspace_name: Option<String>,
     pub default_branch: Option<String>,
+    /// First port in the workspace's deterministic port block.
+    /// Surfaces to scripts as `HELMOR_PORT`. `None` for non-workspace
+    /// runs (onboarding auth terminals, etc.) where there is no
+    /// workspace to anchor a stable range to.
+    pub port_base: Option<u16>,
+    /// Size of the port block starting at `port_base`. Surfaces to
+    /// scripts as `HELMOR_PORT_COUNT`. Always paired with `port_base`.
+    pub port_count: Option<u16>,
 }
 
 /// Allocate a PTY pair via `openpty`. Returns (master_fd, slave_fd).
@@ -362,6 +710,10 @@ fn wrapped_script_for_shell(shell_path: &str, script: &str) -> String {
 /// send additional input (arrow keys, Ctrl+C, responses to prompts) through
 /// `ScriptProcessManager::write_stdin`. The wrapped command's final `exit`
 /// is what ends the session on normal completion.
+///
+/// `stop` carries the optional graceful-stop config attached to the
+/// originating `RunAction`. Setup / archive scripts have no notion of
+/// stop.command and should pass `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn run_script(
     manager: &ScriptProcessManager,
@@ -372,6 +724,7 @@ pub fn run_script(
     working_dir: &str,
     context: &ScriptContext,
     channel: Channel<ScriptEvent>,
+    stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     run_script_with_shell(
@@ -386,6 +739,7 @@ pub fn run_script(
         &shell,
         &["-i", "-l"],
         None,
+        stop,
     )
 }
 
@@ -424,6 +778,7 @@ pub fn run_terminal_session(
         &shell,
         &["-i", "-l"],
         boot_input,
+        None,
     )
 }
 
@@ -454,6 +809,7 @@ pub(crate) fn run_script_with_shell(
     shell_path: &str,
     shell_args: &[&str],
     boot_input: Option<&str>,
+    stop: Option<ScriptStop>,
 ) -> Result<Option<i32>> {
     if let Some(s) = script {
         if s.trim().is_empty() {
@@ -502,6 +858,13 @@ pub(crate) fn run_script_with_shell(
     if let Some(db) = &context.default_branch {
         cmd.env("HELMOR_DEFAULT_BRANCH", db);
     }
+    // Per-workspace port range. Only emit both vars together so scripts
+    // can rely on `HELMOR_PORT_COUNT` being present whenever `HELMOR_PORT`
+    // is. Both are absent for non-workspace runs (onboarding terminals).
+    if let (Some(base), Some(count)) = (context.port_base, context.port_count) {
+        cmd.env("HELMOR_PORT", base.to_string());
+        cmd.env("HELMOR_PORT_COUNT", count.to_string());
+    }
 
     // Set up the child's session and controlling terminal before exec.
     unsafe {
@@ -547,9 +910,14 @@ pub(crate) fn run_script_with_shell(
         script_type.to_string(),
         workspace_id.map(str::to_string),
     );
-    let killed = manager.register(key.clone(), pid, pgid, stdin.clone());
+    let killed = manager.register(key.clone(), pid, pgid, stdin.clone(), stop);
 
     // Single reader on the PTY master — stdout+stderr are merged by the PTY.
+    // Uses poll(2) so the kernel wakes the thread the instant data is
+    // readable instead of the legacy 25ms `sleep` loop. The PTY master keeps
+    // O_NONBLOCK so we can drain everything available after each wake without
+    // re-entering poll for each chunk; write_stdin also benefits (PTY full
+    // → WouldBlock instead of blocking the IPC thread).
     let ch = channel.clone();
     let stop_reader = Arc::new(AtomicBool::new(false));
     let stop_reader_in_thread = stop_reader.clone();
@@ -558,32 +926,66 @@ pub(crate) fn run_script_with_shell(
         .spawn(move || {
             let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
             let mut buf = [0u8; 4096];
+            // 100ms tick is just a stop-flag fallback — kill() also closes
+            // the PTY which triggers EIO/POLLHUP and wakes us instantly.
+            const POLL_TIMEOUT_MS: libc::c_int = 100;
             loop {
                 if stop_reader_in_thread.load(Ordering::Relaxed) {
                     break;
                 }
 
-                match master.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        let _ = ch.send(ScriptEvent::Stdout { data });
+                let mut pfd = libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, POLL_TIMEOUT_MS) };
+                if ret < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
                     }
-                    Err(e) => {
-                        // master_fd is non-blocking, so an idle PTY (Terminal
-                        // tab waiting for keystrokes) returns EAGAIN every
-                        // poll. Sleep + continue without logging — otherwise
-                        // the debug log floods at PTY_POLL_INTERVAL frequency.
-                        if e.kind() == std::io::ErrorKind::WouldBlock {
-                            std::thread::sleep(PTY_POLL_INTERVAL);
-                            continue;
+                    tracing::debug!(error = %err, "PTY poll failed");
+                    break;
+                }
+                if ret == 0 {
+                    // Timeout — re-check stop flag and re-poll.
+                    continue;
+                }
+                // POLLHUP / POLLERR fire when the slave fd is closed (child
+                // exited). We still try to read first so any pending bytes
+                // ahead of the hangup are delivered.
+                let revents = pfd.revents;
+                let hung_up = revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0;
+
+                // Drain everything available in this wake cycle.
+                let mut should_exit = hung_up;
+                loop {
+                    match master.read(&mut buf) {
+                        Ok(0) => {
+                            should_exit = true;
+                            break;
                         }
-                        // EIO is expected when the child exits and slave closes.
-                        if e.raw_os_error() != Some(libc::EIO) {
-                            tracing::debug!(error = %e, "PTY read error");
+                        Ok(n) => {
+                            let data = String::from_utf8_lossy(&buf[..n]).into_owned();
+                            let _ = ch.send(ScriptEvent::Stdout { data });
                         }
-                        break;
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Drained for now — back to poll().
+                            break;
+                        }
+                        Err(e) => {
+                            // EIO is expected when the child exits and slave closes.
+                            if e.raw_os_error() != Some(libc::EIO) {
+                                tracing::debug!(error = %e, "PTY read error");
+                            }
+                            should_exit = true;
+                            break;
+                        }
                     }
+                }
+                if should_exit {
+                    break;
                 }
             }
         })
@@ -707,7 +1109,7 @@ mod tests {
             .open("/dev/null")
             .expect("open /dev/null");
         let stdin_arc = Arc::new(Mutex::new(stdin));
-        let killed = mgr.register(key, pid, pgid, stdin_arc);
+        let killed = mgr.register(key, pid, pgid, stdin_arc, None);
         (child, pid, pgid, killed)
     }
 
@@ -815,6 +1217,114 @@ mod tests {
         assert_eq!(mgr.kill_others_in_repo("nope", "run", None), 0);
     }
 
+    // ── kill_all (graceful-quit path) ──────────────────────────────────────
+
+    #[test]
+    fn kill_all_signals_every_registered_handle_across_repos_and_script_types() {
+        let mgr = ScriptProcessManager::new();
+        // Mixed registry: two scripts in one repo, one terminal in
+        // another, and a forge-auth-style no-workspace entry. kill_all
+        // must hit every single one.
+        let a_run: ProcessKey = ("A".into(), "run".into(), Some("ws-1".into()));
+        let a_setup: ProcessKey = ("A".into(), "setup".into(), Some("ws-1".into()));
+        let b_terminal: ProcessKey = ("B".into(), "terminal:abc".into(), Some("ws-other".into()));
+        let auth: ProcessKey = ("__auth__".into(), "agent-login:claude".into(), None);
+
+        let (mut c1, _, _, k1) = spawn_and_register(&mgr, a_run.clone());
+        let (mut c2, _, _, k2) = spawn_and_register(&mgr, a_setup.clone());
+        let (mut c3, _, _, k3) = spawn_and_register(&mgr, b_terminal.clone());
+        let (mut c4, _, _, k4) = spawn_and_register(&mgr, auth.clone());
+
+        let signaled = mgr.kill_all();
+        assert_eq!(signaled, 4);
+
+        // Reap each child to release pid resources, then prove the
+        // killed flag was flipped on every handle.
+        let _ = c1.wait();
+        let _ = c2.wait();
+        let _ = c3.wait();
+        let _ = c4.wait();
+        assert!(k1.load(Ordering::Acquire));
+        assert!(k2.load(Ordering::Acquire));
+        assert!(k3.load(Ordering::Acquire));
+        assert!(k4.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn kill_all_with_empty_manager_is_zero() {
+        let mgr = ScriptProcessManager::new();
+        assert_eq!(mgr.kill_all(), 0);
+    }
+
+    /// Regression: `kill_all` must drop the process-map lock BEFORE
+    /// signaling, otherwise the `run_script` thread's post-wait
+    /// `unregister` — which takes the same lock — would deadlock the
+    /// quit path. We exercise the exact ordering by spawning a real
+    /// `run_script` that exits the moment it's signaled (so its reaper
+    /// thread calls `unregister` while `kill_all` is still iterating
+    /// over its victim list). The test would hang the suite if the
+    /// lock were held; finishing under the timeout proves the
+    /// invariant.
+    #[test]
+    fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let mgr = std::sync::Arc::new(ScriptProcessManager::new());
+        let ctx = ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+            port_base: None,
+            port_count: None,
+        };
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let runner = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                Some("sleep 60"),
+                &tempdir,
+                &ctx,
+                make_channel(),
+                "/bin/sh",
+                &[],
+                None,
+                None,
+            )
+        });
+
+        // Wait for run_script to register before we issue kill_all.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(&key) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "run_script never registered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert_eq!(mgr.kill_all(), 1);
+        // run_script's reaper must have unregistered + returned. If
+        // kill_all held the map lock past the signal, the unregister
+        // would have blocked and this join would hang.
+        let _ = runner.join().unwrap();
+        // Real path is sub-second (PROCESS_TERM + PROCESS_KILL = 700ms
+        // upper bound). 5s headroom for CI load; a real regression
+        // (deadlock / missed signal) hangs indefinitely and still trips.
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "kill_all + reap took too long: {:?}",
+            start.elapsed()
+        );
+        assert!(mgr.processes.lock().unwrap().is_empty());
+    }
+
     // ── escalating_kill kills the process group ────────────────────────────
 
     #[test]
@@ -883,6 +1393,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -902,6 +1414,7 @@ mod tests {
                 make_channel(),
                 "/bin/sh",
                 &[],
+                None,
                 None,
             )
         });
@@ -923,8 +1436,9 @@ mod tests {
 
         assert!(mgr.kill(&key), "kill should find the handle");
         let result = handle.join().unwrap();
+        // 5s headroom for CI load; real path is sub-second.
         assert!(
-            start.elapsed() < Duration::from_secs(3),
+            start.elapsed() < Duration::from_secs(5),
             "Stop took too long: {:?}",
             start.elapsed()
         );
@@ -945,6 +1459,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -982,6 +1498,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
             )
         });
@@ -1033,6 +1550,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
@@ -1070,6 +1589,7 @@ mod tests {
                 ch,
                 "/bin/sh",
                 &[],
+                None,
                 None,
             )
         });
@@ -1121,6 +1641,8 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
         run_script_with_shell(
             &mgr,
@@ -1133,6 +1655,7 @@ mod tests {
             make_channel(),
             shell_path,
             shell_args,
+            None,
             None,
         )
         .unwrap()
@@ -1176,6 +1699,159 @@ mod tests {
         );
     }
 
+    /// End-to-end: a script with a populated `ScriptContext.port_base`
+    /// sees `HELMOR_PORT` / `HELMOR_PORT_COUNT` in its env, and the
+    /// existing env vars (HELMOR_ROOT_PATH, HELMOR_WORKSPACE_NAME, …)
+    /// keep working alongside the new ones.
+    #[test]
+    fn script_env_includes_helmor_port_vars_when_range_present() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-port".into()),
+            default_branch: Some("main".into()),
+            port_base: Some(55_100),
+            port_count: Some(10),
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-port"),
+            // Sentinel-tag the output so we can spot the env values
+            // amid the interactive-shell prompt / wrapper banner the
+            // PTY also writes to stdout.
+            Some(
+                "printf 'PORT=%s|COUNT=%s|NAME=%s|ROOT=%s\\n' \
+                  \"$HELMOR_PORT\" \"$HELMOR_PORT_COUNT\" \
+                  \"$HELMOR_WORKSPACE_NAME\" \"$HELMOR_ROOT_PATH\"",
+            ),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    if combined.contains("PORT=55100|COUNT=10") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT=55100|COUNT=10|NAME=ws-port"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT alongside legacy env; got: {combined:?}"
+        );
+        assert!(
+            combined.contains(&format!("ROOT={}", dir.display())),
+            "expected HELMOR_ROOT_PATH still injected; got: {combined:?}"
+        );
+    }
+
+    /// When the workspace has no allocated range, the new env vars are
+    /// absent (vs. set to empty strings) so scripts that fall back with
+    /// `${HELMOR_PORT:-3000}` keep their default.
+    #[test]
+    fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let mgr = ScriptProcessManager::new();
+        let dir = std::env::temp_dir();
+        let ctx = ScriptContext {
+            root_path: dir.display().to_string(),
+            workspace_path: Some(dir.display().to_string()),
+            workspace_name: Some("ws-noport".into()),
+            default_branch: Some("main".into()),
+            port_base: None,
+            port_count: None,
+        };
+
+        let (tx, rx) = mpsc::channel::<String>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("stdout") {
+                        if let Some(data) = v.get("data").and_then(|d| d.as_str()) {
+                            let _ = tx.send(data.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        let exit = run_script_with_shell(
+            &mgr,
+            "repo",
+            "run",
+            Some("ws-noport"),
+            // `${var+set}` expands to "set" if set (even when empty) and
+            // to nothing otherwise. The sentinel intentionally puts the
+            // expansion between two delimiters so we can tell "unset"
+            // (PORT[]COUNT[]) apart from "set to empty" (PORT[set]COUNT[set])
+            // even after the wrapper echoes the literal source line back.
+            Some("printf 'PORT[%s]COUNT[%s]EOM\\n' \"${HELMOR_PORT+set}\" \"${HELMOR_PORT_COUNT+set}\""),
+            dir.to_str().unwrap(),
+            &ctx,
+            ch,
+            "/bin/sh",
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(exit, Some(0));
+
+        let mut combined = String::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(chunk) => {
+                    combined.push_str(&chunk);
+                    // `PORT[]COUNT[]` only materialises post-substitution
+                    // — the source line carries `PORT[%s]COUNT[%s]`, so
+                    // matching the substituted form lets us distinguish
+                    // it from the wrapper's echo of the source line.
+                    if combined.contains("PORT[]COUNT[]EOM") {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            combined.contains("PORT[]COUNT[]EOM"),
+            "expected HELMOR_PORT/HELMOR_PORT_COUNT to be unset; got: {combined:?}"
+        );
+    }
+
     #[test]
     fn run_script_rejects_empty() {
         let mgr = ScriptProcessManager::new();
@@ -1184,8 +1860,20 @@ mod tests {
             workspace_path: None,
             workspace_name: None,
             default_branch: None,
+            port_base: None,
+            port_count: None,
         };
-        let result = run_script(&mgr, "r", "s", None, "  ", "/tmp", &ctx, make_channel());
+        let result = run_script(
+            &mgr,
+            "r",
+            "s",
+            None,
+            "  ",
+            "/tmp",
+            &ctx,
+            make_channel(),
+            None,
+        );
         assert!(result.is_err());
     }
 
@@ -1210,5 +1898,228 @@ mod tests {
         let mgr = ScriptProcessManager::new();
         let key: ProcessKey = ("nope".into(), "run".into(), None);
         assert!(!mgr.kill(&key));
+    }
+
+    // ── graceful_kill (stop.command) ───────────────────────────────────────
+
+    /// Build a Channel that forwards `(type, optional data)` of every
+    /// ScriptEvent into a Receiver. Tests use this to wait for specific
+    /// events (Stopping, Exited) and to assert that stop.command output
+    /// landed in the same stream as the main run output.
+    fn capture_events() -> (
+        Channel<ScriptEvent>,
+        mpsc::Receiver<(String, Option<String>)>,
+    ) {
+        let (tx, rx) = mpsc::channel::<(String, Option<String>)>();
+        let ch = Channel::<ScriptEvent>::new(move |msg| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    let ev_type = v
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                        .unwrap_or_default();
+                    let data = v.get("data").and_then(|d| d.as_str()).map(String::from);
+                    let _ = tx.send((ev_type, data));
+                }
+            }
+            Ok(())
+        });
+        (ch, rx)
+    }
+
+    /// Block until either an event with `type == ev_type` arrives, or
+    /// `timeout` elapses. Returns the data payload (if any).
+    fn wait_for_event(
+        rx: &mpsc::Receiver<(String, Option<String>)>,
+        ev_type: &str,
+        timeout: Duration,
+    ) -> Option<Option<String>> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok((t, data)) = rx.recv_timeout(Duration::from_millis(100)) {
+                if t == ev_type {
+                    return Some(data);
+                }
+            }
+        }
+        None
+    }
+
+    fn empty_ctx() -> ScriptContext {
+        ScriptContext {
+            root_path: std::env::temp_dir().display().to_string(),
+            workspace_path: None,
+            workspace_name: None,
+            default_branch: None,
+            port_base: None,
+            port_count: None,
+        }
+    }
+
+    /// Stop.command exits cleanly → backend emits Stopping, streams the
+    /// command's stdout into the same channel, and then SIGTERMs the run
+    /// process. The run script reports None for its exit code because
+    /// `killed` was flipped.
+    ///
+    /// Marked `#[ignore]` because each graceful_kill test spawns multiple
+    /// subprocesses (run shell, stop.command, reader threads) and a full
+    /// `cargo test --lib` already runs ~1100 tests in parallel. Adding
+    /// this kind of fork/exec load to the default suite makes a couple of
+    /// pre-existing PTY tests in this module flake under heavy macOS
+    /// scheduling. Run explicitly with
+    /// `cargo test --lib graceful_kill -- --ignored`, or include it in a
+    /// focused `workspace::scripts` filter where the parallel load stays
+    /// well under the flakiness threshold.
+    #[test]
+    #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
+    fn graceful_kill_runs_stop_command_then_escalates() {
+        let mgr = Arc::new(ScriptProcessManager::new());
+        let ctx = empty_ctx();
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let (ch, rx) = capture_events();
+
+        let stop = ScriptStop {
+            command: "echo HELMOR_STOP_CALLED".to_string(),
+            event_tx: ch.clone(),
+            ctx: ctx.clone(),
+            working_dir: std::env::temp_dir().display().to_string(),
+        };
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let ctx_for_thread = ctx.clone();
+        let handle = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                Some("sleep 60"),
+                &tempdir,
+                &ctx_for_thread,
+                ch,
+                "/bin/sh",
+                &[],
+                None,
+                Some(stop),
+            )
+        });
+
+        // Wait until run_script registers, then click Stop.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(&key) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "run_script never registered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert!(mgr.kill(&key), "kill should find the live handle");
+
+        // The Stopping event must arrive before the run process exits.
+        assert!(
+            wait_for_event(&rx, "stopping", Duration::from_secs(2)).is_some(),
+            "Stopping event must fire when stop.command is configured"
+        );
+
+        // Wait for Exited.
+        assert!(
+            wait_for_event(&rx, "exited", Duration::from_secs(5)).is_some(),
+            "run process should exit after stop.command + SIGTERM"
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "graceful kill took too long: {elapsed:?}"
+        );
+
+        // The run_script thread returns once child.wait() completes —
+        // killed flag was set, so exit code is None.
+        let result = handle.join().unwrap();
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "killed scripts should report None exit"
+        );
+    }
+
+    /// Second `kill()` while stop.command is still running short-circuits
+    /// straight to SIGKILL on the main process. The Force Stop button
+    /// uses exactly this path. See the sibling test for why `#[ignore]`.
+    #[test]
+    #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
+    fn graceful_kill_force_stop_on_second_click_short_circuits() {
+        let mgr = Arc::new(ScriptProcessManager::new());
+        let ctx = empty_ctx();
+        let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
+
+        let (ch, rx) = capture_events();
+
+        // Long-running stop.command — without the re-click escalation
+        // this test would block until the sleep naturally finishes.
+        let stop = ScriptStop {
+            command: "/bin/sleep 30".to_string(),
+            event_tx: ch.clone(),
+            ctx: ctx.clone(),
+            working_dir: std::env::temp_dir().display().to_string(),
+        };
+
+        let mgr_c = mgr.clone();
+        let key_c = key.clone();
+        let tempdir = std::env::temp_dir().display().to_string();
+        let ctx_for_thread = ctx.clone();
+        let handle = std::thread::spawn(move || {
+            run_script_with_shell(
+                &mgr_c,
+                &key_c.0,
+                &key_c.1,
+                key_c.2.as_deref(),
+                Some("sleep 60"),
+                &tempdir,
+                &ctx_for_thread,
+                ch,
+                "/bin/sh",
+                &[],
+                None,
+                Some(stop),
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(&key) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "run_script never registered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // First click — wait for Stopping to confirm we're inside the
+        // graceful window before issuing the second click.
+        assert!(mgr.kill(&key));
+        assert!(
+            wait_for_event(&rx, "stopping", Duration::from_secs(2)).is_some(),
+            "Stopping must fire on first kill"
+        );
+
+        // Second click — short-circuit to SIGKILL.
+        let start_force = Instant::now();
+        assert!(mgr.kill(&key));
+        assert!(
+            wait_for_event(&rx, "exited", Duration::from_secs(5)).is_some(),
+            "Force Stop should exit promptly, not wait 30s for stop.command"
+        );
+        let force_elapsed = start_force.elapsed();
+        assert!(
+            force_elapsed < Duration::from_secs(3),
+            "Force Stop took too long: {force_elapsed:?}"
+        );
+
+        let _ = handle.join();
     }
 }

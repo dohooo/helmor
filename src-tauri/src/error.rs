@@ -24,6 +24,10 @@ pub enum ErrorCode {
     WorkspaceNotFound,
     /// Expected forge CLI onboarding state: CLI missing or auth required.
     ForgeOnboarding,
+    /// Branch is already checked out in another worktree.
+    BranchInUse,
+    /// Branch not found locally or on the remote.
+    BranchNotFound,
 }
 
 /// Exposes an [`ErrorCode`] as a distinct layer in an anyhow error chain,
