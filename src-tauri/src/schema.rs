@@ -964,11 +964,12 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
--- AI triage: per-provider time checkpoint.
+-- AI triage: per-provider time checkpoint. Stored in local time
+-- (`advance_sync` writes RFC3339 with the local offset).
 CREATE TABLE IF NOT EXISTS triage_sync (
     provider_id TEXT PRIMARY KEY,
-    last_triaged_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    last_triaged_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 -- Indexes

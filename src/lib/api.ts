@@ -1931,9 +1931,20 @@ export type TriageActiveStatus = {
 	recentToolCalls: TriageToolCallRecord[];
 };
 
+export type TickOutcome =
+	| { kind: "createdWorkspaces"; count: number }
+	| { kind: "noActionableItems" }
+	| { kind: "failed"; message: string };
+
+export type LastTickOutcome = {
+	at: string;
+	tickId: string;
+	outcome: TickOutcome;
+};
+
 export type TriageStatus = {
 	active: TriageActiveStatus | null;
-	lastCompletedAt: string | null;
+	lastOutcome: LastTickOutcome | null;
 };
 
 export async function getTriageConfig(): Promise<TriageConfig> {

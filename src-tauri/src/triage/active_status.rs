@@ -1,8 +1,10 @@
-//! In-memory snapshot of the currently-running tick + last completion stamp.
+//! In-memory snapshot of the currently-running tick + a structured
+//! record of the last tick's outcome so the UI can show
+//! "created N / no items / failed" instead of just a bare timestamp.
 
 use std::sync::Mutex;
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 
 const MAX_TOOL_CALLS: usize = 200;
@@ -27,17 +29,39 @@ pub struct ActiveStatus {
     pub recent_tool_calls: Vec<ToolCallRecord>,
 }
 
+/// What happened on the most recent tick. Drives the descriptor line next
+/// to the Run button — lets the user tell apart "agent decided nothing
+/// was worth a workspace" from "sidecar blew up".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TickOutcome {
+    /// Tick ran clean and the agent proposed workspaces that got created.
+    CreatedWorkspaces { count: u32 },
+    /// Tick ran clean but the agent didn't surface anything actionable.
+    NoActionableItems,
+    /// Tick aborted (sidecar error, timeout, agent abort).
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastTickOutcome {
+    pub at: String,
+    pub tick_id: String,
+    pub outcome: TickOutcome,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TriageStatus {
     pub active: Option<ActiveStatus>,
-    pub last_completed_at: Option<String>,
+    pub last_outcome: Option<LastTickOutcome>,
 }
 
 #[derive(Default)]
 pub struct ActiveStatusStore {
     inner: Mutex<Option<ActiveStatus>>,
-    last_completed_at: Mutex<Option<String>>,
+    last_outcome: Mutex<Option<LastTickOutcome>>,
 }
 
 impl ActiveStatusStore {
@@ -47,10 +71,10 @@ impl ActiveStatusStore {
 
     pub fn snapshot(&self) -> TriageStatus {
         let active = self.inner.lock().ok().and_then(|g| g.clone());
-        let last_completed_at = self.last_completed_at.lock().ok().and_then(|g| g.clone());
+        let last_outcome = self.last_outcome.lock().ok().and_then(|g| g.clone());
         TriageStatus {
             active,
-            last_completed_at,
+            last_outcome,
         }
     }
 
@@ -75,11 +99,16 @@ impl ActiveStatusStore {
         }
     }
 
-    /// Stamp the most recent successful tick completion. Used by the UI to
-    /// show "Last completed Xm ago" next to the Run button.
-    pub fn mark_completed(&self) {
-        if let Ok(mut g) = self.last_completed_at.lock() {
-            *g = Some(now_iso());
+    /// Stamp the most recent tick's result. Called from `run_tick` after
+    /// the agent loop finishes — `created` 0 maps to `NoActionableItems`,
+    /// errors map to `Failed { message }`.
+    pub fn record_outcome(&self, tick_id: &str, outcome: TickOutcome) {
+        if let Ok(mut g) = self.last_outcome.lock() {
+            *g = Some(LastTickOutcome {
+                at: now_iso(),
+                tick_id: tick_id.to_string(),
+                outcome,
+            });
         }
     }
 
@@ -114,5 +143,7 @@ impl ActiveStatusStore {
 }
 
 fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    // RFC3339 with the local UTC offset (e.g. "+08:00") — readable as
+    // wall-clock time when eyeballed, still parsed correctly by JS `Date`.
+    Local::now().to_rfc3339_opts(SecondsFormat::Millis, false)
 }

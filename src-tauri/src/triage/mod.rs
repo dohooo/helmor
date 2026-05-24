@@ -7,7 +7,9 @@ pub mod scheduler;
 pub mod sync;
 pub mod workspace_factory;
 
-pub use active_status::{ActiveStatus, ActiveStatusStore, ToolCallRecord, TriageStatus};
+pub use active_status::{
+    ActiveStatus, ActiveStatusStore, LastTickOutcome, TickOutcome, ToolCallRecord, TriageStatus,
+};
 pub use config::{load_config, save_config, TriageConfig};
 pub use priming::{
     combine_prefixes, load_priming_prefix_for_session, mark_consumed_for_session, wrap_priming,

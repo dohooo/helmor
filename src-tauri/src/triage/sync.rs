@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat};
 
 use crate::models::db;
 
@@ -26,17 +26,20 @@ pub fn load_sync_map() -> Result<BTreeMap<String, String>> {
     Ok(out)
 }
 
-pub fn advance_sync(provider_id: &str, at: DateTime<Utc>) -> Result<()> {
-    let ts = at.to_rfc3339_opts(SecondsFormat::Secs, true);
+pub fn advance_sync(provider_id: &str, at: DateTime<Local>) -> Result<()> {
+    // Persist as RFC3339 with the local UTC offset (e.g. "+08:00") instead
+    // of the bare `Z` so anyone eyeballing the DB sees their wall-clock time.
+    let ts = at.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let now = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     let connection = db::write_conn()?;
     connection
         .execute(
             "INSERT INTO triage_sync (provider_id, last_triaged_at, updated_at)
-             VALUES (?1, ?2, datetime('now'))
+             VALUES (?1, ?2, ?3)
              ON CONFLICT(provider_id) DO UPDATE SET
                 last_triaged_at = excluded.last_triaged_at,
-                updated_at = datetime('now')",
-            rusqlite::params![provider_id, ts],
+                updated_at = excluded.updated_at",
+            rusqlite::params![provider_id, ts, now],
         )
         .context("upsert triage_sync")?;
     Ok(())

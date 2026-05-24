@@ -1,13 +1,28 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Play, Wrench } from "lucide-react";
+import {
+	CheckCircle2,
+	ChevronDown,
+	ChevronRight,
+	MinusCircle,
+	Play,
+	Wrench,
+	XCircle,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
 	getLocalLlmStatus,
 	getTriageActiveStatus,
 	getTriageConfig,
+	type LastTickOutcome,
 	type TriageActiveStatus,
 	type TriageConfig,
 	triggerTriageTickNow,
@@ -63,7 +78,9 @@ function formatTimeAgo(iso: string, now: number): string {
 	const t = Date.parse(iso);
 	if (Number.isNaN(t)) return "";
 	const sec = Math.max(0, Math.floor((now - t) / 1000));
-	if (sec < 60) return `${sec}s ago`;
+	// Sub-minute: don't tick second-by-second — a jumping number reads
+	// like "something is happening" when nothing is.
+	if (sec < 60) return "just now";
 	const min = Math.floor(sec / 60);
 	if (min < 60) return `${min}m ago`;
 	const hr = Math.floor(min / 60);
@@ -142,7 +159,7 @@ export function TriagePanel() {
 
 	const isLlmRunning = !!llmStatus.data?.running;
 	const active = status.data?.active ?? null;
-	const lastCompletedAt = status.data?.lastCompletedAt ?? null;
+	const lastOutcome = status.data?.lastOutcome ?? null;
 	const isRunning = active != null;
 	const canEnable = isLlmRunning;
 	const triageOn = draft.enabled && canEnable;
@@ -212,12 +229,8 @@ export function TriagePanel() {
 						</div>
 					</Field>
 
-					<div className="flex items-center justify-between">
-						<div className="text-mini text-muted-foreground">
-							{lastCompletedAt
-								? `Last completed ${formatTimeAgo(lastCompletedAt, now)}`
-								: "No tick completed yet."}
-						</div>
+					<div className="flex items-center justify-between gap-3">
+						<OutcomeLine last={lastOutcome} now={now} />
 						<Button
 							variant="outline"
 							size="sm"
@@ -285,6 +298,64 @@ function Field({
 			) : null}
 			<div>{children}</div>
 		</div>
+	);
+}
+
+function OutcomeLine({
+	last,
+	now,
+}: {
+	last: LastTickOutcome | null;
+	now: number;
+}) {
+	if (!last) {
+		return (
+			<div className="min-w-0 flex-1 truncate text-mini text-muted-foreground">
+				No tick run yet.
+			</div>
+		);
+	}
+	const when = formatTimeAgo(last.at, now);
+	const o = last.outcome;
+	if (o.kind === "createdWorkspaces") {
+		return (
+			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-foreground">
+				<CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+				<span className="truncate">
+					Last tick · {when} · created {o.count} workspace
+					{o.count === 1 ? "" : "s"}
+				</span>
+			</div>
+		);
+	}
+	if (o.kind === "noActionableItems") {
+		return (
+			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
+				<MinusCircle className="size-3.5 shrink-0" />
+				<span className="truncate">
+					Last tick · {when} · nothing actionable
+				</span>
+			</div>
+		);
+	}
+	// failed
+	return (
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<div className="flex min-w-0 flex-1 cursor-help items-center gap-1.5 text-mini text-destructive">
+						<XCircle className="size-3.5 shrink-0" />
+						<span className="truncate">Last tick · {when} · failed</span>
+					</div>
+				</TooltipTrigger>
+				<TooltipContent
+					side="top"
+					className="max-w-[360px] text-[11px] leading-5"
+				>
+					{o.message || "(no message)"}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 }
 

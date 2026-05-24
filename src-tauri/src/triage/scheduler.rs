@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::Local;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::sidecar::{ManagedSidecar, SidecarRequest};
 use crate::ui_sync::{self, UiMutationEvent};
 
-use super::active_status::ActiveStatusStore;
+use super::active_status::{ActiveStatusStore, TickOutcome};
 use super::config::{enabled_provider_ids, load_config, TriageConfig};
 use super::sync::{advance_sync, load_sync_map};
 use super::workspace_factory::{create_ai_workspace, CreateAiWorkspaceParams};
@@ -80,17 +80,24 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     store.begin(&tick_id);
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
 
-    let started_at = Utc::now();
+    let started_at = Local::now();
     let outcome = execute_tick(app, cfg, &tick_id);
 
+    let summary = match &outcome {
+        Ok(0) => TickOutcome::NoActionableItems,
+        Ok(count) => TickOutcome::CreatedWorkspaces { count: *count },
+        Err(error) => TickOutcome::Failed {
+            message: format!("{error:#}"),
+        },
+    };
     if outcome.is_ok() {
         for pid in enabled_provider_ids(cfg) {
             if let Err(error) = advance_sync(&pid, started_at) {
                 tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
             }
         }
-        store.mark_completed();
     }
+    store.record_outcome(&tick_id, summary);
 
     store.end();
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
@@ -104,11 +111,11 @@ impl Drop for TickGuard {
     }
 }
 
-fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &str) -> Result<()> {
+fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &str) -> Result<u32> {
     let providers = enabled_provider_ids(cfg);
     if providers.is_empty() {
         tracing::info!(tick_id = %tick_id, "triage: no providers enabled, skipping");
-        return Ok(());
+        return Ok(0);
     }
 
     let repos = list_repos_payload()?;
@@ -232,7 +239,7 @@ fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &st
 
     tracing::info!(tick_id = %tick_id, created, "triage: tick complete");
     ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
-    Ok(())
+    Ok(created)
 }
 
 fn list_repos_payload() -> Result<Value> {
