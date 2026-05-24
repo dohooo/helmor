@@ -1933,13 +1933,16 @@ export type TriageActiveStatus = {
 
 export type TickOutcome =
 	| { kind: "createdWorkspaces"; count: number }
-	| { kind: "noActionableItems"; reason: string | null }
+	| { kind: "noActionableItems" }
 	| { kind: "failed"; message: string };
 
 export type LastTickOutcome = {
 	at: string;
 	tickId: string;
 	outcome: TickOutcome;
+	/** Agent's final assistant text, when it gave one. Applies to every
+	 *  outcome variant so the UI can hang an info tooltip on the line. */
+	summary: string | null;
 };
 
 export type TriageStatus = {

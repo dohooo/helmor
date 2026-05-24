@@ -38,9 +38,7 @@ pub enum TickOutcome {
     /// Tick ran clean and the agent proposed workspaces that got created.
     CreatedWorkspaces { count: u32 },
     /// Tick ran clean but the agent didn't surface anything actionable.
-    /// `reason` carries the agent's final assistant text (when it gave
-    /// one) so the UI can show why nothing was proposed.
-    NoActionableItems { reason: Option<String> },
+    NoActionableItems,
     /// Tick aborted (sidecar error, timeout, agent abort).
     Failed { message: String },
 }
@@ -51,6 +49,11 @@ pub struct LastTickOutcome {
     pub at: String,
     pub tick_id: String,
     pub outcome: TickOutcome,
+    /// Agent's final assistant text (when it gave one). Surfaced as a
+    /// tooltip next to the outcome line for every variant — even when
+    /// some workspaces were created, the agent's commentary on what it
+    /// skipped and why is often useful.
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,13 +106,15 @@ impl ActiveStatusStore {
 
     /// Stamp the most recent tick's result. Called from `run_tick` after
     /// the agent loop finishes — `created` 0 maps to `NoActionableItems`,
-    /// errors map to `Failed { message }`.
-    pub fn record_outcome(&self, tick_id: &str, outcome: TickOutcome) {
+    /// errors map to `Failed { message }`. `summary` is the agent's
+    /// final assistant text and applies to every outcome variant.
+    pub fn record_outcome(&self, tick_id: &str, outcome: TickOutcome, summary: Option<String>) {
         if let Ok(mut g) = self.last_outcome.lock() {
             *g = Some(LastTickOutcome {
                 at: now_iso(),
                 tick_id: tick_id.to_string(),
                 outcome,
+                summary,
             });
         }
     }

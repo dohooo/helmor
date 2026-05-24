@@ -25,7 +25,7 @@ registerBuiltInApiProviders();
 
 const PROVIDER_ID = "helmor-local";
 const PREVIEW_CHARS = 240;
-const COLD_START_LOOKBACK_HOURS = 48;
+const COLD_START_LOOKBACK_HOURS = 120;
 
 function buildLocalModel(
 	params: TriageTickParams["localModel"],
@@ -252,7 +252,9 @@ export async function runTriageTick(
 			proposalCount: proposals.length,
 			aborted,
 			turnsRun: turnIndex,
-			finalMessagePreview: preview(lastAssistantText, 240),
+			// Persist the agent's full final message in jsonl — this is the
+			// only post-hoc record of its reasoning, so don't truncate.
+			finalMessage: lastAssistantText,
 		});
 		return { proposals, finalMessage: lastAssistantText };
 	} finally {

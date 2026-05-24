@@ -302,6 +302,30 @@ function Field({
 	);
 }
 
+function SummaryTooltip({ text }: { text: string }) {
+	return (
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<button
+						type="button"
+						aria-label="Show agent reasoning"
+						className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
+					>
+						<Info className="size-3" />
+					</button>
+				</TooltipTrigger>
+				<TooltipContent
+					side="top"
+					className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
+				>
+					{text}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
+}
+
 function OutcomeLine({
 	last,
 	now,
@@ -318,6 +342,7 @@ function OutcomeLine({
 	}
 	const when = formatTimeAgo(last.at, now);
 	const o = last.outcome;
+	const summary = last.summary;
 	if (o.kind === "createdWorkspaces") {
 		return (
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-foreground">
@@ -326,6 +351,7 @@ function OutcomeLine({
 					Last tick · {when} · created {o.count} workspace
 					{o.count === 1 ? "" : "s"}
 				</span>
+				{summary ? <SummaryTooltip text={summary} /> : null}
 			</div>
 		);
 	}
@@ -336,48 +362,17 @@ function OutcomeLine({
 				<span className="truncate">
 					Last tick · {when} · nothing actionable
 				</span>
-				{o.reason ? (
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									aria-label="Why nothing was proposed"
-									className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
-								>
-									<Info className="size-3" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent
-								side="top"
-								className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
-							>
-								{o.reason}
-							</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
-				) : null}
+				{summary ? <SummaryTooltip text={summary} /> : null}
 			</div>
 		);
 	}
-	// failed
+	// failed — error message goes through the same tooltip surface.
 	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<div className="flex min-w-0 flex-1 cursor-help items-center gap-1.5 text-mini text-destructive">
-						<XCircle className="size-3.5 shrink-0" />
-						<span className="truncate">Last tick · {when} · failed</span>
-					</div>
-				</TooltipTrigger>
-				<TooltipContent
-					side="top"
-					className="max-w-[360px] text-[11px] leading-5"
-				>
-					{o.message || "(no message)"}
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+		<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-destructive">
+			<XCircle className="size-3.5 shrink-0" />
+			<span className="truncate">Last tick · {when} · failed</span>
+			<SummaryTooltip text={summary || o.message || "(no message)"} />
+		</div>
 	);
 }
 

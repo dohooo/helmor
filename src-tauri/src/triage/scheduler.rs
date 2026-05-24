@@ -83,14 +83,18 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     let started_at = Local::now();
     let outcome = execute_tick(app, cfg, &tick_id);
 
-    let summary = match &outcome {
-        Ok((0, reason)) => TickOutcome::NoActionableItems {
-            reason: reason.clone(),
-        },
-        Ok((count, _)) => TickOutcome::CreatedWorkspaces { count: *count },
-        Err(error) => TickOutcome::Failed {
-            message: format!("{error:#}"),
-        },
+    let (kind, summary_text) = match &outcome {
+        Ok((0, reason)) => (TickOutcome::NoActionableItems, reason.clone()),
+        Ok((count, reason)) => (
+            TickOutcome::CreatedWorkspaces { count: *count },
+            reason.clone(),
+        ),
+        Err(error) => (
+            TickOutcome::Failed {
+                message: format!("{error:#}"),
+            },
+            None,
+        ),
     };
     if outcome.is_ok() {
         for pid in enabled_provider_ids(cfg) {
@@ -99,7 +103,7 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             }
         }
     }
-    store.record_outcome(&tick_id, summary);
+    store.record_outcome(&tick_id, kind, summary_text);
 
     store.end();
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
