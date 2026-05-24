@@ -1,8 +1,4 @@
 //! Wire shapes for the sidecar → Rust reverse IPC.
-//!
-//! Sidecar emits `hostRequest` on its stdout; the reader thread parses it
-//! into a `HostRequest`, dispatches by `method`, and writes a
-//! `HostResponse` back via the same stdin pipe used by `SidecarRequest`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -729,10 +729,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     materialize_review_pr_model_defaults(connection)?;
 
-    // Migration: Smart Triage columns. Each ALTER is guarded by a
-    // pragma_table_info check so upgrades from pre-triage builds add
-    // them once; brand-new installs already get the columns via
-    // SCHEMA_SQL's CREATE TABLE and skip the ADD.
+    // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
     add_column_if_missing(connection, "workspaces", "kind", "TEXT")?;
     add_column_if_missing(
         connection,
@@ -746,9 +743,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
         "is_ai_priming",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
-    // Index on workspaces.kind must come AFTER the ALTER above —
-    // otherwise an upgraded DB tries to index a column it doesn't yet
-    // have.
+    // Must come after the ALTER above — old DBs would otherwise index a missing column.
     connection
         .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
         .context("Failed to create idx_workspaces_kind")?;
@@ -756,9 +751,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Idempotent `ALTER TABLE ... ADD COLUMN`. Skips when the column already
-/// exists (the column is in SCHEMA_SQL for new installs, so this is a
-/// no-op there).
+// Idempotent `ALTER TABLE ... ADD COLUMN`; no-op when the column already exists.
 fn add_column_if_missing(
     connection: &Connection,
     table: &str,
@@ -1013,8 +1006,7 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
--- AI triage: per-provider time checkpoint. Stored in local time
--- (`advance_sync` writes RFC3339 with the local offset).
+-- AI triage: per-provider time checkpoint (stored in local-time RFC3339).
 CREATE TABLE IF NOT EXISTS triage_sync (
     provider_id TEXT PRIMARY KEY,
     last_triaged_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -1025,9 +1017,7 @@ CREATE TABLE IF NOT EXISTS triage_sync (
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
--- NOTE: idx_workspaces_kind lives in `run_migrations` so it runs AFTER
--- the `workspaces.kind` ALTER on upgraded databases (otherwise the index
--- would reference a column that doesn't exist yet on old installs).
+-- idx_workspaces_kind is created in `run_migrations` (after the ALTER on upgraded DBs).
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

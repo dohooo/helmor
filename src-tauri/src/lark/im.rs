@@ -1,5 +1,4 @@
-//! `lark-cli im +chat-search` / `+chat-messages-list` / `+messages-search`
-//! / `+messages-mget` typed wrappers.
+//! Typed wrappers around `lark-cli im` subcommands.
 
 use std::path::Path;
 
@@ -126,10 +125,7 @@ pub async fn messages_get(message_ids: &str) -> Result<Value> {
     .await
 }
 
-/// Download an image / file resource from a Lark message. `kind` is
-/// "image" or "file". The output filename is relative (lark-cli rejects
-/// `..`), so we set the process cwd to the staging dir and write a flat
-/// filename underneath it.
+// `output_filename` must be relative — lark-cli rejects `..`, so caller passes the staging cwd.
 pub async fn download_resource(
     message_id: &str,
     kind: &str,

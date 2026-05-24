@@ -74,11 +74,9 @@ pub struct WorkspaceRecord {
     /// fresh workspaces and for ones whose previously-active action was
     /// deleted (the loader auto-clears stale ids).
     pub active_run_action_id: Option<String>,
-    /// "manual" (user-created) or "ai_triage" (auto-created by the triage
-    /// agent).
+    /// "manual" or "ai_triage".
     pub kind: String,
-    /// True before the user has sent their first message in an ai_triage
-    /// workspace. Drives the sidebar red dot.
+    /// False until the user sends the first message in an ai_triage workspace.
     pub ai_priming_consumed: bool,
 }
 

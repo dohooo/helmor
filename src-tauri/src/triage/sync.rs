@@ -1,5 +1,4 @@
-//! Per-provider time checkpoint. One row per provider; updated after a
-//! successful tick scans that provider.
+//! Per-provider time checkpoint.
 
 use std::collections::BTreeMap;
 
@@ -27,8 +26,7 @@ pub fn load_sync_map() -> Result<BTreeMap<String, String>> {
 }
 
 pub fn advance_sync(provider_id: &str, at: DateTime<Local>) -> Result<()> {
-    // Persist as RFC3339 with the local UTC offset (e.g. "+08:00") instead
-    // of the bare `Z` so anyone eyeballing the DB sees their wall-clock time.
+    // RFC3339 with local UTC offset so the DB shows wall-clock time.
     let ts = at.to_rfc3339_opts(SecondsFormat::Secs, false);
     let now = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     let connection = db::write_conn()?;

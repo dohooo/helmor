@@ -1,7 +1,4 @@
-//! `lark.*` host methods. Wraps the Rust-side `crate::lark::im` helpers
-//! (which shell out to `lark-cli`). Triage previously spawned `lark-cli`
-//! from the sidecar; we centralize the shell-out in Rust so any future
-//! caller (inbox UI, context bridge) reuses the same surface.
+//! `lark.*` host methods — thin wrappers over `crate::lark::im`.
 
 use anyhow::Result;
 use serde::Deserialize;

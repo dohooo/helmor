@@ -1,6 +1,4 @@
-//! In-memory snapshot of the currently-running tick + a structured
-//! record of the last tick's outcome so the UI can show
-//! "created N / no items / failed" instead of just a bare timestamp.
+//! In-memory active tick + structured last-tick outcome for the UI.
 
 use std::sync::Mutex;
 
@@ -29,19 +27,12 @@ pub struct ActiveStatus {
     pub recent_tool_calls: Vec<ToolCallRecord>,
 }
 
-/// What happened on the most recent tick. Drives the descriptor line next
-/// to the Run button — lets the user tell apart "agent decided nothing
-/// was worth a workspace" from "sidecar blew up".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TickOutcome {
-    /// Tick ran clean and the agent proposed workspaces that got created.
     CreatedWorkspaces { count: u32 },
-    /// Tick ran clean but the agent didn't surface anything actionable.
     NoActionableItems,
-    /// User pressed Stop while the tick was still running.
     Cancelled,
-    /// Tick aborted (sidecar error, timeout, agent abort).
     Failed { message: String },
 }
 
@@ -51,10 +42,7 @@ pub struct LastTickOutcome {
     pub at: String,
     pub tick_id: String,
     pub outcome: TickOutcome,
-    /// Agent's final assistant text (when it gave one). Surfaced as a
-    /// tooltip next to the outcome line for every variant — even when
-    /// some workspaces were created, the agent's commentary on what it
-    /// skipped and why is often useful.
+    /// Agent's final assistant text, when present.
     pub summary: Option<String>,
 }
 
@@ -106,10 +94,6 @@ impl ActiveStatusStore {
         }
     }
 
-    /// Stamp the most recent tick's result. Called from `run_tick` after
-    /// the agent loop finishes — `created` 0 maps to `NoActionableItems`,
-    /// errors map to `Failed { message }`. `summary` is the agent's
-    /// final assistant text and applies to every outcome variant.
     pub fn record_outcome(&self, tick_id: &str, outcome: TickOutcome, summary: Option<String>) {
         if let Ok(mut g) = self.last_outcome.lock() {
             *g = Some(LastTickOutcome {
@@ -152,7 +136,6 @@ impl ActiveStatusStore {
 }
 
 fn now_iso() -> String {
-    // RFC3339 with the local UTC offset (e.g. "+08:00") — readable as
-    // wall-clock time when eyeballed, still parsed correctly by JS `Date`.
+    // RFC3339 with local UTC offset — readable + still parseable by JS `Date`.
     Local::now().to_rfc3339_opts(SecondsFormat::Millis, false)
 }

@@ -1,8 +1,4 @@
-//! Reverse IPC: sidecar calls into Rust via `hostRequest` JSON on stdout,
-//! Rust replies via `hostResponse` JSON on stdin. Mirrors `SidecarRequest`
-//! but inverted. Used by the triage agent to reuse Helmor's native
-//! forge / slack / lark integrations instead of reimplementing them in
-//! the sidecar.
+//! Reverse IPC — sidecar `hostRequest` on stdout, Rust `hostResponse` on stdin.
 
 pub mod handlers;
 pub mod protocol;

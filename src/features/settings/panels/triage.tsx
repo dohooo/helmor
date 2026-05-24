@@ -96,8 +96,7 @@ function formatTimeAgo(iso: string, now: number): string {
 	const t = Date.parse(iso);
 	if (Number.isNaN(t)) return "";
 	const sec = Math.max(0, Math.floor((now - t) / 1000));
-	// Sub-minute: don't tick second-by-second — a jumping number reads
-	// like "something is happening" when nothing is.
+	// Don't tick second-by-second under a minute.
 	if (sec < 60) return "just now";
 	const min = Math.floor(sec / 60);
 	if (min < 60) return `${min}m ago`;
@@ -112,10 +111,7 @@ function formatTime(iso: string): string {
 	return d.toLocaleTimeString();
 }
 
-/// Single 1Hz heartbeat shared by elapsed / "X ago" labels. Keeps every
-/// time-derived string in sync without each consumer wiring its own
-/// setInterval (which previously froze at "0s" when React Query refetch
-/// timing collided with the local tick).
+// Shared 1Hz clock for elapsed / "X ago" labels.
 function useTickingNow(): number {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {

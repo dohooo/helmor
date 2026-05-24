@@ -41,9 +41,7 @@ fn scheduler_loop<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
         };
-        // Triage requires Local LLM. Skip silently when LLM is off in
-        // settings, or when the user has paused the heartbeat (`auto_run`
-        // off — they can still trigger manually via the Run now button).
+        // Skip when LLM is off or `auto_run` is paused; manual Run-now still works.
         let llm_on = crate::local_llm::load_settings().enabled;
         if cfg.enabled && cfg.auto_run && llm_on {
             if let Err(error) = run_tick(&app, &cfg) {
@@ -68,11 +66,7 @@ pub fn trigger_tick_now<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     run_tick(app, &cfg)
 }
 
-/// Tell the sidecar to abort whatever tick is currently running. The
-/// active `execute_tick` is blocking in `rx.recv_timeout` waiting for
-/// the sidecar's events — once the sidecar acks the stop and emits its
-/// terminal `end` (plus a `triageCancelled` marker), that loop unwinds
-/// naturally and records a `Cancelled` outcome.
+// `execute_tick` unwinds once the sidecar emits its terminal `end` after the stop.
 pub fn cancel_tick_in_flight<R: Runtime>(app: &AppHandle<R>) -> Result<bool> {
     if !TICK_IN_FLIGHT.load(Ordering::SeqCst) {
         return Ok(false);
@@ -129,11 +123,7 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             None,
         ),
     };
-    // Only advance per-provider checkpoints when the tick fully
-    // committed. Skip when:
-    //   - cancelled by the user (some sources unscanned)
-    //   - any proposal failed to create a workspace (advancing would
-    //     bury those items past the next tick's time floor)
+    // Only advance sync when no items were lost, otherwise the next tick would skip them.
     let should_advance = matches!(
         &outcome,
         Ok(ExecuteOk {
@@ -151,9 +141,7 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     }
     store.record_outcome(&tick_id, kind, summary_text);
 
-    // GC staged attachments older than 24h — `create_ai_workspace` moves
-    // referenced files immediately, so anything still sitting around past
-    // that window is an unconsumed leftover.
+    // GC unconsumed staged attachments older than 24h.
     super::attachments::sweep_stale_staging(Duration::from_secs(24 * 60 * 60));
 
     store.end();
@@ -172,10 +160,7 @@ pub struct ExecuteOk {
     pub created: u32,
     pub summary: Option<String>,
     pub cancelled: bool,
-    /// Count of proposals the agent emitted but `create_ai_workspace`
-    /// failed on. We use this to gate `advance_sync` — if anything was
-    /// lost we don't want to advance the per-provider time floor and
-    /// silently drop those items on the next tick.
+    /// Proposals that failed `create_ai_workspace`; gates `advance_sync`.
     pub workspace_failures: u32,
 }
 

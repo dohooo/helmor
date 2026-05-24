@@ -26,8 +26,7 @@ pub struct CreateAiWorkspaceParams {
     pub source_ref: String,
     pub repo_id: String,
     pub plan_message: String,
-    /// Staged attachments to relocate into the workspace before the
-    /// priming message is written.
+    /// Staged attachments relocated into the workspace before priming.
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
 }
@@ -73,8 +72,7 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
         .context("update workspaces.kind")?;
     }
 
-    // Move any staged attachments into the workspace before composing the
-    // priming text — the message references workspace-relative paths.
+    // Relocate attachments first — priming text references workspace-relative paths.
     let workspace_root = workspace_models::load_workspace_record_by_id(&prepared.workspace_id)
         .context("reload workspace record for attachment move")?
         .and_then(|record| workspace_helpers::workspace_path(&record).ok());
@@ -118,10 +116,7 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
     })
 }
 
-/// Move every staged attachment into the workspace and return a markdown
-/// block referencing them. Failures on individual attachments are
-/// non-fatal — surface a placeholder line so the agent at least knows
-/// something was meant to be there.
+// Per-attachment failures degrade to a placeholder line, not an error.
 fn render_attachments(refs: &[AttachmentRef], workspace_root: &std::path::Path) -> String {
     if refs.is_empty() {
         return String::new();

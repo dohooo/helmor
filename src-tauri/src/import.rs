@@ -772,10 +772,7 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
     let mut source_parts = Vec::new();
 
     for col in &main_cols {
-        // NOT NULL columns added in later migrations need an explicit default
-        // when the source DB pre-dates them. Source tables created via
-        // `CREATE TABLE x AS SELECT ... WHERE 0` lose column constraints,
-        // so even if the source has the column it may be NULL.
+        // Coalesce post-migration NOT NULL columns so pre-triage source DBs import cleanly.
         if table == "session_messages" && col == "is_ai_priming" {
             main_parts.push(col.clone());
             source_parts.push(if source_set.contains("is_ai_priming") {
@@ -919,10 +916,7 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
             continue;
         }
 
-        // AI-triage columns are NOT NULL in main but the source ("Conductor"
-        // DB or fixture table cloned via `CREATE TABLE AS SELECT ... WHERE 0`)
-        // never carries them. Coalesce to the same defaults the schema uses
-        // so imports of pre-triage Conductor DBs don't violate the constraint.
+        // Coalesce AI-triage NOT NULL columns so pre-triage Conductor DBs import cleanly.
         if col == "kind" {
             main_parts.push(col.clone());
             source_parts.push(if source_set.contains("kind") {

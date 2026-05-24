@@ -60,9 +60,7 @@ export function LinearBrandIcon(props: Omit<BrandIconProps, "icon">) {
 	return <BrandIcon icon={siLinear} {...props} />;
 }
 
-/** Lark / Feishu glyph (IconPark "new-lark"). Multi-path: two stroked
- *  arcs + one filled connector — all use `currentColor` so callers can
- *  tint via Tailwind `text-*`. */
+/** Lark / Feishu glyph (IconPark "new-lark"). Uses `currentColor`. */
 export function LarkBrandIcon({
 	size = 16,
 	className,

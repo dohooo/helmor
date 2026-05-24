@@ -1,7 +1,4 @@
-//! `slack.*` host methods. Wraps the same `slack::inbox` / `slack::detail`
-//! entry points the `slack_*` Tauri commands use. Multi-workspace by
-//! `team_id` — the agent first calls `slack.list_workspaces`, then keys
-//! every subsequent call on the chosen `teamId`.
+//! `slack.*` host methods. Multi-workspace by `teamId`.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -30,9 +27,7 @@ pub async fn dispatch<R: Runtime>(
 #[serde(rename_all = "camelCase")]
 struct SaveAttachmentParams {
     tick_id: String,
-    /// `url_private` or `permalink_public` from a Slack file. We route via
-    /// `slack::files::resolve_to_path` so the on-disk cache + auth logic
-    /// stays in one place.
+    /// `url_private` or `permalink_public` from a Slack file.
     url: String,
 }
 

@@ -1,23 +1,10 @@
-//! Shared priming-injection helper. Called from the agent send path
-//! (`agents::send_agent_message_stream`) so all three providers
-//! (claude / codex / cursor) inject the same way without each implementing
-//! their own variant.
-//!
-//! Lifecycle:
-//!   1. AI-triage creates a workspace whose first `session_messages` row is
-//!      an assistant message with `is_ai_priming = 1`.
-//!   2. User opens the workspace, sees the plan, types a message, sends.
-//!   3. This helper looks up `(workspaces.kind, ai_priming_consumed)`. If
-//!      it's an unconsumed AI-triage workspace, it loads the priming text
-//!      and returns the wrapped prefix that gets prepended on the wire.
-//!   4. `mark_consumed` flips the flag so the next send is normal.
+//! Shared priming-injection helper for the agent send path.
 
 use anyhow::{Context, Result};
 
 use crate::models::db;
 
-/// XML-tagged wrap so any LLM understands "here's earlier context, now the
-/// user's request". Used for Claude / Codex / Cursor uniformly.
+// XML-tagged so any LLM treats it as prior context.
 pub fn wrap_priming(priming_text: &str) -> String {
     format!(
         "<discovered-context>\n{}\n</discovered-context>\n\nThe user has reviewed the above context and now requests:",
@@ -25,13 +12,9 @@ pub fn wrap_priming(priming_text: &str) -> String {
     )
 }
 
-/// Returns Some(wrapped prefix) when the helmor_session belongs to an
-/// unconsumed AI-triage workspace. Returns Ok(None) otherwise (manual
-/// workspace, already consumed, or any inconsistency that should be
-/// treated as "no injection").
+// Returns Some(prefix) only for an unconsumed AI-triage workspace; Ok(None) otherwise.
 pub fn load_priming_prefix_for_session(helmor_session_id: &str) -> Result<Option<String>> {
     let connection = db::read_conn()?;
-    // Step 1: workspace metadata.
     let workspace_row = connection
         .query_row(
             "SELECT w.id, w.kind, w.ai_priming_consumed
@@ -54,7 +37,6 @@ pub fn load_priming_prefix_for_session(helmor_session_id: &str) -> Result<Option
     if kind != "ai_triage" || consumed != 0 {
         return Ok(None);
     }
-    // Step 2: priming message body.
     let raw_content: Option<String> = connection
         .query_row(
             "SELECT content FROM session_messages
@@ -74,10 +56,7 @@ pub fn load_priming_prefix_for_session(helmor_session_id: &str) -> Result<Option
     Ok(Some(wrap_priming(&plan_text)))
 }
 
-/// Look at the stored assistant JSON; pull out the first text block.
-/// Falls back to None when the shape doesn't match the canonical
-/// `{ type: "assistant", message: { content: [...] } }` form so the caller
-/// can decide to pass through the raw stored string.
+// Concat text blocks from the stored `{ message: { content: [...] } }` JSON.
 pub fn extract_plan_text(raw: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     let blocks = value.get("message")?.get("content")?.as_array()?;
@@ -99,8 +78,7 @@ pub fn extract_plan_text(raw: &str) -> Option<String> {
     }
 }
 
-/// Flip `workspaces.ai_priming_consumed = 1` for whatever workspace this
-/// session belongs to. Idempotent — already-consumed rows just no-op.
+// Idempotent: already-consumed rows no-op.
 pub fn mark_consumed_for_session(helmor_session_id: &str) -> Result<()> {
     let connection = db::write_conn()?;
     connection
@@ -114,9 +92,7 @@ pub fn mark_consumed_for_session(helmor_session_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Compose with any existing prompt_prefix (user "preferences" prefix).
-/// Priming goes first (it's the discovery context), then the user-set
-/// preferences, then the wire wrapper adds the user's actual prompt.
+// Priming goes first (discovery context), then any user preferences prefix.
 pub fn combine_prefixes(priming: Option<String>, existing: Option<String>) -> Option<String> {
     match (priming, existing) {
         (None, None) => None,

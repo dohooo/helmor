@@ -109,10 +109,9 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
-	/** "manual" (user-created) or "ai_triage" (auto-discovered). */
+	/** "manual" or "ai_triage". */
 	kind?: string;
-	/** True for AI-triage workspaces before the user has sent their first
-	 * message. Sidebar surfaces this as a red dot. */
+	/** True for an ai_triage row still awaiting the user's first send. */
 	triagePrimingUnconsumed?: boolean;
 };
 
@@ -1909,8 +1908,7 @@ export type UiMutationEvent =
 
 export type TriageConfig = {
 	enabled: boolean;
-	/** Heartbeat on/off. When false the scheduler doesn't auto-fire; the
-	 *  Run-now button still works. */
+	/** False = scheduler doesn't auto-fire; Run-now still works. */
 	autoRun: boolean;
 	systemPrompt: string;
 	maxPerTick: number;
@@ -1944,8 +1942,7 @@ export type LastTickOutcome = {
 	at: string;
 	tickId: string;
 	outcome: TickOutcome;
-	/** Agent's final assistant text, when it gave one. Applies to every
-	 *  outcome variant so the UI can hang an info tooltip on the line. */
+	/** Agent's final assistant text, when present. */
 	summary: string | null;
 };
 

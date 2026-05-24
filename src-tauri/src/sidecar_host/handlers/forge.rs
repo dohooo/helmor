@@ -1,6 +1,4 @@
-//! `forge.*` host methods. Triage uses these to enumerate the user's
-//! GitHub / GitLab inbox without reimplementing `gh search` / `glab
-//! issue list` in TypeScript.
+//! `forge.*` host methods (GitHub / GitLab inbox enumeration for triage).
 
 use std::time::Duration;
 
@@ -52,8 +50,7 @@ async fn list_repo_items(params: Value) -> Result<Value> {
     let kind = p.kind.to_lowercase();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<Value> {
-        // RepositoryRecord only carries the git remote *name* (e.g. "origin");
-        // `list_repositories()` is the loader that resolves it to the URL.
+        // `list_repositories()` resolves the remote name to its URL.
         let summary = crate::models::repos::list_repositories()?
             .into_iter()
             .find(|r| r.id == p.repo_id)
@@ -176,13 +173,10 @@ fn parse_github_remote(remote: &str) -> Option<(String, String)> {
     Some((owner, repo))
 }
 
-/// Accept any GitLab host (gitlab.com, ngit.hundun.cn, self-hosted).
-/// Returns the project's `group[/sub]/project` path that `glab -R` wants.
+// Returns the `group[/sub]/project` path that `glab -R` expects, for any GitLab host.
 fn parse_gitlab_full_path(remote: &str) -> Option<String> {
     let trimmed = remote.trim().trim_end_matches('/').trim_end_matches(".git");
-    // URL-form first — the bare `split_once(':')` fallback below would
-    // happily match `https:` on a `https://...` URL and return
-    // `//host/group/project`, so the URL prefixes must take priority.
+    // URL forms first — otherwise the scp-style split would match `https:` on `https://...`.
     for prefix in ["https://", "http://", "ssh://git@", "ssh://"] {
         if let Some(no_scheme) = trimmed.strip_prefix(prefix) {
             let (_, rest) = no_scheme.split_once('/')?;
@@ -192,8 +186,7 @@ fn parse_gitlab_full_path(remote: &str) -> Option<String> {
             return Some(rest.to_string());
         }
     }
-    // scp-style: `git@host:group/project`. The "URL forms" branch above
-    // already ruled out the `://` cases, so a colon here means host:path.
+    // scp-style: `git@host:group/project`.
     if let Some((_, rest)) = trimmed.split_once(':') {
         if rest.contains('/') {
             return Some(rest.to_string());
@@ -208,8 +201,7 @@ mod tests {
 
     #[test]
     fn parse_gitlab_full_path_handles_url_forms() {
-        // The original split-on-colon bug returned `//gitlab.com/foo/bar`
-        // for the https form — regression-guard each URL shape here.
+        // Regression: old split-on-colon returned `//gitlab.com/foo/bar` for the https form.
         assert_eq!(
             parse_gitlab_full_path("https://gitlab.com/group/repo.git").as_deref(),
             Some("group/repo"),
@@ -242,15 +234,10 @@ mod tests {
 struct SaveAttachmentParams {
     tick_id: String,
     /// HTTPS URL of an image embedded in an issue/PR body or comment.
-    /// GitHub user-content / GitLab uploads are public CDNs; no auth
-    /// header needed for the common case.
     url: String,
 }
 
-/// SSRF + DoS guards on a model-supplied URL: HTTPS only, no redirects,
-/// 15 s timeout, 20 MiB cap. A model that ingested a poisoned issue body
-/// can't bounce us to `http://169.254.169.254/...` or stall a tick on a
-/// hung CDN.
+// SSRF/DoS guards on model-supplied URLs (HTTPS only, no redirects, 15s timeout, 20 MiB cap).
 const ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(15);
 const ATTACHMENT_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
@@ -373,8 +360,6 @@ async fn discover_login(params: Value) -> Result<Value> {
     let provider = parse_provider(&p.provider)?;
     let host = p.host.unwrap_or_else(|| match provider {
         ForgeProvider::Gitlab => "gitlab.com".to_string(),
-        // Github + Unknown (parse_provider rejects Unknown so it's
-        // unreachable in practice — default to github.com for safety).
         _ => "github.com".to_string(),
     });
     let logins = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>> {

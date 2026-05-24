@@ -226,13 +226,7 @@ pub async fn send_agent_message_stream(
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
 
-    // AI-triage priming: if the helmor_session belongs to an unconsumed
-    // AI-triage workspace, inject the planning context as a hidden
-    // prefix. The consumed flag is NOT flipped here — if any of the
-    // pre-send validation steps below (model resolution, working dir,
-    // sidecar dispatch) fails, the user retries and we want the priming
-    // to still be there. The mark moves to after stream_via_sidecar
-    // returns Ok.
+    // Inject triage priming as a hidden prefix; consumed flag flips only after sidecar accepts.
     let priming_session_to_consume: Option<String> = match request.helmor_session_id.as_deref() {
         Some(session_id) => match crate::triage::load_priming_prefix_for_session(session_id) {
             Ok(Some(priming_prefix)) => {
@@ -282,9 +276,7 @@ pub async fn send_agent_message_stream(
         &working_directory,
     );
 
-    // Only burn the priming flag after the sidecar accepted the stream.
-    // If `stream_via_sidecar` returned Err, the user's retry should still
-    // receive the planning context.
+    // Mark consumed only after the prompt actually streamed; retries should keep the priming.
     if send_result.is_ok() {
         if let Some(session_id) = priming_session_to_consume {
             if let Err(error) = crate::triage::mark_consumed_for_session(&session_id) {

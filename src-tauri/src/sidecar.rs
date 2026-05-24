@@ -327,8 +327,7 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
-/// One `hostRequest` envelope, forwarded by the reader thread to the
-/// host dispatcher task wired up in `lib.rs::run`.
+/// One `hostRequest` envelope routed from the reader thread to the host dispatcher.
 #[derive(Debug)]
 pub struct HostRequestEnvelope {
     pub callback_id: String,
@@ -341,8 +340,7 @@ pub struct ManagedSidecar {
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
-    /// Sender for host-request envelopes the reader thread sniffs out
-    /// of stdout. `OnceLock` because Tauri setup runs once after `.manage`.
+    /// `OnceLock` so Tauri setup can install the sender once after `.manage`.
     host_request_tx: OnceLock<mpsc::Sender<HostRequestEnvelope>>,
 }
 
@@ -362,19 +360,14 @@ impl ManagedSidecar {
         }
     }
 
-    /// Wire the reverse-channel dispatcher's mpsc into the sidecar. Called
-    /// once from `lib.rs::run`'s setup hook; returns the receiver end the
-    /// dispatcher task drains. Subsequent calls are no-ops (only the first
-    /// sender survives).
+    // Called once from Tauri setup; later calls are no-ops.
     pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
         let (tx, rx) = mpsc::channel();
         let _ = self.host_request_tx.set(tx);
         rx
     }
 
-    /// Write a `hostResponse` JSON line on the sidecar's stdin. Acquires
-    /// the same lock as `send()` so request and response writes can't
-    /// interleave on the pipe.
+    // Shares the stdin lock with `send()` so request/response writes can't interleave.
     pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
         let guard = self
             .process
@@ -436,10 +429,7 @@ impl ManagedSidecar {
             *guard = Some(process);
 
             // Start the reader/dispatcher thread (always spawns fresh).
-            // Clone the host-request channel so the reader can route
-            // `hostRequest` envelopes; `None` if Tauri setup hasn't wired
-            // the dispatcher yet (early-boot edge case — those events are
-            // dropped, which matches "host bridge unavailable").
+            // `host_tx` is `None` only during early boot — events drop, matching "host bridge unavailable".
             let host_tx = self.host_request_tx.get().cloned();
             if let Err(error) = self.start_reader_thread(reader, host_tx) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
@@ -614,9 +604,7 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
-                            // Reverse channel: `hostRequest` JSON jumps out to
-                            // the host dispatcher task before regular event
-                            // routing. Anything malformed is logged + dropped.
+                            // Reverse channel: route `hostRequest` ahead of normal event dispatch.
                             if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
                                 match parse_host_request(&raw) {
                                     Ok(env) => {

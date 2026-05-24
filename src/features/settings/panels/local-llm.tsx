@@ -195,10 +195,7 @@ export function LocalLlmPanel({
 		void cancelLocalLlmDownload(entryId);
 	};
 
-	// Shared context-override commit path. Routes through the dedicated
-	// `set_local_llm_context_override` IPC so persistence + restart are
-	// atomic on the Rust side (avoids stale lastError flashing through a
-	// manual stop/start dance).
+	// Goes through Rust so persistence + restart stay atomic.
 	const commitContextOverride = async (entryId: string, tokens: number) => {
 		try {
 			await setLocalLlmContextOverride(entryId, tokens);

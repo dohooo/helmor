@@ -1,5 +1,4 @@
-//! `hostRequest` handlers grouped by namespace prefix (`forge.*`,
-//! `slack.*`, `lark.*`). Each submodule dispatches its own methods.
+//! `hostRequest` handlers grouped by namespace prefix.
 
 pub mod forge;
 pub mod lark;

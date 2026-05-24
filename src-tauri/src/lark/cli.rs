@@ -1,6 +1,4 @@
-//! Shared `lark-cli` shell-out helper. 30 s timeout, JSON-parse stdout
-//! when possible, surface trimmed stdout+stderr on non-zero exit so
-//! lark-cli's structured error (often on stdout) reaches callers.
+//! Shared `lark-cli` shell-out helper.
 
 use std::process::Stdio;
 use std::time::Duration;

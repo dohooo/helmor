@@ -77,11 +77,9 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" or "ai_triage". Sidebar uses this to route AI-triage
-    /// workspaces into the dedicated "AI Tasks" group.
+    /// "manual" or "ai_triage" — routes ai_triage rows into the AI Tasks group.
     pub kind: String,
-    /// True for ai_triage workspaces before the user sends their first
-    /// message. Drives the unread red dot in the sidebar row.
+    /// True while an ai_triage row still needs the user's first send.
     pub triage_priming_unconsumed: bool,
 }
 
@@ -204,11 +202,7 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     // each group naturally inherits the same stable order, no per-group
     // re-sort needed.
     //
-    // Chat workspaces live in their own bucket and don't participate in
-    // status/pinned buckets — their `status` column is meaningless
-    // (kept at the default `in-progress` for column compatibility).
-    // AI-triage workspaces likewise live in their own bucket so the user
-    // can scan auto-discovered work separately from manual work.
+    // Chat and AI-triage workspaces live in their own buckets, separate from status/pinned.
     for record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;

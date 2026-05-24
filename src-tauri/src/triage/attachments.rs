@@ -1,8 +1,4 @@
-//! Per-tick attachment staging. Provider tools download images / files
-//! into `<dataDir>/triage/attachments-staging/<tickId>/<uuid>.<ext>`;
-//! when `create_ai_workspace` runs, it moves the referenced files into
-//! the workspace itself so the chat session can hand the paths to a
-//! downstream vision-capable agent.
+//! Per-tick attachment staging.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -28,9 +24,7 @@ pub fn staging_dir_for(tick_id: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Allocate a unique file path under the tick's staging dir. Caller writes
-/// the actual content. `extension` (without the dot) drives the filename
-/// suffix so downstream tools recognize the file type.
+// Allocate a path under the tick's staging dir; caller writes the content.
 pub fn reserve_attachment(tick_id: &str, extension: Option<&str>) -> Result<StagedAttachment> {
     let id = uuid::Uuid::new_v4().to_string();
     let ext = extension
@@ -48,9 +42,6 @@ pub fn reserve_attachment(tick_id: &str, extension: Option<&str>) -> Result<Stag
     })
 }
 
-/// Walk every tick dir looking for a file whose stem matches `attachment_id`.
-/// Called from `create_ai_workspace` after the agent has already returned
-/// — at that point we only have the id.
 pub fn find_attachment(attachment_id: &str) -> Result<Option<PathBuf>> {
     let root = staging_root()?;
     if !root.exists() {
@@ -77,9 +68,7 @@ pub struct MovedAttachment {
     pub filename: String,
 }
 
-/// Move a staged file into `<workspace-root>/.helmor/triage-attachments/`.
-/// Returns the workspace-relative path so callers can embed it in the
-/// priming message as a stable reference.
+// Returns the workspace-relative path for use in the priming message.
 pub fn move_into_workspace(
     attachment_id: &str,
     workspace_root: &std::path::Path,
@@ -94,8 +83,7 @@ pub fn move_into_workspace(
     let dest_dir = workspace_root.join(WORKSPACE_SUBDIR);
     std::fs::create_dir_all(&dest_dir).with_context(|| format!("mkdir {}", dest_dir.display()))?;
     let dest = dest_dir.join(&filename);
-    // Cross-device move (workspace might be on a different mount) — try
-    // rename first, fall back to copy+remove.
+    // Cross-device safe: rename, fall back to copy+remove.
     if std::fs::rename(&staged, &dest).is_err() {
         std::fs::copy(&staged, &dest).with_context(|| format!("copy {filename}"))?;
         let _ = std::fs::remove_file(&staged);
@@ -107,9 +95,7 @@ pub fn move_into_workspace(
     })
 }
 
-/// GC tick dirs older than `max_age`. Runs from the scheduler after each
-/// tick — keeps storage bounded even if `create_ai_workspace` never came
-/// for a particular file.
+// GC tick dirs older than `max_age`; run by scheduler after each tick.
 pub fn sweep_stale_staging(max_age: Duration) {
     let Ok(root) = staging_root() else { return };
     let Ok(entries) = std::fs::read_dir(&root) else {

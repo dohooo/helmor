@@ -326,8 +326,7 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
-            // AI-triage heartbeat scheduler. Polls every minute when
-            // disabled; on enable, runs ticks at the configured interval.
+            // AI-triage heartbeat scheduler.
             triage::spawn_scheduler(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to
@@ -337,11 +336,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             install_macos_menu(app.handle())?;
 
-            // Wire the reverse IPC (sidecar → Rust). The sidecar's reader
-            // thread sniffs `hostRequest` JSON out of stdout and forwards
-            // it via mpsc; this task drains the channel, dispatches each
-            // request (in its own tokio task so they run concurrently),
-            // then writes `hostResponse` back on the shared stdin lock.
+            // Drain reverse-IPC (`hostRequest`) and write `hostResponse` back on stdin.
             let host_rx = app
                 .state::<sidecar::ManagedSidecar>()
                 .install_host_dispatcher();
