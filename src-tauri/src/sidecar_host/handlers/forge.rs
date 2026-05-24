@@ -2,6 +2,8 @@
 //! GitHub / GitLab inbox without reimplementing `gh search` / `glab
 //! issue list` in TypeScript.
 
+use std::time::Duration;
+
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -178,24 +180,61 @@ fn parse_github_remote(remote: &str) -> Option<(String, String)> {
 /// Returns the project's `group[/sub]/project` path that `glab -R` wants.
 fn parse_gitlab_full_path(remote: &str) -> Option<String> {
     let trimmed = remote.trim().trim_end_matches('/').trim_end_matches(".git");
-    // git@host:group/project — split on the first colon.
-    if let Some((_, rest)) = trimmed.split_once(':') {
-        if !rest.contains("://") && rest.contains('/') {
+    // URL-form first — the bare `split_once(':')` fallback below would
+    // happily match `https:` on a `https://...` URL and return
+    // `//host/group/project`, so the URL prefixes must take priority.
+    for prefix in ["https://", "http://", "ssh://git@", "ssh://"] {
+        if let Some(no_scheme) = trimmed.strip_prefix(prefix) {
+            let (_, rest) = no_scheme.split_once('/')?;
+            if rest.is_empty() {
+                return None;
+            }
             return Some(rest.to_string());
         }
     }
-    // https://host/group/project — strip scheme + host.
-    if let Some(no_scheme) = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .or_else(|| trimmed.strip_prefix("ssh://git@"))
-    {
-        let (_, rest) = no_scheme.split_once('/')?;
-        if !rest.is_empty() {
+    // scp-style: `git@host:group/project`. The "URL forms" branch above
+    // already ruled out the `://` cases, so a colon here means host:path.
+    if let Some((_, rest)) = trimmed.split_once(':') {
+        if rest.contains('/') {
             return Some(rest.to_string());
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_gitlab_full_path_handles_url_forms() {
+        // The original split-on-colon bug returned `//gitlab.com/foo/bar`
+        // for the https form — regression-guard each URL shape here.
+        assert_eq!(
+            parse_gitlab_full_path("https://gitlab.com/group/repo.git").as_deref(),
+            Some("group/repo"),
+        );
+        assert_eq!(
+            parse_gitlab_full_path("https://gitlab.com/group/sub/repo").as_deref(),
+            Some("group/sub/repo"),
+        );
+        assert_eq!(
+            parse_gitlab_full_path("http://gitlab.internal/team/proj.git").as_deref(),
+            Some("team/proj"),
+        );
+        assert_eq!(
+            parse_gitlab_full_path("ssh://git@gitlab.com/group/repo.git").as_deref(),
+            Some("group/repo"),
+        );
+        assert_eq!(
+            parse_gitlab_full_path("git@ngit.hundun.cn:mix/hdcode.git").as_deref(),
+            Some("mix/hdcode"),
+        );
+        assert_eq!(
+            parse_gitlab_full_path("git@gitlab.com:group/sub/proj.git").as_deref(),
+            Some("group/sub/proj"),
+        );
+    }
 }
 
 #[derive(Deserialize)]
@@ -208,20 +247,70 @@ struct SaveAttachmentParams {
     url: String,
 }
 
+/// SSRF + DoS guards on a model-supplied URL: HTTPS only, no redirects,
+/// 15 s timeout, 20 MiB cap. A model that ingested a poisoned issue body
+/// can't bounce us to `http://169.254.169.254/...` or stall a tick on a
+/// hung CDN.
+const ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(15);
+const ATTACHMENT_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
 async fn save_attachment(params: Value) -> Result<Value> {
     let p: SaveAttachmentParams = serde_json::from_value(params)?;
+
+    let parsed = url::Url::parse(&p.url).with_context(|| format!("invalid URL: {}", p.url))?;
+    if parsed.scheme() != "https" {
+        bail!(
+            "forge.save_attachment refuses {} URLs (HTTPS only)",
+            parsed.scheme(),
+        );
+    }
+
     let ext = guess_ext(&p.url);
     let staged = crate::triage::attachments::reserve_attachment(&p.tick_id, ext.as_deref())?;
-    let response = reqwest::get(&p.url)
+
+    let client = reqwest::Client::builder()
+        .timeout(ATTACHMENT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("build attachment http client")?;
+    let response = client
+        .get(parsed)
+        .send()
         .await
         .with_context(|| format!("GET {}", p.url))?;
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {} fetching {}", response.status(), p.url);
+    let status = response.status();
+    if status.is_redirection() {
+        bail!(
+            "forge.save_attachment refuses redirect (HTTP {}) for {}",
+            status,
+            p.url,
+        );
+    }
+    if !status.is_success() {
+        bail!("HTTP {} fetching {}", status, p.url);
+    }
+    if let Some(len) = response.content_length() {
+        if len > ATTACHMENT_MAX_BYTES {
+            bail!(
+                "forge.save_attachment refuses {} bytes (>{} cap) for {}",
+                len,
+                ATTACHMENT_MAX_BYTES,
+                p.url,
+            );
+        }
     }
     let bytes = response
         .bytes()
         .await
         .with_context(|| format!("read body of {}", p.url))?;
+    if bytes.len() as u64 > ATTACHMENT_MAX_BYTES {
+        bail!(
+            "forge.save_attachment refuses {} bytes (>{} cap) for {}",
+            bytes.len(),
+            ATTACHMENT_MAX_BYTES,
+            p.url,
+        );
+    }
     tokio::fs::write(&staged.path, &bytes).await?;
     Ok(json!({
         "id": staged.id,

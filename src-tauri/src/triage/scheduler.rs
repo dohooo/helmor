@@ -129,15 +129,20 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             None,
         ),
     };
-    // Only advance per-provider checkpoints when the tick actually
-    // finished — a cancelled tick may have left some sources unscanned.
-    if matches!(
+    // Only advance per-provider checkpoints when the tick fully
+    // committed. Skip when:
+    //   - cancelled by the user (some sources unscanned)
+    //   - any proposal failed to create a workspace (advancing would
+    //     bury those items past the next tick's time floor)
+    let should_advance = matches!(
         &outcome,
         Ok(ExecuteOk {
             cancelled: false,
+            workspace_failures: 0,
             ..
         })
-    ) {
+    );
+    if should_advance {
         for pid in enabled_provider_ids(cfg) {
             if let Err(error) = advance_sync(&pid, started_at) {
                 tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
@@ -167,6 +172,11 @@ pub struct ExecuteOk {
     pub created: u32,
     pub summary: Option<String>,
     pub cancelled: bool,
+    /// Count of proposals the agent emitted but `create_ai_workspace`
+    /// failed on. We use this to gate `advance_sync` — if anything was
+    /// lost we don't want to advance the per-provider time floor and
+    /// silently drop those items on the next tick.
+    pub workspace_failures: u32,
 }
 
 fn execute_tick<R: Runtime>(
@@ -181,6 +191,7 @@ fn execute_tick<R: Runtime>(
             created: 0,
             summary: None,
             cancelled: false,
+            workspace_failures: 0,
         });
     }
 
@@ -298,6 +309,7 @@ fn execute_tick<R: Runtime>(
     }
 
     let mut created = 0u32;
+    let mut workspace_failures = 0u32;
     for p in proposals {
         match create_ai_workspace(&p) {
             Ok(result) => {
@@ -310,17 +322,25 @@ fn execute_tick<R: Runtime>(
                 );
             }
             Err(error) => {
+                workspace_failures += 1;
                 tracing::warn!(error = %format!("{error:#}"), "workspace creation failed");
             }
         }
     }
 
-    tracing::info!(tick_id = %tick_id, created, cancelled, "triage: tick complete");
+    tracing::info!(
+        tick_id = %tick_id,
+        created,
+        workspace_failures,
+        cancelled,
+        "triage: tick complete"
+    );
     ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
     Ok(ExecuteOk {
         created,
         summary: summary_message,
         cancelled,
+        workspace_failures,
     })
 }
 

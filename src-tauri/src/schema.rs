@@ -729,6 +729,55 @@ fn run_migrations(connection: &Connection) -> Result<()> {
 
     materialize_review_pr_model_defaults(connection)?;
 
+    // Migration: Smart Triage columns. Each ALTER is guarded by a
+    // pragma_table_info check so upgrades from pre-triage builds add
+    // them once; brand-new installs already get the columns via
+    // SCHEMA_SQL's CREATE TABLE and skip the ADD.
+    add_column_if_missing(connection, "workspaces", "kind", "TEXT")?;
+    add_column_if_missing(
+        connection,
+        "workspaces",
+        "ai_priming_consumed",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "session_messages",
+        "is_ai_priming",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    // Index on workspaces.kind must come AFTER the ALTER above —
+    // otherwise an upgraded DB tries to index a column it doesn't yet
+    // have.
+    connection
+        .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
+        .context("Failed to create idx_workspaces_kind")?;
+
+    Ok(())
+}
+
+/// Idempotent `ALTER TABLE ... ADD COLUMN`. Skips when the column already
+/// exists (the column is in SCHEMA_SQL for new installs, so this is a
+/// no-op there).
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    column_def: &str,
+) -> Result<()> {
+    let exists: bool = connection
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+        ))
+        .and_then(|mut stmt| stmt.exists([column]))
+        .unwrap_or(false);
+    if !exists {
+        connection
+            .execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {column_def}"
+            ))
+            .with_context(|| format!("Failed to add {table}.{column} column"))?;
+    }
     Ok(())
 }
 
@@ -976,7 +1025,9 @@ CREATE TABLE IF NOT EXISTS triage_sync (
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
-CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind);
+-- NOTE: idx_workspaces_kind lives in `run_migrations` so it runs AFTER
+-- the `workspaces.kind` ALTER on upgraded databases (otherwise the index
+-- would reference a column that doesn't exist yet on old installs).
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

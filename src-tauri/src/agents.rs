@@ -227,34 +227,33 @@ pub async fn send_agent_message_stream(
     }
 
     // AI-triage priming: if the helmor_session belongs to an unconsumed
-    // AI-triage workspace, inject the planning context as a hidden prefix
-    // and flip the consumed flag. Runs once per workspace lifetime. Safe
-    // no-op for manual workspaces and already-consumed AI workspaces.
-    if let Some(session_id) = request.helmor_session_id.as_deref() {
-        match crate::triage::load_priming_prefix_for_session(session_id) {
+    // AI-triage workspace, inject the planning context as a hidden
+    // prefix. The consumed flag is NOT flipped here — if any of the
+    // pre-send validation steps below (model resolution, working dir,
+    // sidecar dispatch) fails, the user retries and we want the priming
+    // to still be there. The mark moves to after stream_via_sidecar
+    // returns Ok.
+    let priming_session_to_consume: Option<String> = match request.helmor_session_id.as_deref() {
+        Some(session_id) => match crate::triage::load_priming_prefix_for_session(session_id) {
             Ok(Some(priming_prefix)) => {
                 request.prompt_prefix = crate::triage::combine_prefixes(
                     Some(priming_prefix),
                     request.prompt_prefix.take(),
                 );
-                if let Err(error) = crate::triage::mark_consumed_for_session(session_id) {
-                    tracing::warn!(
-                        error = %format!("{error:#}"),
-                        session_id,
-                        "triage: failed to mark priming consumed; injection will recur"
-                    );
-                }
+                Some(session_id.to_string())
             }
-            Ok(None) => {}
+            Ok(None) => None,
             Err(error) => {
                 tracing::warn!(
                     error = %format!("{error:#}"),
                     session_id,
                     "triage: load_priming_prefix_for_session failed"
                 );
+                None
             }
-        }
-    }
+        },
+        None => None,
+    };
 
     let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
 
@@ -271,7 +270,7 @@ pub async fn send_agent_message_stream(
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
-    stream_via_sidecar(
+    let send_result = stream_via_sidecar(
         app.clone(),
         on_event,
         &sidecar,
@@ -281,7 +280,24 @@ pub async fn send_agent_message_stream(
         &prompt,
         &request,
         &working_directory,
-    )
+    );
+
+    // Only burn the priming flag after the sidecar accepted the stream.
+    // If `stream_via_sidecar` returned Err, the user's retry should still
+    // receive the planning context.
+    if send_result.is_ok() {
+        if let Some(session_id) = priming_session_to_consume {
+            if let Err(error) = crate::triage::mark_consumed_for_session(&session_id) {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    session_id,
+                    "triage: failed to mark priming consumed; injection will recur"
+                );
+            }
+        }
+    }
+
+    send_result
 }
 
 fn resolve_stream_working_directory(

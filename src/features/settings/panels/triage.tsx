@@ -3,6 +3,7 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
+	CircleStop,
 	Info,
 	MinusCircle,
 	Play,
@@ -431,6 +432,16 @@ function OutcomeLine({
 				<span className="truncate">
 					Last tick · {when} · nothing actionable
 				</span>
+				{summary ? <SummaryTooltip text={summary} /> : null}
+			</div>
+		);
+	}
+	if (o.kind === "cancelled") {
+		// Stop pressed by the user — neutral grey, not the red `failed` look.
+		return (
+			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
+				<CircleStop className="size-3.5 shrink-0" />
+				<span className="truncate">Last tick · {when} · stopped</span>
 				{summary ? <SummaryTooltip text={summary} /> : null}
 			</div>
 		);
