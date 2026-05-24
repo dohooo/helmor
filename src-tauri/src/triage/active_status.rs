@@ -39,6 +39,8 @@ pub enum TickOutcome {
     CreatedWorkspaces { count: u32 },
     /// Tick ran clean but the agent didn't surface anything actionable.
     NoActionableItems,
+    /// User pressed Stop while the tick was still running.
+    Cancelled,
     /// Tick aborted (sidecar error, timeout, agent abort).
     Failed { message: String },
 }

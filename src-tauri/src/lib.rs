@@ -495,6 +495,7 @@ pub fn run() {
             commands::triage_commands::update_triage_config,
             commands::triage_commands::get_triage_active_status,
             commands::triage_commands::trigger_triage_tick_now,
+            commands::triage_commands::cancel_triage_tick,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

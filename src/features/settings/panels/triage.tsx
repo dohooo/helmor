@@ -4,9 +4,9 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Info,
-	MessagesSquare,
 	MinusCircle,
 	Play,
+	Square,
 	Wrench,
 	XCircle,
 } from "lucide-react";
@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
 	GithubBrandIcon,
 	GitlabBrandIcon,
+	LarkBrandIcon,
 	SlackBrandIcon,
 } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+	cancelTriageTick,
 	getLocalLlmStatus,
 	getTriageActiveStatus,
 	getTriageConfig,
@@ -57,12 +59,10 @@ const PROVIDER_SPECS: ReadonlyArray<{
 	},
 	{
 		id: "lark",
-		displayName: "Lark / Feishu",
+		displayName: "Lark",
 		description:
 			"Scans messages via lark-cli. Sign in once with `lark-cli auth login`.",
-		// simple-icons doesn't ship a Lark/Feishu glyph; fall back to a
-		// generic chat icon so the row visually matches the other three.
-		Icon: MessagesSquare,
+		Icon: LarkBrandIcon,
 	},
 	{
 		id: "gitlab",
@@ -159,6 +159,15 @@ export function TriagePanel() {
 
 	const trigger = useMutation({
 		mutationFn: () => triggerTriageTickNow(),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageActiveStatus,
+			});
+		},
+	});
+
+	const stop = useMutation({
+		mutationFn: () => cancelTriageTick(),
 		onSuccess: () => {
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.triageActiveStatus,
@@ -279,15 +288,27 @@ export function TriagePanel() {
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={isRunning || trigger.isPending}
-								onClick={() => trigger.mutate()}
-							>
-								<Play className="size-3.5" />
-								{isRunning ? "Running…" : "Run now"}
-							</Button>
+							{isRunning ? (
+								<Button
+									variant="destructive"
+									size="sm"
+									disabled={stop.isPending}
+									onClick={() => stop.mutate()}
+								>
+									<Square className="size-3.5 fill-current" />
+									{stop.isPending ? "Stopping…" : "Stop"}
+								</Button>
+							) : (
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={trigger.isPending}
+									onClick={() => trigger.mutate()}
+								>
+									<Play className="size-3.5" />
+									Run now
+								</Button>
+							)}
 						</div>
 					</div>
 

@@ -1993,6 +1993,16 @@ export async function triggerTriageTickNow(): Promise<string> {
 	}
 }
 
+export async function cancelTriageTick(): Promise<boolean> {
+	try {
+		return await invoke<boolean>("cancel_triage_tick");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to cancel triage tick."),
+		);
+	}
+}
+
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,
 ): Promise<UnlistenFn> {

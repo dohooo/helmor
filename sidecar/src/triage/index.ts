@@ -2,8 +2,22 @@
 
 import type { SidecarEmitter } from "../emitter";
 import { logger } from "../logger";
-import { runTriageTick } from "./agent";
+import { abortCurrentTick, runTriageTick } from "./agent";
 import type { TriageTickParams } from "./types";
+
+export function handleStopTriageTick(
+	requestId: string,
+	rawParams: Record<string, unknown>,
+	emitter: SidecarEmitter,
+): void {
+	const tickId =
+		typeof rawParams.tickId === "string" ? rawParams.tickId : undefined;
+	const stopped = abortCurrentTick(tickId);
+	logger.info(`[${requestId}] stopTriageTick`, { tickId, stopped });
+	// `runTriageTick` will emit its own `end` once the abort lands; we
+	// just ack the stop request so the Rust caller's listener resolves.
+	emitter.end(requestId);
+}
 
 function coerceParams(raw: Record<string, unknown>): TriageTickParams {
 	const obj = (v: unknown) =>
@@ -85,6 +99,9 @@ export async function handleRunTriageTick(
 				type: "triageSummary",
 				message: outcome.finalMessage,
 			});
+		}
+		if (outcome.cancelled) {
+			write({ id: requestId, type: "triageCancelled" });
 		}
 		emitter.end(requestId);
 	} catch (error) {

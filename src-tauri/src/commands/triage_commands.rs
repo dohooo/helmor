@@ -32,3 +32,8 @@ pub async fn get_triage_active_status(
 pub async fn trigger_triage_tick_now<R: Runtime>(app: AppHandle<R>) -> CmdResult<String> {
     run_blocking(move || triage::trigger_tick_now(&app)).await
 }
+
+#[tauri::command]
+pub async fn cancel_triage_tick<R: Runtime>(app: AppHandle<R>) -> CmdResult<bool> {
+    run_blocking(move || triage::cancel_tick_in_flight(&app)).await
+}

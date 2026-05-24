@@ -40,7 +40,7 @@ import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
-import { handleRunTriageTick } from "./triage/index.js";
+import { handleRunTriageTick, handleStopTriageTick } from "./triage/index.js";
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
@@ -618,6 +618,9 @@ for await (const line of rl) {
 				trackHandler(
 					handleRunTriageTick(id, params, emitter, writeStdoutEvent),
 				);
+				break;
+			case "stopTriageTick":
+				handleStopTriageTick(id, params, emitter);
 				break;
 			case "permissionResponse": {
 				const permissionId = params.permissionId as string;

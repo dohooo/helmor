@@ -57,6 +57,26 @@ export interface RunTriageOutcome {
 	/// the "nothing actionable" tooltip so the user can see why the agent
 	/// decided not to propose anything.
 	finalMessage: string | null;
+	/// True when the user clicked Stop. Distinguishes a cancelled tick
+	/// from a normal "no proposals" finish so the UI can flag it.
+	cancelled: boolean;
+}
+
+/// Handle to the currently-running tick, so the stdin dispatcher can
+/// abort it when the user clicks Stop. Only one tick runs at a time
+/// (`TICK_IN_FLIGHT` on the Rust side enforces this), so a single
+/// module-level slot is enough.
+let activeTick: { tickId: string; abort: () => void } | null = null;
+
+export function abortCurrentTick(tickId?: string): boolean {
+	if (!activeTick) return false;
+	if (tickId && tickId !== activeTick.tickId) return false;
+	try {
+		activeTick.abort();
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function extractAssistantText(message: unknown): string | null {
@@ -197,7 +217,18 @@ export async function runTriageTick(
 	const MAX_TURNS = 100;
 	let turnIndex = 0;
 	let aborted = false;
+	let cancelledByUser = false;
 	let lastAssistantText: string | null = null;
+	activeTick = {
+		tickId,
+		abort: () => {
+			cancelledByUser = true;
+			aborted = true;
+			try {
+				agent.abort();
+			} catch {}
+		},
+	};
 	agent.subscribe((event) => {
 		const e = event as { type: string } & Record<string, unknown>;
 		switch (e.type) {
@@ -251,13 +282,19 @@ export async function runTriageTick(
 		logger.info(`${logTag} agent.done`, {
 			proposalCount: proposals.length,
 			aborted,
+			cancelledByUser,
 			turnsRun: turnIndex,
 			// Persist the agent's full final message in jsonl — this is the
 			// only post-hoc record of its reasoning, so don't truncate.
 			finalMessage: lastAssistantText,
 		});
-		return { proposals, finalMessage: lastAssistantText };
+		return {
+			proposals,
+			finalMessage: lastAssistantText,
+			cancelled: cancelledByUser,
+		};
 	} finally {
+		activeTick = null;
 		// Always clean up scratch — every prior return path leaked the dir
 		// when the agent aborted by cap or threw post-drain.
 		await scratch.dispose();

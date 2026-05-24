@@ -306,7 +306,7 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 
 export const larkProvider: TriageProvider = {
 	id: "lark",
-	displayName: "Lark / Feishu",
+	displayName: "Lark",
 	description:
 		"Scans messages via lark-cli. Sign in with `lark-cli auth login`.",
 	async preflight() {
@@ -323,7 +323,7 @@ export const larkProvider: TriageProvider = {
 	},
 	buildTools,
 	promptHint({ lastTriagedAt }) {
-		return `## Lark / Feishu
+		return `## Lark
 Use lark_* tools to scan messages. ${
 			lastTriagedAt
 				? `Only look at items after \`${lastTriagedAt}\` (use \`start=\` on search/list).`

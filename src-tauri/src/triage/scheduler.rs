@@ -68,6 +68,26 @@ pub fn trigger_tick_now<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     run_tick(app, &cfg)
 }
 
+/// Tell the sidecar to abort whatever tick is currently running. The
+/// active `execute_tick` is blocking in `rx.recv_timeout` waiting for
+/// the sidecar's events — once the sidecar acks the stop and emits its
+/// terminal `end` (plus a `triageCancelled` marker), that loop unwinds
+/// naturally and records a `Cancelled` outcome.
+pub fn cancel_tick_in_flight<R: Runtime>(app: &AppHandle<R>) -> Result<bool> {
+    if !TICK_IN_FLIGHT.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let sidecar = app.state::<ManagedSidecar>();
+    let request_id = Uuid::new_v4().to_string();
+    let request = SidecarRequest {
+        id: request_id,
+        method: "stopTriageTick".into(),
+        params: json!({}),
+    };
+    sidecar.send(&request).context("send stopTriageTick")?;
+    Ok(true)
+}
+
 fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String> {
     if TICK_IN_FLIGHT
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -86,10 +106,21 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     let outcome = execute_tick(app, cfg, &tick_id);
 
     let (kind, summary_text) = match &outcome {
-        Ok((0, reason)) => (TickOutcome::NoActionableItems, reason.clone()),
-        Ok((count, reason)) => (
-            TickOutcome::CreatedWorkspaces { count: *count },
-            reason.clone(),
+        Ok(ExecuteOk {
+            cancelled: true,
+            summary,
+            ..
+        }) => (TickOutcome::Cancelled, summary.clone()),
+        Ok(ExecuteOk {
+            created: 0,
+            summary,
+            ..
+        }) => (TickOutcome::NoActionableItems, summary.clone()),
+        Ok(ExecuteOk {
+            created, summary, ..
+        }) => (
+            TickOutcome::CreatedWorkspaces { count: *created },
+            summary.clone(),
         ),
         Err(error) => (
             TickOutcome::Failed {
@@ -98,7 +129,15 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             None,
         ),
     };
-    if outcome.is_ok() {
+    // Only advance per-provider checkpoints when the tick actually
+    // finished — a cancelled tick may have left some sources unscanned.
+    if matches!(
+        &outcome,
+        Ok(ExecuteOk {
+            cancelled: false,
+            ..
+        })
+    ) {
         for pid in enabled_provider_ids(cfg) {
             if let Err(error) = advance_sync(&pid, started_at) {
                 tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
@@ -124,15 +163,25 @@ impl Drop for TickGuard {
     }
 }
 
+pub struct ExecuteOk {
+    pub created: u32,
+    pub summary: Option<String>,
+    pub cancelled: bool,
+}
+
 fn execute_tick<R: Runtime>(
     app: &AppHandle<R>,
     cfg: &TriageConfig,
     tick_id: &str,
-) -> Result<(u32, Option<String>)> {
+) -> Result<ExecuteOk> {
     let providers = enabled_provider_ids(cfg);
     if providers.is_empty() {
         tracing::info!(tick_id = %tick_id, "triage: no providers enabled, skipping");
-        return Ok((0, None));
+        return Ok(ExecuteOk {
+            created: 0,
+            summary: None,
+            cancelled: false,
+        });
     }
 
     let repos = list_repos_payload()?;
@@ -178,6 +227,7 @@ fn execute_tick<R: Runtime>(
     let mut summary_message: Option<String> = None;
     let mut got_terminal = false;
     let mut error_message: Option<String> = None;
+    let mut cancelled = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(1800);
 
     while std::time::Instant::now() < deadline {
@@ -202,6 +252,9 @@ fn execute_tick<R: Runtime>(
                     .get("message")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
+            }
+            "triageCancelled" => {
+                cancelled = true;
             }
             "triageProgress" => {
                 if let Some(turn) = event.raw.get("turn").and_then(Value::as_u64) {
@@ -262,9 +315,13 @@ fn execute_tick<R: Runtime>(
         }
     }
 
-    tracing::info!(tick_id = %tick_id, created, "triage: tick complete");
+    tracing::info!(tick_id = %tick_id, created, cancelled, "triage: tick complete");
     ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
-    Ok((created, summary_message))
+    Ok(ExecuteOk {
+        created,
+        summary: summary_message,
+        cancelled,
+    })
 }
 
 fn list_repos_payload() -> Result<Value> {
