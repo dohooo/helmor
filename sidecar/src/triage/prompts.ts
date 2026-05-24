@@ -27,6 +27,19 @@ Per source:
   3. scratch_read around hits only — don't page through whole files
   4. decide → propose_workspace or move on
 
+# Forge scope — inbox vs repo
+
+For GitHub/GitLab there are TWO complementary scan modes:
+- *_inbox_* tools = items where the user is the protagonist (assigned,
+  mentioned, review-requested). Narrow, user-centric.
+- *_list_repo_* tools = ALL open issues/PRs in a specific Helmor repo,
+  regardless of who's on the hook. Use this when the user prompt is
+  repo-centric ("triage helmor backlog", "check hdcode for new bugs").
+
+The list_repos tool gives you each Helmor repo's id; pass it directly
+as repo_id to *_list_repo_*. Don't try to derive owner/repo from the
+remote URL yourself — Helmor does that mapping for you.
+
 # Plan message format
 
   ## Source

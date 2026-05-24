@@ -53,7 +53,99 @@ function renderItems(items: InboxItem[], kind: "issue" | "mr"): string {
 	return out.join("\n");
 }
 
+interface RepoItemGitlab {
+	iid?: number;
+	title?: string;
+	state?: string;
+	author?: { username?: string } | null;
+	assignees?: Array<{ username?: string } | string | null>;
+	labels?: Array<string | { name?: string }>;
+	web_url?: string;
+	updated_at?: string;
+	description?: string;
+	draft?: boolean;
+	work_in_progress?: boolean;
+}
+
+function renderRepoItemsGitlab(
+	items: RepoItemGitlab[],
+	kind: "issue" | "mr",
+): string {
+	const out: string[] = [];
+	const sigil = kind === "issue" ? "#" : "!";
+	for (const it of items) {
+		out.push(`## ${sigil}${it.iid ?? "?"} — ${it.title ?? "(no title)"}`);
+		if (it.state) out.push(`- state: ${it.state}`);
+		if (it.draft || it.work_in_progress) out.push(`- draft: true`);
+		if (it.author?.username) out.push(`- author: ${it.author.username}`);
+		const assignees = (it.assignees ?? [])
+			.map((a) => (typeof a === "string" ? a : a?.username))
+			.filter((s): s is string => !!s);
+		if (assignees.length > 0) out.push(`- assignees: ${assignees.join(", ")}`);
+		const labels = (it.labels ?? [])
+			.map((l) => (typeof l === "string" ? l : l?.name))
+			.filter((s): s is string => !!s);
+		if (labels.length > 0) out.push(`- labels: ${labels.join(", ")}`);
+		if (it.updated_at) out.push(`- updated: ${it.updated_at}`);
+		if (it.web_url) out.push(`- url: ${it.web_url}`);
+		if (it.description?.trim())
+			out.push("", "```", it.description.trim(), "```");
+		out.push("", "---", "");
+	}
+	return out.join("\n");
+}
+
 function buildTools({ scratch }: ProviderContext): unknown[] {
+	const listRepoItems = (
+		kind: "issues" | "mrs",
+		toolName: string,
+		label: string,
+	) => ({
+		name: toolName,
+		label,
+		description:
+			kind === "issues"
+				? "List ALL open issues in a Helmor GitLab repo (not just yours). Use for repo-centric triage."
+				: "List ALL open MRs in a Helmor GitLab repo (not just yours / not just review-requested).",
+		parameters: Type.Object({
+			repo_id: Type.String({
+				description: "Helmor repo id from list_repos.",
+			}),
+			state: Type.Optional(
+				Type.String({ description: "open | closed | all — default open." }),
+			),
+			limit: Type.Optional(Type.Integer({ description: "1-100, default 30." })),
+		}),
+		execute: async (
+			_id: string,
+			params: { repo_id: string; state?: string; limit?: number },
+		) => {
+			const r = await callHost<{ items: RepoItemGitlab[]; repo: string }>(
+				"forge.list_repo_items",
+				{
+					repoId: params.repo_id,
+					kind,
+					state: params.state ?? "open",
+					limit: params.limit ?? 30,
+				},
+			);
+			const items = Array.isArray(r.items) ? r.items : [];
+			const file = await scratch.write(
+				`gitlab_repo_${kind}_${safe(r.repo)}.md`,
+				`# GitLab repo · ${r.repo} · ${kind}\nstate: ${params.state ?? "open"}\nfetched_at: ${now()}\ncount: ${items.length}\n\n---\n\n${renderRepoItemsGitlab(items, kind === "issues" ? "issue" : "mr")}`,
+			);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Wrote ${items.length} ${kind === "issues" ? "issue" : "MR"}(s) from ${r.repo} to scratch/${file}.`,
+					},
+				],
+				details: { file, count: items.length, repo: r.repo },
+			};
+		},
+	});
+
 	const saveAttachment = {
 		name: "gitlab_save_attachment",
 		label: "GitLab · Save Attachment",
@@ -171,6 +263,8 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		),
 		viewItem("gitlab_issue", "gitlab_view_issue", "GitLab · View Issue"),
 		viewItem("gitlab_mr", "gitlab_view_mr", "GitLab · View MR"),
+		listRepoItems("issues", "gitlab_list_repo_issues", "GitLab · Repo Issues"),
+		listRepoItems("mrs", "gitlab_list_repo_mrs", "GitLab · Repo MRs"),
 		saveAttachment,
 	];
 }
@@ -193,6 +287,9 @@ export const gitlabProvider: TriageProvider = {
 	buildTools,
 	promptHint() {
 		return `## GitLab
-Use gitlab_inbox_issues / gitlab_inbox_mrs to scan items the user is assigned / mentioned on. Drill into one item via gitlab_view_issue / gitlab_view_mr with its external_id (the iid).`;
+Two complementary scan modes:
+- gitlab_inbox_* — only items assigned to / mentioning the user. Narrow.
+- gitlab_list_repo_* — ALL open issues/MRs in a Helmor repo (by repo_id). Use for repo-centric triage ("scan hdcode backlog").
+Drill into one item via gitlab_view_issue / gitlab_view_mr.`;
 	},
 };

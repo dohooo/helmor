@@ -55,7 +55,94 @@ function renderItems(items: InboxItem[], kind: "issue" | "pr"): string {
 	return out.join("\n");
 }
 
+interface RepoItem {
+	number?: number;
+	title?: string;
+	state?: string;
+	author?: { login?: string } | null;
+	assignees?: Array<{ login?: string } | null>;
+	labels?: Array<{ name?: string } | null>;
+	url?: string;
+	updatedAt?: string;
+	body?: string;
+	isDraft?: boolean;
+}
+
+function renderRepoItems(items: RepoItem[], kind: "issue" | "pr"): string {
+	const out: string[] = [];
+	const sigil = kind === "issue" ? "#" : "PR ";
+	for (const it of items) {
+		out.push(`## ${sigil}${it.number ?? "?"} — ${it.title ?? "(no title)"}`);
+		if (it.state) out.push(`- state: ${it.state}`);
+		if (it.isDraft) out.push(`- draft: true`);
+		if (it.author?.login) out.push(`- author: ${it.author.login}`);
+		const assignees = (it.assignees ?? [])
+			.map((a) => a?.login)
+			.filter((s): s is string => !!s);
+		if (assignees.length > 0) out.push(`- assignees: ${assignees.join(", ")}`);
+		const labels = (it.labels ?? [])
+			.map((l) => l?.name)
+			.filter((s): s is string => !!s);
+		if (labels.length > 0) out.push(`- labels: ${labels.join(", ")}`);
+		if (it.updatedAt) out.push(`- updated: ${it.updatedAt}`);
+		if (it.url) out.push(`- url: ${it.url}`);
+		if (it.body?.trim()) out.push("", "```", it.body.trim(), "```");
+		out.push("", "---", "");
+	}
+	return out.join("\n");
+}
+
 function buildTools({ scratch }: ProviderContext): unknown[] {
+	const listRepoItems = (
+		kind: "issues" | "prs",
+		toolName: string,
+		label: string,
+	) => ({
+		name: toolName,
+		label,
+		description:
+			kind === "issues"
+				? "List ALL open issues in a Helmor repo (not just yours). Use this to discover work the user might pick up — independent of GitHub inbox filters."
+				: "List ALL open PRs in a Helmor repo (not just yours / not just review-requested).",
+		parameters: Type.Object({
+			repo_id: Type.String({
+				description: "Helmor repo id from list_repos.",
+			}),
+			state: Type.Optional(
+				Type.String({ description: "open | closed | all — default open." }),
+			),
+			limit: Type.Optional(Type.Integer({ description: "1-100, default 30." })),
+		}),
+		execute: async (
+			_id: string,
+			params: { repo_id: string; state?: string; limit?: number },
+		) => {
+			const r = await callHost<{ items: RepoItem[]; repo: string }>(
+				"forge.list_repo_items",
+				{
+					repoId: params.repo_id,
+					kind,
+					state: params.state ?? "open",
+					limit: params.limit ?? 30,
+				},
+			);
+			const items = Array.isArray(r.items) ? r.items : [];
+			const file = await scratch.write(
+				`github_repo_${kind}_${safe(r.repo)}.md`,
+				`# GitHub repo · ${r.repo} · ${kind}\nstate: ${params.state ?? "open"}\nfetched_at: ${now()}\ncount: ${items.length}\n\n---\n\n${renderRepoItems(items, kind === "issues" ? "issue" : "pr")}`,
+			);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Wrote ${items.length} ${kind === "issues" ? "issue" : "PR"}(s) from ${r.repo} to scratch/${file}.`,
+					},
+				],
+				details: { file, count: items.length, repo: r.repo },
+			};
+		},
+	});
+
 	const saveAttachment = {
 		name: "github_save_attachment",
 		label: "GitHub · Save Attachment",
@@ -174,6 +261,8 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		),
 		viewItem("github_issue", "github_view_issue", "GitHub · View Issue"),
 		viewItem("github_pr", "github_view_pr", "GitHub · View PR"),
+		listRepoItems("issues", "github_list_repo_issues", "GitHub · Repo Issues"),
+		listRepoItems("prs", "github_list_repo_prs", "GitHub · Repo PRs"),
 		saveAttachment,
 	];
 }
@@ -196,6 +285,9 @@ export const githubProvider: TriageProvider = {
 	buildTools,
 	promptHint() {
 		return `## GitHub
-Use github_inbox_issues / github_inbox_prs to scan items the user is assigned / @-mentioned / review-requested on. Drill into one item via github_view_issue / github_view_pr with its external_id (the number).`;
+Two complementary scan modes:
+- github_inbox_* — only items assigned to / mentioning / review-requested by the user. Narrow.
+- github_list_repo_* — ALL open issues/PRs in a specific Helmor repo (by repo_id). Use this when the user's prompt is repo-centric ("triage helmor backlog") rather than "what's on my plate".
+Drill into one item via github_view_issue / github_view_pr.`;
 	},
 };

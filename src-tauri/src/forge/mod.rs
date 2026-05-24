@@ -24,7 +24,7 @@ pub(crate) mod avatar_cache;
 mod branch;
 mod bundled;
 mod cli_status;
-mod command;
+pub(crate) mod command;
 mod detect;
 pub mod github;
 mod gitlab;

@@ -2,7 +2,7 @@
 //! GitHub / GitLab inbox without reimplementing `gh search` / `glab
 //! issue list` in TypeScript.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Runtime};
@@ -19,10 +19,183 @@ pub async fn dispatch<R: Runtime>(
     match method {
         "discover_login" => discover_login(params).await,
         "list_inbox_items" => list_inbox_items(params).await,
+        "list_repo_items" => list_repo_items(params).await,
         "get_inbox_item_detail" => get_inbox_item_detail(params).await,
         "save_attachment" => save_attachment(params).await,
         _ => Err(crate::sidecar_host::unknown_method(method)),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListRepoItemsParams {
+    repo_id: String,
+    /// "issues" | "prs" (GitHub) | "mrs" (GitLab)
+    kind: String,
+    /// "open" | "closed" | "all" — defaults to "open".
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+async fn list_repo_items(params: Value) -> Result<Value> {
+    let p: ListRepoItemsParams = serde_json::from_value(params)?;
+    let limit = p.limit.unwrap_or(30).clamp(1, 100) as u32;
+    let state = p
+        .state
+        .as_deref()
+        .map(str::to_lowercase)
+        .unwrap_or_else(|| "open".to_string());
+    let kind = p.kind.to_lowercase();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<Value> {
+        // RepositoryRecord only carries the git remote *name* (e.g. "origin");
+        // `list_repositories()` is the loader that resolves it to the URL.
+        let summary = crate::models::repos::list_repositories()?
+            .into_iter()
+            .find(|r| r.id == p.repo_id)
+            .ok_or_else(|| anyhow!("repo {} not found", p.repo_id))?;
+        let provider = summary
+            .forge_provider
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase();
+        let remote = summary
+            .remote_url
+            .as_deref()
+            .ok_or_else(|| anyhow!("repo {} has no remote URL", p.repo_id))?;
+
+        match provider.as_str() {
+            "github" => run_gh_list(remote, &kind, &state, limit),
+            "gitlab" => run_glab_list(remote, &kind, &state, limit),
+            other => bail!("forge.list_repo_items: provider \"{other}\" not supported"),
+        }
+    })
+    .await?
+}
+
+fn run_gh_list(remote: &str, kind: &str, state: &str, limit: u32) -> Result<Value> {
+    let (owner, name) = parse_github_remote(remote)
+        .ok_or_else(|| anyhow!("cannot parse GitHub remote: {remote}"))?;
+    let repo_arg = format!("{owner}/{name}");
+    let subcommand = match kind {
+        "issues" => "issue",
+        "prs" | "mrs" => "pr",
+        other => bail!("unknown kind: {other}"),
+    };
+    let limit_str = limit.to_string();
+    let json_fields = match subcommand {
+        "issue" => "number,title,state,author,url,updatedAt,body,labels,assignees",
+        "pr" => "number,title,state,author,url,updatedAt,body,labels,assignees,isDraft",
+        _ => unreachable!(),
+    };
+    let args = vec![
+        subcommand,
+        "list",
+        "-R",
+        repo_arg.as_str(),
+        "--state",
+        state,
+        "--limit",
+        limit_str.as_str(),
+        "--json",
+        json_fields,
+    ];
+    let output =
+        crate::forge::command::run_command("gh", args).map_err(|e| anyhow!("spawn gh: {e}"))?;
+    if !output.success {
+        let tail = output.stderr.lines().rev().take(5).collect::<Vec<_>>();
+        bail!(
+            "gh {subcommand} list failed (exit {:?}): {}",
+            output.status,
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n"),
+        );
+    }
+    let items: Value =
+        serde_json::from_str(&output.stdout).unwrap_or_else(|_| Value::Array(Vec::new()));
+    Ok(json!({ "items": items, "repo": repo_arg }))
+}
+
+fn run_glab_list(remote: &str, kind: &str, state: &str, limit: u32) -> Result<Value> {
+    let full_path = parse_gitlab_full_path(remote)
+        .ok_or_else(|| anyhow!("cannot parse GitLab remote: {remote}"))?;
+    let subcommand = match kind {
+        "issues" => "issue",
+        "prs" | "mrs" => "mr",
+        other => bail!("unknown kind: {other}"),
+    };
+    let glab_state = match state {
+        "open" => "opened",
+        "closed" => "closed",
+        _ => "all",
+    };
+    let limit_str = limit.to_string();
+    let args = vec![
+        subcommand,
+        "list",
+        "-R",
+        full_path.as_str(),
+        "--state",
+        glab_state,
+        "--per-page",
+        limit_str.as_str(),
+        "--output",
+        "json",
+    ];
+    let output =
+        crate::forge::command::run_command("glab", args).map_err(|e| anyhow!("spawn glab: {e}"))?;
+    if !output.success {
+        let tail = output.stderr.lines().rev().take(5).collect::<Vec<_>>();
+        bail!(
+            "glab {subcommand} list failed (exit {:?}): {}",
+            output.status,
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n"),
+        );
+    }
+    let items: Value =
+        serde_json::from_str(&output.stdout).unwrap_or_else(|_| Value::Array(Vec::new()));
+    Ok(json!({ "items": items, "repo": full_path }))
+}
+
+/// `git@github.com:owner/repo.git` or `https://github.com/owner/repo(.git)`
+fn parse_github_remote(remote: &str) -> Option<(String, String)> {
+    let trimmed = remote.trim().trim_end_matches('/').trim_end_matches(".git");
+    let body = trimmed
+        .strip_prefix("git@github.com:")
+        .or_else(|| trimmed.strip_prefix("https://github.com/"))
+        .or_else(|| trimmed.strip_prefix("ssh://git@github.com/"))?;
+    let mut parts = body.splitn(2, '/');
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner, repo))
+}
+
+/// Accept any GitLab host (gitlab.com, ngit.hundun.cn, self-hosted).
+/// Returns the project's `group[/sub]/project` path that `glab -R` wants.
+fn parse_gitlab_full_path(remote: &str) -> Option<String> {
+    let trimmed = remote.trim().trim_end_matches('/').trim_end_matches(".git");
+    // git@host:group/project — split on the first colon.
+    if let Some((_, rest)) = trimmed.split_once(':') {
+        if !rest.contains("://") && rest.contains('/') {
+            return Some(rest.to_string());
+        }
+    }
+    // https://host/group/project — strip scheme + host.
+    if let Some(no_scheme) = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .or_else(|| trimmed.strip_prefix("ssh://git@"))
+    {
+        let (_, rest) = no_scheme.split_once('/')?;
+        if !rest.is_empty() {
+            return Some(rest.to_string());
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]
