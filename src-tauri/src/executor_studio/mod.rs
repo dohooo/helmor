@@ -342,17 +342,48 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
     let auth_password = uuid::Uuid::new_v4().to_string();
     let pinned = format!("executor@{EXECUTOR_PIN}");
 
-    let mut cmd = Command::new(&bunx);
-    cmd.args([
-        &pinned,
-        "web",
-        "--port",
-        "0",
-        "--hostname",
-        "127.0.0.1",
-        "--auth-password",
-        &auth_password,
-    ]);
+    // Inner command (the actual daemon we want to run). When wrapped in
+    // the watchdog this gets passed positionally after `--`.
+    let bunx_args = [
+        pinned.clone(),
+        "web".to_string(),
+        "--port".to_string(),
+        "0".to_string(),
+        "--hostname".to_string(),
+        "127.0.0.1".to_string(),
+        "--auth-password".to_string(),
+        auth_password.clone(),
+    ];
+
+    // Wrap the spawn in `helmor-executor-watchdog` when we can find it
+    // alongside our own binary. The watchdog SIGTERMs the daemon when
+    // Helmor exits — covering SIGKILL / terminal-close paths that never
+    // reach `ManagedExecutor::shutdown`. If it's missing (release builds
+    // before the bundle pipeline registers it as an externalBin), fall
+    // back to direct spawn and log loudly so the regression is visible.
+    let watchdog = locate_watchdog();
+    let mut cmd = match &watchdog {
+        Some(watchdog_path) => {
+            let mut c = Command::new(watchdog_path);
+            c.arg(std::process::id().to_string());
+            c.arg("--");
+            c.arg(&bunx);
+            c.args(&bunx_args);
+            c
+        }
+        None => {
+            tracing::warn!(
+                target: "executor::spawn",
+                "helmor-executor-watchdog not found beside the running Helmor \
+                 binary — falling back to direct bunx spawn. The executor may \
+                 outlive an abruptly-killed Helmor (SIGKILL, OS crash, dev \
+                 terminal close) and orphan its SQLite lock."
+            );
+            let mut c = Command::new(&bunx);
+            c.args(&bunx_args);
+            c
+        }
+    };
     cmd.env("EXECUTOR_DATA_DIR", &scope_dir);
     cmd.env("EXECUTOR_SCOPE_DIR", &scope_dir);
     // bunx caches versions under ~/.bun/install/cache; respect user's HOME.
@@ -360,8 +391,11 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // Put the executor in its own process group so SIGTERM reaches every
-    // descendant (the Bun runner + the spawned `executor` itself).
+    // Put our direct child (the watchdog, or bunx in the fallback path)
+    // in its own process group so the cooperative-shutdown SIGTERM
+    // reaches every descendant. The watchdog itself ALSO puts bunx in
+    // a nested group so it can independently target the daemon side on
+    // a parent-death wakeup.
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
 
@@ -372,6 +406,10 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
         scope_dir = %scope_dir.display(),
         auth_password_present = !auth_password.is_empty(),
         ready_timeout_s = READY_TIMEOUT.as_secs(),
+        watchdog = %watchdog
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
         "Spawning executor child process"
     );
 
@@ -583,6 +621,27 @@ fn locate_bunx() -> Result<PathBuf> {
         anyhow!("`bunx` not found on PATH. Install Bun from https://bun.sh and restart Helmor.")
     })?;
     Ok(candidate)
+}
+
+/// Resolve `helmor-executor-watchdog` as a sibling of the running
+/// Helmor binary. Works in dev (`target/<profile>/`) and in release
+/// builds where the watchdog is bundled next to the main executable
+/// (Tauri's standard externalBin layout).
+///
+/// Returns `None` rather than erroring: callers fall back to direct
+/// `bunx` spawn and log the regression. We don't want a missing
+/// watchdog to take the whole MCP feature offline — orphan risk is
+/// still better than no executor at all.
+fn locate_watchdog() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = if cfg!(windows) {
+        "helmor-executor-watchdog.exe"
+    } else {
+        "helmor-executor-watchdog"
+    };
+    let candidate = dir.join(name);
+    candidate.is_file().then_some(candidate)
 }
 
 fn which(program: &str) -> Option<PathBuf> {

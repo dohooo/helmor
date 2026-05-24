@@ -116,6 +116,15 @@ path = "src/bin/helmor-cli.rs"
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
 
+# Tiny standalone watchdog that sits between Helmor and `bunx executor`.
+# Watches the Helmor pid via `kqueue NOTE_EXIT` and tears down the daemon
+# whenever Helmor dies — even on SIGKILL / terminal-close paths that
+# never run `request_quit`. See the binary's module docs for the full
+# rationale.
+[[bin]]
+name = "helmor-executor-watchdog"
+path = "src/bin/executor_watchdog.rs"
+
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"
