@@ -14,11 +14,22 @@ const BIN: &str = "lark-cli";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn run(args: &[&str], label: &str) -> Result<Value> {
+    run_in(args, None, label).await
+}
+
+pub(super) async fn run_in(
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+    label: &str,
+) -> Result<Value> {
     let mut cmd = Command::new(BIN);
     cmd.args(args);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     let child = cmd
         .spawn()
         .map_err(|e| anyhow!("spawn {BIN} failed: {e}"))?;

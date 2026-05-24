@@ -24,9 +24,15 @@ export interface TriageTickParams {
 	readonly localModel: TriageLocalModel;
 }
 
+export interface TriageAttachment {
+	readonly id: string;
+	readonly alt?: string;
+}
+
 export interface TriageProposal {
 	readonly sourceType: string;
 	readonly sourceRef: string;
 	readonly repoId: string;
 	readonly planMessage: string;
+	readonly attachments?: readonly TriageAttachment[];
 }

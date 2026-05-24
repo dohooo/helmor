@@ -38,6 +38,21 @@ Per source:
   ## Confirm?
   Ask user to confirm.
 
+# Attachments (images, screenshots, files)
+
+If a message body contains an image / screenshot / attachment that's
+relevant to the task, save it BEFORE proposing:
+
+  lark:    lark_save_image(message_id, image_key)
+  slack:   slack_save_attachment(url)
+  github:  github_save_attachment(url)
+  gitlab:  gitlab_save_attachment(url)
+
+Each tool returns an attachment id. Pass them in
+propose_workspace.attachments: [{ id, alt }] so the workspace agent can
+see them later. You do NOT need to look at the image yourself — your
+job is just to capture and forward.
+
 Hard cap: never call propose_workspace more than {{MAX}} times.`;
 
 export interface BuildPromptInput {

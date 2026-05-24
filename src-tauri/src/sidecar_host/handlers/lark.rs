@@ -24,8 +24,40 @@ pub async fn dispatch<R: Runtime>(
         "chat_messages_list" => chat_messages_list(params).await,
         "messages_search" => messages_search(params).await,
         "messages_get" => messages_get(params).await,
+        "save_image" => save_image(params).await,
         _ => Err(crate::sidecar_host::unknown_method(method)),
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveImageParams {
+    tick_id: String,
+    message_id: String,
+    image_key: String,
+    #[serde(default)]
+    extension: Option<String>,
+}
+
+async fn save_image(params: Value) -> Result<Value> {
+    let p: SaveImageParams = serde_json::from_value(params)?;
+    let ext = p.extension.as_deref().unwrap_or("png");
+    let staged = crate::triage::attachments::reserve_attachment(&p.tick_id, Some(ext))?;
+    let cwd = staged
+        .path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("staged path has no parent"))?
+        .to_path_buf();
+    im::download_resource(&p.message_id, "image", &p.image_key, &cwd, &staged.filename).await?;
+    let size = tokio::fs::metadata(&staged.path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "id": staged.id,
+        "filename": staged.filename,
+        "sizeBytes": size,
+    }))
 }
 
 #[derive(Deserialize, Default)]

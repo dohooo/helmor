@@ -62,6 +62,22 @@ export function buildProposeWorkspaceTool(
 				description:
 					"Markdown plan shown verbatim as first assistant message in the new workspace.",
 			}),
+			attachments: Type.Optional(
+				Type.Array(
+					Type.Object({
+						id: Type.String({
+							description:
+								"Attachment id returned by a *_save_image / *_save_attachment tool earlier in this turn.",
+						}),
+						alt: Type.Optional(
+							Type.String({
+								description:
+									"Short label shown in the priming message's markdown image ref.",
+							}),
+						),
+					}),
+				),
+			),
 		}),
 		execute: async (
 			_id: string,
@@ -70,6 +86,7 @@ export function buildProposeWorkspaceTool(
 				source_ref: string;
 				repo_id: string;
 				plan_message: string;
+				attachments?: Array<{ id: string; alt?: string }>;
 			},
 		) => {
 			if (accumulator.count >= budget.max) {
@@ -88,12 +105,20 @@ export function buildProposeWorkspaceTool(
 				sourceRef: params.source_ref,
 				repoId: params.repo_id,
 				planMessage: params.plan_message,
+				attachments: params.attachments?.map((a) => ({
+					id: a.id,
+					alt: a.alt,
+				})),
 			});
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: `Recorded proposal for ${params.source_type}/${params.source_ref}.`,
+						text: `Recorded proposal for ${params.source_type}/${params.source_ref}${
+							params.attachments?.length
+								? ` (with ${params.attachments.length} attachment${params.attachments.length === 1 ? "" : "s"})`
+								: ""
+						}.`,
 					},
 				],
 				details: { skipped: false },

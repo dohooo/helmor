@@ -56,6 +56,36 @@ function renderItems(items: InboxItem[], kind: "issue" | "pr"): string {
 }
 
 function buildTools({ scratch }: ProviderContext): unknown[] {
+	const saveAttachment = {
+		name: "github_save_attachment",
+		label: "GitHub · Save Attachment",
+		description:
+			"Download an image / asset URL embedded in a GitHub issue or PR body (e.g. user-images.githubusercontent.com) into staging. Pass the returned id in propose_workspace.attachments so the workspace agent can read it.",
+		parameters: Type.Object({
+			url: Type.String({
+				description: "Full HTTPS URL of the embedded image / asset.",
+			}),
+		}),
+		execute: async (_id: string, params: { url: string }) => {
+			const r = await callHost<{
+				id: string;
+				filename: string;
+				sizeBytes: number;
+			}>("forge.save_attachment", {
+				tickId: scratch.tickId,
+				url: params.url,
+			});
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Saved attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					},
+				],
+				details: r,
+			};
+		},
+	};
 	const listInbox = (
 		kind: "Issues" | "Prs",
 		toolName: string,
@@ -144,6 +174,7 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		),
 		viewItem("github_issue", "github_view_issue", "GitHub · View Issue"),
 		viewItem("github_pr", "github_view_pr", "GitHub · View PR"),
+		saveAttachment,
 	];
 }
 

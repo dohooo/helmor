@@ -2,7 +2,7 @@
 //! GitHub / GitLab inbox without reimplementing `gh search` / `glab
 //! issue list` in TypeScript.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Runtime};
@@ -20,8 +20,52 @@ pub async fn dispatch<R: Runtime>(
         "discover_login" => discover_login(params).await,
         "list_inbox_items" => list_inbox_items(params).await,
         "get_inbox_item_detail" => get_inbox_item_detail(params).await,
+        "save_attachment" => save_attachment(params).await,
         _ => Err(crate::sidecar_host::unknown_method(method)),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAttachmentParams {
+    tick_id: String,
+    /// HTTPS URL of an image embedded in an issue/PR body or comment.
+    /// GitHub user-content / GitLab uploads are public CDNs; no auth
+    /// header needed for the common case.
+    url: String,
+}
+
+async fn save_attachment(params: Value) -> Result<Value> {
+    let p: SaveAttachmentParams = serde_json::from_value(params)?;
+    let ext = guess_ext(&p.url);
+    let staged = crate::triage::attachments::reserve_attachment(&p.tick_id, ext.as_deref())?;
+    let response = reqwest::get(&p.url)
+        .await
+        .with_context(|| format!("GET {}", p.url))?;
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} fetching {}", response.status(), p.url);
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("read body of {}", p.url))?;
+    tokio::fs::write(&staged.path, &bytes).await?;
+    Ok(json!({
+        "id": staged.id,
+        "filename": staged.filename,
+        "sizeBytes": bytes.len(),
+    }))
+}
+
+fn guess_ext(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let last = path.rsplit('/').next()?;
+    let dot = last.rfind('.')?;
+    let ext = &last[dot + 1..];
+    if ext.is_empty() || ext.len() > 12 {
+        return None;
+    }
+    Some(ext.to_string())
 }
 
 fn parse_provider(s: &str) -> Result<ForgeProvider> {

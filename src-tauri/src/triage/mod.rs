@@ -1,6 +1,7 @@
 //! AI-triage: heartbeat-driven scan that creates AI workspaces.
 
 pub mod active_status;
+pub mod attachments;
 pub mod config;
 pub mod priming;
 pub mod scheduler;
@@ -17,7 +18,7 @@ pub use priming::{
 pub use scheduler::{spawn_scheduler, trigger_tick_now};
 pub use sync::{advance_sync, load_sync_map};
 pub use workspace_factory::{
-    create_ai_workspace, CreateAiWorkspaceParams, CreateAiWorkspaceResult,
+    create_ai_workspace, AttachmentRef, CreateAiWorkspaceParams, CreateAiWorkspaceResult,
 };
 
 pub const HEARTBEAT_SEC: u64 = 600;

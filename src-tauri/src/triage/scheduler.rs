@@ -105,6 +105,11 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     }
     store.record_outcome(&tick_id, kind, summary_text);
 
+    // GC staged attachments older than 24h — `create_ai_workspace` moves
+    // referenced files immediately, so anything still sitting around past
+    // that window is an unconsumed leftover.
+    super::attachments::sweep_stale_staging(Duration::from_secs(24 * 60 * 60));
+
     store.end();
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
     outcome.map(|_| tick_id)

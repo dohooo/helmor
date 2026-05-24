@@ -52,6 +52,37 @@ function renderItems(items: InboxItem[]): string {
 }
 
 function buildTools({ scratch }: ProviderContext): unknown[] {
+	const saveAttachment = {
+		name: "slack_save_attachment",
+		label: "Slack · Save Attachment",
+		description:
+			"Download a Slack file (image/gif/etc) into staging so it can be attached to a propose_workspace call. Pass the returned id in propose_workspace.attachments. Hand off to the workspace agent; you don't need to interpret the file content.",
+		parameters: Type.Object({
+			url: Type.String({
+				description:
+					"url_private or permalink from a Slack file blob (e.g. files.slack.com/...).",
+			}),
+		}),
+		execute: async (_id: string, params: { url: string }) => {
+			const r = await callHost<{
+				id: string;
+				filename: string;
+				sizeBytes: number;
+			}>("slack.save_attachment", {
+				tickId: scratch.tickId,
+				url: params.url,
+			});
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Saved Slack file as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					},
+				],
+				details: r,
+			};
+		},
+	};
 	const listWorkspaces = {
 		name: "slack_list_workspaces",
 		label: "Slack · List Workspaces",
@@ -188,7 +219,7 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		},
 	};
 
-	return [listWorkspaces, listInbox, searchMessages, getThread];
+	return [listWorkspaces, listInbox, searchMessages, getThread, saveAttachment];
 }
 
 export const slackProvider: TriageProvider = {

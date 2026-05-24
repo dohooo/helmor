@@ -75,6 +75,7 @@ export async function handleRunTriageTick(
 					sourceRef: proposal.sourceRef,
 					repoId: proposal.repoId,
 					planMessage: proposal.planMessage,
+					attachments: proposal.attachments ?? [],
 				},
 			});
 		}

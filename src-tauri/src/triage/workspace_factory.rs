@@ -4,10 +4,20 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::models::db;
+use crate::models::{db, workspaces as workspace_models};
+use crate::triage::attachments;
+use crate::workspace::helpers as workspace_helpers;
 use crate::workspace::lifecycle as wlifecycle;
 use crate::workspace_state::WorkspaceBranchIntent;
 use crate::workspace_status::WorkspaceStatus;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRef {
+    pub id: String,
+    #[serde(default)]
+    pub alt: Option<String>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +26,10 @@ pub struct CreateAiWorkspaceParams {
     pub source_ref: String,
     pub repo_id: String,
     pub plan_message: String,
+    /// Staged attachments to relocate into the workspace before the
+    /// priming message is written.
+    #[serde(default)]
+    pub attachments: Vec<AttachmentRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,11 +73,31 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
         .context("update workspaces.kind")?;
     }
 
+    // Move any staged attachments into the workspace before composing the
+    // priming text — the message references workspace-relative paths.
+    let workspace_root = workspace_models::load_workspace_record_by_id(&prepared.workspace_id)
+        .context("reload workspace record for attachment move")?
+        .and_then(|record| workspace_helpers::workspace_path(&record).ok());
+    let attachment_block = if let Some(root) = workspace_root.as_ref() {
+        render_attachments(&params.attachments, root)
+    } else {
+        String::new()
+    };
+
+    let mut full_message = params.plan_message.clone();
+    if !attachment_block.is_empty() {
+        if !full_message.ends_with('\n') {
+            full_message.push('\n');
+        }
+        full_message.push('\n');
+        full_message.push_str(&attachment_block);
+    }
+
     let message_id = uuid::Uuid::new_v4().to_string();
     let content_json = json!({
         "type": "assistant",
         "message": {
-            "content": [{ "type": "text", "text": params.plan_message }]
+            "content": [{ "type": "text", "text": full_message }]
         }
     })
     .to_string();
@@ -82,6 +116,42 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
         workspace_id: prepared.workspace_id,
         session_id: prepared.initial_session_id,
     })
+}
+
+/// Move every staged attachment into the workspace and return a markdown
+/// block referencing them. Failures on individual attachments are
+/// non-fatal — surface a placeholder line so the agent at least knows
+/// something was meant to be there.
+fn render_attachments(refs: &[AttachmentRef], workspace_root: &std::path::Path) -> String {
+    if refs.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["## Attachments".to_string()];
+    for r in refs {
+        match attachments::move_into_workspace(&r.id, workspace_root) {
+            Ok(moved) => {
+                let alt = r
+                    .alt
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&moved.filename);
+                lines.push(format!("- ![{alt}]({})", moved.workspace_relative_path));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    attachment_id = %r.id,
+                    "attachment move failed"
+                );
+                lines.push(format!(
+                    "- _(attachment {} unavailable — staging file missing)_",
+                    r.id
+                ));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn cleanup_orphan_workspace(workspace_id: &str) -> Result<()> {

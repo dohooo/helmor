@@ -227,6 +227,49 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 		},
 	};
 
+	const saveImage = {
+		name: "lark_save_image",
+		label: "Lark · Save Image",
+		description:
+			"Download a Lark message image (msg_type=image) into staging so it can be attached to a propose_workspace call. Returns an attachment id — pass it in propose_workspace.attachments. You don't need to look at the image yourself; the workspace's vision-capable agent will.",
+		parameters: Type.Object({
+			message_id: Type.String({ description: "om_ message id." }),
+			image_key: Type.String({
+				description:
+					"img_ key from the message content (post-type messages embed it as image_key).",
+			}),
+			extension: Type.Optional(
+				Type.String({
+					description: "Override filename extension (default png).",
+				}),
+			),
+		}),
+		execute: async (
+			_id: string,
+			params: { message_id: string; image_key: string; extension?: string },
+		) => {
+			const r = await callHost<{
+				id: string;
+				filename: string;
+				sizeBytes: number;
+			}>("lark.save_image", {
+				tickId: scratch.tickId,
+				messageId: params.message_id,
+				imageKey: params.image_key,
+				extension: params.extension,
+			});
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Saved Lark image as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					},
+				],
+				details: r,
+			};
+		},
+	};
+
 	const messagesGet = {
 		name: "lark_messages_get",
 		label: "Lark · Get Messages",
@@ -258,7 +301,7 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 		},
 	};
 
-	return [chatSearch, chatMessages, messagesSearch, messagesGet];
+	return [chatSearch, chatMessages, messagesSearch, messagesGet, saveImage];
 }
 
 export const larkProvider: TriageProvider = {

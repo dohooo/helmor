@@ -9,7 +9,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Runtime};
 
 use crate::models::slack_workspaces;
-use crate::slack::{api as slack_api, detail, inbox};
+use crate::slack::{api as slack_api, detail, files as slack_files, inbox};
 
 pub async fn dispatch<R: Runtime>(
     _app: AppHandle<R>,
@@ -21,8 +21,43 @@ pub async fn dispatch<R: Runtime>(
         "list_inbox" => list_inbox(params).await,
         "search_messages" => search_messages(params).await,
         "get_thread_detail" => get_thread_detail(params).await,
+        "save_attachment" => save_attachment(params).await,
         _ => Err(crate::sidecar_host::unknown_method(method)),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAttachmentParams {
+    tick_id: String,
+    /// `url_private` or `permalink_public` from a Slack file. We route via
+    /// `slack::files::resolve_to_path` so the on-disk cache + auth logic
+    /// stays in one place.
+    url: String,
+}
+
+async fn save_attachment(params: Value) -> Result<Value> {
+    let p: SaveAttachmentParams = serde_json::from_value(params)?;
+    let cached = tauri::async_runtime::spawn_blocking({
+        let url = p.url.clone();
+        move || slack_files::resolve_to_path(&url)
+    })
+    .await??;
+    let ext = cached
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_string);
+    let staged = crate::triage::attachments::reserve_attachment(&p.tick_id, ext.as_deref())?;
+    tokio::fs::copy(&cached, &staged.path).await?;
+    let size = tokio::fs::metadata(&staged.path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "id": staged.id,
+        "filename": staged.filename,
+        "sizeBytes": size,
+    }))
 }
 
 async fn list_workspaces() -> Result<Value> {

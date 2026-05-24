@@ -1,10 +1,12 @@
 //! `lark-cli im +chat-search` / `+chat-messages-list` / `+messages-search`
 //! / `+messages-mget` typed wrappers.
 
+use std::path::Path;
+
 use anyhow::Result;
 use serde_json::Value;
 
-use super::cli::run;
+use super::cli::{run, run_in};
 
 pub struct ChatSearch<'a> {
     pub query: Option<&'a str>,
@@ -122,6 +124,37 @@ pub async fn messages_get(message_ids: &str) -> Result<Value> {
         "messages-mget",
     )
     .await
+}
+
+/// Download an image / file resource from a Lark message. `kind` is
+/// "image" or "file". The output filename is relative (lark-cli rejects
+/// `..`), so we set the process cwd to the staging dir and write a flat
+/// filename underneath it.
+pub async fn download_resource(
+    message_id: &str,
+    kind: &str,
+    file_key: &str,
+    cwd: &Path,
+    output_filename: &str,
+) -> Result<()> {
+    run_in(
+        &[
+            "im",
+            "+messages-resources-download",
+            "--message-id",
+            message_id,
+            "--type",
+            kind,
+            "--file-key",
+            file_key,
+            "--output",
+            output_filename,
+        ],
+        Some(cwd),
+        "messages-resources-download",
+    )
+    .await?;
+    Ok(())
 }
 
 fn non_empty(s: &str) -> Option<&str> {
