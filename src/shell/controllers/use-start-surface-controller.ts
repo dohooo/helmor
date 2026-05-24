@@ -245,11 +245,9 @@ export function useStartSurfaceController(
 	}, [deps.viewMode]);
 
 	// Payload `mode` forces the initial mode for this open only; no payload
-	// honors the per-repo remembered mode.
+	// clears any prior transient override so the per-repo remembered mode wins.
 	useShellEvent("open-new-workspace", (event) => {
-		if (event.mode) {
-			setTransientModeOverride(event.mode);
-		}
+		setTransientModeOverride(event.mode ?? null);
 	});
 
 	// In local mode default to repo HEAD; worktree mode keeps stored default.
