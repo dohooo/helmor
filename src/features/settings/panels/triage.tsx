@@ -3,6 +3,7 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
+	Info,
 	MinusCircle,
 	Play,
 	Wrench,
@@ -329,32 +330,34 @@ function OutcomeLine({
 		);
 	}
 	if (o.kind === "noActionableItems") {
-		const line = (
-			<div
-				className={cn(
-					"flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground",
-					o.reason ? "cursor-help" : null,
-				)}
-			>
+		return (
+			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
 				<MinusCircle className="size-3.5 shrink-0" />
 				<span className="truncate">
 					Last tick · {when} · nothing actionable
 				</span>
+				{o.reason ? (
+					<TooltipProvider>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									aria-label="Why nothing was proposed"
+									className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
+								>
+									<Info className="size-3" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent
+								side="top"
+								className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
+							>
+								{o.reason}
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
+				) : null}
 			</div>
-		);
-		if (!o.reason) return line;
-		return (
-			<TooltipProvider>
-				<Tooltip>
-					<TooltipTrigger asChild>{line}</TooltipTrigger>
-					<TooltipContent
-						side="top"
-						className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
-					>
-						{o.reason}
-					</TooltipContent>
-				</Tooltip>
-			</TooltipProvider>
 		);
 	}
 	// failed
