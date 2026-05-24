@@ -4,12 +4,19 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Info,
+	MessagesSquare,
 	MinusCircle,
 	Play,
 	Wrench,
 	XCircle,
 } from "lucide-react";
+import type { ComponentType } from "react";
 import { useEffect, useMemo, useState } from "react";
+import {
+	GithubBrandIcon,
+	GitlabBrandIcon,
+	SlackBrandIcon,
+} from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,34 +40,43 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { SettingsReleaseBadge } from "../components/release-marker";
 
+type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
+
 // Keep in sync with sidecar/src/triage/providers/registry.ts.
 const PROVIDER_SPECS: ReadonlyArray<{
 	id: string;
 	displayName: string;
 	description: string;
+	Icon: ProviderIcon;
 }> = [
 	{
 		id: "slack",
 		displayName: "Slack",
 		description: "Scans Slack inbox / search across connected workspaces.",
+		Icon: SlackBrandIcon,
 	},
 	{
 		id: "lark",
 		displayName: "Lark / Feishu",
 		description:
 			"Scans messages via lark-cli. Sign in once with `lark-cli auth login`.",
+		// simple-icons doesn't ship a Lark/Feishu glyph; fall back to a
+		// generic chat icon so the row visually matches the other three.
+		Icon: MessagesSquare,
 	},
 	{
 		id: "gitlab",
 		displayName: "GitLab",
 		description:
 			"Scans GitLab inbox (issues/MRs). Sign in with `glab auth login`.",
+		Icon: GitlabBrandIcon,
 	},
 	{
 		id: "github",
 		displayName: "GitHub",
 		description:
 			"Scans GitHub inbox (issues/PRs). Sign in with `gh auth login`.",
+		Icon: GithubBrandIcon,
 	},
 ];
 
@@ -208,39 +224,71 @@ export function TriagePanel() {
 						hint="Toggle each integration; CLI auth must already be set up."
 					>
 						<div className="flex flex-col divide-y divide-border/40 rounded-md border border-border/60 bg-background/30">
-							{PROVIDER_SPECS.map((spec) => (
-								<div
-									key={spec.id}
-									className="flex items-center justify-between gap-3 px-3 py-2.5"
-								>
-									<div className="min-w-0">
-										<div className="text-ui font-medium">
-											{spec.displayName}
+							{PROVIDER_SPECS.map((spec) => {
+								const Icon = spec.Icon;
+								return (
+									<div
+										key={spec.id}
+										className="flex items-center justify-between gap-3 px-3 py-2.5"
+									>
+										<div className="flex min-w-0 items-start gap-2.5">
+											<Icon
+												size={16}
+												className="mt-0.5 shrink-0 text-foreground"
+											/>
+											<div className="min-w-0">
+												<div className="text-ui font-medium">
+													{spec.displayName}
+												</div>
+												<div className="text-mini text-muted-foreground">
+													{spec.description}
+												</div>
+											</div>
 										</div>
-										<div className="text-mini text-muted-foreground">
-											{spec.description}
-										</div>
+										<Switch
+											checked={draft.providers[spec.id] ?? false}
+											onCheckedChange={(c) => setProviderEnabled(spec.id, c)}
+										/>
 									</div>
-									<Switch
-										checked={draft.providers[spec.id] ?? false}
-										onCheckedChange={(c) => setProviderEnabled(spec.id, c)}
-									/>
-								</div>
-							))}
+								);
+							})}
 						</div>
 					</Field>
 
 					<div className="flex items-center justify-between gap-3">
 						<OutcomeLine last={lastOutcome} now={now} />
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={isRunning || trigger.isPending}
-							onClick={() => trigger.mutate()}
-						>
-							<Play className="size-3.5" />
-							{isRunning ? "Running…" : "Run a tick"}
-						</Button>
+						<div className="flex shrink-0 items-center gap-3">
+							<TooltipProvider>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div className="flex items-center gap-1.5 text-mini text-muted-foreground">
+											<span>Auto-run</span>
+											<Switch
+												checked={draft.autoRun}
+												onCheckedChange={(v) => commit({ autoRun: v })}
+												aria-label="Auto-run heartbeat"
+											/>
+										</div>
+									</TooltipTrigger>
+									<TooltipContent
+										side="top"
+										className="max-w-[260px] text-[11px] leading-5"
+									>
+										When on, a tick fires every 10 minutes. Overlapping ticks
+										are skipped. Off = ticks only run when you press Run now.
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={isRunning || trigger.isPending}
+								onClick={() => trigger.mutate()}
+							>
+								<Play className="size-3.5" />
+								{isRunning ? "Running…" : "Run now"}
+							</Button>
+						</div>
 					</div>
 
 					{isRunning && active ? (
@@ -265,12 +313,12 @@ function HeaderBar({
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0 flex-1">
 				<div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium leading-snug text-foreground">
-					<span className="min-w-0">Auto-triage</span>
+					<span className="min-w-0">Smart triage</span>
 					<SettingsReleaseBadge marker={{ kind: "feature" }} />
 				</div>
 				<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-					On a heartbeat, the local LLM scans enabled sources and creates
-					AI-prepared workspaces for actionable items.
+					The local LLM scans your enabled sources and creates AI-prepared
+					workspaces for actionable items.
 				</p>
 			</div>
 			<Switch

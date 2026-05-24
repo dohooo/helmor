@@ -14,6 +14,11 @@ const SETTINGS_KEY: &str = "app.triage_config";
 pub struct TriageConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// When true, the scheduler heartbeat actually fires every 10 min.
+    /// When false, only manual `Run now` triggers a tick. Defaults to
+    /// `true` so existing users' configs keep their heartbeat behaviour.
+    #[serde(default = "default_auto_run")]
+    pub auto_run: bool,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]
@@ -23,10 +28,15 @@ pub struct TriageConfig {
     pub providers: BTreeMap<String, bool>,
 }
 
+fn default_auto_run() -> bool {
+    true
+}
+
 impl Default for TriageConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            auto_run: true,
             system_prompt: String::new(),
             max_per_tick: 5,
             providers: BTreeMap::new(),

@@ -1909,6 +1909,9 @@ export type UiMutationEvent =
 
 export type TriageConfig = {
 	enabled: boolean;
+	/** Heartbeat on/off. When false the scheduler doesn't auto-fire; the
+	 *  Run-now button still works. */
+	autoRun: boolean;
 	systemPrompt: string;
 	maxPerTick: number;
 	/** provider_id → enabled */

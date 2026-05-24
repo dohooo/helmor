@@ -41,9 +41,11 @@ fn scheduler_loop<R: Runtime>(app: AppHandle<R>) {
                 continue;
             }
         };
-        // Triage requires Local LLM. Skip silently when LLM is off in settings.
+        // Triage requires Local LLM. Skip silently when LLM is off in
+        // settings, or when the user has paused the heartbeat (`auto_run`
+        // off — they can still trigger manually via the Run now button).
         let llm_on = crate::local_llm::load_settings().enabled;
-        if cfg.enabled && llm_on {
+        if cfg.enabled && cfg.auto_run && llm_on {
             if let Err(error) = run_tick(&app, &cfg) {
                 let msg = format!("{error:#}");
                 if !msg.contains("in flight") {
