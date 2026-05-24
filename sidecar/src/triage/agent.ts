@@ -55,6 +55,11 @@ export interface RunTriageOutcome {
 	finalMessage: string | null;
 	// True when the user clicked Stop.
 	cancelled: boolean;
+	// Providers whose preflight passed AND the tick completed normally
+	// (no MAX_TURNS abort, no user cancel). Rust uses this to gate
+	// `advance_sync` so preflight-failed or partially-scanned providers
+	// don't get their time floor bumped past unseen items.
+	scannedProviders: string[];
 }
 
 // Handle to the currently-running tick for Stop. Only one tick runs at a time.
@@ -117,6 +122,7 @@ export async function runTriageTick(
 
 	const providerHints: string[] = [];
 	const disabledProviders: { displayName: string; reason: string }[] = [];
+	const preflightOk: string[] = [];
 
 	// Cold-start fallback so a missing checkpoint doesn't trigger a full-history scan.
 	const coldStartFloor = new Date(
@@ -163,6 +169,7 @@ export async function runTriageTick(
 		for (const t of provider.buildTools(ctx)) tools.push(t);
 		const hint = provider.promptHint(ctx);
 		if (hint) providerHints.push(hint);
+		preflightOk.push(id);
 	}
 
 	const model = buildLocalModel(params.localModel);
@@ -266,17 +273,23 @@ export async function runTriageTick(
 		}
 
 		const proposals = accumulator.drain();
+		// Only advance sync floors for providers we actually scanned end-to-end.
+		// MAX_TURNS or user cancel ⇒ tick truncated, no advance for anything.
+		const completedNormally = !aborted && !cancelledByUser;
+		const scannedProviders = completedNormally ? preflightOk.slice() : [];
 		logger.info(`${logTag} agent.done`, {
 			proposalCount: proposals.length,
 			aborted,
 			cancelledByUser,
 			turnsRun: turnIndex,
 			finalMessage: lastAssistantText,
+			scannedProviders,
 		});
 		return {
 			proposals,
 			finalMessage: lastAssistantText,
 			cancelled: cancelledByUser,
+			scannedProviders,
 		};
 	} finally {
 		activeTick = null;

@@ -730,23 +730,38 @@ fn run_migrations(connection: &Connection) -> Result<()> {
     materialize_review_pr_model_defaults(connection)?;
 
     // Smart Triage columns (idempotent ALTERs for pre-triage upgrades).
-    add_column_if_missing(connection, "workspaces", "kind", "TEXT")?;
-    add_column_if_missing(
-        connection,
-        "workspaces",
-        "ai_priming_consumed",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "session_messages",
-        "is_ai_priming",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    // Must come after the ALTER above — old DBs would otherwise index a missing column.
-    connection
-        .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
-        .context("Failed to create idx_workspaces_kind")?;
+    if has_table(connection, "workspaces") {
+        // Match the fresh schema so a manual INSERT (which omits `kind`)
+        // resolves to 'manual' on upgraded and fresh DBs alike.
+        add_column_if_missing(
+            connection,
+            "workspaces",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'manual'",
+        )?;
+        // Backfill rows the earlier nullable-`TEXT` migration left as NULL.
+        connection
+            .execute_batch("UPDATE workspaces SET kind = 'manual' WHERE kind IS NULL")
+            .context("Failed to backfill workspaces.kind NULLs")?;
+        add_column_if_missing(
+            connection,
+            "workspaces",
+            "ai_priming_consumed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        // Index goes after the ALTER above — else old DBs would index a missing column.
+        connection
+            .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
+            .context("Failed to create idx_workspaces_kind")?;
+    }
+    if has_table(connection, "session_messages") {
+        add_column_if_missing(
+            connection,
+            "session_messages",
+            "is_ai_priming",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
 
     Ok(())
 }

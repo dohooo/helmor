@@ -98,6 +98,11 @@ export async function handleRunTriageTick(
 				message: outcome.finalMessage,
 			});
 		}
+		write({
+			id: requestId,
+			type: "triageScanned",
+			providers: outcome.scannedProviders,
+		});
 		if (outcome.cancelled) {
 			write({ id: requestId, type: "triageCancelled" });
 		}

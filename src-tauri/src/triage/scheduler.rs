@@ -18,6 +18,7 @@ use super::config::{enabled_provider_ids, load_config, TriageConfig};
 use super::sync::{advance_sync, load_sync_map};
 use super::workspace_factory::{create_ai_workspace, CreateAiWorkspaceParams};
 use super::HEARTBEAT_SEC;
+use std::sync::mpsc::RecvTimeoutError;
 
 static TICK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
@@ -123,7 +124,9 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             None,
         ),
     };
-    // Only advance sync when no items were lost, otherwise the next tick would skip them.
+    // Advance only providers the sidecar actually scanned end-to-end, and only
+    // when every proposal made it to a workspace. Anything else risks burying
+    // items past the next tick's time floor.
     let should_advance = matches!(
         &outcome,
         Ok(ExecuteOk {
@@ -133,9 +136,11 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
         })
     );
     if should_advance {
-        for pid in enabled_provider_ids(cfg) {
-            if let Err(error) = advance_sync(&pid, started_at) {
-                tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
+        if let Ok(ok) = &outcome {
+            for pid in &ok.scanned_providers {
+                if let Err(error) = advance_sync(pid, started_at) {
+                    tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
+                }
             }
         }
     }
@@ -162,6 +167,9 @@ pub struct ExecuteOk {
     pub cancelled: bool,
     /// Proposals that failed `create_ai_workspace`; gates `advance_sync`.
     pub workspace_failures: u32,
+    /// Providers the sidecar reports as fully scanned (preflight passed,
+    /// tick ran to normal completion). Empty when cancelled / MAX_TURNS.
+    pub scanned_providers: Vec<String>,
 }
 
 fn execute_tick<R: Runtime>(
@@ -177,6 +185,7 @@ fn execute_tick<R: Runtime>(
             summary: None,
             cancelled: false,
             workspace_failures: 0,
+            scanned_providers: Vec::new(),
         });
     }
 
@@ -221,16 +230,20 @@ fn execute_tick<R: Runtime>(
     let store = app.state::<ActiveStatusStore>();
     let mut proposals: Vec<CreateAiWorkspaceParams> = Vec::new();
     let mut summary_message: Option<String> = None;
+    let mut scanned_providers: Vec<String> = Vec::new();
     let mut got_terminal = false;
     let mut error_message: Option<String> = None;
     let mut cancelled = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(1800);
 
-    while std::time::Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let event = match rx.recv_timeout(remaining) {
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let event = match rx.recv_timeout(deadline - now) {
             Ok(event) => event,
-            Err(_) => break,
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
         };
         match event.event_type() {
             "triageProposal" => {
@@ -248,6 +261,14 @@ fn execute_tick<R: Runtime>(
                     .get("message")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
+            }
+            "triageScanned" => {
+                if let Some(arr) = event.raw.get("providers").and_then(Value::as_array) {
+                    scanned_providers = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                }
             }
             "triageCancelled" => {
                 cancelled = true;
@@ -281,6 +302,33 @@ fn execute_tick<R: Runtime>(
                 break;
             }
             _ => {}
+        }
+    }
+
+    // Timeout / channel drop without an `end`: tell the sidecar to abort and
+    // wait briefly for its terminal event before we release in-flight, so a
+    // new tick can't overlap the dying one.
+    if !got_terminal {
+        let stop_req = SidecarRequest {
+            id: Uuid::new_v4().to_string(),
+            method: "stopTriageTick".into(),
+            params: json!({ "tickId": tick_id }),
+        };
+        let _ = sidecar.send(&stop_req);
+        let cleanup_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let now = std::time::Instant::now();
+            if now >= cleanup_deadline {
+                break;
+            }
+            match rx.recv_timeout(cleanup_deadline - now) {
+                Ok(event) if matches!(event.event_type(), "end" | "error") => {
+                    got_terminal = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
         }
     }
 
@@ -318,6 +366,7 @@ fn execute_tick<R: Runtime>(
         created,
         workspace_failures,
         cancelled,
+        scanned = ?scanned_providers,
         "triage: tick complete"
     );
     ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
@@ -326,6 +375,7 @@ fn execute_tick<R: Runtime>(
         summary: summary_message,
         cancelled,
         workspace_failures,
+        scanned_providers,
     })
 }
 
