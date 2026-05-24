@@ -128,6 +128,13 @@ export function WorkspaceStartPage({
 		settings.shortcuts,
 		"startSurface.cycleRepository",
 	);
+	// Mode-picker shortcuts surfaced inside each menu item, matching the
+	// "label + kbd badges" pattern used elsewhere in the app.
+	const newWorktreeShortcut = getShortcut(settings.shortcuts, "workspace.new");
+	const justChatShortcut = getShortcut(
+		settings.shortcuts,
+		"workspace.justChat",
+	);
 
 	const selectNextRepository = useCallback(() => {
 		if (repositories.length === 0) {
@@ -540,6 +547,12 @@ export function WorkspaceStartPage({
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
 											<span>Just chat</span>
+											{justChatShortcut ? (
+												<InlineShortcutDisplay
+													hotkey={justChatShortcut}
+													className="ml-auto text-muted-foreground"
+												/>
+											) : null}
 										</DropdownMenuItem>
 									</>
 								) : (
@@ -559,6 +572,12 @@ export function WorkspaceStartPage({
 										>
 											<Split className="size-3.5 rotate-90" strokeWidth={1.8} />
 											<span>New worktree</span>
+											{newWorktreeShortcut ? (
+												<InlineShortcutDisplay
+													hotkey={newWorktreeShortcut}
+													className="ml-auto text-muted-foreground"
+												/>
+											) : null}
 										</DropdownMenuItem>
 										<DropdownMenuItem
 											onClick={() => onModeChange("chat")}
@@ -567,6 +586,12 @@ export function WorkspaceStartPage({
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
 											<span>Just chat</span>
+											{justChatShortcut ? (
+												<InlineShortcutDisplay
+													hotkey={justChatShortcut}
+													className="ml-auto text-muted-foreground"
+												/>
+											) : null}
 										</DropdownMenuItem>
 									</>
 								)}
