@@ -8,9 +8,7 @@
 //! Initialise once at startup via [`init_pools`]. All DB access goes
 //! through [`read_conn`] / [`write_conn`] or the closure helpers
 //! [`read`] / [`write_transaction`].
-use std::cell::Cell;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
 use std::panic::Location;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -23,60 +21,6 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 use tauri::async_runtime::Mutex;
 
 pub type PooledConn = PooledConnection<SqliteConnectionManager>;
-
-thread_local! {
-    /// Number of live write borrows on the current thread. Bumped by
-    /// [`write_conn`] and cleared by [`WriteConn`]'s `Drop`. Reentrant
-    /// `write_conn()` from the same thread fails fast instead of
-    /// dead-locking on the pool's 30 s `connection_timeout`.
-    ///
-    /// Counter (not bool) so a future `write_transaction` nested inside
-    /// another correctly-released borrow still works without panicking
-    /// off-by-one — but in practice it should never go above 1.
-    ///
-    /// Thread-local is sound here because every `write_conn` caller is
-    /// either synchronous Rust code or runs inside `spawn_blocking`,
-    /// both of which pin a single OS thread for the lifetime of the
-    /// borrow. Async tasks that get scheduled across threads never
-    /// hold a `WriteConn` across an `.await`, so they can't observe
-    /// stale TLS values.
-    static WRITE_BORROW_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// RAII handle to the writer connection. Wraps the raw `PooledConn` so
-/// we can run a `Drop` impl that clears the reentrancy counter, and
-/// exposes `&Connection` / `&mut Connection` through `Deref` /
-/// `DerefMut` so callers continue to write `conn.execute(...)` etc.
-/// unchanged.
-pub struct WriteConn(PooledConn);
-
-impl Drop for WriteConn {
-    fn drop(&mut self) {
-        WRITE_BORROW_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
-    }
-}
-
-impl std::fmt::Debug for WriteConn {
-    // `PooledConnection` doesn't implement `Debug`, but `.unwrap()` /
-    // `.expect()` on `Result<WriteConn>` requires it. Render a short
-    // placeholder rather than digging into the live SQLite handle.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WriteConn").finish_non_exhaustive()
-    }
-}
-
-impl Deref for WriteConn {
-    type Target = Connection;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for WriteConn {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 
 /// Serializes FS-mutating operations on a workspace (worktree creation /
 /// removal / reset) together with the DB row update, so concurrent commands
@@ -280,38 +224,9 @@ pub fn read_conn() -> Result<PooledConn> {
 /// Borrow the writer connection. Pool `max_size = 1`, so callers serialize
 /// at the pool layer — no SQLITE_BUSY from intra-process contention.
 /// Hold for as short as possible; long-held writes starve all other writers.
-///
-/// Reentrancy guard: if the *current thread* already holds a [`WriteConn`],
-/// this returns an error immediately instead of dead-locking on the
-/// 30 s pool timeout. The Rust call stack inside the same thread is
-/// the only place a single-writer pool can dead-lock against itself,
-/// and the error message names the second caller's file:line so the
-/// owning fn can be refactored to either drop the outer borrow first
-/// or take `&Connection` / `&Transaction` instead of borrowing again.
 #[track_caller]
-pub fn write_conn() -> Result<WriteConn> {
+pub fn write_conn() -> Result<PooledConn> {
     let caller = Location::caller();
-    let depth = WRITE_BORROW_DEPTH.with(|d| d.get());
-    if depth > 0 {
-        tracing::error!(
-            caller_file = caller.file(),
-            caller_line = caller.line(),
-            depth,
-            "db: reentrant write_conn() on a thread that already holds one — \
-             refactor the caller to drop the outer borrow first, or take \
-             &Connection / &Transaction instead of borrowing again. Falling \
-             into the pool here would dead-lock for {}s.",
-            POOL_GET_TIMEOUT.as_secs()
-        );
-        return Err(anyhow!(
-            "Reentrant write_conn() at {}:{} — this thread already holds \
-             the write connection. Drop the outer borrow first, take \
-             &Connection in your helper, or wrap the whole sequence in \
-             db::write_transaction().",
-            caller.file(),
-            caller.line()
-        ));
-    }
     with_bundle(|bundle| {
         let start = std::time::Instant::now();
         let conn = bundle.write.get().map_err(|e| {
@@ -334,10 +249,7 @@ pub fn write_conn() -> Result<WriteConn> {
                 "db: slow write_conn borrow — another writer held the pool"
             );
         }
-        // Increment AFTER the borrow succeeds so a borrow failure
-        // doesn't leave the counter stuck.
-        WRITE_BORROW_DEPTH.with(|d| d.set(d.get() + 1));
-        Ok(WriteConn(conn))
+        Ok(conn)
     })
 }
 
@@ -352,13 +264,7 @@ where
 }
 
 /// Run a write closure inside a transaction. Commits on Ok, rolls back on Err.
-///
-/// Prefer this over `write_conn()` + multiple `conn.execute(...)` when
-/// the unit of work is a sequence of writes that should be atomic.
-/// Helpers called from within the closure should take `&Connection` or
-/// `&Transaction` rather than calling `write_conn()` themselves — the
-/// pool only has one writer, so a nested borrow would dead-lock (and
-/// the reentrancy guard in `write_conn` now catches it explicitly).
+#[allow(dead_code)]
 pub fn write_transaction<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&Transaction) -> Result<T>,
@@ -461,76 +367,6 @@ mod tests {
             "unrelated writes starved by streaming: {:?}",
             elapsed,
         );
-    }
-
-    #[test]
-    fn reentrant_write_conn_fails_fast() {
-        // Reentrancy guard: if the same thread already holds a write
-        // borrow and tries to borrow again, we must error out in <100ms
-        // rather than blocking on the 30s pool timeout. This is the
-        // class of bug that hid in `service::send_message` for months —
-        // a single-writer pool can dead-lock against itself silently,
-        // and the only signal is "everything is slow for half a minute".
-        let _env = test_env();
-        let outer = write_conn().expect("first borrow should succeed");
-
-        let start = std::time::Instant::now();
-        let result = write_conn();
-        let elapsed = start.elapsed();
-
-        assert!(
-            result.is_err(),
-            "second borrow on the same thread must error, not succeed",
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(100),
-            "reentrant borrow should fail in <100ms, took {elapsed:?}",
-        );
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("Reentrant"),
-            "error must name the failure mode so the caller can fix it: {msg}",
-        );
-
-        // Drop the outer borrow and confirm a fresh borrow on the same
-        // thread is now fine — the counter must clear correctly so we
-        // don't accidentally permanently lock out the thread.
-        drop(outer);
-        let _again = write_conn().expect("borrow after drop should succeed");
-    }
-
-    #[test]
-    fn write_transaction_runs_nested_helpers_without_reentrancy() {
-        // The whole point of `write_transaction` is to give multi-step
-        // writes a single borrow + atomic commit. Helpers that take
-        // `&Connection` or `&Transaction` should slot in without ever
-        // calling `write_conn()` themselves. This test pins that
-        // contract so a future "convenience" refactor that adds a
-        // nested `write_conn()` call inside a transaction-using helper
-        // is caught by CI.
-        let _env = test_env();
-        write_conn()
-            .unwrap()
-            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)")
-            .unwrap();
-
-        fn insert_via_borrowed(conn: &Connection, id: i64, v: i64) -> Result<()> {
-            conn.execute("INSERT INTO t (id, v) VALUES (?1, ?2)", [id, v])?;
-            Ok(())
-        }
-
-        write_transaction(|tx| {
-            insert_via_borrowed(tx, 1, 10)?;
-            insert_via_borrowed(tx, 2, 20)?;
-            Ok(())
-        })
-        .expect("transaction with borrowed helpers should commit");
-
-        let count: i64 = read_conn()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 2);
     }
 
     #[test]

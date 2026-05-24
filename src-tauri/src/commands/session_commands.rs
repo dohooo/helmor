@@ -1,6 +1,8 @@
+use anyhow::Context;
+
 use crate::{
     agents::{self, ActionKind},
-    pipeline, sessions,
+    db, pipeline, sessions,
 };
 
 use super::common::{run_blocking, CmdResult};
@@ -263,13 +265,21 @@ pub async fn update_session_settings(
     fast_mode: Option<bool>,
 ) -> CmdResult<()> {
     run_blocking(move || {
-        sessions::update_session_settings(
-            &session_id,
-            model.as_deref(),
-            effort_level.as_deref(),
-            permission_mode.as_deref(),
-            fast_mode,
-        )
+        let connection = db::write_conn()?;
+        connection
+            .execute(
+                r#"
+                UPDATE sessions SET
+                  model = COALESCE(?2, model),
+                  effort_level = COALESCE(?3, effort_level),
+                  permission_mode = COALESCE(?4, permission_mode),
+                  fast_mode = COALESCE(?5, fast_mode)
+                WHERE id = ?1
+                "#,
+                rusqlite::params![session_id, model, effort_level, permission_mode, fast_mode],
+            )
+            .context("Failed to update session settings")?;
+        Ok(())
     })
     .await
 }

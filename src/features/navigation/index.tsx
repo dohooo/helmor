@@ -385,130 +385,6 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		});
 	}, [archivedRows, groups]);
 
-	// ── Insertion animation: FLIP slide for new workspaces ─────────────
-	//
-	// Why FLIP: the virtualizer positions every row via `transform:
-	// translateY(start)`. When a new workspace appears, React commits the
-	// new `start` synchronously — by the time any `useEffect` could opt
-	// into a `transition`, the new transform is already painted, so a
-	// CSS transition has nothing to animate from. FLIP fixes this by
-	// playing the animation *from* the previous position to the new one
-	// in `useLayoutEffect`, which runs after commit but BEFORE paint.
-	//
-	// Mechanics: we keep a ref of last-render `start` values keyed by
-	// virtual key. After every render we diff: if (a) at least one row's
-	// id is brand-new and (b) some visible rows shifted, we replay each
-	// shifted wrapper's translateY from old → new via Web Animations API.
-	// `fill: 'none'` means the animation hands the property back to the
-	// inline style on completion — no jump, no permanent override.
-	//
-	// Scoping: we only run when a NEW id appears. Section collapse/expand,
-	// status reorders, and scroll recycling don't touch the animation
-	// path — those keep their original snap behavior.
-	const seenWorkspaceIdsRef = useRef<Set<string> | null>(null);
-	const prevVirtualStartsRef = useRef<Map<string, number>>(new Map());
-	const wrapperRefsByKey = useRef<Map<string, HTMLDivElement>>(new Map());
-	const flipAnimationsRef = useRef<Map<string, Animation>>(new Map());
-
-	const allWorkspaceIds = useMemo(() => {
-		const ids = new Set<string>();
-		for (const group of groups) {
-			for (const row of group.rows) ids.add(row.id);
-		}
-		for (const row of archivedRows) ids.add(row.id);
-		return ids;
-	}, [groups, archivedRows]);
-
-	// Drives FLIP. `useLayoutEffect` so the animation is queued on the same
-	// frame React commits the new transforms — no flicker.
-	// No deps: must run on every render so prev-starts stays in sync with
-	// scroll-driven recycling. The body is O(visible rows) and short-circuits
-	// to a single Map rebuild when nothing changed.
-	useLayoutEffect(() => {
-		const visibleItems = virtualizer.getVirtualItems();
-		const nextStarts = new Map<string, number>();
-		for (const v of visibleItems) {
-			nextStarts.set(String(v.key), v.start);
-		}
-
-		const seen = seenWorkspaceIdsRef.current;
-		const isFirstMeaningfulRender =
-			seen === null || (seen.size === 0 && allWorkspaceIds.size > 0);
-
-		if (isFirstMeaningfulRender) {
-			seenWorkspaceIdsRef.current = allWorkspaceIds;
-			prevVirtualStartsRef.current = nextStarts;
-			return;
-		}
-
-		const justAdded: string[] = [];
-		for (const id of allWorkspaceIds) {
-			if (!seen.has(id)) justAdded.push(id);
-		}
-		seenWorkspaceIdsRef.current = allWorkspaceIds;
-
-		if (justAdded.length === 0) {
-			prevVirtualStartsRef.current = nextStarts;
-			return;
-		}
-
-		// Slide every visible wrapper that shifted, from old → new start.
-		// Wrapped in try/catch so that any environment without full Web
-		// Animations API support (e.g. jsdom in tests) silently degrades
-		// to the existing snap behavior instead of breaking the commit.
-		const prevStarts = prevVirtualStartsRef.current;
-		for (const v of visibleItems) {
-			const key = String(v.key);
-			const prevStart = prevStarts.get(key);
-			if (prevStart === undefined) continue;
-			const delta = prevStart - v.start;
-			if (Math.abs(delta) < 0.5) continue;
-			const node = wrapperRefsByKey.current.get(key);
-			if (!node || typeof node.animate !== "function") continue;
-
-			try {
-				// Cancel any in-flight FLIP on this wrapper so back-to-back
-				// inserts don't double-animate from a stale origin.
-				const inFlight = flipAnimationsRef.current.get(key);
-				if (inFlight) inFlight.cancel();
-
-				const animation = node.animate(
-					[
-						{ transform: `translateY(${prevStart}px)` },
-						{ transform: `translateY(${v.start}px)` },
-					],
-					{
-						duration: 240,
-						easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-						fill: "none",
-					},
-				);
-				flipAnimationsRef.current.set(key, animation);
-				animation.finished
-					.catch(() => {
-						/* cancelled — ignore */
-					})
-					.finally(() => {
-						if (flipAnimationsRef.current.get(key) === animation) {
-							flipAnimationsRef.current.delete(key);
-						}
-					});
-			} catch {
-				/* WAAPI unavailable — fall back to snap. */
-			}
-		}
-
-		prevVirtualStartsRef.current = nextStarts;
-	});
-
-	useEffect(() => {
-		const animations = flipAnimationsRef.current;
-		return () => {
-			for (const a of animations.values()) a.cancel();
-			animations.clear();
-		};
-	}, []);
-
 	// Auto-expand the group containing the selected workspace, but ONLY when
 	// the selection actually changes — not on every groups refetch (window
 	// focus, invalidation, status change). Without this guard, collapsed
@@ -1263,18 +1139,10 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					}}
 				>
 					{virtualizer.getVirtualItems().map((vItem) => {
-						const key = String(vItem.key);
 						const item = flatItems[vItem.index];
 						return (
 							<div
 								key={vItem.key}
-								ref={(node) => {
-									if (node === null) {
-										wrapperRefsByKey.current.delete(key);
-									} else {
-										wrapperRefsByKey.current.set(key, node);
-									}
-								}}
 								style={{
 									position: "absolute",
 									top: 0,
@@ -1290,11 +1158,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 									// false and any layout shift caused by the
 									// optimistic commit (status/repo lane change,
 									// reorder, etc.) snaps instantly into place — no
-									// landing animation. FLIP insertion animations
-									// run via WAAPI and override `transform` while
-									// they play, then hand back to the inline style
-									// on finish — they coexist with the drag
-									// transition without fighting it.
+									// landing animation.
 									transition:
 										isAnyDragging && item.kind !== "drop-placeholder"
 											? "transform 150ms cubic-bezier(0.16, 1, 0.3, 1)"

@@ -84,13 +84,6 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-# Screen / window capture utility (`commands::screen_capture`). Kept as
-# a general Helmor capability for future agent / CLI re-exposure; no
-# active caller today. `xcap` is the maintained cross-platform successor
-# to the deprecated `screenshots` crate; `image` provides the
-# RgbaImage / PNG / JPEG encoder dependency.
-xcap = "0.8"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # libc backs Unix process groups, signals, and PTY handling.
 # Windows support will need platform-specific replacements before this can be gated.
@@ -99,12 +92,6 @@ version = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-# `core_graphics::access::ScreenCaptureAccess` wraps
-# `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess` for
-# `commands::screen_capture`'s permission gate. Sync `bool` API; no
-# other crate needs core-graphics today, so it sits in the macOS-only
-# block.
-core-graphics = "0.25"
 security-framework = "3"
 security-framework-sys = "2"
 
