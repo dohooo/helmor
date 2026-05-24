@@ -244,14 +244,10 @@ export function useStartSurfaceController(
 		}
 	}, [deps.viewMode]);
 
-	// `Cmd+N` / `Cmd+Shift+N` publish this event with a `mode` payload to
-	// force the start composer's initial mode for the current open without
-	// writing to settings. Plain `open-new-workspace` (no payload) leaves
-	// the persisted preference untouched.
+	// Payload `mode` forces the initial mode for this open only; no payload
+	// clears any prior transient override so the per-repo remembered mode wins.
 	useShellEvent("open-new-workspace", (event) => {
-		if (event.mode) {
-			setTransientModeOverride(event.mode);
-		}
+		setTransientModeOverride(event.mode ?? null);
 	});
 
 	// In local mode default to repo HEAD; worktree mode keeps stored default.
