@@ -487,11 +487,18 @@ export class CodexAppServerManager implements SessionManager {
 					: resolution.action === "decline"
 						? "decline"
 						: "cancel";
+			// Forward `_meta.persist` so Codex remembers session/always allow.
+			const meta =
+				(resolution.action === "submit" || resolution.action === "decline") &&
+				resolution.meta &&
+				Object.keys(resolution.meta).length > 0
+					? resolution.meta
+					: null;
 			ctx.server.sendResponse(pending.jsonRpcId, {
 				action,
 				content:
 					resolution.action === "submit" ? (resolution.content ?? null) : null,
-				_meta: null,
+				_meta: meta,
 			});
 		} else {
 			const answers =
@@ -917,6 +924,12 @@ export class CodexAppServerManager implements SessionManager {
 							? p.message
 							: "Server requested input.";
 
+					// Forward `_meta` opaquely (carries codex_approval_kind + persist).
+					const elicitationMeta =
+						p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
+							? (p._meta as Record<string, unknown>)
+							: undefined;
+
 					this.pendingUserInputs.set(userInputId, {
 						kind: "mcp-elicitation",
 						jsonRpcId: req.id,
@@ -944,13 +957,21 @@ export class CodexAppServerManager implements SessionManager {
 							userInputId,
 							serverName,
 							message,
-							{ kind: "form", schema },
+							{
+								kind: "form",
+								schema,
+								...(elicitationMeta ? { meta: elicitationMeta } : {}),
+							},
 						);
 					}
 					logger.debug(`Codex MCP elicitation request`, {
 						userInputId,
 						serverName,
 						mode: p.mode,
+						approvalKind:
+							typeof elicitationMeta?.codex_approval_kind === "string"
+								? elicitationMeta.codex_approval_kind
+								: undefined,
 					});
 					return;
 				}

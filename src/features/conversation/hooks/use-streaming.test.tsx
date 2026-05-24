@@ -336,6 +336,7 @@ describe("useConversationStreaming", () => {
 			"tool-1",
 			"submit",
 			{ questions: [], answers: { Q: "A" } },
+			undefined,
 		);
 		expect(apiMocks.startAgentMessageStream).not.toHaveBeenCalled();
 	});
@@ -1493,6 +1494,7 @@ describe("useConversationStreaming", () => {
 			"elicitation-1",
 			"submit",
 			{ name: "Helmor" },
+			undefined,
 		);
 		expect(result.current.pendingUserInput).toBeNull();
 		expect(result.current.isSending).toBe(true);

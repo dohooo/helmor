@@ -471,6 +471,9 @@ pub struct UserInputResponseRequest {
     /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
+    /// Provider-specific meta (e.g. Codex `{ persist: "session" }`). Opaque.
+    #[serde(default)]
+    pub meta: Option<Value>,
 }
 
 #[tauri::command]
@@ -490,6 +493,7 @@ pub async fn respond_to_user_input(
             "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
+            "meta": request.meta,
         }),
     };
     sidecar

@@ -9,6 +9,7 @@ import {
 	ExternalLink,
 	Globe,
 	Info,
+	Settings2,
 	ShieldQuestion,
 	X,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils";
 import type {
 	ElicitationFormField,
 	ElicitationFormViewModel,
+	ElicitationToolApprovalViewModel,
 	ElicitationUrlViewModel,
 	UnsupportedElicitationViewModel,
 } from "../elicitation-schema";
@@ -735,6 +737,89 @@ function UrlElicitationPanel({
 	);
 }
 
+/**
+ * Codex MCP tool-call approval panel. Negative path sends `"decline"`
+ * (not `"cancel"`) so the agent's error reads "user rejected" and it
+ * tries a different approach instead of treating the turn as aborted.
+ */
+function ToolApprovalElicitationPanel({
+	userInput,
+	viewModel,
+	disabled,
+	onResponse,
+}: {
+	userInput: PendingUserInput;
+	viewModel: ElicitationToolApprovalViewModel;
+	disabled: boolean;
+	onResponse: UserInputResponseHandler;
+}) {
+	const handleAccept = useCallback(
+		(persist: "session" | "always" | null) => {
+			onResponse(userInput, "submit", {
+				content: {},
+				...(persist ? { meta: { persist } } : {}),
+			});
+		},
+		[userInput, onResponse],
+	);
+
+	return (
+		<UserInputCard>
+			<InteractionHeader
+				icon={Settings2}
+				title={viewModel.serverName}
+				description={
+					viewModel.message ||
+					"This MCP tool needs your approval before it can run."
+				}
+			/>
+
+			<InteractionFooter>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={disabled}
+					onClick={() => onResponse(userInput, "decline")}
+				>
+					<X className="size-3.5" strokeWidth={2} />
+					<span>Decline</span>
+				</Button>
+				{viewModel.allowAlways ? (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={disabled}
+						onClick={() => handleAccept("always")}
+					>
+						<Check className="size-3.5" strokeWidth={2} />
+						<span>Always allow</span>
+					</Button>
+				) : null}
+				{viewModel.allowSession ? (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={disabled}
+						onClick={() => handleAccept("session")}
+					>
+						<Check className="size-3.5" strokeWidth={2} />
+						<span>Allow for session</span>
+					</Button>
+				) : null}
+				<Button
+					variant="default"
+					size="sm"
+					disabled={disabled}
+					onClick={() => handleAccept(null)}
+				>
+					<Check className="size-3.5" strokeWidth={2} />
+					<span>Allow</span>
+				</Button>
+			</InteractionFooter>
+		</UserInputCard>
+	);
+}
+
 function UnsupportedElicitationPanel({
 	userInput,
 	viewModel,
@@ -793,6 +878,17 @@ export function ElicitationRenderer({
 	if (viewModel.kind === "url") {
 		return (
 			<UrlElicitationPanel
+				userInput={userInput}
+				viewModel={viewModel}
+				disabled={disabled}
+				onResponse={onResponse}
+			/>
+		);
+	}
+
+	if (viewModel.kind === "tool-approval") {
+		return (
+			<ToolApprovalElicitationPanel
 				userInput={userInput}
 				viewModel={viewModel}
 				disabled={disabled}
