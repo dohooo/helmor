@@ -30,34 +30,11 @@ function diag(event: string, data?: Record<string, unknown>) {
  *  Executor meta tools handle external MCP sources. Helmor native
  *  tools run directly in-process through Rust typed handlers.
  */
-type ToolName =
-	| "search_mcp_tools"
-	| "describe_mcp_tool"
-	| "call_mcp_tool"
-	| "approve_mcp_call"
-	| "wait_for_user"
-	| "end_session"
-	| "start_planner_poc"
-	| "ask_planner"
-	| "describe_local_tools"
-	| "list_workspaces"
-	| "show_workspace"
-	| "create_workspace"
-	| "create_workspace_and_send"
-	| "create_workspace_variants"
-	| "set_workspace_status"
-	| "archive_workspace"
-	| "permanently_delete_workspace"
-	| "run_workspace_action"
-	| "run_workspace_script"
-	| "list_sessions"
-	| "search_sessions"
-	| "get_session_messages"
-	| "stop_session"
-	| "send_prompt"
-	| "list_repos"
-	| "select_workspace"
-	| "capture_screen";
+// Reception-only tool surface. Worker-side tools never appear here —
+// they're invoked through the planner agent loop in Rust, not through
+// rt's WebRTC dataChannel. Keep in sync with
+// `voice_agent::is_reception_tool` in `src-tauri/`.
+type ToolName = "ask_planner" | "wait_for_user";
 
 /** Re-export of the Rust-side mutation kind enum. Kept as a TS type
  *  alias rather than its own union so they can't drift independently. */
@@ -66,26 +43,70 @@ export type AgentMutationKind = VoiceToolMutationKind;
 const MIN_RESPONSE_CREATE_REMAINING_TOKENS = 5_000;
 const MAX_RATE_LIMIT_WAIT_MS = 15_000;
 
-// ─── Phase-0 PoC harness ─────────────────────────────────────────────
-// Validates that external `response.create` calls can drive `gpt-realtime-2`
-// to speak a sequence of short lines after a tool ack — the foundation
-// for the planned "rt = voice frontend, planner = reasoning backend"
-// architecture. Five lines, one per turn, serialised on `response.done`.
-// Strip this block (and the `start_planner_poc` tool) once Phase 0 closes.
-const POC_LINES: readonly string[] = [
-	"Hmm, let me think about that for a moment.",
-	"Still looking — checking the workspaces now.",
-	"Halfway there. Cross-referencing what I found.",
-	"Almost done. Just pulling the last bit of context.",
-	"All set. That's the end of the test sequence.",
-];
-
-/** Strict, single-line speaking instruction. We deliberately pin the
- *  text via "exactly" + quotes because rt likes to paraphrase otherwise.
- *  Tone hint kept short — long instructions blow the per-response
- *  budget when these fire back-to-back. */
-function buildPocInstruction(line: string): string {
+// ─── Say queue — Reception's "voice these lines verbatim" mechanism ──
+// Populated by `handlePlannerEvent` as the Worker emits `say` / `final`
+// events. Drained one item per rt `response.done` so each gets its own
+// audio response, and eagerly pumped when the Worker sends a fresh Say
+// while rt is idle. Cleared on user interruption, response cancel, or
+// dispatcher reset. (Same mechanism that validated Phase-0; the PoC
+// harness has since been removed but the queue stays as planner
+// infrastructure.)
+function buildSayInstruction(line: string): string {
 	return `Speak exactly this single short line in a natural voice, then stop. Do not add anything before or after it: "${line}"`;
+}
+
+/** Map a planner-side Helmor tool name to a short Chinese verb phrase
+ *  for the voice bar. Falls back to the raw name when the tool isn't
+ *  listed — humanise new tools here as the Worker catalog grows. */
+function humanizePlannerTool(name: string): string {
+	switch (name) {
+		case "list_workspaces":
+			return "查看 workspace";
+		case "show_workspace":
+			return "查看 workspace";
+		case "list_repos":
+			return "查看仓库";
+		case "list_sessions":
+			return "查 session";
+		case "search_sessions":
+			return "搜 session";
+		case "get_session_messages":
+			return "读 session 消息";
+		case "create_workspace":
+		case "create_workspace_and_send":
+		case "create_workspace_variants":
+			return "创建 workspace";
+		case "set_workspace_status":
+			return "更新状态";
+		case "archive_workspace":
+			return "归档 workspace";
+		case "permanently_delete_workspace":
+			return "删除 workspace";
+		case "run_workspace_action":
+			return "运行操作";
+		case "run_workspace_script":
+			return "运行脚本";
+		case "send_prompt":
+			return "派发任务";
+		case "stop_session":
+			return "停止 session";
+		case "select_workspace":
+			return "切换 workspace";
+		case "search_mcp_tools":
+			return "搜索外部工具";
+		case "describe_mcp_tool":
+			return "查工具参数";
+		case "call_mcp_tool":
+			return "调用外部工具";
+		case "approve_mcp_call":
+			return "批准外部调用";
+		case "capture_screen":
+			return "看屏幕";
+		case "end_session":
+			return "准备结束";
+		default:
+			return name;
+	}
 }
 
 function sleep(ms: number) {
@@ -171,6 +192,12 @@ type DispatcherOptions = {
 		workspaceId: string,
 		actionKind: VoiceDispatchActionKind,
 	) => void;
+	/** Push a status label onto the voice bar. Called when the Worker
+	 *  starts/finishes a Helmor tool, or explicitly via the planner's
+	 *  `show_status(text)` tool. `null` clears the label and lets the
+	 *  bar drop back to its default "listening" / "speaking" state.
+	 *  Implementation lives in `use-realtime-sequence.ts`. */
+	onPlannerStatus?: (label: string | null) => void;
 };
 
 export type ToolDispatcher = {
@@ -209,6 +236,11 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 	// idle, the next Say fires immediately rather than waiting for the
 	// next organic response.done.
 	let responseInFlight = false;
+	// `pendingEndSession` is set when the Worker invokes `end_session`.
+	// We defer actually tearing down the WebRTC session until the say
+	// queue has fully drained — that way the goodbye line voiced via
+	// `final` finishes playing before we close the channel.
+	let pendingEndSession = false;
 
 	function reset() {
 		disposed = true;
@@ -217,11 +249,13 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 		tokenBudget = null;
 		pocQueue = [];
 		pocActive = false;
+		pendingEndSession = false;
 		if (activePlannerTurnId) {
 			void abortPlannerTurn(activePlannerTurnId).catch(() => {});
 			activePlannerTurnId = null;
 		}
 		responseInFlight = false;
+		opts.onPlannerStatus?.(null);
 	}
 
 	function clearPocQueue(reason: string) {
@@ -232,11 +266,19 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			reason,
 			remaining: pocQueue.length,
 			hadActivePlanner: activePlannerTurnId !== null,
+			cancelledPendingEnd: pendingEndSession,
 		});
 		pocQueue = [];
 		pocActive = false;
-		// If a planner turn is still in flight, abort it so GPT-5 stops
-		// emitting more say/final events into a queue we just emptied.
+		// Drop the deferred teardown — the user interrupted before the
+		// goodbye finished, so they probably want to keep talking.
+		pendingEndSession = false;
+		// Clear voice-bar status — user is taking over, no more
+		// "thinking…" badge.
+		opts.onPlannerStatus?.(null);
+		// If a planner turn is still in flight, abort it so the Worker
+		// stops emitting more say/final events into a queue we just
+		// emptied.
 		if (activePlannerTurnId) {
 			const turnId = activePlannerTurnId;
 			activePlannerTurnId = null;
@@ -256,6 +298,18 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 				// "pump on response.done" path.
 				diag("poc-queue-drained", {});
 				pocActive = false;
+				// Worker requested session teardown: now that the goodbye
+				// line has been voiced and the queue is empty, ask rt to
+				// close. The 1500ms delay matches the rt-side end_session
+				// path and lets the audio buffer flush.
+				if (pendingEndSession) {
+					const fireEnd = opts.onEndSession;
+					pendingEndSession = false;
+					if (fireEnd) {
+						diag("end-session-scheduled", { delayMs: 1500 });
+						setTimeout(fireEnd, 1500);
+					}
+				}
 			}
 			return;
 		}
@@ -271,7 +325,7 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			type: "response.create",
 			response: {
 				output_modalities: ["audio"],
-				instructions: buildPocInstruction(line),
+				instructions: buildSayInstruction(line),
 				// `metadata` rides through `response.done` unchanged so we
 				// can tell PoC/planner-driven responses apart from organic
 				// ones in the diag stream. Useful when correlating timing.
@@ -311,11 +365,21 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 					text: event.text,
 				});
 				if (activePlannerTurnId !== event.turnId) return;
+				// Clear voice-bar status — the final answer is about to
+				// be voiced and the bar transitions to "speaking" on its
+				// own once rt's response.created fires.
+				opts.onPlannerStatus?.(null);
 				pocQueue.push(event.text);
 				pumpIfIdle();
 				break;
 			case "status":
 				diag("planner-status", { turnId: event.turnId, note: event.note });
+				// Worker's explicit `show_status(text)` call. Surfaced on
+				// the voice bar so the user sees what the assistant is
+				// doing without having to be told.
+				if (activePlannerTurnId === event.turnId && event.note?.trim()) {
+					opts.onPlannerStatus?.(event.note.trim());
+				}
 				break;
 			case "error":
 				diag("planner-error", {
@@ -323,9 +387,10 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 					message: event.message,
 				});
 				if (activePlannerTurnId === event.turnId) {
+					opts.onPlannerStatus?.(null);
 					// Bubble a short user-facing line so rt says something
 					// instead of just going silent.
-					pocQueue.push("Sorry, the planner ran into an error.");
+					pocQueue.push("嗯,刚才走神了,你再说一遍?");
 					pumpIfIdle();
 				}
 				break;
@@ -333,7 +398,93 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 				diag("planner-done", { turnId: event.turnId });
 				if (activePlannerTurnId === event.turnId) {
 					activePlannerTurnId = null;
+					opts.onPlannerStatus?.(null);
 				}
+				break;
+			case "toolCallStarted":
+				diag("planner-tool-started", {
+					turnId: event.turnId,
+					callId: event.callId,
+					name: event.name,
+					argsPreview: event.argsPreview,
+				});
+				// Surface tool activity on the voice bar — the user sees
+				// what the assistant is doing in real time. Falls back to
+				// the raw name if the tool isn't in the humanised list.
+				if (activePlannerTurnId === event.turnId) {
+					opts.onPlannerStatus?.(humanizePlannerTool(event.name));
+				}
+				break;
+			case "toolCallCompleted":
+				diag("planner-tool-completed", {
+					turnId: event.turnId,
+					callId: event.callId,
+					name: event.name,
+					ok: event.ok,
+					durationMs: event.durationMs,
+					resultPreview: event.resultPreview,
+				});
+				break;
+			case "invalidate":
+				diag("planner-invalidate", {
+					turnId: event.turnId,
+					kinds: event.kinds,
+				});
+				if (activePlannerTurnId === event.turnId && opts.onMutation) {
+					// Mirror the per-turn mutation aggregator the rt path
+					// uses. Cast through the union — Rust serialises
+					// `MutationKind` as camelCase strings (workspaces /
+					// sessions) which match `VoiceToolMutationKind`.
+					opts.onMutation(event.kinds as AgentMutationKind[]);
+				}
+				break;
+			case "navigateToWorkspace":
+				diag("planner-navigate", {
+					turnId: event.turnId,
+					workspaceId: event.workspaceId,
+				});
+				if (
+					activePlannerTurnId === event.turnId &&
+					opts.onNavigateToWorkspace
+				) {
+					opts.onNavigateToWorkspace(event.workspaceId);
+				}
+				break;
+			case "endSession":
+				diag("planner-end-session", { turnId: event.turnId });
+				if (activePlannerTurnId === event.turnId) {
+					// Mark for teardown — actual `onEndSession` call fires
+					// AFTER the final say/final has been voiced. We piggy-
+					// back on the queue-drained transition so the audio
+					// buffer has a chance to flush.
+					pendingEndSession = true;
+				}
+				break;
+			case "captureImage":
+				diag("planner-capture-image", {
+					turnId: event.turnId,
+					width: event.width,
+					height: event.height,
+					captionPreview: event.caption.slice(0, 80),
+					dataUrlBytes: event.dataUrl.length,
+				});
+				if (activePlannerTurnId !== event.turnId) return;
+				// Forward the image into rt's conversation as an
+				// `input_image` user message. Reception (gpt-realtime-2)
+				// is multimodal and will reference it on its next
+				// response; Worker only got the text caption back so
+				// it can't reason about pixels, but Reception can.
+				opts.send({
+					type: "conversation.item.create",
+					item: {
+						type: "message",
+						role: "user",
+						content: [
+							{ type: "input_text", text: event.caption },
+							{ type: "input_image", image_url: event.dataUrl },
+						],
+					},
+				});
 				break;
 		}
 	}
@@ -349,6 +500,11 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 		}
 		pocActive = true;
 		pocQueue = [];
+		// Show "thinking" on the voice bar immediately so the user has
+		// visual feedback during the 1–3 s before the Worker emits its
+		// first say/final or tool call. Replaces the old verbal "我看看"
+		// ack — quieter, less repetitive.
+		opts.onPlannerStatus?.("思考中…");
 		startPlannerTurn(transcript, handlePlannerEvent)
 			.then((accepted) => {
 				if (disposed) {
@@ -360,7 +516,8 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			})
 			.catch((err) => {
 				diag("planner-turn-start-failed", { error: String(err) });
-				pocQueue.push("Sorry, the planner is unavailable.");
+				opts.onPlannerStatus?.(null);
+				pocQueue.push("嗯,刚才走神了,你再说一遍?");
 				pumpIfIdle();
 			});
 	}
@@ -559,23 +716,12 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
 			// loop. Errors are caught inside `executeCalls` so a single
 			// bad tool can't abort the whole response.
 			void executeCalls(calls, opts, responseCreateDelayMs, () => disposed, {
-				onPocArm: () => {
-					// PoC batch entry: populate the queue so that when
-					// the natural `response.create` (the one that lets
-					// rt voice its ack) finishes, the queue starts
-					// draining. We deliberately do NOT call `pumpPocQueue`
-					// here — we want the first injection to fire AFTER
-					// the ack response.done, not in parallel with it.
-					pocQueue = [...POC_LINES];
-					pocActive = true;
-					diag("poc-armed", { queued: pocQueue.length });
-				},
 				onAskPlanner: (transcript) => {
 					// Planner batch entry: fire-and-forget the start RPC.
 					// `kickoffPlannerTurn` resolves the turn id and wires
-					// the event channel; subsequent planner Say events
-					// land back here via `handlePlannerEvent` and feed
-					// the same queue the PoC uses.
+					// the event channel; subsequent planner Say / Final
+					// events land back here via `handlePlannerEvent` and
+					// feed the say queue for rt to voice.
 					if (!transcript?.trim()) {
 						diag("planner-skip", { reason: "empty-transcript" });
 						return;
@@ -595,14 +741,9 @@ export function createToolDispatcher(opts: DispatcherOptions): ToolDispatcher {
  *  parallel, then submit outputs + a single `response.create` to nudge
  *  the model into speaking the answer. */
 type ExecuteCallsHooks = {
-	/** Called when the batch contains `start_planner_poc`. Lets the
-	 *  dispatcher closure arm its PoC queue before tool results are
-	 *  submitted, so the natural ack response.done finds the queue
-	 *  ready to drain. */
-	onPocArm?: () => void;
 	/** Called when the batch contains `ask_planner`, with the parsed
 	 *  transcript argument. Lets the dispatcher closure kick off the
-	 *  GPT-5 planner stream while rt voices its short ack. */
+	 *  Worker stream while rt voices its short ack. */
 	onAskPlanner?: (transcript: string) => void;
 };
 
@@ -613,17 +754,9 @@ async function executeCalls(
 	isDisposed?: () => boolean,
 	hooks?: ExecuteCallsHooks,
 ) {
-	// Phase-0 PoC: detect the marker tool in this batch and hand control
-	// of the post-result `response.create` chain to the dispatcher's PoC
-	// queue. The Rust handler already returned a delegated ack — rt will
-	// voice that ack via the existing tail-of-turn `response.create`, and
-	// each subsequent `response.done` will pump the next line out.
-	const isPocBatch = calls.some((c) => c.name === "start_planner_poc");
-	if (isPocBatch && hooks?.onPocArm) {
-		hooks.onPocArm();
-	}
-	// Phase-1 planner: detect ask_planner, extract the transcript arg,
-	// and signal the dispatcher closure to start the GPT-5 turn.
+	// Detect ask_planner, extract the transcript arg, and signal the
+	// dispatcher closure to start the Worker turn. Other tool calls are
+	// handled inline below via `runVoiceTool`.
 	const askPlannerCall = calls.find((c) => c.name === "ask_planner");
 	if (askPlannerCall && hooks?.onAskPlanner) {
 		const parsed = parseArgs(askPlannerCall.argsBuffer);
@@ -740,7 +873,13 @@ async function executeCalls(
 	// speaking → acting → speaking → listening replay). Skip the
 	// nudge whenever any call in this batch ended the session.
 	const isEndSessionBatch = results.some((r) => r.endSession);
-	if (!isEndSessionBatch) {
+	// `ask_planner` also skips the response.create. We DON'T want rt
+	// to voice an audible ack ("我看看") — the voice bar already shows
+	// "思考中…" as visual feedback, and the Worker's first `say`/`final`
+	// will trigger its own response.create via the say queue. Speaking
+	// the ack here just adds a repetitive verbal tic on every turn.
+	const isAskPlannerBatch = calls.some((c) => c.name === "ask_planner");
+	if (!isEndSessionBatch && !isAskPlannerBatch) {
 		const delayMs = getResponseCreateDelayMs?.() ?? 0;
 		if (delayMs > 0) {
 			diag("response-create-delayed", {
@@ -759,7 +898,9 @@ async function executeCalls(
 		});
 		opts.send({ type: "response.create" });
 	} else {
-		diag("response-create-skipped", { reason: "end_session" });
+		diag("response-create-skipped", {
+			reason: isEndSessionBatch ? "end_session" : "ask_planner",
+		});
 	}
 
 	// Aggregate mutation kinds across this turn and notify the host

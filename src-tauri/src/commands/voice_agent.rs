@@ -81,13 +81,6 @@ pub enum ToolKind {
     // `run()` arms below still ack with `{ok: true}` as a safety net.
     WaitForUser,
     EndSession,
-    // ─── Phase-0 PoC ────────────────────────────────────────────────
-    // Temporary harness for validating "external response.create can
-    // drive rt to speak short lines after a tool ack". The Rust handler
-    // returns a minimal delegated-style ack; the frontend dispatcher
-    // detects this name and runs the timed injection sequence. Strip
-    // this variant + the matching frontend branch once Phase 0 closes.
-    StartPlannerPoc,
     // ─── Phase-1 production delegate ────────────────────────────────
     // The real "rt as voice frontend, planner as reasoning backend"
     // entry point. rt sees this tool, calls it with the user's
@@ -249,7 +242,6 @@ impl ToolKind {
         Self::ApproveMcpCall,
         Self::WaitForUser,
         Self::EndSession,
-        Self::StartPlannerPoc,
         Self::AskPlanner,
         Self::DescribeLocalTools,
         Self::ListWorkspaces,
@@ -1131,20 +1123,6 @@ impl ToolKind {
                            Produces no audio output. Not a CLI command — this is a synthetic \
                            'stay silent' signal handled inside the voice tool dispatcher.",
             },
-            Self::StartPlannerPoc => ToolMetadata {
-                name: "start_planner_poc",
-                parameters: json!({ "type": "object", "properties": {}, "required": [] }),
-                cli_path: None,
-                invalidates: &[],
-                use_when: "Phase-0 PoC harness. Call this ONLY when the user explicitly asks to \
-                           'start the planner test' / 'run the poc' / 'run the planner poc' / \
-                           '启动 planner 测试'. After the tool returns the delegated ack, \
-                           speak ONE short acknowledgment in the user's language (e.g. \
-                           'starting the test.' / '开始测试。') — do NOT keep talking. The \
-                           dispatcher will inject five short lines on its own; you must stay \
-                           quiet until they finish or the user interrupts. Synthetic harness, \
-                           not a production capability — strip this tool after the PoC closes.",
-            },
             Self::AskPlanner => ToolMetadata {
                 name: "ask_planner",
                 parameters: json!({
@@ -1232,20 +1210,8 @@ impl ToolKind {
                 data: json!({ "ok": true }),
                 ..Default::default()
             }),
-            // PoC: the Rust side just returns an instant "delegated" ack.
-            // The frontend dispatcher recognises the tool name and runs
-            // the timed injection sequence on its own. We deliberately
-            // mirror the production `ask_planner` ack shape here so the
-            // model is trained on the same envelope it will see later.
-            Self::StartPlannerPoc => Ok(VoiceToolResult {
-                data: json!({
-                    "status": "delegated",
-                    "ack": "Planner PoC sequence will begin shortly."
-                }),
-                ..Default::default()
-            }),
-            // Phase-1: same shape as StartPlannerPoc — instant delegated
-            // ack. The frontend recognises the tool name, takes the
+            // `ask_planner` returns an instant "delegated" ack. The
+            // frontend dispatcher recognises the tool name, takes the
             // `transcript` argument, and starts a real GPT-5 planner
             // turn via `start_planner_turn`. From rt's perspective the
             // tool just succeeded and the dispatcher will inject the
@@ -3255,9 +3221,6 @@ fn realtime_description(kind: ToolKind) -> &'static str {
         ToolKind::CaptureScreen => "Capture focused window by default; use screen only when asked.",
         ToolKind::WaitForUser => "Stay silent for background audio or non-addressed speech.",
         ToolKind::EndSession => "End voice mode after speaking a short goodbye.",
-        ToolKind::StartPlannerPoc => {
-            "Phase-0 PoC: kick off the timed-injection harness. Use only on explicit user request; ack once and stay quiet."
-        }
         ToolKind::AskPlanner => {
             "Delegate the user's request to the planner agent. Call for any substantive request; ack once ('on it.' / '好的。') and stay quiet."
         }
@@ -3287,17 +3250,99 @@ fn strip_schema_descriptions(value: &mut Value) {
     }
 }
 
+/// Public, async dispatch entry shared between the rt `run_voice_tool`
+/// Tauri command (sync handler path) and the voice planner's agent
+/// loop. Handles both the async meta-tool path (Executor MCP) and the
+/// sync typed-handler path (Helmor native tools). Returns an
+/// `VoiceToolEnvelope` exactly the same shape both consumers expect.
+pub async fn dispatch_tool_kind(
+    app: tauri::AppHandle,
+    scripts_manager: ScriptProcessManager,
+    kind: ToolKind,
+    args: Value,
+) -> VoiceToolEnvelope {
+    // Async meta tools — talk to Executor's HTTP API.
+    if let Some(envelope) = match kind {
+        ToolKind::SearchMcpTools => Some(run_search_mcp_tools(&app, args.clone()).await),
+        ToolKind::DescribeMcpTool => Some(run_describe_mcp_tool(&app, args.clone()).await),
+        ToolKind::CallMcpTool => Some(run_call_mcp_tool(&app, args.clone()).await),
+        ToolKind::ApproveMcpCall => Some(run_approve_mcp_call(&app, args.clone()).await),
+        _ => None,
+    } {
+        return envelope;
+    }
+
+    // Sync typed handlers — run on a blocking pool so we don't stall the
+    // tokio runtime if `ToolKind::run` does SQLite IO.
+    let invalidates = kind.metadata().invalidates.to_vec();
+    let ctx = VoiceToolContext {
+        app,
+        scripts_manager,
+    };
+    let join = tauri::async_runtime::spawn_blocking(move || match kind.run(args, &ctx) {
+        Ok(result) => VoiceToolEnvelope {
+            ok: true,
+            data: result.data,
+            error: None,
+            invalidates,
+            navigate_to_workspace_id: result.navigate_to_workspace_id,
+            dispatch_workspace_action: result.dispatch_workspace_action,
+            image: result.image,
+        },
+        Err(e) => VoiceToolEnvelope {
+            ok: false,
+            data: Value::Null,
+            error: Some(format!("{e:#}")),
+            invalidates: Vec::new(),
+            navigate_to_workspace_id: None,
+            dispatch_workspace_action: None,
+            image: None,
+        },
+    })
+    .await;
+    match join {
+        Ok(envelope) => envelope,
+        Err(e) => VoiceToolEnvelope {
+            ok: false,
+            data: Value::Null,
+            error: Some(format!("spawn_blocking join failed: {e}")),
+            invalidates: Vec::new(),
+            navigate_to_workspace_id: None,
+            dispatch_workspace_action: None,
+            image: None,
+        },
+    }
+}
+
+/// True for the tools the Reception layer (rt) is allowed to call.
+/// Phase 2.1 pared this down to a minimal "voice interface" set:
+///
+///   * `ask_planner`    — delegate substantive work to the Worker.
+///   * `wait_for_user`  — stay silent for background / unaddressed audio.
+///
+/// Everything else (workspace ops, MCP, capture_screen, end_session, …)
+/// moved to the Worker, which has the agent loop + reasoning to wield
+/// them properly. Keeping rt's tool catalog tiny saves ~6–8 KB of
+/// schema per `session.update` payload AND removes ambient temptation
+/// for the realtime model to call them directly instead of delegating.
+fn is_reception_tool(kind: ToolKind) -> bool {
+    matches!(kind, ToolKind::AskPlanner | ToolKind::WaitForUser)
+}
+
 /// Build the `tools` array for the OpenAI Realtime `session.update`
 /// payload. Called from `settings_commands::create_openai_realtime_client_secret`.
+/// Filtered to the Reception-only tool set — see `is_reception_tool`.
 pub fn build_tools_array() -> Vec<Value> {
     ToolKind::ALL
         .iter()
+        .copied()
+        .filter(|kind| is_reception_tool(*kind))
         .map(|kind| {
             let meta = kind.metadata();
             json!({
                 "type": "function",
                 "name": meta.name,
-                "description": realtime_description(*kind),
+                "description": realtime_description(kind),
                 "parameters": compact_parameters(&meta.parameters),
             })
         })
@@ -4096,7 +4141,6 @@ mod tests {
                 "send_prompt",
                 "set_workspace_status",
                 "show_workspace",
-                "start_planner_poc",
                 "stop_session",
                 "wait_for_user",
             ]

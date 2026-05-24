@@ -134,6 +134,16 @@ path = "src/bin/helmor-cli.rs"
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
 
+# Standalone probe that exercises the voice planner's GPT-5 pipeline
+# without WebRTC / rt / Tauri. Reads the OpenAI key from the helmor
+# settings DB, sends synthetic transcripts through the same code path
+# the real voice agent uses, and prints a timeline of what the planner
+# emitted (say + final events). Self-validation tool for prompt
+# iteration. Run: `cargo run --bin planner_probe -- "your transcript"`
+[[bin]]
+name = "planner_probe"
+path = "src/bin/planner_probe.rs"
+
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"

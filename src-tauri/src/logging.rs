@@ -37,13 +37,16 @@ const MAX_BYTES: u64 = 10 * 1024 * 1024;
 ///
 /// Custom `target:` namespaces in our code (`executor::*` for the
 /// Executor lifecycle + HTTP, `executor::ipc` for the MCP
-/// Tauri commands) are NOT under the `helmor_lib` module path, so they
-/// would otherwise fall to the `warn` baseline. We explicitly enable
-/// `executor=debug` so the full `target: "executor::http" / ::lifecycle
-/// / ::ipc / ::spawn / ::child` log stream is visible
-/// during dev — they're our primary debug surface for the voice agent's
-/// MCP routing.
-const DEV_DEFAULT_DIRECTIVES: &str = "warn,helmor_lib=debug,helmor=debug,executor=debug";
+/// Tauri commands, `planner::*` for the voice-planner GPT-5 stream)
+/// are NOT under the `helmor_lib` module path, so they would otherwise
+/// fall to the `warn` baseline. We explicitly enable
+/// `executor=debug` and `planner=debug` so the full
+/// `target: "executor::http" / ::lifecycle / ::ipc / ::spawn / ::child`
+/// and `planner::http / ::lifecycle / ::stream / ::cadence` log streams
+/// are visible during dev — they're our primary debug surface for the
+/// voice agent's MCP routing and the planner SSE pipeline.
+const DEV_DEFAULT_DIRECTIVES: &str =
+    "warn,helmor_lib=debug,helmor=debug,executor=debug,planner=debug";
 
 /// Release default: plain `info`.
 const RELEASE_DEFAULT_DIRECTIVES: &str = "info";
@@ -209,6 +212,17 @@ mod tests {
         // it; the actual filter behavior is tested implicitly by the
         // tracing-subscriber crate.
         assert!(default_directives(true).contains("executor=debug"));
+    }
+
+    #[test]
+    fn dev_default_enables_planner_target_at_debug() {
+        // `target: "planner::*"` (used by voice_planner) sits outside
+        // `helmor_lib` and needs its own directive. Without it the SSE /
+        // lifecycle / cadence info-level traces are filtered out and
+        // debugging the planner pipeline becomes guesswork — exactly the
+        // regression that hid the Phase-1 ask_planner SSE id mismatch
+        // until the user reported "rt only says 好的 then nothing".
+        assert!(default_directives(true).contains("planner=debug"));
     }
 
     #[test]

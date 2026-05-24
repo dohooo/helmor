@@ -4108,14 +4108,41 @@ export async function openMcpStudioWindow(): Promise<{ label: string }> {
 // ---------------------------------------------------------------------------
 
 /** Mirror of `voice_planner::events::PlannerEvent`. The tag field
- *  matches Rust's `#[serde(tag = "kind", rename_all = "camelCase")]`. */
+ *  matches Rust's `#[serde(tag = "kind", ..., rename_all_fields = "camelCase")]`. */
 export type PlannerEvent =
 	| { kind: "started"; turnId: string }
 	| { kind: "say"; turnId: string; text: string }
 	| { kind: "final"; turnId: string; text: string }
 	| { kind: "status"; turnId: string; note: string }
 	| { kind: "error"; turnId: string; message: string }
-	| { kind: "done"; turnId: string };
+	| { kind: "done"; turnId: string }
+	| {
+			kind: "toolCallStarted";
+			turnId: string;
+			callId: string;
+			name: string;
+			argsPreview: string;
+	  }
+	| {
+			kind: "toolCallCompleted";
+			turnId: string;
+			callId: string;
+			name: string;
+			ok: boolean;
+			durationMs: number;
+			resultPreview: string;
+	  }
+	| { kind: "invalidate"; turnId: string; kinds: string[] }
+	| { kind: "navigateToWorkspace"; turnId: string; workspaceId: string }
+	| { kind: "endSession"; turnId: string }
+	| {
+			kind: "captureImage";
+			turnId: string;
+			width: number;
+			height: number;
+			dataUrl: string;
+			caption: string;
+	  };
 
 export type PlannerTurnAccepted = { turnId: string };
 

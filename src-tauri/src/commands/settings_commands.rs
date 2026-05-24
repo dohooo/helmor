@@ -28,30 +28,42 @@ static CODEX_RATE_LIMITS_THROTTLE: Throttle = Throttle::new(RATE_LIMITS_THROTTLE
 /// by `commands::voice_tools`) carry per-tool specifics; this prompt
 /// only covers cross-cutting behavior.
 const VOICE_AGENT_INSTRUCTIONS: &str = r#"# Role
-You are Helmor's voice frontend. You do NOT plan, look up data, or reason. You delegate substantive work to the planner agent via `ask_planner` and voice the responses it streams back. Fast turn-taking, not reasoning.
+You are Helmor — the user's coding assistant, speaking through their headset.
 
-# Routing
-- ANY substantive user request (question, lookup, action, opinion, anything that needs thought) -> `ask_planner` with the user's verbatim transcript. Then speak ONE short ack in the user's language ("on it." / "好的。") and STOP. The dispatcher injects the planner's say/final updates as separate spoken responses; you stay silent until the user speaks again.
-- Trivial signals you handle directly (do NOT delegate these):
-  - Silence / background audio / not addressed -> `wait_for_user`.
-  - Goodbye / "that's all" / "拜拜" / "算了" -> short goodbye, then `end_session`.
-  - Visual references ("look at this", "this error") -> `capture_screen` once; default `window`, `screen` only if asked.
-- PoC harness: `start_planner_poc` only on explicit "start the planner test" / "启动 planner 测试". After the ack, stay silent — dispatcher injects 5 lines on its own.
+# Architecture
+Helmor has two halves working in tandem, presenting as ONE assistant to the user:
+- Reception layer (接待层): the live voice interface. Receives the user, routes (delegates substantive work, holds silence on background noise), voices the Worker's replies as if they were its own.
+- Worker layer (工作层): the reasoning & execution core. Reads the transcript, thinks, calls tools / queries data, decides when to end the conversation, writes the spoken response.
 
-# Style
-- Reply in the user's language. Be terse: one short sentence per ack. No opener, no "let me know".
-- Never read UUIDs, hashes, paths, raw JSON, markdown, URLs.
-- If `ask_planner` returns an error envelope, voice the error briefly ("planner is unavailable, try again") and stop.
+You are the Reception layer.
+The user perceives ONE Helmor — they never learn the two halves exist.
 
-# What NOT to do
-- Do NOT answer substantive questions yourself, even if you know the answer.
-- Do NOT call any other tool (list_workspaces, send_prompt, search_mcp_tools, …) — those are the planner's job in Phase 2. For Phase 1 you only have: ask_planner, wait_for_user, end_session, capture_screen, start_planner_poc.
-- Do NOT speak again between the ack and the user's next turn unless the planner is clearly broken.
+# Your tools (only two)
+- `ask_planner(transcript)` — delegate the user's verbatim words to the Worker. Use for ANYTHING substantive: questions, requests, even goodbyes ("拜拜" → let the Worker say bye + decide to end).
+- `wait_for_user()` — stay silent for background audio, side conversations, anything not addressed to you.
+
+# Loop
+1. User speaks.
+2. Substantive utterance → `ask_planner(transcript)` → STAY SILENT. Do NOT speak an ack ("我看看" / "let me see" / "好的"). The voice bar shows visual progress while the Worker runs.
+   Not addressed to you → `wait_for_user()`.
+3. The runtime streams the Worker's `say` / `final` into your speech. Voice each verbatim, first person, no attribution. The runtime also tears down the session itself when the Worker decides to end.
+
+# Voice
+First person, user's language, one short sentence. No UUIDs, hashes, paths, JSON, URLs.
+
+# Forbidden (illusion-breaking)
+Never say: "planner", "agent", "tool", "system", "the AI", "Reception", "Worker", "接待层", "工作层", "let me ask", "checking with", "fetching", "calling", "loading".
+On `ask_planner` error: "嗯…刚才卡了一下,再说一遍?" — never name the failure.
+
+# Don't
+- Answer from your own knowledge — always delegate to the Worker.
+- Speak between your ack and the user's next utterance, unless the runtime injects words.
+- Decide to end the session yourself — the Worker handles goodbyes.
 "#;
 
 fn voice_agent_instructions_with_current_time() -> String {
     let now = chrono::Local::now();
-    let current_context = match current_helmor_context() {
+    let current_context = match crate::voice_planner::context::current_helmor_context() {
         Ok(Some(context)) => format!("\n\n{}", context.to_instruction_block()),
         Ok(None) => String::new(),
         Err(error) => {
@@ -69,128 +81,6 @@ fn voice_agent_instructions_with_current_time() -> String {
         current_context,
         VOICE_AGENT_INSTRUCTIONS
     )
-}
-
-#[derive(Debug, Default)]
-struct CurrentHelmorContext {
-    repository_slug: Option<String>,
-    workspace_ref: Option<String>,
-    active_session: Option<String>,
-}
-
-impl CurrentHelmorContext {
-    fn to_instruction_block(&self) -> String {
-        let mut lines = vec!["# Helmor context".to_string()];
-        if let Some(slug) = &self.repository_slug {
-            lines.push(format!("- Repo slug: {slug}"));
-        }
-        if let Some(workspace_ref) = &self.workspace_ref {
-            lines.push(format!("- Workspace ref: {workspace_ref}"));
-        }
-        if let Some(active_session) = &self.active_session {
-            lines.push(format!("- Active session: {active_session}"));
-        }
-        lines.push("- Prefer this for current, this, here, latest, or it.".to_string());
-        lines.join("\n")
-    }
-}
-
-fn current_helmor_context() -> anyhow::Result<Option<CurrentHelmorContext>> {
-    let Some(workspace_id) = settings::load_setting_value("app.last_workspace_id")? else {
-        return Ok(None);
-    };
-    let Some(workspace) = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)?
-    else {
-        return Ok(None);
-    };
-
-    let repository_slug = crate::forge::accounts::forge_target_from(
-        workspace.forge_provider.as_deref(),
-        workspace.remote_url.as_deref(),
-    )
-    .map(|target| {
-        format!(
-            "{}:{}/{}",
-            target.provider.as_storage_str(),
-            target.owner,
-            target.name
-        )
-    });
-    let workspace_ref = clean_context_value(workspace.branch.as_deref())
-        .or_else(|| clean_context_value(Some(&workspace.directory_name)))
-        .or_else(|| clean_context_value(Some(&workspace.id)));
-    let active_session = current_active_session_for_context(
-        &workspace.id,
-        workspace.active_session_id.as_deref(),
-        workspace.active_session_title.as_deref(),
-    )?;
-
-    let context = CurrentHelmorContext {
-        repository_slug,
-        workspace_ref,
-        active_session,
-    };
-    if context.repository_slug.is_none()
-        && context.workspace_ref.is_none()
-        && context.active_session.is_none()
-    {
-        return Ok(None);
-    }
-    Ok(Some(context))
-}
-
-fn current_active_session_for_context(
-    workspace_id: &str,
-    fallback_session_id: Option<&str>,
-    fallback_title: Option<&str>,
-) -> anyhow::Result<Option<String>> {
-    let last_session_id = settings::load_setting_value("app.last_session_id")?;
-    let selected_session = match last_session_id.as_deref() {
-        Some(session_id) => load_session_context_label(workspace_id, session_id)?,
-        None => None,
-    };
-    if selected_session.is_some() {
-        return Ok(selected_session);
-    }
-    Ok(format_session_context_label(
-        fallback_session_id,
-        fallback_title,
-    ))
-}
-
-fn load_session_context_label(
-    workspace_id: &str,
-    session_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let conn = db::read_conn()?;
-    let mut stmt =
-        conn.prepare("SELECT title FROM sessions WHERE id = ?1 AND workspace_id = ?2 LIMIT 1")?;
-    let mut rows = stmt.query(rusqlite::params![session_id, workspace_id])?;
-    let Some(row) = rows.next()? else {
-        return Ok(None);
-    };
-    let title: Option<String> = row.get(0)?;
-    Ok(format_session_context_label(
-        Some(session_id),
-        title.as_deref(),
-    ))
-}
-
-fn format_session_context_label(session_id: Option<&str>, title: Option<&str>) -> Option<String> {
-    match (clean_context_value(title), clean_context_value(session_id)) {
-        (Some(title), Some(id)) => Some(format!("{title} [{id}]")),
-        (Some(title), None) => Some(title),
-        (None, Some(id)) => Some(id),
-        (None, None) => None,
-    }
-}
-
-fn clean_context_value(value: Option<&str>) -> Option<String> {
-    let value = value?.split_whitespace().collect::<Vec<_>>().join(" ");
-    if value.is_empty() {
-        return None;
-    }
-    Some(value.chars().take(96).collect())
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -225,6 +225,27 @@ export function useRealtimeSequence(
 		[applyPhase],
 	);
 
+	/** Planner-status updates from the agent-loop dispatcher. `label`
+	 *  is either a humanised Worker activity ("查看 workspace", "思考中…",
+	 *  custom `show_status` text) or `null` to clear and let the bar
+	 *  drop back to its default phase. Drives the voice bar to "acting"
+	 *  with the label, replacing the old verbal "我看看" ack. */
+	const handlePlannerStatusUpdate = useCallback(
+		(label: string | null) => {
+			if (label) {
+				transitionWithHold("acting", { label });
+				return;
+			}
+			// Null = clear. Only drop back to listening if we're still in
+			// `acting` — if the model already started voicing the answer
+			// the phase is "speaking" and we shouldn't yank it.
+			if (phaseRef.current === "acting") {
+				transitionWithHold("listening");
+			}
+		},
+		[transitionWithHold],
+	);
+
 	/** Speaking is special: its label is the live transcript buffer,
 	 *  which keeps growing during the MIN_HOLD wait. So we read the
 	 *  ref *at fire time*, not at schedule time. */
@@ -555,6 +576,16 @@ export function useRealtimeSequence(
 					},
 					onDispatchWorkspaceAction: (workspaceId, actionKind) => {
 						dispatchActionRef.current?.(workspaceId, actionKind);
+					},
+					onPlannerStatus: (label) => {
+						// Planner progress lights up the voice bar. `label`
+						// is either a humanised tool/status string ("查看
+						// workspace", "思考中…", "查 GitHub PR") or `null`
+						// to clear and drop the bar back to its default.
+						// We can't easily call `transitionWithHold` from
+						// here (closure capture order); raise a tagged
+						// synthetic event the main handler picks up.
+						handlePlannerStatusUpdate(label);
 					},
 				});
 				dispatcher = nextDispatcher;

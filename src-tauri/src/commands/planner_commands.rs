@@ -8,8 +8,10 @@
 use tauri::{ipc::Channel, Manager};
 
 use crate::voice_planner::{
-    self, fabricate_turn_id, ManagedPlanner, PlannerEvent, PlannerTurnAccepted,
+    self, fabricate_turn_id, tools::TauriPlannerTools, ManagedPlanner, PlannerEvent,
+    PlannerTurnAccepted,
 };
+use crate::workspace::scripts::ScriptProcessManager;
 
 use super::common::CmdResult;
 
@@ -27,10 +29,17 @@ pub async fn start_planner_turn(
         voice_planner::load_planner_api_key().map_err(crate::error::CommandError::from)?;
 
     let planner_handle = app.clone();
+    let app_for_task = app.clone();
     let turn_id_for_task = turn_id.clone();
     tauri::async_runtime::spawn(async move {
         let planner = planner_handle.state::<ManagedPlanner>();
+        let scripts_manager = app_for_task.state::<ScriptProcessManager>().inner().clone();
+        let planner_tools = TauriPlannerTools {
+            app: app_for_task,
+            scripts_manager,
+        };
         if let Err(e) = voice_planner::run_turn(
+            &planner_tools,
             &planner,
             api_key,
             turn_id_for_task.clone(),
