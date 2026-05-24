@@ -27,7 +27,20 @@ pub use client::{ExecutorClient, McpSourceRow};
 
 /// Pinned executor version. Bump when an upstream patch lands that we want.
 /// Beta channel today — see https://github.com/RhysSullivan/executor/releases.
-pub const EXECUTOR_PIN: &str = "1.4.29";
+///
+/// 1.4.30 → 1.4.33 versus 1.4.29:
+/// - Source config no longer replays from / writes back to `executor.jsonc`;
+///   live state lives in the shared Executor sqlite db (we don't touch
+///   the jsonc, so this is transparent).
+/// - MCP / OpenAPI / GraphQL tools return structured auth failures with
+///   recovery guidance instead of opaque internal errors.
+/// - OAuth popup completes more reliably; OAuth DCR data is reused across
+///   retries / reconnects.
+/// - MCP tool output schemas now mirror the full `CallToolResult` envelope
+///   (`content`, `structuredContent`, `_meta`, `isError`) — additive on
+///   the wire, our client only reads `isError`.
+/// - No breaking changes declared by any of the four releases.
+pub const EXECUTOR_PIN: &str = "1.4.33";
 
 /// Cooperative shutdown timeout. Executor handles SIGTERM by closing
 /// in-flight HTTP requests + flushing sqlite — usually well under 2s.
