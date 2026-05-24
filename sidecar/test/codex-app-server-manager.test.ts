@@ -745,12 +745,7 @@ describe("CodexAppServerManager", () => {
 	});
 
 	test("forwards Codex MCP tool-call approval _meta to the frontend and round-trips persist back to Codex", async () => {
-		// Repro for https://github.com/dohooo/helmor/issues/639: the
-		// `mcpServer/elicitation/request` with `_meta.codex_approval_kind:
-		// "mcp_tool_call"` used to be forwarded with the meta stripped,
-		// which left the frontend rendering an "unsupported" panel with
-		// no Allow button. The sidecar now keeps the meta on the form
-		// payload and forwards the user's persist choice back to Codex.
+		// Repro for #639.
 		const manager = new CodexAppServerManager();
 		const events: Array<Record<string, unknown>> = [];
 		const capturingEmitter = createSidecarEmitter((event) => {
@@ -758,11 +753,7 @@ describe("CodexAppServerManager", () => {
 		});
 
 		serverState.beforeTurnCompleted = () => {
-			// Real Codex parks the turn while it waits for the elicitation
-			// response, so the response must reach the manager BEFORE
-			// turn/completed (turn/completed clears pending inputs). We
-			// reproduce that here: fire elicit → resolve → let
-			// turn/completed run.
+			// Resolve BEFORE turn/completed — it clears pending user inputs.
 			serverState.onRequest?.({
 				id: "rpc-elicit-1",
 				method: "mcpServer/elicitation/request",
@@ -793,7 +784,6 @@ describe("CodexAppServerManager", () => {
 			});
 
 			const userInputId = userInputEvent?.userInputId as string;
-			// User clicks "Allow for session" → submit + meta.persist=session.
 			const claimed = manager.resolveUserInput(userInputId, {
 				action: "submit",
 				content: {},
@@ -810,8 +800,7 @@ describe("CodexAppServerManager", () => {
 				model: "gpt-5.5",
 				cwd: "/tmp",
 				resume: undefined,
-				// IMPORTANT: NOT bypassPermissions — otherwise the sidecar
-				// auto-accepts and never surfaces the prompt.
+				// NOT bypassPermissions — that path auto-accepts.
 				permissionMode: undefined,
 				effortLevel: "high",
 				fastMode: false,
@@ -820,8 +809,6 @@ describe("CodexAppServerManager", () => {
 			capturingEmitter,
 		);
 
-		// Sidecar responds to Codex with the MCP elicitation result shape,
-		// including _meta so Codex can persist the choice.
 		const response = serverState.responses.find((r) => r.id === "rpc-elicit-1");
 		expect(response?.result).toEqual({
 			action: "accept",

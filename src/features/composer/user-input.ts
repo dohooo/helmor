@@ -5,9 +5,7 @@ import type { PendingUserInput } from "@/features/conversation/pending-user-inpu
  * `userInputRequest`. The `content` field carries whatever the matching
  * sub-renderer produced — its shape is per-kind (AUQ updatedInput, MCP
  * elicitation content map, or empty for url-mode). `meta` is opaque
- * provider-specific metadata (e.g. Codex MCP tool-call approval's
- * `{ persist: "session" | "always" }`) the sidecar forwards back into
- * the SDK response unchanged.
+ * provider-specific metadata (e.g. Codex `{ persist: "session" | "always" }`).
  */
 export type UserInputResponseOptions = {
 	content?: Record<string, unknown>;

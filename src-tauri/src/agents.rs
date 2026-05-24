@@ -471,9 +471,7 @@ pub struct UserInputResponseRequest {
     /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
-    /// Provider-specific meta the frontend chose to send alongside its
-    /// answer (e.g. Codex MCP tool-call approval's `{ persist: "session" }`).
-    /// Opaquely round-trips through to the sidecar's matching manager.
+    /// Provider-specific meta (e.g. Codex `{ persist: "session" }`). Opaque.
     #[serde(default)]
     pub meta: Option<Value>,
 }

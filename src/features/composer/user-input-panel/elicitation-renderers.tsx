@@ -738,16 +738,9 @@ function UrlElicitationPanel({
 }
 
 /**
- * Codex MCP tool-call approval panel. Mirrors the Codex TUI flow:
- * the schema is intentionally empty, so the user only picks an action
- * (Allow / Allow for session / Always allow / Cancel). The persist
- * choice rides back to Codex via `_meta.persist` so Core can remember
- * the decision for the session or permanently.
- *
- * No "Decline" button — Codex's `mcp_tool_call` approval flow doesn't
- * expose Decline (see `mcp_server_elicitation.rs` in codex-rs/tui).
- * Cancel maps to `action: "cancel"`, which Codex Core treats as "user
- * cancelled this tool call".
+ * Codex MCP tool-call approval panel. Negative path sends `"decline"`
+ * (not `"cancel"`) so the agent's error reads "user rejected" and it
+ * tries a different approach instead of treating the turn as aborted.
  */
 function ToolApprovalElicitationPanel({
 	userInput,
@@ -779,11 +772,6 @@ function ToolApprovalElicitationPanel({
 					viewModel.message ||
 					"This MCP tool needs your approval before it can run."
 				}
-				trailing={
-					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
-						{viewModel.serverName}
-					</span>
-				}
 			/>
 
 			<InteractionFooter>
@@ -791,10 +779,10 @@ function ToolApprovalElicitationPanel({
 					variant="outline"
 					size="sm"
 					disabled={disabled}
-					onClick={() => onResponse(userInput, "cancel")}
+					onClick={() => onResponse(userInput, "decline")}
 				>
 					<X className="size-3.5" strokeWidth={2} />
-					<span>Cancel</span>
+					<span>Decline</span>
 				</Button>
 				{viewModel.allowAlways ? (
 					<Button

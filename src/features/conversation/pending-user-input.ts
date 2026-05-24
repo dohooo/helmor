@@ -35,10 +35,7 @@ export type PendingUserInputPayload =
 	| {
 			kind: "form";
 			schema: Record<string, unknown>;
-			/** Provider-specific hints (e.g. Codex's `_meta.codex_approval_kind`
-			 *  flagging an MCP tool-call approval + `_meta.persist` advertising
-			 *  which session/always buttons the client may render). Opaquely
-			 *  round-trips back through `respondToUserInput`'s `meta` arg. */
+			/** Provider-specific hints (e.g. Codex `_meta`). Round-trips back via `respondToUserInput`'s `meta`. */
 			meta?: Record<string, unknown>;
 	  }
 	| {

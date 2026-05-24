@@ -224,10 +224,7 @@ describe("normalizeElicitation", () => {
 	});
 
 	it("routes Codex MCP tool-call approvals (empty schema + approval kind) to the tool-approval view model", () => {
-		// Reproduces https://github.com/dohooo/helmor/issues/639: Codex
-		// `mcpServer/elicitation/request` with empty schema + the
-		// `codex_approval_kind: "mcp_tool_call"` _meta tag used to fall
-		// through to `unsupported` (Cancel/Decline only — no Allow).
+		// Repro for #639.
 		const result = normalizeElicitation({
 			provider: "codex",
 			modelId: "gpt-5.5-high",

@@ -99,9 +99,7 @@ export type UserInputResolution =
 	| {
 			action: "submit";
 			content: Record<string, unknown>;
-			/** Optional provider-specific meta (e.g. Codex MCP tool-call
-			 *  approval `{ persist: "session" | "always" }`). Round-trips
-			 *  back into the SDK response unchanged. */
+			/** Provider-specific meta (e.g. Codex `{ persist: "session" | "always" }`). */
 			meta?: Record<string, unknown>;
 	  }
 	| {

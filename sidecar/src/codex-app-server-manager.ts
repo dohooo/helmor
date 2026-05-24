@@ -487,9 +487,7 @@ export class CodexAppServerManager implements SessionManager {
 					: resolution.action === "decline"
 						? "decline"
 						: "cancel";
-			// Forward `_meta` so the user's persist choice (session/always)
-			// reaches Codex's MCP tool-call approval flow. The TUI wires the
-			// same `meta` field; see `mcp_tool_call.rs::parse_mcp_tool_approval_decision`.
+			// Forward `_meta.persist` so Codex remembers session/always allow.
 			const meta =
 				(resolution.action === "submit" || resolution.action === "decline") &&
 				resolution.meta &&
@@ -926,12 +924,7 @@ export class CodexAppServerManager implements SessionManager {
 							? p.message
 							: "Server requested input.";
 
-					// Codex tags MCP tool-call approvals via `_meta.codex_approval_kind`,
-					// and advertises persist options on `_meta.persist`. We forward
-					// the whole `_meta` object opaquely so the frontend can render
-					// the matching Allow / Allow-for-session / Always-allow UI and
-					// round-trip the chosen persist value back through `respondToUserInput`.
-					// See https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md#mcp-server-elicitations
+					// Forward `_meta` opaquely (carries codex_approval_kind + persist).
 					const elicitationMeta =
 						p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
 							? (p._meta as Record<string, unknown>)
