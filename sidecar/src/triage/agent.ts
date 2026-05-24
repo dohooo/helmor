@@ -51,6 +51,28 @@ function preview(value: unknown, max = PREVIEW_CHARS): string {
 
 export interface RunTriageOutcome {
 	proposals: TriageProposal[];
+	/// The agent's final assistant text, captured from the last
+	/// `message_end` event with `role: "assistant"`. Surfaced to the UI as
+	/// the "nothing actionable" tooltip so the user can see why the agent
+	/// decided not to propose anything.
+	finalMessage: string | null;
+}
+
+function extractAssistantText(message: unknown): string | null {
+	if (!message || typeof message !== "object") return null;
+	const m = message as { role?: unknown; content?: unknown };
+	if (m.role !== "assistant" || !Array.isArray(m.content)) return null;
+	const parts: string[] = [];
+	for (const block of m.content) {
+		if (block && typeof block === "object") {
+			const b = block as { type?: unknown; text?: unknown };
+			if (b.type === "text" && typeof b.text === "string") {
+				parts.push(b.text);
+			}
+		}
+	}
+	const joined = parts.join("\n").trim();
+	return joined.length > 0 ? joined : null;
 }
 
 export interface RunTriageHooks {
@@ -163,6 +185,7 @@ export async function runTriageTick(
 	const MAX_TURNS = 100;
 	let turnIndex = 0;
 	let aborted = false;
+	let lastAssistantText: string | null = null;
 	agent.subscribe((event) => {
 		const e = event as { type: string } & Record<string, unknown>;
 		switch (e.type) {
@@ -188,6 +211,14 @@ export async function runTriageTick(
 				}
 				break;
 			}
+			case "message_end": {
+				// Stash every assistant text — the *last* one we see (after the
+				// agent loop terminates without further tool_calls) is the
+				// model's stated reason for stopping.
+				const text = extractAssistantText((e as { message?: unknown }).message);
+				if (text) lastAssistantText = text;
+				break;
+			}
 		}
 	});
 
@@ -209,8 +240,9 @@ export async function runTriageTick(
 			proposalCount: proposals.length,
 			aborted,
 			turnsRun: turnIndex,
+			finalMessagePreview: preview(lastAssistantText, 240),
 		});
-		return { proposals };
+		return { proposals, finalMessage: lastAssistantText };
 	} finally {
 		// Always clean up scratch — every prior return path leaked the dir
 		// when the agent aborted by cap or threw post-drain.

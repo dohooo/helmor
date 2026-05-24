@@ -1933,7 +1933,7 @@ export type TriageActiveStatus = {
 
 export type TickOutcome =
 	| { kind: "createdWorkspaces"; count: number }
-	| { kind: "noActionableItems" }
+	| { kind: "noActionableItems"; reason: string | null }
 	| { kind: "failed"; message: string };
 
 export type LastTickOutcome = {

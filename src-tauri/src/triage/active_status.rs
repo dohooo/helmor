@@ -38,7 +38,9 @@ pub enum TickOutcome {
     /// Tick ran clean and the agent proposed workspaces that got created.
     CreatedWorkspaces { count: u32 },
     /// Tick ran clean but the agent didn't surface anything actionable.
-    NoActionableItems,
+    /// `reason` carries the agent's final assistant text (when it gave
+    /// one) so the UI can show why nothing was proposed.
+    NoActionableItems { reason: Option<String> },
     /// Tick aborted (sidecar error, timeout, agent abort).
     Failed { message: String },
 }

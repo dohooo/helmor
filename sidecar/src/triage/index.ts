@@ -78,6 +78,13 @@ export async function handleRunTriageTick(
 				},
 			});
 		}
+		if (outcome.finalMessage) {
+			write({
+				id: requestId,
+				type: "triageSummary",
+				message: outcome.finalMessage,
+			});
+		}
 		emitter.end(requestId);
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);

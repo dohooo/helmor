@@ -329,13 +329,32 @@ function OutcomeLine({
 		);
 	}
 	if (o.kind === "noActionableItems") {
-		return (
-			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
+		const line = (
+			<div
+				className={cn(
+					"flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground",
+					o.reason ? "cursor-help" : null,
+				)}
+			>
 				<MinusCircle className="size-3.5 shrink-0" />
 				<span className="truncate">
 					Last tick · {when} · nothing actionable
 				</span>
 			</div>
+		);
+		if (!o.reason) return line;
+		return (
+			<TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>{line}</TooltipTrigger>
+					<TooltipContent
+						side="top"
+						className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
+					>
+						{o.reason}
+					</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
 		);
 	}
 	// failed

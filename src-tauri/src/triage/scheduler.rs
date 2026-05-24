@@ -84,8 +84,10 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     let outcome = execute_tick(app, cfg, &tick_id);
 
     let summary = match &outcome {
-        Ok(0) => TickOutcome::NoActionableItems,
-        Ok(count) => TickOutcome::CreatedWorkspaces { count: *count },
+        Ok((0, reason)) => TickOutcome::NoActionableItems {
+            reason: reason.clone(),
+        },
+        Ok((count, _)) => TickOutcome::CreatedWorkspaces { count: *count },
         Err(error) => TickOutcome::Failed {
             message: format!("{error:#}"),
         },
@@ -111,11 +113,15 @@ impl Drop for TickGuard {
     }
 }
 
-fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &str) -> Result<u32> {
+fn execute_tick<R: Runtime>(
+    app: &AppHandle<R>,
+    cfg: &TriageConfig,
+    tick_id: &str,
+) -> Result<(u32, Option<String>)> {
     let providers = enabled_provider_ids(cfg);
     if providers.is_empty() {
         tracing::info!(tick_id = %tick_id, "triage: no providers enabled, skipping");
-        return Ok(0);
+        return Ok((0, None));
     }
 
     let repos = list_repos_payload()?;
@@ -158,6 +164,7 @@ fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &st
 
     let store = app.state::<ActiveStatusStore>();
     let mut proposals: Vec<CreateAiWorkspaceParams> = Vec::new();
+    let mut summary_message: Option<String> = None;
     let mut got_terminal = false;
     let mut error_message: Option<String> = None;
     let deadline = std::time::Instant::now() + Duration::from_secs(1800);
@@ -177,6 +184,13 @@ fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &st
                         proposals.push(p);
                     }
                 }
+            }
+            "triageSummary" => {
+                summary_message = event
+                    .raw
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
             }
             "triageProgress" => {
                 if let Some(turn) = event.raw.get("turn").and_then(Value::as_u64) {
@@ -239,7 +253,7 @@ fn execute_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig, tick_id: &st
 
     tracing::info!(tick_id = %tick_id, created, "triage: tick complete");
     ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
-    Ok(created)
+    Ok((created, summary_message))
 }
 
 fn list_repos_payload() -> Result<Value> {
