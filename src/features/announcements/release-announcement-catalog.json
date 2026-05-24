@@ -2,6 +2,31 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.25.0",
+			"items": [
+				{
+					"text": "Cmd+Shift+N now opens the new-workspace composer in Just-chat mode, and Cmd+N opens it in worktree mode.",
+					"action": {
+						"label": "Open Shortcuts",
+						"value": {
+							"type": "openSettings",
+							"section": "shortcuts"
+						}
+					}
+				},
+				{
+					"text": "Slack is now a Context source — connect your workspaces and the agent can read threads (with images) the same way you do.",
+					"action": {
+						"label": "Open Context",
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.24.0",
 			"items": [
 				{
