@@ -5,8 +5,7 @@ import type { ScratchSession } from "../scratch";
 
 export interface ProviderContext {
 	readonly scratch: ScratchSession;
-	/** ISO 8601 timestamp the last successful tick advanced to. null on first run. */
-	readonly lastTriagedAt: string | null;
+	readonly lastTriagedAt: string;
 }
 
 export interface PreflightResult {

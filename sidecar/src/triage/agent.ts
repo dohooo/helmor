@@ -25,6 +25,7 @@ registerBuiltInApiProviders();
 
 const PROVIDER_ID = "helmor-local";
 const PREVIEW_CHARS = 240;
+const COLD_START_LOOKBACK_HOURS = 48;
 
 function buildLocalModel(
 	params: TriageTickParams["localModel"],
@@ -106,6 +107,17 @@ export async function runTriageTick(
 	const providerHints: string[] = [];
 	const disabledProviders: { displayName: string; reason: string }[] = [];
 
+	// Resolve a non-null time floor for every provider. If the DB has no
+	// checkpoint yet (cold start), fall back to "now - 48h" so the agent
+	// never gets a "scan all of history" budget on the first run.
+	const coldStartFloor = new Date(
+		Date.now() - COLD_START_LOOKBACK_HOURS * 3_600_000,
+	).toISOString();
+	const effectiveLastTriagedAt: Record<string, string> = {};
+	for (const id of params.providers) {
+		effectiveLastTriagedAt[id] = params.lastTriagedAt[id] ?? coldStartFloor;
+	}
+
 	for (const id of params.providers) {
 		const provider = findProvider(id);
 		if (!provider) {
@@ -114,7 +126,7 @@ export async function runTriageTick(
 		}
 		const ctx: ProviderContext = {
 			scratch,
-			lastTriagedAt: params.lastTriagedAt[id] ?? null,
+			lastTriagedAt: effectiveLastTriagedAt[id] ?? coldStartFloor,
 		};
 		if (provider.preflight) {
 			try {
@@ -154,7 +166,7 @@ export async function runTriageTick(
 	const userMessage = buildTickUserMessage(
 		params.providers,
 		params.repos,
-		params.lastTriagedAt,
+		effectiveLastTriagedAt,
 	);
 
 	logger.info(`${logTag} agent.build`, {
