@@ -6,7 +6,6 @@ pub(crate) mod feedback_commands;
 pub(crate) mod forge_commands;
 pub(crate) mod local_llm_commands;
 pub(crate) mod mcp_commands;
-pub(crate) mod planner_commands;
 pub(crate) mod repository_commands;
 pub(crate) mod screen_capture;
 pub(crate) mod script_commands;
@@ -16,7 +15,6 @@ pub(crate) mod slack_commands;
 pub(crate) mod system_commands;
 pub(crate) mod terminal_commands;
 pub(crate) mod updater_commands;
-pub(crate) mod voice_agent;
 pub(crate) mod workspace_commands;
 
 pub use system_commands::DataInfo;

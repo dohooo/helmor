@@ -27,7 +27,6 @@ pub mod slack;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
-pub mod voice_planner;
 pub mod workspace;
 
 #[cfg(test)]
@@ -114,7 +113,6 @@ pub fn run() {
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(executor_studio::ManagedExecutor::new())
-        .manage(voice_planner::ManagedPlanner::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
@@ -164,9 +162,6 @@ pub fn run() {
                 data = %db_path.display(),
                 "Helmor started"
             );
-
-            build_main_window(app)?;
-            build_voice_panel_window(app)?;
 
             // Sweep `.trash-*` dirs left over from a prior run (worker killed
             // mid-cleanup, OS crash). Hands them to the global serial queue so
@@ -429,7 +424,6 @@ pub fn run() {
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
-            commands::settings_commands::create_openai_realtime_client_secret,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
             commands::mcp_commands::get_executor_status,
@@ -439,8 +433,6 @@ pub fn run() {
             commands::mcp_commands::remove_mcp_source,
             commands::mcp_commands::open_mcp_studio_window,
             commands::mcp_commands::open_mcp_oauth_external,
-            commands::planner_commands::start_planner_turn,
-            commands::planner_commands::abort_planner_turn,
             commands::local_llm_commands::detect_local_llm_hardware,
             commands::local_llm_commands::get_local_llm_status,
             commands::local_llm_commands::list_local_llm_catalog,
@@ -598,11 +590,7 @@ pub fn run() {
             commands::settings_commands::save_auto_close_action_kinds,
             commands::settings_commands::load_auto_close_opt_in_asked,
             commands::settings_commands::save_auto_close_opt_in_asked,
-            commands::voice_agent::run_voice_tool,
             global_hotkey::sync_global_hotkey,
-            global_hotkey::set_voice_mode_active,
-            global_hotkey::hide_voice_panel,
-            record_voice_panel_event,
             ui_sync::subscribe_ui_mutations,
             ui_sync::unsubscribe_ui_mutations,
             commands::updater_commands::get_app_update_status,
@@ -649,25 +637,7 @@ pub fn run() {
             event: tauri::WindowEvent::Focused(true),
             ..
         } if label == "main" => {
-            if let Err(error) = global_hotkey::set_main_window_focused(app_handle, true) {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to disable global hotkey while main window is focused",
-                );
-            }
             updater::maybe_trigger_on_focus(app_handle.clone());
-        }
-        tauri::RunEvent::WindowEvent {
-            label,
-            event: tauri::WindowEvent::Focused(false),
-            ..
-        } if label == "main" => {
-            if let Err(error) = global_hotkey::set_main_window_focused(app_handle, false) {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to enable global hotkey while main window is blurred",
-                );
-            }
         }
         tauri::RunEvent::WindowEvent {
             label,
@@ -702,79 +672,6 @@ pub fn run() {
         }
         _ => {}
     });
-}
-
-fn build_main_window(app: &mut tauri::App) -> tauri::Result<()> {
-    let Some(window_config) = app.config().app.windows.first() else {
-        return Ok(());
-    };
-
-    let builder = tauri::WebviewWindowBuilder::from_config(app, window_config)?;
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.with_webview_configuration(mac_webview_configuration());
-
-    builder.build()?;
-    Ok(())
-}
-
-/// Forward-and-tag a structured event from the voice-panel webview
-/// into the Rust tracing log. The voice-panel is a transparent
-/// chrome-less window with no surfaceable devtools, so this is the
-/// only channel by which its lifecycle / WebRTC peer churn / Realtime
-/// session activity becomes visible to an operator. Cheap enough to
-/// leave wired up even outside active debugging.
-#[tauri::command]
-fn record_voice_panel_event(event: String, data: Option<serde_json::Value>) {
-    tracing::info!(
-        target: "helmor_lib::voice_panel",
-        event = %event,
-        data = ?data,
-        "voice panel event",
-    );
-}
-
-fn build_voice_panel_window(app: &mut tauri::App) -> tauri::Result<()> {
-    let builder = tauri::WebviewWindowBuilder::new(
-        app,
-        "voice-panel",
-        tauri::WebviewUrl::App("voice-panel.html".into()),
-    )
-    .title("Helmor Voice")
-    .inner_size(328.0, 80.0)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .closable(false)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .visible(false)
-    .skip_taskbar(true)
-    .shadow(false);
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.with_webview_configuration(mac_webview_configuration());
-
-    builder.build()?;
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn mac_webview_configuration() -> objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration> {
-    use objc2_foundation::{ns_string, MainThreadMarker, NSNumber, NSObjectNSKeyValueCoding};
-    use objc2_web_kit::WKWebViewConfiguration;
-
-    let mtm = MainThreadMarker::new().expect("main window must be created on the main thread");
-    let config = unsafe { WKWebViewConfiguration::new(mtm) };
-    let yes = NSNumber::numberWithBool(true);
-
-    unsafe {
-        let preferences = config.preferences();
-        preferences.setValue_forKey(Some(&yes), ns_string!("mediaDevicesEnabled"));
-    }
-
-    config
 }
 
 // Route a user-initiated exit through the frontend quit-confirm flow.

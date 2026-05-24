@@ -27,7 +27,6 @@ export default defineConfig(async () => ({
 		dedupe: ["react", "react-dom"],
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
-			"border-beam": path.resolve(__dirname, "./src/components/border-beam"),
 			react: path.resolve(__dirname, "./node_modules/react"),
 			"react-dom": path.resolve(__dirname, "./node_modules/react-dom"),
 			"react/jsx-runtime": path.resolve(
@@ -78,14 +77,6 @@ export default defineConfig(async () => ({
 		watch: {
 			// 3. ignore app-internal local data/docs, Rust backend, editor metadata, logs, and build artifacts
 			ignored: WATCH_IGNORED,
-		},
-	},
-	build: {
-		rollupOptions: {
-			input: {
-				main: path.resolve(__dirname, "index.html"),
-				voicePanel: path.resolve(__dirname, "voice-panel.html"),
-			},
 		},
 	},
 	test: {

@@ -7,9 +7,7 @@
 //!
 //! This MCP surface exposes Helmor's domain operations that don't
 //! require Tauri runtime state (no `AppHandle`, no `ScriptProcessManager`,
-//! no `ActiveStreams`). Voice-side handlers in `commands/voice_agent.rs`
-//! that DO need runtime state are NOT mirrored here — see the migration
-//! block in `ToolKind` for what's intentionally absent.
+//! no `ActiveStreams`).
 //!
 //! The MCP variants of `*_list` / `*_show` tools drop the "is this
 //! session live-streaming?" enrichment fields (`isWorking`,
@@ -1211,10 +1209,6 @@ fn bounded_limit(args: &Value, default: usize, max: usize) -> usize {
 }
 
 /// SQL window into `session_messages` for `helmor_session_get_messages`.
-///
-/// Inline copy of voice_agent's `list_session_records_for_voice` — small
-/// and self-contained, not worth extracting to a shared module (the
-/// voice version is dormant during the executor migration anyway).
 fn list_session_records(
     session_id: &str,
     limit: usize,
@@ -1265,8 +1259,7 @@ fn list_session_records(
 }
 
 /// Collapse a stored `session_messages.content` row into a single
-///   human-readable string. Direct inline copy of voice_agent's helper
-///   (see `summarize_historical_record` there).
+/// human-readable string.
 fn summarize_historical_record(record: &HistoricalRecord) -> String {
     let Some(parsed) = &record.parsed_content else {
         return record.content.clone();

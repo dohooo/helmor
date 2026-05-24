@@ -33,7 +33,6 @@ rand = "0.10.0"
 reqwest = { version = "0.12", default-features = false, features = [
     "blocking",
     "json",
-    "multipart",
     "rustls-tls",
     "stream",
 ] }
@@ -55,7 +54,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 hex = "0.4"
-tauri = { version = "2", features = ["macos-private-api", "protocol-asset", "test", "devtools"] }
+tauri = { version = "2", features = ["protocol-asset", "test", "devtools"] }
 tempfile = "3"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
@@ -74,15 +73,6 @@ tokio = { version = "1", features = [
     "macros",
     "time",
 ] }
-# `CancellationToken` for propagating abort signals across the
-# planner's tokio::spawn boundary into the in-flight reqwest SSE
-# stream. tokio's `JoinHandle::abort` alone can't interrupt a
-# blocking-style network read partway through a frame.
-tokio-util = "0.7"
-# `StreamExt::next()` for pumping `reqwest::Response::bytes_stream()`
-# in the planner SSE loop. Already a transitive dep through reqwest;
-# pinning here keeps the planner module compilable standalone.
-futures-util = "0.3"
 notify = "7"
 notify-debouncer-full = "0.4"
 toml = "0.8"
@@ -94,18 +84,12 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-# Screen capture for the voice agent's `capture_screen` tool. `xcap` is the
-# maintained cross-platform successor to the deprecated `screenshots` crate;
-# `image` is xcap's underlying RgbaImage / PNG encoder dependency. We re-export
-# the same `image` version xcap uses so encoder + buffer types match without a
-# manual transmute. The PNG-only feature shaves the JPEG/GIF/etc. codecs we
-# don't use.
+# Screen / window capture utility (`commands::screen_capture`). Kept as
+# a general Helmor capability for future agent / CLI re-exposure; no
+# active caller today. `xcap` is the maintained cross-platform successor
+# to the deprecated `screenshots` crate; `image` provides the
+# RgbaImage / PNG / JPEG encoder dependency.
 xcap = "0.8"
-# `png` for the lossless path (small windows where size isn't an issue).
-# `jpeg` for the lossy path the voice agent's `capture_screen` actually
-# uses — Realtime API's WebRTC dataChannel has an SCTP message size
-# limit (~16–256 KB) that PNG screenshots blow through, so we encode to
-# JPEG and downsample to ~1280px long edge before base64'ing.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # libc backs Unix process groups, signals, and PTY handling.
@@ -116,13 +100,11 @@ version = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 # `core_graphics::access::ScreenCaptureAccess` wraps
-# `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess` for the
-# voice-agent screenshot tool's permission gate. Sync `bool` API; no other
-# crate needs core-graphics today, so it sits in the macOS-only block.
+# `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess` for
+# `commands::screen_capture`'s permission gate. Sync `bool` API; no
+# other crate needs core-graphics today, so it sits in the macOS-only
+# block.
 core-graphics = "0.25"
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSKeyValueCoding", "NSString", "NSValue"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
 security-framework = "3"
 security-framework-sys = "2"
 
@@ -133,16 +115,6 @@ path = "src/bin/helmor-cli.rs"
 [[bin]]
 name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
-
-# Standalone probe that exercises the voice planner's GPT-5 pipeline
-# without WebRTC / rt / Tauri. Reads the OpenAI key from the helmor
-# settings DB, sends synthetic transcripts through the same code path
-# the real voice agent uses, and prints a timeline of what the planner
-# emitted (say + final events). Self-validation tool for prompt
-# iteration. Run: `cargo run --bin planner_probe -- "your transcript"`
-[[bin]]
-name = "planner_probe"
-path = "src/bin/planner_probe.rs"
 
 [dev-dependencies]
 insta = { version = "1", features = ["yaml", "glob"] }

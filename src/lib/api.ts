@@ -183,10 +183,6 @@ export type AgentSendRequest = {
 	 *  matching `@<path>` substrings out as image attachments without
 	 *  re-parsing the text — paths may contain whitespace. */
 	images?: string[] | null;
-	/** Voice dispatches use this to mirror stream updates through the
-	 *  global UI-sync bridge. Composer sends leave it off because they
-	 *  already own a dedicated stream Channel. */
-	broadcastStreamEvents?: boolean;
 };
 
 export type WorkspaceSummary = {
@@ -758,16 +754,6 @@ export async function syncGlobalHotkey(hotkey: string | null): Promise<void> {
 		await invoke<void>("sync_global_hotkey", { hotkey });
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to set global hotkey."));
-	}
-}
-
-export async function setVoiceModeActive(active: boolean): Promise<void> {
-	try {
-		await invoke<void>("set_voice_mode_active", { active });
-	} catch (error) {
-		throw new Error(
-			describeInvokeError(error, "Unable to update voice mode state."),
-		);
 	}
 }
 
@@ -1891,16 +1877,6 @@ export type UiMutationEvent =
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
-	| {
-			type: "sessionStreamUpdated";
-			sessionId: string;
-			messages: ThreadMessageLike[];
-	  }
-	| {
-			type: "sessionStreamPartial";
-			sessionId: string;
-			message: ThreadMessageLike;
-	  }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
 	| { type: "workspaceForgeChanged"; workspaceId: string }
@@ -3201,9 +3177,7 @@ export async function setLocalLlmContextOverride(
 	});
 }
 
-/** Connection params for the running local LLM `llama-server`. Voice
- *  Pilot reads this to POST OpenAI-compatible chat completions with
- *  tool schemas directly to the user's configured local model. `null`
+/** Connection params for the running local LLM `llama-server`. `null`
  *  while the server is stopped / starting / crashed. */
 export type LocalLlmEndpoint = {
 	url: string;
@@ -3233,88 +3207,6 @@ export async function startAgentMessageStream(
 	const onEvent = new Channel<AgentStreamEvent>();
 	onEvent.onmessage = (event) => callback(event);
 	await invoke("send_agent_message_stream", { request, onEvent });
-}
-
-export type OpenAiRealtimeClientSecret = {
-	value: string;
-	expiresAt?: number | null;
-};
-
-export async function createOpenAiRealtimeClientSecret(): Promise<OpenAiRealtimeClientSecret> {
-	return await invoke<OpenAiRealtimeClientSecret>(
-		"create_openai_realtime_client_secret",
-	);
-}
-
-/** Coarse-grained cache invalidation hint emitted by an in-process voice
- *  tool call. Mirrors the Rust `MutationKind` enum
- *  (`commands::voice_agent::MutationKind`) — variants are intentionally
- *  the same camelCase strings on both sides. */
-export type VoiceToolMutationKind = "workspaces" | "sessions";
-
-export type VoiceDispatchActionKind =
-	| "commit-and-push"
-	| "create-pr"
-	| "fix"
-	| "resolve-conflicts";
-
-export type VoiceDispatchWorkspaceAction = {
-	workspaceId: string;
-	actionKind: VoiceDispatchActionKind;
-};
-
-/** Image payload returned by the `capture_screen` voice tool. The
- *  dispatcher pushes this into the Realtime conversation as a separate
- *  `input_image` user item (the Realtime `function_call_output.output`
- *  field is string-only, so binary frames cannot ride the tool
- *  output). Mirrors `commands::voice_agent::VoiceToolImage`.
- *
- *  Rust delivers a fully-formed `data:image/jpeg;base64,…` URL ready
- *  to drop into `input_image.image_url`. We can't use Files API
- *  `file_id` — `gpt-realtime-2` rejects `input_image` items that
- *  omit `image_url` (verified against the live API). To stay under
- *  the WebRTC dataChannel's SCTP message size ceiling (~16–256 KB),
- *  the Rust encoder aggressively downsamples to ~1280 px long edge
- *  and JPEG-q60s the frame; expect base64 sizes around 80–150 KB. */
-export type VoiceToolImage = {
-	/** `data:image/jpeg;base64,…` URL. Drop straight into the Realtime
-	 *  `input_image.image_url` field. */
-	dataUrl: string;
-	width: number;
-	height: number;
-	/** One-line caption sent alongside the image as an `input_text`
-	 *  content part to steer the model's reading. */
-	caption: string;
-};
-
-/** Envelope returned by an in-process voice tool invocation. Mirrors
- *  `commands::voice_agent::VoiceToolEnvelope` on the Rust side.
- *
- *  Handler errors are returned as `ok: false` with `error` populated
- *  rather than as IPC failures, so a single bad tool call can't abort
- *  the whole Realtime turn — the model still gets the failure in its
- *  `function_call_output` and can phrase it for the user. */
-export type VoiceToolEnvelope = {
-	ok: boolean;
-	data: unknown;
-	error: string | null;
-	invalidates: VoiceToolMutationKind[];
-	navigateToWorkspaceId: string | null;
-	dispatchWorkspaceAction: VoiceDispatchWorkspaceAction | null;
-	image: VoiceToolImage | null;
-};
-
-/** Run one voice-agent tool in-process inside the Tauri host. The Rust
- *  side dispatches `tool` to its matching handler (which calls the same
- *  internal `service::*` / `workspace::*` / `models::*` function the
- *  CLI would have used) and returns a typed envelope. No subprocess,
- *  no separate SQLite write pool — see `commands::voice_agent` for the
- *  rationale. */
-export async function runVoiceTool(
-	tool: string,
-	args: Record<string, unknown>,
-): Promise<VoiceToolEnvelope> {
-	return await invoke<VoiceToolEnvelope>("run_voice_tool", { tool, args });
 }
 
 export async function stopAgentStream(
@@ -4101,69 +3993,6 @@ export async function removeMcpSource(sourceId: string): Promise<void> {
 
 export async function openMcpStudioWindow(): Promise<{ label: string }> {
 	return await invoke<{ label: string }>("open_mcp_studio_window");
-}
-
-// ---------------------------------------------------------------------------
-// Voice planner (Phase 1)
-// ---------------------------------------------------------------------------
-
-/** Mirror of `voice_planner::events::PlannerEvent`. The tag field
- *  matches Rust's `#[serde(tag = "kind", ..., rename_all_fields = "camelCase")]`. */
-export type PlannerEvent =
-	| { kind: "started"; turnId: string }
-	| { kind: "say"; turnId: string; text: string }
-	| { kind: "final"; turnId: string; text: string }
-	| { kind: "status"; turnId: string; note: string }
-	| { kind: "error"; turnId: string; message: string }
-	| { kind: "done"; turnId: string }
-	| {
-			kind: "toolCallStarted";
-			turnId: string;
-			callId: string;
-			name: string;
-			argsPreview: string;
-	  }
-	| {
-			kind: "toolCallCompleted";
-			turnId: string;
-			callId: string;
-			name: string;
-			ok: boolean;
-			durationMs: number;
-			resultPreview: string;
-	  }
-	| { kind: "invalidate"; turnId: string; kinds: string[] }
-	| { kind: "navigateToWorkspace"; turnId: string; workspaceId: string }
-	| { kind: "endSession"; turnId: string }
-	| {
-			kind: "captureImage";
-			turnId: string;
-			width: number;
-			height: number;
-			dataUrl: string;
-			caption: string;
-	  };
-
-export type PlannerTurnAccepted = { turnId: string };
-
-/** Start a new planner turn. Returns synchronously with the turn id;
- *  events arrive on the supplied callback until the turn ends. Caller
- *  should keep a reference to the returned channel/turnId so it can
- *  call `abortPlannerTurn` for interruption. */
-export async function startPlannerTurn(
-	transcript: string,
-	onEvent: (event: PlannerEvent) => void,
-): Promise<PlannerTurnAccepted> {
-	const channel = new Channel<PlannerEvent>();
-	channel.onmessage = onEvent;
-	return await invoke<PlannerTurnAccepted>("start_planner_turn", {
-		transcript,
-		onEvent: channel,
-	});
-}
-
-export async function abortPlannerTurn(turnId: string): Promise<void> {
-	await invoke("abort_planner_turn", { turnId });
 }
 
 // ---------------------------------------------------------------------------

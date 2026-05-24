@@ -229,7 +229,7 @@ function SourcesGroup({
 		<SettingsGroup>
 			<SettingsRow
 				title="MCP Sources"
-				description="Tool integrations exposed through Executor. Use these for external systems; Helmor local commands are available to voice mode as native tools."
+				description="Tool integrations exposed through Executor. Use these for external systems."
 			/>
 			{disabled ? (
 				<SettingsRow

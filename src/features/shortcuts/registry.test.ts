@@ -16,7 +16,7 @@ describe("shortcut registry", () => {
 
 	it("resolves defaults, overrides, and disabled shortcuts", () => {
 		expect(getShortcut({}, "workspace.previous")).toBe("Mod+Alt+ArrowUp");
-		expect(getShortcut({}, "global.hotkey")).toBe("Mod+Shift+V");
+		expect(getShortcut({}, "global.hotkey")).toBeNull();
 		expect(
 			getShortcut({ "workspace.previous": "Mod+A" }, "workspace.previous"),
 		).toBe("Mod+A");
@@ -77,14 +77,6 @@ describe("shortcut registry", () => {
 		expect(conflicts.disabledIds.has("terminal.new")).toBe(false);
 		expect(conflicts.conflictById["session.new"]).toBeUndefined();
 		expect(conflicts.conflictById["terminal.new"]).toBeUndefined();
-	});
-
-	it("allows the global hotkey to share voice mode's app shortcut", () => {
-		const conflicts = getShortcutConflicts({});
-		expect(conflicts.disabledIds.has("global.hotkey")).toBe(false);
-		expect(conflicts.disabledIds.has("voice.toggle")).toBe(false);
-		expect(findShortcutConflict({}, "global.hotkey", "Mod+Shift+V")).toBeNull();
-		expect(findShortcutConflict({}, "voice.toggle", "Mod+Shift+V")).toBeNull();
 	});
 
 	it("treats 'app' scope as overlapping with every other scope", () => {

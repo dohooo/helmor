@@ -2,7 +2,7 @@ use std::{str::FromStr, sync::Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::error::CommandError;
@@ -10,22 +10,13 @@ use crate::error::CommandError;
 const SHORTCUTS_SETTING_KEY: &str = "app.shortcuts";
 const GLOBAL_HOTKEY_ID: &str = "global.hotkey";
 const MAIN_WINDOW_LABEL: &str = "main";
-const VOICE_PANEL_WINDOW_LABEL: &str = "voice-panel";
-const VOICE_PANEL_WIDTH: f64 = 328.0;
-const VOICE_PANEL_HEIGHT: f64 = 80.0;
-const VOICE_PANEL_BOTTOM_MARGIN: f64 = 28.0;
-const VOICE_TOGGLE_REQUEST_EVENT: &str = "helmor://voice-toggle-request";
-const MAIN_WINDOW_FOCUSED_EVENT: &str = "helmor://main-window-focused";
 
 // Rust owns plugin registration, so no frontend plugin capability is needed.
-// Startup reads only stored overrides; the frontend syncs registry defaults
-// after settings load.
+// Startup reads only stored overrides; keep the TS default null unless this
+// module learns the registry default too.
 #[derive(Default)]
 pub struct GlobalHotkeyState {
-    desired: Mutex<Option<String>>,
-    registered: Mutex<Option<String>>,
-    main_focused: Mutex<bool>,
-    voice_active: Mutex<bool>,
+    current: Mutex<Option<String>>,
 }
 
 pub fn sync_from_settings(app: &AppHandle) -> Result<()> {
@@ -48,53 +39,19 @@ fn sync_global_hotkey_inner(app: &AppHandle, hotkey: Option<String>) -> Result<(
         .transpose()?;
 
     let state = app.state::<GlobalHotkeyState>();
-    *state
-        .desired
-        .lock()
-        .expect("global hotkey desired state poisoned") = normalized.clone();
-    let main_focused = *state
-        .main_focused
-        .lock()
-        .expect("global hotkey focus state poisoned");
-    sync_registered_hotkey(app, if main_focused { None } else { normalized })
-}
-
-pub fn set_main_window_focused(app: &AppHandle, focused: bool) -> Result<()> {
-    let state = app.state::<GlobalHotkeyState>();
-    *state
-        .main_focused
-        .lock()
-        .expect("global hotkey focus state poisoned") = focused;
-    tracing::info!(focused, "voice focus bridge: main focus changed");
-    app.emit(MAIN_WINDOW_FOCUSED_EVENT, focused)
-        .context("Failed to emit main window focus state")?;
-    apply_voice_panel_visibility(app)?;
-    let desired = state
-        .desired
-        .lock()
-        .expect("global hotkey desired state poisoned")
-        .clone();
-    sync_registered_hotkey(app, if focused { None } else { desired })
-}
-
-fn sync_registered_hotkey(app: &AppHandle, target: Option<String>) -> Result<()> {
-    let state = app.state::<GlobalHotkeyState>();
-    let mut registered = state
-        .registered
-        .lock()
-        .expect("global hotkey registered state poisoned");
-    if *registered == target {
+    let mut current = state.current.lock().expect("global hotkey state poisoned");
+    if *current == normalized {
         return Ok(());
     }
 
-    let previous = registered.clone();
+    let previous = current.clone();
     if let Some(previous) = previous.as_deref() {
         app.global_shortcut()
             .unregister(previous)
             .with_context(|| format!("Failed to unregister global hotkey {previous}"))?;
     }
 
-    if let Some(next) = target.as_deref() {
+    if let Some(next) = normalized.as_deref() {
         if let Err(error) = app
             .global_shortcut()
             .on_shortcut(next, handle_global_hotkey)
@@ -109,14 +66,14 @@ fn sync_registered_hotkey(app: &AppHandle, target: Option<String>) -> Result<()>
                         hotkey = %previous,
                         "Failed to restore previous global hotkey",
                     );
-                    *registered = None;
+                    *current = None;
                 }
             }
             return Err(error).with_context(|| format!("Failed to register global hotkey {next}"));
         }
     }
 
-    *registered = target;
+    *current = normalized;
     Ok(())
 }
 
@@ -128,125 +85,24 @@ fn handle_global_hotkey(
     if event.state != ShortcutState::Pressed {
         return;
     }
-    if let Err(error) = request_voice_toggle(app) {
-        tracing::warn!(error = %format!("{error:#}"), "Failed to request voice toggle from global hotkey");
+    if let Err(error) = toggle_main_window(app) {
+        tracing::warn!(error = %format!("{error:#}"), "Failed to toggle main window from global hotkey");
     }
 }
 
-fn request_voice_toggle(app: &AppHandle) -> Result<()> {
-    if app
+fn toggle_main_window(app: &AppHandle) -> Result<()> {
+    let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
-        .is_some_and(|window| {
-            window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false)
-        })
-    {
+        .ok_or_else(|| anyhow!("Main window is not available"))?;
+
+    if window.is_visible()? && window.is_focused()? {
+        window.hide()?;
         return Ok(());
     }
 
-    app.emit(VOICE_TOGGLE_REQUEST_EVENT, ())
-        .context("Failed to emit voice toggle request")
-}
-
-/// Main-window voice state is the source of truth. Rust only mirrors
-/// whether the always-on-top global panel should be visible while the
-/// main window is unfocused.
-#[tauri::command]
-pub fn set_voice_mode_active(app: AppHandle, active: bool) -> Result<(), CommandError> {
-    {
-        let state = app.state::<GlobalHotkeyState>();
-        *state
-            .voice_active
-            .lock()
-            .expect("voice active state poisoned") = active;
-    }
-    tracing::info!(active, "voice focus bridge: active changed");
-    Ok(apply_voice_panel_visibility(&app)?)
-}
-
-/// Compatibility command for existing JS callers. Ending the session
-/// means the main-window-owned voice mode is no longer active.
-#[tauri::command]
-pub fn hide_voice_panel(app: AppHandle) -> Result<(), CommandError> {
-    {
-        let state = app.state::<GlobalHotkeyState>();
-        *state
-            .voice_active
-            .lock()
-            .expect("voice active state poisoned") = false;
-    }
-    Ok(apply_voice_panel_visibility(&app)?)
-}
-
-fn apply_voice_panel_visibility(app: &AppHandle) -> Result<()> {
-    let state = app.state::<GlobalHotkeyState>();
-    let voice_active = *state
-        .voice_active
-        .lock()
-        .expect("voice active state poisoned");
-    let recorded_main_focused = *state
-        .main_focused
-        .lock()
-        .expect("global hotkey focus state poisoned");
-    let main_focused = app
-        .get_webview_window(MAIN_WINDOW_LABEL)
-        .map(|window| window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false))
-        .unwrap_or(recorded_main_focused);
-    let visible = should_show_voice_panel(voice_active, main_focused);
-    let panel = app
-        .get_webview_window(VOICE_PANEL_WINDOW_LABEL)
-        .ok_or_else(|| anyhow!("Voice panel window is not available"))?;
-    tracing::info!(
-        voice_active,
-        recorded_main_focused,
-        main_focused,
-        visible,
-        "voice focus bridge: applying panel visibility",
-    );
-
-    if visible {
-        position_voice_panel(&panel)?;
-        panel.show()?;
-        panel.unminimize()?;
-    } else {
-        panel.hide()?;
-    }
-
-    Ok(())
-}
-
-fn should_show_voice_panel(voice_active: bool, main_focused: bool) -> bool {
-    voice_active && !main_focused
-}
-
-fn position_voice_panel(panel: &tauri::WebviewWindow) -> Result<()> {
-    panel
-        .set_size(LogicalSize::new(VOICE_PANEL_WIDTH, VOICE_PANEL_HEIGHT))
-        .context("Failed to size voice panel")?;
-
-    let monitor = panel
-        .current_monitor()?
-        .or(panel.primary_monitor()?)
-        .or_else(|| {
-            panel
-                .available_monitors()
-                .ok()
-                .and_then(|mut monitors| monitors.pop())
-        });
-    let Some(monitor) = monitor else {
-        return Ok(());
-    };
-
-    let scale = monitor.scale_factor();
-    let work_area = monitor.work_area();
-    let panel_width = (VOICE_PANEL_WIDTH * scale).round() as i32;
-    let panel_height = (VOICE_PANEL_HEIGHT * scale).round() as i32;
-    let bottom_margin = (VOICE_PANEL_BOTTOM_MARGIN * scale).round() as i32;
-    let x = work_area.position.x + ((work_area.size.width as i32 - panel_width) / 2);
-    let y = work_area.position.y + work_area.size.height as i32 - panel_height - bottom_margin;
-
-    panel
-        .set_position(PhysicalPosition::new(x, y))
-        .context("Failed to position voice panel")?;
+    window.show()?;
+    window.unminimize()?;
+    window.set_focus()?;
     Ok(())
 }
 
@@ -330,13 +186,5 @@ mod tests {
         assert!(to_tauri_accelerator("   ").is_err());
         assert!(to_tauri_accelerator("Mod+").is_err());
         assert!(to_tauri_accelerator("Mod+Shift").is_err());
-    }
-
-    #[test]
-    fn voice_panel_visible_only_when_voice_active_and_main_unfocused() {
-        assert!(!should_show_voice_panel(false, false));
-        assert!(!should_show_voice_panel(false, true));
-        assert!(!should_show_voice_panel(true, true));
-        assert!(should_show_voice_panel(true, false));
     }
 }

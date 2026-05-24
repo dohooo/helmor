@@ -12,9 +12,9 @@
 	],
 	"scripts": {
 		"changeset": "changeset",
-		"dev": "bun run dev:prepare && bun run dev:cli:build && tauri dev",
+		"dev": "bun run dev:prepare && tauri dev",
 		"dev:prepare": "cd sidecar && bun run dev:prepare",
-		"dev:analyze": "bun run dev:prepare && bun run dev:cli:build && VITE_HELMOR_PERF_HUD=1 tauri dev",
+		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
 		"test": "bun run test:frontend && bun run test:sidecar && bun run test:rust",

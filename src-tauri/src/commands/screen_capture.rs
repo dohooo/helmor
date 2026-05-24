@@ -1,27 +1,20 @@
-//! Screen / window capture for the voice agent's `capture_screen` tool.
-//!
-//! The voice agent invokes this when the user asks it to "look at the
-//! screen" — typically because they've referenced something visible
-//! (a Slack message, an error in another window, a design in Figma)
-//! that the agent needs to read before acting. The captured PNG is
-//! delivered as a base64 data URL on the voice tool envelope's `image`
-//! field; the frontend dispatcher injects it into the active Realtime
-//! conversation as an `input_image` user item so the model can reason
-//! about it on its next response.
+//! Screen / window capture utility. Currently parked — kept available
+//! as a general-purpose Helmor capability (downsampled JPEG capture
+//! of the primary monitor or focused window, returned as a base64
+//! `data:` URL) for future agent / CLI re-exposure. Has no in-tree
+//! caller right now; suppressing dead-code so it lives without
+//! producing warnings.
 //!
 //! ## Permission model (macOS)
 //!
 //! Screen Recording is a TCC-gated permission. `CGPreflightScreenCaptureAccess`
 //! returns the granted/denied state synchronously without prompting;
 //! `CGRequestScreenCaptureAccess` triggers the system prompt exactly
-//! once per install per code-signing identity. Two important gotchas
-//! that drive the UX here:
+//! once per install per code-signing identity. Two important gotchas:
 //!
 //! 1. **`preflight()` caches for the lifetime of the process.** Once
 //!    we've seen `false`, we keep seeing `false` even after the user
-//!    grants. The only reliable recovery is a full app restart — we
-//!    surface that to the voice agent as part of the error string so
-//!    it can tell the user.
+//!    grants. The only reliable recovery is a full app restart.
 //! 2. **Denied captures don't error.** `xcap::Monitor::capture_image`
 //!    on macOS happily returns a black/blank `RgbaImage` if Screen
 //!    Recording is denied. So we MUST preflight before every capture
@@ -29,6 +22,7 @@
 //!
 //! On non-macOS platforms the permission gate is a no-op (`is_granted`
 //! returns `true`) and capture works directly.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -274,69 +268,6 @@ fn persist_jpeg(jpeg_bytes: &[u8]) -> Option<String> {
         return None;
     }
     Some(path.display().to_string())
-}
-
-/// Upload a captured PNG to the OpenAI Files API and return the
-/// resulting `file_id`.
-///
-/// **Currently unused.** This was the original transport plan, but as
-/// of 2026-05 `gpt-realtime-2` rejects `input_image` items that omit
-/// `image_url` even when `file_id` is set
-/// (`Missing required parameter: 'item.content[*].image_url'`). The
-/// Responses API honors `file_id`; Realtime does not, despite sharing
-/// the same content-part schema name. Kept here ready-to-wire so when
-/// OpenAI lifts that restriction we can swap transports without
-/// re-discovering the multipart shape — it's worth ~30 lines + a
-/// `reqwest` feature flag.
-///
-/// Blocking reqwest is OK here: this function is only ever called from
-/// inside `tauri::async_runtime::spawn_blocking` (via `run_blocking`),
-/// matching how `create_openai_realtime_client_secret` makes its own
-/// blocking POST. Timeout is 30 s.
-#[allow(dead_code)]
-pub fn upload_png_to_openai_files(api_key: &str, png_bytes: Vec<u8>) -> Result<String> {
-    let start = std::time::Instant::now();
-    let total_bytes = png_bytes.len();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("build OpenAI Files HTTP client")?;
-    let part = reqwest::blocking::multipart::Part::bytes(png_bytes)
-        .file_name("helmor-voice-capture.png")
-        .mime_str("image/png")
-        .context("build multipart png part")?;
-    let form = reqwest::blocking::multipart::Form::new()
-        // `purpose=vision` is the magic string that makes the file
-        // referenceable from chat / responses / realtime input_image
-        // content. `assistants` purpose does NOT work for vision.
-        .text("purpose", "vision")
-        .part("file", part);
-    let response = client
-        .post("https://api.openai.com/v1/files")
-        .bearer_auth(api_key)
-        .multipart(form)
-        .send()
-        .context("upload capture to OpenAI Files API")?;
-    let status = response.status();
-    let text = response
-        .text()
-        .context("read OpenAI Files API response body")?;
-    if !status.is_success() {
-        anyhow::bail!("OpenAI Files upload failed: HTTP {status}: {text}");
-    }
-    #[derive(serde::Deserialize)]
-    struct FilesResponse {
-        id: String,
-    }
-    let parsed: FilesResponse =
-        serde_json::from_str(&text).context("parse OpenAI Files API response")?;
-    tracing::info!(
-        file_id = %parsed.id,
-        bytes = total_bytes,
-        elapsed_ms = start.elapsed().as_millis() as u64,
-        "uploaded capture to OpenAI Files API"
-    );
-    Ok(parsed.id)
 }
 
 fn capture_primary_monitor() -> Result<RgbaImage> {

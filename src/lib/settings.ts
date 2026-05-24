@@ -289,7 +289,6 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
-	openAiRealtimeApiKey: string;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	startSurfacePreferences: StartSurfacePreferences;
@@ -389,7 +388,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		enabledModelIds: null,
 		cachedModels: null,
 	},
-	openAiRealtimeApiKey: "",
 	localLlm: {
 		enabled: false,
 		model: "",
@@ -549,7 +547,6 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
-	openAiRealtimeApiKey: "app.openai_realtime_api_key",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
 	startSurfacePreferences: "app.start_surface_preferences",
@@ -1206,9 +1203,6 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
-			openAiRealtimeApiKey:
-				raw[SETTINGS_KEY_MAP.openAiRealtimeApiKey] ??
-				DEFAULT_SETTINGS.openAiRealtimeApiKey,
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],

@@ -43,7 +43,6 @@ use uuid::Uuid;
 use crate::pipeline::types::{
     ExtendedMessagePart, MessagePart, MessageRole, PlanAllowedPrompt, ThreadMessageLike,
 };
-use crate::pipeline::PipelineEmit;
 
 use super::{
     finalize_session_metadata, persist_error_message, persist_exit_plan_message,
@@ -236,7 +235,6 @@ pub(super) fn stream_via_sidecar(
     let files_copy = request.files.clone().unwrap_or_default();
     let images_copy = request.images.clone().unwrap_or_default();
     let sidecar_session_id_copy = sidecar_session_id.clone();
-    let broadcast_stream_events = request.broadcast_stream_events;
     let rid = request_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -300,14 +298,6 @@ pub(super) fn stream_via_sidecar(
                     {
                         Ok(()) => {
                             tracing::debug!(rid = %rid, "User message persisted to DB");
-                            if broadcast_stream_events {
-                                crate::ui_sync::publish(
-                                    &app,
-                                    crate::ui_sync::UiMutationEvent::SessionMessagesAppended {
-                                        session_id: ctx.helmor_session_id.clone(),
-                                    },
-                                );
-                            }
                             exchange_ctx = Some(ctx);
                         }
                         Err(error) => {
@@ -695,13 +685,6 @@ pub(super) fn stream_via_sidecar(
                         // cache matches what the historical loader returns.
                         final_messages = pipeline_state.finish();
                     }
-
-                    publish_stream_final_snapshot(
-                        &app,
-                        broadcast_stream_events,
-                        &hsid_copy,
-                        &final_messages,
-                    );
 
                     tracing::info!(
                         rid = %rid,
@@ -1144,8 +1127,6 @@ pub(super) fn stream_via_sidecar(
                                 }
                             }
 
-                            publish_stream_emit(&app, broadcast_stream_events, &hsid_copy, &emit);
-
                             match turn_session.handle_stream_event(emit) {
                                 Ok(actions) => {
                                     for action in actions {
@@ -1228,65 +1209,5 @@ fn build_exit_plan_review_message(
         })],
         status: None,
         streaming: None,
-    }
-}
-
-fn publish_stream_emit(
-    app: &AppHandle,
-    enabled: bool,
-    helmor_session_id: &Option<String>,
-    emit: &PipelineEmit,
-) {
-    if !enabled {
-        return;
-    }
-    let Some(session_id) = helmor_session_id.as_ref() else {
-        return;
-    };
-
-    match emit {
-        PipelineEmit::Full(messages) => {
-            publish_stream_final_snapshot(app, enabled, helmor_session_id, messages);
-        }
-        PipelineEmit::Partial(message) => match serde_json::to_value(message) {
-            Ok(message) => crate::ui_sync::publish(
-                app,
-                crate::ui_sync::UiMutationEvent::SessionStreamPartial {
-                    session_id: session_id.clone(),
-                    message,
-                },
-            ),
-            Err(error) => {
-                tracing::warn!(session_id, "Failed to serialize stream partial: {error}");
-            }
-        },
-        PipelineEmit::None => {}
-    }
-}
-
-fn publish_stream_final_snapshot(
-    app: &AppHandle,
-    enabled: bool,
-    helmor_session_id: &Option<String>,
-    messages: &[ThreadMessageLike],
-) {
-    if !enabled || messages.is_empty() {
-        return;
-    }
-    let Some(session_id) = helmor_session_id.as_ref() else {
-        return;
-    };
-
-    match serde_json::to_value(messages) {
-        Ok(messages) => crate::ui_sync::publish(
-            app,
-            crate::ui_sync::UiMutationEvent::SessionStreamUpdated {
-                session_id: session_id.clone(),
-                messages,
-            },
-        ),
-        Err(error) => {
-            tracing::warn!(session_id, "Failed to serialize stream snapshot: {error}");
-        }
     }
 }

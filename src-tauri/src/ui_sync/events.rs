@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -27,21 +26,6 @@ pub enum UiMutationEvent {
     /// (Goal paused / resumed / cleared) we insert ourselves.
     SessionMessagesAppended {
         session_id: String,
-    },
-    /// Live stream snapshot for sessions that do not have a dedicated
-    /// frontend `Channel` subscriber (voice-created sends). Payload is
-    /// serialized `ThreadMessageLike[]`; keeping it as `Value` avoids
-    /// coupling ui-sync's equality tests to the full pipeline type graph.
-    SessionStreamUpdated {
-        session_id: String,
-        messages: Value,
-    },
-    /// Live streaming tail for sessions that do not have a dedicated
-    /// frontend `Channel` subscriber. Payload is one serialized
-    /// `ThreadMessageLike`.
-    SessionStreamPartial {
-        session_id: String,
-        message: Value,
     },
     WorkspaceFilesChanged {
         workspace_id: String,
@@ -91,7 +75,7 @@ pub enum UiMutationEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiMutationEnvelope {
     pub version: u8,

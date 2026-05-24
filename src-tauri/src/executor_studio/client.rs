@@ -371,9 +371,9 @@ impl ExecutorClient {
     /// - completed: `{ status: "completed", text, structured, isError }`
     /// - paused:    `{ status: "paused",    text, structured: { executionId, interaction: {...} } }`
     ///
-    /// We pass the raw `serde_json::Value` straight through to the voice
-    /// agent — it's what the LLM reads to decide whether to follow up with
-    /// `approve_mcp_call`.
+    /// We pass the raw `serde_json::Value` straight through to the
+    /// caller — it's what an agent reads to decide whether to follow up
+    /// with `approve_mcp_call`.
     pub async fn execute(&self, code: &str) -> Result<Value> {
         let url = format!("{}/api/executions", self.base_url);
         // Code is ~80-400 bytes for our generated meta-tool snippets;

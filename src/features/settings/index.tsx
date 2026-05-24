@@ -74,7 +74,6 @@ import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
 import { McpSettingsPanel } from "./panels/mcp";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
-import { OpenAiRealtimePanel } from "./panels/openai-realtime";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
@@ -596,7 +595,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										updateSettings={updateSettings}
 									/>
 									<CliInstallPanel />
-									<OpenAiRealtimePanel />
 								</SettingsGroup>
 							)}
 

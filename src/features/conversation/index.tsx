@@ -12,7 +12,6 @@ import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import { VoiceModeBar } from "@/features/voice-mode/voice-mode-bar";
 import {
 	type ActiveStreamSummary,
 	type ChangeRequestInfo,
@@ -569,64 +568,52 @@ export const WorkspaceConversationContainer = memo(
 						composerWrapperClassName,
 					)}
 				>
-					{/* Voice-mode outer container. Flex column so the composer
-					    and voice bar swap height 1:1: the composer's textarea
-					    shrinks via AutoResizePlugin's `shrinkBy`, the bar grows
-					    by the same amount -- outer's total height stays
-					    constant, no surrounding-layout shift. `relative` is
-					    reserved for future absolute overlays (orb / glow). */}
-					<div className="relative flex flex-col" data-voice-composer-outer="">
-						<WorkspaceComposerContainer
-							displayedWorkspaceId={displayedWorkspaceId}
-							displayedSessionId={displayedSessionId}
-							repoId={repoId}
-							disabled={selectionPending}
-							forceAvailable={composerForceAvailable}
-							placeholder={composerPlaceholder}
-							contextKeyOverride={composerContextKeyOverride}
-							sending={sendingForComposer}
-							sendError={activeSendError}
-							restoreDraft={restoreDraft}
-							restoreImages={restoreImages}
-							restoreFiles={restoreFiles}
-							restoreCustomTags={restoreCustomTags}
-							restoreNonce={restoreNonce}
-							pendingUserInput={pendingUserInput}
-							onUserInputResponse={userInputResponse}
-							userInputResponsePending={userInputResponsePending}
-							pendingPermission={headPendingPermission}
-							onPermissionResponse={handlePermissionResponse}
-							hasPlanReview={hasPlanReview}
-							modelSelections={composerModelSelections}
-							effortLevels={composerEffortLevels}
-							permissionModes={composerPermissionModes}
-							fastModes={composerFastModes}
-							activeFastPreludes={activeFastPreludes}
-							onSelectModel={handleSelectModel}
-							onSelectEffort={handleSelectEffort}
-							onChangePermissionMode={handleChangePermissionMode}
-							onChangeFastMode={handleChangeFastMode}
-							onSwitchSession={onSelectSession}
-							onSubmit={handleComposerSubmitWrapper}
-							onStop={handleStopStream}
-							pendingPromptForSession={pendingPromptForSession}
-							onPendingPromptConsumed={onPendingPromptConsumed}
-							pendingInsertRequests={relevantPendingInsertRequests}
-							onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
-							queueItems={queueItems}
-							onSteerQueued={handleSteerQueued}
-							onRemoveQueued={handleRemoveQueued}
-							contextPanelOpen={contextPanelOpen}
-							onToggleContextPanel={onToggleContextPanel}
-							startSubmitMenu={composerStartSubmitMenu}
-							focusScope={composerFocusScope}
-							linkedDirectoriesController={composerLinkedDirectoriesController}
-						/>
-						{/* Voice-mode bar. Total slot grows 0 -> 40 px (8 px
-						    gap above + 32 px visible bar) while the composer's
-						    textarea shrinks by the same 40 px. */}
-						<VoiceModeBar />
-					</div>
+					<WorkspaceComposerContainer
+						displayedWorkspaceId={displayedWorkspaceId}
+						displayedSessionId={displayedSessionId}
+						repoId={repoId}
+						disabled={selectionPending}
+						forceAvailable={composerForceAvailable}
+						placeholder={composerPlaceholder}
+						contextKeyOverride={composerContextKeyOverride}
+						sending={sendingForComposer}
+						sendError={activeSendError}
+						restoreDraft={restoreDraft}
+						restoreImages={restoreImages}
+						restoreFiles={restoreFiles}
+						restoreCustomTags={restoreCustomTags}
+						restoreNonce={restoreNonce}
+						pendingUserInput={pendingUserInput}
+						onUserInputResponse={userInputResponse}
+						userInputResponsePending={userInputResponsePending}
+						pendingPermission={headPendingPermission}
+						onPermissionResponse={handlePermissionResponse}
+						hasPlanReview={hasPlanReview}
+						modelSelections={composerModelSelections}
+						effortLevels={composerEffortLevels}
+						permissionModes={composerPermissionModes}
+						fastModes={composerFastModes}
+						activeFastPreludes={activeFastPreludes}
+						onSelectModel={handleSelectModel}
+						onSelectEffort={handleSelectEffort}
+						onChangePermissionMode={handleChangePermissionMode}
+						onChangeFastMode={handleChangeFastMode}
+						onSwitchSession={onSelectSession}
+						onSubmit={handleComposerSubmitWrapper}
+						onStop={handleStopStream}
+						pendingPromptForSession={pendingPromptForSession}
+						onPendingPromptConsumed={onPendingPromptConsumed}
+						pendingInsertRequests={relevantPendingInsertRequests}
+						onPendingInsertRequestsConsumed={onPendingInsertRequestsConsumed}
+						queueItems={queueItems}
+						onSteerQueued={handleSteerQueued}
+						onRemoveQueued={handleRemoveQueued}
+						contextPanelOpen={contextPanelOpen}
+						onToggleContextPanel={onToggleContextPanel}
+						startSubmitMenu={composerStartSubmitMenu}
+						focusScope={composerFocusScope}
+						linkedDirectoriesController={composerLinkedDirectoriesController}
+					/>
 				</div>
 			</FileLinkProvider>
 		);
