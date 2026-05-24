@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -327,11 +327,23 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
+/// One `hostRequest` envelope, forwarded by the reader thread to the
+/// host dispatcher task wired up in `lib.rs::run`.
+#[derive(Debug)]
+pub struct HostRequestEnvelope {
+    pub callback_id: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
+    /// Sender for host-request envelopes the reader thread sniffs out
+    /// of stdout. `OnceLock` because Tauri setup runs once after `.manage`.
+    host_request_tx: OnceLock<mpsc::Sender<HostRequestEnvelope>>,
 }
 
 impl Default for ManagedSidecar {
@@ -346,7 +358,39 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
+            host_request_tx: OnceLock::new(),
         }
+    }
+
+    /// Wire the reverse-channel dispatcher's mpsc into the sidecar. Called
+    /// once from `lib.rs::run`'s setup hook; returns the receiver end the
+    /// dispatcher task drains. Subsequent calls are no-ops (only the first
+    /// sender survives).
+    pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
+        let (tx, rx) = mpsc::channel();
+        let _ = self.host_request_tx.set(tx);
+        rx
+    }
+
+    /// Write a `hostResponse` JSON line on the sidecar's stdin. Acquires
+    /// the same lock as `send()` so request and response writes can't
+    /// interleave on the pipe.
+    pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
+        let guard = self
+            .process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
+        let Some(process) = guard.as_ref() else {
+            anyhow::bail!("Sidecar not running (hostResponse dropped)");
+        };
+        let mut stdin = process
+            .stdin
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
+        let json = serde_json::to_string(response).context("Failed to serialize hostResponse")?;
+        writeln!(stdin, "{json}").context("Failed to write hostResponse")?;
+        stdin.flush().context("Failed to flush hostResponse")?;
+        Ok(())
     }
 
     /// Register a listener for events matching `request_id`.
@@ -391,8 +435,13 @@ impl ManagedSidecar {
             let (process, reader) = SidecarProcess::start()?;
             *guard = Some(process);
 
-            // Start the reader/dispatcher thread (always spawns fresh)
-            if let Err(error) = self.start_reader_thread(reader) {
+            // Start the reader/dispatcher thread (always spawns fresh).
+            // Clone the host-request channel so the reader can route
+            // `hostRequest` envelopes; `None` if Tauri setup hasn't wired
+            // the dispatcher yet (early-boot edge case — those events are
+            // dropped, which matches "host bridge unavailable").
+            let host_tx = self.host_request_tx.get().cloned();
+            if let Err(error) = self.start_reader_thread(reader, host_tx) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -522,7 +571,11 @@ impl ManagedSidecar {
         dispatch_event(&self.listeners, event, raw)
     }
 
-    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
+    fn start_reader_thread(
+        &self,
+        reader: BufReader<std::process::ChildStdout>,
+        host_tx: Option<mpsc::Sender<HostRequestEnvelope>>,
+    ) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -561,6 +614,31 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
+                            // Reverse channel: `hostRequest` JSON jumps out to
+                            // the host dispatcher task before regular event
+                            // routing. Anything malformed is logged + dropped.
+                            if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
+                                match parse_host_request(&raw) {
+                                    Ok(env) => {
+                                        if let Some(tx) = host_tx.as_ref() {
+                                            if let Err(error) = tx.send(env) {
+                                                tracing::warn!(
+                                                    error = %error,
+                                                    "hostRequest forward failed (receiver dropped)"
+                                                );
+                                            }
+                                        } else {
+                                            tracing::warn!(
+                                                "hostRequest received but dispatcher not installed"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "invalid hostRequest");
+                                    }
+                                }
+                                continue;
+                            }
                             let event = SidecarEvent { raw };
                             if dispatch_event(&listeners, event, trimmed) {
                                 event_count += 1;
@@ -614,6 +692,23 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+fn parse_host_request(raw: &Value) -> Result<HostRequestEnvelope> {
+    let callback_id = raw
+        .get("callbackId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing callbackId"))?;
+    let method = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing method"))?;
+    let params = raw.get("params").cloned().unwrap_or(Value::Null);
+    Ok(HostRequestEnvelope {
+        callback_id: callback_id.to_string(),
+        method: method.to_string(),
+        params,
+    })
 }
 
 /// Dispatch one event. `true` when delivered to a listener; no-id

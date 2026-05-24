@@ -74,6 +74,7 @@ import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
+import { TriagePanel } from "./panels/triage";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
 
@@ -588,6 +589,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										settings={settings}
 										updateSettings={updateSettings}
 									/>
+									{settings.localLlm.enabled ? <TriagePanel /> : null}
 									<CliInstallPanel />
 								</SettingsGroup>
 							)}

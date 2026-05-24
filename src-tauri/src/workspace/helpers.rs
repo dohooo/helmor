@@ -935,6 +935,8 @@ mod tests {
             last_user_message_at: None,
             setup_completed_at: None,
             active_run_action_id: None,
+            kind: "manual".to_string(),
+            ai_priming_consumed: false,
         }
     }
 

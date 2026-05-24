@@ -772,6 +772,20 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
     let mut source_parts = Vec::new();
 
     for col in &main_cols {
+        // NOT NULL columns added in later migrations need an explicit default
+        // when the source DB pre-dates them. Source tables created via
+        // `CREATE TABLE x AS SELECT ... WHERE 0` lose column constraints,
+        // so even if the source has the column it may be NULL.
+        if table == "session_messages" && col == "is_ai_priming" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("is_ai_priming") {
+                "COALESCE(is_ai_priming, 0) AS is_ai_priming".to_string()
+            } else {
+                "0 AS is_ai_priming".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             // Column exists in both with the same name
             main_parts.push(col.clone());
@@ -901,6 +915,29 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
                 "COALESCE(display_order, 0) AS display_order".to_string()
             } else {
                 "0 AS display_order".to_string()
+            });
+            continue;
+        }
+
+        // AI-triage columns are NOT NULL in main but the source ("Conductor"
+        // DB or fixture table cloned via `CREATE TABLE AS SELECT ... WHERE 0`)
+        // never carries them. Coalesce to the same defaults the schema uses
+        // so imports of pre-triage Conductor DBs don't violate the constraint.
+        if col == "kind" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("kind") {
+                "COALESCE(kind, 'manual') AS kind".to_string()
+            } else {
+                "'manual' AS kind".to_string()
+            });
+            continue;
+        }
+        if col == "ai_priming_consumed" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("ai_priming_consumed") {
+                "COALESCE(ai_priming_consumed, 0) AS ai_priming_consumed".to_string()
+            } else {
+                "0 AS ai_priming_consumed".to_string()
             });
             continue;
         }

@@ -899,6 +899,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     port_count INTEGER,
     branch_intent TEXT DEFAULT 'from_branch',
     active_run_action_id TEXT,
+    kind TEXT NOT NULL DEFAULT 'manual',
+    ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -945,6 +947,7 @@ CREATE TABLE IF NOT EXISTS session_messages (
     role TEXT,
     content TEXT,
     sent_at TEXT,
+    is_ai_priming INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -961,10 +964,18 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
+-- AI triage: per-provider time checkpoint.
+CREATE TABLE IF NOT EXISTS triage_sync (
+    provider_id TEXT PRIMARY KEY,
+    last_triaged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind);
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

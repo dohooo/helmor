@@ -221,6 +221,22 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.slackWorkspaces,
 			});
 			return;
+		case "triageConfigChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageConfig,
+			});
+			return;
+		case "triageActiveStatusChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageActiveStatus,
+			});
+			return;
+		case "triageWorkspaceCreated":
+			requestSidebarReconcile(queryClient);
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageActiveStatus,
+			});
+			return;
 	}
 }
 

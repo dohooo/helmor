@@ -15,6 +15,7 @@ import { ClaudeSessionManager } from "./claude-session-manager.js";
 import { CodexAppServerManager } from "./codex-app-server-manager.js";
 import { CursorSessionManager } from "./cursor-session-manager.js";
 import { createSidecarEmitter } from "./emitter.js";
+import { resolveHostResponse, setHostWriter } from "./host-bridge.js";
 import { errorDetails, logger } from "./logger.js";
 import {
 	errorMessage,
@@ -39,6 +40,7 @@ import {
 	TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
+import { handleRunTriageTick } from "./triage/index.js";
 
 const claudeManager = new ClaudeSessionManager();
 const codexManager = new CodexAppServerManager();
@@ -79,9 +81,14 @@ function handleStdioError(stream: "stdout" | "stderr") {
 process.stdout.on("error", handleStdioError("stdout"));
 process.stderr.on("error", handleStdioError("stderr"));
 
-const emitter = createSidecarEmitter((event) => {
+const writeStdoutEvent = (event: object): void => {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
-});
+};
+const emitter = createSidecarEmitter(writeStdoutEvent);
+// Wire the reverse IPC writer so triage providers can `callHost(...)`
+// into Rust. Rust replies with `{ type: "hostResponse" }` on stdin,
+// detected in the main loop below.
+setHostWriter(writeStdoutEvent);
 
 // ---------------------------------------------------------------------------
 // Heartbeat — emit a lightweight keepalive every 15s for every in-flight
@@ -533,6 +540,26 @@ let requestCount = 0;
 for await (const line of rl) {
 	if (!line.trim()) continue;
 
+	// Sniff reverse-channel responses before the JSON-RPC parser chokes
+	// on the non-id shape. Rust writes these in response to `callHost(...)`
+	// from any provider tool.
+	let pre: unknown;
+	try {
+		pre = JSON.parse(line);
+	} catch {
+		// fall through — parseRequest will surface the error properly.
+	}
+	if (
+		pre !== null &&
+		typeof pre === "object" &&
+		(pre as { type?: unknown }).type === "hostResponse"
+	) {
+		resolveHostResponse(
+			pre as { callbackId?: unknown; ok?: unknown; error?: unknown },
+		);
+		continue;
+	}
+
 	let request: RawRequest;
 	try {
 		request = parseRequest(line);
@@ -586,6 +613,11 @@ for await (const line of rl) {
 				break;
 			case "shutdown":
 				await handleShutdown(id);
+				break;
+			case "runTriageTick":
+				trackHandler(
+					handleRunTriageTick(id, params, emitter, writeStdoutEvent),
+				);
 				break;
 			case "permissionResponse": {
 				const permissionId = params.permissionId as string;

@@ -16,6 +16,8 @@
 		"@anthropic-ai/claude-agent-sdk": "0.2.139",
 		"@anthropic-ai/claude-code": "2.1.139",
 		"@cursor/sdk": "^1.0.12",
+		"@earendil-works/pi-agent-core": "^0.75.4",
+		"@earendil-works/pi-ai": "^0.75.4",
 		"@openai/codex": "0.130.0"
 	},
 	"devDependencies": {

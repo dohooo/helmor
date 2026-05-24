@@ -76,6 +76,9 @@ impl Manager {
     pub fn stop(&self) {
         let _guard = self.start_lock.lock().unwrap_or_else(|p| p.into_inner());
         self.kill_server();
+        // Explicit teardown — drop any prior error so the next status poll
+        // doesn't flash a stale banner during a restart cycle.
+        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
     }
 
     /// Connection params for the running server — `None` while stopped

@@ -77,6 +77,12 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
+    /// "manual" or "ai_triage". Sidebar uses this to route AI-triage
+    /// workspaces into the dedicated "AI Tasks" group.
+    pub kind: String,
+    /// True for ai_triage workspaces before the user sends their first
+    /// message. Drives the unread red dot in the sidebar row.
+    pub triage_priming_unconsumed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +190,7 @@ pub struct WorkspaceDetail {
 // ---- Sidebar groups ----
 
 pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
+    let mut ai_tasks = Vec::new();
     let mut pinned = Vec::new();
     let mut chats = Vec::new();
     let mut done = Vec::new();
@@ -200,14 +207,19 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     // Chat workspaces live in their own bucket and don't participate in
     // status/pinned buckets — their `status` column is meaningless
     // (kept at the default `in-progress` for column compatibility).
+    // AI-triage workspaces likewise live in their own bucket so the user
+    // can scan auto-discovered work separately from manual work.
     for record in workspace_models::load_workspace_records()? {
         if record.state == WorkspaceState::Archived {
             continue;
         }
         let is_chat = record.mode == WorkspaceMode::Chat;
         let is_pinned = record.pinned_at.is_some();
+        let is_ai_triage = record.kind == "ai_triage";
         let row = record_to_sidebar_row(record);
-        if is_chat {
+        if is_ai_triage {
+            ai_tasks.push(row);
+        } else if is_chat {
             chats.push(row);
         } else if is_pinned {
             pinned.push(row);
@@ -223,6 +235,12 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     }
 
     Ok(vec![
+        WorkspaceSidebarGroup {
+            id: "ai-tasks".to_string(),
+            label: "AI Tasks".to_string(),
+            tone: "ai-tasks".to_string(),
+            rows: ai_tasks,
+        },
         WorkspaceSidebarGroup {
             id: "pinned".to_string(),
             label: "Pinned".to_string(),
@@ -1284,6 +1302,8 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         created_at: record.created_at,
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
+        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
+        kind: record.kind,
     }
 }
 

@@ -11,6 +11,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod lark;
 pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
@@ -22,8 +23,10 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod sidecar_host;
 pub mod slack;
 mod system_limits;
+pub mod triage;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -124,6 +127,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(triage::ActiveStatusStore::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -322,12 +326,61 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
+            // AI-triage heartbeat scheduler. Polls every minute when
+            // disabled; on enable, runs ticks at the configured interval.
+            triage::spawn_scheduler(app.handle().clone());
+
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
             // Install a custom menu so Cmd+Q flows through the same
             // confirmation dialog as the close button.
             #[cfg(target_os = "macos")]
             install_macos_menu(app.handle())?;
+
+            // Wire the reverse IPC (sidecar → Rust). The sidecar's reader
+            // thread sniffs `hostRequest` JSON out of stdout and forwards
+            // it via mpsc; this task drains the channel, dispatches each
+            // request (in its own tokio task so they run concurrently),
+            // then writes `hostResponse` back on the shared stdin lock.
+            let host_rx = app
+                .state::<sidecar::ManagedSidecar>()
+                .install_host_dispatcher();
+            let dispatcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("sidecar-host-dispatcher".into())
+                .spawn(move || {
+                    while let Ok(env) = host_rx.recv() {
+                        let app_clone = dispatcher_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let response = match sidecar_host::dispatch(
+                                app_clone.clone(),
+                                &env.method,
+                                env.params,
+                            )
+                            .await
+                            {
+                                Ok(value) => sidecar_host::HostResponse::success(
+                                    env.callback_id.clone(),
+                                    value,
+                                ),
+                                Err(error) => sidecar_host::HostResponse::failure(
+                                    env.callback_id.clone(),
+                                    format!("{error:#}"),
+                                ),
+                            };
+                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
+                            if let Err(error) = sidecar_state.send_host_response(&response) {
+                                tracing::warn!(
+                                    error = %format!("{error:#}"),
+                                    method = %env.method,
+                                    "hostResponse write failed"
+                                );
+                            }
+                        });
+                    }
+                    tracing::debug!("host dispatcher channel closed");
+                })
+                .ok();
 
             Ok(())
         })
@@ -438,6 +491,10 @@ pub fn run() {
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::triage_commands::get_triage_config,
+            commands::triage_commands::update_triage_config,
+            commands::triage_commands::get_triage_active_status,
+            commands::triage_commands::trigger_triage_tick_now,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

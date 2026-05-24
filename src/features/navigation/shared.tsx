@@ -3,7 +3,7 @@ import {
 	IssueDraftIcon,
 	XCircleFillIcon,
 } from "@primer/octicons-react";
-import { Pin } from "lucide-react";
+import { MessageCircle, Pin, Sparkles } from "lucide-react";
 import type {
 	GroupTone,
 	WorkspaceGroup,
@@ -15,11 +15,13 @@ import type { WorkspaceBranchTone } from "@/lib/workspace-helpers";
 
 export const groupToneClasses: Record<GroupTone, string> = {
 	pinned: "text-[var(--workspace-sidebar-status-neutral)]",
+	chats: "text-[var(--workspace-sidebar-status-neutral)]",
 	done: "text-[var(--workspace-sidebar-status-done)]",
 	review: "text-[var(--workspace-sidebar-status-review)]",
 	progress: "text-[var(--workspace-sidebar-status-progress)]",
 	backlog: "text-[var(--workspace-sidebar-status-backlog)]",
 	canceled: "text-[var(--workspace-sidebar-status-canceled)]",
+	"ai-tasks": "text-[var(--workspace-sidebar-status-progress)]",
 };
 
 export const branchToneClasses: Record<WorkspaceBranchTone, string> = {
@@ -122,6 +124,12 @@ export function GroupIcon({ tone }: { tone: GroupTone }) {
 			return <IssueDraftIcon className={className} size={iconSize} />;
 		case "canceled":
 			return <XCircleFillIcon className={className} size={iconSize} />;
+		case "chats":
+			return (
+				<MessageCircle className={className} size={iconSize} strokeWidth={2} />
+			);
+		case "ai-tasks":
+			return <Sparkles className={className} size={iconSize} strokeWidth={2} />;
 	}
 }
 

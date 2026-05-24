@@ -74,6 +74,12 @@ pub struct WorkspaceRecord {
     /// fresh workspaces and for ones whose previously-active action was
     /// deleted (the loader auto-clears stale ids).
     pub active_run_action_id: Option<String>,
+    /// "manual" (user-created) or "ai_triage" (auto-created by the triage
+    /// agent).
+    pub kind: String,
+    /// True before the user has sent their first message in an ai_triage
+    /// workspace. Drives the sidebar red dot.
+    pub ai_priming_consumed: bool,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -182,7 +188,9 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.updated_at,
       wss.last_user_message_at,
       w.setup_completed_at,
-      w.active_run_action_id
+      w.active_run_action_id,
+      COALESCE(w.kind, 'manual') AS kind,
+      COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -714,6 +722,8 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         last_user_message_at: row.get(38)?,
         setup_completed_at: row.get(39)?,
         active_run_action_id: row.get(40)?,
+        kind: row.get(41)?,
+        ai_priming_consumed: row.get::<_, i64>(42)? != 0,
     })
 }
 

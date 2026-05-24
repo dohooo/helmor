@@ -272,12 +272,16 @@ export const WorkspaceRowItem = memo(
 		});
 		const statusDotLabel = isInteractionRequired
 			? "Interaction required"
-			: row.hasUnread
-				? "Unread"
-				: null;
+			: row.triagePrimingUnconsumed
+				? "AI proposal — open to review"
+				: row.hasUnread
+					? "Unread"
+					: null;
 		const statusDotClassName = isInteractionRequired
 			? "bg-yellow-500"
-			: "bg-chart-2";
+			: row.triagePrimingUnconsumed
+				? "bg-destructive"
+				: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
 		// Local & Chat workspaces don't carry a meaningful per-row branch
 		// label (locals share the repo's HEAD; chats have no branch at

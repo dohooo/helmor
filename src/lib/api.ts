@@ -6,11 +6,13 @@ import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
 	| "pinned"
+	| "chats"
 	| "done"
 	| "review"
 	| "progress"
 	| "backlog"
-	| "canceled";
+	| "canceled"
+	| "ai-tasks";
 
 /**
  * Mirror of the Rust `WorkspaceState` enum (`src-tauri/src/workspace/state.rs`).
@@ -107,6 +109,11 @@ export type WorkspaceRow = {
 	/** ISO-8601 timestamp — most recent user message across all sessions
 	 * in this workspace. Null when the workspace has no user messages yet. */
 	lastUserMessageAt?: string | null;
+	/** "manual" (user-created) or "ai_triage" (auto-discovered). */
+	kind?: string;
+	/** True for AI-triage workspaces before the user has sent their first
+	 * message. Sidebar surfaces this as a red dot. */
+	triagePrimingUnconsumed?: boolean;
 };
 
 export type WorkspaceGroup = {
@@ -1895,7 +1902,79 @@ export type UiMutationEvent =
 	  }
 	| { type: "activeStreamsChanged" }
 	| { type: "slackWorkspacesChanged" }
-	| { type: "slackTokenInvalidated"; teamId: string };
+	| { type: "slackTokenInvalidated"; teamId: string }
+	| { type: "triageConfigChanged" }
+	| { type: "triageActiveStatusChanged" }
+	| { type: "triageWorkspaceCreated"; workspaceId: string };
+
+export type TriageConfig = {
+	enabled: boolean;
+	systemPrompt: string;
+	maxPerTick: number;
+	/** provider_id → enabled */
+	providers: Record<string, boolean>;
+};
+
+export type TriageToolCallRecord = {
+	at: string;
+	tool: string;
+	argsPreview: string;
+};
+
+export type TriageActiveStatus = {
+	tickId: string;
+	startedAt: string;
+	turnCount: number;
+	toolCount: number;
+	lastToolName: string | null;
+	lastUpdateAt: string;
+	recentToolCalls: TriageToolCallRecord[];
+};
+
+export type TriageStatus = {
+	active: TriageActiveStatus | null;
+	lastCompletedAt: string | null;
+};
+
+export async function getTriageConfig(): Promise<TriageConfig> {
+	try {
+		return await invoke<TriageConfig>("get_triage_config");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage settings."),
+		);
+	}
+}
+
+export async function updateTriageConfig(config: TriageConfig): Promise<void> {
+	try {
+		await invoke<void>("update_triage_config", { config });
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to save triage settings."),
+		);
+	}
+}
+
+export async function getTriageActiveStatus(): Promise<TriageStatus> {
+	try {
+		return await invoke<TriageStatus>("get_triage_active_status");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage status."),
+		);
+	}
+}
+
+export async function triggerTriageTickNow(): Promise<string> {
+	try {
+		return await invoke<string>("trigger_triage_tick_now");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to trigger triage tick."),
+		);
+	}
+}
 
 export async function listenGitBranchChanged(
 	callback: (payload: GitBranchChangedPayload) => void,

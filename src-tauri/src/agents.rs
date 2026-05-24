@@ -218,12 +218,42 @@ pub async fn list_cursor_models(
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: AgentSendRequest,
+    mut request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
+    }
+
+    // AI-triage priming: if the helmor_session belongs to an unconsumed
+    // AI-triage workspace, inject the planning context as a hidden prefix
+    // and flip the consumed flag. Runs once per workspace lifetime. Safe
+    // no-op for manual workspaces and already-consumed AI workspaces.
+    if let Some(session_id) = request.helmor_session_id.as_deref() {
+        match crate::triage::load_priming_prefix_for_session(session_id) {
+            Ok(Some(priming_prefix)) => {
+                request.prompt_prefix = crate::triage::combine_prefixes(
+                    Some(priming_prefix),
+                    request.prompt_prefix.take(),
+                );
+                if let Err(error) = crate::triage::mark_consumed_for_session(session_id) {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        session_id,
+                        "triage: failed to mark priming consumed; injection will recur"
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    session_id,
+                    "triage: load_priming_prefix_for_session failed"
+                );
+            }
+        }
     }
 
     let model = resolve_model(&request.model_id, Some(request.provider.as_str()));

@@ -47,6 +47,7 @@ import {
 	type LocalLlmDownloadStatus,
 	listLocalLlmCatalog,
 	pauseLocalLlmDownload,
+	setLocalLlmContextOverride,
 	startLocalLlm,
 	startLocalLlmDownload,
 	stopLocalLlm,
@@ -194,30 +195,15 @@ export function LocalLlmPanel({
 		void cancelLocalLlmDownload(entryId);
 	};
 
-	// Shared context-override commit path. Catalog entries and custom
-	// GGUFs both round-trip through here so the restart-on-change behavior
-	// stays uniform.
+	// Shared context-override commit path. Routes through the dedicated
+	// `set_local_llm_context_override` IPC so persistence + restart are
+	// atomic on the Rust side (avoids stale lastError flashing through a
+	// manual stop/start dance).
 	const commitContextOverride = async (entryId: string, tokens: number) => {
-		const nextOverrides = {
-			...(settings.localLlm.contextOverrides ?? {}),
-			[entryId]: tokens,
-		};
-		await updateSettings({
-			localLlm: { ...settings.localLlm, contextOverrides: nextOverrides },
-		});
-		// `manager.start()` short-circuits when the model PATH is
-		// unchanged. Only `-c` differs here, so we have to stop first to
-		// force the spawn path that actually reads the new value.
-		if (running || starting) {
-			try {
-				await stopLocalLlm();
-			} catch (error) {
-				console.warn("[local-llm] stop before context restart failed", error);
-			}
-			void startLocalLlm().catch((error) => {
-				console.warn("[local-llm] restart after context change failed", error);
-				invalidateStatus();
-			});
+		try {
+			await setLocalLlmContextOverride(entryId, tokens);
+		} catch (error) {
+			console.warn("[local-llm] context override commit failed", error);
 		}
 		invalidateStatus();
 	};
