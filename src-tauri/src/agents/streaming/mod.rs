@@ -1273,16 +1273,16 @@ fn build_helmor_system_prompt_for_session(
     let linked_directories =
         crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
 
-    // Resolve the on-PATH CLI binary name from the current build
-    // mode. Dev installs ship as `helmor-dev` to avoid shadowing a
-    // release install on the same machine; SKILL.md uses the release
-    // name `helmor`, so we pass the actual binary name through to
-    // the prompt explicitly.
-    let cli_command_name = if crate::data_dir::is_dev() {
-        "helmor-dev".to_string()
-    } else {
-        "helmor".to_string()
-    };
+    // CLI invocation the agent should call. On release this is the
+    // canonical `helmor` symlink on PATH; on dev it's the absolute
+    // path of THIS process's sibling `helmor-cli`. The dev branch
+    // deliberately avoids the bare `helmor-dev` name because under
+    // Helmor's worktree-based dev workflow every worktree compiles
+    // its own CLI binary, and a global `/usr/local/bin/helmor-dev`
+    // symlink (if it exists) can only target one of them — the other
+    // dev instances' agents would silently talk to the wrong build.
+    // See `crate::cli::agent_invocation_path` for the full rationale.
+    let cli_command_name = crate::cli::agent_invocation_path();
 
     let ctx = HelmorSystemPromptContext {
         workspace_label,

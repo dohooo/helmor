@@ -3,8 +3,114 @@
 //! Split out from `mod.rs` so dispatch logic and argument schema evolve
 //! independently — adding a new flag only touches this file plus the
 //! command body.
+//!
+//! ## `EXAMPLES_*` `after_help` blocks
+//!
+//! The clap derive on each high-traffic subcommand uses
+//! `#[command(after_help = EXAMPLES_*)]` to append a literal
+//! `EXAMPLES:` section underneath the standard `--help` output. These
+//! blocks are the single source of truth for "how do I use this
+//! command in practice" — both human users and AI agents working
+//! inside Helmor are pointed at them by the system prompt instead of
+//! getting a command cheat-sheet baked into every turn's preamble.
+//!
+//! Command strings in the examples use the literal name `helmor`.
+//! That's the right copy for release users (the binary on their PATH
+//! IS `helmor`). Dev users invoke the CLI through an absolute path
+//! handed to them by Helmor's system prompt, and the prompt's trust
+//! signal already tells the agent to call its path verbatim — so we
+//! intentionally don't try to runtime-rewrite `helmor` to the dev
+//! binary name inside these strings.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+
+// ---------------------------------------------------------------------------
+// after_help example blocks (rendered as the `EXAMPLES:` section under each
+// subcommand's `--help`)
+// ---------------------------------------------------------------------------
+
+const EXAMPLES_WORKSPACE_NEW: &str = "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # Create a workspace on a repo by name (matches the repo column in `workspace list`)
+    helmor workspace new --repo dohooo/hello
+
+    # Repo argument also accepts a UUID
+    helmor workspace new --repo 7f3e9b2a-1234-5678-90ab-cdef12345678
+
+    # Pre-stage a prompt into the new workspace's session without sending
+    NEW_WS_ID=$(helmor workspace new --repo dohooo/hello --json | jq -r .id)
+    helmor send --workspace \"$NEW_WS_ID\" --plan 'Analyse the routing layer and propose a refactor.'";
+
+const EXAMPLES_WORKSPACE_LIST: &str =
+    "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # All active workspaces, grouped by status
+    helmor workspace list
+
+    # Machine-readable form (for scripting / agent piping)
+    helmor workspace list --json
+
+    # Just the ones in a single repo
+    helmor workspace list --repo dohooo/hello
+
+    # Filter by kanban status
+    helmor workspace list --status review";
+
+const EXAMPLES_WORKSPACE_RUN_ACTION: &str =
+    "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # Dispatch an agent-driven 'commit + push' run against a workspace
+    helmor workspace run-action dohooo/hello/feature-x commit-and-push
+
+    # Same shape with a workspace UUID
+    helmor workspace run-action 7f3e9b2a-1234-5678-90ab-cdef12345678 create-pr
+
+    # Other agent-dispatched flows
+    helmor workspace run-action <ref> fix-errors
+    helmor workspace run-action <ref> resolve-conflicts
+
+    # Inline flows (no agent involved; run synchronously)
+    helmor workspace run-action <ref> merge-pr
+    helmor workspace run-action <ref> pull-latest";
+
+const EXAMPLES_SESSION_SEARCH: &str =
+    "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # Find sessions whose title or messages mention 'auth'
+    helmor session search --query auth
+
+    # Restrict to one repo
+    helmor session search --query auth --repo dohooo/hello
+
+    # Status-only filter (no keyword needed)
+    helmor session search --status streaming
+
+    # Include archived workspaces
+    helmor session search --query auth --include-archived --json";
+
+const EXAMPLES_SESSION_GET_MESSAGES: &str =
+    "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # Last 5 messages of a session (default window)
+    helmor session get-messages 7f3e9b2a-1234-5678-90ab-cdef12345678
+
+    # Wider tail window
+    helmor session get-messages <session-id> --limit 20
+
+    # Oldest messages first (good for reading another agent's plan)
+    helmor session get-messages <session-id> --position head --limit 10
+
+    # Truncate long messages to 300 chars from the end
+    helmor session get-messages <session-id> --body-limit 300 --body-position end";
+
+const EXAMPLES_SEND: &str =
+    "EXAMPLES (substitute `helmor` with the binary name in the Usage line above if it differs):
+    # Send a prompt to a workspace's active session (sends immediately)
+    helmor send --workspace dohooo/hello/feature-x 'Add a test for the parser edge case.'
+
+    # Target a specific session by UUID
+    helmor send --workspace <ws-ref> --session <session-id> 'Continue from where you left off.'
+
+    # Plan mode (shortcut for --permission-mode plan)
+    helmor send --workspace <ws-ref> --plan 'Sketch the refactor before changing anything.'
+
+    # Read the prompt body from stdin (useful for long / piped prompts)
+    cat prompt.md | helmor send --workspace <ws-ref> -";
 
 #[derive(Parser)]
 #[command(
@@ -218,6 +324,7 @@ pub enum RepoAction {
 #[derive(Subcommand)]
 pub enum WorkspaceAction {
     /// List active workspaces grouped by status.
+    #[command(after_help = EXAMPLES_WORKSPACE_LIST)]
     List {
         /// Show archived workspaces instead.
         #[arg(long)]
@@ -238,6 +345,7 @@ pub enum WorkspaceAction {
         workspace_ref: String,
     },
     /// Create a new workspace for an existing repository.
+    #[command(after_help = EXAMPLES_WORKSPACE_NEW)]
     New {
         /// Repo name or UUID.
         #[arg(long)]
@@ -326,6 +434,7 @@ pub enum WorkspaceAction {
     /// workspace's active agent — the agent runs in its own session
     /// and the CLI returns once the message is queued, not when the
     /// agent finishes.
+    #[command(after_help = EXAMPLES_WORKSPACE_RUN_ACTION)]
     RunAction {
         #[arg(name = "ref")]
         workspace_ref: String,
@@ -526,6 +635,7 @@ pub enum SessionAction {
     /// Search sessions across all workspaces by title / message content.
     ///
     /// Pass `--query`, `--status`, or both. At least one is required.
+    #[command(after_help = EXAMPLES_SESSION_SEARCH)]
     Search {
         /// Case-insensitive substring matched against session title and
         /// message bodies. Optional if `--status` is set.
@@ -549,6 +659,7 @@ pub enum SessionAction {
     /// Output is a JSON array (one entry per message) with each body
     /// char-bounded by `--body-limit`. Use `--position head` for the
     /// oldest messages, `--position tail` (default) for the newest.
+    #[command(after_help = EXAMPLES_SESSION_GET_MESSAGES)]
     GetMessages {
         /// Session UUID (from `session list` or `session search`).
         session: String,
@@ -642,6 +753,7 @@ pub enum FilesAction {
 // ---------------------------------------------------------------------------
 
 #[derive(Args, Debug, Clone)]
+#[command(after_help = EXAMPLES_SEND)]
 pub struct SendArgs {
     /// Workspace UUID or repo-name/dir-name.
     #[arg(long)]

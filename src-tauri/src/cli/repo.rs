@@ -114,9 +114,10 @@ fn add(path: &str, cli: &Cli) -> Result<()> {
         }
         match r.selected_workspace_id.as_deref() {
             Some(ws_id) => lines.push(format!("Selected workspace {ws_id}")),
-            None => lines.push(
-                "No workspace selected — use `helmor workspace create` to start one.".to_string(),
-            ),
+            None => lines.push(format!(
+                "No workspace selected — use `{} workspace new` to start one.",
+                super::installed_cli_name(),
+            )),
         }
         lines.join("\n")
     })

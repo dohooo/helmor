@@ -7,6 +7,17 @@ description: Use the Helmor CLI to remote-control Helmor from the terminal. Use 
 
 Use this skill to guide simple terminal-first Helmor workflows. Keep the answer practical: prefer one or two concrete commands over a long CLI tutorial.
 
+## Binary Name (Release vs Dev)
+
+Examples below use the literal name `helmor` — the binary a release user has on their PATH.
+
+- **Release builds**: invoke commands as `helmor <subcommand>`.
+- **Dev builds**: do NOT assume `helmor-dev` is on PATH. Under Helmor's worktree-based dev workflow every worktree has its own `target/debug/helmor-cli`, and a shared `/usr/local/bin/helmor-dev` symlink (if it exists) can only point at one of them. Instead:
+  - If you're an **agent running inside Helmor**, the system prompt has already handed you the exact CLI invocation to use (typically an absolute path like `<worktree>/src-tauri/target/debug/helmor-cli`). Call it verbatim — don't re-verify with `which` / `file` / `--version`.
+  - If you're a **human at a terminal**, run `<your-worktree>/src-tauri/target/debug/helmor-cli <subcommand>` (or whatever path your active Helmor build uses).
+
+The rest of every command shape is identical regardless of build.
+
 ## First Checks
 
 1. Check whether the CLI is installed and which data mode it targets:

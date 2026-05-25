@@ -20,6 +20,18 @@ const SETUP_FAILED_MESSAGE =
 	"Something went wrong — don't worry, Helmor will work fine without it.";
 
 /**
+ * The CLI binary name to show in the "Power up Helmor" mockup
+ * terminal. Mirrors the Rust-side `installed_cli_name()` decision:
+ * release builds install the canonical `helmor`, dev builds install
+ * `helmor-dev` (so they don't shadow a release install on the same
+ * machine). Driven by `import.meta.env.DEV` rather than an IPC call
+ * because (a) it's known at build time, (b) we don't want a flash of
+ * the wrong name while a status query resolves, (c) this is purely
+ * cosmetic — actual CLI invocation is handled by the install flow.
+ */
+const ONBOARDING_CLI_NAME = import.meta.env.DEV ? "helmor-dev" : "helmor";
+
+/**
  * Onboarding "Power up Helmor" step.
  *
  * Behaviour contract:
@@ -155,17 +167,17 @@ export function SkillsStep({
 							<span className="size-2 rounded-full bg-muted-foreground/25" />
 							<span className="size-2 rounded-full bg-muted-foreground/20" />
 							<span className="ml-2 text-micro font-medium text-muted-foreground">
-								helmor --help
+								{`${ONBOARDING_CLI_NAME} --help`}
 							</span>
 						</div>
 						<div className="h-[calc(100%-2rem)] overflow-hidden px-4 py-3 font-mono text-nano leading-[13px] text-muted-foreground group-hover:overflow-y-auto">
 							<pre className="whitespace-pre-wrap break-words font-mono">
-								<span className="text-foreground">$ helmor --help</span>
+								<span className="text-foreground">{`$ ${ONBOARDING_CLI_NAME} --help`}</span>
 								{`
 Remote-control Helmor from the terminal.
 Works against the same SQLite database the desktop app uses.
 
-Usage: helmor [OPTIONS] <COMMAND>
+Usage: ${ONBOARDING_CLI_NAME} [OPTIONS] <COMMAND>
 
 Commands:
   data         Data directory, database, and mode info
@@ -180,7 +192,7 @@ Commands:
   scripts      Inspect repo-level setup/run/archive scripts
   conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
-  cli-status   Report whether helmor is installed to PATH
+  cli-status   Report whether ${ONBOARDING_CLI_NAME} is installed to PATH
   quit         Ask a running Helmor app to quit
   mcp          Run as an MCP server over stdio
   help         Print this message

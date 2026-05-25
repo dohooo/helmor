@@ -73,15 +73,10 @@ pub struct HelmorSkillsStatus {
 
 /// Where Helmor installs its managed CLI entrypoint on macOS.
 fn cli_install_target() -> std::path::PathBuf {
-    std::path::PathBuf::from(format!("/usr/local/bin/{}", installed_cli_name()))
-}
-
-fn installed_cli_name() -> &'static str {
-    if crate::data_dir::is_dev() {
-        "helmor-dev"
-    } else {
-        "helmor"
-    }
+    std::path::PathBuf::from(format!(
+        "/usr/local/bin/{}",
+        crate::cli::installed_cli_name()
+    ))
 }
 
 /// Name of the compiled CLI binary produced by `cargo build --bin helmor-cli`.
@@ -307,7 +302,7 @@ fn build_elevated_install_script(
     );
     format!(
         "do shell script \"{inner}\" with prompt \"Helmor wants to install the {name} command line tool to {display}.\" with administrator privileges",
-        name = installed_cli_name(),
+        name = crate::cli::installed_cli_name(),
         display = install_path.display(),
     )
 }

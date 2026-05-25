@@ -13,12 +13,14 @@
 //!   plus any `/add-dir`-linked directories.
 //! - Points at the `.agent-contexts/` scratch dir as the canonical
 //!   place to leave files for other sessions.
-//! - Names the `helmor-cli` skill installed in the agent's skills
-//!   directory — the agent will lazy-load the skill on demand when it
-//!   needs to operate Helmor itself (spawn workspaces, dispatch ship
-//!   actions, read other agents' transcripts). We deliberately do NOT
-//!   inline the command reference here — the skill's `SKILL.md` is the
-//!   single source of truth.
+//! - Tells the agent it can drive Helmor itself via the bundled CLI,
+//!   and points it at the CLI's own `--help` for the full command
+//!   surface (clap's `after_help` blocks own the examples). The
+//!   `helmor-cli` skill is still auto-loaded on demand for prose
+//!   context, but the prompt never duplicates the command list — the
+//!   CLI's `--help` is the single source of truth, which means dev
+//!   and release stay in sync automatically without us re-injecting
+//!   commands every turn.
 //! - Mentions the feedback button so the agent can correctly redirect
 //!   "how do I report a bug?"-style asks.
 //!
@@ -65,14 +67,21 @@ pub struct HelmorSystemPromptContext {
     /// Extra directories the user added via `/add-dir`. Empty list
     /// elides the entire linked-directories paragraph.
     pub linked_directories: Vec<String>,
-    /// Name of the on-PATH CLI binary the agent should invoke. In
-    /// release builds this is `helmor`; in dev builds it's
-    /// `helmor-dev` (so a development install never shadows a
-    /// release install on the same machine). The `helmor-cli`
-    /// SKILL.md documents commands using the release name `helmor`,
-    /// so we explicitly thread the resolved name through here to
-    /// keep the agent from invoking a binary that doesn't exist on
-    /// PATH for the build it's running in.
+    /// The CLI invocation string the agent should use to talk to
+    /// THIS Helmor instance.
+    ///
+    /// - Release builds: `helmor` (the stable on-PATH symlink).
+    /// - Dev builds: the absolute path of `helmor-cli` next to the
+    ///   currently-running Helmor executable. Bare `helmor-dev` would
+    ///   be ambiguous under the worktree-based dev workflow — multiple
+    ///   Helmor dev instances coexist and a shared symlink can only
+    ///   point at one of them, so we hand the agent an absolute path
+    ///   that's unambiguously tied to this instance.
+    ///
+    /// Either way the agent is expected to call the value verbatim;
+    /// it does NOT need to verify the binary first (`which`, `file`,
+    /// `--version` etc.) because we already know it exists — it's the
+    /// process the agent is talking to.
     pub cli_command_name: String,
 }
 
@@ -128,8 +137,8 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
 
     let _ = write!(
         out,
-        "\nHelmor itself is scriptable. If the user has a clear intent that requires multiple workspaces, or asks you to operate Helmor (spawn workspaces, change kanban status, dispatch a ship action, read what another agent is doing, etc.), consult the `helmor-cli` skill installed in your skills directory — it documents the full command surface. Don't fabricate commands; let the skill be the source of truth. Invoke the CLI as `{}` on this build (the skill's SKILL.md shows `helmor` for release builds — substitute accordingly).\n",
-        ctx.cli_command_name,
+        "\nHelmor itself is scriptable via `{cli}`. When you need to operate Helmor (spawn workspaces, dispatch ship actions, read other agents' sessions, etc.), run `{cli} --help` or `{cli} <subcommand> --help` — each subcommand's help block includes examples you can copy. Invoke `{cli}` verbatim; do NOT verify it first with `which`, `file`, `--version`, or by searching `target/debug` — it is already the binary this Helmor instance owns, and pre-verifying eats your turn.\n",
+        cli = ctx.cli_command_name,
     );
 
     out.push_str(
@@ -223,54 +232,91 @@ mod tests {
         assert!(prompt.contains("gitignored"));
     }
 
-    /// The helmor-cli skill must be named (so Claude Code's skill
-    /// auto-loader picks it up) and the prompt must defer to the
-    /// skill rather than inline commands. This is the load-bearing
-    /// invariant for the orchestration vision.
+    /// The prompt points the agent at the CLI's own `--help` instead
+    /// of inlining a command cheat sheet. Two reasons: (a) per-turn
+    /// token budget stays small, (b) the CLI's `--help` is the single
+    /// source of truth, so dev/release stay in sync automatically.
+    /// Pin so a future refactor that re-inlines a command list breaks
+    /// loudly here.
     #[test]
-    fn helmor_cli_skill_is_named_and_not_inlined() {
+    fn helmor_cli_paragraph_points_at_help_not_inlined_commands() {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
-        assert!(prompt.contains("`helmor-cli` skill"));
-        // Don't accidentally turn the prompt into a CLI cheat-sheet —
-        // the skill's SKILL.md owns the canonical reference.
+        // The CLI name must be paired with `--help` so the agent
+        // knows where to look.
         assert!(
-            !prompt.contains("helmor-cli workspace new"),
-            "command listing should live in SKILL.md, not in the prompt prefix"
+            prompt.contains("`helmor --help`"),
+            "release prompt should tell the agent to run `helmor --help`"
+        );
+        // We deliberately don't list subcommand recipes — that's
+        // clap `after_help`'s job, lazily read when the agent
+        // actually needs them.
+        assert!(
+            !prompt.contains("workspace new --repo"),
+            "command recipes belong in clap after_help, not the prompt prefix"
+        );
+        assert!(
+            !prompt.contains("session send-prompt"),
+            "command recipes belong in clap after_help, not the prompt prefix"
         );
     }
 
-    /// Dev builds install the CLI as `helmor-dev` so a development
-    /// copy doesn't shadow a release install on the same machine. The
-    /// `helmor-cli` SKILL.md documents commands using the release
-    /// name `helmor`, so the prompt MUST name the actual binary the
-    /// agent should invoke — otherwise dev users get "command not
-    /// found" the moment the agent tries to use the skill.
+    /// Trust signal: agent must be told the CLI invocation is
+    /// reliable and pre-verification (`which`, `file`, `--version`,
+    /// searching `target/debug`, etc.) is wasted effort. This pins
+    /// the fix for the "agent spent 14 commands introspecting the
+    /// CLI before doing anything" failure mode.
+    #[test]
+    fn helmor_cli_paragraph_tells_agent_not_to_pre_verify() {
+        let prompt = build_helmor_system_prompt(&ctx_with_defaults());
+        assert!(
+            prompt.contains("do NOT verify"),
+            "prompt must explicitly forbid pre-verification of the CLI binary"
+        );
+    }
+
+    /// Dev builds hand the agent an absolute path so each Helmor
+    /// instance's agent talks to the exact CLI binary that belongs to
+    /// it — required under the worktree-based dev workflow where
+    /// multiple dev instances coexist. Pin the substitution so a
+    /// future "always use the bare `helmor-dev` name" regression
+    /// breaks here.
     #[test]
     fn cli_command_name_is_threaded_through_for_dev_builds() {
         let mut ctx = ctx_with_defaults();
-        ctx.cli_command_name = "helmor-dev".to_string();
+        ctx.cli_command_name =
+            "/Users/me/helmor-wt/feature-x/src-tauri/target/debug/helmor-cli".to_string();
         let prompt = build_helmor_system_prompt(&ctx);
         assert!(
-            prompt.contains("`helmor-dev`"),
-            "dev builds must surface the `helmor-dev` binary name"
+            prompt.contains("`/Users/me/helmor-wt/feature-x/src-tauri/target/debug/helmor-cli`"),
+            "dev builds must surface the absolute CLI path"
         );
-        // Make sure the SKILL-vs-build disambiguation hint is also
-        // present so a confused agent reading the skill docs knows
-        // why they need to substitute.
+        // And the `--help` pairing must use the same path so the
+        // agent can copy-paste it directly.
         assert!(
-            prompt.contains("SKILL.md"),
-            "should explain the SKILL.md vs build-name mismatch"
+            prompt.contains(
+                "`/Users/me/helmor-wt/feature-x/src-tauri/target/debug/helmor-cli --help`"
+            ),
+            "dev `--help` invocation must use the same absolute path"
         );
     }
 
-    /// Release builds use the canonical `helmor` name — same as the
-    /// SKILL.md docs, no substitution needed. Pin so a future refactor
-    /// that always hardcodes `helmor-dev` regardless of build doesn't
-    /// silently misadvise release agents.
+    /// Release builds use the canonical `helmor` name. Pin so a
+    /// future refactor that always emits an absolute path (or
+    /// `helmor-dev`) regardless of build doesn't silently misadvise
+    /// release agents.
     #[test]
     fn cli_command_name_uses_release_binary_in_release_builds() {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
-        assert!(prompt.contains("Invoke the CLI as `helmor`"));
+        assert!(prompt.contains("`helmor`"));
+        assert!(prompt.contains("`helmor --help`"));
+        assert!(
+            !prompt.contains("target/debug/helmor-cli"),
+            "release prompt must not mention dev-only paths"
+        );
+        assert!(
+            !prompt.contains("helmor-dev"),
+            "release prompt must not surface the dev binary name"
+        );
     }
 
     /// Feedback line points at the sidebar button — matches the real
