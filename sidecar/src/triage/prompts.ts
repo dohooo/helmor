@@ -68,7 +68,12 @@ block (under ~5 MB) — look at it and:
   - still pass the id in propose_workspace.attachments: [{ id, alt }]
     so the downstream workspace agent can re-open the original.
 
-Hard cap: never call propose_workspace more than {{MAX}} times.`;
+# Workspace creation cap
+
+You can create at most {{MAX}} workspaces per tick. Prioritize tasks
+by RECENCY — always propose the newest/most-recent tasks first, as older
+items may become stale or no longer relevant. When you reach the cap,
+stop proposing and summarize what you found.`;
 
 export interface BuildPromptInput {
 	userPromptSuffix: string;
