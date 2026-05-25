@@ -43,7 +43,7 @@ export type ContextPanelActions = {
 	closeStartContextPreview(): void;
 	// Called by AppShell's `handleSelectWorkspace` wrapper on every workspace
 	// click (including reselect) so the right sidebar follows the user's
-	// persisted preference.
+	// persisted content mode without overriding a manual collapse.
 	syncToWorkspaceMode(): void;
 	// Called by selection's `onStartOpened` to align the right sidebar with
 	// `startContextPanelOpen` and reveal the panel if it was collapsed.
@@ -181,9 +181,6 @@ export function useContextPanelController(
 
 	const syncToWorkspaceMode = useCallback(() => {
 		setRightSidebarMode(appSettings.workspaceRightSidebarMode);
-		if (appSettings.workspaceRightSidebarMode === "context") {
-			setInspectorCollapsed(false);
-		}
 	}, [appSettings.workspaceRightSidebarMode]);
 
 	const syncToStartMode = useCallback(() => {
