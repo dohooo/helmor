@@ -86,8 +86,8 @@ export const helmorQueryKeys = {
 		] as const,
 	sessionMessages: (sessionId: string) =>
 		["sessionMessages", sessionId] as const,
-	workspaceChanges: (workspaceRootPath: string) =>
-		["workspaceChanges", workspaceRootPath] as const,
+	workspaceChanges: (workspaceRootPath: string, workspaceId?: string | null) =>
+		["workspaceChanges", workspaceRootPath, workspaceId ?? ""] as const,
 	workspaceFiles: (workspaceRootPath: string) =>
 		["workspaceFiles", workspaceRootPath] as const,
 	workspaceChangeRequest: (workspaceId: string) =>
@@ -919,10 +919,13 @@ export function workspaceForgeRefetchInterval(
 		: false;
 }
 
-export function workspaceChangesQueryOptions(workspaceRootPath: string) {
+export function workspaceChangesQueryOptions(
+	workspaceRootPath: string,
+	workspaceId?: string | null,
+) {
 	return queryOptions({
-		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
-		queryFn: () => listWorkspaceChanges(workspaceRootPath),
+		queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath, workspaceId),
+		queryFn: () => listWorkspaceChanges(workspaceRootPath, workspaceId),
 		staleTime: CHANGES_STALE_TIME,
 		refetchOnWindowFocus: true,
 		refetchInterval: CHANGES_REFETCH_INTERVAL,

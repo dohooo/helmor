@@ -63,6 +63,7 @@ type WorkspaceEditorSurfaceProps = {
 	editorSession: EditorSessionState;
 	editShortcut?: string | null;
 	shortcutOverrides?: ShortcutMap;
+	workspaceId?: string | null;
 	workspaceRootPath?: string | null;
 	onChangeSession: (session: EditorSessionState) => void;
 	onExit: () => void;
@@ -418,6 +419,7 @@ export function WorkspaceEditorSurface({
 	editorSession,
 	editShortcut = null,
 	shortcutOverrides = {},
+	workspaceId = null,
 	workspaceRootPath,
 	onChangeSession,
 	onExit,
@@ -990,7 +992,9 @@ export function WorkspaceEditorSurface({
 			);
 			const changes = workspaceRootPath
 				? await queryClient
-						.fetchQuery(workspaceChangesQueryOptions(workspaceRootPath))
+						.fetchQuery(
+							workspaceChangesQueryOptions(workspaceRootPath, workspaceId),
+						)
 						.catch(() => null)
 				: null;
 			const changedFile = changes?.find(
@@ -1064,7 +1068,10 @@ export function WorkspaceEditorSurface({
 			});
 			if (workspaceRootPath) {
 				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+					queryKey: helmorQueryKeys.workspaceChanges(
+						workspaceRootPath,
+						workspaceId,
+					),
 				});
 			}
 		} catch (error) {

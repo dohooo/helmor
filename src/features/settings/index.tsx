@@ -66,7 +66,7 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
-import { CliInstallPanel } from "./panels/cli-install";
+import { ComponentsPanel } from "./panels/components";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
@@ -181,10 +181,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"model",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
-		...(isDev ? (["developer"] as const) : []),
 		"account",
 		"inbox",
 		"experimental",
+		// Developer is intentionally last in the fixed group — it sits
+		// directly above the dynamic repository entries in the sidebar
+		// (so the bottom of the static nav reads: experimental →
+		// developer → <repos>). Hidden in non-dev builds.
+		...(isDev ? (["developer"] as const) : []),
 	];
 
 	const activeRepoId = activeSection.startsWith("repo:")
@@ -492,6 +496,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										</ToggleGroup>
 									</SettingsRow>
 									<AppUpdatesPanel />
+									<ComponentsPanel />
 								</SettingsGroup>
 							)}
 
@@ -590,7 +595,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										updateSettings={updateSettings}
 									/>
 									{settings.localLlm.enabled ? <TriagePanel /> : null}
-									<CliInstallPanel />
 								</SettingsGroup>
 							)}
 

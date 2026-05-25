@@ -109,6 +109,17 @@ pub(super) fn stream_via_sidecar(
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
+    // Build Helmor's "you are inside Helmor" system-prompt preamble.
+    // Pulled from the same `session_row` we already read so we don't
+    // borrow the read pool again on the hot path. Re-rendered every
+    // turn so even mid-conversation orchestration asks ("spawn me 3
+    // more workspaces") still see the helmor-cli skill cue.
+    let helmor_prefix = build_helmor_system_prompt_for_session(
+        request.helmor_session_id.as_deref(),
+        session_row.as_ref(),
+        working_directory,
+    );
+
     // Combine the optional hidden preamble with the user's prompt. Only
     // the wire payload sees the combined string — `prompt` (user text
     // only) is what gets persisted in `persist_user_message` below, so
@@ -118,9 +129,13 @@ pub(super) fn stream_via_sidecar(
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty());
-    let combined_prompt = match prefix_trimmed {
-        Some(prefix) => format!("{prefix}\n\nUser request:\n{prompt}"),
-        None => prompt.to_string(),
+    let combined_prompt = match (helmor_prefix.as_deref(), prefix_trimmed) {
+        (Some(helmor), Some(caller)) => {
+            format!("{helmor}\n\n{caller}\n\nUser request:\n{prompt}")
+        }
+        (Some(helmor), None) => format!("{helmor}\n\nUser request:\n{prompt}"),
+        (None, Some(caller)) => format!("{caller}\n\nUser request:\n{prompt}"),
+        (None, None) => prompt.to_string(),
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
@@ -1210,4 +1225,72 @@ fn build_exit_plan_review_message(
         status: None,
         streaming: None,
     }
+}
+
+/// Build the Helmor system-prompt prefix that gets prepended to the
+/// agent's wire payload. Returns `None` when we can't resolve enough
+/// context (no helmor_session_id or no workspace row found) — callers
+/// fall through to "no Helmor prefix this turn" rather than blocking
+/// the send.
+///
+/// Lookups against the workspace record happen against the read pool;
+/// failures degrade gracefully (we still build the prompt with
+/// whatever we managed to resolve).
+fn build_helmor_system_prompt_for_session(
+    helmor_session_id: Option<&str>,
+    session_row: Option<&(Option<String>, Option<String>, Option<String>)>,
+    working_directory: &std::path::Path,
+) -> Option<String> {
+    use crate::agents::system_prompt::{build_helmor_system_prompt, HelmorSystemPromptContext};
+
+    let workspace_id = session_row.and_then(|(_, _, workspace_id)| workspace_id.clone())?;
+
+    let workspace_record = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)
+        .ok()
+        .flatten();
+
+    // Workspace label: `<repo>/<directory>`. Falls back to the bare
+    // workspace id when the row is missing so the agent still gets a
+    // self-locating cue.
+    let workspace_label = match workspace_record.as_ref() {
+        Some(record) => format!("{}/{}", record.repo_name, record.directory_name),
+        None => workspace_id.clone(),
+    };
+
+    // Target branch: prefer the user-configured intended target,
+    // fall back to the repo's default branch. Wrap as `origin/<x>`
+    // so the diff/PR hints are immediately usable.
+    let target_branch_raw = workspace_record.as_ref().and_then(|record| {
+        record
+            .intended_target_branch
+            .clone()
+            .or_else(|| record.default_branch.clone())
+            .filter(|s| !s.trim().is_empty())
+    });
+    let base_branch = target_branch_raw.clone();
+    let target_branch = target_branch_raw.as_deref().map(|b| format!("origin/{b}"));
+
+    let linked_directories =
+        crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
+
+    // CLI invocation the agent should call. On release this is the
+    // canonical `helmor` symlink on PATH; on dev it's the absolute
+    // path of THIS process's sibling `helmor-cli`. The dev branch
+    // deliberately avoids the bare `helmor-dev` name because under
+    // Helmor's worktree-based dev workflow every worktree compiles
+    // its own CLI binary, and a global `/usr/local/bin/helmor-dev`
+    // symlink (if it exists) can only target one of them — the other
+    // dev instances' agents would silently talk to the wrong build.
+    // See `crate::cli::agent_invocation_path` for the full rationale.
+    let cli_command_name = crate::cli::agent_invocation_path();
+
+    let ctx = HelmorSystemPromptContext {
+        workspace_label,
+        workspace_root_path: working_directory.display().to_string(),
+        target_branch,
+        base_branch,
+        linked_directories,
+        cli_command_name,
+    };
+    Some(build_helmor_system_prompt(&ctx))
 }

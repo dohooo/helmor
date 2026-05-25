@@ -17,6 +17,7 @@ mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;
+pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};

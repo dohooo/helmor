@@ -7,6 +7,17 @@ description: Use the Helmor CLI to remote-control Helmor from the terminal. Use 
 
 Use this skill to guide simple terminal-first Helmor workflows. Keep the answer practical: prefer one or two concrete commands over a long CLI tutorial.
 
+## Binary Name (Release vs Dev)
+
+Examples below use the literal name `helmor` — the binary a release user has on their PATH.
+
+- **Release builds**: invoke commands as `helmor <subcommand>`.
+- **Dev builds**: do NOT assume `helmor-dev` is on PATH. Under Helmor's worktree-based dev workflow every worktree has its own `target/debug/helmor-cli`, and a shared `/usr/local/bin/helmor-dev` symlink (if it exists) can only point at one of them. Instead:
+  - If you're an **agent running inside Helmor**, the system prompt has already handed you the exact CLI invocation to use (typically an absolute path like `<worktree>/src-tauri/target/debug/helmor-cli`). Call it verbatim — don't re-verify with `which` / `file` / `--version`.
+  - If you're a **human at a terminal**, run `<your-worktree>/src-tauri/target/debug/helmor-cli <subcommand>` (or whatever path your active Helmor build uses).
+
+The rest of every command shape is identical regardless of build.
+
 ## First Checks
 
 1. Check whether the CLI is installed and which data mode it targets:
@@ -27,16 +38,16 @@ Use `--json` when the output will be parsed by scripts or another tool.
 
 Treat Helmor CLI install/update as beta.
 
-- Prefer the Helmor desktop onboarding/settings flow for installing or repairing the managed CLI entrypoint.
+- Prefer the Helmor desktop onboarding/settings Components panel for installing or repairing the managed CLI entrypoint.
 - Use `helmor cli-status` to verify whether the PATH entry points at the current app-managed CLI.
 - Do not invent a stable standalone install/update command unless it exists in `helmor --help` or a subcommand help page.
-- If the user is blocked, ask them to run `helmor cli-status` and share the output, or inspect the app's CLI install panel if working inside the Helmor repo.
+- If the user is blocked, ask them to run `helmor cli-status` and share the output, or inspect the app's Components panel if working inside the Helmor repo.
 
 ## Helmor Skills Install And Update
 
 Treat Helmor skills install/update as a beta app-managed flow.
 
-- Prefer the Helmor desktop onboarding/settings flow for installing or updating bundled Helmor skills.
+- Prefer the Helmor desktop onboarding/settings Components panel for installing or updating bundled Helmor skills.
 - Do not invent a `helmor skills` command; the top-level CLI help does not currently expose one.
 - If the user asks to update a bundled Helmor skill inside the repo, edit the skill files directly and validate them with the skill validation tooling.
 - Keep user-facing skill content concise and English-first unless the user explicitly asks for another language.
