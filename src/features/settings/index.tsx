@@ -66,11 +66,9 @@ import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
-import { CliInstallPanel } from "./panels/cli-install";
 import { ConductorImportPanel } from "./panels/conductor-import";
 import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
-import { HelmorSkillsPanel } from "./panels/helmor-skills";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
@@ -589,8 +587,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										settings={settings}
 										updateSettings={updateSettings}
 									/>
-									<CliInstallPanel />
-									<HelmorSkillsPanel />
 								</SettingsGroup>
 							)}
 
