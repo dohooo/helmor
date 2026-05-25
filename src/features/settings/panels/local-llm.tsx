@@ -15,7 +15,7 @@ import {
 	Undo2,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -442,25 +442,15 @@ export function LocalLlmPanel({
 						<CustomModelPathSection
 							value={customPathValue}
 							disabled={pending}
-							onChange={(value) =>
-								updateSettings({
-									localLlm: { ...settings.localLlm, model: value },
-								})
-							}
-							onCommit={() => {
-								// Trim once on commit so the inspect IPC, catalog
-								// suffix match, and llama-server `--model` arg all
-								// see the canonical path. Bare whitespace = clear.
-								const trimmed = settings.localLlm.model.trim();
-								if (trimmed !== settings.localLlm.model) {
-									updateSettings({
-										localLlm: { ...settings.localLlm, model: trimmed },
+							onCommit={(path) => {
+								if (path !== settings.localLlm.model) {
+									void updateSettings({
+										localLlm: { ...settings.localLlm, model: path },
 									});
 								}
-								if (trimmed.length === 0) return;
-								// Kick the server to pick up the new path. The
-								// backend is idempotent: same model + running →
-								// no-op; new path → kill old, start new.
+								if (path.length === 0) return;
+								// Kick the server to pick up the new path. Idempotent
+								// on the backend: same path while running = no-op.
 								void startLocalLlm().catch((error) => {
 									console.warn(
 										"[local-llm] start after custom path commit failed",
@@ -1353,18 +1343,33 @@ function DownloadRowView({
 function CustomModelPathSection({
 	value,
 	disabled,
-	onChange,
 	onCommit,
 }: {
 	value: string;
 	disabled: boolean;
-	onChange: (value: string) => void;
-	/** Called when the user signals "this is the path I want" — either
-	 *  by blurring the input or pressing Enter. Parent uses this to
-	 *  kick off / restart the server so the new path takes effect
-	 *  without a separate Apply button. */
-	onCommit: () => void;
+	/** Fired on blur / Enter with the trimmed path. Parent persists it
+	 *  and kicks the server. */
+	onCommit: (path: string) => void;
 }) {
+	// Local draft so per-keystroke updates don't round-trip through the
+	// settings DB + `settingsChanged` reload — that race could overwrite
+	// in-progress edits (e.g. clear half the input on a fast paste).
+	const [draft, setDraft] = useState(value);
+	const inputRef = useRef<HTMLInputElement>(null);
+	// Re-sync to the committed value, but only when the input isn't
+	// focused — never clobber whatever the user is actively typing.
+	useEffect(() => {
+		if (document.activeElement !== inputRef.current) {
+			setDraft(value);
+		}
+	}, [value]);
+
+	const commit = () => {
+		const trimmed = draft.trim();
+		if (trimmed !== draft) setDraft(trimmed);
+		onCommit(trimmed);
+	};
+
 	return (
 		<div className="grid gap-1.5">
 			<div className="flex items-center gap-1">
@@ -1404,11 +1409,12 @@ function CustomModelPathSection({
 			</div>
 			<Input
 				id="local-llm-model"
-				value={value}
+				ref={inputRef}
+				value={draft}
 				placeholder="/path/to/model.gguf"
 				disabled={disabled}
-				onChange={(event) => onChange(event.currentTarget.value)}
-				onBlur={onCommit}
+				onChange={(event) => setDraft(event.currentTarget.value)}
+				onBlur={commit}
 				onKeyDown={(event) => {
 					if (event.key === "Enter") {
 						event.preventDefault();
