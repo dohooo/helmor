@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -183,9 +183,15 @@ pub fn send_message(
     // and streams through its shared sidecar so the frontend sees live
     // updates. The CLI prints a short confirmation instead of streaming.
     if is_app_running() {
-        // Persist user message so the app's conversation container
-        // shows the optimistic user bubble right away.
-        let conn = crate::models::db::write_conn()?;
+        // All three writes (user message, session pin, pending send) go
+        // through ONE pooled connection inside ONE transaction. The
+        // write pool's max_size is 1, so holding a borrow across nested
+        // calls that also grab `write_conn()` self-deadlocks the pool
+        // until the 30s `connection_timeout` fires — that's the
+        // "Failed to borrow write connection: timed out waiting for
+        // connection" we used to surface when CLI sends raced. Single
+        // borrow + single tx eliminates both the deadlock and the
+        // partial-write window.
         let timestamp = crate::models::db::current_timestamp()?;
         let user_msg_id = Uuid::new_v4().to_string();
         let user_content = serde_json::json!({
@@ -193,36 +199,51 @@ pub fn send_message(
             "text": params.prompt,
         })
         .to_string();
-        conn.execute(
-            r#"INSERT INTO session_messages
-               (id, session_id, role, content, created_at, sent_at)
-               VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
-            params![user_msg_id, session_id, user_content, timestamp],
-        )?;
+        let pending_id = Uuid::new_v4().to_string();
+        {
+            let mut conn = crate::models::db::write_conn()?;
+            let tx = conn.transaction()?;
+            // Persist user message so the app's conversation container
+            // shows the optimistic user bubble right away.
+            tx.execute(
+                r#"INSERT INTO session_messages
+                   (id, session_id, role, content, created_at, sent_at)
+                   VALUES (?1, ?2, 'user', ?3, ?4, ?4)"#,
+                params![user_msg_id, session_id, user_content, timestamp],
+            )?;
 
-        // Pin the resolved model + (optional) permission_mode onto the
-        // session row before queuing. The App composer reads these off
-        // `currentSession` when it auto-submits the drained prompt — so
-        // without this the row still has model=NULL and the composer
-        // falls back to settings.defaultModelId, ignoring the CLI's
-        // --model / --plan override.
-        conn.execute(
-            "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
-            params![
-                session_id,
-                model_id,
-                params.permission_mode.as_deref(),
-                timestamp,
-            ],
-        )?;
+            // Pin the resolved model + (optional) permission_mode onto
+            // the session row before queuing. The App composer reads
+            // these off `currentSession` when it auto-submits the
+            // drained prompt — without this the row still has
+            // model=NULL and the composer falls back to
+            // settings.defaultModelId, ignoring the CLI's
+            // --model / --plan override.
+            tx.execute(
+                "UPDATE sessions SET model = ?2, permission_mode = COALESCE(?3, permission_mode), updated_at = ?4 WHERE id = ?1",
+                params![
+                    session_id,
+                    model_id,
+                    params.permission_mode.as_deref(),
+                    timestamp,
+                ],
+            )?;
 
-        insert_pending_cli_send(
-            &workspace_id,
-            &session_id,
-            &params.prompt,
-            Some(&model_id),
-            params.permission_mode.as_deref(),
-        )?;
+            tx.execute(
+                r#"INSERT INTO pending_cli_sends
+                   (id, workspace_id, session_id, prompt, model_id, permission_mode)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+                params![
+                    pending_id,
+                    workspace_id,
+                    session_id,
+                    params.prompt,
+                    Some(&model_id),
+                    params.permission_mode.as_deref()
+                ],
+            )?;
+            tx.commit()?;
+        }
 
         let _ = crate::ui_sync::notify_running_app(
             crate::ui_sync::UiMutationEvent::PendingCliSendQueued {
@@ -268,9 +289,24 @@ pub fn send_message(
             crate::agents::lookup_workspace_linked_directories(Some(&session_id));
     }
 
+    // Prepend the same Helmor `<helmor_context>` preamble the in-app
+    // streaming path uses, so a CLI-launched agent self-locates and
+    // sees the chat-vs-workspace framing. Persisted user message
+    // (further down) still stores `params.prompt` only, matching the
+    // in-app contract that the DB never sees the preamble.
+    let helmor_prefix = crate::agents::streaming::build_helmor_system_prompt_for_workspace(
+        Some(&session_id),
+        Some(&workspace_id),
+        std::path::Path::new(&cwd),
+    );
+    let wire_prompt = match helmor_prefix.as_deref() {
+        Some(helmor) => format!("{helmor}\n\nUser request:\n{}", params.prompt),
+        None => params.prompt.clone(),
+    };
+
     let mut payload = serde_json::json!({
         "sessionId": session_id,
-        "prompt": params.prompt,
+        "prompt": wire_prompt,
         "model": model.cli_model,
         "cwd": cwd,
         "provider": model.provider,
@@ -557,7 +593,17 @@ pub struct PendingCliSend {
 }
 
 /// Insert a pending send so the App's frontend can pick it up on focus.
-pub fn insert_pending_cli_send(
+///
+/// **Test-only.** Production used to call this from `send_message`'s
+/// App-delegation branch, but that path now performs the INSERT inline
+/// inside a transaction that already holds the (single) writer
+/// connection — calling this helper while still holding the writer
+/// would self-deadlock the `max_size=1` write pool. The helper is kept
+/// for `drain_pending_cli_sends` round-trip tests; gating it on
+/// `#[cfg(test)]` makes the deprecation explicit so a future caller
+/// can't accidentally reintroduce the deadlock.
+#[cfg(test)]
+fn insert_pending_cli_send(
     workspace_id: &str,
     session_id: &str,
     prompt: &str,
@@ -575,16 +621,30 @@ pub fn insert_pending_cli_send(
     Ok(id)
 }
 
-/// Read and delete all pending sends in one atomic operation.
-/// Returns them oldest-first so the App processes them in order.
+/// Drain the **single oldest** pending send, returning it as a
+/// zero-or-one Vec, and delete only that row.
+///
+/// We intentionally do NOT drain the whole queue in one call. The
+/// frontend's `processPendingCliSends` consumes `sends[0]` and routes
+/// the UI to that one workspace/session — older code drained the whole
+/// table at once, which meant any prompt past the first was deleted
+/// from the queue but never dispatched (orphan user bubbles, no
+/// agent reply). Each `PendingCliSendQueued` event triggers a fresh
+/// drain, so a one-at-a-time contract turns N pending rows into N
+/// dispatches with no races.
+///
+/// Returns an empty Vec when the queue is empty. Vec (not Option) so
+/// the existing Tauri command + frontend type signature stays
+/// backwards-compatible — frontend already does `if (sends.length === 0)
+/// return; const first = sends[0];`, which works unchanged.
 pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
     let conn = crate::models::db::write_conn()?;
     let mut stmt = conn.prepare(
         "SELECT id, workspace_id, session_id, prompt, model_id, permission_mode, created_at
-         FROM pending_cli_sends ORDER BY datetime(created_at) ASC",
+         FROM pending_cli_sends ORDER BY datetime(created_at) ASC LIMIT 1",
     )?;
-    let rows: Vec<PendingCliSend> = stmt
-        .query_map([], |row| {
+    let row: Option<PendingCliSend> = stmt
+        .query_row([], |row| {
             Ok(PendingCliSend {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -594,16 +654,19 @@ pub fn drain_pending_cli_sends() -> Result<Vec<PendingCliSend>> {
                 permission_mode: row.get(5)?,
                 created_at: row.get(6)?,
             })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()
+        })
+        .optional()
         .context("Failed to read pending CLI sends")?;
 
-    if !rows.is_empty() {
-        conn.execute("DELETE FROM pending_cli_sends", [])
-            .context("Failed to delete pending CLI sends")?;
+    if let Some(ref send) = row {
+        conn.execute(
+            "DELETE FROM pending_cli_sends WHERE id = ?1",
+            params![send.id],
+        )
+        .context("Failed to delete pending CLI send")?;
     }
 
-    Ok(rows)
+    Ok(row.into_iter().collect())
 }
 
 /// Check if the Helmor App is running by testing the MCP bridge port.
@@ -696,7 +759,12 @@ mod tests {
     }
 
     #[test]
-    fn drain_returns_oldest_first() {
+    fn drain_returns_one_oldest_at_a_time_in_order() {
+        // Regression for the multi-CLI-send queue-loss bug: the drain
+        // used to return + delete every row in one call, but the
+        // frontend only dispatches sends[0] per call — older entries
+        // were silently dropped. Pin that the queue now drains ONE row
+        // per call, oldest first, leaving the rest for subsequent calls.
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _dir = TestDataDir::new("drain-order");
 
@@ -705,10 +773,16 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         insert_pending_cli_send("ws-1", "sess-b", "second", None, None).unwrap();
 
-        let sends = drain_pending_cli_sends().unwrap();
-        assert_eq!(sends.len(), 2);
-        assert_eq!(sends[0].prompt, "first");
-        assert_eq!(sends[1].prompt, "second");
+        let first = drain_pending_cli_sends().unwrap();
+        assert_eq!(first.len(), 1, "first drain must take only one row");
+        assert_eq!(first[0].prompt, "first");
+
+        let second = drain_pending_cli_sends().unwrap();
+        assert_eq!(second.len(), 1, "second drain must take the next row");
+        assert_eq!(second[0].prompt, "second");
+
+        let third = drain_pending_cli_sends().unwrap();
+        assert!(third.is_empty(), "queue must be empty after both drained");
     }
 
     #[test]

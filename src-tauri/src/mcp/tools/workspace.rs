@@ -142,7 +142,7 @@ pub(super) fn tool_workspace_create(args: &Value) -> Result<String> {
 pub(super) fn tool_workspace_set_status(args: &Value) -> Result<String> {
     let ws_ref = required_str(args, "ref")?;
     let status_raw = required_str(args, "status")?;
-    // Accept both the kebab-case stored value AND the kanban group id —
+    // Accept both the kebab-case stored value AND the status group id —
     // "progress" maps to "in-progress" the same way the GUI does.
     let canonical = if status_raw.eq_ignore_ascii_case("progress") {
         "in-progress".to_string()

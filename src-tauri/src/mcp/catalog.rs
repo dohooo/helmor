@@ -31,7 +31,7 @@ pub(super) fn tool_catalog() -> Vec<Value> {
             add_response_options(json!({
                 "type": "object",
                 "properties": {
-                    "status": { "type": "string", "description": "Filter by stored workspace status. Accepts a kanban lane id (progress/done/review/backlog/canceled) or the canonical status string (in-progress/done/...)." },
+                    "status": { "type": "string", "description": "Filter by stored workspace status. Accepts a status group id (progress/done/review/backlog/canceled) or the canonical status string (in-progress/done/...)." },
                     "repo": { "type": "string", "description": "Repository UUID or name" },
                     "archived": { "type": "boolean", "description": "If true, list archived workspaces instead of active ones." },
                     "limit": { "type": "integer", "description": "Max rows to return (1-50, default 20)" }
@@ -63,7 +63,7 @@ pub(super) fn tool_catalog() -> Vec<Value> {
         ),
         tool_def(
             "helmor_workspace_set_status",
-            "Move a workspace into a different kanban lane. Use this when the user verbally moves a workspace to done/review/backlog/in-progress/canceled. Canceled and Done are destructive-feeling; callers should confirm with the user first.",
+            "Move a workspace into a different status group. Use this when the user verbally moves a workspace to done/review/backlog/in-progress/canceled. Canceled and Done are destructive-feeling; callers should confirm with the user first.",
             add_response_options(json!({
                 "type": "object",
                 "properties": {
@@ -71,7 +71,7 @@ pub(super) fn tool_catalog() -> Vec<Value> {
                     "status": {
                         "type": "string",
                         "enum": ["in-progress", "done", "review", "backlog", "canceled"],
-                        "description": "Target status. Accepts kanban group ids (progress = in-progress)."
+                        "description": "Target status. Accepts status group ids (progress = in-progress)."
                     }
                 },
                 "required": ["ref", "status"]

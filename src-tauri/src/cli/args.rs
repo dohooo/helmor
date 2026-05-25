@@ -51,7 +51,7 @@ const EXAMPLES_WORKSPACE_LIST: &str =
     # Just the ones in a single repo
     helmor workspace list --repo dohooo/hello
 
-    # Filter by kanban status
+    # Filter by status group
     helmor workspace list --status review";
 
 const EXAMPLES_WORKSPACE_RUN_ACTION: &str =

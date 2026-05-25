@@ -455,7 +455,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				continue;
 			}
 
-			// The Chats bucket has no kanban semantics — when no chat
+			// The Chats bucket has no status-group semantics — when no chat
 			// workspaces exist, drop the section entirely (header + gap)
 			// so the sidebar isn't littered with an always-empty bucket.
 			// Status / repo buckets keep their empty header because users
@@ -757,7 +757,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					? item.group.rows[0]
 					: undefined;
 
-				// The dedicated "chats" bucket has no kanban semantics —
+				// The dedicated "chats" bucket has no status-group semantics —
 				// surface it with a MessageCircle glyph that mirrors the
 				// chat-mode UI elsewhere (start-page picker, panel header).
 				const isChatGroup = item.group.id === "chats";
