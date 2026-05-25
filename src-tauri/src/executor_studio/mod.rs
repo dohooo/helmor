@@ -343,6 +343,12 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
             scope_dir.display()
         )
     })?;
+    // Pre-flight on the existing data.db so bun-sqlite (executor's
+    // runtime) can open it across pin bumps. Executor handles its own
+    // schema migration once it can read the file — this only unblocks
+    // the open. Idempotent on a clean file; a no-op when data.db
+    // doesn't exist.
+    preflight_executor_data_db(&scope_dir);
     tracing::debug!(
         target: "executor::spawn",
         scope_dir = %scope_dir.display(),
@@ -637,6 +643,66 @@ fn locate_bunx() -> Result<PathBuf> {
     Ok(candidate)
 }
 
+/// Prepare an existing `data.db` so bun-sqlite (Executor's runtime
+/// embedded SQLite) can open it on the next spawn.
+///
+/// **Why this exists:** between pin bumps, a `data.db` created by an
+/// older executor under `journal_mode = WAL` makes bun-sqlite return
+/// `SQLITE_CANTOPEN` / `database is locked` immediately on open, even
+/// when no other process is holding the file. Running a WAL checkpoint
+/// and then switching the persistent journal mode to `DELETE` via the
+/// system SQLite (which has no such bug) unblocks bun. Once bun can
+/// open the file, Executor itself runs its own schema migration — we
+/// saw `Imported N row(s) into FumaDB SQLite storage` during diagnosis.
+///
+/// **Why best-effort:** any failure here only matters if the user had
+/// a pre-existing db; the spawn that follows will either succeed
+/// (bun opens it after the pragma) or fail with the same error we'd
+/// have hit anyway. Logging at WARN lets us see the failure in
+/// rust.jsonl without taking the executor offline.
+///
+/// **Cost:** ~1 ms on a clean db (open + 2 pragmas + drop); no-op
+/// when `data.db` doesn't exist (first-launch case).
+fn preflight_executor_data_db(scope_dir: &Path) {
+    let db_path = scope_dir.join("data.db");
+    if !db_path.is_file() {
+        return;
+    }
+    let started = Instant::now();
+    let result: Result<()> = (|| {
+        let conn = rusqlite::Connection::open(&db_path).context("open data.db for pre-flight")?;
+        // `wal_checkpoint(TRUNCATE)` flushes the WAL into the main db
+        // file and truncates the WAL to zero — required before
+        // switching off WAL mode, otherwise the journal_mode change
+        // gets rejected with `database is locked`.
+        let _: (i32, i32, i32) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .context("wal_checkpoint(TRUNCATE)")?;
+        // Persist the journal-mode change so subsequent opens see
+        // `delete` mode (the value sticks in the db header).
+        let _: String = conn
+            .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+            .context("set journal_mode = DELETE")?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => tracing::info!(
+            target: "executor::spawn",
+            db_path = %db_path.display(),
+            elapsed_us = started.elapsed().as_micros() as u64,
+            "Executor data.db pre-flight complete"
+        ),
+        Err(err) => tracing::warn!(
+            target: "executor::spawn",
+            db_path = %db_path.display(),
+            error = %format!("{err:#}"),
+            "Executor data.db pre-flight failed — proceeding anyway; if bun-sqlite can't open the db, executor will report it"
+        ),
+    }
+}
+
 /// Resolve `helmor-executor-watchdog` as a sibling of the running
 /// Helmor binary. Works in dev (`target/<profile>/`) and in release
 /// builds where the watchdog is bundled next to the main executable
@@ -751,5 +817,71 @@ mod tests {
     #[test]
     fn rejects_unrelated_lines() {
         assert_eq!(extract_base_url("[bun] installing executor@1.4.29"), None);
+    }
+
+    // -- preflight_executor_data_db ---------------------------------
+
+    /// No data.db on disk → pre-flight returns silently. This is the
+    /// fresh-install path; we must not create a phantom db.
+    #[test]
+    fn preflight_is_noop_when_data_db_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        preflight_executor_data_db(tmp.path());
+        assert!(
+            !tmp.path().join("data.db").exists(),
+            "pre-flight must not create data.db"
+        );
+    }
+
+    /// Pre-existing WAL-mode db (what bun-sqlite chokes on) → pre-flight
+    /// flips it to DELETE mode and leaves the data intact. This is the
+    /// upgrade-bridge case we built the helper for.
+    #[test]
+    fn preflight_converts_wal_db_to_delete_mode_preserving_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("data.db");
+
+        // Seed: a WAL-mode db with a row, written by system rusqlite
+        // (mirrors how executor 1.4.29 left the file behind).
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(mode, "wal", "seed should be WAL mode");
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO t (v) VALUES ('preserved')", [])
+                .unwrap();
+        }
+
+        preflight_executor_data_db(tmp.path());
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete", "pre-flight should persist DELETE mode");
+        let value: String = conn
+            .query_row("SELECT v FROM t LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "preserved", "row data must survive the flip");
+    }
+
+    /// A garbage file at `data.db` → pre-flight logs but never panics
+    /// and never propagates the error. The caller's spawn proceeds
+    /// (bunx will surface a real error if the file is unusable).
+    #[test]
+    fn preflight_is_best_effort_on_corrupt_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("data.db");
+        std::fs::write(&db_path, b"not a sqlite database").unwrap();
+
+        // Should not panic; should not error out the caller.
+        preflight_executor_data_db(tmp.path());
+
+        // File still there — pre-flight isn't allowed to delete user
+        // data on its own.
+        assert!(db_path.is_file());
     }
 }
