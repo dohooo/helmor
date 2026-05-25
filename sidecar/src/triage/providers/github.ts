@@ -4,6 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 
 import { callHost } from "../../host-bridge";
 import type { ProviderContext, TriageProvider } from "./types";
+import { buildAttachmentContent } from "./types";
 
 const now = () => new Date().toISOString();
 const safe = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
@@ -144,7 +145,7 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		name: "github_save_attachment",
 		label: "GitHub · Save Attachment",
 		description:
-			"Download an image / asset URL embedded in a GitHub issue or PR body (e.g. user-images.githubusercontent.com) into staging. Pass the returned id in propose_workspace.attachments so the workspace agent can read it.",
+			"Download an image / asset URL embedded in a GitHub issue or PR body (e.g. user-images.githubusercontent.com) into staging AND inline its bytes back to you as an image block so you can see it. Pass the returned id in propose_workspace.attachments so it's also forwarded to the downstream workspace agent.",
 		parameters: Type.Object({
 			url: Type.String({
 				description: "Full HTTPS URL of the embedded image / asset.",
@@ -155,17 +156,18 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 				id: string;
 				filename: string;
 				sizeBytes: number;
+				dataBase64?: string;
+				mimeType?: string;
 			}>("forge.save_attachment", {
 				tickId: scratch.tickId,
 				url: params.url,
 			});
 			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Saved attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
-					},
-				],
+				content: buildAttachmentContent(
+					`Saved attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					r.dataBase64,
+					r.mimeType,
+				),
 				details: r,
 			};
 		},

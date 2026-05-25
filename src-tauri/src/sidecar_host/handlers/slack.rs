@@ -48,11 +48,19 @@ async fn save_attachment(params: Value) -> Result<Value> {
         .await
         .map(|m| m.len())
         .unwrap_or(0);
-    Ok(serde_json::json!({
+    let preview = crate::triage::attachments::inline_preview(&staged.path)
+        .ok()
+        .flatten();
+    let mut out = serde_json::json!({
         "id": staged.id,
         "filename": staged.filename,
         "sizeBytes": size,
-    }))
+    });
+    if let (Some(map), Some(preview)) = (out.as_object_mut(), preview) {
+        map.insert("dataBase64".into(), Value::String(preview.data_base64));
+        map.insert("mimeType".into(), Value::String(preview.mime_type));
+    }
+    Ok(out)
 }
 
 async fn list_workspaces() -> Result<Value> {

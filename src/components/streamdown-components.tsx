@@ -9,6 +9,7 @@
  * @see https://streamdown.ai/docs/components
  */
 
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DownloadIcon } from "lucide-react";
@@ -340,12 +341,58 @@ export function StreamdownAnchor({
 	);
 }
 
+/**
+ * Image override. Triage priming messages render `![alt](.helmor/...)`
+ * with workspace-relative paths; the webview can't load those directly,
+ * so we resolve against the panel's workspace root and route through the
+ * Tauri `asset://` protocol. Absolute URLs (http(s), data:, asset:) pass
+ * straight through.
+ */
+export function StreamdownImage({
+	src,
+	alt,
+	className,
+	...props
+}: {
+	src?: string;
+	alt?: string;
+	className?: string;
+} & Record<string, unknown>) {
+	const { workspaceRootPath } = useFileLinkContext();
+	const resolved = resolveImageSrc(src, workspaceRootPath ?? null);
+	return (
+		<img
+			{...(props as Omit<
+				React.ImgHTMLAttributes<HTMLImageElement>,
+				"src" | "alt" | "className"
+			>)}
+			src={resolved}
+			alt={alt ?? ""}
+			className={cn("max-h-[480px] max-w-full rounded-md border", className)}
+		/>
+	);
+}
+
+function resolveImageSrc(
+	src: string | undefined,
+	workspaceRootPath: string | null,
+): string | undefined {
+	if (!src) return src;
+	if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return src;
+	if (src.startsWith("//")) return src;
+	if (!workspaceRootPath) return src;
+	const rel = src.replace(/^\.?\/+/, "");
+	const sep = workspaceRootPath.endsWith("/") ? "" : "/";
+	return convertFileSrc(`${workspaceRootPath}${sep}${rel}`);
+}
+
 // ---------------------------------------------------------------------------
 // Aggregated components map
 // ---------------------------------------------------------------------------
 
 export const streamdownComponents = {
 	a: StreamdownAnchor,
+	img: StreamdownImage,
 	pre: StreamdownPre,
 	table: StreamdownTable,
 	thead: StreamdownTableHeader,

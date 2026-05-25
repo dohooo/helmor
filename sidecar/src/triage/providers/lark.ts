@@ -4,6 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 
 import { callHost } from "../../host-bridge";
 import type { ProviderContext, TriageProvider } from "./types";
+import { buildAttachmentContent } from "./types";
 
 const now = () => new Date().toISOString();
 const safe = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
@@ -229,7 +230,7 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 		name: "lark_save_image",
 		label: "Lark · Save Image",
 		description:
-			"Download a Lark message image (msg_type=image) into staging so it can be attached to a propose_workspace call. Returns an attachment id — pass it in propose_workspace.attachments. You don't need to look at the image yourself; the workspace's vision-capable agent will.",
+			"Download a Lark message image (msg_type=image) into staging AND inline the bytes back to you as an image block so you can see what's in it. Returns an attachment id — pass it in propose_workspace.attachments so it's also forwarded to the downstream workspace agent.",
 		parameters: Type.Object({
 			message_id: Type.String({ description: "om_ message id." }),
 			image_key: Type.String({
@@ -250,6 +251,8 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 				id: string;
 				filename: string;
 				sizeBytes: number;
+				dataBase64?: string;
+				mimeType?: string;
 			}>("lark.save_image", {
 				tickId: scratch.tickId,
 				messageId: params.message_id,
@@ -257,12 +260,11 @@ function buildTools({ scratch, lastTriagedAt }: ProviderContext): unknown[] {
 				extension: params.extension,
 			});
 			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Saved Lark image as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
-					},
-				],
+				content: buildAttachmentContent(
+					`Saved Lark image as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					r.dataBase64,
+					r.mimeType,
+				),
 				details: r,
 			};
 		},

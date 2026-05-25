@@ -1,12 +1,60 @@
 //! Per-tick attachment staging.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 
 const STAGING_SUBDIR: &str = "triage/attachments-staging";
 const WORKSPACE_SUBDIR: &str = ".helmor/triage-attachments";
+/// Files larger than this skip the inline-to-LLM path — we still keep
+/// the staged copy so the downstream cloud agent can see it via the
+/// workspace dir, but the local LLM only gets a text breadcrumb.
+const INLINE_PREVIEW_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+pub struct InlinePreview {
+    pub data_base64: String,
+    pub mime_type: String,
+}
+
+/// Read a staged file and produce a base64 preview the local LLM can
+/// consume as an `ImageContent` block. Returns `Ok(None)` when the file
+/// is over `INLINE_PREVIEW_MAX_BYTES` or its extension isn't an image
+/// type llama-cpp's vision pipeline supports.
+pub fn inline_preview(path: &Path) -> Result<Option<InlinePreview>> {
+    let metadata = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    if metadata.len() > INLINE_PREVIEW_MAX_BYTES {
+        return Ok(None);
+    }
+    let Some(mime) = guess_image_mime(path) else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(Some(InlinePreview {
+        data_base64,
+        mime_type: mime,
+    }))
+}
+
+fn guess_image_mime(path: &Path) -> Option<String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)?;
+    Some(
+        match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
 
 pub struct StagedAttachment {
     pub id: String,

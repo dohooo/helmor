@@ -24,13 +24,20 @@ impl AssetProvider for CatalogAssetProvider {
 }
 
 fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> Asset {
+    let estimated_bytes = entry.total_bytes();
+    let mut files = entry.files;
+    if let Some(mmproj) = entry.mmproj_file {
+        // mmproj lives in the same HF repo as the main weights, so the
+        // downloader fetches them in one swing without extra plumbing.
+        files.push(mmproj);
+    }
     Asset {
         id: entry.id,
         target_dir: target_dir.to_path_buf(),
-        files: entry.files,
+        files,
         source: AssetSource::HuggingFace { repo: entry.repo },
         archive: ArchiveKind::None,
         is_directory: false,
-        estimated_bytes: entry.bytes,
+        estimated_bytes,
     }
 }

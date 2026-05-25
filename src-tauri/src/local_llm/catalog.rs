@@ -50,9 +50,26 @@ pub struct CatalogEntry {
     /// existing entries don't need touching.
     #[serde(default)]
     pub kind: ModelKind,
+    /// Vision projector GGUF (multimodal). When set, downloads alongside
+    /// the main weights and llama-server starts with `--mmproj`.
+    #[serde(default)]
+    pub mmproj_file: Option<String>,
+    /// Bytes of the mmproj file; folded into `total_bytes()` for the UI.
+    #[serde(default)]
+    pub mmproj_bytes: u64,
 }
 
-/// Curated catalog. Sorted by `recommended_for_gb` ascending.
+impl CatalogEntry {
+    /// Sum of main weights + mmproj (when present). What the UI / progress
+    /// bars / RAM-fit hints should treat as the entry's footprint.
+    pub fn total_bytes(&self) -> u64 {
+        self.bytes + self.mmproj_bytes
+    }
+}
+
+/// Curated catalog. Sorted by `recommended_for_gb` ascending. Every Qwen
+/// 3.5+ row also pulls the F16 mmproj from the same repo so llama-server
+/// boots with vision enabled.
 pub fn catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry {
@@ -64,8 +81,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 2_500_000_000,
             min_ram_gb: 8,
             recommended_for_gb: 16,
-            blurb: "Compact starter — good for chat and simple drafts.".into(),
+            blurb: "Compact starter — chat, simple drafts, image input.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 672_423_616,
         },
         CatalogEntry {
             id: "qwen35-9b-q4".into(),
@@ -76,8 +95,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 5_400_000_000,
             min_ram_gb: 12,
             recommended_for_gb: 24,
-            blurb: "Great all-rounder. Fits comfortably on 24 GB Macs.".into(),
+            blurb: "All-rounder with vision. Comfortable on 24 GB Macs.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 918_166_080,
         },
         CatalogEntry {
             id: "qwen36-27b-q4".into(),
@@ -88,8 +109,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 16_200_000_000,
             min_ram_gb: 20,
             recommended_for_gb: 32,
-            blurb: "Dense flagship — solid coding model on 32 GB Macs.".into(),
+            blurb: "Dense flagship with vision — solid 32 GB pick.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 927_607_360,
         },
         CatalogEntry {
             id: "qwen36-35b-a3b-q4".into(),
@@ -100,8 +123,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 21_000_000_000,
             min_ram_gb: 24,
             recommended_for_gb: 32,
-            blurb: "Sparse MoE — 35B params, only ~3B active per token.".into(),
+            blurb: "Sparse MoE with vision — 35B params, ~3B active.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 899_283_680,
         },
         CatalogEntry {
             id: "qwen36-35b-a3b-q8".into(),
@@ -112,8 +137,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 37_000_000_000,
             min_ram_gb: 40,
             recommended_for_gb: 48,
-            blurb: "Sweet spot — smart + fast. The 48-GB default.".into(),
+            blurb: "Sweet spot with vision. The 48-GB default.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 899_283_680,
         },
         CatalogEntry {
             id: "qwen35-122b-a10b-q4".into(),
@@ -128,8 +155,10 @@ pub fn catalog() -> Vec<CatalogEntry> {
             bytes: 73_000_000_000,
             min_ram_gb: 80,
             recommended_for_gb: 96,
-            blurb: "Frontier MoE — 122B params, ~10B active. 3 parts.".into(),
+            blurb: "Frontier MoE with vision — 122B params, ~10B active.".into(),
             kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 908_724_960,
         },
     ]
 }

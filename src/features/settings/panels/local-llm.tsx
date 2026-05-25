@@ -46,6 +46,7 @@ import {
 	type LocalLlmDownloadEvent,
 	type LocalLlmDownloadStatus,
 	listLocalLlmCatalog,
+	localLlmEntryTotalBytes,
 	pauseLocalLlmDownload,
 	setLocalLlmContextOverride,
 	startLocalLlm,
@@ -493,7 +494,7 @@ export function LocalLlmPanel({
 								id: selectedEntry.id,
 								modelMaxContextTokens: catalogInspect.contextLength,
 								kvBytesPerToken: catalogInspect.kvBytesPerToken,
-								modelBytes: selectedEntry.bytes,
+								modelBytes: localLlmEntryTotalBytes(selectedEntry),
 							}}
 							totalRamGb={hardwareQuery.data?.totalRamGb ?? null}
 							currentTokens={contextTokensForSelected}
@@ -516,8 +517,8 @@ export function LocalLlmPanel({
 							<span className="font-medium text-foreground">
 								{deleteTargetEntry.label}
 							</span>{" "}
-							({formatBytes(deleteTargetEntry.bytes)}) from disk. You'll have to
-							download it again to use it.
+							({formatBytes(localLlmEntryTotalBytes(deleteTargetEntry))}) from
+							disk. You'll have to download it again to use it.
 						</>
 					) : (
 						"This will remove the model from disk."
@@ -853,7 +854,7 @@ function ModelsSection({
 												recommended={entryRecommended}
 											/>
 											<span className="tabular-nums text-muted-foreground">
-												{formatBytes(entry.bytes)}
+												{formatBytes(localLlmEntryTotalBytes(entry))}
 											</span>
 										</div>
 									</div>

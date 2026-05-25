@@ -3131,6 +3131,7 @@ export type LocalLlmCatalogEntry = {
 	files: string[];
 	label: string;
 	quant: string;
+	/** Main weights only. UI should add `mmprojBytes` for total footprint. */
 	bytes: number;
 	minRamGb: number;
 	recommendedForGb: number;
@@ -3139,7 +3140,18 @@ export type LocalLlmCatalogEntry = {
 	 *  as a discriminator so future entry kinds can land without
 	 *  churning every consumer. */
 	kind?: "llm";
+	/** Vision projector file fetched alongside the main weights. Absent
+	 *  on text-only entries. */
+	mmprojFile?: string | null;
+	/** Bytes of the mmproj file; 0 when none. */
+	mmprojBytes?: number;
 };
+
+/** Main weights + vision projector. Use everywhere we show "size of this
+ *  catalog entry" to the user (picker rows, delete dialog, download cap). */
+export function localLlmEntryTotalBytes(entry: LocalLlmCatalogEntry): number {
+	return entry.bytes + (entry.mmprojBytes ?? 0);
+}
 
 export async function listLocalLlmCatalog(): Promise<LocalLlmCatalogEntry[]> {
 	return await invoke<LocalLlmCatalogEntry[]>("list_local_llm_catalog");

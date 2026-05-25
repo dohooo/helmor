@@ -270,10 +270,10 @@ fn spawn_llm_server(model: &str) -> Result<server::ServerInstance> {
     })
 }
 
-/// Resolve `model` to llama-server `--model` args. We deliberately only
-/// accept a local file path — the curated catalog drives all "fetch from
-/// HF" flows through our own download manager (with progress / pause /
-/// resume); shelling out to `llama-server -hf` would bypass that.
+/// Resolve `model` to llama-server `--model` args. Local file path only;
+/// curated catalog flows through our own download manager so `-hf` would
+/// bypass it. Auto-appends `--mmproj` when a sibling `mmproj-*.gguf` is
+/// present so vision-capable models boot with their projector loaded.
 fn llama_model_args(model: &str) -> Result<Vec<String>> {
     let trimmed = model.trim();
     if trimmed.is_empty() {
@@ -285,5 +285,46 @@ fn llama_model_args(model: &str) -> Result<Vec<String>> {
             "Model file not found: {trimmed}. Pick a curated model in Settings or point Custom model path at a real `.gguf` file."
         );
     }
-    Ok(vec!["--model".to_string(), trimmed.to_string()])
+    let mut args = vec!["--model".to_string(), trimmed.to_string()];
+    if let Some(mmproj) = find_sibling_mmproj(&pb) {
+        tracing::info!(model = trimmed, mmproj = %mmproj.display(), "vision mmproj detected");
+        args.push("--mmproj".to_string());
+        args.push(mmproj.to_string_lossy().into_owned());
+    }
+    Ok(args)
+}
+
+/// Scan the model file's parent dir for any `mmproj-*.gguf`. Preference
+/// order: F16 > BF16 > F32 > anything else, picking the first match so
+/// catalog downloads (which ship F16) light up vision automatically while
+/// custom-path users can drop whichever precision they have.
+fn find_sibling_mmproj(model_path: &std::path::Path) -> Option<PathBuf> {
+    let parent = model_path.parent()?;
+    let entries = std::fs::read_dir(parent).ok()?;
+    let mut candidates: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+                name.starts_with("mmproj-") && name.to_lowercase().ends_with(".gguf")
+            })
+        })
+        .collect();
+    candidates.sort_by_key(|p| {
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if name.contains("f16") && !name.contains("bf16") {
+            0
+        } else if name.contains("bf16") {
+            1
+        } else if name.contains("f32") {
+            2
+        } else {
+            3
+        }
+    });
+    candidates.into_iter().next()
 }

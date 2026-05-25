@@ -61,10 +61,12 @@ relevant to the task, save it BEFORE proposing:
   github:  github_save_attachment(url)
   gitlab:  gitlab_save_attachment(url)
 
-Each tool returns an attachment id. Pass them in
-propose_workspace.attachments: [{ id, alt }] so the workspace agent can
-see them later. You do NOT need to look at the image yourself — your
-job is just to capture and forward.
+Each save tool also INLINES the image bytes back to you as a vision
+block (under ~5 MB) — look at it and:
+  - briefly describe what you see in plan_message so the user
+    understands the task without re-opening the source,
+  - still pass the id in propose_workspace.attachments: [{ id, alt }]
+    so the downstream workspace agent can re-open the original.
 
 Hard cap: never call propose_workspace more than {{MAX}} times.`;
 

@@ -36,7 +36,10 @@ function buildLocalModel(
 		provider: PROVIDER_ID,
 		baseUrl: params.baseUrl.replace(/\/$/, ""),
 		reasoning: false,
-		input: ["text"],
+		// Vision-capable when llama-server was started with --mmproj (catalog
+		// entries ship the F16 projector by default). Even without it, sending
+		// image blocks is harmless — llama-server just rejects them.
+		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 32_768,
 		maxTokens: 4_096,

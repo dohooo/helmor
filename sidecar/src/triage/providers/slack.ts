@@ -4,6 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 
 import { callHost } from "../../host-bridge";
 import type { ProviderContext, TriageProvider } from "./types";
+import { buildAttachmentContent } from "./types";
 
 const now = () => new Date().toISOString();
 const safe = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
@@ -53,7 +54,7 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 		name: "slack_save_attachment",
 		label: "Slack · Save Attachment",
 		description:
-			"Download a Slack file (image/gif/etc) into staging so it can be attached to a propose_workspace call. Pass the returned id in propose_workspace.attachments. Hand off to the workspace agent; you don't need to interpret the file content.",
+			"Download a Slack file (image/gif/etc) into staging AND inline its bytes back to you as an image block so you can see it. Pass the returned id in propose_workspace.attachments so it's also forwarded to the downstream workspace agent.",
 		parameters: Type.Object({
 			url: Type.String({
 				description:
@@ -65,17 +66,18 @@ function buildTools({ scratch }: ProviderContext): unknown[] {
 				id: string;
 				filename: string;
 				sizeBytes: number;
+				dataBase64?: string;
+				mimeType?: string;
 			}>("slack.save_attachment", {
 				tickId: scratch.tickId,
 				url: params.url,
 			});
 			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Saved Slack file as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
-					},
-				],
+				content: buildAttachmentContent(
+					`Saved Slack file as attachment ${r.id} (${r.filename}, ${r.sizeBytes} bytes).`,
+					r.dataBase64,
+					r.mimeType,
+				),
 				details: r,
 			};
 		},
