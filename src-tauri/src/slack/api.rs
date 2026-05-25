@@ -288,6 +288,79 @@ pub fn users_info(team_id: &str, creds: &SlackCreds, user_id: &str) -> Result<Us
     Ok(info)
 }
 
+/// Resolve every `<@U…>` user-mention token in a Slack message body to
+/// the labeled form `<@U…|display_name>` using the cached `users.info`
+/// lookup. Idempotent — already-labeled mentions (`<@U…|name>`) and
+/// non-mention tokens are passed through unchanged.
+///
+/// Why this lives in the backend: the only way to resolve a Slack user
+/// id to a display name without nuking the workspace token is
+/// `users.info` (bulk `users.list` triggers Slack's anti-enumeration
+/// rule and revokes the xoxc/xoxd pair — see the module-level note).
+/// Per-id lookups are TTL-cached in this process, so a refresh of an
+/// active thread re-uses the 5 min cache hit instead of refetching
+/// each author. Frontend then renders the labeled form via
+/// `inlineMentionsForMarkdown` / `formatSlackTextPlain` which both
+/// already understood `<@U…|name>`.
+///
+/// On failure (network blip, deactivated account, etc.) we keep the
+/// raw `<@U…>` token rather than substituting a confusing fallback —
+/// frontend will still render it as `@U…`, matching today's behavior.
+pub fn resolve_mentions(team_id: &str, creds: &SlackCreds, text: &str) -> String {
+    // Cheap precheck: skip the scan entirely when no mention syntax is
+    // present. Most messages have no mentions so the inbox refresh
+    // shouldn't pay the cost of walking each body line.
+    if !text.contains("<@") {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start_rel) = rest.find("<@") {
+        // Copy the segment before the token (UTF-8 safe — `find` returns
+        // a valid byte boundary).
+        out.push_str(&rest[..start_rel]);
+        let after_marker = &rest[start_rel + 2..];
+        if let Some(end_rel) = after_marker.find('>') {
+            let inner = &after_marker[..end_rel];
+            // Slack user ids: `U` or `W` then uppercase ASCII
+            // alphanumerics. Already-labeled (`U…|name`) and non-user
+            // tokens (e.g. broadcasts) pass through verbatim.
+            let is_user_id = !inner.contains('|')
+                && inner.starts_with(['U', 'W'])
+                && inner
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+            if is_user_id {
+                let resolved = users_info(team_id, creds, inner)
+                    .map(|info| info.display_name)
+                    .ok();
+                if let Some(name) = resolved {
+                    out.push_str("<@");
+                    out.push_str(inner);
+                    out.push('|');
+                    out.push_str(&name);
+                    out.push('>');
+                    rest = &after_marker[end_rel + 1..];
+                    continue;
+                }
+            }
+            // Pass through the original token verbatim.
+            out.push_str("<@");
+            out.push_str(inner);
+            out.push('>');
+            rest = &after_marker[end_rel + 1..];
+        } else {
+            // No closing `>` — bail out and append the remainder as-is.
+            out.push_str("<@");
+            rest = after_marker;
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `users.conversations` — lists conversations (channels, DMs, MPIMs) the
 /// authed user is a member of. We filter to `im` + `mpim` for the unread
 /// DM feed.

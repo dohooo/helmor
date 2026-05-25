@@ -75,8 +75,11 @@ fn convert_message(team_id: &str, creds: &SlackCreds, raw: RawMessage) -> SlackM
     // `attachments`, but skip the `files` placeholder branch. When a
     // message is purely a file share, the inline preview rendered from
     // `files` below replaces what would otherwise be `📎 N files` —
-    // we don't want both showing.
-    let text = api::extract_message_body(&raw);
+    // we don't want both showing. Then resolve `<@U…>` mentions to the
+    // labeled `<@U…|display>` form so the frontend can render
+    // human-readable `@names` instead of opaque user ids.
+    let body = api::extract_message_body(&raw);
+    let text = api::resolve_mentions(team_id, creds, &body);
     let reactions = raw
         .reactions
         .iter()
