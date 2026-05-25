@@ -3177,7 +3177,9 @@ export async function setLocalLlmContextOverride(
 	});
 }
 
-/** Connection params for the running local LLM `llama-server`. `null`
+/** Connection params for the running local LLM `llama-server`. Voice
+ *  Pilot reads this to POST OpenAI-compatible chat completions with
+ *  tool schemas directly to the user's configured local model. `null`
  *  while the server is stopped / starting / crashed. */
 export type LocalLlmEndpoint = {
 	url: string;
@@ -3932,68 +3934,6 @@ export async function resizeTerminal(
 }
 
 export { DEFAULT_WORKSPACE_GROUPS };
-
-// MCP / Executor (Settings → MCP panel + Studio window)
-// ---------------------------------------------------------------------------
-
-/** Mirror of `executor_studio::ExecutorStatus`. */
-export type ExecutorStatus = {
-	running: boolean;
-	baseUrl: string | null;
-	error: string | null;
-	version: string;
-};
-
-/** Mirror of `executor_studio::client::McpSourceRow`. */
-export type McpSourceRow = {
-	id: string;
-	name: string;
-	transport: string;
-	namespace: string | null;
-	toolCount: number;
-	status: string;
-	isDefault: boolean;
-};
-
-export type AddMcpSourceArgs = {
-	name: string;
-	transport: "stdio" | "remote";
-	namespace?: string;
-	// stdio
-	command?: string;
-	args?: string[];
-	env?: Record<string, string>;
-	// remote
-	endpoint?: string;
-	headers?: Record<string, string>;
-	authToken?: string;
-};
-
-export async function getExecutorStatus(): Promise<ExecutorStatus> {
-	return await invoke<ExecutorStatus>("get_executor_status");
-}
-
-export async function restartExecutor(): Promise<ExecutorStatus> {
-	return await invoke<ExecutorStatus>("restart_executor");
-}
-
-export async function listMcpSources(): Promise<McpSourceRow[]> {
-	return await invoke<McpSourceRow[]>("list_mcp_sources");
-}
-
-export async function addMcpSource(
-	args: AddMcpSourceArgs,
-): Promise<McpSourceRow> {
-	return await invoke<McpSourceRow>("add_mcp_source", { args });
-}
-
-export async function removeMcpSource(sourceId: string): Promise<void> {
-	await invoke("remove_mcp_source", { sourceId });
-}
-
-export async function openMcpStudioWindow(): Promise<{ label: string }> {
-	return await invoke<{ label: string }>("open_mcp_studio_window");
-}
 
 // ---------------------------------------------------------------------------
 // Feedback / "Quick fix" contribution flow

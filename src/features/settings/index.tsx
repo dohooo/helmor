@@ -72,7 +72,6 @@ import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
-import { McpSettingsPanel } from "./panels/mcp";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
@@ -93,7 +92,6 @@ import type { SettingsSection } from "./types";
 const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 	account: "Accounts",
 	inbox: "Contexts",
-	mcp: "MCP",
 };
 
 /// Optional muted-caption next to the title in the dialog header.
@@ -102,7 +100,6 @@ const SECTION_LABEL_OVERRIDES: Partial<Record<SettingsSection, string>> = {
 const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 	account: "Synced with your local gh / glab CLI.",
 	inbox: "Pick which items each connected account contributes to Contexts.",
-	mcp: "Manage tool integrations via Executor.",
 };
 
 function sidebarSectionLabel(
@@ -181,7 +178,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 		"general",
 		"appearance",
 		"model",
-		"mcp",
 		"shortcuts",
 		...(conductorEnabled ? (["import"] as const) : []),
 		...(isDev ? (["developer"] as const) : []),
@@ -585,8 +581,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 									<CursorProviderPanel />
 								</SettingsGroup>
 							)}
-
-							{activeSection === "mcp" && <McpSettingsPanel />}
 
 							{activeSection === "experimental" && (
 								<SettingsGroup>

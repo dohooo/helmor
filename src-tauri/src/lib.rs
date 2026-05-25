@@ -5,7 +5,6 @@ pub(crate) mod commands;
 pub mod data_dir;
 pub mod downloads;
 pub mod error;
-pub mod executor_studio;
 pub mod feedback;
 pub mod forge;
 pub mod git;
@@ -112,7 +111,6 @@ pub fn run() {
 
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
-        .manage(executor_studio::ManagedExecutor::new())
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
@@ -223,73 +221,6 @@ pub fn run() {
             shell_env::inherit_login_shell_env();
 
             forge::init_bundled_cli_paths();
-
-            // Spawn the Executor daemon in the background. Lifecycle is bound
-            // to Helmor: `request_quit` SIGTERMs it cooperatively, and
-            // `RunEvent::Exit` is the safety net. Failures don't block app
-            // startup — the MCP settings panel surfaces the error so the
-            // user can retry.
-            //
-            // Two phases run in distinct tokio contexts:
-            //   1. `manager.start()` blocks on child spawn + stdout banner —
-            //      offloaded to `spawn_blocking`.
-            //   2. Bootstrap uses the async `reqwest::Client` — runs on the
-            //      regular async runtime via `.await`.
-            tracing::info!(target: "executor::lifecycle", "Setup hook: scheduling executor startup task");
-            let executor_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tracing::info!(target: "executor::lifecycle", "Setup hook: executor startup task running");
-                let data_dir = match data_dir::data_dir() {
-                    Ok(dir) => dir,
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "executor::lifecycle",
-                            error = %format!("{e:#}"),
-                            "Skipped executor start (data_dir resolve failed)"
-                        );
-                        return;
-                    }
-                };
-                tracing::debug!(
-                    target: "executor::lifecycle",
-                    data_dir = %data_dir.display(),
-                    "Setup hook: starting executor"
-                );
-
-                // Phase 1: blocking child-process spawn.
-                let start_handle = executor_handle.clone();
-                let start_data_dir = data_dir.clone();
-                let start_result = tauri::async_runtime::spawn_blocking(move || {
-                    let manager = start_handle.state::<executor_studio::ManagedExecutor>();
-                    manager.start(&start_data_dir)
-                })
-                .await;
-
-                match start_result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        tracing::warn!(
-                            target: "executor::lifecycle",
-                            error = %format!("{e:#}"),
-                            "Setup hook: executor failed to start — panel will show error"
-                        );
-                        return;
-                    }
-                    Err(join_err) => {
-                        tracing::warn!(
-                            target: "executor::lifecycle",
-                            error = %join_err,
-                            "Setup hook: executor start join failed"
-                        );
-                        return;
-                    }
-                }
-
-                tracing::info!(
-                    target: "executor::lifecycle",
-                    "Setup hook: executor running"
-                );
-            });
 
             // Background backfill: re-run auto-bind for repos whose
             // forge_login is still NULL. Covers (a) repos added before
@@ -426,13 +357,6 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
-            commands::mcp_commands::get_executor_status,
-            commands::mcp_commands::restart_executor,
-            commands::mcp_commands::list_mcp_sources,
-            commands::mcp_commands::add_mcp_source,
-            commands::mcp_commands::remove_mcp_source,
-            commands::mcp_commands::open_mcp_studio_window,
-            commands::mcp_commands::open_mcp_oauth_external,
             commands::local_llm_commands::detect_local_llm_hardware,
             commands::local_llm_commands::get_local_llm_status,
             commands::local_llm_commands::list_local_llm_catalog,
@@ -658,16 +582,6 @@ pub fn run() {
         // new version. By this point `request_quit` has stopped watchers
         // and torn down the sidecar, so blocking briefly here is safe.
         tauri::RunEvent::Exit => {
-            // Safety net: if `request_quit` was bypassed (panic, OS-level
-            // shutdown), make sure the executor child process doesn't
-            // outlive us. No-op when already stopped.
-            tracing::info!(
-                target: "executor::lifecycle",
-                "RunEvent::Exit — safety-net executor shutdown"
-            );
-            app_handle
-                .state::<executor_studio::ManagedExecutor>()
-                .shutdown();
             updater::install_pending_on_exit_blocking();
         }
         _ => {}

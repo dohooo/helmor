@@ -34,16 +34,7 @@ const MAX_BYTES: u64 = 10 * 1024 * 1024;
 /// Dev default: app crates at `debug`, everything else at `warn`.
 /// Without the `warn` baseline, hyper/reqwest/rustls flood stderr with
 /// per-connection traces (see `git::watcher` periodic fetches).
-///
-/// Custom `target:` namespaces in our code (`executor::*` for the
-/// Executor lifecycle + HTTP, `executor::ipc` for the MCP
-/// Tauri commands) are NOT under the `helmor_lib` module path, so they
-/// would otherwise fall to the `warn` baseline. We explicitly enable
-/// `executor=debug` so the full
-/// `target: "executor::http" / ::lifecycle / ::ipc / ::spawn / ::child`
-/// log streams are visible during dev — they're our primary debug
-/// surface for MCP routing.
-const DEV_DEFAULT_DIRECTIVES: &str = "warn,helmor_lib=debug,helmor=debug,executor=debug";
+const DEV_DEFAULT_DIRECTIVES: &str = "warn,helmor_lib=debug,helmor=debug";
 
 /// Release default: plain `info`.
 const RELEASE_DEFAULT_DIRECTIVES: &str = "info";
@@ -199,16 +190,6 @@ mod tests {
         // max_level_hint reflects the most permissive directive.
         let f = EnvFilter::new(default_directives(true));
         assert_eq!(f.max_level_hint(), Some(tracing::Level::DEBUG.into()));
-    }
-
-    #[test]
-    fn dev_default_enables_executor_target_at_debug() {
-        // Custom `target: "executor::*"` namespaces (used by executor_studio
-        // + mcp_commands) are not under the helmor_lib module path, so they
-        // need an explicit directive. Verify the directive string contains
-        // it; the actual filter behavior is tested implicitly by the
-        // tracing-subscriber crate.
-        assert!(default_directives(true).contains("executor=debug"));
     }
 
     #[test]
