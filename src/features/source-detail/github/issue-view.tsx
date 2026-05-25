@@ -1,7 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
-import { getInboxItemDetail } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
-import { GitHubDetailPage, type SourceDetailProps } from "../common";
+import {
+	GitHubDetailPage,
+	type SourceDetailProps,
+	toRefreshControl,
+	useInboxItemDetailQuery,
+} from "../common";
 
 export function GitHubIssueView({
 	card,
@@ -9,24 +11,7 @@ export function GitHubIssueView({
 }: SourceDetailProps) {
 	const detailRef =
 		card.detailRef?.source === "github_issue" ? card.detailRef : null;
-	const detailQuery = useQuery({
-		queryKey: detailRef
-			? helmorQueryKeys.inboxItemDetail(
-					detailRef.provider,
-					detailRef.login,
-					detailRef.source,
-					detailRef.externalId,
-				)
-			: ["inboxItemDetail", "missing", card.id],
-		queryFn: () => getInboxItemDetail(detailRef!),
-		enabled: detailRef !== null,
-		staleTime: 60_000,
-		// Re-fetch every time the detail view mounts (user click) or the
-		// app window regains focus — same UX contract the user expects
-		// from a "refresh on visit" content surface.
-		refetchOnMount: "always",
-		refetchOnWindowFocus: "always",
-	});
+	const detailQuery = useInboxItemDetailQuery(detailRef, card.id);
 	const detail =
 		detailQuery.data?.type === "github_issue" ? detailQuery.data.data : null;
 
@@ -38,14 +23,7 @@ export function GitHubIssueView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="issue"
-			refresh={
-				detailRef
-					? {
-							refetch: () => void detailQuery.refetch(),
-							isFetching: detailQuery.isFetching,
-						}
-					: undefined
-			}
+			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);
 }

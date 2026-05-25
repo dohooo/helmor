@@ -15,7 +15,7 @@ import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
-import { formatRelativeTime, RefreshButton } from "../common";
+import { formatRelativeTime, RefreshButton, toRefreshControl } from "../common";
 import { SlackMessageBubble } from "./message";
 
 const STALE_MS = 60_000;
@@ -94,12 +94,7 @@ export function SlackThreadView({
 						</span>
 					</div>
 					<div className="flex shrink-0 items-center gap-1">
-						<RefreshButton
-							refresh={{
-								refetch: () => void detailQuery.refetch(),
-								isFetching: detailQuery.isFetching,
-							}}
-						/>
+						<RefreshButton refresh={toRefreshControl(detailQuery)} />
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button

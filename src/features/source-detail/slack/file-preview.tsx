@@ -49,22 +49,17 @@ function SlackFilePreview({ file }: { file: SlackFileRef }) {
 function ImagePreview({ file }: { file: SlackFileRef }) {
 	if (!file.previewUrl) return <FileChip file={file} />;
 	const sourceUrl = file.sourceUrl ?? file.previewUrl;
-	// The `<img>` is the sizing element: `width` / `height` attrs from
-	// Slack's reported dimensions give the browser an intrinsic size
-	// (no layout shift on load), and `w-auto h-auto max-w-full
-	// max-h-[60vh]` lets the browser scale it down to fit the
-	// (container-width × 60vh) box while preserving the natural
-	// aspect ratio. The wrapping `<button>` is `inline-block max-w-full`
-	// so it hugs the image exactly — no `w-full`, no forced
-	// `aspect-ratio`, no `object-contain` letterbox. The result: the
-	// rounded border traces the picture, not a fixed-size frame around
-	// it.
+	// The `<img>` sizes itself: natural `width`/`height` attrs prevent
+	// layout shift, and `max-w-full` / `max-h-[60vh]` scale it down to
+	// fit the cell while preserving aspect ratio. The `<button>` is
+	// `inline-block` so the rounded border hugs the image — no
+	// letterbox.
 	return (
 		<button
 			type="button"
 			onClick={() => sourceUrl && void openExternal(sourceUrl)}
 			className={cn(
-				"group relative inline-block max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted",
+				"inline-block max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted",
 				"cursor-interactive transition-colors",
 				"hover:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
 			)}

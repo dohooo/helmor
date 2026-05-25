@@ -1,7 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
-import { getInboxItemDetail } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
-import { GitHubDetailPage, type SourceDetailProps } from "../common";
+import {
+	GitHubDetailPage,
+	type SourceDetailProps,
+	toRefreshControl,
+	useInboxItemDetailQuery,
+} from "../common";
 
 export function GitHubDiscussionView({
 	card,
@@ -9,21 +11,7 @@ export function GitHubDiscussionView({
 }: SourceDetailProps) {
 	const detailRef =
 		card.detailRef?.source === "github_discussion" ? card.detailRef : null;
-	const detailQuery = useQuery({
-		queryKey: detailRef
-			? helmorQueryKeys.inboxItemDetail(
-					detailRef.provider,
-					detailRef.login,
-					detailRef.source,
-					detailRef.externalId,
-				)
-			: ["inboxItemDetail", "missing", card.id],
-		queryFn: () => getInboxItemDetail(detailRef!),
-		enabled: detailRef !== null,
-		staleTime: 60_000,
-		refetchOnMount: "always",
-		refetchOnWindowFocus: "always",
-	});
+	const detailQuery = useInboxItemDetailQuery(detailRef, card.id);
 	const detail =
 		detailQuery.data?.type === "github_discussion"
 			? detailQuery.data.data
@@ -37,14 +25,7 @@ export function GitHubDiscussionView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="discussion"
-			refresh={
-				detailRef
-					? {
-							refetch: () => void detailQuery.refetch(),
-							isFetching: detailQuery.isFetching,
-						}
-					: undefined
-			}
+			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);
 }
