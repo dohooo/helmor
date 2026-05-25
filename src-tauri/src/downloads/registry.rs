@@ -138,11 +138,21 @@ impl DownloadsManager {
                 return Ok(());
             }
             if let Some(existing) = inner.statuses.get(asset_id) {
-                if matches!(
-                    existing.state,
-                    AssetState::Downloading | AssetState::Downloaded
-                ) {
+                if existing.state == AssetState::Downloading {
                     return Ok(());
+                }
+                if existing.state == AssetState::Downloaded {
+                    // Essentials are on disk; top-up only when an optional
+                    // file is still missing (lets the user add mmproj to an
+                    // already-installed model without losing it to Delete +
+                    // redownload). True no-op when everything is in place.
+                    let all_optional_present = asset
+                        .optional_files
+                        .iter()
+                        .all(|opt| asset.target_dir.join(&opt.local_name).is_file());
+                    if all_optional_present {
+                        return Ok(());
+                    }
                 }
             }
             inner.active.insert(asset_id.to_string(), cancel.clone());
@@ -156,6 +166,10 @@ impl DownloadsManager {
                 .get(asset_id)
                 .map(|s| s.downloaded)
                 .unwrap_or(0);
+            let optional_complete = asset
+                .optional_files
+                .iter()
+                .all(|opt| asset.target_dir.join(&opt.local_name).is_file());
             inner.statuses.insert(
                 asset_id.to_string(),
                 AssetStatus {
@@ -163,6 +177,7 @@ impl DownloadsManager {
                     state: AssetState::Downloading,
                     downloaded,
                     total,
+                    optional_complete,
                     error: None,
                 },
             );
@@ -185,17 +200,23 @@ impl DownloadsManager {
                 );
             }
             let registry = app_clone.state::<DownloadsManager>();
+            // Drop the `active` marker so a fresh `start()` for an
+            // unrelated reason can rerun, but KEEP the `cancelling`
+            // marker — that's the flag `start()` checks to refuse
+            // re-spawning while we're still cleaning the disk. If we
+            // cleared it before `delete_asset_files`, a racing new
+            // `start()` could spawn a worker whose `.part` we'd then
+            // wipe a few microseconds later.
             let was_cancelling = {
                 let mut inner = registry.inner.lock().unwrap_or_else(|p| p.into_inner());
                 inner.active.remove(&asset_id);
-                inner.cancelling.remove(&asset_id)
+                inner.cancelling.contains(&asset_id)
             };
-            // Worker exit + cancel-pending → wipe whatever ended up
-            // on disk. We deliberately do this AFTER the worker
-            // dropped its file handle so on macOS the inode is fully
-            // released and the bytes are actually reclaimed.
             if was_cancelling {
                 delete_asset_files(&asset_for_cleanup);
+                if let Ok(mut inner) = registry.inner.lock() {
+                    inner.cancelling.remove(&asset_id);
+                }
             }
         });
         Ok(())
@@ -234,6 +255,13 @@ impl DownloadsManager {
                 }
                 None => false,
             };
+            // Even with no active worker, mark `cancelling` for the
+            // window we hold the file open below — otherwise a
+            // racing `start()` could spawn a worker whose `.part`
+            // file we'd immediately wipe.
+            if !was_active {
+                inner.cancelling.insert(asset_id.to_string());
+            }
             inner.statuses.insert(
                 asset_id.to_string(),
                 AssetStatus::not_downloaded(asset_id.to_string(), asset.estimated_bytes),
@@ -251,6 +279,9 @@ impl DownloadsManager {
 
         if !was_active {
             delete_asset_files(&asset);
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.cancelling.remove(asset_id);
+            }
         }
         Ok(())
     }
@@ -292,10 +323,15 @@ impl DownloadsManager {
                 entry.total = *total;
                 entry.error = None;
             }
-            AssetEventKind::Completed { downloaded, .. } => {
+            AssetEventKind::Completed {
+                downloaded,
+                optional_complete,
+                ..
+            } => {
                 entry.state = AssetState::Downloaded;
                 entry.downloaded = *downloaded;
                 entry.total = *downloaded;
+                entry.optional_complete = *optional_complete;
                 entry.error = None;
             }
             AssetEventKind::Failed { error, .. } => {
@@ -337,7 +373,8 @@ impl DownloadsManager {
 /// disk — final files AND their `.part` counterparts. NotFound is
 /// ignored. Sweeps both essential and optional files.
 fn delete_asset_files(asset: &Asset) {
-    for file in asset.files.iter().chain(asset.optional_files.iter()) {
+    let optional_locals = asset.optional_files.iter().map(|o| &o.local_name);
+    for file in asset.files.iter().chain(optional_locals) {
         let final_path = asset.target_dir.join(file);
         let part_path = asset.target_dir.join(format!("{file}.part"));
 
@@ -381,13 +418,17 @@ fn scan_asset_state(asset: &Asset) -> AssetStatus {
             any_present = true;
         }
     }
-    for file in &asset.optional_files {
-        let final_path = asset.target_dir.join(file);
-        let part_path = asset.target_dir.join(format!("{file}.part"));
+    let mut optional_complete = true;
+    for opt in &asset.optional_files {
+        let final_path = asset.target_dir.join(&opt.local_name);
+        let part_path = asset.target_dir.join(format!("{}.part", opt.local_name));
         if let Ok(meta) = std::fs::metadata(&final_path) {
             downloaded = downloaded.saturating_add(meta.len());
         } else if let Ok(meta) = std::fs::metadata(&part_path) {
             downloaded = downloaded.saturating_add(meta.len());
+            optional_complete = false;
+        } else {
+            optional_complete = false;
         }
     }
     let state = if all_complete {
@@ -402,6 +443,7 @@ fn scan_asset_state(asset: &Asset) -> AssetStatus {
         state,
         downloaded,
         total: asset.estimated_bytes.max(downloaded),
+        optional_complete,
         error: None,
     }
 }
@@ -488,7 +530,10 @@ mod tests {
         // making every old model show up in the Downloads section.
         let dir = tempdir().expect("tempdir");
         let mut asset = fake_asset(dir.path(), &["model.gguf"]);
-        asset.optional_files = vec!["mmproj.gguf".into()];
+        asset.optional_files = vec![super::super::types::OptionalFile {
+            remote_name: "mmproj.gguf".into(),
+            local_name: "mmproj.gguf".into(),
+        }];
         fs::write(dir.path().join("model.gguf"), b"weights").expect("write main");
 
         let status = scan_asset_state(&asset);
@@ -504,7 +549,10 @@ mod tests {
     fn optional_file_bytes_count_toward_disk_footprint() {
         let dir = tempdir().expect("tempdir");
         let mut asset = fake_asset(dir.path(), &["model.gguf"]);
-        asset.optional_files = vec!["mmproj.gguf".into()];
+        asset.optional_files = vec![super::super::types::OptionalFile {
+            remote_name: "mmproj.gguf".into(),
+            local_name: "mmproj.gguf".into(),
+        }];
         fs::write(dir.path().join("model.gguf"), b"weights").expect("write main");
         fs::write(dir.path().join("mmproj.gguf"), b"vision").expect("write mmproj");
 

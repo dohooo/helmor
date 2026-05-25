@@ -4,7 +4,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	CircleStop,
-	Info,
+	MessageSquareQuote,
 	MinusCircle,
 	Play,
 	Square,
@@ -378,7 +378,7 @@ function SummaryTooltip({ text }: { text: string }) {
 						aria-label="Show agent reasoning"
 						className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
 					>
-						<Info className="size-3" />
+						<MessageSquareQuote className="size-3" />
 					</button>
 				</TooltipTrigger>
 				<TooltipContent

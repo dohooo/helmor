@@ -2,7 +2,7 @@
 //! Translates each `CatalogEntry` into an `Asset` so the downloads
 //! module never sees domain concepts.
 
-use crate::downloads::{ArchiveKind, Asset, AssetProvider, AssetSource};
+use crate::downloads::{ArchiveKind, Asset, AssetProvider, AssetSource, OptionalFile};
 use crate::local_llm::catalog::{self, CatalogEntry};
 
 /// `AssetProvider` for every entry in `local_llm::catalog`. Stateless —
@@ -28,7 +28,18 @@ fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> 
     // mmproj is optional: an existing main-weights-only install stays
     // "Downloaded" instead of regressing to "Paused", and a missing/404
     // mmproj on a fresh fetch still yields a usable text-only model.
-    let optional_files = entry.mmproj_file.into_iter().collect();
+    // Local name carries a per-repo suffix so projectors from different
+    // Qwen variants (all named `mmproj-F16.gguf` upstream) don't collide
+    // in the flat target dir; entries from the same repo (q4/q8 of one
+    // model) still share a single file on disk.
+    let optional_files: Vec<OptionalFile> = entry
+        .mmproj_file
+        .into_iter()
+        .map(|remote| OptionalFile {
+            local_name: mmproj_local_name(&remote, &entry.repo),
+            remote_name: remote,
+        })
+        .collect();
     Asset {
         id: entry.id,
         target_dir: target_dir.to_path_buf(),
@@ -38,5 +49,47 @@ fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> 
         archive: ArchiveKind::None,
         is_directory: false,
         estimated_bytes,
+    }
+}
+
+/// `mmproj-F16.gguf` + repo `unsloth/Qwen3.6-27B-GGUF`
+/// → `mmproj-F16.unsloth_Qwen3.6-27B-GGUF.gguf`. The repo segment is
+/// sanitised so the result is a valid filename on every OS.
+pub fn mmproj_local_name(remote_name: &str, repo: &str) -> String {
+    let (stem, ext) = match remote_name.rsplit_once('.') {
+        Some((s, e)) => (s, e),
+        None => (remote_name, "gguf"),
+    };
+    let suffix: String = repo
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | ' ' => '_',
+            c if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') => c,
+            _ => '_',
+        })
+        .collect();
+    format!("{stem}.{suffix}.{ext}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_repo_suffix_disambiguates_collisions() {
+        let a = mmproj_local_name("mmproj-F16.gguf", "unsloth/Qwen3.5-9B-GGUF");
+        let b = mmproj_local_name("mmproj-F16.gguf", "unsloth/Qwen3.6-27B-GGUF");
+        assert_ne!(a, b);
+        assert_eq!(a, "mmproj-F16.unsloth_Qwen3.5-9B-GGUF.gguf");
+        assert_eq!(b, "mmproj-F16.unsloth_Qwen3.6-27B-GGUF.gguf");
+    }
+
+    #[test]
+    fn same_repo_yields_same_local_name() {
+        // q4 + q8 entries of the same Qwen variant must share a single
+        // mmproj on disk — otherwise the user pays ~900 MB twice.
+        let q4 = mmproj_local_name("mmproj-F16.gguf", "unsloth/Qwen3.6-35B-A3B-GGUF");
+        let q8 = mmproj_local_name("mmproj-F16.gguf", "unsloth/Qwen3.6-35B-A3B-GGUF");
+        assert_eq!(q4, q8);
     }
 }

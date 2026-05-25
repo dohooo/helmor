@@ -24,7 +24,7 @@ registerBuiltInApiProviders();
 
 const PROVIDER_ID = "helmor-local";
 const PREVIEW_CHARS = 240;
-const COLD_START_LOOKBACK_HOURS = 120;
+const COLD_START_LOOKBACK_HOURS = 12;
 
 function buildLocalModel(
 	params: TriageTickParams["localModel"],

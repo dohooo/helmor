@@ -121,11 +121,21 @@ export function LocalLlmPanel({
 		};
 		void subscribeLocalLlmDownloads(channel).then((snapshot) => {
 			if (!mounted) return;
-			const next: Record<string, DownloadRow> = {};
-			for (const row of snapshot) {
-				next[row.entryId] = row;
-			}
-			setDownloads(next);
+			// Merge: a channel event may have landed BEFORE the IPC reply
+			// resolved (e.g. a `started` mid-tick). Replacing wholesale
+			// would clobber whatever progressed in that window. Prefer
+			// the existing row whenever it's more "advanced" than the
+			// snapshot's stale view.
+			setDownloads((prev) => {
+				const next: Record<string, DownloadRow> = { ...prev };
+				for (const row of snapshot) {
+					const existing = next[row.entryId];
+					if (!existing || isSnapshotMoreAdvanced(row, existing)) {
+						next[row.entryId] = row;
+					}
+				}
+				return next;
+			});
 		});
 		return () => {
 			mounted = false;
@@ -576,18 +586,23 @@ function StatusHeader({
 		<div className="flex min-w-0 items-center gap-2">
 			<Cpu className="size-4 shrink-0 text-muted-foreground" />
 			<div className="flex min-w-0 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-0.5 text-[12px]">
-				{showSpinner ? (
-					<Loader2 className="size-3 animate-spin text-muted-foreground" />
-				) : (
-					<span
-						className={cn("size-2 shrink-0 rounded-full", dotClass)}
-						aria-hidden
-					/>
-				)}
+				{/* Fixed wrapper around the spinner/dot so the Starting→Running
+				    swap doesn't grow the pill by the 4 px difference between
+				    `size-3` (loader) and `size-2` (dot). */}
+				<span
+					className="flex size-3 shrink-0 items-center justify-center"
+					aria-hidden
+				>
+					{showSpinner ? (
+						<Loader2 className="size-3 animate-spin text-muted-foreground" />
+					) : (
+						<span className={cn("size-2 rounded-full", dotClass)} />
+					)}
+				</span>
 				<span className="font-medium text-foreground">{label}</span>
 				{showEndpoint && endpoint ? (
 					<span
-						className="font-mono text-[11px] text-muted-foreground/80"
+						className="font-mono text-[11px] tabular-nums text-muted-foreground/80"
 						title={stripScheme(endpoint)}
 					>
 						{formatEndpointPort(endpoint)}
@@ -600,7 +615,7 @@ function StatusHeader({
 				</span>
 			) : null}
 			{running && activeContextTokens ? (
-				<span className="flex shrink-0 items-center rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium text-foreground">
+				<span className="flex shrink-0 items-center rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium tabular-nums text-foreground">
 					{formatContext(activeContextTokens)}
 				</span>
 			) : null}
@@ -773,8 +788,13 @@ function ModelsSection({
 											active={isSelectedActive}
 											recommended={isSelectedRecommended}
 										/>
-										<span className="tabular-nums text-muted-foreground">
-											{formatBytes(selectedCatalogEntry.bytes)}
+										{/* Right-align in a fixed slot so pill swaps
+										    (Downloading ↔ Paused ↔ Downloaded ↔ none)
+										    don't drag the bytes / chevron horizontally. */}
+										<span className="min-w-[3.5rem] text-right tabular-nums text-muted-foreground">
+											{formatBytes(
+												localLlmEntryTotalBytes(selectedCatalogEntry),
+											)}
 										</span>
 										<ChevronDown
 											className="size-3 text-muted-foreground"
@@ -853,7 +873,7 @@ function ModelsSection({
 												active={entryActive}
 												recommended={entryRecommended}
 											/>
-											<span className="tabular-nums text-muted-foreground">
+											<span className="min-w-[3.5rem] text-right tabular-nums text-muted-foreground">
 												{formatBytes(localLlmEntryTotalBytes(entry))}
 											</span>
 										</div>
@@ -873,6 +893,9 @@ function ModelsSection({
 					<ContextualActions
 						state={selectedState}
 						active={isSelectedActive}
+						optionalComplete={
+							downloads[selectedCatalogEntry.id]?.optionalComplete ?? true
+						}
 						onDownload={() => onDownload(selectedCatalogEntry.id)}
 						onResume={() => onResume(selectedCatalogEntry.id)}
 						onCancel={() => onCancel(selectedCatalogEntry.id)}
@@ -1161,6 +1184,7 @@ function StateIndicator({
 function ContextualActions({
 	state,
 	active,
+	optionalComplete,
 	onDownload,
 	onResume,
 	onCancel,
@@ -1168,6 +1192,11 @@ function ContextualActions({
 }: {
 	state: LocalLlmDownloadStatus["state"];
 	active: boolean;
+	/** `false` when essentials are on disk but an optional companion
+	 *  (e.g. the vision mmproj) is still missing — surfaces a top-up
+	 *  affordance next to Delete so the user doesn't lose the main
+	 *  weights to a redownload. */
+	optionalComplete: boolean;
 	onDownload: () => void;
 	onResume: () => void;
 	onCancel: () => void;
@@ -1176,7 +1205,7 @@ function ContextualActions({
 	// Selection = activation, so we never render "Use this model" any
 	// more. The only contextual CTA on the row is whatever's
 	// reasonable for the entry's current state:
-	//   - downloaded → Delete (red)
+	//   - downloaded → Delete (red), plus Add vision when mmproj missing
 	//   - downloading → Cancel (red)
 	//   - paused → Resume (default) + Cancel (red)
 	//   - failed → Retry (default) + Cancel (red)
@@ -1185,10 +1214,28 @@ function ContextualActions({
 	void active;
 	if (state === "downloaded") {
 		return (
-			<Button type="button" size="sm" variant="destructive" onClick={onDelete}>
-				<Trash2 className="size-3.5" strokeWidth={1.8} />
-				Delete
-			</Button>
+			<>
+				{optionalComplete ? null : (
+					<Button
+						type="button"
+						size="sm"
+						variant="default"
+						onClick={onDownload}
+					>
+						<Download className="size-3.5" strokeWidth={1.8} />
+						Add vision
+					</Button>
+				)}
+				<Button
+					type="button"
+					size="sm"
+					variant="destructive"
+					onClick={onDelete}
+				>
+					<Trash2 className="size-3.5" strokeWidth={1.8} />
+					Delete
+				</Button>
+			</>
 		);
 	}
 	if (state === "downloading") {
@@ -1495,11 +1542,31 @@ function formatEta(seconds: number): string {
 	return rem === 0 ? `${hours}h` : `${hours}h${rem}m`;
 }
 
+/// Pick the more advanced of two `DownloadRow` snapshots. The state
+/// machine's terminal-ish states (`downloaded`, `failed`, in-flight
+/// `downloading` past byte 0) reflect real disk/wire progress that a
+/// stale disk snapshot can't see — so we prefer them. A snapshot only
+/// wins when the existing row is still on the default `not_downloaded`
+/// view.
+function isSnapshotMoreAdvanced(
+	snap: LocalLlmDownloadStatus,
+	existing: DownloadRow,
+): boolean {
+	if (existing.state === "not_downloaded" && snap.state !== "not_downloaded") {
+		return true;
+	}
+	if (snap.state === "downloaded" && existing.state !== "downloaded") {
+		return true;
+	}
+	return false;
+}
+
 function applyDownloadEvent(
 	prev: Record<string, DownloadRow>,
 	event: LocalLlmDownloadEvent,
 ): Record<string, DownloadRow> {
 	const current = prev[event.entryId];
+	const carriedOptionalComplete = current?.optionalComplete ?? true;
 	const next = { ...prev };
 	switch (event.kind) {
 		case "started":
@@ -1508,6 +1575,7 @@ function applyDownloadEvent(
 				state: "downloading",
 				downloaded: current?.downloaded ?? 0,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1517,6 +1585,7 @@ function applyDownloadEvent(
 				state: "downloading",
 				downloaded: event.downloaded,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				// Keep the last non-zero rate so a momentary 0 (HF
 				// rate-limit window, brief stall) doesn't blank the
 				// "X MB/s" readout. A genuinely stuck download surfaces
@@ -1535,6 +1604,7 @@ function applyDownloadEvent(
 				state: "paused",
 				downloaded: event.downloaded,
 				total: event.total,
+				optionalComplete: carriedOptionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1544,6 +1614,7 @@ function applyDownloadEvent(
 				state: "not_downloaded",
 				downloaded: 0,
 				total: event.total,
+				optionalComplete: true,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1553,6 +1624,7 @@ function applyDownloadEvent(
 				state: "downloaded",
 				downloaded: event.downloaded,
 				total: event.downloaded,
+				optionalComplete: event.optionalComplete,
 				bytesPerSec: 0,
 			};
 			break;
@@ -1562,6 +1634,7 @@ function applyDownloadEvent(
 				state: "failed",
 				downloaded: current?.downloaded ?? 0,
 				total: current?.total ?? 0,
+				optionalComplete: carriedOptionalComplete,
 				error: event.error,
 				bytesPerSec: 0,
 			};

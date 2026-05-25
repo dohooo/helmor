@@ -27,4 +27,5 @@ mod worker;
 pub use registry::{AssetProvider, DownloadsManager};
 pub use types::{
     ArchiveKind, Asset, AssetEvent, AssetEventKind, AssetSource, AssetState, AssetStatus,
+    OptionalFile,
 };

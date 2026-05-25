@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -335,13 +335,22 @@ pub struct HostRequestEnvelope {
     pub params: serde_json::Value,
 }
 
+/// `mpsc::Sender` is `Send` but `!Sync`, so it can't ride in a plain
+/// `Arc<OnceLock<…>>`. The `Mutex<Option<…>>` wrapper lets the reader
+/// thread (which captures an `Arc` clone) look the sender up
+/// dynamically per event — so the install order between sidecar spawn
+/// and `install_host_dispatcher` no longer matters.
+type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
+
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
-    /// `OnceLock` so Tauri setup can install the sender once after `.manage`.
-    host_request_tx: OnceLock<mpsc::Sender<HostRequestEnvelope>>,
+    /// Reader threads each hold an `Arc` clone and look the sender up
+    /// per `hostRequest`, so `install_host_dispatcher` can run AFTER
+    /// the first sidecar spawn without losing events.
+    host_request_tx: HostRequestSenderSlot,
 }
 
 impl Default for ManagedSidecar {
@@ -356,14 +365,16 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
-            host_request_tx: OnceLock::new(),
+            host_request_tx: Arc::new(Mutex::new(None)),
         }
     }
 
     // Called once from Tauri setup; later calls are no-ops.
     pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
         let (tx, rx) = mpsc::channel();
-        let _ = self.host_request_tx.set(tx);
+        if let Ok(mut slot) = self.host_request_tx.lock() {
+            *slot = Some(tx);
+        }
         rx
     }
 
@@ -429,9 +440,12 @@ impl ManagedSidecar {
             *guard = Some(process);
 
             // Start the reader/dispatcher thread (always spawns fresh).
-            // `host_tx` is `None` only during early boot — events drop, matching "host bridge unavailable".
-            let host_tx = self.host_request_tx.get().cloned();
-            if let Err(error) = self.start_reader_thread(reader, host_tx) {
+            // Hand the reader an `Arc` clone so it can look the sender up
+            // per event — if `install_host_dispatcher` runs AFTER the
+            // first spawn, the reader picks the sender up on the next
+            // `hostRequest` instead of dropping it.
+            let host_tx_slot = Arc::clone(&self.host_request_tx);
+            if let Err(error) = self.start_reader_thread(reader, host_tx_slot) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -564,7 +578,7 @@ impl ManagedSidecar {
     fn start_reader_thread(
         &self,
         reader: BufReader<std::process::ChildStdout>,
-        host_tx: Option<mpsc::Sender<HostRequestEnvelope>>,
+        host_tx_slot: HostRequestSenderSlot,
     ) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
@@ -608,7 +622,11 @@ impl ManagedSidecar {
                             if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
                                 match parse_host_request(&raw) {
                                     Ok(env) => {
-                                        if let Some(tx) = host_tx.as_ref() {
+                                        let sender = host_tx_slot
+                                            .lock()
+                                            .ok()
+                                            .and_then(|g| g.as_ref().cloned());
+                                        if let Some(tx) = sender {
                                             if let Err(error) = tx.send(env) {
                                                 tracing::warn!(
                                                     error = %error,

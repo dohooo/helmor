@@ -3246,6 +3246,12 @@ export type LocalLlmDownloadStatus = {
 	state: LocalLlmDownloadState;
 	downloaded: number;
 	total: number;
+	/** `false` when the model is `downloaded` but at least one optional
+	 *  companion file (e.g. mmproj projector) is still missing on disk.
+	 *  UI uses this to surface a top-up affordance without forcing a
+	 *  Delete + redownload. Always `true` for entries with no optional
+	 *  files. */
+	optionalComplete: boolean;
 	error?: string;
 };
 
@@ -3268,6 +3274,7 @@ export type LocalLlmDownloadEvent =
 			downloaded: number;
 			path: string;
 			sha256Verified: boolean;
+			optionalComplete: boolean;
 	  }
 	| {
 			entryId: string;

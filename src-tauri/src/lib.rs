@@ -265,6 +265,51 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
+            // Install the reverse-IPC dispatcher BEFORE anything that
+            // might spawn the sidecar (prewarm / autostart / scheduler).
+            // Reader threads now look the sender up dynamically, so
+            // ordering is no longer load-bearing for correctness — but
+            // installing first still avoids the early-boot warnings.
+            let host_rx = app
+                .state::<sidecar::ManagedSidecar>()
+                .install_host_dispatcher();
+            let dispatcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("sidecar-host-dispatcher".into())
+                .spawn(move || {
+                    while let Ok(env) = host_rx.recv() {
+                        let app_clone = dispatcher_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let response = match sidecar_host::dispatch(
+                                app_clone.clone(),
+                                &env.method,
+                                env.params,
+                            )
+                            .await
+                            {
+                                Ok(value) => sidecar_host::HostResponse::success(
+                                    env.callback_id.clone(),
+                                    value,
+                                ),
+                                Err(error) => sidecar_host::HostResponse::failure(
+                                    env.callback_id.clone(),
+                                    format!("{error:#}"),
+                                ),
+                            };
+                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
+                            if let Err(error) = sidecar_state.send_host_response(&response) {
+                                tracing::warn!(
+                                    error = %format!("{error:#}"),
+                                    method = %env.method,
+                                    "hostResponse write failed"
+                                );
+                            }
+                        });
+                    }
+                    tracing::debug!("host dispatcher channel closed");
+                })
+                .ok();
+
             // Per-version silent re-check of the Helmor CLI symlink and
             // the Helmor Skills package. Runs once per app version
             // (cached by version string in app_settings); a clean pass
@@ -346,47 +391,6 @@ pub fn run() {
             // confirmation dialog as the close button.
             #[cfg(target_os = "macos")]
             install_macos_menu(app.handle())?;
-
-            // Drain reverse-IPC (`hostRequest`) and write `hostResponse` back on stdin.
-            let host_rx = app
-                .state::<sidecar::ManagedSidecar>()
-                .install_host_dispatcher();
-            let dispatcher_handle = app.handle().clone();
-            std::thread::Builder::new()
-                .name("sidecar-host-dispatcher".into())
-                .spawn(move || {
-                    while let Ok(env) = host_rx.recv() {
-                        let app_clone = dispatcher_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let response = match sidecar_host::dispatch(
-                                app_clone.clone(),
-                                &env.method,
-                                env.params,
-                            )
-                            .await
-                            {
-                                Ok(value) => sidecar_host::HostResponse::success(
-                                    env.callback_id.clone(),
-                                    value,
-                                ),
-                                Err(error) => sidecar_host::HostResponse::failure(
-                                    env.callback_id.clone(),
-                                    format!("{error:#}"),
-                                ),
-                            };
-                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
-                            if let Err(error) = sidecar_state.send_host_response(&response) {
-                                tracing::warn!(
-                                    error = %format!("{error:#}"),
-                                    method = %env.method,
-                                    "hostResponse write failed"
-                                );
-                            }
-                        });
-                    }
-                    tracing::debug!("host dispatcher channel closed");
-                })
-                .ok();
 
             Ok(())
         })
