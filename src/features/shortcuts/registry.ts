@@ -96,7 +96,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	},
 	{
 		id: "workspace.new",
-		title: "Create new workspace (worktree)",
+		title: "Open Start Page",
 		group: "Workspace",
 		defaultHotkey: "Mod+N",
 		scopes: ["app"],
@@ -104,7 +104,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	},
 	{
 		id: "workspace.justChat",
-		title: "Create new workspace (just chat)",
+		title: "Open Start Page (Just chat)",
 		group: "Workspace",
 		defaultHotkey: "Mod+Shift+N",
 		scopes: ["app"],
