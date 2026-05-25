@@ -22,6 +22,12 @@ pub struct Asset {
     /// `files[0]` is the on-disk name (or the extracted top-level
     /// directory name for `ArchiveKind::TarGz`).
     pub files: Vec<String>,
+    /// Best-effort companions. Downloaded alongside `files` on fresh
+    /// fetches, but their absence on disk does NOT make the asset
+    /// "incomplete" — useful for LLM mmproj projectors where the main
+    /// weights are functional standalone. Existing downloads with only
+    /// the essential files keep showing as `Downloaded`.
+    pub optional_files: Vec<String>,
     /// Where bytes come from.
     pub source: AssetSource,
     /// Post-download decoration (extract / verify-only / …).

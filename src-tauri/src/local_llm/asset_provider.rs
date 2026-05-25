@@ -25,16 +25,15 @@ impl AssetProvider for CatalogAssetProvider {
 
 fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> Asset {
     let estimated_bytes = entry.total_bytes();
-    let mut files = entry.files;
-    if let Some(mmproj) = entry.mmproj_file {
-        // mmproj lives in the same HF repo as the main weights, so the
-        // downloader fetches them in one swing without extra plumbing.
-        files.push(mmproj);
-    }
+    // mmproj is optional: an existing main-weights-only install stays
+    // "Downloaded" instead of regressing to "Paused", and a missing/404
+    // mmproj on a fresh fetch still yields a usable text-only model.
+    let optional_files = entry.mmproj_file.into_iter().collect();
     Asset {
         id: entry.id,
         target_dir: target_dir.to_path_buf(),
-        files,
+        files: entry.files,
+        optional_files,
         source: AssetSource::HuggingFace { repo: entry.repo },
         archive: ArchiveKind::None,
         is_directory: false,

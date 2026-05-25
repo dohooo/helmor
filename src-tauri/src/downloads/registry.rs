@@ -335,9 +335,9 @@ impl DownloadsManager {
 
 /// Best-effort removal of every artefact an asset could have left on
 /// disk — final files AND their `.part` counterparts. NotFound is
-/// ignored.
+/// ignored. Sweeps both essential and optional files.
 fn delete_asset_files(asset: &Asset) {
-    for file in &asset.files {
+    for file in asset.files.iter().chain(asset.optional_files.iter()) {
         let final_path = asset.target_dir.join(file);
         let part_path = asset.target_dir.join(format!("{file}.part"));
 
@@ -357,7 +357,10 @@ fn delete_asset_files(asset: &Asset) {
     }
 }
 
-/// Disk scan: derive an `AssetStatus` purely from what's on disk.
+/// Disk scan: derive an `AssetStatus` purely from what's on disk. The
+/// state machine looks at `files` only — `optional_files` contribute to
+/// the on-disk footprint reported as `downloaded` but their absence
+/// never demotes the asset out of `Downloaded`.
 fn scan_asset_state(asset: &Asset) -> AssetStatus {
     let mut downloaded: u64 = 0;
     let mut all_complete = true;
@@ -376,6 +379,15 @@ fn scan_asset_state(asset: &Asset) -> AssetStatus {
             downloaded = downloaded.saturating_add(meta.len());
             any_partial = true;
             any_present = true;
+        }
+    }
+    for file in &asset.optional_files {
+        let final_path = asset.target_dir.join(file);
+        let part_path = asset.target_dir.join(format!("{file}.part"));
+        if let Ok(meta) = std::fs::metadata(&final_path) {
+            downloaded = downloaded.saturating_add(meta.len());
+        } else if let Ok(meta) = std::fs::metadata(&part_path) {
+            downloaded = downloaded.saturating_add(meta.len());
         }
     }
     let state = if all_complete {
@@ -408,6 +420,7 @@ mod tests {
             id: "fake".into(),
             target_dir: target_dir.to_path_buf(),
             files: files.iter().map(|f| (*f).to_string()).collect(),
+            optional_files: Vec::new(),
             source: super::super::types::AssetSource::HuggingFace {
                 repo: "fake/repo".into(),
             },
@@ -466,5 +479,37 @@ mod tests {
         let status = scan_asset_state(&asset);
         assert!(matches!(status.state, AssetState::NotDownloaded));
         assert_eq!(status.downloaded, 0);
+    }
+
+    #[test]
+    fn essential_only_is_downloaded_when_optional_file_missing() {
+        // Regression: previously, adding mmproj to `files` flipped the
+        // scan from Downloaded → Paused for existing main-only installs,
+        // making every old model show up in the Downloads section.
+        let dir = tempdir().expect("tempdir");
+        let mut asset = fake_asset(dir.path(), &["model.gguf"]);
+        asset.optional_files = vec!["mmproj.gguf".into()];
+        fs::write(dir.path().join("model.gguf"), b"weights").expect("write main");
+
+        let status = scan_asset_state(&asset);
+        assert!(
+            matches!(status.state, AssetState::Downloaded),
+            "main-only install must stay Downloaded, got {:?}",
+            status.state
+        );
+        assert_eq!(status.downloaded, 7);
+    }
+
+    #[test]
+    fn optional_file_bytes_count_toward_disk_footprint() {
+        let dir = tempdir().expect("tempdir");
+        let mut asset = fake_asset(dir.path(), &["model.gguf"]);
+        asset.optional_files = vec!["mmproj.gguf".into()];
+        fs::write(dir.path().join("model.gguf"), b"weights").expect("write main");
+        fs::write(dir.path().join("mmproj.gguf"), b"vision").expect("write mmproj");
+
+        let status = scan_asset_state(&asset);
+        assert!(matches!(status.state, AssetState::Downloaded));
+        assert_eq!(status.downloaded, 13);
     }
 }

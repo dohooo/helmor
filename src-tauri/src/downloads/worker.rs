@@ -100,6 +100,7 @@ async fn run_hf(
     let mut last_bytes_marker = 0u64;
     let mut any_sha_verified = false;
 
+    // Essential files: any failure aborts the whole asset.
     for file in &asset.files {
         let final_path = asset.target_dir.join(file);
         let part_path = asset.target_dir.join(format!("{file}.part"));
@@ -167,6 +168,88 @@ async fn run_hf(
                     },
                 });
                 return Err(error);
+            }
+        }
+    }
+
+    // Optional files: best-effort. A missing/failed projector still
+    // leaves the main weights usable as text-only; we log and continue.
+    for file in &asset.optional_files {
+        let final_path = asset.target_dir.join(file);
+        let part_path = asset.target_dir.join(format!("{file}.part"));
+
+        if tokio::fs::metadata(&final_path).await.is_ok() {
+            continue;
+        }
+        if cancel.load(Ordering::Acquire) {
+            // User cancelled mid-optional — fall through to the
+            // Paused-emit path below.
+            registry.emit(AssetEvent {
+                entry_id: asset.id.clone(),
+                kind: AssetEventKind::Paused {
+                    downloaded: accumulated,
+                    total: total_expected,
+                },
+            });
+            return Ok(());
+        }
+
+        let expected_size = manifest
+            .as_ref()
+            .and_then(|m| m.per_file.get(file))
+            .and_then(|info| info.size)
+            .unwrap_or(0);
+        let expected_sha256 = manifest
+            .as_ref()
+            .and_then(|m| m.per_file.get(file))
+            .and_then(|info| info.sha256.clone());
+
+        let url = format!("https://huggingface.co/{repo}/resolve/main/{file}");
+        match stream_to_part(
+            client,
+            &asset,
+            &url,
+            &part_path,
+            expected_size,
+            expected_sha256.as_deref(),
+            &cancel,
+            registry,
+            &mut accumulated,
+            total_expected,
+            &mut last_emit,
+            &mut last_bytes_marker,
+        )
+        .await
+        {
+            Ok(FileOutcome::Completed { sha256_ok }) => {
+                if let Err(error) = tokio::fs::rename(&part_path, &final_path).await {
+                    tracing::warn!(
+                        error = %error,
+                        file,
+                        "optional file rename failed; continuing without it"
+                    );
+                }
+                if sha256_ok {
+                    any_sha_verified = true;
+                }
+            }
+            Ok(FileOutcome::Paused { downloaded }) => {
+                registry.emit(AssetEvent {
+                    entry_id: asset.id.clone(),
+                    kind: AssetEventKind::Paused {
+                        downloaded,
+                        total: total_expected,
+                    },
+                });
+                return Ok(());
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    file,
+                    "optional file download failed; asset will be usable without it"
+                );
+                let _ = tokio::fs::remove_file(&part_path).await;
             }
         }
     }
@@ -363,7 +446,7 @@ fn compute_total_hf(asset: &Asset, manifest: Option<&HfManifest>) -> u64 {
     if let Some(manifest) = manifest {
         let mut sum: u64 = 0;
         let mut all_known = true;
-        for file in &asset.files {
+        for file in asset.files.iter().chain(asset.optional_files.iter()) {
             match manifest.per_file.get(file).and_then(|info| info.size) {
                 Some(size) => sum = sum.saturating_add(size),
                 None => {
