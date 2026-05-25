@@ -396,6 +396,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 													void queryClient.invalidateQueries({
 														queryKey: helmorQueryKeys.workspaceChanges(
 															workspace.rootPath,
+															workspace.id,
 														),
 													});
 												}
@@ -414,6 +415,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															void queryClient.invalidateQueries({
 																queryKey: helmorQueryKeys.workspaceChanges(
 																	workspace.rootPath,
+																	workspace.id,
 																),
 															});
 														}

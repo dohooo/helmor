@@ -4,7 +4,8 @@ mod support;
 mod types;
 
 pub use changes::{
-    discard_workspace_file, list_workspace_changes, stage_workspace_file, unstage_workspace_file,
+    discard_workspace_file, list_workspace_changes, list_workspace_changes_for_workspace,
+    stage_workspace_file, unstage_workspace_file,
 };
 pub use editor::{
     list_editor_files, list_workspace_files, read_editor_file, read_file_at_ref, stat_editor_file,
