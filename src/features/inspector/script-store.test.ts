@@ -28,8 +28,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 // Dynamic import so vi.mock is applied before module evaluation.
-const { _resetForTesting, getScriptState, startScript, TRUNCATION_NOTICE } =
-	await import("./script-store");
+const {
+	_resetForTesting,
+	getScriptState,
+	startScript,
+	stopScript,
+	TRUNCATION_NOTICE,
+} = await import("./script-store");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -130,5 +135,27 @@ describe("script-store ring buffer", () => {
 		// ANSI dim + reset so we don't leak styling into replayed chunks.
 		expect(TRUNCATION_NOTICE).toContain("\x1b[2m");
 		expect(TRUNCATION_NOTICE).toContain("\x1b[0m");
+	});
+});
+
+describe("script-store userStopped tracking", () => {
+	it("fresh entries start with userStopped=false", () => {
+		startAndCapture();
+		expect(getScriptState("ws1", "run")?.userStopped).toBe(false);
+	});
+
+	it("stopScript marks the entry as user-initiated", () => {
+		startAndCapture();
+		stopScript("repo1", "run", "ws1");
+		expect(getScriptState("ws1", "run")?.userStopped).toBe(true);
+	});
+
+	it("a subsequent startScript clears userStopped", () => {
+		startAndCapture();
+		stopScript("repo1", "run", "ws1");
+		expect(getScriptState("ws1", "run")?.userStopped).toBe(true);
+
+		startAndCapture();
+		expect(getScriptState("ws1", "run")?.userStopped).toBe(false);
 	});
 });

@@ -847,7 +847,11 @@ fn prepare_workspace_inserts_initializing_row_without_creating_worktree() {
         Some("bun install")
     );
     assert_eq!(
-        prepared.repo_scripts.run_script.as_deref(),
+        prepared
+            .repo_scripts
+            .run_actions
+            .first()
+            .map(|a| a.command.as_str()),
         Some("bun run dev")
     );
     assert_eq!(prepared.repo_scripts.archive_script, None);
@@ -1546,7 +1550,8 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = CreateTestHarness::new();
 
-    // Commit a repo-root helmor.json and seed a DB script override — both
+    // Commit a repo-root helmor.json and seed DB-level script overrides
+    // (both `setup_script` and a `repo_run_actions` row) — every one
     // should be SHADOWED by the worktree's own helmor.json.
     harness.commit_repo_files(&[(
         "helmor.json",
@@ -1555,9 +1560,11 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2 WHERE id = ?3",
-            ("db-setup", "db-run", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1 WHERE id = ?2",
+            ("db-setup", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     // Finalize so the worktree exists, then rewrite the worktree's
@@ -1581,7 +1588,10 @@ fn load_repo_scripts_priority_1_worktree_helmor_json_wins() {
     let scripts =
         crate::repos::load_repo_scripts(&harness.repo_id, Some(&prepared.workspace_id)).unwrap();
     assert_eq!(scripts.setup_script.as_deref(), Some("worktree-setup"));
-    assert_eq!(scripts.run_script.as_deref(), Some("worktree-run"));
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("worktree-run")
+    );
     assert!(scripts.setup_from_project);
     assert!(scripts.run_from_project);
 }
@@ -1602,9 +1612,11 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2 WHERE id = ?3",
-            ("db-setup", "db-run", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1 WHERE id = ?2",
+            ("db-setup", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
@@ -1623,8 +1635,11 @@ fn load_repo_scripts_priority_2_repo_root_wins_when_worktree_missing() {
     // setup: worktree absent → falls to repo root.
     assert_eq!(scripts.setup_script.as_deref(), Some("source-root-setup"));
     assert!(scripts.setup_from_project);
-    // run: no project value anywhere → falls to DB.
-    assert_eq!(scripts.run_script.as_deref(), Some("db-run"));
+    // run: no project value anywhere → falls to DB action.
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("db-run")
+    );
     assert!(!scripts.run_from_project);
 }
 
@@ -1640,9 +1655,11 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
     Connection::open(harness.db_path())
         .unwrap()
         .execute(
-            "UPDATE repos SET setup_script = ?1, run_script = ?2, archive_script = ?3 WHERE id = ?4",
-            ("db-setup", "db-run", "db-archive", &harness.repo_id),
+            "UPDATE repos SET setup_script = ?1, archive_script = ?2 WHERE id = ?3",
+            ("db-setup", "db-archive", &harness.repo_id),
         )
+        .unwrap();
+    crate::repos::create_repo_run_action(&harness.repo_id, "Default", "db-run", "concurrent", None)
         .unwrap();
 
     let prepared = workspaces::prepare_workspace_from_repo_impl(
@@ -1658,7 +1675,10 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
     let scripts =
         crate::repos::load_repo_scripts(&harness.repo_id, Some(&prepared.workspace_id)).unwrap();
     assert_eq!(scripts.setup_script.as_deref(), Some("db-setup"));
-    assert_eq!(scripts.run_script.as_deref(), Some("db-run"));
+    assert_eq!(
+        scripts.run_actions.first().map(|a| a.command.as_str()),
+        Some("db-run")
+    );
     assert_eq!(scripts.archive_script.as_deref(), Some("db-archive"));
     assert!(!scripts.setup_from_project);
     assert!(!scripts.run_from_project);

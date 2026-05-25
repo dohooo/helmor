@@ -166,6 +166,7 @@ export function RunTab({
 }: RunTabProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
+	const [stopping, setStopping] = useState(false);
 	const [hasRun, setHasRun] = useState(false);
 	const { isZoomPresented, isHoverExpanded } = useTabsZoom();
 	const { settings } = useSettings();
@@ -182,6 +183,7 @@ export function RunTab({
 			onUrlsChange?.([]);
 			setHasRun(false);
 			setStatus("idle");
+			setStopping(false);
 			termRef.current?.clear();
 			return;
 		}
@@ -192,6 +194,7 @@ export function RunTab({
 			{
 				onChunk: (data) => termRef.current?.write(data),
 				onStatusChange: setStatus,
+				onStoppingChange: setStopping,
 				onUrlsChange: (urls) => onUrlsChange?.(urls),
 				// When a fresh run is triggered externally (e.g. Cmd+R while
 				// this tab is mounted), wipe the terminal so old output
@@ -199,6 +202,7 @@ export function RunTab({
 				onReset: () => {
 					termRef.current?.clear();
 					setHasRun(true);
+					setStopping(false);
 				},
 			},
 			activeRunActionId,
@@ -207,6 +211,7 @@ export function RunTab({
 		if (existing) {
 			setHasRun(true);
 			setStatus(existing.status);
+			setStopping(existing.stopping);
 			// Replay URLs already detected on this entry so the parent's state
 			// mirrors the store the moment the component mounts.
 			onUrlsChange?.([...existing.urls]);
@@ -222,6 +227,7 @@ export function RunTab({
 		} else {
 			setHasRun(false);
 			setStatus("idle");
+			setStopping(false);
 			onUrlsChange?.([]);
 			termRef.current?.clear();
 		}
@@ -309,13 +315,21 @@ export function RunTab({
 								className="text-small shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
+								// Title clarifies the escalation semantic when a
+								// cleanup command is still running — second click
+								// short-circuits to SIGKILL on the backend.
+								title={stopping ? "Skip cleanup and force-kill" : undefined}
 							>
 								{status === "running" ? (
 									<Square className="size-3" strokeWidth={2} />
 								) : (
 									<RotateCcw className="size-3" strokeWidth={2} />
 								)}
-								{status === "running" ? "Stop" : "Rerun"}
+								{status === "running"
+									? stopping
+										? "Force Stop"
+										: "Stop"
+									: "Rerun"}
 								{runShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={runShortcut}

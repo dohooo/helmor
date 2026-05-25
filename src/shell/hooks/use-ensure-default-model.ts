@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import type { AgentModelSection } from "@/lib/api";
 import { agentModelSectionsQueryOptions } from "@/lib/query-client";
-import { useSettings } from "@/lib/settings";
+import { type AppSettings, useSettings } from "@/lib/settings";
 import { findModelOption } from "@/lib/workspace-helpers";
 
 const KNOWN_MODEL_PROVIDERS = ["claude", "codex"] as const;
@@ -55,6 +55,35 @@ export function useEnsureDefaultModel() {
 			allOptions[0]?.id ??
 			null;
 		if (!pick) return;
-		updateSettings({ defaultModelId: pick });
-	}, [isLoaded, sections, settings.defaultModelId, updateSettings]);
+
+		// Materialize null review/pr fields alongside the default so a fresh
+		// install doesn't depend on the next cold-start migration.
+		const patch: Partial<AppSettings> = { defaultModelId: pick };
+		if (settings.reviewModelId === null) patch.reviewModelId = pick;
+		if (settings.prModelId === null) patch.prModelId = pick;
+		if (settings.reviewEffort === null) {
+			patch.reviewEffort = settings.defaultEffort;
+		}
+		if (settings.prEffort === null) patch.prEffort = settings.defaultEffort;
+		if (settings.reviewFastMode === null) {
+			patch.reviewFastMode = settings.defaultFastMode;
+		}
+		if (settings.prFastMode === null) {
+			patch.prFastMode = settings.defaultFastMode;
+		}
+		updateSettings(patch);
+	}, [
+		isLoaded,
+		sections,
+		settings.defaultModelId,
+		settings.reviewModelId,
+		settings.prModelId,
+		settings.reviewEffort,
+		settings.prEffort,
+		settings.reviewFastMode,
+		settings.prFastMode,
+		settings.defaultEffort,
+		settings.defaultFastMode,
+		updateSettings,
+	]);
 }

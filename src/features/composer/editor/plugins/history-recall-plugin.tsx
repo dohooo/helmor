@@ -1,33 +1,26 @@
 /**
  * Shell-style input recall: ArrowUp/ArrowDown at the editor's first /
- * last line walks back/forward through previously submitted prompts
- * for the current session (per-session scope).
+ * last line walks back/forward through previously submitted prompts.
  *
- * Behavior matches bash/zsh/fish:
- *   - Up at first line (or empty input): step to older history. The
- *     content the user had in the composer before the first Up gets
- *     snapshotted as the "in-progress draft" so a later Down past the
- *     newest entry restores it verbatim.
- *   - Down at last line: step to newer history; past the newest entry
- *     the in-progress draft is restored and history mode exits.
- *   - Mid-content Up/Down (cursor not at the line boundary) falls
- *     through to Lexical's default caret movement.
- *   - User edits inside a recalled entry exit history mode and drop
- *     the saved in-progress draft — the recalled+edited text becomes
- *     the new working draft.
+ * Boundary check is hybrid: Lexical paragraph index (anchor's top-level
+ * paragraph must equal root's first/last child) AND DOM visual-line
+ * position. Lexical guards blank middle paragraphs; DOM handles
+ * soft-wrap and multi-line recalled entries.
  *
- * Guards (mirrored from `SubmitPlugin` so the three pieces of keyboard
- * UX stay consistent):
- *   - Active typeahead popup (slash / @-mention / add-dir picker)
- *     keeps Arrow keys for menu navigation.
- *   - IME composition (`isComposing` / `keyCode === 229`) yields to
- *     the browser's candidate selector.
+ * Past the oldest/newest entry stays put; Down past newest restores the
+ * in-progress draft snapshotted on first Up. Editing a recalled entry
+ * exits recall and adopts the recalled+edited text as the new draft.
+ *
+ * Guards: yields Arrow keys to active typeahead popups and IME
+ * composition (same as `SubmitPlugin`).
  */
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { mergeRegister } from "@lexical/utils";
 import {
 	$getRoot,
+	$getSelection,
+	$isRangeSelection,
 	COMMAND_PRIORITY_LOW,
 	KEY_ARROW_DOWN_COMMAND,
 	KEY_ARROW_UP_COMMAND,
@@ -39,11 +32,8 @@ import { $setEditorContent, $setEditorContentParts } from "../../editor-ops";
 import type { InputHistoryEntry } from "../../input-history";
 import { $extractComposerContent } from "../utils";
 
-/** Update tag stamped on every editor mutation the recall plugin
- *  performs (applying a history entry, restoring the in-progress draft).
- *  Sibling plugins watch for this tag to suppress side effects — most
- *  importantly `DraftPersistencePlugin`, which would otherwise overwrite
- *  the saved draft with whatever recalled prompt is currently on screen. */
+/** Tags on recall-plugin edits; `DraftPersistencePlugin` watches these
+ *  to avoid persisting recalled prompts over the in-progress draft. */
 export const HISTORY_RECALL_TAG = "helmor-input-recall";
 export const HISTORY_RECALL_RESTORE_TAG = "helmor-input-recall-restore";
 
@@ -84,11 +74,8 @@ function caretLinePosition(rootEl: HTMLElement): {
 	atFirstLine: boolean;
 	atLastLine: boolean;
 } {
-	// Fallback treats the caret as "on both boundaries" — the shell-style
-	// recall handler then runs on every Up/Down regardless of position.
-	// That's the right behavior for jsdom (no layout) and the empty-editor
-	// case (no measurable caret), and harmless in production for the
-	// single-line case where first === last line.
+	// Fallback `{true, true}` covers jsdom (no layout) and empty-editor;
+	// harmless in production single-line case.
 	const fallback = { atFirstLine: true, atLastLine: true };
 	if (typeof window === "undefined") return fallback;
 	const selection = window.getSelection();
@@ -135,17 +122,48 @@ function caretLinePosition(rootEl: HTMLElement): {
 	};
 }
 
+/** Lexical-side first/last paragraph check; `{true, true}` when no
+ *  range selection so the DOM line check still decides. */
+function $caretParagraphPosition(): {
+	atFirstParagraph: boolean;
+	atLastParagraph: boolean;
+} {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		return { atFirstParagraph: true, atLastParagraph: true };
+	}
+	const root = $getRoot();
+	const firstChild = root.getFirstChild();
+	const lastChild = root.getLastChild();
+	if (!firstChild || !lastChild) {
+		return { atFirstParagraph: true, atLastParagraph: true };
+	}
+	let node = selection.anchor.getNode();
+	let parent = node.getParent();
+	while (parent && parent.getKey() !== root.getKey()) {
+		node = parent;
+		parent = node.getParent();
+	}
+	if (!parent) {
+		return { atFirstParagraph: true, atLastParagraph: true };
+	}
+	const key = node.getKey();
+	return {
+		atFirstParagraph: firstChild.getKey() === key,
+		atLastParagraph: lastChild.getKey() === key,
+	};
+}
+
 export const historyRecallTestUtils = {
 	caretLinePosition,
+	$caretParagraphPosition,
 };
 
 type Props = {
-	/** Returns the per-session recall list, most-recent first. Called
-	 *  lazily on each ArrowUp/Down so the plugin always sees the latest
-	 *  cache without needing to re-render on every cache update. */
+	/** Per-session recall list, most-recent first. Called lazily on each
+	 *  Arrow press so cache updates don't re-render the plugin. */
 	getHistory: () => readonly InputHistoryEntry[];
-	/** Resets recall state when the parent swaps sessions (a new
-	 *  `contextKey` means a new history scope). */
+	/** Resets recall state on session swap. */
 	scopeKey: string;
 };
 
@@ -232,9 +250,22 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 			const rootEl = editor.getRootElement();
 			if (!rootEl) return false;
 
+			// Both Lexical paragraph and DOM visual line must agree before
+			// we eat the keystroke.
+			let atFirstParagraph = false;
+			let atLastParagraph = false;
+			editor.getEditorState().read(() => {
+				const pos = $caretParagraphPosition();
+				atFirstParagraph = pos.atFirstParagraph;
+				atLastParagraph = pos.atLastParagraph;
+			});
 			const { atFirstLine, atLastLine } = caretLinePosition(rootEl);
-			if (direction === "up" && !atFirstLine) return false;
-			if (direction === "down" && !atLastLine) return false;
+			if (direction === "up" && !(atFirstParagraph && atFirstLine)) {
+				return false;
+			}
+			if (direction === "down" && !(atLastParagraph && atLastLine)) {
+				return false;
+			}
 
 			const history = getHistoryRef.current();
 			if (history.length === 0) return false;
@@ -244,16 +275,13 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 			if (direction === "up") {
 				const nextIndex = Math.min(history.length - 1, currentIndex + 1);
 				if (nextIndex === currentIndex) {
-					// Already at the oldest entry — keep the focus where it
-					// is. Returning true prevents the caret from drifting to
-					// a previous DOM line as a side effect of the ArrowUp.
+					// At oldest entry — preventDefault so the caret doesn't drift.
 					event?.preventDefault();
 					return true;
 				}
 				if (currentIndex < 0) {
-					// First step into recall: snapshot whatever the user
-					// had typed so a later Down past the newest entry can
-					// restore it.
+					// First step into recall: snapshot the current draft so a
+					// later Down past newest can restore it.
 					const editorState = snapshotCurrentDraft();
 					editor.read(() => {
 						const content = $extractComposerContent();
@@ -279,8 +307,7 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 
 			// direction === "down"
 			if (currentIndex < 0) {
-				// Not in recall mode and Down at last line — let Lexical
-				// run its default (no-op when already at last line).
+				// Not in recall: let Lexical handle the default.
 				return false;
 			}
 			const nextIndex = currentIndex - 1;
@@ -315,13 +342,10 @@ export function HistoryRecallPlugin({ getHistory, scopeKey }: Props) {
 				COMMAND_PRIORITY_LOW,
 			),
 			editor.registerUpdateListener(({ tags, dirtyElements, dirtyLeaves }) => {
-				// Self-initiated updates (recall apply / draft restore) carry
-				// our tag. Ignore those — only genuine user edits should
-				// exit recall mode.
+				// Ignore self-tagged updates and caret-only changes — only
+				// real user edits exit recall.
 				if (tags.has(HISTORY_RECALL_TAG)) return;
 				if (indexRef.current < 0) return;
-				// Selection-only changes (caret movement) shouldn't exit
-				// recall — only content mutations do.
 				if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
 				exitRecallMode();
 			}),

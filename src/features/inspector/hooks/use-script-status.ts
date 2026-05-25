@@ -26,10 +26,16 @@ function deriveState(
 	hasScript: boolean,
 	status: ScriptStatus,
 	exitCode: number | null,
+	userStopped: boolean,
 ): ScriptIconState {
 	if (!hasScript) return "no-script";
 	if (status === "running") return "running";
-	if (status === "exited") return exitCode === 0 ? "success" : "failure";
+	if (status === "exited") {
+		// User-initiated stop produces a non-zero exit code (SIGTERM = 143)
+		// but isn't a failure — collapse back to the pre-run "idle" glyph.
+		if (userStopped) return "idle";
+		return exitCode === 0 ? "success" : "failure";
+	}
 	return "idle";
 }
 
@@ -54,11 +60,13 @@ export function useScriptStatus(
 ): ScriptIconState {
 	const [status, setStatus] = useState<ScriptStatus>("idle");
 	const [exitCode, setExitCode] = useState<number | null>(null);
+	const [userStopped, setUserStopped] = useState(false);
 
 	useEffect(() => {
 		if (!workspaceId) {
 			setStatus("idle");
 			setExitCode(null);
+			setUserStopped(false);
 			return;
 		}
 		// "run" without a resolved actionId means "no action selected yet"
@@ -67,6 +75,7 @@ export function useScriptStatus(
 		if (scriptType === "run" && !actionId) {
 			setStatus("idle");
 			setExitCode(null);
+			setUserStopped(false);
 			return;
 		}
 
@@ -75,19 +84,21 @@ export function useScriptStatus(
 		const existing = getScriptState(workspaceId, scriptType, actionId);
 		setStatus(existing?.status ?? "idle");
 		setExitCode(existing?.exitCode ?? null);
+		setUserStopped(existing?.userStopped ?? false);
 
 		return subscribeStatus(
 			workspaceId,
 			scriptType,
-			(next, code) => {
+			(next, code, stoppedByUser) => {
 				setStatus(next);
 				setExitCode(code);
+				setUserStopped(stoppedByUser);
 			},
 			actionId,
 		);
 	}, [workspaceId, scriptType, actionId]);
 
-	const state = deriveState(hasScript, status, exitCode);
+	const state = deriveState(hasScript, status, exitCode, userStopped);
 	// Restore the success badge after restart: in-memory entry is gone but
 	// the workspace row still has a completion timestamp.
 	if (state === "idle" && lastCompletedAt) return "success";

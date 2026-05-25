@@ -1,5 +1,6 @@
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Clock3, Copy, ExternalLink } from "lucide-react";
+import { Check, Clock3, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { Suspense, useCallback, useState } from "react";
 import { AppendContextButton } from "@/components/append-context-button";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
@@ -13,9 +14,64 @@ import {
 import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
+import { getInboxItemDetail } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
-import type { ContextCard } from "@/lib/sources/types";
+import { helmorQueryKeys } from "@/lib/query-client";
+import type {
+	ContextCard,
+	ContextCardForgeDetailRef,
+} from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
+
+/** Background revalidation contract shared across detail views. Wiring
+ *  a query's `refetch` + `isFetching` into this is enough to surface
+ *  the toolbar refresh button. */
+export type DetailRefreshControl = {
+	refetch: () => void;
+	isFetching: boolean;
+};
+
+/** Adapt a React Query result into the `RefreshButton` contract. Pure
+ *  glue — kept here so individual detail-view files don't repeat the
+ *  same 3-line inline object. */
+export function toRefreshControl<T>(
+	query: UseQueryResult<T>,
+): DetailRefreshControl {
+	return {
+		refetch: () => void query.refetch(),
+		isFetching: query.isFetching,
+	};
+}
+
+/** Shared React Query setup for the forge (GitHub / GitLab) inbox-item
+ *  detail page. Every `*-view.tsx` in `github/` and `gitlab/` calls
+ *  this — same query key, same staleTime, same focus/mount sync
+ *  contract — so the wrapper view files reduce to type-narrowing the
+ *  result and forwarding to `GitHubDetailPage`. */
+export function useInboxItemDetailQuery(
+	detailRef: ContextCardForgeDetailRef | null,
+	cardId: string,
+) {
+	return useQuery({
+		queryKey: detailRef
+			? helmorQueryKeys.inboxItemDetail(
+					detailRef.provider,
+					detailRef.login,
+					detailRef.source,
+					detailRef.externalId,
+				)
+			: ["inboxItemDetail", "missing", cardId],
+		queryFn: () => getInboxItemDetail(detailRef!),
+		enabled: detailRef !== null,
+		staleTime: 60_000,
+		// Re-fetch every time the panel mounts (user opens a card) or
+		// the window regains focus — Slack/GitHub/GitLab items mutate
+		// quickly and users expect "open / refocus" to be a natural
+		// sync point.
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
+	});
+}
 
 export type SourceDetailProps = {
 	card: ContextCard;
@@ -29,6 +85,7 @@ export function GitHubDetailPage({
 	isLoading,
 	error,
 	kindLabel,
+	refresh,
 }: {
 	card: ContextCard;
 	appendContextTarget?: ComposerInsertTarget;
@@ -36,6 +93,7 @@ export function GitHubDetailPage({
 	isLoading?: boolean;
 	error?: Error | null;
 	kindLabel: string;
+	refresh?: DetailRefreshControl;
 }) {
 	const reference = parseExternalReference(card.externalId);
 	const markdownBody = description?.trim() || "No description provided.";
@@ -63,6 +121,7 @@ export function GitHubDetailPage({
 						appendContextTarget={appendContextTarget}
 						markdownBody={markdownBody}
 						copyDisabled={isLoading || Boolean(error)}
+						refresh={refresh}
 					/>
 				</div>
 			</header>
@@ -90,11 +149,13 @@ function SourceDetailActions({
 	appendContextTarget,
 	markdownBody,
 	copyDisabled,
+	refresh,
 }: {
 	card: ContextCard;
 	appendContextTarget?: ComposerInsertTarget;
 	markdownBody: string;
 	copyDisabled?: boolean;
+	refresh?: DetailRefreshControl;
 }) {
 	const [copied, setCopied] = useState(false);
 	const handleCopy = useCallback(() => {
@@ -107,6 +168,7 @@ function SourceDetailActions({
 
 	return (
 		<div className="flex shrink-0 items-center gap-1">
+			{refresh ? <RefreshButton refresh={refresh} /> : null}
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
@@ -161,6 +223,38 @@ function SourceDetailActions({
 				</TooltipContent>
 			</Tooltip>
 		</div>
+	);
+}
+
+/** Toolbar button that triggers a background refetch of the active
+ *  detail query. Spins the icon while the underlying query is fetching,
+ *  and disables the button so back-to-back clicks don't queue duplicate
+ *  refetches. Shared between Slack and Forge (GitHub/GitLab) detail
+ *  views — both wire a React Query `refetch` + `isFetching` pair into
+ *  the `refresh` prop. */
+export function RefreshButton({ refresh }: { refresh: DetailRefreshControl }) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-xs"
+					aria-label="Refresh"
+					disabled={refresh.isFetching}
+					onClick={() => refresh.refetch()}
+					className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+				>
+					<RefreshCw
+						className={cn("size-[13px]", refresh.isFetching && "animate-spin")}
+						strokeWidth={1.8}
+					/>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="top">
+				{refresh.isFetching ? "Refreshing…" : "Refresh"}
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 

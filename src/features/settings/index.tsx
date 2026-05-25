@@ -1,6 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, HelpCircle, Settings } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import {
+	CheckCircle2,
+	ChevronDown,
+	HelpCircle,
+	Settings,
+	Volume2,
+} from "lucide-react";
+import { memo, useEffect, useState } from "react";
 import { ModelIcon } from "@/components/model-icon";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -38,16 +44,25 @@ import {
 	type RepositoryCreateOption,
 } from "@/lib/api";
 import {
+	NOTIFICATION_SOUND_LABELS,
+	playNotificationSound,
+} from "@/lib/notification-sound";
+import {
 	agentModelSectionsQueryOptions,
 	helmorQueryKeys,
 	repositoriesQueryOptions,
 } from "@/lib/query-client";
-import type { AppSettings, ClaudeThinkingDisplay } from "@/lib/settings";
-import { useSettings } from "@/lib/settings";
+import type {
+	AppSettings,
+	ClaudeThinkingDisplay,
+	NotificationSound,
+} from "@/lib/settings";
+import { useSettings, VALID_NOTIFICATION_SOUNDS } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
+import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
 import { AppUpdatesPanel } from "./panels/app-updates";
 import { AppearancePanel } from "./panels/appearance";
@@ -56,10 +71,16 @@ import { ConductorImportPanel } from "./panels/conductor-import";
 import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
+import { LocalLlmPanel } from "./panels/local-llm";
 import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 
 const FALLBACK_EFFORT_LEVELS = ["low", "medium", "high"];
+
+const NOTIFICATION_SOUND_OPTIONS = VALID_NOTIFICATION_SOUNDS.map((value) => ({
+	value,
+	label: NOTIFICATION_SOUND_LABELS[value],
+})) satisfies readonly { value: NotificationSound; label: string }[];
 
 export type { SettingsSection } from "./types";
 
@@ -138,48 +159,12 @@ export const SettingsDialog = memo(function SettingsDialog({
 	const modelSections = modelSectionsQuery.data ?? [];
 	const allModels = modelSections.flatMap((s) => s.options);
 
-	// Materialize null Review/PR fields once per dialog open. Each model row
-	// (default / review / pr) owns its three controls (model, effort, fast
-	// mode) independently — `null` was the legacy "follow default" sentinel,
-	// but that coupling caused review/pr displays to flip whenever the
-	// default row changed. We promote nulls to explicit copies of the
-	// current default values so the three rows are fully decoupled going
-	// forward. Wait until `defaultModelId` is set so we don't materialize
-	// to `null` on first launch.
-	const hasMaterialized = useRef(false);
-	useEffect(() => {
-		if (!open) {
-			hasMaterialized.current = false;
-			return;
-		}
-		if (hasMaterialized.current) return;
-		if (settings.defaultModelId === null) return;
-
-		const patch: Partial<AppSettings> = {};
-		if (settings.reviewModelId === null) {
-			patch.reviewModelId = settings.defaultModelId;
-		}
-		if (settings.reviewEffort === null) {
-			patch.reviewEffort = settings.defaultEffort;
-		}
-		if (settings.reviewFastMode === null) {
-			patch.reviewFastMode = settings.defaultFastMode;
-		}
-		if (settings.prModelId === null) {
-			patch.prModelId = settings.defaultModelId;
-		}
-		if (settings.prEffort === null) {
-			patch.prEffort = settings.defaultEffort;
-		}
-		if (settings.prFastMode === null) {
-			patch.prFastMode = settings.defaultFastMode;
-		}
-
-		hasMaterialized.current = true;
-		if (Object.keys(patch).length > 0) {
-			void updateSettings(patch);
-		}
-	}, [open, settings, updateSettings]);
+	// Note: null review/pr model fields used to be promoted to default
+	// values here on every dialog open. That migration now runs once in
+	// `materialize_review_pr_model_defaults` (src-tauri/src/schema.rs) at
+	// schema upgrade time. Consumers fall back to `?? settings.defaultX`
+	// for the brief window between first-time default-set and next
+	// cold-start, which is what the existing UI bindings already do.
 
 	useEffect(() => {
 		if (open) {
@@ -299,6 +284,41 @@ export const SettingsDialog = memo(function SettingsDialog({
 												updateSettings({ notifications: checked })
 											}
 										/>
+									</SettingsRow>
+									<SettingsRow
+										title="Notification sound"
+										description="Play a sound when a desktop notification fires"
+									>
+										<div className="flex items-center gap-1.5">
+											<SettingsSelect<NotificationSound>
+												value={settings.notificationSound}
+												options={NOTIFICATION_SOUND_OPTIONS}
+												onChange={(next) =>
+													updateSettings({ notificationSound: next })
+												}
+												disabled={!settings.notifications}
+												ariaLabel="Notification sound"
+											/>
+											<Button
+												type="button"
+												variant="ghost"
+												size="icon"
+												aria-label="Test notification sound"
+												className="size-8"
+												disabled={
+													!settings.notifications ||
+													settings.notificationSound === "off"
+												}
+												onClick={() =>
+													playNotificationSound(settings.notificationSound)
+												}
+											>
+												<Volume2
+													className="size-4 text-muted-foreground"
+													strokeWidth={1.8}
+												/>
+											</Button>
+										</div>
 									</SettingsRow>
 									<SettingsRow
 										title="Expand terminals on hover"
@@ -563,9 +583,13 @@ export const SettingsDialog = memo(function SettingsDialog({
 							)}
 
 							{activeSection === "experimental" && (
-								<div className="flex flex-col gap-3">
+								<SettingsGroup>
+									<LocalLlmPanel
+										settings={settings}
+										updateSettings={updateSettings}
+									/>
 									<CliInstallPanel />
-								</div>
+								</SettingsGroup>
 							)}
 
 							{activeSection === "import" && <ConductorImportPanel />}

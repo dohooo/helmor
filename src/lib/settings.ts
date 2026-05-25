@@ -31,6 +31,38 @@ export type WorkspaceRightSidebarMode = "inspector" | "context";
 export type SidebarGrouping = "status" | "repo";
 export type SidebarSort = "custom" | "repoName" | "updatedAt" | "createdAt";
 
+/** Sound played alongside each desktop notification. `off` disables it. */
+export type NotificationSound =
+	| "off"
+	| "ding"
+	| "pop"
+	| "chime"
+	| "glass"
+	| "soft"
+	| "positive"
+	| "doorbell"
+	| "scifi"
+	| "bubble"
+	| "confirm"
+	| "elevator"
+	| "blip";
+
+export const VALID_NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
+	"off",
+	"ding",
+	"pop",
+	"chime",
+	"glass",
+	"soft",
+	"positive",
+	"doorbell",
+	"scifi",
+	"bubble",
+	"confirm",
+	"elevator",
+	"blip",
+];
+
 export type ShortcutOverrides = Record<string, string | null>;
 
 export type InboxIssueScope =
@@ -101,6 +133,16 @@ export type CursorProviderSettings = {
 	enabledModelIds: string[] | null;
 	/** Last fetched catalog; lets the Rust picker render synchronously. */
 	cachedModels: CursorCachedModel[] | null;
+};
+
+export type LocalLlmSettings = {
+	enabled: boolean;
+	model: string;
+	autoStart: boolean;
+	/** Per-catalog-entry runtime `-c` overrides. Absent key = use the
+	 *  catalog default. Backend keeps this map in sync via
+	 *  `setLocalLlmContextOverride`. */
+	contextOverrides?: Record<string, number>;
 };
 
 /** Per-account toggles for which item kinds the inbox should pull from
@@ -196,6 +238,9 @@ export type AppSettings = {
 	/** Color preset applied when the effective mode is `dark`. */
 	darkTheme: ColorTheme;
 	notifications: boolean;
+	/** Sound effect to play with each desktop notification.
+	 *  `off` keeps notifications silent. */
+	notificationSound: NotificationSound;
 	/** When true, hovering a terminal-like inspector tab body expands it. */
 	terminalHoverExpansion: boolean;
 	lastWorkspaceId: string | null;
@@ -244,6 +289,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	startSurfacePreferences: StartSurfacePreferences;
 	/** Sidebar grouping mode. Persisted to localStorage (sync read on boot
@@ -307,6 +353,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	lightTheme: "default",
 	darkTheme: "default",
 	notifications: true,
+	notificationSound: "off",
 	terminalHoverExpansion: true,
 	lastWorkspaceId: null,
 	lastSessionId: null,
@@ -340,6 +387,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
+	},
+	localLlm: {
+		enabled: false,
+		model: "",
+		autoStart: true,
+		contextOverrides: {},
 	},
 	inboxSourceConfig: { accounts: {} },
 	startSurfacePreferences: DEFAULT_START_SURFACE_PREFERENCES,
@@ -468,6 +521,7 @@ const SETTINGS_KEY_MAP: Record<
 	chatFontSize: "app.chat_font_size",
 	usePointerCursors: "app.use_pointer_cursors",
 	notifications: "app.notifications",
+	notificationSound: "app.notification_sound",
 	terminalHoverExpansion: "app.terminal_hover_expansion",
 	lastWorkspaceId: "app.last_workspace_id",
 	lastSessionId: "app.last_session_id",
@@ -493,6 +547,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
 	startSurfacePreferences: "app.start_surface_preferences",
 };
@@ -946,6 +1001,41 @@ function parseClaudeCustomProviderSettings(
 	}
 }
 
+function parseLocalLlmSettings(raw: string | undefined): LocalLlmSettings {
+	if (!raw) return DEFAULT_SETTINGS.localLlm;
+	try {
+		const parsed = JSON.parse(raw) as Partial<LocalLlmSettings>;
+		const overrides: Record<string, number> = {};
+		if (
+			parsed.contextOverrides &&
+			typeof parsed.contextOverrides === "object"
+		) {
+			for (const [key, value] of Object.entries(parsed.contextOverrides)) {
+				if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+					overrides[key] = value;
+				}
+			}
+		}
+		return {
+			enabled:
+				typeof parsed.enabled === "boolean"
+					? parsed.enabled
+					: DEFAULT_SETTINGS.localLlm.enabled,
+			model:
+				typeof parsed.model === "string"
+					? parsed.model
+					: DEFAULT_SETTINGS.localLlm.model,
+			autoStart:
+				typeof parsed.autoStart === "boolean"
+					? parsed.autoStart
+					: DEFAULT_SETTINGS.localLlm.autoStart,
+			contextOverrides: overrides,
+		};
+	} catch {
+		return DEFAULT_SETTINGS.localLlm;
+	}
+}
+
 /** Read an integer setting bounded to [min, max] with a default fallback.
  *  Used for font sizes so corrupted or out-of-range values can't render
  *  the UI unreadable. */
@@ -1022,6 +1112,12 @@ export async function loadSettings(): Promise<AppSettings> {
 				raw[SETTINGS_KEY_MAP.notifications] !== undefined
 					? raw[SETTINGS_KEY_MAP.notifications] === "true"
 					: DEFAULT_SETTINGS.notifications,
+			notificationSound: (() => {
+				const v = raw[SETTINGS_KEY_MAP.notificationSound];
+				return VALID_NOTIFICATION_SOUNDS.includes(v as NotificationSound)
+					? (v as NotificationSound)
+					: DEFAULT_SETTINGS.notificationSound;
+			})(),
 			terminalHoverExpansion:
 				raw[SETTINGS_KEY_MAP.terminalHoverExpansion] !== undefined
 					? raw[SETTINGS_KEY_MAP.terminalHoverExpansion] === "true"
@@ -1107,6 +1203,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
 			),
@@ -1152,6 +1249,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
 				key === "startSurfacePreferences"
 					? JSON.stringify(value)

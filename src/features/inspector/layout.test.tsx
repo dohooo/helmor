@@ -27,6 +27,8 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runTabLabel="Run"
+				workspaceId={null}
 				runActions={[]}
 				activeRunActionId={null}
 				onSelectRunAction={vi.fn()}
@@ -36,7 +38,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
 			>
 				<div>Terminal body</div>
@@ -78,6 +79,8 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runTabLabel="Run"
+				workspaceId={null}
 				runActions={[]}
 				activeRunActionId={null}
 				onSelectRunAction={vi.fn()}
@@ -87,7 +90,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
 			>
 				<div>Terminal body</div>
@@ -117,6 +119,8 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="running"
+				runTabLabel="Run"
+				workspaceId={null}
 				runActions={[]}
 				activeRunActionId={null}
 				onSelectRunAction={vi.fn()}
@@ -126,7 +130,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand={false}
 			>
 				<div>Placeholder body</div>
@@ -156,6 +159,8 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="idle"
+				runTabLabel="Run"
+				workspaceId={null}
 				runActions={[
 					{
 						id: "a1",
@@ -180,7 +185,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
 			>
 				<div>Body</div>
@@ -219,6 +223,8 @@ describe("InspectorTabsSection", () => {
 				onTabChange={vi.fn()}
 				setupScriptState="idle"
 				runScriptState="idle"
+				runTabLabel="Run"
+				workspaceId={null}
 				runActions={[
 					{
 						id: "a1",
@@ -243,7 +249,6 @@ describe("InspectorTabsSection", () => {
 				onCloseTerminal={vi.fn()}
 				onToggleTerminalHoverZoom={vi.fn()}
 				canSpawnTerminal={false}
-				bodyHeight={128}
 				canHoverExpand
 			>
 				<div>Body</div>

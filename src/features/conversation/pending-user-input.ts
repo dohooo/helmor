@@ -35,6 +35,8 @@ export type PendingUserInputPayload =
 	| {
 			kind: "form";
 			schema: Record<string, unknown>;
+			/** Provider-specific hints (e.g. Codex `_meta`). Round-trips back via `respondToUserInput`'s `meta`. */
+			meta?: Record<string, unknown>;
 	  }
 	| {
 			kind: "url";
@@ -74,7 +76,11 @@ function normalizePayload(
 	if (kind === "form") {
 		const schema = isRecord(raw.schema) ? raw.schema : null;
 		if (!schema) return null;
-		return { kind, schema };
+		return {
+			kind,
+			schema,
+			...(isRecord(raw.meta) ? { meta: raw.meta } : {}),
+		};
 	}
 
 	if (kind === "url") {

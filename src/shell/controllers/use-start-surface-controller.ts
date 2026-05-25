@@ -38,6 +38,7 @@ import { describeUnknownError } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { EMPTY_STRING_LIST } from "@/shell/constants";
 import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
+import { useShellEvent } from "@/shell/event-bus";
 import {
 	useLatestRef,
 	useStableActions,
@@ -98,6 +99,8 @@ export type StartSurfaceControllerDeps = {
 	repositories: RepositoryCreateOption[];
 	pushToast: PushWorkspaceToast;
 	getViewMode(): ShellViewMode;
+	/** Reactive view-mode used to clear the one-shot mode override on exit. */
+	viewMode: ShellViewMode;
 	openWorkspaceStart(): void;
 	setViewMode(mode: ShellViewMode): void;
 	selectWorkspace(workspaceId: string): void;
@@ -137,6 +140,15 @@ export function useStartSurfaceController(
 	>(null);
 	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
 		useState<readonly string[]>(EMPTY_STRING_LIST);
+	// One-shot mode override set by the `Cmd+N` / `Cmd+Shift+N` shortcuts
+	// (carried via the `open-new-workspace` event's `mode` payload). Wins
+	// over the persisted preference for the lifetime of the current visit
+	// to the start surface. Cleared when the user (a) manually picks a
+	// different mode in the composer, or (b) leaves the start surface — so
+	// the next non-shortcut entry (e.g. sidebar "New workspace" button)
+	// falls back to the persisted default.
+	const [transientModeOverride, setTransientModeOverride] =
+		useState<WorkspaceMode | null>(null);
 
 	// Pickers read from settings; writes go through `updateSettings`.
 	const prefs = appSettings.startSurfacePreferences;
@@ -147,9 +159,15 @@ export function useStartSurfaceController(
 		startRepositoryId,
 		START_SURFACE_MODE_FALLBACK,
 	);
-	// No repos → lock to chat (worktree/local can't run without one).
+	// No repos → lock to chat (worktree/local can't run without one);
+	// the transient override is ignored in this case so `Cmd+N` falls back
+	// to chat cleanly. Otherwise, transient (shortcut-driven) > persisted
+	// prefs > per-repo work mode.
 	const startMode: WorkspaceMode =
-		repositories.length === 0 || prefs.chatModeActive ? "chat" : repoWorkMode;
+		repositories.length === 0
+			? "chat"
+			: (transientModeOverride ??
+				(prefs.chatModeActive ? "chat" : repoWorkMode));
 	const startBranchIntent = readRepoPreference(
 		prefs.branchIntentByRepoId,
 		startRepositoryId,
@@ -217,6 +235,21 @@ export function useStartSurfaceController(
 		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 	}, [startRepositoryId]);
 
+	// Drop the one-shot mode override whenever we leave the start surface.
+	// Re-entry via a non-shortcut path (sidebar "New workspace" button,
+	// boot rehydration, etc.) should honor the user's persisted default.
+	useEffect(() => {
+		if (deps.viewMode !== "start") {
+			setTransientModeOverride(null);
+		}
+	}, [deps.viewMode]);
+
+	// Payload `mode` forces the initial mode for this open only; no payload
+	// clears any prior transient override so the per-repo remembered mode wins.
+	useShellEvent("open-new-workspace", (event) => {
+		setTransientModeOverride(event.mode ?? null);
+	});
+
 	// In local mode default to repo HEAD; worktree mode keeps stored default.
 	const startLocalCurrentBranchQuery = useQuery({
 		queryKey: ["repoCurrentBranch", startRepository?.id],
@@ -282,6 +315,9 @@ export function useStartSurfaceController(
 
 	const selectMode = useCallback(
 		(mode: WorkspaceMode) => {
+			// Manual pick supersedes any shortcut-driven override and gets
+			// persisted via the normal `updateSettings` path below.
+			setTransientModeOverride(null);
 			// pendingNewBranch is local-mode-only; clear it on any mode flip.
 			setStartPendingNewBranch(null);
 

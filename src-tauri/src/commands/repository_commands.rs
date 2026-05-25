@@ -97,16 +97,10 @@ pub async fn load_repo_preferences(repo_id: String) -> CmdResult<repos::RepoPref
 pub async fn update_repo_scripts(
     repo_id: String,
     setup_script: Option<String>,
-    run_script: Option<String>,
     archive_script: Option<String>,
 ) -> CmdResult<()> {
     run_blocking(move || {
-        repos::update_repo_scripts(
-            &repo_id,
-            setup_script.as_deref(),
-            run_script.as_deref(),
-            archive_script.as_deref(),
-        )
+        repos::update_repo_scripts(&repo_id, setup_script.as_deref(), archive_script.as_deref())
     })
     .await
 }
@@ -114,11 +108,6 @@ pub async fn update_repo_scripts(
 #[tauri::command]
 pub async fn update_repo_auto_run_setup(repo_id: String, enabled: bool) -> CmdResult<()> {
     run_blocking(move || repos::update_repo_auto_run_setup(&repo_id, enabled)).await
-}
-
-#[tauri::command]
-pub async fn update_repo_run_script_mode(repo_id: String, mode: String) -> CmdResult<()> {
-    run_blocking(move || repos::update_repo_run_script_mode(&repo_id, &mode)).await
 }
 
 #[tauri::command]

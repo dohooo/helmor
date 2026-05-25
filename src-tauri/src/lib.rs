@@ -3,6 +3,7 @@ pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
+pub mod downloads;
 pub mod error;
 pub mod feedback;
 pub mod forge;
@@ -10,6 +11,7 @@ pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod local_llm;
 pub mod logging;
 pub mod maintenance;
 pub mod mcp;
@@ -20,6 +22,7 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod slack;
 mod system_limits;
 pub mod ui_sync;
 pub mod updater;
@@ -43,7 +46,18 @@ pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
 pub use workspace::workspaces;
 
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
+
+/// Fallback `404 Not Found` response with an empty body. Used by the
+/// custom-protocol handlers when the upstream fetch fails — the
+/// webview falls back to the `<img alt="">` text gracefully.
+fn empty_404() -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(404)
+        .body(Vec::new())
+        .expect("404 response builder is infallible")
+}
 
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
@@ -62,7 +76,35 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build());
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Inline Slack file previews. The webview hits
+        // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
+        // through the workspace cookie, and stream the bytes back as a
+        // normal HTTP response. Cached on disk after the first fetch.
+        .register_asynchronous_uri_scheme_protocol("slack-file", |_app, request, responder| {
+            let uri = request.uri().to_string();
+            std::thread::spawn(move || {
+                let response = match slack::files::resolve(&uri) {
+                    Ok(file) => tauri::http::Response::builder()
+                        .header("Content-Type", file.content_type)
+                        // Slack file URLs are content-stable — bytes
+                        // never change for a given URL — so let the
+                        // webview cache them aggressively.
+                        .header("Cache-Control", "public, max-age=2592000, immutable")
+                        .body(file.bytes)
+                        .unwrap_or_else(|_| empty_404()),
+                    Err(error) => {
+                        tracing::warn!(
+                            uri = %uri,
+                            error = %format!("{error:#}"),
+                            "slack-file protocol fetch failed",
+                        );
+                        empty_404()
+                    }
+                };
+                responder.respond(response);
+            });
+        });
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -72,6 +114,13 @@ pub fn run() {
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
+        .manage(local_llm::Manager::default())
+        // Top-level downloads manager. The local-LLM catalog is supplied
+        // through `CatalogAssetProvider`; the downloads module itself
+        // stays business-agnostic.
+        .manage(downloads::DownloadsManager::new(Arc::new(
+            local_llm::CatalogAssetProvider,
+        )))
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
@@ -213,6 +262,41 @@ pub fn run() {
             updater::spawn_interval_worker(app.handle().clone());
 
             agents::prewarm_slash_command_cache(app.handle());
+
+            // Reap any orphan llama-server from a prior Helmor process
+            // that was force-quit / crashed / hot-reloaded — its
+            // `local_llm::Manager::drop` never ran. Doing this BEFORE the
+            // auto-start guarantees we don't accumulate duplicates
+            // across dev reloads or unclean exits.
+            local_llm::sweep_orphan_server();
+
+            // Auto-start the bundled llama-server when the user has
+            // flipped Local LLM on in settings. Spawned so a slow
+            // first-time model download can't stall the rest of setup.
+            // `local_llm::Manager::drop` handles teardown on app exit.
+            let local_llm_handle = app.handle().clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("local-llm-autostart".into())
+                .spawn(move || {
+                    let settings = local_llm::load_settings();
+                    if !settings.enabled || !settings.auto_start {
+                        return;
+                    }
+                    let manager = local_llm_handle.state::<local_llm::Manager>();
+                    if let Err(error) = manager.start() {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "Local LLM auto-start failed"
+                        );
+                    }
+                })
+            {
+                tracing::error!(error = %error, "Failed to spawn local-llm autostart thread");
+            }
+
+            // Re-register the user's saved global hotkey at startup. Missing
+            // this leaves the hotkey unregistered after a cold launch until
+            // the user re-saves it in settings.
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
                     error = %format!("{error:#}"),
@@ -273,6 +357,21 @@ pub fn run() {
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::local_llm_commands::detect_local_llm_hardware,
+            commands::local_llm_commands::get_local_llm_status,
+            commands::local_llm_commands::list_local_llm_catalog,
+            commands::local_llm_commands::inspect_local_llm_model,
+            commands::local_llm_commands::inspect_local_llm_catalog_entry,
+            commands::local_llm_commands::list_local_llm_downloads,
+            commands::local_llm_commands::subscribe_local_llm_downloads,
+            commands::local_llm_commands::start_local_llm_download,
+            commands::local_llm_commands::pause_local_llm_download,
+            commands::local_llm_commands::cancel_local_llm_download,
+            commands::local_llm_commands::activate_local_llm_model,
+            commands::local_llm_commands::set_local_llm_context_override,
+            commands::local_llm_commands::start_local_llm,
+            commands::local_llm_commands::stop_local_llm,
+            commands::local_llm_commands::get_local_llm_endpoint,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
@@ -322,7 +421,6 @@ pub fn run() {
             commands::repository_commands::load_repo_preferences,
             commands::repository_commands::update_repo_scripts,
             commands::repository_commands::update_repo_auto_run_setup,
-            commands::repository_commands::update_repo_run_script_mode,
             commands::repository_commands::update_repo_preferences,
             commands::repository_commands::delete_repository,
             commands::repository_commands::move_repository_in_sidebar,
@@ -422,7 +520,15 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::slack_commands::slack_import_from_desktop,
+            commands::slack_commands::slack_list_workspaces,
+            commands::slack_commands::slack_disconnect_workspace,
+            commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_search_messages,
+            commands::slack_commands::slack_get_thread_detail,
+            commands::slack_commands::slack_list_emoji,
+            commands::slack_commands::slack_prepare_thread_context
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

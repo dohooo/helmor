@@ -1,6 +1,7 @@
 // Left workspace sidebar — workspaces list, app-update button, sidebar
 // collapse, and the settings entry button at the bottom.
 import { PanelLeftClose } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -65,8 +66,21 @@ export function ShellSidebarPane({
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
+	// Inline width written via ref so each remount re-applies it.
+	const asideRef = useRef<HTMLElement>(null);
+	const innerRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (asideRef.current) {
+			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
+		}
+		if (innerRef.current) {
+			innerRef.current.style.width = `${width}px`;
+		}
+	}, [width, collapsed]);
+
 	return (
 		<aside
+			ref={asideRef}
 			aria-hidden={collapsed}
 			aria-label="Workspace sidebar"
 			data-helmor-sidebar-root
@@ -78,20 +92,16 @@ export function ShellSidebarPane({
 					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 				collapsed ? "pointer-events-none" : "",
 			)}
-			// Width driven by a CSS var written on THIS element (not documentElement)
-			// during drag — keeps style invalidation inside the pane subtree.
-			style={{
-				width: collapsed ? 0 : `var(--shell-sidebar-width, ${width}px)`,
-			}}
 		>
 			<div
+				ref={innerRef}
+				data-shell-pane-inner="sidebar"
 				className={cn(
 					"relative flex h-full shrink-0 flex-col transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
 					collapsed
 						? "-translate-x-full opacity-0"
 						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `var(--shell-sidebar-width, ${width}px)` }}
 			>
 				<div className="min-h-0 flex-1">
 					<WorkspacesSidebarContainer

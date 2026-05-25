@@ -17,6 +17,13 @@ type Listener = {
 	onStatusChange: (status: ScriptStatus) => void;
 	onUrlsChange?: (urls: string[]) => void;
 	/**
+	 * `true` while a configured `stopCommand` is running (Stop button
+	 * renders as "Force Stop"); `false` when it finishes or the entry is
+	 * reset by a fresh `startScript`. Only fires for actions that
+	 * configure a `stopCommand`.
+	 */
+	onStoppingChange?: (stopping: boolean) => void;
+	/**
 	 * Called at the start of a fresh `startScript` invocation. Gives any
 	 * already-attached listener a chance to clear its terminal so output from
 	 * a previous run is not mixed with the new run's chunks — important when
@@ -26,7 +33,11 @@ type Listener = {
 	onReset?: () => void;
 };
 
-type StatusListener = (status: ScriptStatus, exitCode: number | null) => void;
+type StatusListener = (
+	status: ScriptStatus,
+	exitCode: number | null,
+	userStopped: boolean,
+) => void;
 
 /**
  * Max bytes of stdout/stderr retained per script entry. Long-running dev
@@ -55,6 +66,19 @@ export type ScriptEntry = {
 	 * as new chunks arrive. Empty when the script hasn't printed any banner.
 	 */
 	urls: string[];
+	/** True while a configured `stopCommand` is running. Drives the
+	 * "Force Stop" button — a second Stop click while true escalates to
+	 * SIGKILL backend-side. */
+	stopping: boolean;
+	/**
+	 * True once the user clicks Stop on this run. The backend kills the
+	 * process via SIGTERM, which produces a non-zero exit code (typically
+	 * 143). Without this flag the icon would derive "failure" — but a
+	 * user-initiated stop is intentional, not a crash. The status hook
+	 * collapses {exited + userStopped} back to "idle" so the tab returns
+	 * to its pre-run glyph. Cleared on the next `startScript`.
+	 */
+	userStopped: boolean;
 };
 
 /** Append a chunk and evict from the head until under the byte cap. */
@@ -89,9 +113,9 @@ const workspaceRunListeners = new Map<string, Set<StatusListener>>();
 
 function emitStatus(k: string, status: ScriptStatus, exitCode: number | null) {
 	const subs = statusListeners.get(k);
-	if (subs) {
-		for (const sub of subs) sub(status, exitCode);
-	}
+	if (!subs) return;
+	const userStopped = entries.get(k)?.userStopped ?? false;
+	for (const sub of subs) sub(status, exitCode, userStopped);
 }
 
 function emitWorkspaceRunStatus(
@@ -101,7 +125,10 @@ function emitWorkspaceRunStatus(
 ) {
 	const subs = workspaceRunListeners.get(workspaceId);
 	if (!subs) return;
-	for (const sub of subs) sub(status, exitCode);
+	// Workspace-level listeners (sidebar row dot) don't care about user-
+	// initiated stops — they only need to know "is anything live here?"
+	// — so pass `false` unconditionally.
+	for (const sub of subs) sub(status, exitCode, false);
 }
 
 /**
@@ -148,8 +175,21 @@ export function startScript(
 		status: "running",
 		exitCode: null,
 		urls: [],
+		stopping: false,
+		userStopped: false,
 	};
 	entries.set(k, entry);
+
+	// Flip `stopping` back to false (and notify) if the entry was mid-
+	// graceful-stop when this final event arrived. Called from every
+	// `exited` / `error` / `.catch` path so the Force Stop button label
+	// always clears on exit.
+	const clearStopping = () => {
+		if (entry.stopping) {
+			entry.stopping = false;
+			listeners.get(k)?.onStoppingChange?.(false);
+		}
+	};
 
 	listeners.get(k)?.onStatusChange("running");
 	// Reset URL listener to empty — previous run's URLs don't apply.
@@ -167,6 +207,10 @@ export function startScript(
 
 			switch (event.type) {
 				case "started":
+					break;
+				case "stopping":
+					entry.stopping = true;
+					listeners.get(k)?.onStoppingChange?.(true);
 					break;
 				case "stdout":
 				case "stderr": {
@@ -211,6 +255,7 @@ export function startScript(
 				case "exited":
 					entry.status = "exited";
 					entry.exitCode = event.code;
+					clearStopping();
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", event.code);
 					if (scriptType === "run") {
@@ -223,6 +268,7 @@ export function startScript(
 					entry.status = "exited";
 					// No exit code from the backend here — treat as failure.
 					entry.exitCode = entry.exitCode ?? 1;
+					clearStopping();
 					listeners.get(k)?.onChunk(msg);
 					listeners.get(k)?.onStatusChange("exited");
 					emitStatus(k, "exited", entry.exitCode);
@@ -241,6 +287,7 @@ export function startScript(
 		appendChunk(entry, msg);
 		entry.status = "exited";
 		entry.exitCode = entry.exitCode ?? 1;
+		clearStopping();
 		listeners.get(k)?.onChunk(msg);
 		listeners.get(k)?.onStatusChange("exited");
 		emitStatus(k, "exited", entry.exitCode);
@@ -256,6 +303,11 @@ export function stopScript(
 	workspaceId: string,
 	actionId?: string | null,
 ) {
+	// Mark before firing the backend stop so the eventual `exited` event
+	// — which will arrive with a non-zero exit code (SIGTERM = 143) —
+	// is correctly attributed to the user and not surfaced as a failure.
+	const entry = entries.get(key(workspaceId, scriptType, actionId));
+	if (entry) entry.userStopped = true;
 	void stopRepoScript(repoId, scriptType, workspaceId, actionId ?? null);
 }
 

@@ -446,7 +446,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -546,7 +546,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -722,7 +722,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,
@@ -833,7 +833,7 @@ describe("useWorkspacesSidebarController archive flow", () => {
 			state: "initializing" as const,
 			repoScripts: {
 				setupScript: null,
-				runScript: null,
+				runActions: [],
 				archiveScript: null,
 				setupFromProject: false,
 				runFromProject: false,

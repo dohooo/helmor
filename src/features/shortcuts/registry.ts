@@ -96,9 +96,17 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	},
 	{
 		id: "workspace.new",
-		title: "Create new workspace",
+		title: "Open Start Page",
 		group: "Workspace",
 		defaultHotkey: "Mod+N",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "workspace.justChat",
+		title: "Open Start Page (Just chat)",
+		group: "Workspace",
+		defaultHotkey: "Mod+Shift+N",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -106,7 +114,9 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: "workspace.addRepository",
 		title: "Add repository",
 		group: "Workspace",
-		defaultHotkey: "Mod+Shift+N",
+		// Unbound by default — Mod+Shift+N now opens the start composer in
+		// "Just chat" mode. Users can rebind from settings if they want.
+		defaultHotkey: null,
 		scopes: ["app"],
 		editable: true,
 	},

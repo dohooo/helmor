@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.25.0
+
+### Minor Changes
+
+- [#654](https://github.com/dohooo/helmor/pull/654) [`bf80653`](https://github.com/dohooo/helmor/commit/bf80653ed47c960447e3ce04ec8f3f281c44d9fd) Thanks [@dohooo](https://github.com/dohooo)! - Add Slack as a Context source.
+
+  - Import every workspace straight from your local Slack desktop session — no bot, no admin OAuth approval.
+  - Browse a unified mentions + DM activity feed in the sidebar, search any workspace with Slack's native operators (`from:@alice`, `in:#chan`, `has:link`, `is:thread`), and click through to a full-fidelity thread preview with inline images and video.
+  - Add a thread to context and the agent receives the conversation as structured prose plus every shared image as direct vision input — no Read-tool detour.
+
+### Patch Changes
+
+- [#652](https://github.com/dohooo/helmor/pull/652) [`6fa372f`](https://github.com/dohooo/helmor/commit/6fa372f3f22b2a10d84b401ab9548f703cc5ed64) Thanks [@natllian](https://github.com/natllian)! - Fix Codex MCP tool-call approvals showing no Allow button. The empty-schema elicitation with `_meta.codex_approval_kind: "mcp_tool_call"` now renders Allow / Allow-for-session / Always-allow / Decline, and the persist choice round-trips back so Codex remembers it.
+
+- [#656](https://github.com/dohooo/helmor/pull/656) [`a285c65`](https://github.com/dohooo/helmor/commit/a285c65cd54b04888378ae6815be7bc97bb59813) Thanks [@dohooo](https://github.com/dohooo)! - Refresh the new-workspace keyboard shortcuts:
+
+  - Cmd+N opens the start composer directly in worktree mode.
+  - Cmd+Shift+N now opens the start composer in Just-chat mode.
+  - The previous Cmd+Shift+N "Add repository" binding is unbound by default and can be re-bound in Settings → Shortcuts.
+
+- [#653](https://github.com/dohooo/helmor/pull/653) [`c420b83`](https://github.com/dohooo/helmor/commit/c420b83ce302bf1e1ed20d0c8666d44c443b77d1) Thanks [@dohooo](https://github.com/dohooo)! - Polish the inspector's Run tab:
+  - Manually stopping a script no longer marks the run as failed — the tab icon returns to its idle state.
+  - Show the active action's name on the Run tab when a workspace has multiple configured, so users can tell which script's output is on screen.
+  - Clicking anywhere on the active Run tab now opens the action menu — no need to aim for the chevron.
+
+## 0.24.0
+
+### Minor Changes
+
+- [#647](https://github.com/dohooo/helmor/pull/647) [`dc6da55`](https://github.com/dohooo/helmor/commit/dc6da55dcd268c43420316f52b27acdbf1454770) Thanks [@dohooo](https://github.com/dohooo)! - Add an optional `stopCommand` per run action that runs as graceful cleanup when you click Stop, with a second click force-killing the process if you don't want to wait.
+
+- [#650](https://github.com/dohooo/helmor/pull/650) [`1912328`](https://github.com/dohooo/helmor/commit/1912328489b52358d34c4216e31759cb867dd68f) Thanks [@natllian](https://github.com/natllian)! - Add an experimental Local LLM panel that runs session title and branch name generation on-device through a bundled llama-server.
+
+### Patch Changes
+
+- [#645](https://github.com/dohooo/helmor/pull/645) [`4564bd8`](https://github.com/dohooo/helmor/commit/4564bd896cb609bd16ee060cd52f3149cf6dc8c4) Thanks [@natllian](https://github.com/natllian)! - Fix the composer's ArrowUp accidentally recalling the previous prompt when the caret crossed into a blank line in the middle of a multi-paragraph draft.
+
+- [#648](https://github.com/dohooo/helmor/pull/648) [`1ef46cb`](https://github.com/dohooo/helmor/commit/1ef46cb37fc201be65db3c88bf83f9e02430817b) Thanks [@natllian](https://github.com/natllian)! - Add an optional sound effect that plays alongside each desktop notification, with 12 sounds to choose from in Settings → General.
+
+## 0.23.6
+
+### Patch Changes
+
+- [#643](https://github.com/dohooo/helmor/pull/643) [`b94fe03`](https://github.com/dohooo/helmor/commit/b94fe03ec16f496d1a2224b6d7640bc07b5bb696) Thanks [@dohooo](https://github.com/dohooo)! - Fix the hover-expanded terminal panel from collapsing the moment you open the Run action dropdown, so the menu now opens at the expanded position instead of an empty patch of inspector chrome.
+
+## 0.23.5
+
+### Patch Changes
+
+- [#632](https://github.com/dohooo/helmor/pull/632) [`b27c5e1`](https://github.com/dohooo/helmor/commit/b27c5e1a771144ec2c72422d9e735ce35ad5f899) Thanks [@aidxun](https://github.com/aidxun)! - Stop eagerly prefetching every changed file's contents when opening the Git Changes panel — Monaco now reads files on demand instead, cutting CPU and IPC traffic on large workspaces.
+
+- [#631](https://github.com/dohooo/helmor/pull/631) [`7093895`](https://github.com/dohooo/helmor/commit/7093895cd375cafd657721879b0211e63b129682) Thanks [@natllian](https://github.com/natllian)! - Fix Shift+Tab on the new-thread page only cycling repositories when focus was inside the composer; the shortcut now works anywhere on the start surface.
+
+- [#633](https://github.com/dohooo/helmor/pull/633) [`fb0bba1`](https://github.com/dohooo/helmor/commit/fb0bba177287b0ff3d65c3725770616cc9e34ffe) Thanks [@natllian](https://github.com/natllian)! - Fix the composer preview popover running off the bottom of the screen when pasting a long-text pill or image on the start page — the preview now shrinks to fit the space between the composer and the screen edge.
+
+- [#629](https://github.com/dohooo/helmor/pull/629) [`eadc55d`](https://github.com/dohooo/helmor/commit/eadc55d13a0952f383425a25de7142bce67f929f) Thanks [@natllian](https://github.com/natllian)! - Fix the inspector Run/Setup tabs' floating Stop/Rerun button only registering clicks on a thin strip near its bottom edge. The xterm WebGL link-layer canvas sits at `z-index: 2` and was painted over the upper portion of the button — the button now sits above the xterm canvas stack so the entire visible rectangle is clickable.
+
+- [#641](https://github.com/dohooo/helmor/pull/641) [`9d7d236`](https://github.com/dohooo/helmor/commit/9d7d236812d3afbed04862aaec45ac820e71dfee) Thanks [@natllian](https://github.com/natllian)! - Restore 60 FPS on inspector and sidebar / inspector drag with thousands of changed files.
+
 ## 0.23.4
 
 ### Patch Changes

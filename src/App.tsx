@@ -364,16 +364,6 @@ function AppShell({
 		[],
 	);
 	const {
-		handleResizeKeyDown,
-		handleResizeStart,
-		inspectorWidth,
-		isInspectorResizing,
-		isSidebarResizing,
-		sidebarCollapsed,
-		sidebarWidth,
-		setSidebarCollapsed,
-	} = useShellPanels();
-	const {
 		settings: appSettings,
 		isLoaded: areSettingsLoaded,
 		updateSettings,
@@ -457,6 +447,7 @@ function AppShell({
 			repositories,
 			pushToast: pushWorkspaceToast,
 			getViewMode: () => selectionActions.getSnapshot().viewMode,
+			viewMode: selection.viewMode,
 			openWorkspaceStart: () => selectionActions.openStart(),
 			setViewMode: (mode) => selectionActions.setViewMode(mode),
 			selectWorkspace: (id) => handleSelectWorkspace(id),
@@ -489,6 +480,16 @@ function AppShell({
 	const startLinkedDirectoriesController =
 		startSurface.startLinkedDirectoriesController;
 	const inspectorCollapsed = contextPanel.inspectorCollapsed;
+	const {
+		handleResizeKeyDown,
+		handleResizeStart,
+		inspectorWidth,
+		isInspectorResizing,
+		isSidebarResizing,
+		sidebarCollapsed,
+		sidebarWidth,
+		setSidebarCollapsed,
+	} = useShellPanels();
 	const rightSidebarMode = contextPanel.rightSidebarMode;
 	const workspacePreviewCard = contextPanel.workspacePreviewCard;
 	const workspacePreviewActive = contextPanel.workspacePreviewActive;
@@ -670,12 +671,20 @@ function AppShell({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
+	// Optional `initialSection` lets callers jump straight to a panel
+	// (e.g. inspector's "Add run script" → the current repo's Scripts
+	// editor). Bound directly to button onClick is still safe — React
+	// passes the click event as the first arg, which doesn't match the
+	// `SettingsSection` shape, so we coerce non-string args back to
+	// `undefined` to preserve the original zero-arg behavior.
 	const handleOpenSettings = useCallback(
 		(initialSection?: SettingsSection): void => {
+			const section =
+				typeof initialSection === "string" ? initialSection : undefined;
 			onOpenSettings(
 				selectedWorkspaceId,
 				selectedWorkspaceDetailQuery.data?.repoId ?? null,
-				initialSection,
+				section,
 			);
 		},
 		[
@@ -686,9 +695,30 @@ function AppShell({
 	);
 	const handleOpenAnnouncementSettings = useCallback(
 		(initialSection?: SettingsSection): void => {
+			// Sentinel: announcements written before a workspace is
+			// selected can ask for "the current repo's Scripts section"
+			// without knowing the repo id at authoring time. We resolve
+			// it here and replay the same open-then-scroll dance the
+			// inspector empty states use.
+			if (initialSection === ("repo:current" as SettingsSection)) {
+				const currentRepoId = selectedWorkspaceDetailQuery.data?.repoId;
+				if (currentRepoId) {
+					onOpenSettings(null, null, `repo:${currentRepoId}`);
+					requestAnimationFrame(() => {
+						window.dispatchEvent(
+							new CustomEvent("helmor:scroll-to-repo-scripts"),
+						);
+					});
+					return;
+				}
+				// No active repo (chat-only workspace, or none selected) —
+				// fall back to plain settings rather than a broken link.
+				onOpenSettings(null, null);
+				return;
+			}
 			onOpenSettings(null, null, initialSection);
 		},
-		[onOpenSettings],
+		[onOpenSettings, selectedWorkspaceDetailQuery.data?.repoId],
 	);
 	const handleOpenReleaseChangelog = useCallback(() => {
 		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
@@ -722,6 +752,23 @@ function AppShell({
 		exitEditorMode: () => selectionActions.setViewMode("conversation"),
 	});
 	const editorSession = editorSessionState.editorSession;
+	// Stable identity so downstream `React.memo` boundaries hold.
+	const activeEditorTarget = useMemo(
+		() =>
+			editorSession
+				? {
+						path: editorSession.path,
+						originalRef: editorSession.originalRef,
+						modifiedRef: editorSession.modifiedRef,
+					}
+				: null,
+		[
+			editorSession?.path,
+			editorSession?.originalRef,
+			editorSession?.modifiedRef,
+			editorSession,
+		],
+	);
 	const handleOpenEditorFile = editorSessionActions.openFile;
 	const handleOpenFileReference = editorSessionActions.openFileReference;
 	const handleEditorSessionChange = editorSessionActions.changeSession;
@@ -1183,6 +1230,11 @@ function AppShell({
 				callback: () => publishShellEvent({ type: "open-new-workspace" }),
 			},
 			{
+				id: "workspace.justChat" as const,
+				callback: () =>
+					publishShellEvent({ type: "open-new-workspace", mode: "chat" }),
+			},
+			{
 				id: "workspace.addRepository" as const,
 				callback: () => publishShellEvent({ type: "open-add-repository" }),
 			},
@@ -1539,7 +1591,7 @@ function AppShell({
 											collapsed={sidebarCollapsed}
 											resizing={isSidebarResizing}
 											width={sidebarWidth}
-											onMouseDown={handleResizeStart("sidebar")}
+											onPointerDown={handleResizeStart("sidebar")}
 											onKeyDown={handleResizeKeyDown("sidebar")}
 										/>
 									</>
@@ -1785,7 +1837,7 @@ function AppShell({
 												collapsed={inspectorCollapsed}
 												resizing={isInspectorResizing}
 												width={inspectorWidth}
-												onMouseDown={handleResizeStart("inspector")}
+												onPointerDown={handleResizeStart("inspector")}
 												onKeyDown={handleResizeKeyDown("inspector")}
 											/>
 											<ShellInspectorPane
@@ -1827,15 +1879,7 @@ function AppShell({
 													selectedWorkspaceDetailQuery.data ?? null
 												}
 												displayedSessionId={displayedSessionId}
-												activeEditor={
-													editorSession
-														? {
-																path: editorSession.path,
-																originalRef: editorSession.originalRef,
-																modifiedRef: editorSession.modifiedRef,
-															}
-														: null
-												}
+												activeEditor={activeEditorTarget}
 												preferredEditor={preferredEditor}
 												onOpenEditorFile={handleOpenEditorFile}
 												onCommitAction={handleCommitAction}
