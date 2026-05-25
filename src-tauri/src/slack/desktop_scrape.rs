@@ -45,6 +45,12 @@ use super::credentials::SlackCreds;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
+// Chromium / Electron `safeStorage` always stores its AES key under
+// service name `"<App Name> Safe Storage"` — this is hard-coded in
+// `os_crypt_mac.mm` upstream. Slack inherits this through Electron, so
+// the service name is a stable protocol contract. Don't rely on the
+// `acct` field instead — Slack has silently renamed it
+// ("Slack" -> "Slack Key" sometime in 2024+).
 const KEYCHAIN_SERVICE: &str = "Slack Safe Storage";
 const SAFE_STORAGE_SALT: &[u8] = b"saltysalt";
 const SAFE_STORAGE_ITERATIONS: u32 = 1003;
@@ -434,57 +440,68 @@ fn read_d_cookie(cookies_path: &Path, data_dir: &Path) -> Result<String> {
 
 #[cfg(target_os = "macos")]
 fn read_safe_storage_key(data_dir: &Path) -> Result<Vec<u8>> {
-    // The Slack desktop client stores its Safe Storage AES key in the
-    // user's login Keychain. We could go through the `keyring` crate,
-    // but that returns "No matching entry found" — the Keychain
-    // item's ACL is restricted to the binaries Slack itself signed,
-    // so a direct Security Framework lookup from Helmor gets blocked.
+    // Slack stashes its Safe Storage AES key in the user's login
+    // Keychain. We shell out to `/usr/bin/security` rather than going
+    // through the `keyring` crate / Security Framework directly: the
+    // item's ACL is restricted to binaries Slack signed, so a direct
+    // SF call returns "no matching entry"; spawning `security` causes
+    // macOS to show a one-time "Allow Helmor to access ‘Slack Safe
+    // Storage’?" prompt and remember the approval. That tradeoff is
+    // fine — the user just clicked "Import from Slack desktop".
     //
-    // Shelling out to `/usr/bin/security` works because the user gets
-    // a one-time "Allow Helmor to access Slack Safe Storage?" prompt
-    // and macOS remembers the approval. The user explicitly clicked
-    // "Import from Slack desktop", so an extra OS-level confirmation
-    // is acceptable UX.
-    // "Slack" first for the standalone build; "Slack App Store Key"
-    // first for the sandboxed Mac App Store build (it stores under a
-    // different keychain account name). Path-based bias keeps the
-    // OS-level access prompt to a single allow-click for whichever
-    // account exists.
+    // Lookup strategy: query by **service name only** (`-s
+    // "Slack Safe Storage"`). The service name is a stable protocol
+    // contract (Chromium `os_crypt_mac.mm` -> Electron `safeStorage`
+    // -> Slack), while the `acct` field is whatever label Slack picked
+    // and has been silently renamed at least once ("Slack" ->
+    // "Slack Key"). Account-list matching is a brittle whack-a-mole;
+    // service-only matching survives every rename.
+    //
+    // Fallback: if the service-only query somehow misses (e.g. stale
+    // duplicate entry returned first, or future macOS CLI behavior
+    // change), try the known account names too so we degrade
+    // gracefully instead of hard-failing.
+    match try_read_keychain_password(None) {
+        Ok(key) if !key.is_empty() => return Ok(key),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(error = %error, "Slack Safe Storage service-only lookup failed; trying known accounts")
+        }
+    }
+
+    // Known historical account labels. Order biased by which Slack
+    // build is on disk so the (now rare) per-account ACL prompt
+    // happens once at most.
     let accounts: &[&str] = if data_dir
         .to_string_lossy()
         .contains("com.tinyspeck.slackmacgap")
     {
-        &["Slack App Store Key", "Slack"]
+        &["Slack App Store Key", "Slack Key", "Slack"]
     } else {
-        &["Slack", "Slack App Store Key"]
+        &["Slack Key", "Slack", "Slack App Store Key"]
     };
-    let mut last_err: Option<String> = None;
+    let mut errors: Vec<String> = Vec::new();
     for account in accounts {
-        match try_read_keychain_password(account) {
+        match try_read_keychain_password(Some(account)) {
             Ok(key) if !key.is_empty() => return Ok(key),
-            Ok(_) => last_err = Some(format!("{account}: empty")),
-            Err(error) => last_err = Some(format!("{account}: {error}")),
+            Ok(_) => errors.push(format!("{account}: empty")),
+            Err(error) => errors.push(format!("{account}: {error}")),
         }
     }
     bail!(
-        "Slack Safe Storage key not found in Keychain (tried {:?}): {}",
-        accounts,
-        last_err.unwrap_or_default()
+        "Slack Safe Storage key not found in Keychain (service-only lookup failed; also tried accounts {accounts:?}): {}",
+        errors.join("; ")
     )
 }
 
 #[cfg(target_os = "macos")]
-fn try_read_keychain_password(account: &str) -> Result<Vec<u8>> {
-    let output = std::process::Command::new("/usr/bin/security")
-        .args([
-            "find-generic-password",
-            "-ws",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-        ])
-        .output()
-        .context("Failed to spawn /usr/bin/security")?;
+fn try_read_keychain_password(account: Option<&str>) -> Result<Vec<u8>> {
+    let mut cmd = std::process::Command::new("/usr/bin/security");
+    cmd.args(["find-generic-password", "-ws", KEYCHAIN_SERVICE]);
+    if let Some(account) = account {
+        cmd.args(["-a", account]);
+    }
+    let output = cmd.output().context("Failed to spawn /usr/bin/security")?;
     if !output.status.success() {
         bail!(
             "`security` exit={:?}: {}",
