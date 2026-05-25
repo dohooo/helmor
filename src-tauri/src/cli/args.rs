@@ -318,6 +318,37 @@ pub enum WorkspaceAction {
         #[command(subcommand)]
         action: LinkedDirsAction,
     },
+    /// Run a ship-flow action against a workspace.
+    ///
+    /// `merge-pr` and `pull-latest` execute inline. The four
+    /// agent-dispatched actions (`commit-and-push`, `create-pr`,
+    /// `fix-errors`, `resolve-conflicts`) send a canned prompt to the
+    /// workspace's active agent — the agent runs in its own session
+    /// and the CLI returns once the message is queued, not when the
+    /// agent finishes.
+    RunAction {
+        #[arg(name = "ref")]
+        workspace_ref: String,
+        #[arg(value_enum)]
+        action: WorkspaceShipAction,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+#[clap(rename_all = "kebab-case")]
+pub enum WorkspaceShipAction {
+    /// Merge the workspace's open change request via the configured forge.
+    MergePr,
+    /// Rebase / merge the workspace's target branch into it.
+    PullLatest,
+    /// Dispatch a "commit + push" prompt to the workspace agent.
+    CommitAndPush,
+    /// Dispatch a "create PR" prompt to the workspace agent.
+    CreatePr,
+    /// Dispatch a "fix errors" prompt to the workspace agent.
+    FixErrors,
+    /// Dispatch a "resolve conflicts" prompt to the workspace agent.
+    ResolveConflicts,
 }
 
 #[derive(Subcommand)]
@@ -492,6 +523,67 @@ pub enum SessionAction {
         #[arg(long)]
         permission_mode: Option<String>,
     },
+    /// Search sessions across all workspaces by title / message content.
+    ///
+    /// Pass `--query`, `--status`, or both. At least one is required.
+    Search {
+        /// Case-insensitive substring matched against session title and
+        /// message bodies. Optional if `--status` is set.
+        #[arg(long)]
+        query: Option<String>,
+        /// Restrict to a single repo (UUID or name).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Filter by stored session status (e.g. `streaming`, `idle`).
+        #[arg(long)]
+        status: Option<String>,
+        /// Include sessions in archived workspaces.
+        #[arg(long)]
+        include_archived: bool,
+        /// Max rows to return (1-20, default 8).
+        #[arg(long, default_value_t = 8)]
+        limit: u32,
+    },
+    /// Fetch a windowed slice of messages from a session.
+    ///
+    /// Output is a JSON array (one entry per message) with each body
+    /// char-bounded by `--body-limit`. Use `--position head` for the
+    /// oldest messages, `--position tail` (default) for the newest.
+    GetMessages {
+        /// Session UUID (from `session list` or `session search`).
+        session: String,
+        /// How many messages to return (1-20, default 5).
+        #[arg(long, default_value_t = 5)]
+        limit: u32,
+        /// Where in the session the window starts.
+        #[arg(long, value_enum, default_value_t = SessionWindowPosition::Tail)]
+        position: SessionWindowPosition,
+        /// Per-message body char cap (1-4000, default 800).
+        #[arg(long, default_value_t = 800)]
+        body_limit: u32,
+        /// Which slice of each body to return when it overflows
+        /// `--body-limit`.
+        #[arg(long, value_enum, default_value_t = SessionBodyPosition::Start)]
+        body_position: SessionBodyPosition,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+#[clap(rename_all = "kebab-case")]
+pub enum SessionWindowPosition {
+    /// Oldest messages first.
+    Head,
+    /// Newest messages first.
+    Tail,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+#[clap(rename_all = "kebab-case")]
+pub enum SessionBodyPosition {
+    /// Body slice starts at offset 0.
+    Start,
+    /// Body slice ends at the final character (tail of the message).
+    End,
 }
 
 // ---------------------------------------------------------------------------

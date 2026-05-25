@@ -12,7 +12,7 @@ use crate::workspaces;
 
 use super::args::{
     BranchAction, Cli, LinkedDirsAction, ReadState, TargetBranchAction, WorkspaceAction,
-    WorkspaceStatusAction, WorkspaceStatusValue,
+    WorkspaceShipAction, WorkspaceStatusAction, WorkspaceStatusValue,
 };
 use super::{notify_ui_event, notify_ui_events, output};
 
@@ -52,6 +52,119 @@ pub fn dispatch(action: &WorkspaceAction, cli: &Cli) -> Result<()> {
         WorkspaceAction::Push { workspace_ref } => push(workspace_ref, cli),
         WorkspaceAction::Fetch { workspace_ref } => fetch(workspace_ref, cli),
         WorkspaceAction::LinkedDirs { action } => linked_dirs(action, cli),
+        WorkspaceAction::RunAction {
+            workspace_ref,
+            action,
+        } => run_action(workspace_ref, *action, cli),
+    }
+}
+
+/// Canned prompt that gets dispatched to the workspace agent for the
+/// four "agent-driven" ship actions. Identical wording to the GUI's
+/// inspector commit-action buttons so the agent sees the same
+/// instructions regardless of entry point.
+fn canned_ship_prompt(action: WorkspaceShipAction) -> Option<&'static str> {
+    match action {
+        WorkspaceShipAction::CommitAndPush => Some(
+            "Please commit the pending changes and push the branch. Use a concise commit \
+             message that describes what changed and why.",
+        ),
+        WorkspaceShipAction::CreatePr => Some(
+            "Please open a pull request for this workspace's branch. Use the existing \
+             commit messages to draft a short PR title + description.",
+        ),
+        WorkspaceShipAction::FixErrors => Some(
+            "Please investigate the latest errors and propose a fix. Surface any \
+             ambiguity that needs my input before changing code.",
+        ),
+        WorkspaceShipAction::ResolveConflicts => Some(
+            "Please resolve the merge conflicts in this workspace. Walk me through \
+             non-trivial decisions before committing.",
+        ),
+        _ => None,
+    }
+}
+
+fn run_action(workspace_ref: &str, action: WorkspaceShipAction, cli: &Cli) -> Result<()> {
+    let ws_id = service::resolve_workspace_ref(workspace_ref)?;
+    match action {
+        WorkspaceShipAction::MergePr => {
+            let info = crate::forge::merge_workspace_change_request(&ws_id)?;
+            notify_ui_event(UiMutationEvent::WorkspaceChanged {
+                workspace_id: ws_id.clone(),
+            });
+            output::print(
+                cli,
+                &serde_json::json!({
+                    "ok": true,
+                    "action": "merge-pr",
+                    "workspaceId": ws_id,
+                    "result": info,
+                }),
+                |_| format!("Merged change request for workspace {ws_id}"),
+            )
+        }
+        WorkspaceShipAction::PullLatest => {
+            let result = workspaces::sync_workspace_with_target_branch(&ws_id)?;
+            notify_ui_event(UiMutationEvent::WorkspaceChanged {
+                workspace_id: ws_id.clone(),
+            });
+            output::print(
+                cli,
+                &serde_json::json!({
+                    "ok": true,
+                    "action": "pull-latest",
+                    "workspaceId": ws_id,
+                    "result": result,
+                }),
+                |_| format!("Pulled latest into workspace {ws_id}"),
+            )
+        }
+        agent_action @ (WorkspaceShipAction::CommitAndPush
+        | WorkspaceShipAction::CreatePr
+        | WorkspaceShipAction::FixErrors
+        | WorkspaceShipAction::ResolveConflicts) => {
+            // Dispatch a canned prompt to the workspace's active agent.
+            // Mirrors the GUI inspector's commit-action buttons — the
+            // user sees the prompt land in the chat history just like
+            // a manually-typed message.
+            let prompt = canned_ship_prompt(agent_action)
+                .context("missing canned prompt for agent ship action")?;
+            let params = service::SendMessageParams {
+                workspace_ref: ws_id.clone(),
+                session_id: None,
+                prompt: prompt.to_string(),
+                model: None,
+                permission_mode: Some("auto".to_string()),
+                linked_directories: Vec::new(),
+            };
+            // Fire-and-forget: we don't stream the agent's reply to the
+            // CLI. Just dispatch and return the session id.
+            let response = service::send_message(params, &mut |_event| {})?;
+            let action_label = match agent_action {
+                WorkspaceShipAction::CommitAndPush => "commit-and-push",
+                WorkspaceShipAction::CreatePr => "create-pr",
+                WorkspaceShipAction::FixErrors => "fix-errors",
+                WorkspaceShipAction::ResolveConflicts => "resolve-conflicts",
+                _ => unreachable!("guarded by outer match"),
+            };
+            output::print(
+                cli,
+                &serde_json::json!({
+                    "ok": true,
+                    "action": action_label,
+                    "workspaceId": ws_id,
+                    "sessionId": response.session_id,
+                    "dispatched": true,
+                }),
+                |_| {
+                    format!(
+                        "Dispatched `{action_label}` to workspace {ws_id} (session {})",
+                        response.session_id
+                    )
+                },
+            )
+        }
     }
 }
 
@@ -507,5 +620,79 @@ fn linked_dirs(action: &LinkedDirsAction, cli: &Cli) -> Result<()> {
                     .join("\n")
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `canned_ship_prompt` is the canonical wording the agent sees when
+    /// the user (or another agent) dispatches a ship-flow action through
+    /// the CLI. The exact phrases are part of the surface contract — if
+    /// they drift, the GUI's inspector buttons and the CLI / future MCP /
+    /// future skill-injection invocations stop saying the same thing.
+    /// This test pins the variant mapping AND the load-bearing phrases.
+
+    #[test]
+    fn canned_ship_prompt_returns_none_for_inline_actions() {
+        // merge-pr and pull-latest execute inline (forge::* / workspaces::*)
+        // — they must never produce a canned prompt, otherwise the dispatch
+        // path would try to send the prompt to an agent AS WELL as run the
+        // inline operation.
+        assert!(canned_ship_prompt(WorkspaceShipAction::MergePr).is_none());
+        assert!(canned_ship_prompt(WorkspaceShipAction::PullLatest).is_none());
+    }
+
+    #[test]
+    fn canned_ship_prompt_returns_non_empty_for_agent_actions() {
+        for action in [
+            WorkspaceShipAction::CommitAndPush,
+            WorkspaceShipAction::CreatePr,
+            WorkspaceShipAction::FixErrors,
+            WorkspaceShipAction::ResolveConflicts,
+        ] {
+            let prompt = canned_ship_prompt(action)
+                .unwrap_or_else(|| panic!("agent action {action:?} missing canned prompt"));
+            assert!(
+                !prompt.trim().is_empty(),
+                "agent action {action:?} has empty canned prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn canned_ship_prompt_wording_is_pinned() {
+        // Lock the load-bearing phrases so a typo / drift shows up
+        // immediately. We don't pin the full string (that would make
+        // small editorial tweaks too painful) — just the verbs each
+        // action MUST mention.
+        let cap = canned_ship_prompt(WorkspaceShipAction::CommitAndPush).unwrap();
+        assert!(
+            cap.contains("commit"),
+            "commit-and-push must mention 'commit': {cap}"
+        );
+        assert!(
+            cap.contains("push"),
+            "commit-and-push must mention 'push': {cap}"
+        );
+
+        let pr = canned_ship_prompt(WorkspaceShipAction::CreatePr).unwrap();
+        assert!(
+            pr.to_lowercase().contains("pull request"),
+            "create-pr must mention 'pull request': {pr}"
+        );
+
+        let fix = canned_ship_prompt(WorkspaceShipAction::FixErrors).unwrap();
+        assert!(
+            fix.to_lowercase().contains("error"),
+            "fix-errors must mention 'error': {fix}"
+        );
+
+        let conflicts = canned_ship_prompt(WorkspaceShipAction::ResolveConflicts).unwrap();
+        assert!(
+            conflicts.to_lowercase().contains("conflict"),
+            "resolve-conflicts must mention 'conflict': {conflicts}"
+        );
     }
 }
