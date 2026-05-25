@@ -44,6 +44,16 @@ pub const EXECUTOR_PIN: &str = "1.4.33";
 
 /// Cooperative shutdown timeout. Executor handles SIGTERM by closing
 /// in-flight HTTP requests + flushing sqlite — usually well under 2s.
+///
+/// MUST stay strictly greater than `executor_watchdog::TERMINATE_GRACE`
+/// (3s today). Spawn now goes through `helmor-executor-watchdog`, so a
+/// SIGTERM we send to our direct child (the watchdog) gets forwarded
+/// to bunx and then the watchdog drives its own SIGTERM → 3s →
+/// SIGKILL cycle on bunx before exiting. If we SIGKILL the watchdog
+/// before it finishes that cycle, bunx becomes a launchd orphan —
+/// exactly the leak the watchdog was meant to prevent. 5s gives the
+/// watchdog its full 3s plus a 2s buffer for syscall latency and the
+/// final waitpid reap.
 const SIGTERM_GRACE: Duration = Duration::from_secs(5);
 
 /// How long to wait for the "Web: http://..." banner on stdout before
@@ -461,8 +471,10 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
                 "Executor failed to reach ready state — killing child"
             );
             // Kill the half-started process so it doesn't linger.
+            // Same grace as cooperative shutdown — see SIGTERM_GRACE
+            // docs for why this must outlast the watchdog's own cycle.
             send_sigterm(&child);
-            let _ = wait_with_timeout(&mut child, Duration::from_secs(2));
+            let _ = wait_with_timeout(&mut child, SIGTERM_GRACE);
             let _ = child.kill();
             let _ = child.wait();
             return Err(err);
@@ -487,8 +499,10 @@ fn spawn_executor(data_dir: &Path) -> Result<RunningProcess> {
                 error = %format!("{err:#}"),
                 "Executor scope discovery failed — killing child"
             );
+            // Same grace as cooperative shutdown — see SIGTERM_GRACE
+            // docs for why this must outlast the watchdog's own cycle.
             send_sigterm(&child);
-            let _ = wait_with_timeout(&mut child, Duration::from_secs(2));
+            let _ = wait_with_timeout(&mut child, SIGTERM_GRACE);
             let _ = child.kill();
             let _ = child.wait();
             return Err(err.context("discover executor scope id"));
@@ -688,12 +702,18 @@ impl Drop for RunningProcess {
             pid,
             "RunningProcess::drop reached (unexpected exit path) — emergency SIGTERM"
         );
+        // Match the foreground shutdown grace so the watchdog's own
+        // SIGTERM → 3s → SIGKILL cycle on bunx can finish before we
+        // escalate to SIGKILL on the watchdog itself. A panic-driven
+        // Drop sitting 5s during teardown is a fair price to pay for
+        // not orphaning the daemon.
         send_sigterm(&self.child);
-        if !wait_with_timeout(&mut self.child, Duration::from_millis(500)) {
+        if !wait_with_timeout(&mut self.child, SIGTERM_GRACE) {
             tracing::warn!(
                 target: "executor::lifecycle",
                 pid,
-                "Drop fallback: SIGTERM didn't catch in 500ms — sending SIGKILL"
+                grace_ms = SIGTERM_GRACE.as_millis() as u64,
+                "Drop fallback: SIGTERM didn't catch in grace — sending SIGKILL"
             );
             let _ = self.child.kill();
             let _ = self.child.wait();
