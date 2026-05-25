@@ -779,6 +779,32 @@ export async function installHelmorSkills(): Promise<HelmorSkillsStatus> {
 	}
 }
 
+/**
+ * Combined snapshot for the Settings → General "Helmor components"
+ * row. Pairs the live CLI / Skills status with whatever the per-version
+ * silent startup check cached. `lastCheckedVersion === currentVersion`
+ * means the silent pass finished cleanly for this build; mismatch (or
+ * null) means it never completed and the panel should surface a nudge.
+ */
+export type HelmorComponentsUpdateCheck = {
+	cli: CliStatus;
+	skills: HelmorSkillsStatus;
+	lastCheckedVersion: string | null;
+	currentVersion: string;
+	cliError: string | null;
+	skillsError: string | null;
+};
+
+export async function getHelmorComponentsUpdateCheck(): Promise<HelmorComponentsUpdateCheck> {
+	return await invoke<HelmorComponentsUpdateCheck>(
+		"get_helmor_components_update_check",
+	);
+}
+
+export async function recheckHelmorComponents(): Promise<HelmorComponentsUpdateCheck> {
+	return await invoke<HelmorComponentsUpdateCheck>("recheck_helmor_components");
+}
+
 export async function enterOnboardingWindowMode(): Promise<void> {
 	await invoke("enter_onboarding_window_mode");
 }

@@ -430,10 +430,9 @@ pub enum WorkspaceAction {
     ///
     /// `merge-pr` and `pull-latest` execute inline. The four
     /// agent-dispatched actions (`commit-and-push`, `create-pr`,
-    /// `fix-errors`, `resolve-conflicts`) send a canned prompt to the
-    /// workspace's active agent — the agent runs in its own session
-    /// and the CLI returns once the message is queued, not when the
-    /// agent finishes.
+    /// `fix-errors`, `resolve-conflicts`) create a dedicated action
+    /// session, queue the same prompt/settings the GUI uses, and return
+    /// once the message is queued, not when the agent finishes.
     #[command(after_help = EXAMPLES_WORKSPACE_RUN_ACTION)]
     RunAction {
         #[arg(name = "ref")]

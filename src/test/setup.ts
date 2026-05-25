@@ -194,6 +194,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 					lastAttemptAt: null,
 					downloadedAt: null,
 				};
+			case "get_helmor_components_update_check":
+				return {
+					cli: {
+						installed: false,
+						installPath: null,
+						buildMode: "development",
+						installState: "missing",
+					},
+					skills: {
+						installed: false,
+						claude: false,
+						codex: false,
+						command:
+							"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					},
+					lastCheckedVersion: null,
+					currentVersion: "0.0.0-test",
+					cliError: null,
+					skillsError: null,
+				};
 			case "load_auto_close_action_kinds":
 				return [];
 			case "load_auto_close_opt_in_asked":

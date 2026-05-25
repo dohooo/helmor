@@ -38,16 +38,16 @@ Use `--json` when the output will be parsed by scripts or another tool.
 
 Treat Helmor CLI install/update as beta.
 
-- Prefer the Helmor desktop onboarding/settings flow for installing or repairing the managed CLI entrypoint.
+- Prefer the Helmor desktop onboarding/settings Components panel for installing or repairing the managed CLI entrypoint.
 - Use `helmor cli-status` to verify whether the PATH entry points at the current app-managed CLI.
 - Do not invent a stable standalone install/update command unless it exists in `helmor --help` or a subcommand help page.
-- If the user is blocked, ask them to run `helmor cli-status` and share the output, or inspect the app's CLI install panel if working inside the Helmor repo.
+- If the user is blocked, ask them to run `helmor cli-status` and share the output, or inspect the app's Components panel if working inside the Helmor repo.
 
 ## Helmor Skills Install And Update
 
 Treat Helmor skills install/update as a beta app-managed flow.
 
-- Prefer the Helmor desktop onboarding/settings flow for installing or updating bundled Helmor skills.
+- Prefer the Helmor desktop onboarding/settings Components panel for installing or updating bundled Helmor skills.
 - Do not invent a `helmor skills` command; the top-level CLI help does not currently expose one.
 - If the user asks to update a bundled Helmor skill inside the repo, edit the skill files directly and validate them with the skill validation tooling.
 - Keep user-facing skill content concise and English-first unless the user explicitly asks for another language.

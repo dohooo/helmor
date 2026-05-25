@@ -261,6 +261,17 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
+            // Per-version silent re-check of the Helmor CLI symlink and
+            // the Helmor Skills package. Runs once per app version
+            // (cached by version string in app_settings); a clean pass
+            // updates the cache, a failure leaves it untouched so the
+            // next launch retries. Gated on onboarding_completed inside
+            // the spawn so the onboarding auto-install owns the
+            // first-run path. Must come AFTER
+            // `shell_env::inherit_login_shell_env()` above so the
+            // spawned `npx` call resolves through the user's login PATH.
+            commands::system_commands::spawn_startup_components_check();
+
             agents::prewarm_slash_command_cache(app.handle());
 
             // Reap any orphan llama-server from a prior Helmor process
@@ -381,6 +392,8 @@ pub fn run() {
             commands::system_commands::write_query_cache,
             commands::system_commands::delete_query_cache,
             commands::system_commands::install_helmor_skills,
+            commands::system_commands::get_helmor_components_update_check,
+            commands::system_commands::recheck_helmor_components,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
             commands::system_commands::open_agent_login_terminal,

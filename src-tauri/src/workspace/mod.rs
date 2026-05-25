@@ -7,6 +7,7 @@ pub(crate) mod lifecycle;
 pub mod port_allocation;
 pub mod pr_sync;
 pub mod scripts;
+pub(crate) mod ship_actions;
 pub mod sidebar_order;
 pub mod state;
 pub mod status;
