@@ -45,6 +45,12 @@ use super::credentials::SlackCreds;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
+// Chromium / Electron `safeStorage` always stores its AES key under
+// service name `"<App Name> Safe Storage"` — this is hard-coded in
+// `os_crypt_mac.mm` upstream. Slack inherits this through Electron, so
+// the service name is a stable protocol contract. Don't rely on the
+// `acct` field instead — Slack has silently renamed it
+// ("Slack" -> "Slack Key" sometime in 2024+).
 const KEYCHAIN_SERVICE: &str = "Slack Safe Storage";
 const SAFE_STORAGE_SALT: &[u8] = b"saltysalt";
 const SAFE_STORAGE_ITERATIONS: u32 = 1003;
@@ -399,6 +405,25 @@ fn parse_teams_json(json_text: &str) -> Result<Vec<TeamFromLeveldb>> {
 }
 
 /// Read `d` from Slack's Cookies SQLite and decrypt it.
+///
+/// Why this isn't just "read the key, decrypt the cookie": users who
+/// have ever installed both Slack builds (Mac App Store + standalone
+/// direct download) end up with *multiple* `"Slack Safe Storage"`
+/// entries in their login Keychain — one per build, each with a
+/// different `acct` label (`"Slack"`, `"Slack Key"`, `"Slack App Store
+/// Key"`) and a different AES password. A service-only `security`
+/// lookup returns the oldest entry, which is frequently the *wrong*
+/// build (e.g. App Store key when the user's running standalone).
+/// AES-CBC will still decrypt mechanically with the wrong key, but
+/// PKCS7 unpadding then fails with "Unpad Error" — confusing both for
+/// us and for the user.
+///
+/// Strategy: enumerate every candidate key (service-only first, then
+/// each historical `acct` label biased by which build is on disk),
+/// dedupe, and try `decrypt_chromium_cookie` with each in turn. The
+/// only reliable "is this the right key?" test is whether the ciphertext
+/// actually decrypts cleanly. First success wins; if all fail we
+/// surface every candidate's failure so support has a complete picture.
 #[cfg(target_os = "macos")]
 fn read_d_cookie(cookies_path: &Path, data_dir: &Path) -> Result<String> {
     if !cookies_path.exists() {
@@ -425,66 +450,110 @@ fn read_d_cookie(cookies_path: &Path, data_dir: &Path) -> Result<String> {
         )
         .context("No `d` cookie row found in Slack Cookies DB")?;
 
-    let key = read_safe_storage_key(data_dir)
+    let candidates = collect_safe_storage_keys(data_dir)
         .context("Couldn't read Slack's Safe Storage key from the macOS Keychain")?;
-    let xoxd = decrypt_chromium_cookie(&encrypted, &key, host_key.as_bytes())
-        .context("Failed to decrypt Slack `d` cookie")?;
-    Ok(xoxd)
+
+    let mut errors: Vec<String> = Vec::with_capacity(candidates.len());
+    for (label, key) in &candidates {
+        match decrypt_chromium_cookie(&encrypted, key, host_key.as_bytes()) {
+            Ok(value) if !value.is_empty() => {
+                tracing::debug!(
+                    keychain_account = %label,
+                    "Decrypted Slack `d` cookie",
+                );
+                return Ok(value);
+            }
+            Ok(_) => errors.push(format!("{label}: decrypted to empty string")),
+            Err(error) => errors.push(format!("{label}: {error}")),
+        }
+    }
+    bail!(
+        "Failed to decrypt Slack `d` cookie with any candidate Safe Storage key — the active Slack build's AES key wasn't among the {} keychain entries we tried. Details: {}",
+        candidates.len(),
+        errors.join("; ")
+    )
 }
 
+/// Collect every distinct Slack Safe Storage AES key Chromium might
+/// have stored in the login Keychain for this user.
+///
+/// Why we shell out to `/usr/bin/security` rather than going through
+/// the `keyring` crate / Security Framework directly: the item's ACL
+/// is restricted to binaries Slack signed, so a direct SF call returns
+/// "no matching entry"; spawning `security` causes macOS to show a
+/// one-time "Allow Helmor to access 'Slack Safe Storage'?" prompt and
+/// remember the approval. That tradeoff is fine — the user just
+/// clicked "Import from Slack desktop".
+///
+/// Order matters: service-only first (the future-proof path that
+/// survives Slack renaming the `acct` field), then a build-aware
+/// rotation through known historical names. Whichever entry decrypts
+/// the ciphertext first wins in `read_d_cookie`, so the ordering only
+/// affects how often we burn a wasted decrypt attempt — not
+/// correctness.
 #[cfg(target_os = "macos")]
-fn read_safe_storage_key(data_dir: &Path) -> Result<Vec<u8>> {
-    // The Slack desktop client stores its Safe Storage AES key in the
-    // user's login Keychain. We could go through the `keyring` crate,
-    // but that returns "No matching entry found" — the Keychain
-    // item's ACL is restricted to the binaries Slack itself signed,
-    // so a direct Security Framework lookup from Helmor gets blocked.
-    //
-    // Shelling out to `/usr/bin/security` works because the user gets
-    // a one-time "Allow Helmor to access Slack Safe Storage?" prompt
-    // and macOS remembers the approval. The user explicitly clicked
-    // "Import from Slack desktop", so an extra OS-level confirmation
-    // is acceptable UX.
-    // "Slack" first for the standalone build; "Slack App Store Key"
-    // first for the sandboxed Mac App Store build (it stores under a
-    // different keychain account name). Path-based bias keeps the
-    // OS-level access prompt to a single allow-click for whichever
-    // account exists.
+fn collect_safe_storage_keys(data_dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut push_unique = |label: String, key: Vec<u8>| {
+        if key.is_empty() {
+            return;
+        }
+        // Multiple `acct` entries often share the same AES key — only
+        // attempt decryption once per distinct key.
+        if out.iter().any(|(_, k)| k.as_slice() == key.as_slice()) {
+            return;
+        }
+        out.push((label, key));
+    };
+
+    // Service-only lookup first.
+    match try_read_keychain_password(None) {
+        Ok(key) => push_unique("(service-only)".to_string(), key),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Slack Safe Storage service-only lookup failed; will fall back to known accounts",
+            );
+        }
+    }
+
+    // Known historical account labels. Bias the order by which Slack
+    // build is on disk so the most likely key is tried first — the
+    // service-only entry above might still be the wrong build, in
+    // which case the build-aware first guess avoids a wasted decrypt.
     let accounts: &[&str] = if data_dir
         .to_string_lossy()
         .contains("com.tinyspeck.slackmacgap")
     {
-        &["Slack App Store Key", "Slack"]
+        &["Slack App Store Key", "Slack Key", "Slack"]
     } else {
-        &["Slack", "Slack App Store Key"]
+        &["Slack Key", "Slack", "Slack App Store Key"]
     };
-    let mut last_err: Option<String> = None;
+    let mut errors: Vec<String> = Vec::new();
     for account in accounts {
-        match try_read_keychain_password(account) {
-            Ok(key) if !key.is_empty() => return Ok(key),
-            Ok(_) => last_err = Some(format!("{account}: empty")),
-            Err(error) => last_err = Some(format!("{account}: {error}")),
+        match try_read_keychain_password(Some(account)) {
+            Ok(key) => push_unique((*account).to_string(), key),
+            Err(error) => errors.push(format!("{account}: {error}")),
         }
     }
-    bail!(
-        "Slack Safe Storage key not found in Keychain (tried {:?}): {}",
-        accounts,
-        last_err.unwrap_or_default()
-    )
+
+    if out.is_empty() {
+        bail!(
+            "Slack Safe Storage key not found in Keychain (service-only lookup empty; also tried accounts {accounts:?}): {}",
+            errors.join("; ")
+        );
+    }
+    Ok(out)
 }
 
 #[cfg(target_os = "macos")]
-fn try_read_keychain_password(account: &str) -> Result<Vec<u8>> {
-    let output = std::process::Command::new("/usr/bin/security")
-        .args([
-            "find-generic-password",
-            "-ws",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-        ])
-        .output()
-        .context("Failed to spawn /usr/bin/security")?;
+fn try_read_keychain_password(account: Option<&str>) -> Result<Vec<u8>> {
+    let mut cmd = std::process::Command::new("/usr/bin/security");
+    cmd.args(["find-generic-password", "-ws", KEYCHAIN_SERVICE]);
+    if let Some(account) = account {
+        cmd.args(["-a", account]);
+    }
+    let output = cmd.output().context("Failed to spawn /usr/bin/security")?;
     if !output.status.success() {
         bail!(
             "`security` exit={:?}: {}",
@@ -663,6 +732,55 @@ mod tests {
         // SHA256, so the optional strip is a no-op.
         let recovered = decrypt_chromium_cookie(&payload, password, b".slack.com").unwrap();
         assert_eq!(recovered, "xoxd-abcdef-1234567890");
+    }
+
+    /// Smoke test the multi-key fallback shape: the wrong key must
+    /// return an error from `decrypt_chromium_cookie` (Unpad Error or
+    /// invalid UTF-8) — that's the failure signal `read_d_cookie`
+    /// uses to advance to the next candidate. The right key recovers
+    /// the original plaintext. Mirrors the real-world scenario where
+    /// Keychain holds both an "Slack App Store Key" entry (wrong
+    /// password) and a "Slack Key" entry (right password) for the
+    /// active standalone Slack build.
+    #[test]
+    fn decrypt_chromium_cookie_returns_err_for_wrong_key() {
+        use aes::cipher::block_padding::Pkcs7;
+        use aes::cipher::{BlockEncryptMut, KeyIvInit};
+        type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+
+        let correct_password = b"correct-build-key";
+        let wrong_password = b"other-build-key";
+        let plaintext = b"xoxd-real-token";
+
+        let mut key = [0u8; AES_KEY_LEN];
+        pbkdf2::pbkdf2::<hmac::Hmac<sha1::Sha1>>(
+            correct_password,
+            SAFE_STORAGE_SALT,
+            SAFE_STORAGE_ITERATIONS,
+            &mut key,
+        )
+        .unwrap();
+        let iv: [u8; 16] = [b' '; 16];
+        let mut buf = vec![0u8; plaintext.len() + 16];
+        buf[..plaintext.len()].copy_from_slice(plaintext);
+        let ct = Aes128CbcEnc::new(&key.into(), &iv.into())
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+            .unwrap();
+        let mut payload = Vec::with_capacity(3 + ct.len());
+        payload.extend_from_slice(CIPHER_PREFIX_V10);
+        payload.extend_from_slice(ct);
+
+        // Wrong key → error (Unpad or UTF-8). Caller treats this as
+        // "try the next candidate".
+        assert!(
+            decrypt_chromium_cookie(&payload, wrong_password, b".slack.com").is_err(),
+            "wrong key should fail decryption, not return garbage",
+        );
+        // Right key → exact plaintext recovery.
+        assert_eq!(
+            decrypt_chromium_cookie(&payload, correct_password, b".slack.com").unwrap(),
+            "xoxd-real-token",
+        );
     }
 
     #[test]

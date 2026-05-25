@@ -153,7 +153,7 @@ fn convert_search_match(
     let permalink = raw.permalink.clone().unwrap_or_default();
     let ts_millis = api::ts_to_millis(&raw.ts);
 
-    let snippet_source = api::extract_display_text(&raw);
+    let snippet_source = api::resolve_mentions(team_id, creds, &api::extract_display_text(&raw));
     Ok(SlackInboxItem {
         id: format!("{}:{}:{}", team_id, channel.id, raw.ts),
         team_id: team_id.to_string(),
@@ -218,7 +218,8 @@ fn snippet_for_dm(
         .flatten()
         .unwrap_or_default();
     let ts_millis = api::ts_to_millis(&message.ts);
-    let snippet_source = api::extract_display_text(&message);
+    let snippet_source =
+        api::resolve_mentions(team_id, creds, &api::extract_display_text(&message));
     Ok(Some(SlackInboxItem {
         id: format!("{}:{}:{}", team_id, dm.id, message.ts),
         team_id: team_id.to_string(),
