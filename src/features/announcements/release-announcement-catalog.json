@@ -2,6 +2,27 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.26.0",
+			"items": [
+				{
+					"text": "Coding agents in Helmor can now drive Helmor itself — spawn sibling workspaces, dispatch ship actions, and read other agents' transcripts. Just ask them in any chat. Helmor CLI and skills install automatically in the background."
+				},
+				{
+					"text": "Every new workspace now has a gitignored `.agent-contexts/` directory agents can use to share files across sessions without polluting diffs."
+				},
+				{
+					"text": "Slack, GitHub, and GitLab context detail panels now refresh automatically when you open them or refocus Helmor, and there's a manual refresh button in the toolbar.",
+					"action": {
+						"label": "Open Context",
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.25.0",
 			"items": [
 				{
