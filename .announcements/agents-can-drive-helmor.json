@@ -1,0 +1,14 @@
+{
+	"items": [
+		{
+			"text": "Coding agents in Helmor can now drive Helmor itself — spawn sibling workspaces, dispatch ship actions, and read other agents' transcripts. Just ask them in any chat. Helmor CLI and skills install automatically.",
+			"action": {
+				"label": "Open Experimental",
+				"value": { "type": "openSettings", "section": "experimental" }
+			}
+		},
+		{
+			"text": "Every new workspace now has a gitignored `.agent-contexts/` directory agents can use to share files across sessions without polluting diffs."
+		}
+	]
+}

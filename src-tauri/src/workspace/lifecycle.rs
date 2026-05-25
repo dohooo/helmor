@@ -621,6 +621,21 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
             }
         }
 
+        // Scratch space for agents to share files across sessions. The
+        // directory lives at `<workspace>/.agent-contexts/` and the
+        // worktree-local git exclude entry keeps it out of every diff.
+        // Best-effort — a failure here doesn't block workspace creation
+        // (agents just lose cross-session file sharing for this WS).
+        if let Err(err) =
+            crate::workspace::agent_contexts::ensure_agent_contexts_in_worktree(&workspace_dir)
+        {
+            tracing::warn!(
+                workspace_id = %workspace_id,
+                error = %format!("{err:#}"),
+                "Failed to provision .agent-contexts/ — workspace still usable",
+            );
+        }
+
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"
         // and the UI auto-triggers it. Otherwise we go straight to Ready and
