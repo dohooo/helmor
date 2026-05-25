@@ -21,6 +21,11 @@ export function GitHubIssueView({
 		queryFn: () => getInboxItemDetail(detailRef!),
 		enabled: detailRef !== null,
 		staleTime: 60_000,
+		// Re-fetch every time the detail view mounts (user click) or the
+		// app window regains focus — same UX contract the user expects
+		// from a "refresh on visit" content surface.
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 	const detail =
 		detailQuery.data?.type === "github_issue" ? detailQuery.data.data : null;
@@ -33,6 +38,14 @@ export function GitHubIssueView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="issue"
+			refresh={
+				detailRef
+					? {
+							refetch: () => void detailQuery.refetch(),
+							isFetching: detailQuery.isFetching,
+						}
+					: undefined
+			}
 		/>
 	);
 }

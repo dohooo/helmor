@@ -15,7 +15,7 @@ import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
-import { formatRelativeTime } from "../common";
+import { formatRelativeTime, RefreshButton } from "../common";
 import { SlackMessageBubble } from "./message";
 
 const STALE_MS = 60_000;
@@ -49,6 +49,12 @@ export function SlackThreadView({
 			}),
 		enabled: parsed !== null,
 		staleTime: STALE_MS,
+		// Re-fetch every time the detail view mounts (user opens a card)
+		// and whenever the app window regains focus — Slack threads
+		// mutate quickly and the user expects "open / refocus" to be a
+		// natural sync point.
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 
 	if (!parsed) {
@@ -88,6 +94,12 @@ export function SlackThreadView({
 						</span>
 					</div>
 					<div className="flex shrink-0 items-center gap-1">
+						<RefreshButton
+							refresh={{
+								refetch: () => void detailQuery.refetch(),
+								isFetching: detailQuery.isFetching,
+							}}
+						/>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button

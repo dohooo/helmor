@@ -21,6 +21,8 @@ export function GitLabIssueView({
 		queryFn: () => getInboxItemDetail(detailRef!),
 		enabled: detailRef !== null,
 		staleTime: 60_000,
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 	const detail =
 		detailQuery.data?.type === "gitlab_issue" ? detailQuery.data.data : null;
@@ -33,6 +35,14 @@ export function GitLabIssueView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="issue"
+			refresh={
+				detailRef
+					? {
+							refetch: () => void detailQuery.refetch(),
+							isFetching: detailQuery.isFetching,
+						}
+					: undefined
+			}
 		/>
 	);
 }

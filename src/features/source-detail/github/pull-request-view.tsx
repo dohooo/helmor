@@ -21,6 +21,8 @@ export function GitHubPullRequestView({
 		queryFn: () => getInboxItemDetail(detailRef!),
 		enabled: detailRef !== null,
 		staleTime: 60_000,
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 	const detail =
 		detailQuery.data?.type === "github_pr" ? detailQuery.data.data : null;
@@ -33,6 +35,14 @@ export function GitHubPullRequestView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="pull request"
+			refresh={
+				detailRef
+					? {
+							refetch: () => void detailQuery.refetch(),
+							isFetching: detailQuery.isFetching,
+						}
+					: undefined
+			}
 		/>
 	);
 }

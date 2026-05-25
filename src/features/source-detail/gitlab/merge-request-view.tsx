@@ -21,6 +21,8 @@ export function GitLabMergeRequestView({
 		queryFn: () => getInboxItemDetail(detailRef!),
 		enabled: detailRef !== null,
 		staleTime: 60_000,
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 	const detail =
 		detailQuery.data?.type === "gitlab_mr" ? detailQuery.data.data : null;
@@ -33,6 +35,14 @@ export function GitLabMergeRequestView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="merge request"
+			refresh={
+				detailRef
+					? {
+							refetch: () => void detailQuery.refetch(),
+							isFetching: detailQuery.isFetching,
+						}
+					: undefined
+			}
 		/>
 	);
 }

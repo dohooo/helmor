@@ -8,16 +8,23 @@ import { cn } from "@/lib/utils";
  *  custom protocol; PDFs / audio / unknown types render as a tappable
  *  chip that opens the original file in the user's browser.
  *
- *  Layout: 2-up grid on wide messages, single column when narrow. We
- *  cap the rendered height per tile to keep long file lists from
- *  exploding the thread view. */
+ *  Layout: 2-up grid on wide messages, single column when narrow.
+ *  `justify-items-start` keeps each tile from being stretched by the
+ *  grid so the inner `<button>` (inline-block) can hug the image
+ *  exactly — no letterbox / empty padding inside the rounded frame.
+ *  `max-w-[50%]` on the single-file grid acts as an upper bound only,
+ *  not a forced width: a narrow landscape stays at its natural size,
+ *  a wide or tall image scales down to fit the cap. */
 export function SlackFilePreviewGrid({ files }: { files: SlackFileRef[] }) {
 	if (files.length === 0) return null;
 	return (
 		<div
 			className={cn(
-				"mt-1 grid gap-1.5",
-				files.length === 1 ? "grid-cols-1" : "grid-cols-2",
+				"mt-1 grid gap-1.5 justify-items-start",
+				// Single-file: ≤ 50% of message body width.
+				// Multi-file: 2-column grid (each tile already implicitly
+				// at ≤ 50% body via the column split).
+				files.length === 1 ? "grid-cols-1 max-w-[50%]" : "grid-cols-2",
 			)}
 		>
 			{files.map((file) => (
@@ -41,30 +48,35 @@ function SlackFilePreview({ file }: { file: SlackFileRef }) {
 
 function ImagePreview({ file }: { file: SlackFileRef }) {
 	if (!file.previewUrl) return <FileChip file={file} />;
-	// Aspect ratio from the original dimensions (when Slack reported
-	// them) keeps the layout from reflowing when the image loads.
-	const aspect =
-		file.width && file.height
-			? { aspectRatio: `${file.width} / ${file.height}` }
-			: undefined;
 	const sourceUrl = file.sourceUrl ?? file.previewUrl;
+	// The `<img>` is the sizing element: `width` / `height` attrs from
+	// Slack's reported dimensions give the browser an intrinsic size
+	// (no layout shift on load), and `w-auto h-auto max-w-full
+	// max-h-[60vh]` lets the browser scale it down to fit the
+	// (container-width × 60vh) box while preserving the natural
+	// aspect ratio. The wrapping `<button>` is `inline-block max-w-full`
+	// so it hugs the image exactly — no `w-full`, no forced
+	// `aspect-ratio`, no `object-contain` letterbox. The result: the
+	// rounded border traces the picture, not a fixed-size frame around
+	// it.
 	return (
 		<button
 			type="button"
 			onClick={() => sourceUrl && void openExternal(sourceUrl)}
 			className={cn(
-				"group relative overflow-hidden rounded-lg border border-border/60 bg-muted",
+				"group relative inline-block max-w-full overflow-hidden rounded-lg border border-border/60 bg-muted",
 				"cursor-interactive transition-colors",
 				"hover:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
 			)}
-			style={aspect}
 		>
 			<img
 				src={file.previewUrl}
 				alt={file.name}
 				title={file.name}
 				loading="lazy"
-				className="block max-h-[420px] w-full object-cover"
+				width={file.width ?? undefined}
+				height={file.height ?? undefined}
+				className="block h-auto max-h-[60vh] w-auto max-w-full"
 			/>
 		</button>
 	);

@@ -21,6 +21,8 @@ export function GitHubDiscussionView({
 		queryFn: () => getInboxItemDetail(detailRef!),
 		enabled: detailRef !== null,
 		staleTime: 60_000,
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 	});
 	const detail =
 		detailQuery.data?.type === "github_discussion"
@@ -35,6 +37,14 @@ export function GitHubDiscussionView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="discussion"
+			refresh={
+				detailRef
+					? {
+							refetch: () => void detailQuery.refetch(),
+							isFetching: detailQuery.isFetching,
+						}
+					: undefined
+			}
 		/>
 	);
 }

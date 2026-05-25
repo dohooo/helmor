@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Slack, GitHub, and GitLab context detail panels now refresh automatically when you open them or refocus Helmor, and there's a manual refresh button in the toolbar.",
+			"action": {
+				"label": "Open Context",
+				"value": { "type": "setRightSidebarMode", "mode": "context" }
+			}
+		}
+	]
+}

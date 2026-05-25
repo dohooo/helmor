@@ -353,3 +353,25 @@ export function inlineEmojiForMarkdown(
 		return raw;
 	});
 }
+
+/** Rewrite Slack mention tokens inside a markdown string into plain
+ *  `@name` text so Streamdown renders them as readable handles instead
+ *  of the raw `<@U…>` escape sequence.
+ *
+ *    `<@U123|jane>` → `@jane`     (backend already resolved the label)
+ *    `<@U123>`      → `@U123`     (unresolved fallback — surfaced as-is)
+ *    `<#C123|name>` → `#name`
+ *    `<#C123>`      → `#C123`
+ *
+ *  We don't try to produce a styled "pill" inside the markdown stream;
+ *  doing so would require injecting HTML through the markdown renderer,
+ *  which fights Streamdown's sanitization. The visible result — a human
+ *  name with an `@` prefix — matches how Slack itself renders the
+ *  collapsed/notification form of a mention. */
+export function inlineMentionsForMarkdown(text: string): string {
+	return text
+		.replace(/<@[UW][A-Z0-9]+\|([^>]+)>/g, "@$1")
+		.replace(/<@([UW][A-Z0-9]+)>/g, "@$1")
+		.replace(/<#[CGD][A-Z0-9]+\|([^>]+)>/g, "#$1")
+		.replace(/<#([CGD][A-Z0-9]+)>/g, "#$1");
+}
