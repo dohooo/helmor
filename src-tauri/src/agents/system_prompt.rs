@@ -65,6 +65,15 @@ pub struct HelmorSystemPromptContext {
     /// Extra directories the user added via `/add-dir`. Empty list
     /// elides the entire linked-directories paragraph.
     pub linked_directories: Vec<String>,
+    /// Name of the on-PATH CLI binary the agent should invoke. In
+    /// release builds this is `helmor`; in dev builds it's
+    /// `helmor-dev` (so a development install never shadows a
+    /// release install on the same machine). The `helmor-cli`
+    /// SKILL.md documents commands using the release name `helmor`,
+    /// so we explicitly thread the resolved name through here to
+    /// keep the agent from invoking a binary that doesn't exist on
+    /// PATH for the build it's running in.
+    pub cli_command_name: String,
 }
 
 /// Render the preamble. Deterministic, no I/O, side-effect-free —
@@ -117,8 +126,10 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
         "\nIf you need a scratch directory to leave files for other agents in this workspace (or for your own future sessions), use `<workspace_root>/.agent-contexts/`. It is gitignored at the worktree level, so anything you write there stays out of every diff.\n",
     );
 
-    out.push_str(
-        "\nHelmor itself is scriptable. If the user has a clear intent that requires multiple workspaces, or asks you to operate Helmor (spawn workspaces, change kanban status, dispatch a ship action, read what another agent is doing, etc.), consult the `helmor-cli` skill installed in your skills directory — it documents the full command surface. Don't fabricate commands; let the skill be the source of truth.\n",
+    let _ = write!(
+        out,
+        "\nHelmor itself is scriptable. If the user has a clear intent that requires multiple workspaces, or asks you to operate Helmor (spawn workspaces, change kanban status, dispatch a ship action, read what another agent is doing, etc.), consult the `helmor-cli` skill installed in your skills directory — it documents the full command surface. Don't fabricate commands; let the skill be the source of truth. Invoke the CLI as `{}` on this build (the skill's SKILL.md shows `helmor` for release builds — substitute accordingly).\n",
+        ctx.cli_command_name,
     );
 
     out.push_str(
@@ -140,6 +151,7 @@ mod tests {
             target_branch: Some("origin/main".to_string()),
             base_branch: Some("main".to_string()),
             linked_directories: Vec::new(),
+            cli_command_name: "helmor".to_string(),
         }
     }
 
@@ -225,6 +237,40 @@ mod tests {
             !prompt.contains("helmor-cli workspace new"),
             "command listing should live in SKILL.md, not in the prompt prefix"
         );
+    }
+
+    /// Dev builds install the CLI as `helmor-dev` so a development
+    /// copy doesn't shadow a release install on the same machine. The
+    /// `helmor-cli` SKILL.md documents commands using the release
+    /// name `helmor`, so the prompt MUST name the actual binary the
+    /// agent should invoke — otherwise dev users get "command not
+    /// found" the moment the agent tries to use the skill.
+    #[test]
+    fn cli_command_name_is_threaded_through_for_dev_builds() {
+        let mut ctx = ctx_with_defaults();
+        ctx.cli_command_name = "helmor-dev".to_string();
+        let prompt = build_helmor_system_prompt(&ctx);
+        assert!(
+            prompt.contains("`helmor-dev`"),
+            "dev builds must surface the `helmor-dev` binary name"
+        );
+        // Make sure the SKILL-vs-build disambiguation hint is also
+        // present so a confused agent reading the skill docs knows
+        // why they need to substitute.
+        assert!(
+            prompt.contains("SKILL.md"),
+            "should explain the SKILL.md vs build-name mismatch"
+        );
+    }
+
+    /// Release builds use the canonical `helmor` name — same as the
+    /// SKILL.md docs, no substitution needed. Pin so a future refactor
+    /// that always hardcodes `helmor-dev` regardless of build doesn't
+    /// silently misadvise release agents.
+    #[test]
+    fn cli_command_name_uses_release_binary_in_release_builds() {
+        let prompt = build_helmor_system_prompt(&ctx_with_defaults());
+        assert!(prompt.contains("Invoke the CLI as `helmor`"));
     }
 
     /// Feedback line points at the sidebar button — matches the real

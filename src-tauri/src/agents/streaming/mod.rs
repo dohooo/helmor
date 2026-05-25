@@ -1273,12 +1273,24 @@ fn build_helmor_system_prompt_for_session(
     let linked_directories =
         crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
 
+    // Resolve the on-PATH CLI binary name from the current build
+    // mode. Dev installs ship as `helmor-dev` to avoid shadowing a
+    // release install on the same machine; SKILL.md uses the release
+    // name `helmor`, so we pass the actual binary name through to
+    // the prompt explicitly.
+    let cli_command_name = if crate::data_dir::is_dev() {
+        "helmor-dev".to_string()
+    } else {
+        "helmor".to_string()
+    };
+
     let ctx = HelmorSystemPromptContext {
         workspace_label,
         workspace_root_path: working_directory.display().to_string(),
         target_branch,
         base_branch,
         linked_directories,
+        cli_command_name,
     };
     Some(build_helmor_system_prompt(&ctx))
 }
