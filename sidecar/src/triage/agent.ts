@@ -1,4 +1,9 @@
-// Runs one triage tick and collects proposals.
+// Runs one Layer-2 triage tick.
+//
+// Inputs: pre-fetched candidate list, repo list, local-model endpoint.
+// Output: a stream of `triageProposal` events the Rust scheduler turns
+// into workspaces. Decisions of kind `skip` are recorded inline via the
+// `triage.record_decision` host bridge.
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import {
@@ -9,22 +14,20 @@ import {
 
 import { logger } from "../logger";
 import { buildSystemPrompt, buildTickUserMessage } from "./prompts";
-import { findProvider, PROVIDERS } from "./providers/registry";
-import type { ProviderContext } from "./providers/types";
-import { ScratchSession, sweepStaleScratch } from "./scratch";
 import {
+	buildListCandidatesInParentTool,
 	buildListReposTool,
+	buildMarkNotActionableTool,
 	buildProposeWorkspaceTool,
+	buildReadCandidateTool,
 	ProposalAccumulator,
 } from "./tools/helmor";
-import { buildScratchTools } from "./tools/scratch";
 import type { TriageProposal, TriageTickParams } from "./types";
 
 registerBuiltInApiProviders();
 
 const PROVIDER_ID = "helmor-local";
 const PREVIEW_CHARS = 240;
-const COLD_START_LOOKBACK_HOURS = 12;
 
 function buildLocalModel(
 	params: TriageTickParams["localModel"],
@@ -36,10 +39,9 @@ function buildLocalModel(
 		provider: PROVIDER_ID,
 		baseUrl: params.baseUrl.replace(/\/$/, ""),
 		reasoning: false,
-		// Vision-capable when llama-server was started with --mmproj (catalog
-		// entries ship the F16 projector by default). Even without it, sending
-		// image blocks is harmless — llama-server just rejects them.
-		input: ["text", "image"],
+		// Layer-2 doesn't pass image blocks (attachments aren't handled at
+		// this layer). Vision capability is irrelevant; text-only is enough.
+		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 32_768,
 		maxTokens: 4_096,
@@ -54,18 +56,10 @@ function preview(value: unknown, max = PREVIEW_CHARS): string {
 
 export interface RunTriageOutcome {
 	proposals: TriageProposal[];
-	// Agent's final assistant text, shown as the "nothing actionable" tooltip.
 	finalMessage: string | null;
-	// True when the user clicked Stop.
 	cancelled: boolean;
-	// Providers whose preflight passed AND the tick completed normally
-	// (no MAX_TURNS abort, no user cancel). Rust uses this to gate
-	// `advance_sync` so preflight-failed or partially-scanned providers
-	// don't get their time floor bumped past unseen items.
-	scannedProviders: string[];
 }
 
-// Handle to the currently-running tick for Stop. Only one tick runs at a time.
 let activeTick: { tickId: string; abort: () => void } | null = null;
 
 export function abortCurrentTick(tickId?: string): boolean {
@@ -97,7 +91,6 @@ function extractAssistantText(message: unknown): string | null {
 }
 
 export interface RunTriageHooks {
-	// Emits a `triageProgress` event on tool/turn start.
 	emitProgress(payload: {
 		turn?: number;
 		tool?: string;
@@ -112,89 +105,30 @@ export async function runTriageTick(
 	const tickId = params.tickId || "(no-tick-id)";
 	const logTag = `triage[${tickId}]`;
 
-	void sweepStaleScratch();
-	const scratch = new ScratchSession(tickId);
-	await scratch.init();
+	if (params.candidates.length === 0) {
+		logger.info(`${logTag} no candidates, skipping LLM call`);
+		return { proposals: [], finalMessage: null, cancelled: false };
+	}
 
 	const accumulator = new ProposalAccumulator();
 	const tools: unknown[] = [
 		buildListReposTool(params.repos),
 		buildProposeWorkspaceTool(accumulator, { max: params.maxPerTick }),
+		buildMarkNotActionableTool(accumulator),
+		buildReadCandidateTool(),
+		buildListCandidatesInParentTool(),
 	];
-	for (const t of buildScratchTools(scratch)) tools.push(t);
-
-	const providerHints: string[] = [];
-	const disabledProviders: { displayName: string; reason: string }[] = [];
-	const preflightOk: string[] = [];
-
-	// Cold-start fallback so a missing checkpoint doesn't trigger a full-history scan.
-	const coldStartFloor = new Date(
-		Date.now() - COLD_START_LOOKBACK_HOURS * 3_600_000,
-	).toISOString();
-	const effectiveLastTriagedAt: Record<string, string> = {};
-	for (const id of params.providers) {
-		effectiveLastTriagedAt[id] = params.lastTriagedAt[id] ?? coldStartFloor;
-	}
-
-	for (const id of params.providers) {
-		const provider = findProvider(id);
-		if (!provider) {
-			logger.info(`${logTag} unknown provider id`, { id });
-			continue;
-		}
-		const ctx: ProviderContext = {
-			scratch,
-			lastTriagedAt: effectiveLastTriagedAt[id] ?? coldStartFloor,
-		};
-		if (provider.preflight) {
-			try {
-				const pre = await provider.preflight();
-				if (!pre.ok) {
-					logger.info(`${logTag} preflight failed`, {
-						id,
-						reason: pre.reason,
-					});
-					disabledProviders.push({
-						displayName: provider.displayName,
-						reason: pre.reason ?? "unavailable",
-					});
-					continue;
-				}
-			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				disabledProviders.push({
-					displayName: provider.displayName,
-					reason: msg,
-				});
-				continue;
-			}
-		}
-		for (const t of provider.buildTools(ctx)) tools.push(t);
-		const hint = provider.promptHint(ctx);
-		if (hint) providerHints.push(hint);
-		preflightOk.push(id);
-	}
 
 	const model = buildLocalModel(params.localModel);
 	const systemPrompt = buildSystemPrompt({
 		userPromptSuffix: params.systemPrompt,
 		maxPerTick: params.maxPerTick,
-		enabledProviderIds: preflightOk,
-		providerHints,
-		disabledProviders,
 	});
-	// User message also scopes to preflight-passed providers so the
-	// model never sees a disabled source in any part of the context.
-	const userMessage = buildTickUserMessage(
-		preflightOk,
-		params.repos,
-		effectiveLastTriagedAt,
-	);
+	const userMessage = buildTickUserMessage(params.candidates, params.repos);
 
 	logger.info(`${logTag} agent.build`, {
 		toolCount: tools.length,
-		providers: params.providers,
-		disabled: disabledProviders.length,
+		candidateCount: params.candidates.length,
 		userMessagePreview: preview(userMessage),
 	});
 
@@ -216,7 +150,10 @@ export async function runTriageTick(
 			provider === PROVIDER_ID ? params.localModel.token : undefined,
 	});
 
-	const MAX_TURNS = 100;
+	// Layer-2 needs many fewer turns than the old "discover-then-judge"
+	// loop. The cap is mainly a runaway-protection (one prompt cycle per
+	// candidate + a few read_candidate drilldowns).
+	const MAX_TURNS = Math.max(20, params.candidates.length * 2 + 10);
 	let turnIndex = 0;
 	let aborted = false;
 	let cancelledByUser = false;
@@ -257,7 +194,6 @@ export async function runTriageTick(
 				break;
 			}
 			case "message_end": {
-				// Keep the last assistant text as the model's stated reason for stopping.
 				const text = extractAssistantText((e as { message?: unknown }).message);
 				if (text) lastAssistantText = text;
 				break;
@@ -279,28 +215,19 @@ export async function runTriageTick(
 		}
 
 		const proposals = accumulator.drain();
-		// Only advance sync floors for providers we actually scanned end-to-end.
-		// MAX_TURNS or user cancel ⇒ tick truncated, no advance for anything.
-		const completedNormally = !aborted && !cancelledByUser;
-		const scannedProviders = completedNormally ? preflightOk.slice() : [];
 		logger.info(`${logTag} agent.done`, {
 			proposalCount: proposals.length,
 			aborted,
 			cancelledByUser,
 			turnsRun: turnIndex,
 			finalMessage: lastAssistantText,
-			scannedProviders,
 		});
 		return {
 			proposals,
 			finalMessage: lastAssistantText,
 			cancelled: cancelledByUser,
-			scannedProviders,
 		};
 	} finally {
 		activeTick = null;
-		await scratch.dispose();
 	}
 }
-
-export { PROVIDERS };

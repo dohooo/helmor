@@ -1,11 +1,28 @@
-//! Heartbeat scheduler. Fixed 10 min interval. One tick at a time.
+//! Layer-2 LLM tick runner. No standalone heartbeat — the fetcher
+//! scheduler (`fetcher::spawn_scheduler`) drives both pipelines: it
+//! pulls fresh data into `triage_candidate`, then (when triage is
+//! enabled + auto_run + LLM is running) fires a tick on top of the
+//! freshly-fetched data via `trigger_tick_now`.
+//!
+//! Manual fires (Settings → Run now) also land here.
+//!
+//! Tick path:
+//!   1. Pull open candidates from `triage_candidate`.
+//!   2. Hand the slice to the sidecar LLM with repo list + endpoint.
+//!   3. For each `triageProposal` event:
+//!      - look up candidate row → `(source, source_ref)`
+//!      - call `create_ai_workspace` (also dedups on source pair)
+//!      - mark the candidate `decision='proposed'`
+//!
+//! `mark_not_actionable` writes `decision='skip'` from the sidecar
+//! directly via the `triage.record_decision` host bridge — the
+//! scheduler never sees those.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Local;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
@@ -14,47 +31,21 @@ use crate::sidecar::{ManagedSidecar, SidecarRequest};
 use crate::ui_sync::{self, UiMutationEvent};
 
 use super::active_status::{ActiveStatusStore, TickOutcome};
-use super::config::{enabled_provider_ids, load_config, TriageConfig};
-use super::sync::{advance_sync, load_sync_map};
+use super::config::{load_config, TriageConfig};
+use super::fetcher::storage as candidate_storage;
 use super::workspace_factory::{create_ai_workspace, CreateAiWorkspaceParams};
-use super::HEARTBEAT_SEC;
 use std::sync::mpsc::RecvTimeoutError;
 
+/// How many candidates we hand to the LLM per BATCH. Sized to fit a
+/// 32k-token local model with 400-char previews + room for tool calls.
+const CANDIDATES_PER_BATCH: i64 = 20;
+/// Upper bound on batches we'll loop through within a single tick.
+/// `CANDIDATES_PER_BATCH * MAX_BATCHES_PER_TICK = 100` candidates max
+/// per tick — typical backlogs clear in one tick without making the
+/// loop unbounded if upstream goes wild.
+const MAX_BATCHES_PER_TICK: u32 = 5;
+
 static TICK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-
-pub fn spawn_scheduler<R: Runtime>(app: AppHandle<R>) {
-    if let Err(error) = thread::Builder::new()
-        .name("triage-scheduler".into())
-        .spawn(move || scheduler_loop(app))
-    {
-        tracing::error!(error = %error, "spawn triage scheduler failed");
-    }
-}
-
-fn scheduler_loop<R: Runtime>(app: AppHandle<R>) {
-    thread::sleep(Duration::from_secs(30));
-    loop {
-        let cfg = match load_config() {
-            Ok(c) => c,
-            Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "triage: load_config failed");
-                thread::sleep(Duration::from_secs(300));
-                continue;
-            }
-        };
-        // Skip when LLM is off or `auto_run` is paused; manual Run-now still works.
-        let llm_on = crate::local_llm::load_settings().enabled;
-        if cfg.enabled && cfg.auto_run && llm_on {
-            if let Err(error) = run_tick(&app, &cfg) {
-                let msg = format!("{error:#}");
-                if !msg.contains("in flight") {
-                    tracing::warn!(error = %msg, "triage tick failed");
-                }
-            }
-        }
-        thread::sleep(Duration::from_secs(HEARTBEAT_SEC));
-    }
-}
 
 pub fn trigger_tick_now<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     let cfg = load_config()?;
@@ -97,7 +88,6 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
     store.begin(&tick_id);
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
 
-    let started_at = Local::now();
     let outcome = execute_tick(app, cfg, &tick_id);
 
     let (kind, summary_text) = match &outcome {
@@ -124,30 +114,7 @@ fn run_tick<R: Runtime>(app: &AppHandle<R>, cfg: &TriageConfig) -> Result<String
             None,
         ),
     };
-    // Advance only providers the sidecar actually scanned end-to-end, and only
-    // when every proposal made it to a workspace. Anything else risks burying
-    // items past the next tick's time floor.
-    let should_advance = matches!(
-        &outcome,
-        Ok(ExecuteOk {
-            cancelled: false,
-            workspace_failures: 0,
-            ..
-        })
-    );
-    if should_advance {
-        if let Ok(ok) = &outcome {
-            for pid in &ok.scanned_providers {
-                if let Err(error) = advance_sync(pid, started_at) {
-                    tracing::warn!(error = %format!("{error:#}"), provider = %pid, "advance_sync failed");
-                }
-            }
-        }
-    }
     store.record_outcome(&tick_id, kind, summary_text);
-
-    // GC unconsumed staged attachments older than 24h.
-    super::attachments::sweep_stale_staging(Duration::from_secs(24 * 60 * 60));
 
     store.end();
     ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
@@ -165,45 +132,107 @@ pub struct ExecuteOk {
     pub created: u32,
     pub summary: Option<String>,
     pub cancelled: bool,
-    /// Proposals that failed `create_ai_workspace`; gates `advance_sync`.
     pub workspace_failures: u32,
-    /// Providers the sidecar reports as fully scanned (preflight passed,
-    /// tick ran to normal completion). Empty when cancelled / MAX_TURNS.
-    pub scanned_providers: Vec<String>,
 }
 
+/// What the sidecar sends back inside a `triageProposal` event.
+/// Mirror of the new sidecar-side `propose_workspace` payload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalEvent {
+    candidate_id: String,
+    repo_id: String,
+    title: String,
+    branch_name: String,
+    plan_message: String,
+}
+
+/// Run up to MAX_BATCHES_PER_TICK back-to-back LLM batches. Each batch
+/// pulls a fresh slice of open candidates (the previous batch's
+/// decisions are already persisted in DB, so the next SELECT naturally
+/// skips them). Stops early when the queue is empty or the user
+/// cancels.
 fn execute_tick<R: Runtime>(
     app: &AppHandle<R>,
     cfg: &TriageConfig,
     tick_id: &str,
 ) -> Result<ExecuteOk> {
-    let providers = enabled_provider_ids(cfg);
-    if providers.is_empty() {
-        tracing::info!(tick_id = %tick_id, "triage: no providers enabled, skipping");
-        return Ok(ExecuteOk {
-            created: 0,
-            summary: None,
-            cancelled: false,
-            workspace_failures: 0,
-            scanned_providers: Vec::new(),
-        });
-    }
-
     let repos = list_repos_payload()?;
-    let sync_map = load_sync_map().unwrap_or_default();
-
     let endpoint = app
         .state::<crate::local_llm::Manager>()
         .endpoint()
         .ok_or_else(|| anyhow!("Local LLM is not running"))?;
+    let store = app.state::<ActiveStatusStore>();
 
-    tracing::info!(
-        tick_id = %tick_id,
-        repos = repos.as_array().map(|a| a.len()).unwrap_or(0),
-        providers = ?providers,
-        "triage: tick dispatching"
-    );
+    let mut total = ExecuteOk {
+        created: 0,
+        summary: None,
+        cancelled: false,
+        workspace_failures: 0,
+    };
 
+    for batch_n in 1..=MAX_BATCHES_PER_TICK {
+        let candidates = candidate_storage::list_open_candidates(CANDIDATES_PER_BATCH)
+            .context("list_open_candidates")?;
+        if candidates.is_empty() {
+            tracing::info!(
+                tick_id = %tick_id,
+                batch = batch_n,
+                "triage: queue empty, ending tick",
+            );
+            break;
+        }
+        store.set_batch(batch_n, MAX_BATCHES_PER_TICK);
+        ui_sync::publish(app, UiMutationEvent::TriageActiveStatusChanged);
+        tracing::info!(
+            tick_id = %tick_id,
+            batch = batch_n,
+            batch_total = MAX_BATCHES_PER_TICK,
+            candidate_count = candidates.len(),
+            "triage: batch dispatching",
+        );
+        let batch = run_one_batch(
+            app,
+            cfg,
+            tick_id,
+            &candidates,
+            &repos,
+            &endpoint.url,
+            &endpoint.token,
+            &endpoint.api_model,
+        )?;
+        total.created += batch.created;
+        total.workspace_failures += batch.workspace_failures;
+        // Keep the most recent non-empty summary — typically the last
+        // batch's "nothing more to judge" / cap-reached message is the
+        // one users want to see in the outcome line.
+        if batch.summary.is_some() {
+            total.summary = batch.summary;
+        }
+        if batch.cancelled {
+            total.cancelled = true;
+            tracing::info!(tick_id = %tick_id, batch = batch_n, "triage: cancelled by user");
+            break;
+        }
+    }
+
+    ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
+    Ok(total)
+}
+
+/// One sidecar request → drain events → resolve `triageProposal`s into
+/// workspaces. Caller (`execute_tick`) aggregates across batches.
+#[allow(clippy::too_many_arguments)]
+fn run_one_batch<R: Runtime>(
+    app: &AppHandle<R>,
+    cfg: &TriageConfig,
+    tick_id: &str,
+    candidates: &[candidate_storage::CandidateRow],
+    repos: &Value,
+    endpoint_url: &str,
+    endpoint_token: &str,
+    endpoint_model: &str,
+) -> Result<ExecuteOk> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar = app.state::<ManagedSidecar>();
     let rx = sidecar.subscribe(&request_id);
@@ -215,22 +244,20 @@ fn execute_tick<R: Runtime>(
             "tickId": tick_id,
             "systemPrompt": cfg.system_prompt,
             "maxPerTick": cfg.max_per_tick,
-            "providers": providers,
-            "lastTriagedAt": sync_map,
+            "candidates": candidates,
             "repos": repos,
             "localModel": {
-                "baseUrl": endpoint.url,
-                "token": endpoint.token,
-                "model": endpoint.api_model,
+                "baseUrl": endpoint_url,
+                "token": endpoint_token,
+                "model": endpoint_model,
             },
         }),
     };
     sidecar.send(&request).context("send runTriageTick")?;
 
     let store = app.state::<ActiveStatusStore>();
-    let mut proposals: Vec<CreateAiWorkspaceParams> = Vec::new();
+    let mut proposal_events: Vec<ProposalEvent> = Vec::new();
     let mut summary_message: Option<String> = None;
-    let mut scanned_providers: Vec<String> = Vec::new();
     let mut got_terminal = false;
     let mut error_message: Option<String> = None;
     let mut cancelled = false;
@@ -248,10 +275,13 @@ fn execute_tick<R: Runtime>(
         match event.event_type() {
             "triageProposal" => {
                 if let Some(params_value) = event.raw.get("params") {
-                    if let Ok(p) =
-                        serde_json::from_value::<CreateAiWorkspaceParams>(params_value.clone())
-                    {
-                        proposals.push(p);
+                    if let Ok(p) = serde_json::from_value::<ProposalEvent>(params_value.clone()) {
+                        proposal_events.push(p);
+                    } else {
+                        tracing::warn!(
+                            raw = ?params_value,
+                            "triage: malformed proposal event, skipping",
+                        );
                     }
                 }
             }
@@ -261,14 +291,6 @@ fn execute_tick<R: Runtime>(
                     .get("message")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
-            }
-            "triageScanned" => {
-                if let Some(arr) = event.raw.get("providers").and_then(Value::as_array) {
-                    scanned_providers = arr
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                }
             }
             "triageCancelled" => {
                 cancelled = true;
@@ -305,9 +327,6 @@ fn execute_tick<R: Runtime>(
         }
     }
 
-    // Timeout / channel drop without an `end`: tell the sidecar to abort and
-    // wait briefly for its terminal event before we release in-flight, so a
-    // new tick can't overlap the dying one.
     if !got_terminal {
         let stop_req = SidecarRequest {
             id: Uuid::new_v4().to_string(),
@@ -343,16 +362,10 @@ fn execute_tick<R: Runtime>(
 
     let mut created = 0u32;
     let mut workspace_failures = 0u32;
-    for p in proposals {
-        match create_ai_workspace(&p) {
+    for ev in proposal_events {
+        match resolve_and_create(app, &ev) {
             Ok(result) => {
                 created += 1;
-                // The priming `session_messages` row is inserted inside
-                // `create_ai_workspace`, but no message-cache invalidation
-                // fires for it on its own. Without this, a user who clicks
-                // the freshly-created workspace before the next periodic
-                // refetch sees an EmptyState placeholder and assumes the
-                // triage produced nothing.
                 ui_sync::publish(
                     app,
                     UiMutationEvent::SessionMessagesAppended {
@@ -368,7 +381,11 @@ fn execute_tick<R: Runtime>(
             }
             Err(error) => {
                 workspace_failures += 1;
-                tracing::warn!(error = %format!("{error:#}"), "workspace creation failed");
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    candidate_id = %ev.candidate_id,
+                    "workspace creation failed",
+                );
             }
         }
     }
@@ -378,17 +395,46 @@ fn execute_tick<R: Runtime>(
         created,
         workspace_failures,
         cancelled,
-        scanned = ?scanned_providers,
-        "triage: tick complete"
+        "triage: batch complete"
     );
-    ui_sync::publish(app, UiMutationEvent::WorkspaceListChanged);
     Ok(ExecuteOk {
         created,
         summary: summary_message,
         cancelled,
         workspace_failures,
-        scanned_providers,
     })
+}
+
+/// Look up the candidate row, build a `CreateAiWorkspaceParams` from its
+/// `(source, source_ref)`, create the workspace, and record the decision.
+fn resolve_and_create<R: Runtime>(
+    _app: &AppHandle<R>,
+    ev: &ProposalEvent,
+) -> Result<super::workspace_factory::CreateAiWorkspaceResult> {
+    let row = candidate_storage::get_candidate(&ev.candidate_id)?
+        .ok_or_else(|| anyhow!("candidate {} not found", ev.candidate_id))?;
+    let params = CreateAiWorkspaceParams {
+        source_type: row.source.clone(),
+        source_ref: row.source_ref.clone(),
+        repo_id: ev.repo_id.clone(),
+        plan_message: ev.plan_message.clone(),
+        title: ev.title.clone(),
+        branch_name: ev.branch_name.clone(),
+    };
+    let result = create_ai_workspace(&params)?;
+    // Record decision so the candidate doesn't surface again next tick.
+    if let Err(error) = candidate_storage::record_decision(
+        &ev.candidate_id,
+        "proposed",
+        Some(&format!("workspace {}", result.workspace_id)),
+    ) {
+        tracing::warn!(
+            error = %format!("{error:#}"),
+            candidate_id = %ev.candidate_id,
+            "failed to record 'proposed' decision",
+        );
+    }
+    Ok(result)
 }
 
 fn list_repos_payload() -> Result<Value> {

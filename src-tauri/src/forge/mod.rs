@@ -27,7 +27,7 @@ mod cli_status;
 pub(crate) mod command;
 mod detect;
 pub mod github;
-mod gitlab;
+pub mod gitlab;
 pub mod inbox;
 mod provider;
 pub(crate) mod remote;

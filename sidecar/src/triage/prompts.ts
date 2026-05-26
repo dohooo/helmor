@@ -1,130 +1,76 @@
-import type { TriageRepo } from "./types";
+// Layer-2 prompts. The fetcher has already pre-built the candidate
+// index — the LLM's only job is to JUDGE each candidate (actionable or
+// not) and, for actionable ones, write a clean propose_workspace call.
 
-const INTRO = `You are Helmor's triage agent. Decide TWO things per item:
-  1. Is this an actionable task the user should do?
-  2. If yes, what's the simplest prompt for a coding agent?
+import type { TriageCandidate, TriageRepo } from "./types";
 
-You MUST NOT analyse how to solve the task, read source code, or speculate
-on implementation. Identify, match to a repo, propose. Done.
+const INTRO = `You are Helmor's triage judge. The candidates listed below were
+pre-fetched from the user's IM / forge sources. For EACH candidate:
 
-You MUST:
-  - Match each task to a repo via list_repos
-  - Call propose_workspace exactly once per real task
-  - Stop when sources are scanned`;
+  1. Decide if it is an actionable coding task the user should do.
+     - "Yes" examples: a bug report, a code-review request, a
+       concrete question about the user's code, a feature request
+       that lands somewhere the user owns.
+     - "No" examples: chat banter, status updates ("LGTM", "deployed"),
+       FYI notifications, already-resolved threads, requests to
+       someone other than the user.
+  2. If yes, match it to ONE Helmor repo (via list_repos) and
+     call \`propose_workspace\` with that repo_id.
+  3. If no, call \`mark_not_actionable\` with a one-sentence reason.
+
+You MUST decide every candidate in the list — exactly one tool call
+per candidate. Do NOT analyse how to fix the bug or write code
+yourself; just identify, match, and propose.`;
+
+const READ_TOOL_HINT = `# Reading more of a candidate
+
+Each candidate row shows you a 400-char preview. When unsure:
+
+  - \`read_candidate(candidate_id)\` — full markdown payload (truncated
+    at 8 KB). For huge bodies, pass \`grep=<keyword>\` for matching
+    lines + context.
+  - \`list_candidates_in_parent(parent)\` — other OPEN candidates in
+    the same chat / repo. Returns metadata rows, no file IO. Use this
+    when a preview makes more sense in the context of sibling messages
+    (e.g. a one-line reply you can't judge without the question above).
+
+Default to the preview when it's clear. Read only when unsure.`;
 
 const PLAN_FORMAT = `# Plan message format
 
+The plan_message you pass to \`propose_workspace\` becomes the first
+assistant message the downstream coding agent sees. Keep it tight:
+
   ## Source
-  Quote + sender / author + link.
+  Quote + sender / author + link (use the externalUrl from the candidate).
   ## Repo
-  Matched repo and one-line reason.
+  Matched repo and one-line reason for the match.
   ## Suggested Action
   ONE sentence on WHAT (not HOW).
   ## Confirm?
-  Ask user to confirm.`;
+  Ask user to confirm before the agent starts coding.`;
 
-const FORGE_SCOPE = `# Forge scope — inbox vs repo
-
-For GitHub/GitLab there are TWO complementary scan modes:
-- *_inbox_* tools = items where the user is the protagonist (assigned,
-  mentioned, review-requested). Narrow, user-centric.
-- *_list_repo_* tools = ALL open issues/PRs in a specific Helmor repo,
-  regardless of who's on the hook. Use this when the user prompt is
-  repo-centric ("triage helmor backlog", "check hdcode for new bugs").
-
-The list_repos tool gives you each Helmor repo's id; pass it directly
-as repo_id to *_list_repo_*. Don't try to derive owner/repo from the
-remote URL yourself — Helmor does that mapping for you.`;
-
-const ATTACHMENT_LINES: Readonly<Record<string, string>> = {
-	lark: "  lark:    lark_save_image(message_id, image_key)",
-	slack: "  slack:   slack_save_attachment(url)",
-	github: "  github:  github_save_attachment(url)",
-	gitlab: "  gitlab:  gitlab_save_attachment(url)",
-};
-
-const FORGE_IDS = new Set(["github", "gitlab"]);
-
-function buildScratchSection(enabledIds: readonly string[]): string {
-	const toolPatterns = enabledIds.map((id) => `${id}_*`).join(", ");
-	return `# Scratch workflow
-
-Provider tools (${toolPatterns}) write fetched data into a per-tick
-scratch directory as Markdown. They return only a pointer string. Query via:
-
-  scratch_list          → see what files exist
-  scratch_grep pattern  → regex search across files
-  scratch_read file     → read a slice (offset/limit)
-
-Per source:
-  1. fetch into scratch (filtered by sender/time/keyword when possible)
-  2. scratch_grep for action keywords: 需要|帮|请|麻烦|fix|bug|修|TODO|做|搞|处理|改
-  3. scratch_read around hits only — don't page through whole files
-  4. decide → propose_workspace or move on`;
-}
-
-function buildAttachmentsSection(enabledIds: readonly string[]): string {
-	const lines = enabledIds
-		.map((id) => ATTACHMENT_LINES[id])
-		.filter((line): line is string => Boolean(line));
-	if (lines.length === 0) return "";
-	return `# Attachments (images, screenshots, files)
-
-If a message body contains an image / screenshot / attachment that's
-relevant to the task, save it BEFORE proposing:
-
-${lines.join("\n")}
-
-Each save tool also INLINES the image bytes back to you as a vision
-block (under ~5 MB) — look at it and:
-  - briefly describe what you see in plan_message so the user
-    understands the task without re-opening the source,
-  - still pass the id in propose_workspace.attachments: [{ id, alt }]
-    so the downstream workspace agent can re-open the original.`;
-}
-
-function buildCapSection(maxPerTick: number): string {
+function capSection(maxPerTick: number): string {
 	return `# Workspace creation cap
 
-You can create at most ${Math.max(1, maxPerTick)} workspaces per tick. Prioritize tasks
-by RECENCY — always propose the newest/most-recent tasks first, as older
-items may become stale or no longer relevant. When you reach the cap,
-stop proposing and summarize what you found.`;
+You can create at most ${Math.max(1, maxPerTick)} workspaces per tick.
+Prioritise newer candidates and stronger signals (DMs / @ mentions /
+assigned to me / review requested). When you reach the cap, call
+\`mark_not_actionable\` on the rest with a brief reason.`;
 }
 
 export interface BuildPromptInput {
 	userPromptSuffix: string;
 	maxPerTick: number;
-	/// Provider ids whose preflight passed AND whose tools are loaded
-	/// in this tick. Drives every conditional section so the model never
-	/// sees instructions or tool names for sources the user disabled.
-	enabledProviderIds: readonly string[];
-	providerHints: readonly string[];
-	disabledProviders: readonly { displayName: string; reason: string }[];
 }
 
 export function buildSystemPrompt(input: BuildPromptInput): string {
-	const enabledIds = input.enabledProviderIds;
-	const sections: string[] = [INTRO, buildScratchSection(enabledIds)];
-	if (enabledIds.some((id) => FORGE_IDS.has(id))) {
-		sections.push(FORGE_SCOPE);
-	}
-	sections.push(PLAN_FORMAT);
-	const attachments = buildAttachmentsSection(enabledIds);
-	if (attachments) sections.push(attachments);
-	sections.push(buildCapSection(input.maxPerTick));
-	if (input.providerHints.length > 0) {
-		sections.push("# Active providers", input.providerHints.join("\n\n"));
-	}
-	if (input.disabledProviders.length > 0) {
-		const lines = input.disabledProviders.map(
-			(d) => `- ${d.displayName}: ${d.reason}`,
-		);
-		sections.push(
-			"# Unavailable providers (skip — do NOT try to use their tools)",
-			lines.join("\n"),
-		);
-	}
+	const sections = [
+		INTRO,
+		READ_TOOL_HINT,
+		PLAN_FORMAT,
+		capSection(input.maxPerTick),
+	];
 	const suffix = input.userPromptSuffix.trim();
 	if (suffix.length > 0) {
 		sections.push("---", "User-provided additional instructions:", suffix);
@@ -132,13 +78,37 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
 	return sections.join("\n\n");
 }
 
+const PREVIEW_TRUNC = 400;
+
+function renderCandidate(c: TriageCandidate): string {
+	const lines: string[] = [];
+	const sender = c.sender ?? "(unknown sender)";
+	const title = c.title?.trim() || "(no title)";
+	lines.push(`[${c.id}] ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
+	lines.push(`  sender:  ${sender}`);
+	lines.push(`  title:   ${truncate(title, 120)}`);
+	if (c.preview && c.preview.trim().length > 0) {
+		const preview = truncate(
+			c.preview.trim().replace(/\s+/g, " "),
+			PREVIEW_TRUNC,
+		);
+		lines.push(`  preview: ${preview}`);
+	}
+	if (c.externalUrl) {
+		lines.push(`  link:    ${c.externalUrl}`);
+	}
+	lines.push(
+		`  bytes:   ${c.payloadBytes} (use read_candidate to see full body)`,
+	);
+	return lines.join("\n");
+}
+
 export function buildTickUserMessage(
-	providerIds: readonly string[],
+	candidates: readonly TriageCandidate[],
 	repos: readonly TriageRepo[],
-	lastTriagedAt: Readonly<Record<string, string>>,
 ): string {
-	if (providerIds.length === 0) {
-		return "No providers are enabled. Do nothing and end the conversation.";
+	if (candidates.length === 0) {
+		return "No open candidates this tick. End the conversation.";
 	}
 	const repoList =
 		repos.length === 0
@@ -149,16 +119,19 @@ export function buildTickUserMessage(
 							`- ${r.id} :: ${r.name}${r.remoteUrl ? ` (${r.remoteUrl})` : ""}`,
 					)
 					.join("\n");
-	const checkpoints = providerIds
-		.map((id) => `  ${id}: ${lastTriagedAt[id] ?? "(first run)"}`)
-		.join("\n");
-	return `Scan the active providers: ${providerIds.join(", ")}.
+	const rendered = candidates.map(renderCandidate).join("\n\n");
+	return `${candidates.length} open candidate(s) this tick:
+
+${rendered}
 
 Available Helmor repos:
 ${repoList}
 
-Per-provider last-triaged checkpoints — only look at items strictly after these:
-${checkpoints}
+Decide every candidate (propose_workspace OR mark_not_actionable),
+then end the conversation.`;
+}
 
-End the conversation when done.`;
+function truncate(s: string, max: number): string {
+	if (s.length <= max) return s;
+	return `${s.slice(0, max)}…(+${s.length - max})`;
 }

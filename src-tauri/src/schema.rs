@@ -749,10 +749,24 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "ai_priming_consumed",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        // Triage source provenance: `(source_type, source_ref)` uniquely
+        // identifies the upstream thing a triage tick proposed against
+        // (e.g. lark om_… message id, github_pr 1234). The scheduler
+        // uses this to skip re-proposing the same source across ticks
+        // even when the time-window overlap exposes a stale message.
+        add_column_if_missing(connection, "workspaces", "triage_source_type", "TEXT")?;
+        add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // Index goes after the ALTER above — else old DBs would index a missing column.
         connection
             .execute_batch("CREATE INDEX IF NOT EXISTS idx_workspaces_kind ON workspaces(kind)")
             .context("Failed to create idx_workspaces_kind")?;
+        connection
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_workspaces_triage_source
+                 ON workspaces(triage_source_type, triage_source_ref)
+                 WHERE triage_source_type IS NOT NULL",
+            )
+            .context("Failed to create idx_workspaces_triage_source")?;
     }
     if has_table(connection, "session_messages") {
         add_column_if_missing(
@@ -958,6 +972,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     active_run_action_id TEXT,
     kind TEXT NOT NULL DEFAULT 'manual',
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
+    triage_source_type TEXT,
+    triage_source_ref TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1021,18 +1037,70 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     added_at INTEGER NOT NULL
 );
 
--- AI triage: per-provider time checkpoint (stored in local-time RFC3339).
-CREATE TABLE IF NOT EXISTS triage_sync (
-    provider_id TEXT PRIMARY KEY,
-    last_triaged_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+-- AI triage fetcher: pre-computed candidate index.
+-- Background fetchers write rows here. The local-LLM Layer-2 tick reads
+-- `decision IS NULL` rows in batches. Heavy payloads live on disk under
+-- `cache/triage/`, only `payload_path` is stored here.
+CREATE TABLE IF NOT EXISTS triage_candidate (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    source_parent TEXT,
+    fetched_at TEXT NOT NULL,
+    source_time TEXT NOT NULL,
+    last_updated_at TEXT,
+    sender TEXT,
+    title TEXT,
+    preview TEXT,
+    external_url TEXT,
+    payload_path TEXT NOT NULL,
+    payload_bytes INTEGER NOT NULL DEFAULT 0,
+    decision TEXT,
+    decision_at TEXT,
+    reason TEXT,
+    UNIQUE(source, source_ref)
+);
+
+-- Per-(source, source_parent) fetch checkpoint. `source_parent` is '' for
+-- inbox-style sources without a parent (GitHub global inbox, Slack search).
+CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
+    source TEXT NOT NULL,
+    source_parent TEXT NOT NULL,
+    last_fetched_at TEXT NOT NULL,
+    last_source_time TEXT,
+    last_external_ref TEXT,
+    PRIMARY KEY (source, source_parent)
+);
+
+-- Auto-converged watch set: which source-parents the fetcher should poll.
+-- `mode = 'auto'` is the default (heuristically chosen); 'pinned' / 'muted'
+-- are user overrides.
+CREATE TABLE IF NOT EXISTS triage_source_subscription (
+    source TEXT NOT NULL,
+    source_parent TEXT NOT NULL,
+    label TEXT,
+    mode TEXT NOT NULL DEFAULT 'auto',
+    last_user_activity_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (source, source_parent)
 );
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
--- idx_workspaces_kind is created in `run_migrations` (after the ALTER on upgraded DBs).
+CREATE INDEX IF NOT EXISTS idx_triage_candidate_open ON triage_candidate(source_time DESC) WHERE decision IS NULL;
+CREATE INDEX IF NOT EXISTS idx_triage_candidate_source ON triage_candidate(source, source_time DESC);
+-- Backs `list_candidates_in_parent`: lets the LLM browse other open
+-- candidates in the same chat/repo without touching the heavy payload
+-- files. Partial index keeps it small (only open rows ever read here).
+CREATE INDEX IF NOT EXISTS idx_triage_candidate_parent_open
+    ON triage_candidate(source_parent, source_time DESC)
+    WHERE decision IS NULL AND source_parent IS NOT NULL;
+-- idx_workspaces_kind + idx_workspaces_triage_source are created in
+-- `run_migrations` (after the ALTERs on upgraded DBs).
 
 -- Triggers (use CREATE TRIGGER IF NOT EXISTS where supported, otherwise wrapped)
 CREATE TRIGGER IF NOT EXISTS update_repos_updated_at

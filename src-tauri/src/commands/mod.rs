@@ -13,6 +13,7 @@ pub(crate) mod slack_commands;
 pub(crate) mod system_commands;
 pub(crate) mod terminal_commands;
 pub(crate) mod triage_commands;
+pub(crate) mod triage_lark_cli_commands;
 pub(crate) mod updater_commands;
 pub(crate) mod workspace_commands;
 

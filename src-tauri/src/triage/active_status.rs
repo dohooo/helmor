@@ -25,6 +25,13 @@ pub struct ActiveStatus {
     pub last_tool_name: Option<String>,
     pub last_update_at: String,
     pub recent_tool_calls: Vec<ToolCallRecord>,
+    /// 1-indexed current batch (a tick can run multiple LLM batches when
+    /// there's a large candidate backlog). `0` while the first batch
+    /// hasn't started.
+    pub batch_index: u32,
+    /// Upper bound on batches this tick will run. Doesn't shrink even
+    /// if the backlog clears early — UI shows "Batch 2 of 5" up to here.
+    pub batch_total: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +91,21 @@ impl ActiveStatusStore {
                 last_tool_name: None,
                 last_update_at: now,
                 recent_tool_calls: Vec::new(),
+                batch_index: 0,
+                batch_total: 0,
             });
+        }
+    }
+
+    /// Bump the (1-indexed) current batch counter. `total` is the
+    /// upper-bound declared at tick start so the UI can show progress.
+    pub fn set_batch(&self, index: u32, total: u32) {
+        if let Ok(mut g) = self.inner.lock() {
+            if let Some(s) = g.as_mut() {
+                s.batch_index = index;
+                s.batch_total = total;
+                s.last_update_at = now_iso();
+            }
         }
     }
 

@@ -1,175 +1,78 @@
-//! Per-tick attachment staging.
+//! Persistent attachment store + custom-protocol resolver.
+//!
+//! Layer-2 of triage no longer downloads attachments inline (the LLM
+//! lost the `*_save_image / *_save_attachment` tools when the
+//! per-platform host bridge was removed). What remains here:
+//!
+//!   1. `resolve_attachment_url` — backs the `helmor-attachment://`
+//!      custom protocol registered in `lib.rs`. Existing rows in the
+//!      DB that point at a `helmor-attachment://` URL keep rendering.
+//!   2. `sweep_workspace_store` — called by the archive lifecycle so
+//!      dropped workspaces don't leak files.
+//!
+//! Anything else (per-tick staging, base64 inline previews, MIME
+//! sniffing) was bound to the old LLM flow and is gone.
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
-use base64::Engine;
+use anyhow::{Context, Result};
 
-const STAGING_SUBDIR: &str = "triage/attachments-staging";
-const WORKSPACE_SUBDIR: &str = ".helmor/triage-attachments";
-/// Files larger than this skip the inline-to-LLM path — we still keep
-/// the staged copy so the downstream cloud agent can see it via the
-/// workspace dir, but the local LLM only gets a text breadcrumb.
-const INLINE_PREVIEW_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const STORE_SUBDIR: &str = "triage/attachments";
+const ATTACHMENT_URL_SCHEME: &str = "helmor-attachment";
 
-pub struct InlinePreview {
-    pub data_base64: String,
-    pub mime_type: String,
+/// Root of the persistent attachment store. Lives under helmor's data
+/// dir, NOT inside any workspace.
+pub fn store_root() -> Result<PathBuf> {
+    Ok(crate::data_dir::data_dir()?.join(STORE_SUBDIR))
 }
 
-/// Read a staged file and produce a base64 preview the local LLM can
-/// consume as an `ImageContent` block. Returns `Ok(None)` when the file
-/// is over `INLINE_PREVIEW_MAX_BYTES` or its extension isn't an image
-/// type llama-cpp's vision pipeline supports.
-pub fn inline_preview(path: &Path) -> Result<Option<InlinePreview>> {
-    let metadata = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
-    if metadata.len() > INLINE_PREVIEW_MAX_BYTES {
-        return Ok(None);
-    }
-    let Some(mime) = guess_image_mime(path) else {
-        return Ok(None);
-    };
-    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(Some(InlinePreview {
-        data_base64,
-        mime_type: mime,
-    }))
-}
-
-fn guess_image_mime(path: &Path) -> Option<String> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)?;
-    Some(
-        match ext.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "bmp" => "image/bmp",
-            _ => return None,
-        }
-        .to_string(),
-    )
-}
-
-pub struct StagedAttachment {
-    pub id: String,
-    pub path: PathBuf,
-    pub filename: String,
-}
-
-pub fn staging_root() -> Result<PathBuf> {
-    Ok(crate::data_dir::data_dir()?.join(STAGING_SUBDIR))
-}
-
-pub fn staging_dir_for(tick_id: &str) -> Result<PathBuf> {
-    let dir = staging_root()?.join(tick_id);
+fn store_dir_for_workspace(workspace_id: &str) -> Result<PathBuf> {
+    let dir = store_root()?.join(workspace_id);
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
     Ok(dir)
 }
 
-// Allocate a path under the tick's staging dir; caller writes the content.
-pub fn reserve_attachment(tick_id: &str, extension: Option<&str>) -> Result<StagedAttachment> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let ext = extension
-        .map(|e| e.trim_start_matches('.'))
-        .filter(|e| !e.is_empty() && is_safe_ext(e));
-    let filename = match ext {
-        Some(ext) => format!("{id}.{ext}"),
-        None => id.clone(),
+/// Resolve `helmor-attachment://<workspace_id>/<filename>` to an
+/// absolute path in the persistent store. `Ok(None)` for malformed
+/// inputs or missing files. Used by the Tauri protocol handler in
+/// `lib.rs`.
+pub fn resolve_attachment_url(url: &str) -> Result<Option<PathBuf>> {
+    let prefix = format!("{ATTACHMENT_URL_SCHEME}://");
+    let rest = match url.strip_prefix(&prefix) {
+        Some(r) => r,
+        None => return Ok(None),
     };
-    let dir = staging_dir_for(tick_id)?;
-    Ok(StagedAttachment {
-        id,
-        path: dir.join(&filename),
-        filename,
-    })
-}
-
-pub fn find_attachment(attachment_id: &str) -> Result<Option<PathBuf>> {
-    let root = staging_root()?;
-    if !root.exists() {
+    let (workspace_id, filename) = match rest.split_once('/') {
+        Some(parts) => parts,
+        None => return Ok(None),
+    };
+    if workspace_id.is_empty() || filename.is_empty() {
         return Ok(None);
     }
-    for tick in std::fs::read_dir(&root).context("read staging root")? {
-        let tick_path = tick?.path();
-        if !tick_path.is_dir() {
-            continue;
-        }
-        for entry in std::fs::read_dir(&tick_path).context("read tick dir")? {
-            let path = entry?.path();
-            if path.file_stem().and_then(|s| s.to_str()) == Some(attachment_id) {
-                return Ok(Some(path));
-            }
-        }
+    if workspace_id.contains("..") || filename.contains("..") || filename.contains('/') {
+        return Ok(None);
     }
-    Ok(None)
-}
-
-pub struct MovedAttachment {
-    pub workspace_relative_path: String,
-    pub absolute_path: PathBuf,
-    pub filename: String,
-}
-
-// Returns the workspace-relative path for use in the priming message.
-pub fn move_into_workspace(
-    attachment_id: &str,
-    workspace_root: &std::path::Path,
-) -> Result<MovedAttachment> {
-    let staged = find_attachment(attachment_id)?
-        .ok_or_else(|| anyhow!("attachment {attachment_id} not found in staging"))?;
-    let filename = staged
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow!("invalid staged filename"))?
-        .to_string();
-    let dest_dir = workspace_root.join(WORKSPACE_SUBDIR);
-    std::fs::create_dir_all(&dest_dir).with_context(|| format!("mkdir {}", dest_dir.display()))?;
-    let dest = dest_dir.join(&filename);
-    // Cross-device safe: rename, fall back to copy+remove.
-    if std::fs::rename(&staged, &dest).is_err() {
-        std::fs::copy(&staged, &dest).with_context(|| format!("copy {filename}"))?;
-        let _ = std::fs::remove_file(&staged);
+    let path = store_root()?.join(workspace_id).join(filename);
+    if !path.is_file() {
+        return Ok(None);
     }
-    Ok(MovedAttachment {
-        workspace_relative_path: format!("{WORKSPACE_SUBDIR}/{filename}"),
-        absolute_path: dest,
-        filename,
-    })
+    Ok(Some(path))
 }
 
-// GC tick dirs older than `max_age`; run by scheduler after each tick.
-pub fn sweep_stale_staging(max_age: Duration) {
-    let Ok(root) = staging_root() else { return };
-    let Ok(entries) = std::fs::read_dir(&root) else {
+/// GC: remove the persistent attachment dir for a workspace. Called
+/// from the archive lifecycle so dropped workspaces don't leak files.
+pub fn sweep_workspace_store(workspace_id: &str) {
+    let Ok(dir) = store_dir_for_workspace(workspace_id) else {
         return;
     };
-    let cutoff = SystemTime::now()
-        .checked_sub(max_age)
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let mtime = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        if mtime < cutoff {
-            let _ = std::fs::remove_dir_all(&path);
+    if let Err(error) = std::fs::remove_dir_all(&dir) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %error,
+                workspace_id,
+                path = %dir.display(),
+                "triage: attachment store sweep failed"
+            );
         }
     }
-}
-
-fn is_safe_ext(ext: &str) -> bool {
-    ext.len() <= 12
-        && ext
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }

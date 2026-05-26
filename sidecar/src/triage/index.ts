@@ -3,7 +3,7 @@
 import type { SidecarEmitter } from "../emitter";
 import { logger } from "../logger";
 import { abortCurrentTick, runTriageTick } from "./agent";
-import type { TriageTickParams } from "./types";
+import type { TriageCandidate, TriageTickParams } from "./types";
 
 export function handleStopTriageTick(
 	requestId: string,
@@ -20,25 +20,18 @@ export function handleStopTriageTick(
 function coerceParams(raw: Record<string, unknown>): TriageTickParams {
 	const obj = (v: unknown) =>
 		v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-	const strArr = (v: unknown): string[] =>
-		Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
-	const strRecord = (v: unknown): Record<string, string> => {
-		const out: Record<string, string> = {};
-		for (const [k, val] of Object.entries(obj(v))) {
-			if (typeof val === "string") out[k] = val;
-		}
-		return out;
-	};
 	const local = obj(raw.localModel);
 	const repos = Array.isArray(raw.repos)
 		? (raw.repos as TriageTickParams["repos"])
+		: [];
+	const candidates = Array.isArray(raw.candidates)
+		? (raw.candidates as TriageCandidate[])
 		: [];
 	return {
 		tickId: String(raw.tickId ?? ""),
 		systemPrompt: typeof raw.systemPrompt === "string" ? raw.systemPrompt : "",
 		maxPerTick: Math.max(1, Math.min(50, Number(raw.maxPerTick ?? 5))),
-		providers: strArr(raw.providers),
-		lastTriagedAt: strRecord(raw.lastTriagedAt),
+		candidates,
 		repos,
 		localModel: {
 			baseUrl: String(local.baseUrl ?? ""),
@@ -57,7 +50,7 @@ export async function handleRunTriageTick(
 	const params = coerceParams(rawParams);
 	logger.debug(`[${requestId}] triage tick start`, {
 		tickId: params.tickId,
-		providers: params.providers,
+		candidateCount: params.candidates.length,
 	});
 
 	if (!params.localModel.baseUrl) {
@@ -67,7 +60,9 @@ export async function handleRunTriageTick(
 		);
 		return;
 	}
-	if (params.providers.length === 0) {
+	if (params.candidates.length === 0) {
+		// Nothing to decide. Tell the scheduler so it can record a
+		// "no actionable items" outcome and not spin the LLM at all.
 		emitter.end(requestId);
 		return;
 	}
@@ -83,11 +78,11 @@ export async function handleRunTriageTick(
 				id: requestId,
 				type: "triageProposal",
 				params: {
-					sourceType: proposal.sourceType,
-					sourceRef: proposal.sourceRef,
+					candidateId: proposal.candidateId,
 					repoId: proposal.repoId,
+					title: proposal.title,
+					branchName: proposal.branchName,
 					planMessage: proposal.planMessage,
-					attachments: proposal.attachments ?? [],
 				},
 			});
 		}
@@ -98,11 +93,6 @@ export async function handleRunTriageTick(
 				message: outcome.finalMessage,
 			});
 		}
-		write({
-			id: requestId,
-			type: "triageScanned",
-			providers: outcome.scannedProviders,
-		});
 		if (outcome.cancelled) {
 			write({ id: requestId, type: "triageCancelled" });
 		}

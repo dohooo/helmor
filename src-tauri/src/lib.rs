@@ -62,6 +62,26 @@ fn empty_404() -> tauri::http::Response<Vec<u8>> {
         .expect("404 response builder is infallible")
 }
 
+/// Best-effort MIME sniff by extension for the `helmor-attachment`
+/// protocol responder. Falls back to `application/octet-stream` so the
+/// webview at least downloads / displays the bytes rather than rejecting.
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
     db::init_connection(conn, true).expect("Failed to apply PRAGMA init");
@@ -107,7 +127,54 @@ pub fn run() {
                 };
                 responder.respond(response);
             });
-        });
+        })
+        // Triage priming attachments. Markdown emits
+        // `helmor-attachment://<workspace_id>/<filename>`; this handler
+        // resolves it to a file in `<data>/triage/attachments/...` and
+        // streams the bytes back. Done as a custom protocol (vs the
+        // default asset protocol) so streamdown's rehype-sanitize +
+        // rehype-harden allowlist can opt this scheme in explicitly.
+        .register_asynchronous_uri_scheme_protocol(
+            "helmor-attachment",
+            |_app, request, responder| {
+                let uri = request.uri().to_string();
+                std::thread::spawn(move || {
+                    let response = match triage::attachments::resolve_attachment_url(&uri) {
+                        Ok(Some(path)) => match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                let content_type = mime_for_path(&path);
+                                tauri::http::Response::builder()
+                                    .header("Content-Type", content_type)
+                                    // Attachment files are content-stable
+                                    // (uuid-named, never rewritten); cache
+                                    // hard so re-renders don't pay disk IO.
+                                    .header("Cache-Control", "public, max-age=2592000, immutable")
+                                    .body(bytes)
+                                    .unwrap_or_else(|_| empty_404())
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    uri = %uri,
+                                    error = %error,
+                                    "helmor-attachment read failed",
+                                );
+                                empty_404()
+                            }
+                        },
+                        Ok(None) => empty_404(),
+                        Err(error) => {
+                            tracing::warn!(
+                                uri = %uri,
+                                error = %format!("{error:#}"),
+                                "helmor-attachment resolve failed",
+                            );
+                            empty_404()
+                        }
+                    };
+                    responder.respond(response);
+                });
+            },
+        );
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -382,8 +449,10 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
-            // AI-triage heartbeat scheduler.
-            triage::spawn_scheduler(app.handle().clone());
+            // Triage: one thread runs the fetcher every 5 min and,
+            // when auto_run + LLM are on, fires a Layer-2 tick right
+            // after each fetch so the LLM always judges fresh data.
+            triage::fetcher::spawn_scheduler(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -509,6 +578,15 @@ pub fn run() {
             commands::triage_commands::get_triage_active_status,
             commands::triage_commands::trigger_triage_tick_now,
             commands::triage_commands::cancel_triage_tick,
+            commands::triage_commands::list_open_triage_candidates,
+            commands::triage_commands::count_open_triage_candidates,
+            commands::triage_commands::read_triage_candidate,
+            commands::triage_commands::record_triage_decision,
+            commands::triage_commands::get_triage_source_health,
+            commands::triage_lark_cli_commands::spawn_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::stop_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::write_lark_cli_auth_terminal_stdin,
+            commands::triage_lark_cli_commands::resize_lark_cli_auth_terminal,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,

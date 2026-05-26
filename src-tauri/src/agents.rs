@@ -280,12 +280,25 @@ pub async fn send_agent_message_stream(
     // Mark consumed only after the prompt actually streamed; retries should keep the priming.
     if send_result.is_ok() {
         if let Some(session_id) = priming_session_to_consume {
-            if let Err(error) = crate::triage::mark_consumed_for_session(&session_id) {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    session_id,
-                    "triage: failed to mark priming consumed; injection will recur"
-                );
+            match crate::triage::mark_consumed_for_session(&session_id) {
+                Ok(true) => {
+                    // Kind flipped from `ai_triage` → `manual`; the sidebar's
+                    // Triage bucket would still show this workspace until
+                    // its next periodic refetch. Publishing here makes the
+                    // graduation visible instantly.
+                    crate::ui_sync::publish(
+                        &app,
+                        crate::ui_sync::UiMutationEvent::WorkspaceListChanged,
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        session_id,
+                        "triage: failed to mark priming consumed; injection will recur"
+                    );
+                }
             }
         }
     }

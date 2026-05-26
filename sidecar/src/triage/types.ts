@@ -1,3 +1,16 @@
+/**
+ * Wire shapes for one triage tick.
+ *
+ * Layer-2 lives entirely on `triage_candidate` rows the Rust fetcher
+ * has already collected. The sidecar receives:
+ *   - the candidate slice to judge,
+ *   - the repo list (so propose_workspace can match),
+ *   - local-model endpoint.
+ *
+ * Provider-discovery params (`providers` / `lastTriagedAt`) are gone —
+ * Rust does all data fetching now.
+ */
+
 export interface TriageRepo {
 	readonly id: string;
 	readonly name: string;
@@ -12,27 +25,34 @@ export interface TriageLocalModel {
 	readonly model: string;
 }
 
+export interface TriageCandidate {
+	readonly id: string;
+	readonly source: string;
+	readonly sourceKind: string;
+	readonly sourceRef: string;
+	readonly sourceParent: string | null;
+	readonly sourceTime: string;
+	readonly sender: string | null;
+	readonly title: string | null;
+	readonly preview: string | null;
+	readonly externalUrl: string | null;
+	readonly payloadPath: string;
+	readonly payloadBytes: number;
+}
+
 export interface TriageTickParams {
 	readonly tickId: string;
 	readonly systemPrompt: string;
 	readonly maxPerTick: number;
-	/** Enabled provider ids in order. */
-	readonly providers: readonly string[];
-	/** ISO timestamp per provider id; missing = first run. */
-	readonly lastTriagedAt: Readonly<Record<string, string>>;
+	readonly candidates: readonly TriageCandidate[];
 	readonly repos: readonly TriageRepo[];
 	readonly localModel: TriageLocalModel;
 }
 
-export interface TriageAttachment {
-	readonly id: string;
-	readonly alt?: string;
-}
-
 export interface TriageProposal {
-	readonly sourceType: string;
-	readonly sourceRef: string;
+	readonly candidateId: string;
 	readonly repoId: string;
+	readonly title: string;
+	readonly branchName: string;
 	readonly planMessage: string;
-	readonly attachments?: readonly TriageAttachment[];
 }

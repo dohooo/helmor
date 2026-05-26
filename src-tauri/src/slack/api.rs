@@ -374,6 +374,10 @@ pub struct ConversationRow {
     #[serde(default)]
     pub is_mpim: bool,
     #[serde(default)]
+    pub is_channel: bool,
+    #[serde(default)]
+    pub is_private: bool,
+    #[serde(default)]
     pub user: Option<String>,
     #[serde(default)]
     pub unread_count_display: u32,
@@ -382,13 +386,26 @@ pub struct ConversationRow {
 }
 
 pub fn users_conversations_dms(creds: &SlackCreds) -> Result<Vec<ConversationRow>> {
+    users_conversations(creds, "im,mpim", 100)
+}
+
+/// Generic `users.conversations` listing. `types` is a Slack-side
+/// comma-separated whitelist (`im`, `mpim`, `public_channel`,
+/// `private_channel`). Used by the triage fetcher to enumerate every
+/// conversation the user is a member of for smart-discovery filtering.
+pub fn users_conversations(
+    creds: &SlackCreds,
+    types: &str,
+    limit: u32,
+) -> Result<Vec<ConversationRow>> {
+    let limit_str = limit.clamp(1, 1000).to_string();
     let body = call(
         creds,
         "users.conversations",
         &[
-            ("types", "im,mpim"),
+            ("types", types),
             ("exclude_archived", "true"),
-            ("limit", "100"),
+            ("limit", &limit_str),
         ],
     )?;
     let raw = body

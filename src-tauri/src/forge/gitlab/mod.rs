@@ -29,7 +29,7 @@ use super::types::{
 pub(super) mod accounts;
 mod api;
 mod context;
-pub(super) mod inbox;
+pub mod inbox;
 mod merge_request;
 mod pipeline;
 mod review;

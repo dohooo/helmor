@@ -1938,9 +1938,156 @@ export type TriageConfig = {
 	autoRun: boolean;
 	systemPrompt: string;
 	maxPerTick: number;
-	/** provider_id → enabled */
-	providers: Record<string, boolean>;
 };
+
+export type TriageCandidateRow = {
+	id: string;
+	source: string;
+	sourceKind: string;
+	sourceRef: string;
+	sourceParent: string | null;
+	sourceTime: string;
+	sender: string | null;
+	title: string | null;
+	preview: string | null;
+	externalUrl: string | null;
+	payloadPath: string;
+	payloadBytes: number;
+	decision: string | null;
+};
+
+export async function listOpenTriageCandidates(
+	limit = 20,
+): Promise<TriageCandidateRow[]> {
+	try {
+		return await invoke<TriageCandidateRow[]>("list_open_triage_candidates", {
+			limit,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage candidates."),
+		);
+	}
+}
+
+export async function countOpenTriageCandidates(): Promise<number> {
+	try {
+		return await invoke<number>("count_open_triage_candidates");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to count triage candidates."),
+		);
+	}
+}
+
+export async function readTriageCandidate(
+	candidateId: string,
+	grep?: string,
+): Promise<string> {
+	try {
+		return await invoke<string>("read_triage_candidate", {
+			candidateId,
+			grep,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to read triage candidate."),
+		);
+	}
+}
+
+export async function recordTriageDecision(
+	candidateId: string,
+	decision: string,
+	reason?: string,
+): Promise<void> {
+	try {
+		await invoke<void>("record_triage_decision", {
+			candidateId,
+			decision,
+			reason,
+		});
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to record triage decision."),
+		);
+	}
+}
+
+export type TriageSourceHealthState =
+	| "ok"
+	| "notInstalled"
+	| "notAuthed"
+	| "notConfigured";
+
+export type TriageSourceHealth = {
+	source: string;
+	displayName: string;
+	state: TriageSourceHealthState;
+	detail: string;
+};
+
+export async function getTriageSourceHealth(): Promise<TriageSourceHealth[]> {
+	try {
+		return await invoke<TriageSourceHealth[]>("get_triage_source_health");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Unable to load triage source health."),
+		);
+	}
+}
+
+export type LarkAuthAction = "install" | "signIn";
+
+export async function spawnLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("spawn_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+		channel,
+	});
+}
+
+export async function stopLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+): Promise<boolean> {
+	return invoke<boolean>("stop_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+	});
+}
+
+export async function writeLarkCliAuthTerminalStdin(
+	action: LarkAuthAction,
+	instanceId: string,
+	data: string,
+): Promise<boolean> {
+	return invoke<boolean>("write_lark_cli_auth_terminal_stdin", {
+		action,
+		instanceId,
+		data,
+	});
+}
+
+export async function resizeLarkCliAuthTerminal(
+	action: LarkAuthAction,
+	instanceId: string,
+	cols: number,
+	rows: number,
+): Promise<boolean> {
+	return invoke<boolean>("resize_lark_cli_auth_terminal", {
+		action,
+		instanceId,
+		cols,
+		rows,
+	});
+}
 
 export type TriageToolCallRecord = {
 	at: string;
@@ -1956,6 +2103,10 @@ export type TriageActiveStatus = {
 	lastToolName: string | null;
 	lastUpdateAt: string;
 	recentToolCalls: TriageToolCallRecord[];
+	/** 1-indexed current batch; 0 = haven't started a batch yet. */
+	batchIndex: number;
+	/** Upper bound on batches this tick will run. */
+	batchTotal: number;
 };
 
 export type TickOutcome =

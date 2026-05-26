@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	AlertTriangle,
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
 	CircleStop,
+	Download,
+	KeyRound,
 	MessageSquareQuote,
 	MinusCircle,
 	Play,
+	Settings as SettingsIcon,
 	Square,
 	Wrench,
 	XCircle,
@@ -19,7 +23,14 @@ import {
 	LarkBrandIcon,
 	SlackBrandIcon,
 } from "@/components/brand-icon";
+import { LarkConnectDialog } from "@/components/lark-connect-dialog";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { Button } from "@/components/ui/button";
+import {
+	HoverCard,
+	HoverCardContent,
+	HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -30,12 +41,17 @@ import {
 } from "@/components/ui/tooltip";
 import {
 	cancelTriageTick,
+	countOpenTriageCandidates,
 	getLocalLlmStatus,
 	getTriageActiveStatus,
 	getTriageConfig,
+	getTriageSourceHealth,
+	type LarkAuthAction,
 	type LastTickOutcome,
 	type TriageActiveStatus,
 	type TriageConfig,
+	type TriageSourceHealth,
+	type TriageSourceHealthState,
 	triggerTriageTickNow,
 	updateTriageConfig,
 } from "@/lib/api";
@@ -43,45 +59,18 @@ import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 import { SettingsReleaseBadge } from "../components/release-marker";
 
-type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
-
-// Keep in sync with sidecar/src/triage/providers/registry.ts.
-const PROVIDER_SPECS: ReadonlyArray<{
-	id: string;
-	displayName: string;
-	description: string;
-	Icon: ProviderIcon;
-}> = [
-	{
-		id: "slack",
-		displayName: "Slack",
-		description: "Scans Slack inbox / search across connected workspaces.",
-		Icon: SlackBrandIcon,
-	},
-	{
-		id: "lark",
-		displayName: "Lark",
-		description:
-			"Scans messages via lark-cli. Sign in once with `lark-cli auth login`.",
-		Icon: LarkBrandIcon,
-	},
-	{
-		id: "gitlab",
-		displayName: "GitLab",
-		description:
-			"Scans GitLab inbox (issues/MRs). Sign in with `glab auth login`.",
-		Icon: GitlabBrandIcon,
-	},
-	{
-		id: "github",
-		displayName: "GitHub",
-		description:
-			"Scans GitHub inbox (issues/PRs). Sign in with `gh auth login`.",
-		Icon: GithubBrandIcon,
-	},
-];
-
 const LOCAL_LLM_STATUS_KEY = ["localLlmStatus"] as const;
+const PENDING_CANDIDATES_KEY = ["triagePendingCandidates"] as const;
+const SOURCE_HEALTH_KEY = ["triageSourceHealth"] as const;
+
+type BrandIcon = ComponentType<{ size?: number; className?: string }>;
+
+const SOURCE_ICONS: Record<string, BrandIcon> = {
+	lark: LarkBrandIcon,
+	slack: SlackBrandIcon,
+	github: GithubBrandIcon,
+	gitlab: GitlabBrandIcon,
+};
 
 function formatElapsed(startedAt: string, now: number): string {
 	const start = Date.parse(startedAt);
@@ -138,6 +127,18 @@ export function TriagePanel() {
 		queryFn: getTriageActiveStatus,
 		refetchInterval: 1000,
 	});
+	const pendingCount = useQuery({
+		queryKey: PENDING_CANDIDATES_KEY,
+		queryFn: countOpenTriageCandidates,
+		refetchInterval: 5000,
+	});
+	const sourceHealth = useQuery({
+		queryKey: SOURCE_HEALTH_KEY,
+		queryFn: getTriageSourceHealth,
+		// Refresh slow enough not to hammer `lark-cli --version` every
+		// second, fast enough that fixing a missing login feels live.
+		refetchInterval: 15000,
+	});
 
 	const [draft, setDraft] = useState<TriageConfig | null>(null);
 
@@ -193,10 +194,6 @@ export function TriagePanel() {
 		save.mutate(next);
 	};
 
-	const setProviderEnabled = (id: string, enabled: boolean) => {
-		commit({ providers: { ...draft.providers, [id]: enabled } });
-	};
-
 	return (
 		<div className="flex flex-col gap-3 py-5">
 			<HeaderBar
@@ -227,39 +224,32 @@ export function TriagePanel() {
 
 					<Field
 						label="Sources"
-						hint="Toggle each integration; CLI auth must already be set up."
+						hint="Where Helmor pulls triage candidates from."
 					>
 						<div className="flex flex-col divide-y divide-border/40 rounded-md border border-border/60 bg-background/30">
-							{PROVIDER_SPECS.map((spec) => {
-								const Icon = spec.Icon;
-								return (
-									<div
-										key={spec.id}
-										className="flex items-center justify-between gap-3 px-3 py-2.5"
-									>
-										<div className="flex min-w-0 items-start gap-2.5">
-											<Icon
-												size={16}
-												className="mt-0.5 shrink-0 text-foreground"
-											/>
-											<div className="min-w-0">
-												<div className="text-ui font-medium">
-													{spec.displayName}
-												</div>
-												<div className="text-mini text-muted-foreground">
-													{spec.description}
-												</div>
-											</div>
-										</div>
-										<Switch
-											checked={draft.providers[spec.id] ?? false}
-											onCheckedChange={(c) => setProviderEnabled(spec.id, c)}
-										/>
-									</div>
-								);
-							})}
+							{sourceHealth.data?.map((row) => (
+								<SourceRow key={row.source} row={row} />
+							)) ?? (
+								<div className="px-3 py-2.5 text-mini text-muted-foreground">
+									Checking source health…
+								</div>
+							)}
 						</div>
 					</Field>
+
+					<div className="text-mini text-muted-foreground">
+						{pendingCount.isLoading ? (
+							"Loading candidate queue…"
+						) : (
+							<span>
+								<span className="font-medium text-foreground">
+									{pendingCount.data ?? 0}
+								</span>{" "}
+								candidate{pendingCount.data === 1 ? "" : "s"} waiting to be
+								judged.
+							</span>
+						)}
+					</div>
 
 					<div className="flex items-center justify-between gap-3">
 						<OutcomeLine last={lastOutcome} now={now} />
@@ -368,27 +358,42 @@ function Field({
 	);
 }
 
-function SummaryTooltip({ text }: { text: string }) {
+/// Hover to open. Long markdown content (LLM final reply) renders
+/// inside a popover with a capped max-height + scroll, rather than the
+/// old whitespace-pre-wrap tooltip that broke on code blocks / lists.
+/// HoverCard (not Tooltip) so the card itself accepts pointer + wheel
+/// events — users need to mouse over to scroll long summaries.
+function SummaryPopover({ text }: { text: string }) {
 	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button
-						type="button"
-						aria-label="Show agent reasoning"
-						className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
-					>
-						<MessageSquareQuote className="size-3" />
-					</button>
-				</TooltipTrigger>
-				<TooltipContent
-					side="top"
-					className="max-w-[420px] whitespace-pre-wrap text-[11px] leading-5"
+		<HoverCard openDelay={120} closeDelay={120}>
+			<HoverCardTrigger asChild>
+				<button
+					type="button"
+					aria-label="Show agent reasoning"
+					className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
 				>
-					{text}
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+					<MessageSquareQuote className="size-3" />
+				</button>
+			</HoverCardTrigger>
+			<HoverCardContent
+				side="top"
+				align="end"
+				className="w-[480px] max-w-[calc(100vw-4rem)] p-0"
+			>
+				<div className="max-h-[360px] overflow-y-auto px-3 py-2.5">
+					<div className="conversation-markdown max-w-none break-words text-foreground">
+						<LazyStreamdown
+							animated={false}
+							caret={undefined}
+							className="conversation-streamdown"
+							isAnimating={false}
+						>
+							{text}
+						</LazyStreamdown>
+					</div>
+				</div>
+			</HoverCardContent>
+		</HoverCard>
 	);
 }
 
@@ -417,7 +422,7 @@ function OutcomeLine({
 					Last tick · {when} · created {o.count} workspace
 					{o.count === 1 ? "" : "s"}
 				</span>
-				{summary ? <SummaryTooltip text={summary} /> : null}
+				{summary ? <SummaryPopover text={summary} /> : null}
 			</div>
 		);
 	}
@@ -428,7 +433,7 @@ function OutcomeLine({
 				<span className="truncate">
 					Last tick · {when} · nothing actionable
 				</span>
-				{summary ? <SummaryTooltip text={summary} /> : null}
+				{summary ? <SummaryPopover text={summary} /> : null}
 			</div>
 		);
 	}
@@ -438,7 +443,7 @@ function OutcomeLine({
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-muted-foreground">
 				<CircleStop className="size-3.5 shrink-0" />
 				<span className="truncate">Last tick · {when} · stopped</span>
-				{summary ? <SummaryTooltip text={summary} /> : null}
+				{summary ? <SummaryPopover text={summary} /> : null}
 			</div>
 		);
 	}
@@ -447,7 +452,7 @@ function OutcomeLine({
 		<div className="flex min-w-0 flex-1 items-center gap-1.5 text-mini text-destructive">
 			<XCircle className="size-3.5 shrink-0" />
 			<span className="truncate">Last tick · {when} · failed</span>
-			<SummaryTooltip text={summary || o.message || "(no message)"} />
+			<SummaryPopover text={summary || o.message || "(no message)"} />
 		</div>
 	);
 }
@@ -466,11 +471,20 @@ function ActiveStatusCard({
 		[status.recentToolCalls],
 	);
 
+	const batchLabel =
+		status.batchIndex > 0 && status.batchTotal > 0
+			? `Batch ${status.batchIndex} of ${status.batchTotal}`
+			: null;
 	return (
 		<div className="rounded-lg border border-border/60 bg-card/40 p-3">
 			<div className="flex items-center gap-2">
 				<span className="inline-block size-2 animate-pulse rounded-full bg-chart-2" />
 				<span className="text-ui font-medium">Tick running</span>
+				{batchLabel ? (
+					<span className="rounded-md bg-accent/40 px-1.5 py-0.5 text-mini font-medium text-foreground">
+						{batchLabel}
+					</span>
+				) : null}
 				<span className="text-mini text-muted-foreground">
 					{formatElapsed(status.startedAt, now)} · turn {status.turnCount} ·{" "}
 					{status.toolCount} tool calls
@@ -522,4 +536,102 @@ function ActiveStatusCard({
 			) : null}
 		</div>
 	);
+}
+
+function stateBadge(state: TriageSourceHealthState): {
+	label: string;
+	tone: string;
+	Icon: ComponentType<{ className?: string }>;
+} {
+	switch (state) {
+		case "ok":
+			return {
+				label: "Connected",
+				tone: "text-emerald-600 dark:text-emerald-400",
+				Icon: CheckCircle2,
+			};
+		case "notInstalled":
+			return {
+				label: "Install required",
+				tone: "text-amber-600 dark:text-amber-400",
+				Icon: Download,
+			};
+		case "notAuthed":
+			return {
+				label: "Sign-in required",
+				tone: "text-amber-600 dark:text-amber-400",
+				Icon: KeyRound,
+			};
+		case "notConfigured":
+			return {
+				label: "Not configured",
+				tone: "text-muted-foreground",
+				Icon: SettingsIcon,
+			};
+		default:
+			return {
+				label: "Unknown",
+				tone: "text-muted-foreground",
+				Icon: AlertTriangle,
+			};
+	}
+}
+
+function SourceRow({ row }: { row: TriageSourceHealth }) {
+	const Icon = SOURCE_ICONS[row.source] ?? AlertTriangle;
+	const { label, tone, Icon: StateIcon } = stateBadge(row.state);
+	// Lark is the only source today that can drive an in-app terminal
+	// flow — gh / glab are bundled and Slack uses its own settings panel.
+	const larkAction = larkConnectAction(row);
+	const [dialogOpen, setDialogOpen] = useState(false);
+	// When a Connect button is available, the button itself signals
+	// "action required" — no need to also stamp the row with an
+	// "Install required" / "Sign-in required" badge.
+	const showBadge = !larkAction;
+	return (
+		<>
+			<div className="flex items-center gap-3 px-3 py-2.5">
+				<Icon size={16} className="shrink-0 text-foreground" />
+				<span className="shrink-0 text-ui font-medium">{row.displayName}</span>
+				<span className="min-w-0 flex-1 truncate text-mini text-muted-foreground">
+					{row.detail}
+				</span>
+				{larkAction ? (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => setDialogOpen(true)}
+					>
+						Connect
+					</Button>
+				) : null}
+				{showBadge ? (
+					<span
+						className={cn(
+							"inline-flex shrink-0 items-center gap-1 text-mini",
+							tone,
+						)}
+					>
+						<StateIcon className="size-3" />
+						{label}
+					</span>
+				) : null}
+			</div>
+			{larkAction ? (
+				<LarkConnectDialog
+					open={dialogOpen}
+					onOpenChange={setDialogOpen}
+					action={larkAction}
+				/>
+			) : null}
+		</>
+	);
+}
+
+function larkConnectAction(row: TriageSourceHealth): LarkAuthAction | null {
+	if (row.source !== "lark") return null;
+	if (row.state === "notInstalled") return "install";
+	if (row.state === "notAuthed") return "signIn";
+	return null;
 }

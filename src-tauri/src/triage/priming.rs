@@ -78,18 +78,26 @@ pub fn extract_plan_text(raw: &str) -> Option<String> {
     }
 }
 
-// Idempotent: already-consumed rows no-op.
-pub fn mark_consumed_for_session(helmor_session_id: &str) -> Result<()> {
+/// Flip `ai_priming_consumed = 1` AND graduate `kind` from `ai_triage`
+/// to `manual`. The kind flip is what removes the workspace from the
+/// sidebar's Triage bucket — once the user has sent the first message,
+/// the workspace's lifecycle is indistinguishable from a manually-
+/// created one. Returns `Ok(true)` when a row was actually updated
+/// (caller publishes `WorkspaceListChanged` so the sidebar repaints).
+/// Idempotent: already-consumed rows return Ok(false) with no writes.
+pub fn mark_consumed_for_session(helmor_session_id: &str) -> Result<bool> {
     let connection = db::write_conn()?;
-    connection
+    let rows = connection
         .execute(
-            "UPDATE workspaces SET ai_priming_consumed = 1
+            "UPDATE workspaces
+             SET ai_priming_consumed = 1,
+                 kind = 'manual'
              WHERE id = (SELECT workspace_id FROM sessions WHERE id = ?1)
                AND ai_priming_consumed = 0",
             [helmor_session_id],
         )
-        .context("mark ai_priming_consumed")?;
-    Ok(())
+        .context("mark ai_priming_consumed + graduate kind")?;
+    Ok(rows > 0)
 }
 
 // Priming goes first (discovery context), then any user preferences prefix.

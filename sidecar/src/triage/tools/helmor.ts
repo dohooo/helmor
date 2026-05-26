@@ -1,6 +1,9 @@
-// Helmor-internal tools: list_repos + propose_workspace accumulator.
+// Layer-2 LLM tools: list_repos, propose_workspace, mark_not_actionable,
+// read_candidate. Together they replace the entire old provider /
+// scratch tool surface.
 
 import { Type } from "@earendil-works/pi-ai";
+import { callHost } from "../../host-bridge";
 import type { TriageProposal, TriageRepo } from "../types";
 
 export interface PropositionBudget {
@@ -9,10 +12,19 @@ export interface PropositionBudget {
 
 export class ProposalAccumulator {
 	private readonly proposals: TriageProposal[] = [];
+	private readonly decided: Set<string> = new Set();
 
-	push(proposal: TriageProposal): { skipped: boolean } {
+	push(proposal: TriageProposal): void {
 		this.proposals.push(proposal);
-		return { skipped: false };
+		this.decided.add(proposal.candidateId);
+	}
+
+	markDecided(candidateId: string): void {
+		this.decided.add(candidateId);
+	}
+
+	hasDecided(candidateId: string): boolean {
+		return this.decided.has(candidateId);
 	}
 
 	get count(): number {
@@ -50,45 +62,47 @@ export function buildProposeWorkspaceTool(
 		name: "propose_workspace",
 		label: "Propose AI Workspace",
 		description:
-			"Record one actionable task. Helmor creates a workspace from the matched repo and pre-fills plan_message as the first assistant message. Call once per task. Do NOT analyse implementation here.",
+			"Record one actionable task for the candidate. Helmor creates a workspace from the matched repo, names the session with `title`, names the git branch with `branch_name`, and pre-fills `plan_message` as the first assistant message. Call once per actionable candidate. Do NOT analyse implementation here.",
 		parameters: Type.Object({
-			source_type: Type.String({
+			candidate_id: Type.String({
 				description:
-					"Stable source category (e.g. lark, gitlab_issue, github_issue).",
+					"Id of the candidate (from the list you were given). Helmor uses it to mark the candidate decided AND to dedup against existing triage workspaces.",
 			}),
-			source_ref: Type.String({ description: "Stable id within the source." }),
 			repo_id: Type.String({ description: "Helmor repo id from list_repos." }),
+			title: Type.String({
+				description:
+					'Short human-readable label, max ~50 chars, no quotes. Use the user\'s language. Becomes the session title in the sidebar — make it scannable (e.g. "修复 9B 模型加载视觉编码器崩溃").',
+			}),
+			branch_name: Type.String({
+				description:
+					"Lowercase-hyphen English slug for the git branch, max ~40 chars. No prefix (Helmor adds your username/). Examples: `fix-vision-loader-crash`, `triage-feedback-button`.",
+			}),
 			plan_message: Type.String({
 				description:
 					"Markdown plan shown verbatim as first assistant message in the new workspace.",
 			}),
-			attachments: Type.Optional(
-				Type.Array(
-					Type.Object({
-						id: Type.String({
-							description:
-								"Attachment id returned by a *_save_image / *_save_attachment tool earlier in this turn.",
-						}),
-						alt: Type.Optional(
-							Type.String({
-								description:
-									"Short label shown in the priming message's markdown image ref.",
-							}),
-						),
-					}),
-				),
-			),
 		}),
 		execute: async (
 			_id: string,
 			params: {
-				source_type: string;
-				source_ref: string;
+				candidate_id: string;
 				repo_id: string;
+				title: string;
+				branch_name: string;
 				plan_message: string;
-				attachments?: Array<{ id: string; alt?: string }>;
 			},
 		) => {
+			if (accumulator.hasDecided(params.candidate_id)) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Skipped: candidate ${params.candidate_id} was already decided this tick.`,
+						},
+					],
+					details: { skipped: true, reason: "already_decided" },
+				};
+			}
 			if (accumulator.count >= budget.max) {
 				return {
 					content: [
@@ -101,27 +115,156 @@ export function buildProposeWorkspaceTool(
 				};
 			}
 			accumulator.push({
-				sourceType: params.source_type,
-				sourceRef: params.source_ref,
+				candidateId: params.candidate_id,
 				repoId: params.repo_id,
+				title: params.title,
+				branchName: params.branch_name,
 				planMessage: params.plan_message,
-				attachments: params.attachments?.map((a) => ({
-					id: a.id,
-					alt: a.alt,
-				})),
 			});
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: `Recorded proposal for ${params.source_type}/${params.source_ref}${
-							params.attachments?.length
-								? ` (with ${params.attachments.length} attachment${params.attachments.length === 1 ? "" : "s"})`
-								: ""
-						}.`,
+						text: `Recorded proposal "${params.title}" for candidate ${params.candidate_id}.`,
 					},
 				],
 				details: { skipped: false },
+			};
+		},
+	};
+}
+
+export function buildMarkNotActionableTool(accumulator: ProposalAccumulator) {
+	return {
+		name: "mark_not_actionable",
+		label: "Mark Candidate Skipped",
+		description:
+			"Record that this candidate is NOT actionable (chat noise, status update, already handled, etc.). Helmor stores the decision so the candidate never appears in a future tick.",
+		parameters: Type.Object({
+			candidate_id: Type.String({
+				description: "Id of the candidate to dismiss.",
+			}),
+			reason: Type.String({
+				description:
+					"One short sentence on why. Goes into the candidate row and shows in the inspector.",
+			}),
+		}),
+		execute: async (
+			_id: string,
+			params: { candidate_id: string; reason: string },
+		) => {
+			if (accumulator.hasDecided(params.candidate_id)) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Already decided ${params.candidate_id} earlier this tick.`,
+						},
+					],
+					details: { skipped: true },
+				};
+			}
+			await callHost<{ ok: boolean }>("triage.record_decision", {
+				candidateId: params.candidate_id,
+				decision: "skip",
+				reason: params.reason,
+			});
+			accumulator.markDecided(params.candidate_id);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Marked ${params.candidate_id} not actionable.`,
+					},
+				],
+				details: { reason: params.reason },
+			};
+		},
+	};
+}
+
+/**
+ * Optional drill-tool: list other OPEN candidates in the same source-
+ * parent (chat / repo) as a candidate you're looking at. Use this when
+ * the preview is ambiguous and you want to see if the same person /
+ * channel has related context you haven't seen yet.
+ *
+ * Doesn't open files — returns metadata + preview rows, exactly the
+ * same shape the main prompt already gave you. Cheap.
+ */
+export function buildListCandidatesInParentTool() {
+	return {
+		name: "list_candidates_in_parent",
+		label: "List Sibling Candidates",
+		description:
+			"List other OPEN (un-decided) candidates that share the same chat / repo as `parent`. Returns metadata + 400-char preview per row, same shape as the candidate list you were given. Use sparingly — only when an ambiguous preview hints at related context elsewhere.",
+		parameters: Type.Object({
+			parent: Type.String({
+				description:
+					"`sourceParent` value from a candidate (chat_id / channel_id / 'owner/repo').",
+			}),
+			exclude_id: Type.Optional(
+				Type.String({
+					description:
+						"Candidate id to exclude from results (usually the one you're currently looking at).",
+				}),
+			),
+			limit: Type.Optional(
+				Type.Integer({
+					description: "1-100, default 20.",
+				}),
+			),
+		}),
+		execute: async (
+			_id: string,
+			params: { parent: string; exclude_id?: string; limit?: number },
+		) => {
+			const rows = await callHost<unknown[]>(
+				"triage.list_candidates_in_parent",
+				{
+					parent: params.parent,
+					excludeId: params.exclude_id,
+					limit: params.limit,
+				},
+			);
+			return {
+				content: [
+					{ type: "text" as const, text: JSON.stringify(rows, null, 2) },
+				],
+				details: { count: rows.length },
+			};
+		},
+	};
+}
+
+export function buildReadCandidateTool() {
+	return {
+		name: "read_candidate",
+		label: "Read Candidate Payload",
+		description:
+			"Read the full Markdown body of one candidate. Default returns the whole file (truncated at 8 KB). Pass `grep=<pattern>` to filter to lines matching a substring (case-insensitive) with ±3 lines of context — use this for very long PR bodies / chat threads instead of reading the whole file.",
+		parameters: Type.Object({
+			candidate_id: Type.String({
+				description: "Id of the candidate.",
+			}),
+			grep: Type.Optional(
+				Type.String({
+					description:
+						"Optional case-insensitive substring filter. Returns matching lines + 3 lines of context, joined by `---`.",
+				}),
+			),
+		}),
+		execute: async (
+			_id: string,
+			params: { candidate_id: string; grep?: string },
+		) => {
+			const r = await callHost<{ body: string }>("triage.read_candidate", {
+				candidateId: params.candidate_id,
+				grep: params.grep,
+			});
+			return {
+				content: [{ type: "text" as const, text: r.body }],
+				details: { bytes: r.body.length },
 			};
 		},
 	};

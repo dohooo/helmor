@@ -1,7 +1,5 @@
 //! Triage config persisted as a JSON blob in the settings table.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -21,9 +19,6 @@ pub struct TriageConfig {
     pub system_prompt: String,
     #[serde(default)]
     pub max_per_tick: u32,
-    /// `provider_id` → enabled; unknown providers ignored.
-    #[serde(default)]
-    pub providers: BTreeMap<String, bool>,
 }
 
 fn default_auto_run() -> bool {
@@ -37,7 +32,6 @@ impl Default for TriageConfig {
             auto_run: true,
             system_prompt: String::new(),
             max_per_tick: 5,
-            providers: BTreeMap::new(),
         }
     }
 }
@@ -58,12 +52,4 @@ pub fn save_config(config: &TriageConfig) -> Result<()> {
     let json = serde_json::to_string(config).context("serialize triage config")?;
     settings_store::upsert_setting_value(SETTINGS_KEY, &json)?;
     Ok(())
-}
-
-pub fn enabled_provider_ids(config: &TriageConfig) -> Vec<String> {
-    config
-        .providers
-        .iter()
-        .filter_map(|(id, on)| if *on { Some(id.clone()) } else { None })
-        .collect()
 }

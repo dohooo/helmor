@@ -7,6 +7,40 @@ use serde_json::Value;
 
 use super::cli::{run, run_in};
 
+pub struct ChatList<'a> {
+    /// `ByActiveTimeDesc` puts the most recently active chats first —
+    /// that's the "smart discovery" signal the triage fetcher rides on.
+    pub sort_type: &'a str,
+    /// When true, drops chats the user has explicitly muted (DND). Lark
+    /// only honors this with `--as user`; bot identity ignores it.
+    pub exclude_muted: bool,
+    pub page_size: u32,
+    pub page_token: Option<&'a str>,
+}
+
+pub async fn chat_list(p: ChatList<'_>) -> Result<Value> {
+    let page_size = p.page_size.clamp(1, 100).to_string();
+    let mut args: Vec<String> = vec![
+        "im".into(),
+        "+chat-list".into(),
+        "--format".into(),
+        "json".into(),
+        "--sort-type".into(),
+        p.sort_type.into(),
+        "--page-size".into(),
+        page_size,
+    ];
+    if p.exclude_muted {
+        args.push("--exclude-muted".into());
+    }
+    if let Some(token) = p.page_token.and_then(non_empty) {
+        args.push("--page-token".into());
+        args.push(token.into());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run(&refs, "chat-list").await
+}
+
 pub struct ChatSearch<'a> {
     pub query: Option<&'a str>,
     pub member_ids: Option<&'a str>,
