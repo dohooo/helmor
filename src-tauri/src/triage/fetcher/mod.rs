@@ -18,8 +18,27 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Runtime as TauriRuntime};
 use tokio::runtime::{Builder, Runtime};
+
+/// How far back any fetcher looks on cold start (no cursor / no DB
+/// history). Applies uniformly across sources: GitHub/GitLab drop items
+/// not updated within this window, IM backends only enumerate
+/// conversations active within it. Keep small so a fresh user doesn't
+/// drown in week-old noise.
+pub const COLD_START_DAYS: i64 = 3;
+
+/// Earliest timestamp a candidate is allowed to have. Helpers below
+/// expose it as both DateTime and unix-ms for the forge clients that
+/// surface `last_activity_at` as a raw millisecond integer.
+pub fn cold_start_cutoff() -> DateTime<Utc> {
+    Utc::now() - chrono::Duration::days(COLD_START_DAYS)
+}
+
+pub fn cold_start_cutoff_ms() -> i64 {
+    cold_start_cutoff().timestamp_millis()
+}
 
 /// Provider trait — one fetch tick per call. Each implementation owns
 /// its own cursor / subscription bookkeeping via `storage::*`.

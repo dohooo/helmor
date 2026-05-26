@@ -95,6 +95,10 @@ pub struct MessagesSearch<'a> {
     pub query: Option<&'a str>,
     pub sender: Option<&'a str>,
     pub chat_id: Option<&'a str>,
+    /// `Some("p2p")` to scope to 1-on-1 DMs, `Some("group")` for group
+    /// chats. Lark's default behavior is to NOT return p2p messages —
+    /// you have to ask for them explicitly.
+    pub chat_type: Option<&'a str>,
     pub is_at_me: bool,
     pub start: Option<&'a str>,
     pub end: Option<&'a str>,
@@ -120,6 +124,10 @@ pub async fn messages_search(p: MessagesSearch<'_>) -> Result<Value> {
     if let Some(c) = p.chat_id.and_then(non_empty) {
         args.push("--chat-id".into());
         args.push(c.into());
+    }
+    if let Some(t) = p.chat_type.and_then(non_empty) {
+        args.push("--chat-type".into());
+        args.push(t.into());
     }
     if p.is_at_me {
         args.push("--is-at-me".into());

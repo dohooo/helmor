@@ -1,24 +1,29 @@
 //! Lark ImBackend.
 //!
 //! Discovery rules (matching user intent):
-//!   - DMs (chat_mode = "p2p"): a DM is worth surfacing as soon as
-//!     ANY message lands in it within the lookback window — we don't
-//!     gate on whether the user has replied. The fetch step decides
-//!     whether the DM actually has recent content (empty windows just
-//!     don't write a candidate row).
+//!   - DMs (p2p): surfaced as soon as ANY message lands in them within
+//!     the lookback window — we don't gate on whether the user replied.
 //!   - Groups: only those the user has spoken in OR been @ed in. A
-//!     large room the user is a passive member of doesn't earn a
-//!     candidate slot.
+//!     large room the user is a passive member of doesn't earn a slot.
 //!
-//! Implementation:
-//!   1. `chat-list --sort-type ByActiveTimeDesc --exclude-muted` —
-//!      enumerate every chat (DM + group) the user is in.
-//!   2. `messages-search(sender=me, start=cold_start)` +
-//!      `messages-search(is_at_me=true, start=cold_start)` — derive
-//!      the "I'm involved here" group set.
-//!   3. Keep DMs unconditionally; keep groups iff in the involved set.
-//!      Per-conversation `chat-messages-list` runs later in the
-//!      generic ingest path; empty windows are silently dropped there.
+//! Implementation note on DMs: Lark's `chat-list` API only lists
+//! GROUPS — there's no equivalent of Slack's `users.conversations`
+//! that returns DMs alongside groups. To discover active DMs we run a
+//! separate `messages-search --chat-type p2p` (Lark's default behavior
+//! omits p2p; the filter has to be explicit) and treat each distinct
+//! `chat_id` as one DM ImConversation. This matches the "active in the
+//! last COLD_START_DAYS" semantics naturally.
+//!
+//! Pipeline:
+//!   1. `messages-search(sender=me, start=cold_start)` +
+//!      `messages-search(is_at_me=true, start=cold_start)` → derive
+//!      the "I'm involved here" GROUP set.
+//!   2. `messages-search(chat_type=p2p, start=cold_start)` → derive
+//!      the "active DM" set, plus the counterpart's display name from
+//!      the message sender.
+//!   3. `chat-list --sort-type ByActiveTimeDesc --exclude-muted` →
+//!      enumerate every GROUP the user is in. Filter to involved set.
+//!   4. Merge: groups (from chat-list) + DMs (from p2p search).
 
 use std::collections::BTreeSet;
 
@@ -59,20 +64,17 @@ impl ImBackend for LarkBackend {
             let my_open_id = lark::contact::self_open_id()
                 .await
                 .context("resolve self open_id")?;
-            // Cold-start aligned window for "I'm involved" checks. DMs
-            // bypass this — they're kept unconditionally and the ingest
-            // step decides whether they actually have recent activity.
             let start = (Utc::now() - Duration::days(super::COLD_START_DAYS))
                 .to_rfc3339_opts(SecondsFormat::Secs, true);
 
-            // (1) Build the "I'm involved" set: chats where I sent
-            // something OR someone @ed me, within the window. Used
-            // only to filter GROUPS — DMs bypass this set.
+            // (1) Build the "I'm involved" GROUP set: chats where I
+            // sent something OR someone @ed me, within the window.
             let mut involved_groups: BTreeSet<String> = BTreeSet::new();
             let sent = lark::im::messages_search(lark::im::MessagesSearch {
                 query: None,
                 sender: Some(my_open_id.as_str()),
                 chat_id: None,
+                chat_type: None,
                 is_at_me: false,
                 start: Some(start.as_str()),
                 end: None,
@@ -85,6 +87,7 @@ impl ImBackend for LarkBackend {
                 query: None,
                 sender: None,
                 chat_id: None,
+                chat_type: None,
                 is_at_me: true,
                 start: Some(start.as_str()),
                 end: None,
@@ -94,7 +97,25 @@ impl ImBackend for LarkBackend {
             .context("messages-search is_at_me")?;
             collect_chat_ids(&mentions, &mut involved_groups);
 
-            // (2) Enumerate every chat the user is in.
+            // (2) Discover active DMs. Lark's chat-list does NOT
+            // include p2p chats; messages-search with chat_type=p2p is
+            // the only way to enumerate DMs that had any activity in
+            // the window.
+            let p2p = lark::im::messages_search(lark::im::MessagesSearch {
+                query: None,
+                sender: None,
+                chat_id: None,
+                chat_type: Some("p2p"),
+                is_at_me: false,
+                start: Some(start.as_str()),
+                end: None,
+                page_size: DISCOVERY_PAGE_SIZE,
+            })
+            .await
+            .context("messages-search chat_type=p2p")?;
+            let dm_convs = build_dm_conversations(&p2p, &my_open_id);
+
+            // (3) Enumerate every group the user is in.
             let raw_chats = lark::im::chat_list(lark::im::ChatList {
                 sort_type: "ByActiveTimeDesc",
                 exclude_muted: true,
@@ -103,18 +124,17 @@ impl ImBackend for LarkBackend {
             .await
             .context("chat-list")?;
 
-            // (3) Apply the per-type rule. Empty DMs survive here and
-            // get filtered out at ingest time when fetch_messages
-            // returns nothing within the window.
-            let convs = parse_chat_list(&raw_chats)
+            // (4) Filter groups to the "involved" set and merge with
+            // the DM list. DMs go first so they survive the per-tick
+            // truncate in the generic layer.
+            let group_convs: Vec<ImConversation> = parse_chat_list(&raw_chats)
                 .into_iter()
-                .filter(|c| {
-                    let is_dm = c.chat_mode.as_deref() == Some("p2p");
-                    is_dm || involved_groups.contains(&c.chat_id)
-                })
+                .filter(|c| involved_groups.contains(&c.chat_id))
                 .map(to_im_conversation)
                 .collect();
-            Ok(convs)
+            let mut out = dm_convs;
+            out.extend(group_convs);
+            Ok(out)
         })
     }
 
@@ -172,6 +192,48 @@ fn collect_chat_ids(raw: &Value, sink: &mut BTreeSet<String>) {
     }
 }
 
+/// Walk a p2p `messages-search` response, group by `chat_id`, and build
+/// one `ImConversation` per DM. Label is the counterpart's display name
+/// (the sender of the first message NOT sent by me); falls back to a
+/// generic `"DM"` if all messages in the page are mine or unnamed.
+fn build_dm_conversations(raw: &Value, my_open_id: &str) -> Vec<ImConversation> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<ImConversation> = Vec::new();
+    for m in parse_messages(raw) {
+        let Some(chat_id) = m.chat_id.as_deref().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !seen.insert(chat_id.to_string()) {
+            // Already emitted; try to upgrade label if previous one was
+            // a self-message and this one is from the counterpart.
+            if let Some(existing) = out.iter_mut().find(|c| c.id == chat_id) {
+                if existing.label.is_none() {
+                    if let Some(label) = label_from_sender(m.sender.as_ref(), my_open_id) {
+                        existing.label = Some(label);
+                    }
+                }
+            }
+            continue;
+        }
+        let label = label_from_sender(m.sender.as_ref(), my_open_id);
+        out.push(ImConversation {
+            id: chat_id.to_string(),
+            label,
+            kind: ImConversationKind::Dm,
+            raw: json!({ "discovered_from": "messages_search_p2p" }),
+        });
+    }
+    out
+}
+
+fn label_from_sender(sender: Option<&SenderRecord>, my_open_id: &str) -> Option<String> {
+    let s = sender?;
+    if s.id.as_deref() == Some(my_open_id) {
+        return None;
+    }
+    s.name.clone().filter(|n| !n.is_empty())
+}
+
 /// Parse a `chat-list` envelope. Lark's response wraps rows under
 /// `data.items` (current API) or `data.chats` (older); be liberal.
 fn parse_chat_list(raw: &Value) -> Vec<ChatRow> {
@@ -206,18 +268,15 @@ fn parse_messages(raw: &Value) -> Vec<MessageRecord> {
 }
 
 fn to_im_conversation(row: ChatRow) -> ImConversation {
-    let kind = match row.chat_mode.as_deref() {
-        Some("p2p") => ImConversationKind::Dm,
-        // Lark's `chat-list` doesn't separate public/private inside the
-        // "group" bucket; default to Channel for both.
-        _ => ImConversationKind::Channel,
-    };
-    let raw = json!({ "chat_mode": row.chat_mode });
+    // Lark's `chat-list` only returns groups (p2p DMs are discovered
+    // separately via messages-search). It also doesn't distinguish
+    // public/private inside the group bucket, so everything maps to
+    // Channel.
     ImConversation {
         id: row.chat_id,
         label: row.name,
-        kind,
-        raw,
+        kind: ImConversationKind::Channel,
+        raw: Value::Null,
     }
 }
 
@@ -251,17 +310,14 @@ fn parse_create_time(raw: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 /// One row from `chat-list`. Only the fields we actually consume are
-/// captured; everything else is dropped by the `Deserialize` impl.
+/// captured. Lark's `chat-list` response doesn't include a chat_mode
+/// field — and only returns groups anyway, so we don't need one.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ChatRow {
     #[serde(default)]
     chat_id: String,
     #[serde(default)]
     name: Option<String>,
-    /// `"p2p"` for DMs, `"group"` (and friends) for everything else.
-    /// `None` when the API omits it — we treat that as group-like.
-    #[serde(default)]
-    chat_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -318,12 +374,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_chat_list_handles_data_items() {
+    fn parse_chat_list_maps_all_rows_to_channel() {
+        // Lark's chat-list only returns groups (no DMs), and doesn't
+        // include a chat_mode field at all. Every row is a Channel.
         let raw = json!({
             "data": {
                 "items": [
-                    { "chat_id": "oc_a", "name": "eng", "chat_mode": "group" },
-                    { "chat_id": "oc_b", "name": "Alice", "chat_mode": "p2p" },
+                    { "chat_id": "oc_a", "name": "eng" },
+                    { "chat_id": "oc_b", "name": "leads" },
                 ]
             }
         });
@@ -331,7 +389,36 @@ mod tests {
         assert_eq!(rows.len(), 2);
         let convs: Vec<_> = rows.into_iter().map(to_im_conversation).collect();
         assert_eq!(convs[0].kind, ImConversationKind::Channel);
-        assert_eq!(convs[1].kind, ImConversationKind::Dm);
+        assert_eq!(convs[1].kind, ImConversationKind::Channel);
+    }
+
+    #[test]
+    fn build_dm_conversations_labels_with_counterpart_name() {
+        // A p2p search returns messages from both sides of each DM.
+        // The label should be the counterpart's name, not "me", and
+        // each chat_id should produce exactly one ImConversation.
+        let raw = json!({
+            "data": {
+                "messages": [
+                    // Me writing to Alice (label should NOT be "me").
+                    { "message_id": "om_1", "chat_id": "oc_alice",
+                      "sender": { "id": "ou_me", "name": "me" } },
+                    // Alice replies — label upgrades to "Alice".
+                    { "message_id": "om_2", "chat_id": "oc_alice",
+                      "sender": { "id": "ou_alice", "name": "Alice" } },
+                    // A separate DM with Bob, only his message.
+                    { "message_id": "om_3", "chat_id": "oc_bob",
+                      "sender": { "id": "ou_bob", "name": "Bob" } },
+                ]
+            }
+        });
+        let convs = build_dm_conversations(&raw, "ou_me");
+        assert_eq!(convs.len(), 2);
+        let alice = convs.iter().find(|c| c.id == "oc_alice").unwrap();
+        assert_eq!(alice.kind, ImConversationKind::Dm);
+        assert_eq!(alice.label.as_deref(), Some("Alice"));
+        let bob = convs.iter().find(|c| c.id == "oc_bob").unwrap();
+        assert_eq!(bob.label.as_deref(), Some("Bob"));
     }
 
     #[test]

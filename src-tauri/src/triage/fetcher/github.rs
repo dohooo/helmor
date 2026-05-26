@@ -127,7 +127,15 @@ fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
             return Ok(());
         }
     };
+    let cutoff_ms = super::cold_start_cutoff_ms();
     for item in page.items {
+        // Server returns updated-desc, so older items past the cutoff
+        // are guaranteed tail-only — we could break, but the filter is
+        // cheap and skipping is more defensive against API ordering
+        // assumptions changing under us.
+        if item.last_activity_at < cutoff_ms {
+            continue;
+        }
         if let Err(error) = ingest_item(&target.login, &item, summary) {
             tracing::warn!(
                 login = %target.login,

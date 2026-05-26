@@ -58,7 +58,9 @@ pub const MAX_CONVERSATIONS_PER_TICK: usize = 30;
 /// Max messages per conversation per fetch call.
 pub const MAX_MESSAGES_PER_CONVERSATION: usize = 50;
 /// Cold-start lookback (used when there's no per-conversation cursor).
-pub const COLD_START_DAYS: i64 = 7;
+/// Re-exported from `triage::fetcher` so the shared cross-source value
+/// is the single source of truth.
+pub use super::COLD_START_DAYS;
 /// Overlap window applied to the cursor so a message that straddled the
 /// previous tick's boundary still surfaces.
 pub const OVERLAP_HOURS: i64 = 6;

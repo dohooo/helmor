@@ -126,7 +126,11 @@ fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
             return Ok(());
         }
     };
+    let cutoff_ms = super::cold_start_cutoff_ms();
     for item in page.items {
+        if item.last_activity_at < cutoff_ms {
+            continue;
+        }
         if let Err(error) = ingest_item(&target.login, &item, summary) {
             tracing::warn!(
                 login = %target.login,
