@@ -342,7 +342,7 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
 }
 
 /// Guard for status/pin operations: chat workspaces live in their own
-/// bucket and don't participate in the kanban (status / pinned). All
+/// bucket and don't participate in workspace status / pinning. All
 /// three commands bail rather than silently no-op so the call site
 /// (frontend menu, automated PR-sync) can surface the rejection.
 fn assert_not_chat(transaction: &Transaction<'_>, workspace_id: &str) -> Result<()> {
@@ -2122,8 +2122,8 @@ mod tests {
 
     // ── Chat-mode workspace tests ────────────────────────────────────────
     //
-    // Chat workspaces are a parallel universe to the kanban: own bucket,
-    // own scratch dir, no git. The tests below pin the contract that
+    // Chat workspaces are a parallel universe to the status grouping:
+    // own bucket, own scratch dir, no git. The tests below pin the contract that
     // (a) prepare lays a row + dir down, (b) the drag-policy walls
     // around the bucket hold both directions, (c) permanently_delete
     // really wipes the scratch dir, and (d) archive is a pure DB flip.

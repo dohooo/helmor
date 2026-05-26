@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.26.0
+
+### Minor Changes
+
+- [#664](https://github.com/dohooo/helmor/pull/664) [`d826150`](https://github.com/dohooo/helmor/commit/d8261506cd19ab30b9c2d014669668441019a98d) Thanks [@dohooo](https://github.com/dohooo)! - Let coding agents operate Helmor itself:
+  - Agents now know they're running inside Helmor (current workspace, target branch, linked directories) and can use the bundled `helmor-cli` skill to spawn sibling workspaces, dispatch ship actions, search sessions across all workspaces, and read other agents' transcripts.
+  - `helmor-cli` gains three new commands: `workspace run-action` (six ship flows including agent-dispatched commit-and-push, create-pr, fix-errors, and resolve-conflicts), `session search`, and `session get-messages` with windowing and body truncation for paging through long transcripts.
+  - New workspaces ship with a gitignored `.agent-contexts/` directory so agents can leave files for other sessions (or themselves later) without polluting diffs.
+  - Helmor CLI and Helmor Skills now install automatically during onboarding — no buttons to click, no Settings dialog to revisit.
+
+### Patch Changes
+
+- [#657](https://github.com/dohooo/helmor/pull/657) [`624dfe6`](https://github.com/dohooo/helmor/commit/624dfe6300d49d34fd318f3fc26fe18466dbc28d) Thanks [@natllian](https://github.com/natllian)! - Fix Cmd+N so it opens the Start Page honoring the per-repo remembered work mode instead of always forcing New Worktree; Shift+Cmd+N still opens Start Page in Just-chat mode.
+
+- [#663](https://github.com/dohooo/helmor/pull/663) [`56153ce`](https://github.com/dohooo/helmor/commit/56153cea7656eb1d509492d0caf461775f1beeca) Thanks [@dohooo](https://github.com/dohooo)! - Polish Slack and Forge context details:
+
+  - Refresh Slack, GitHub, and GitLab detail panels automatically when the panel opens or the window regains focus, plus a manual refresh button in the toolbar next to the open-externally / add-context controls.
+  - Resolve Slack `<@U…>` user mentions to `@displayname` in thread snippets and message bodies so they read like the Slack client instead of opaque user ids.
+  - Cap inline Slack image previews at half the message body width and display the full image at its natural aspect ratio, so tall screenshots no longer crop or leave letterbox padding around the frame.
+  - Fix "Import from Slack desktop" failing with `AES-CBC Unpad Error` when the macOS Keychain holds multiple "Slack Safe Storage" entries (e.g. leftover Mac App Store key alongside the standalone build) by trying every candidate key and using the one that actually decrypts the cookie.
+
+- [#661](https://github.com/dohooo/helmor/pull/661) [`08ce5ff`](https://github.com/dohooo/helmor/commit/08ce5ff0edc3fabfbff97794cd087331ab207d23) Thanks [@natllian](https://github.com/natllian)! - Fix "Import from Slack desktop" failing with a keychain "item not found" error by looking up the Safe Storage key by its stable service name instead of a hard-coded account label, so the import keeps working when Slack renames its keychain account between versions.
+
+- [#662](https://github.com/dohooo/helmor/pull/662) [`d6b0e76`](https://github.com/dohooo/helmor/commit/d6b0e76f814aefabfadf442405fc1b09a41a753d) Thanks [@aidxun](https://github.com/aidxun)! - Keep a collapsed Context sidebar collapsed when switching workspaces.
+
+- [#638](https://github.com/dohooo/helmor/pull/638) [`7bfbd68`](https://github.com/dohooo/helmor/commit/7bfbd68d977825f5413c536427636b6653ffbbb0) Thanks [@aidxun](https://github.com/aidxun)! - Fix Git Changes for local workspaces so Helmor compares files against that workspace's saved target branch instead of another workspace sharing the same repository root.
+
 ## 0.25.0
 
 ### Minor Changes

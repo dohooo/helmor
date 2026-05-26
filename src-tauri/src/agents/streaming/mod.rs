@@ -114,9 +114,11 @@ pub(super) fn stream_via_sidecar(
     // borrow the read pool again on the hot path. Re-rendered every
     // turn so even mid-conversation orchestration asks ("spawn me 3
     // more workspaces") still see the helmor-cli skill cue.
-    let helmor_prefix = build_helmor_system_prompt_for_session(
+    let helmor_prefix = build_helmor_system_prompt_for_workspace(
         request.helmor_session_id.as_deref(),
-        session_row.as_ref(),
+        session_row
+            .as_ref()
+            .and_then(|(_, _, workspace_id)| workspace_id.as_deref()),
         working_directory,
     );
 
@@ -1229,49 +1231,39 @@ fn build_exit_plan_review_message(
 
 /// Build the Helmor system-prompt prefix that gets prepended to the
 /// agent's wire payload. Returns `None` when we can't resolve enough
-/// context (no helmor_session_id or no workspace row found) — callers
-/// fall through to "no Helmor prefix this turn" rather than blocking
-/// the send.
+/// context (missing workspace id, or the workspace row is gone) —
+/// callers fall through to "no Helmor prefix this turn" rather than
+/// blocking the send.
+///
+/// Exposed `pub(crate)` so both the in-app streaming path and the
+/// standalone-CLI path in `service::send_message` share the same
+/// preamble builder — keeps Chat-vs-workspace routing and all the
+/// workspace-bound fields in one place.
 ///
 /// Lookups against the workspace record happen against the read pool;
-/// failures degrade gracefully (we still build the prompt with
-/// whatever we managed to resolve).
-fn build_helmor_system_prompt_for_session(
+/// failures degrade gracefully.
+pub(crate) fn build_helmor_system_prompt_for_workspace(
     helmor_session_id: Option<&str>,
-    session_row: Option<&(Option<String>, Option<String>, Option<String>)>,
+    workspace_id: Option<&str>,
     working_directory: &std::path::Path,
 ) -> Option<String> {
-    use crate::agents::system_prompt::{build_helmor_system_prompt, HelmorSystemPromptContext};
-
-    let workspace_id = session_row.and_then(|(_, _, workspace_id)| workspace_id.clone())?;
-
-    let workspace_record = crate::models::workspaces::load_workspace_record_by_id(&workspace_id)
-        .ok()
-        .flatten();
-
-    // Workspace label: `<repo>/<directory>`. Falls back to the bare
-    // workspace id when the row is missing so the agent still gets a
-    // self-locating cue.
-    let workspace_label = match workspace_record.as_ref() {
-        Some(record) => format!("{}/{}", record.repo_name, record.directory_name),
-        None => workspace_id.clone(),
+    use crate::agents::system_prompt::{
+        build_helmor_chat_prompt, build_helmor_system_prompt, HelmorChatPromptContext,
+        HelmorSystemPromptContext,
     };
 
-    // Target branch: prefer the user-configured intended target,
-    // fall back to the repo's default branch. Wrap as `origin/<x>`
-    // so the diff/PR hints are immediately usable.
-    let target_branch_raw = workspace_record.as_ref().and_then(|record| {
-        record
-            .intended_target_branch
-            .clone()
-            .or_else(|| record.default_branch.clone())
-            .filter(|s| !s.trim().is_empty())
-    });
-    let base_branch = target_branch_raw.clone();
-    let target_branch = target_branch_raw.as_deref().map(|b| format!("origin/{b}"));
+    let workspace_id = workspace_id?;
 
-    let linked_directories =
-        crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
+    // Skip the preamble entirely when we can't resolve the workspace
+    // row. The agent gets no Helmor framing this turn rather than a
+    // degraded one with a UUID-as-workspace-label and a misleading
+    // "target branch not configured" nag — matches the function's
+    // doc-comment contract ("Returns `None` when ... no workspace row
+    // found"). Orphan sessions (workspace deleted but session row
+    // lingering) are the realistic trigger.
+    let record = crate::models::workspaces::load_workspace_record_by_id(workspace_id)
+        .ok()
+        .flatten()?;
 
     // CLI invocation the agent should call. On release this is the
     // canonical `helmor` symlink on PATH; on dev it's the absolute
@@ -1283,6 +1275,35 @@ fn build_helmor_system_prompt_for_session(
     // dev instances' agents would silently talk to the wrong build.
     // See `crate::cli::agent_invocation_path` for the full rationale.
     let cli_command_name = crate::cli::agent_invocation_path();
+
+    // Chat-mode workspaces have no repo / no worktree / no target
+    // branch. The workspace-bound preamble would inject misleading
+    // hints (a synthetic workspace label, a `~/helmor/chats/...`
+    // working directory the user never sees, a "configure a target
+    // branch" nag, and a `.agent-contexts/` scratch dir that lives in
+    // a non-git directory). Route them through the smaller chat-only
+    // template instead.
+    if record.mode.is_chat() {
+        return Some(build_helmor_chat_prompt(&HelmorChatPromptContext {
+            cli_command_name,
+        }));
+    }
+
+    let workspace_label = format!("{}/{}", record.repo_name, record.directory_name);
+
+    // Target branch: prefer the user-configured intended target,
+    // fall back to the repo's default branch. Wrap as `origin/<x>`
+    // so the diff/PR hints are immediately usable.
+    let target_branch_raw = record
+        .intended_target_branch
+        .clone()
+        .or_else(|| record.default_branch.clone())
+        .filter(|s| !s.trim().is_empty());
+    let base_branch = target_branch_raw.clone();
+    let target_branch = target_branch_raw.as_deref().map(|b| format!("origin/{b}"));
+
+    let linked_directories =
+        crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
 
     let ctx = HelmorSystemPromptContext {
         workspace_label,

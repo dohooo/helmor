@@ -146,7 +146,7 @@ fn workspace_run_action_rejects_unknown_actions() {
 }
 
 #[test]
-fn workspace_status_matches_accepts_kanban_and_canonical() {
+fn workspace_status_matches_accepts_group_id_and_canonical() {
     // group_id form
     assert!(workspace_status_matches(
         &WorkspaceStatus::InProgress,

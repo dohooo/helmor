@@ -1,5 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Play, RotateCcw, Settings2, Square } from "lucide-react";
+import {
+	CircleStop,
+	ExternalLink,
+	Play,
+	RotateCcw,
+	Settings2,
+	Square,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -19,6 +26,7 @@ import { extractPort } from "../detect-urls";
 import { TABS_EASING, TABS_HOVER_TRANSITION_MS, useTabsZoom } from "../layout";
 import {
 	attach,
+	cleanupScript,
 	detach,
 	resizeScript,
 	type ScriptStatus,
@@ -43,6 +51,12 @@ type RunTabProps = {
 	/** `RunAction.command` for the active action, or `null` when no action
 	 * is selected. Used to decide which placeholder copy to render. */
 	runScript: string | null;
+	/** `RunAction.stopCommand` for the active action, or `null` when none
+	 * is configured. When set AND the user has run this action at least
+	 * once this session, a Cleanup button appears alongside Rerun so the
+	 * user can tear down side effects (containers, daemons) left by an
+	 * exited start before retrying. */
+	stopCommand: string | null;
 	/** True when at least one run action is configured. Drives whether the
 	 * empty state offers "Add run script" (no actions yet) or the per-action
 	 * empty state with the Run button. */
@@ -158,6 +172,7 @@ export function RunTab({
 	activeRunActionId,
 	activeRunActionName,
 	runScript,
+	stopCommand,
 	hasAnyRunAction,
 	isActive,
 	onOpenSettings,
@@ -248,6 +263,18 @@ export function RunTab({
 		stopScript(repoId, "run", workspaceId, activeRunActionId);
 	}, [repoId, workspaceId, activeRunActionId]);
 
+	// Run the configured `stopCommand` standalone. Available after the
+	// action has been run at least once this session (so the user has a
+	// reason to clean up) — clears terminal & flips status to "running"
+	// for the duration of the cleanup, then back to "exited".
+	const handleCleanup = useCallback(() => {
+		if (!repoId || !workspaceId || !activeRunActionId) return;
+		termRef.current?.clear();
+		setStatus("running");
+		setHasRun(true);
+		cleanupScript(repoId, workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
+
 	// Forward keystrokes to the PTY. The backend silently ignores writes
 	// when no script is live, so we don't gate this on status.
 	const handleData = useCallback(
@@ -267,11 +294,21 @@ export function RunTab({
 	);
 
 	const hasScript = !!runScript?.trim();
+	const trimmedStopCommand = stopCommand?.trim() ?? "";
 	const autoExpandEnabled = settings.terminalHoverExpansion;
 	// Auto-expand off → zoom never fires, so anchor the button unconditionally.
 	const showFloatingAction =
 		(status === "running" || status === "exited") &&
 		(autoExpandEnabled ? isZoomPresented : true);
+	// Cleanup is only useful after the action has actually started something —
+	// before the first run there's nothing to tear down. Hidden while the
+	// script is running (the existing Stop button covers that case, since
+	// `stopRepoScript` already runs `stopCommand` as part of SIGTERM cleanup).
+	const showCleanupButton =
+		status === "exited" &&
+		hasRun &&
+		!!trimmedStopCommand &&
+		!!activeRunActionId;
 
 	return (
 		<div
@@ -296,9 +333,9 @@ export function RunTab({
 					</div>
 
 					{showFloatingAction && (
-						// z-20 keeps the button above xterm's link-layer canvas (z:2).
+						// z-20 keeps the buttons above xterm's link-layer canvas (z:2).
 						<div
-							className="absolute right-4 bottom-3 z-20"
+							className="absolute right-4 bottom-3 z-20 flex items-center gap-2"
 							style={
 								autoExpandEnabled
 									? {
@@ -309,6 +346,24 @@ export function RunTab({
 									: undefined
 							}
 						>
+							{showCleanupButton && (
+								// Surfaces the user-configured `stopCommand` after the
+								// start has exited — for commands like `supabase start`
+								// / `docker compose up` that leave containers running
+								// after the spawned process dies. Without this, Rerun
+								// is sabotaged by "already running" state and the user
+								// has to drop to a real terminal to recover.
+								<Button
+									variant="outline"
+									size="sm"
+									className="text-small shadow-sm backdrop-blur-sm transition-none"
+									onClick={handleCleanup}
+									title={`Run stop command: ${trimmedStopCommand}`}
+									aria-label={`Run stop command: ${trimmedStopCommand}`}
+								>
+									<CircleStop className="size-3" strokeWidth={2} />
+								</Button>
+							)}
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"

@@ -491,6 +491,7 @@ pub fn run() {
             commands::repository_commands::move_repository_in_sidebar,
             commands::repository_commands::retry_repo_forge_binding,
             commands::script_commands::execute_repo_script,
+            commands::script_commands::execute_repo_stop_command,
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,

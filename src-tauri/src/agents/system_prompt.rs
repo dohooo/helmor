@@ -7,7 +7,7 @@
 //! inside Helmor" preamble stitched onto the front of the user's
 //! prompt. The preamble:
 //!
-//! - Names the kanban card the agent is running on (so an agent
+//! - Names the workspace the agent is running on (so an agent
 //!   spawned into a second workspace knows which one it is).
 //! - Tells the agent where its working directory + target branch are,
 //!   plus any `/add-dir`-linked directories.
@@ -49,7 +49,7 @@ use std::fmt::Write;
 /// Context the prompt template consumes. Construct once per send.
 #[derive(Debug, Clone)]
 pub struct HelmorSystemPromptContext {
-    /// Human-friendly label for the current kanban card. Format
+    /// Human-friendly label for the current workspace. Format
     /// `<repo>/<workspace-directory>` so the agent's self-locating
     /// statement matches what the user sees in the sidebar.
     pub workspace_label: String,
@@ -85,6 +85,18 @@ pub struct HelmorSystemPromptContext {
     pub cli_command_name: String,
 }
 
+/// Context the chat-mode prompt template consumes. Chat sessions are
+/// not bound to a repository or worktree, so the workspace label /
+/// working directory / target branch / `.agent-contexts/` story
+/// doesn't apply — we surface a smaller preamble that only carries
+/// the bits a "Just Chat" agent actually needs.
+#[derive(Debug, Clone)]
+pub struct HelmorChatPromptContext {
+    /// Same CLI invocation rules as
+    /// [`HelmorSystemPromptContext::cli_command_name`].
+    pub cli_command_name: String,
+}
+
 /// Render the preamble. Deterministic, no I/O, side-effect-free —
 /// safe to call from any context. The result already trims trailing
 /// whitespace so the consumer can `format!("{prefix}\n\n{rest}")`
@@ -96,7 +108,7 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
     out.push_str("You are running inside Helmor, a Mac app that lets the user run many coding agents in parallel.\n");
     let _ = writeln!(
         out,
-        "You are working on the kanban card `{}`. The user is watching this conversation live in Helmor's GUI.",
+        "You are working on the workspace `{}`. The user is watching this conversation live in Helmor's GUI.",
         ctx.workspace_label,
     );
     let _ = writeln!(
@@ -149,6 +161,35 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
     out
 }
 
+/// Render the "Just Chat" variant of the preamble. Used for
+/// `WorkspaceMode::Chat` sessions that have no repo / no worktree /
+/// no target branch — the workspace-bound prompt's workspace label,
+/// working directory, target branch, and `.agent-contexts/` lines
+/// would all be either wrong or misleading there. Same `<helmor_context>`
+/// envelope so logs / SDK clients can spot Helmor's preamble at a glance.
+pub fn build_helmor_chat_prompt(ctx: &HelmorChatPromptContext) -> String {
+    let mut out = String::with_capacity(384);
+
+    out.push_str("<helmor_context>\n");
+    out.push_str("You are running inside Helmor, a Mac app that lets the user run many coding agents in parallel.\n");
+    out.push_str(
+        "This is a \"Just Chat\" session — it is not bound to any repository or workspace, so there is no working directory, no target branch, and no git context. Do not assume a project structure, and do not run commands that need one (no `git`, no project-relative file edits, no PRs) unless the user explicitly points you at one.\n",
+    );
+
+    let _ = write!(
+        out,
+        "\nHelmor itself is scriptable via `{cli}`. When you need to operate Helmor (spawn workspaces, dispatch ship actions, read other agents' sessions, etc.), run `{cli} --help` or `{cli} <subcommand> --help` — each subcommand's help block includes examples you can copy. Invoke `{cli}` verbatim; do NOT verify it first with `which`, `file`, `--version`, or by searching `target/debug` — it is already the binary this Helmor instance owns, and pre-verifying eats your turn.\n",
+        cli = ctx.cli_command_name,
+    );
+
+    out.push_str(
+        "\nIf the user asks for help with Helmor itself, point them at the feedback button at the bottom of Helmor's sidebar.\n",
+    );
+
+    out.push_str("</helmor_context>");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,8 +205,8 @@ mod tests {
         }
     }
 
-    /// Sanity: every kanban-aware field reaches the rendered prompt so
-    /// the agent can self-locate.
+    /// Sanity: every workspace-aware field reaches the rendered prompt
+    /// so the agent can self-locate.
     #[test]
     fn renders_workspace_label_and_root_path() {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
@@ -338,6 +379,79 @@ mod tests {
     #[test]
     fn output_is_wrapped_in_helmor_context_tag() {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
+        assert!(prompt.starts_with("<helmor_context>"));
+        assert!(prompt.ends_with("</helmor_context>"));
+    }
+
+    // ── Chat-mode preamble ────────────────────────────────────────────
+
+    fn chat_ctx() -> HelmorChatPromptContext {
+        HelmorChatPromptContext {
+            cli_command_name: "helmor".to_string(),
+        }
+    }
+
+    /// Chat sessions have no repo / no worktree / no target branch /
+    /// no `.agent-contexts/` story. Pin that none of the workspace-
+    /// bound lines leak into the chat preamble — a regression that
+    /// reintroduces any of these would mislead the agent into looking
+    /// for a git context that doesn't exist.
+    #[test]
+    fn chat_prompt_omits_workspace_bound_lines() {
+        let prompt = build_helmor_chat_prompt(&chat_ctx());
+        assert!(
+            !prompt.contains("You are working on the workspace"),
+            "chat prompt must not pin a workspace (chat sessions aren't bound to one)"
+        );
+        assert!(
+            !prompt.contains("Your working directory is"),
+            "chat prompt must not pin a working directory"
+        );
+        assert!(
+            !prompt.contains("Target branch for this workspace"),
+            "chat prompt must not advertise a target branch"
+        );
+        assert!(
+            !prompt.contains("gh pr create"),
+            "chat prompt must not pre-substitute PR creation commands"
+        );
+        assert!(
+            !prompt.contains(".agent-contexts/"),
+            "chat prompt must not advertise the agent-contexts scratch dir"
+        );
+        assert!(
+            !prompt.contains("linked directories"),
+            "chat prompt must not mention `/add-dir` linked directories"
+        );
+    }
+
+    /// Chat sessions must be self-locating: the agent should know it's
+    /// a "Just Chat" session and adjust expectations (no project, no
+    /// PR). Pin the user-facing language so a future refactor doesn't
+    /// silently drop the disclosure.
+    #[test]
+    fn chat_prompt_states_it_is_chat_and_warns_against_assuming_repo() {
+        let prompt = build_helmor_chat_prompt(&chat_ctx());
+        assert!(prompt.contains("Just Chat"));
+        assert!(prompt.contains("not bound to any repository"));
+    }
+
+    /// CLI section + feedback pointer apply to chat sessions too —
+    /// they can still drive Helmor and still need to report bugs.
+    #[test]
+    fn chat_prompt_keeps_cli_and_feedback_sections() {
+        let prompt = build_helmor_chat_prompt(&chat_ctx());
+        assert!(prompt.contains("`helmor`"));
+        assert!(prompt.contains("`helmor --help`"));
+        assert!(prompt.contains("do NOT verify"));
+        assert!(prompt.contains("feedback button"));
+    }
+
+    /// Same `<helmor_context>` envelope so log viewers / SDK clients
+    /// can spot the preamble regardless of which template emitted it.
+    #[test]
+    fn chat_prompt_is_wrapped_in_helmor_context_tag() {
+        let prompt = build_helmor_chat_prompt(&chat_ctx());
         assert!(prompt.starts_with("<helmor_context>"));
         assert!(prompt.ends_with("</helmor_context>"));
     }
