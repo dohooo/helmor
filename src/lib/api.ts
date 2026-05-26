@@ -260,7 +260,7 @@ export type ForgeAccount = {
 	active: boolean;
 };
 
-export type ForgeProvider = "github" | "gitlab" | "unknown";
+export type ForgeProvider = "github" | "gitlab" | "gitea" | "unknown";
 
 export type ForgeLabels = {
 	providerName: string;
@@ -1024,7 +1024,9 @@ export type InboxItemSource =
 	| "github_pr"
 	| "github_discussion"
 	| "gitlab_issue"
-	| "gitlab_mr";
+	| "gitlab_mr"
+	| "gitea_issue"
+	| "gitea_pr";
 
 export type InboxItemStateTone =
 	| "open"
@@ -1048,7 +1050,7 @@ export type InboxItem = {
 };
 
 export type InboxItemDetailRef = {
-	provider: Extract<ForgeProvider, "github" | "gitlab">;
+	provider: Extract<ForgeProvider, "github" | "gitlab" | "gitea">;
 	login: string;
 	/** Host the item lives on. Critical for self-hosted GitLab where a
 	 *  login may have accounts on multiple instances — without this the
@@ -1126,12 +1128,41 @@ export type GitLabMergeRequestDetail = {
 	updatedAt?: string | null;
 };
 
+export type GiteaIssueDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	authorLogin?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+	closedAt?: string | null;
+};
+
+export type GiteaPullRequestDetail = {
+	externalId: string;
+	title: string;
+	body?: string | null;
+	url: string;
+	state: string;
+	merged: boolean;
+	draft: boolean;
+	authorLogin?: string | null;
+	sourceBranch?: string | null;
+	targetBranch?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
+};
+
 export type InboxItemDetail =
 	| { type: "github_issue"; data: GitHubIssueDetail }
 	| { type: "github_pr"; data: GitHubPullRequestDetail }
 	| { type: "github_discussion"; data: GitHubDiscussionDetail }
 	| { type: "gitlab_issue"; data: GitLabIssueDetail }
-	| { type: "gitlab_mr"; data: GitLabMergeRequestDetail };
+	| { type: "gitlab_mr"; data: GitLabMergeRequestDetail }
+	| { type: "gitea_issue"; data: GiteaIssueDetail }
+	| { type: "gitea_pr"; data: GiteaPullRequestDetail };
 
 export type InboxPage = {
 	items: InboxItem[];
@@ -2314,7 +2345,12 @@ export type ChangeRequestInfo = {
 };
 
 export type ActionStatusKind = "success" | "pending" | "running" | "failure";
-export type ActionProvider = "github" | "gitlab" | "vercel" | "unknown";
+export type ActionProvider =
+	| "github"
+	| "gitlab"
+	| "gitea"
+	| "vercel"
+	| "unknown";
 export type WorkspaceGitSyncStatus = "upToDate" | "behind" | "unknown";
 export type WorkspacePushStatus = "published" | "unpublished" | "unknown";
 

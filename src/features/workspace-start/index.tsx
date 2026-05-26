@@ -763,7 +763,9 @@ function sourceCardNumber(card: ContextCard): string {
 		card.meta.type === "github_pr" ||
 		card.meta.type === "github_discussion" ||
 		card.meta.type === "gitlab_issue" ||
-		card.meta.type === "gitlab_mr"
+		card.meta.type === "gitlab_mr" ||
+		card.meta.type === "gitea_issue" ||
+		card.meta.type === "gitea_pr"
 	) {
 		return String(card.meta.number);
 	}

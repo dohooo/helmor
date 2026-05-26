@@ -694,8 +694,12 @@ fn resolve_forge_login(
 
     match provider {
         ForgeProvider::Gitlab => resolve_gitlab_login(settings),
+        ForgeProvider::Gitea => resolve_gitea_login(settings),
         ForgeProvider::Unknown if remote_url_looks_like_gitlab(settings) => {
             resolve_gitlab_login(settings)
+        }
+        ForgeProvider::Unknown if remote_url_looks_like_gitea(settings) => {
+            resolve_gitea_login(settings)
         }
         ForgeProvider::Github | ForgeProvider::Unknown => Ok(None),
     }
@@ -707,6 +711,14 @@ fn remote_url_looks_like_gitlab(settings: &crate::settings::EffectiveBranchPrefi
         .as_deref()
         .and_then(parse_remote)
         .is_some_and(|remote| remote.host.contains("gitlab"))
+}
+
+fn remote_url_looks_like_gitea(settings: &crate::settings::EffectiveBranchPrefixSettings) -> bool {
+    settings
+        .remote_url
+        .as_deref()
+        .and_then(parse_remote)
+        .is_some_and(|remote| remote.host.contains("gitea"))
 }
 
 /// Legacy fallback for repo rows that predate `forge_login`: probe
@@ -725,6 +737,25 @@ fn resolve_gitlab_login(
         .unwrap_or_else(|| "gitlab.com".to_string());
 
     let Some(backend) = forge::accounts::backend_for(ForgeProvider::Gitlab) else {
+        return Ok(None);
+    };
+    Ok(backend
+        .list_logins(&host)
+        .ok()
+        .and_then(|logins| logins.into_iter().next()))
+}
+
+fn resolve_gitea_login(
+    settings: &crate::settings::EffectiveBranchPrefixSettings,
+) -> Result<Option<String>> {
+    let host = settings
+        .remote_url
+        .as_deref()
+        .and_then(parse_remote)
+        .map(|remote| remote.host)
+        .unwrap_or_else(|| "gitea.com".to_string());
+
+    let Some(backend) = forge::accounts::backend_for(ForgeProvider::Gitea) else {
         return Ok(None);
     };
     Ok(backend

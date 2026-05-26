@@ -1,4 +1,4 @@
-//! Terminal-side helpers for the gh / glab auth-login flow:
+//! Terminal-side helpers for the gh / glab / tea auth-login flow:
 //!   - [`forge_cli_auth_command`] — produces the shell command we hand
 //!     off to the embedded Helmor terminal session.
 //!   - [`labels_for`] — provider-name / cli-name / connect-action
@@ -31,6 +31,16 @@ pub(crate) fn forge_cli_auth_command(
             format!(
                 "{} auth login --hostname {host}",
                 bundled_program_token("glab")?
+            )
+        }
+        ForgeProvider::Gitea => {
+            let host = host.unwrap_or("gitea.com");
+            if host.contains(['\n', '\r']) {
+                bail!("Invalid hostname (contains newline): {host:?}");
+            }
+            format!(
+                "{} login add --name helmor-{host} --url https://{host}",
+                bundled_program_token("tea")?
             )
         }
         ForgeProvider::Unknown => bail!("Unknown forge provider."),
@@ -82,6 +92,13 @@ pub(crate) fn labels_for(provider: ForgeProvider) -> ForgeLabels {
             change_request_name: "MR".to_string(),
             change_request_full_name: "merge request".to_string(),
             connect_action: "Connect GitLab".to_string(),
+        },
+        ForgeProvider::Gitea => ForgeLabels {
+            provider_name: "Gitea".to_string(),
+            cli_name: "tea".to_string(),
+            change_request_name: "PR".to_string(),
+            change_request_full_name: "pull request".to_string(),
+            connect_action: "Connect Gitea".to_string(),
         },
         ForgeProvider::Unknown => ForgeLabels {
             provider_name: "Git".to_string(),

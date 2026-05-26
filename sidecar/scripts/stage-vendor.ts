@@ -1,4 +1,4 @@
-// Stage claude-code + codex + gh + glab into `sidecar/dist/vendor/`
+// Stage claude-code + codex + gh + glab + tea into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -35,6 +35,7 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 // Bumping any version: update SHA256 below + wipe sidecar/.bundle-cache.
 //   gh:          github.com/cli/cli/releases/download/v$VER/gh_${VER}_checksums.txt
 //   glab:        gitlab.com/gitlab-org/cli/-/releases/v$VER/downloads/checksums.txt
+//   tea:         gitea.com/gitea/tea/releases/download/v$VER/checksums.txt
 //   codex:       shasum -a 256 of the npm tarball at
 //                registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
 //   claude-code: shasum -a 256 of the npm tarballs at
@@ -50,6 +51,12 @@ const GLAB_VERSION = "1.93.0";
 const GLAB_SHA256 = {
 	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
 	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+} as const;
+
+const TEA_VERSION = "0.14.1";
+const TEA_SHA256 = {
+	arm64: "52c482b964de63977b5a836b4976f0b098a1dfde6486ca7b8d0a6ee29b4f7945",
+	amd64: "4b6828c7dec67cfbd4b911e9391fc9e32eddeea693025ee99a20c444c251f53a",
 } as const;
 
 // Codex version is whatever sidecar/package.json pulled in. The SHAs below
@@ -114,6 +121,8 @@ interface TargetInfo {
 	ghArch: "arm64" | "amd64";
 	/** `glab` release naming: `arm64` / `amd64`. */
 	glabArch: "arm64" | "amd64";
+	/** `tea` release naming: `arm64` / `amd64`. */
+	teaArch: "arm64" | "amd64";
 }
 
 function infoForArch(arch: DarwinArch): TargetInfo {
@@ -127,6 +136,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 			codexNpmSuffix: "darwin-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
+			teaArch: "arm64",
 		};
 	}
 	return {
@@ -138,6 +148,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 		codexNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
+		teaArch: "amd64",
 	};
 }
 
@@ -347,6 +358,20 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 	}
 	const binDest = join(DIST_VENDOR, "glab", "glab");
 	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+function stageTeaBinary(arch: "arm64" | "amd64"): string {
+	ensureCacheDir();
+	const slug = `tea-${TEA_VERSION}-darwin-${arch}`;
+	const archive = join(BUNDLE_CACHE, slug);
+	const url = `https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/${slug}`;
+	downloadAndVerify(url, archive, TEA_SHA256[arch]);
+
+	const binDest = join(DIST_VENDOR, "tea", "tea");
+	copyFile(archive, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
 	return binDest;
@@ -695,9 +720,10 @@ stageClaudeCodeBinary(target);
 // ----- Codex -----
 stageCodexBinary(target);
 
-// ----- gh + glab (forge CLIs) -----
+// ----- gh + glab + tea (forge CLIs) -----
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
+stageTeaBinary(target.teaArch);
 
 // ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
 stageLlamaCppBinaries(target);
@@ -709,3 +735,4 @@ console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
 console.log(`  llama-cpp   ${humanSize(join(DIST_VENDOR, "llama-cpp"))}`);
+console.log(`  tea         ${humanSize(join(DIST_VENDOR, "tea"))}`);

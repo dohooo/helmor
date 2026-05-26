@@ -1,7 +1,11 @@
 import { Check, ChevronDown, GitBranch, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BranchPickerPopover } from "@/components/branch-picker";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
 import { ForgeConnectDialog } from "@/components/forge-connect-dialog";
 import { Button } from "@/components/ui/button";
@@ -281,11 +285,19 @@ function ForgeAccountHeader({
 	const providerIcon =
 		provider === "gitlab" ? (
 			<GitlabBrandIcon size={14} className="text-[#FC6D26]" />
+		) : provider === "gitea" ? (
+			<GiteaBrandIcon size={14} className="text-[#609926]" />
 		) : (
 			<GithubBrandIcon size={14} />
 		);
 	const providerLabel =
-		provider === "gitlab" ? "GitLab" : provider === "github" ? "GitHub" : "Git";
+		provider === "gitlab"
+			? "GitLab"
+			: provider === "gitea"
+				? "Gitea"
+				: provider === "github"
+					? "GitHub"
+					: "Git";
 
 	// Probe the live login set for this repo's host so external auth
 	// changes are reflected right away. The hook itself owns the
@@ -429,5 +441,7 @@ function NotConnectedConnectButton({
 }
 
 function defaultHostFor(provider: ForgeProvider): string {
-	return provider === "gitlab" ? "gitlab.com" : "github.com";
+	if (provider === "gitlab") return "gitlab.com";
+	if (provider === "gitea") return "gitea.com";
+	return "github.com";
 }

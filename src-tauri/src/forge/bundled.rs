@@ -1,15 +1,17 @@
-//! Paths to bundled `gh` / `glab` inside `Resources/vendor/`.
+//! Paths to bundled `gh` / `glab` / `tea` inside `Resources/vendor/`.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const GH_PATH_ENV: &str = "HELMOR_GH_BIN_PATH";
 pub const GLAB_PATH_ENV: &str = "HELMOR_GLAB_BIN_PATH";
+pub const TEA_PATH_ENV: &str = "HELMOR_TEA_BIN_PATH";
 
 #[derive(Debug, Default, Clone)]
 pub struct BundledForgeCliPaths {
     pub gh: Option<PathBuf>,
     pub glab: Option<PathBuf>,
+    pub tea: Option<PathBuf>,
 }
 
 static BUNDLED_PATHS: OnceLock<BundledForgeCliPaths> = OnceLock::new();
@@ -23,6 +25,7 @@ pub fn init() {
     tracing::info!(
         gh = ?paths.and_then(|p| p.gh.as_deref()),
         glab = ?paths.and_then(|p| p.glab.as_deref()),
+        tea = ?paths.and_then(|p| p.tea.as_deref()),
         "Resolved bundled forge CLI paths"
     );
 }
@@ -41,6 +44,7 @@ pub fn bundled_path_for(program: &str) -> Option<PathBuf> {
     match program {
         "gh" => cached.gh.clone(),
         "glab" => cached.glab.clone(),
+        "tea" => cached.tea.clone(),
         _ => None,
     }
 }
@@ -49,6 +53,7 @@ fn env_key_for(program: &str) -> Option<&'static str> {
     match program {
         "gh" => Some(GH_PATH_ENV),
         "glab" => Some(GLAB_PATH_ENV),
+        "tea" => Some(TEA_PATH_ENV),
         _ => None,
     }
 }
@@ -77,13 +82,16 @@ fn resolve_for_exe(exe: &Path) -> Option<BundledForgeCliPaths> {
 
     let gh_name = if cfg!(windows) { "gh.exe" } else { "gh" };
     let glab_name = if cfg!(windows) { "glab.exe" } else { "glab" };
+    let tea_name = if cfg!(windows) { "tea.exe" } else { "tea" };
 
     let gh = resources_dir.join(format!("vendor/gh/{gh_name}"));
     let glab = resources_dir.join(format!("vendor/glab/{glab_name}"));
+    let tea = resources_dir.join(format!("vendor/tea/{tea_name}"));
 
     Some(BundledForgeCliPaths {
         gh: gh.is_file().then_some(gh),
         glab: glab.is_file().then_some(glab),
+        tea: tea.is_file().then_some(tea),
     })
 }
 
@@ -93,6 +101,7 @@ impl BundledForgeCliPaths {
         BundledForgeCliPaths {
             gh: self.gh.or(fallback.gh),
             glab: self.glab.or(fallback.glab),
+            tea: self.tea.or(fallback.tea),
         }
     }
 }
@@ -110,13 +119,16 @@ fn resolve_for_dev_workspace(workspace_root: &Path) -> BundledForgeCliPaths {
     let vendor = workspace_root.join("sidecar/dist/vendor");
     let gh_name = if cfg!(windows) { "gh.exe" } else { "gh" };
     let glab_name = if cfg!(windows) { "glab.exe" } else { "glab" };
+    let tea_name = if cfg!(windows) { "tea.exe" } else { "tea" };
 
     let gh = vendor.join(format!("gh/{gh_name}"));
     let glab = vendor.join(format!("glab/{glab_name}"));
+    let tea = vendor.join(format!("tea/{tea_name}"));
 
     BundledForgeCliPaths {
         gh: gh.is_file().then_some(gh),
         glab: glab.is_file().then_some(glab),
+        tea: tea.is_file().then_some(tea),
     }
 }
 

@@ -43,6 +43,7 @@ export const SourceDetailView = memo(function SourceDetailView({
 				/>
 			);
 		case "gitlab_issue":
+		case "gitea_issue":
 			return (
 				<GitLabIssueView
 					card={card}
@@ -50,6 +51,7 @@ export const SourceDetailView = memo(function SourceDetailView({
 				/>
 			);
 		case "gitlab_mr":
+		case "gitea_pr":
 			return (
 				<GitLabMergeRequestView
 					card={card}

@@ -1,6 +1,10 @@
 import { LoaderCircle } from "lucide-react";
 import { useState } from "react";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { ForgeConnectDialog } from "@/components/forge-connect-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +18,7 @@ import { FORGE_AUTH_TOOLTIP_LINES } from "@/lib/forge-auth-copy";
 
 const DEFAULT_GITHUB_HOST = "github.com";
 const DEFAULT_GITLAB_HOST = "gitlab.com";
+const DEFAULT_GITEA_HOST = "gitea.com";
 
 export function ForgeCliTrigger({
 	detection,
@@ -32,7 +37,9 @@ export function ForgeCliTrigger({
 		detection.host ??
 		(detection.provider === "gitlab"
 			? DEFAULT_GITLAB_HOST
-			: DEFAULT_GITHUB_HOST);
+			: detection.provider === "gitea"
+				? DEFAULT_GITEA_HOST
+				: DEFAULT_GITHUB_HOST);
 
 	return (
 		<>
@@ -58,6 +65,11 @@ export function ForgeCliTrigger({
 									<GitlabBrandIcon
 										size={12}
 										className="self-center text-[#FC6D26]"
+									/>
+								) : detection.provider === "gitea" ? (
+									<GiteaBrandIcon
+										size={12}
+										className="self-center text-[#609926]"
 									/>
 								) : (
 									<GithubBrandIcon size={12} className="self-center" />
