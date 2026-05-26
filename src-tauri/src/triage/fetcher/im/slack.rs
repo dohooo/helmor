@@ -1,16 +1,21 @@
 //! Slack ImBackend.
 //!
-//! Discovery rides on `users.conversations`:
-//!   - DMs / MPIMs → always included (private space, small volume).
-//!   - public / private channels → only when `unread_count_display > 0`
-//!     i.e. Slack's own "you haven't read this" signal.
+//! Discovery follows the same rule the Lark backend enforces:
+//!   - DMs (im) and group-DMs (mpim) → always included; the ingest
+//!     step decides whether they actually have recent activity.
+//!   - public / private channels → only when there's a clear "I'm
+//!     involved here" signal in the last `COLD_START_DAYS`:
+//!     * I posted in the channel  (search: `from:<@me> after:…`)
+//!     * I was @ed in the channel (search: `<@me> after:…`)
+//!       A busy channel I'm a passive member of doesn't earn a slot.
 //!
-//! Sorted DMs-first, then by unread count, then truncated by the generic
-//! layer. Per-conversation pull uses `conversations.history` with a
+//! Per-conversation pull uses `conversations.history` with a
 //! Slack-format `oldest` ts derived from the cursor.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;
 
 use crate::models::slack_workspaces;
@@ -46,6 +51,14 @@ impl ImBackend for SlackBackend {
                 Some(c) => c,
                 None => continue,
             };
+
+            // Build the "I'm involved here" channel set: messages I
+            // posted OR messages mentioning me, within COLD_START_DAYS.
+            // Search failures are non-fatal — we degrade to "no
+            // channels pass the filter" rather than aborting the
+            // workspace entirely. DMs still flow through.
+            let involved_channels = collect_involved_channels(ws, &creds);
+
             let mut rows = match api::users_conversations(
                 &creds,
                 "im,mpim,public_channel,private_channel",
@@ -61,14 +74,19 @@ impl ImBackend for SlackBackend {
                     continue;
                 }
             };
-            // DMs/MPIMs always; channels only when Slack itself marks unread.
-            rows.retain(|c| c.is_im || c.is_mpim || c.unread_count_display > 0);
-            // DMs first, then unread-heavy first.
+            rows.retain(|c| {
+                if c.is_im || c.is_mpim {
+                    true // DMs / group-DMs unconditional
+                } else {
+                    involved_channels.contains(&c.id)
+                }
+            });
+            // DMs first; among channels the order doesn't really
+            // matter (the generic layer truncates to a cap anyway).
             rows.sort_by(|a, b| {
                 let dm_a = (a.is_im || a.is_mpim) as u8;
                 let dm_b = (b.is_im || b.is_mpim) as u8;
                 dm_b.cmp(&dm_a)
-                    .then(b.unread_count_display.cmp(&a.unread_count_display))
             });
             for row in rows {
                 out.push(to_im_conversation(ws, &row));
@@ -105,6 +123,40 @@ impl ImBackend for SlackBackend {
         }
         Ok(messages)
     }
+}
+
+/// Run two `search.messages` queries (mentions + from-me) bounded by
+/// `COLD_START_DAYS` and collect distinct `channel.id` hits. Failures
+/// in either query fall back to whatever the other one returned.
+fn collect_involved_channels(ws: &SlackWorkspace, creds: &SlackCreds) -> BTreeSet<String> {
+    let after = (Utc::now() - Duration::days(super::COLD_START_DAYS))
+        .format("%Y-%m-%d")
+        .to_string();
+    let mention_query = format!("<@{my}> after:{after}", my = ws.my_user_id);
+    let sent_query = format!("from:<@{my}> after:{after}", my = ws.my_user_id);
+    let mut channels = BTreeSet::new();
+    for (label, q) in [("mention", mention_query), ("from-me", sent_query)] {
+        match api::search_messages(creds, &q, 1, api::SearchSort::Timestamp) {
+            Ok(page) => {
+                for hit in &page.matches {
+                    if let Some(ch) = hit.channel.as_ref() {
+                        if !ch.id.is_empty() {
+                            channels.insert(ch.id.clone());
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    team_id = %ws.team_id,
+                    kind = label,
+                    error = %format!("{error:#}"),
+                    "slack backend: search.messages failed; channels may be under-discovered",
+                );
+            }
+        }
+    }
+    channels
 }
 
 /// Slack stores per-conversation context in our `ImConversation.id` as

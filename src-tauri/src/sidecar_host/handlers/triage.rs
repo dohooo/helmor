@@ -23,31 +23,10 @@ pub async fn dispatch<R: Runtime>(
 ) -> Result<Value> {
     match method {
         "list_open_candidates" => list_open_candidates(params).await,
-        "list_candidates_in_parent" => list_candidates_in_parent(params).await,
         "read_candidate" => read_candidate(params).await,
         "record_decision" => record_decision(params).await,
         _ => Err(crate::sidecar_host::unknown_method(method)),
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ListInParentParams {
-    parent: String,
-    #[serde(default)]
-    exclude_id: Option<String>,
-    #[serde(default)]
-    limit: Option<u32>,
-}
-
-async fn list_candidates_in_parent(params: Value) -> Result<Value> {
-    let p: ListInParentParams = serde_json::from_value(params)?;
-    let limit = p.limit.unwrap_or(20).clamp(1, 100) as i64;
-    let rows = tauri::async_runtime::spawn_blocking(move || {
-        fetcher_storage::list_candidates_in_parent(&p.parent, p.exclude_id.as_deref(), limit)
-    })
-    .await??;
-    Ok(serde_json::to_value(rows)?)
 }
 
 #[derive(Deserialize, Default)]
@@ -71,10 +50,17 @@ struct ReadCandidateParams {
     candidate_id: String,
     #[serde(default)]
     grep: Option<String>,
+    /// Return only the last N "## "-delimited message blocks. Mutually
+    /// exclusive with `grep`; `tail` wins if both are set. Useful on
+    /// chat candidates where the LLM wants the freshest activity even
+    /// when the file is bigger than `READ_MAX_BYTES`.
+    #[serde(default)]
+    tail: Option<u32>,
 }
 
 const READ_MAX_BYTES: usize = 8 * 1024;
 const GREP_CONTEXT_LINES: usize = 3;
+const TAIL_MAX_BLOCKS: u32 = 200;
 
 async fn read_candidate(params: Value) -> Result<Value> {
     let p: ReadCandidateParams = serde_json::from_value(params)?;
@@ -82,14 +68,47 @@ async fn read_candidate(params: Value) -> Result<Value> {
         let row = fetcher_storage::get_candidate(&p.candidate_id)?
             .ok_or_else(|| anyhow::anyhow!("candidate {} not found", p.candidate_id))?;
         let raw = fetcher_cache::read_payload(&row.payload_path)?;
-        let body = match p.grep.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(pattern) => grep_filter(&raw, pattern),
-            None => truncate_bytes(&raw, READ_MAX_BYTES),
+        let body = if let Some(n) = p.tail.filter(|n| *n > 0) {
+            tail_blocks(&raw, n.min(TAIL_MAX_BLOCKS) as usize)
+        } else if let Some(pattern) = p.grep.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            grep_filter(&raw, pattern)
+        } else {
+            truncate_bytes(&raw, READ_MAX_BYTES)
         };
         Ok(body)
     })
     .await??;
     Ok(json!({ "body": body }))
+}
+
+/// Return the file's header + the last `n` "## "-delimited blocks.
+/// Blocks are detected by lines starting with `## ` — that's the
+/// per-message header `im::default_message_block` emits. If the file
+/// has fewer blocks than requested, returns the whole file.
+fn tail_blocks(body: &str, n: usize) -> String {
+    // Find every line index that starts a block.
+    let mut block_starts: Vec<usize> = body
+        .match_indices("\n## ")
+        .map(|(i, _)| i + 1) // skip the leading \n
+        .collect();
+    if let Some(idx) = body.find("## ") {
+        if idx == 0 && !block_starts.contains(&0) {
+            block_starts.insert(0, 0);
+        }
+    }
+    if block_starts.len() <= n {
+        return body.to_string();
+    }
+    let header_end = block_starts[0];
+    let tail_start = block_starts[block_starts.len() - n];
+    let mut out = String::with_capacity(header_end + (body.len() - tail_start) + 64);
+    out.push_str(&body[..header_end]);
+    out.push_str(&format!(
+        "\n…(omitted {} earlier message block(s))\n\n",
+        block_starts.len() - n
+    ));
+    out.push_str(&body[tail_start..]);
+    out
 }
 
 #[derive(Deserialize)]

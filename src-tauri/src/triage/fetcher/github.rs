@@ -154,17 +154,8 @@ fn fetch_login(login: &str, allowed: &BTreeSet<String>, summary: &mut FetchSumma
             }
         }
     }
-    let now = storage::now_iso();
-    storage::write_cursor(
-        SOURCE,
-        login,
-        &storage::FetchCursor {
-            last_fetched_at: Some(now),
-            last_source_time: None,
-            last_external_ref: None,
-        },
-    )
-    .context("write github cursor")?;
+    // No cursor write: gh inbox does its own "what's new" filtering
+    // server-side, so we'd never read this back.
     Ok(())
 }
 
@@ -203,7 +194,6 @@ fn ingest_item(login: &str, item: &InboxItem, summary: &mut FetchSummary) -> Res
         source: SOURCE.into(),
         source_kind,
         source_ref,
-        source_parent: Some(parent),
         source_time,
         sender: item.subtitle.clone(),
         title: Some(item.title.clone()),

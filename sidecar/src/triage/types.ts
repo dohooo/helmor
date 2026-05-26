@@ -51,6 +51,11 @@ export interface TriageTickParams {
 
 export interface TriageProposal {
 	readonly candidateId: string;
+	/** Stable id of the anchor message / issue / PR this task is about.
+	 *  Lets a single chat candidate spawn N independent workspaces, one
+	 *  per anchor. Composed into `source_ref = candidate_source_ref:anchor`
+	 *  by the Rust scheduler before workspace creation. */
+	readonly taskAnchor: string;
 	readonly repoId: string;
 	readonly title: string;
 	readonly branchName: string;

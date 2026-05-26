@@ -62,11 +62,15 @@ export function buildProposeWorkspaceTool(
 		name: "propose_workspace",
 		label: "Propose AI Workspace",
 		description:
-			"Record one actionable task for the candidate. Helmor creates a workspace from the matched repo, names the session with `title`, names the git branch with `branch_name`, and pre-fills `plan_message` as the first assistant message. Call once per actionable candidate. Do NOT analyse implementation here.",
+			"Record ONE actionable task you found. For IM candidates (Slack/Lark) a single chat may contain multiple independent tasks — call this tool once per task with a unique `task_anchor` (the id of the message that anchors the task). For forge candidates (GitHub/GitLab issue/PR) `task_anchor` can be the issue/PR id from the candidate row.",
 		parameters: Type.Object({
 			candidate_id: Type.String({
 				description:
-					"Id of the candidate (from the list you were given). Helmor uses it to mark the candidate decided AND to dedup against existing triage workspaces.",
+					"Id of the candidate (chat / issue) from the list you were given.",
+			}),
+			task_anchor: Type.String({
+				description:
+					"Stable id of the anchor message / issue / pr that this task is about. For Lark/Slack messages, use the message id (e.g. `om_xxx`, the slack `ts`). Used for dedup AND surfaced in next tick's chat file under `last_proposed_anchors` so you don't re-propose the same task.",
 			}),
 			repo_id: Type.String({ description: "Helmor repo id from list_repos." }),
 			title: Type.String({
@@ -86,18 +90,20 @@ export function buildProposeWorkspaceTool(
 			_id: string,
 			params: {
 				candidate_id: string;
+				task_anchor: string;
 				repo_id: string;
 				title: string;
 				branch_name: string;
 				plan_message: string;
 			},
 		) => {
-			if (accumulator.hasDecided(params.candidate_id)) {
+			const anchorKey = `${params.candidate_id}::${params.task_anchor}`;
+			if (accumulator.hasDecided(anchorKey)) {
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: `Skipped: candidate ${params.candidate_id} was already decided this tick.`,
+							text: `Skipped: ${anchorKey} was already proposed this tick.`,
 						},
 					],
 					details: { skipped: true, reason: "already_decided" },
@@ -116,16 +122,20 @@ export function buildProposeWorkspaceTool(
 			}
 			accumulator.push({
 				candidateId: params.candidate_id,
+				taskAnchor: params.task_anchor,
 				repoId: params.repo_id,
 				title: params.title,
 				branchName: params.branch_name,
 				planMessage: params.plan_message,
 			});
+			// Track per-anchor so multiple tasks from the same chat each
+			// count once and don't trigger the "already decided" branch.
+			accumulator.markDecided(anchorKey);
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: `Recorded proposal "${params.title}" for candidate ${params.candidate_id}.`,
+						text: `Recorded proposal "${params.title}" for ${anchorKey}.`,
 					},
 				],
 				details: { skipped: false },
@@ -139,10 +149,10 @@ export function buildMarkNotActionableTool(accumulator: ProposalAccumulator) {
 		name: "mark_not_actionable",
 		label: "Mark Candidate Skipped",
 		description:
-			"Record that this candidate is NOT actionable (chat noise, status update, already handled, etc.). Helmor stores the decision so the candidate never appears in a future tick.",
+			"Mark this candidate (entire chat / issue) as having nothing actionable RIGHT NOW. For IM chats this means: you read the recent messages and there's no task buried in there. The decision is NOT terminal for chats — if new messages arrive in this chat later, Helmor will surface it again. So this is safe to use liberally.",
 		parameters: Type.Object({
 			candidate_id: Type.String({
-				description: "Id of the candidate to dismiss.",
+				description: "Id of the candidate.",
 			}),
 			reason: Type.String({
 				description:
@@ -183,66 +193,17 @@ export function buildMarkNotActionableTool(accumulator: ProposalAccumulator) {
 	};
 }
 
-/**
- * Optional drill-tool: list other OPEN candidates in the same source-
- * parent (chat / repo) as a candidate you're looking at. Use this when
- * the preview is ambiguous and you want to see if the same person /
- * channel has related context you haven't seen yet.
- *
- * Doesn't open files — returns metadata + preview rows, exactly the
- * same shape the main prompt already gave you. Cheap.
- */
-export function buildListCandidatesInParentTool() {
-	return {
-		name: "list_candidates_in_parent",
-		label: "List Sibling Candidates",
-		description:
-			"List other OPEN (un-decided) candidates that share the same chat / repo as `parent`. Returns metadata + 400-char preview per row, same shape as the candidate list you were given. Use sparingly — only when an ambiguous preview hints at related context elsewhere.",
-		parameters: Type.Object({
-			parent: Type.String({
-				description:
-					"`sourceParent` value from a candidate (chat_id / channel_id / 'owner/repo').",
-			}),
-			exclude_id: Type.Optional(
-				Type.String({
-					description:
-						"Candidate id to exclude from results (usually the one you're currently looking at).",
-				}),
-			),
-			limit: Type.Optional(
-				Type.Integer({
-					description: "1-100, default 20.",
-				}),
-			),
-		}),
-		execute: async (
-			_id: string,
-			params: { parent: string; exclude_id?: string; limit?: number },
-		) => {
-			const rows = await callHost<unknown[]>(
-				"triage.list_candidates_in_parent",
-				{
-					parent: params.parent,
-					excludeId: params.exclude_id,
-					limit: params.limit,
-				},
-			);
-			return {
-				content: [
-					{ type: "text" as const, text: JSON.stringify(rows, null, 2) },
-				],
-				details: { count: rows.length },
-			};
-		},
-	};
-}
-
+/// `read_candidate` — read the chat/issue markdown file.
+///   - default: whole file truncated at 8 KB
+///   - `grep`: substring filter ±3 lines context
+///   - `tail`: last N lines (useful for chat files when you want the
+///             most recent activity even if the file is >8KB)
 export function buildReadCandidateTool() {
 	return {
 		name: "read_candidate",
 		label: "Read Candidate Payload",
 		description:
-			"Read the full Markdown body of one candidate. Default returns the whole file (truncated at 8 KB). Pass `grep=<pattern>` to filter to lines matching a substring (case-insensitive) with ±3 lines of context — use this for very long PR bodies / chat threads instead of reading the whole file.",
+			"Read the full Markdown body of one candidate (chat or issue). Defaults: whole file, truncated at 8 KB. For long chat windows, prefer `tail=<N>` (last N messages) over the default truncation. For huge issue/PR bodies, use `grep=<pattern>` to filter to matching lines + 3 lines context. `grep` and `tail` are mutually exclusive; pass at most one.",
 		parameters: Type.Object({
 			candidate_id: Type.String({
 				description: "Id of the candidate.",
@@ -253,14 +214,21 @@ export function buildReadCandidateTool() {
 						"Optional case-insensitive substring filter. Returns matching lines + 3 lines of context, joined by `---`.",
 				}),
 			),
+			tail: Type.Optional(
+				Type.Integer({
+					description:
+						"Optional. Return the last N message blocks (`## ...`-delimited sections). Useful on chat candidates — gives you the freshest activity instead of the truncated head. 1-200.",
+				}),
+			),
 		}),
 		execute: async (
 			_id: string,
-			params: { candidate_id: string; grep?: string },
+			params: { candidate_id: string; grep?: string; tail?: number },
 		) => {
 			const r = await callHost<{ body: string }>("triage.read_candidate", {
 				candidateId: params.candidate_id,
 				grep: params.grep,
+				tail: params.tail,
 			});
 			return {
 				content: [{ type: "text" as const, text: r.body }],

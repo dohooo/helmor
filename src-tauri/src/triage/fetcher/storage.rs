@@ -1,9 +1,10 @@
-//! DB ops for `triage_candidate`, `triage_fetch_cursor`,
-//! `triage_source_subscription`.
+//! DB ops for `triage_candidate` and `triage_fetch_cursor`.
 //!
-//! Writes go through `db::write_conn()` (single-writer pool). Reads use
-//! the read pool. All timestamps are RFC 3339 with timezone offset so
-//! cross-day comparisons are unambiguous.
+//! Minimal-by-design: every column listed here has at least one prod
+//! read site. Anything that was only ever written got pruned (`fetched_at`,
+//! `last_updated_at`, `decision_at`, `reason`, `source_parent`,
+//! `last_fetched_at`, `last_external_ref`, and the whole subscription table).
+//! Re-add them if a real read site shows up.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -12,15 +13,12 @@ use serde::Serialize;
 
 use crate::models::db;
 
-/// One row to upsert into `triage_candidate`. Built by each provider's
-/// fetcher and handed to [`upsert_candidate`].
 #[derive(Debug, Clone)]
 pub struct NewCandidate {
     pub id: String,
     pub source: String,
     pub source_kind: String,
     pub source_ref: String,
-    pub source_parent: Option<String>,
     pub source_time: DateTime<Utc>,
     pub sender: Option<String>,
     pub title: Option<String>,
@@ -36,7 +34,8 @@ pub enum UpsertOutcome {
     UpdatedUnchanged,
     /// Row already had a non-NULL `decision`; we leave it alone so the
     /// fetcher never resurrects items the LLM (or the user) already
-    /// decided.
+    /// decided. IM fetchers can explicitly call [`reset_decision`] when
+    /// new activity arrives; this path is for the default "no change".
     SkippedDecided,
 }
 
@@ -48,17 +47,12 @@ fn fmt_ts(ts: DateTime<Utc>) -> String {
     ts.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Insert if new; otherwise refresh metadata IF the row is still open
-/// (`decision IS NULL`). Decided rows are not touched — that's the
-/// "don't re-evaluate skipped items" guarantee.
+/// Insert if new; otherwise refresh metadata IFF the row is still open
+/// (`decision IS NULL`). Decided rows are not touched.
 pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
-    let now = now_iso();
     let source_time = fmt_ts(candidate.source_time);
     let conn = db::write_conn()?;
 
-    // Branch on existing row's decision so the fetcher can never
-    // resurrect a 'skip'/'dismissed' candidate just because upstream
-    // bumped its updated_at.
     let existing_decision: Option<Option<String>> = conn
         .query_row(
             "SELECT decision FROM triage_candidate WHERE source = ?1 AND source_ref = ?2",
@@ -74,23 +68,17 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
             conn.execute(
                 "UPDATE triage_candidate SET
                     source_kind = ?1,
-                    source_parent = ?2,
-                    fetched_at = ?3,
-                    source_time = ?4,
-                    last_updated_at = ?5,
-                    sender = ?6,
-                    title = ?7,
-                    preview = ?8,
-                    external_url = ?9,
-                    payload_path = ?10,
-                    payload_bytes = ?11
-                 WHERE source = ?12 AND source_ref = ?13",
+                    source_time = ?2,
+                    sender = ?3,
+                    title = ?4,
+                    preview = ?5,
+                    external_url = ?6,
+                    payload_path = ?7,
+                    payload_bytes = ?8
+                 WHERE source = ?9 AND source_ref = ?10",
                 params![
                     &candidate.source_kind,
-                    &candidate.source_parent,
-                    &now,
                     &source_time,
-                    &now,
                     &candidate.sender,
                     &candidate.title,
                     &candidate.preview,
@@ -107,23 +95,20 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
         None => {
             conn.execute(
                 "INSERT INTO triage_candidate (
-                    id, source, source_kind, source_ref, source_parent,
-                    fetched_at, source_time, last_updated_at, sender,
+                    id, source, source_kind, source_ref,
+                    source_time, sender,
                     title, preview, external_url, payload_path, payload_bytes
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5,
-                    ?6, ?7, ?8, ?9,
-                    ?10, ?11, ?12, ?13, ?14
+                    ?1, ?2, ?3, ?4,
+                    ?5, ?6,
+                    ?7, ?8, ?9, ?10, ?11
                 )",
                 params![
                     &candidate.id,
                     &candidate.source,
                     &candidate.source_kind,
                     &candidate.source_ref,
-                    &candidate.source_parent,
-                    &now,
                     &source_time,
-                    &now,
                     &candidate.sender,
                     &candidate.title,
                     &candidate.preview,
@@ -139,7 +124,6 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
 }
 
 /// True if a candidate with this `(source, source_ref)` already exists.
-/// Used by fetchers to skip the detail-fetch cost for known items.
 pub fn candidate_exists(source: &str, source_ref: &str) -> Result<bool> {
     let conn = db::read_conn()?;
     let n: i64 = conn
@@ -152,29 +136,23 @@ pub fn candidate_exists(source: &str, source_ref: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// Per-`(source, source_parent)` cursor used by fetchers to skip rows
-/// they've already seen. `source_parent` defaults to "" for inbox-style
-/// sources without a parent identifier.
+/// Per-`(source, source_parent)` cursor. Only IM fetchers populate it;
+/// forge fetchers don't use it at all.
 #[derive(Debug, Clone, Default)]
 pub struct FetchCursor {
-    pub last_fetched_at: Option<String>,
     pub last_source_time: Option<String>,
-    pub last_external_ref: Option<String>,
 }
 
 pub fn read_cursor(source: &str, parent: &str) -> Result<FetchCursor> {
     let conn = db::read_conn()?;
     let row = conn
         .query_row(
-            "SELECT last_fetched_at, last_source_time, last_external_ref
-             FROM triage_fetch_cursor
+            "SELECT last_source_time FROM triage_fetch_cursor
              WHERE source = ?1 AND source_parent = ?2",
             params![source, parent],
             |row| {
                 Ok(FetchCursor {
-                    last_fetched_at: row.get(0)?,
-                    last_source_time: row.get(1)?,
-                    last_external_ref: row.get(2)?,
+                    last_source_time: row.get(0)?,
                 })
             },
         )
@@ -184,112 +162,16 @@ pub fn read_cursor(source: &str, parent: &str) -> Result<FetchCursor> {
 }
 
 pub fn write_cursor(source: &str, parent: &str, cursor: &FetchCursor) -> Result<()> {
-    let now = now_iso();
-    let last_fetched_at = cursor
-        .last_fetched_at
-        .clone()
-        .unwrap_or_else(|| now.clone());
     let conn = db::write_conn()?;
     conn.execute(
-        "INSERT INTO triage_fetch_cursor (source, source_parent, last_fetched_at, last_source_time, last_external_ref)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO triage_fetch_cursor (source, source_parent, last_source_time)
+         VALUES (?1, ?2, ?3)
          ON CONFLICT(source, source_parent) DO UPDATE SET
-            last_fetched_at = excluded.last_fetched_at,
-            last_source_time = COALESCE(excluded.last_source_time, last_source_time),
-            last_external_ref = COALESCE(excluded.last_external_ref, last_external_ref)",
-        params![
-            source,
-            parent,
-            last_fetched_at,
-            cursor.last_source_time,
-            cursor.last_external_ref,
-        ],
+            last_source_time = COALESCE(excluded.last_source_time, last_source_time)",
+        params![source, parent, cursor.last_source_time],
     )
     .context("upsert triage_fetch_cursor")?;
     Ok(())
-}
-
-/// Subscription rows tell the fetcher which `source_parent`s to poll.
-/// Layer-2 / UI write 'pinned' / 'muted'; the fetcher itself writes
-/// 'auto' as it discovers new active sources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubscriptionMode {
-    Auto,
-    Pinned,
-    Muted,
-}
-
-impl SubscriptionMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SubscriptionMode::Auto => "auto",
-            SubscriptionMode::Pinned => "pinned",
-            SubscriptionMode::Muted => "muted",
-        }
-    }
-    pub fn parse(s: &str) -> Self {
-        match s {
-            "pinned" => SubscriptionMode::Pinned,
-            "muted" => SubscriptionMode::Muted,
-            _ => SubscriptionMode::Auto,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Subscription {
-    pub source: String,
-    pub source_parent: String,
-    pub label: Option<String>,
-    pub mode: SubscriptionMode,
-    pub last_user_activity_at: Option<String>,
-}
-
-pub fn upsert_subscription_auto(
-    source: &str,
-    parent: &str,
-    label: Option<&str>,
-    last_user_activity_at: Option<&str>,
-) -> Result<()> {
-    let now = now_iso();
-    let conn = db::write_conn()?;
-    conn.execute(
-        "INSERT INTO triage_source_subscription
-            (source, source_parent, label, mode, last_user_activity_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'auto', ?4, ?5, ?5)
-         ON CONFLICT(source, source_parent) DO UPDATE SET
-            label = COALESCE(excluded.label, label),
-            last_user_activity_at = COALESCE(excluded.last_user_activity_at, last_user_activity_at),
-            updated_at = excluded.updated_at",
-        params![source, parent, label, last_user_activity_at, now],
-    )
-    .context("upsert triage_source_subscription")?;
-    Ok(())
-}
-
-pub fn list_subscriptions(source: &str) -> Result<Vec<Subscription>> {
-    let conn = db::read_conn()?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT source, source_parent, label, mode, last_user_activity_at
-             FROM triage_source_subscription
-             WHERE source = ?1 AND mode != 'muted'",
-        )
-        .context("prepare list_subscriptions")?;
-    let rows = stmt
-        .query_map(params![source], |row| {
-            let mode_raw: String = row.get(3)?;
-            Ok(Subscription {
-                source: row.get(0)?,
-                source_parent: row.get(1)?,
-                label: row.get(2)?,
-                mode: SubscriptionMode::parse(&mode_raw),
-                last_user_activity_at: row.get(4)?,
-            })
-        })
-        .context("query list_subscriptions")?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .context("collect list_subscriptions")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -299,7 +181,6 @@ pub struct CandidateRow {
     pub source: String,
     pub source_kind: String,
     pub source_ref: String,
-    pub source_parent: Option<String>,
     pub source_time: String,
     pub sender: Option<String>,
     pub title: Option<String>,
@@ -310,13 +191,12 @@ pub struct CandidateRow {
     pub decision: Option<String>,
 }
 
-/// Used by Layer-2 (LLM tick) to read pending candidates. Newest first —
-/// Layer-2 decides relevance, the fetcher just hands over recent open rows.
+/// Used by Layer-2 (LLM tick) to read pending candidates. Newest first.
 pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
     let conn = db::read_conn()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, source, source_kind, source_ref, source_parent,
+            "SELECT id, source, source_kind, source_ref,
                     source_time, sender, title, preview, external_url,
                     payload_path, payload_bytes, decision
              FROM triage_candidate
@@ -332,15 +212,14 @@ pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
                 source: row.get(1)?,
                 source_kind: row.get(2)?,
                 source_ref: row.get(3)?,
-                source_parent: row.get(4)?,
-                source_time: row.get(5)?,
-                sender: row.get(6)?,
-                title: row.get(7)?,
-                preview: row.get(8)?,
-                external_url: row.get(9)?,
-                payload_path: row.get(10)?,
-                payload_bytes: row.get(11)?,
-                decision: row.get(12)?,
+                source_time: row.get(4)?,
+                sender: row.get(5)?,
+                title: row.get(6)?,
+                preview: row.get(7)?,
+                external_url: row.get(8)?,
+                payload_path: row.get(9)?,
+                payload_bytes: row.get(10)?,
+                decision: row.get(11)?,
             })
         })
         .context("query list_open_candidates")?;
@@ -348,51 +227,35 @@ pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
         .context("collect list_open_candidates")
 }
 
-/// Open candidates in the same `source_parent` as a given candidate,
-/// excluding the candidate itself. Lets Layer-2 browse "what else is
-/// happening in this channel/repo" without paying the cost of opening
-/// individual payload files. Cap at `limit` rows; backed by the
-/// partial index `idx_triage_candidate_parent_open`.
-pub fn list_candidates_in_parent(
-    parent: &str,
-    exclude_id: Option<&str>,
-    limit: i64,
-) -> Result<Vec<CandidateRow>> {
+/// Anchors (message_ids) that already drove a workspace creation for
+/// a given chat. Read from `workspaces.triage_source_ref` matching
+/// `<chat_id>:<anchor>`. Fed into the chat payload header so the LLM
+/// can skip tasks it already proposed in earlier ticks.
+pub fn proposed_anchors_for_chat(source: &str, chat_id: &str) -> Result<Vec<String>> {
     let conn = db::read_conn()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, source, source_kind, source_ref, source_parent,
-                    source_time, sender, title, preview, external_url,
-                    payload_path, payload_bytes, decision
-             FROM triage_candidate
-             WHERE decision IS NULL
-               AND source_parent = ?1
-               AND (?2 IS NULL OR id != ?2)
-             ORDER BY source_time DESC
-             LIMIT ?3",
+            "SELECT triage_source_ref FROM workspaces
+             WHERE triage_source_type = ?1
+               AND triage_source_ref LIKE ?2
+               AND state != 'archived'",
         )
-        .context("prepare list_candidates_in_parent")?;
+        .context("prepare proposed_anchors_for_chat")?;
+    let prefix = format!("{chat_id}:");
+    let pattern = format!("{prefix}%");
     let rows = stmt
-        .query_map(params![parent, exclude_id, limit], |row| {
-            Ok(CandidateRow {
-                id: row.get(0)?,
-                source: row.get(1)?,
-                source_kind: row.get(2)?,
-                source_ref: row.get(3)?,
-                source_parent: row.get(4)?,
-                source_time: row.get(5)?,
-                sender: row.get(6)?,
-                title: row.get(7)?,
-                preview: row.get(8)?,
-                external_url: row.get(9)?,
-                payload_path: row.get(10)?,
-                payload_bytes: row.get(11)?,
-                decision: row.get(12)?,
-            })
-        })
-        .context("query list_candidates_in_parent")?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .context("collect list_candidates_in_parent")
+        .query_map(params![source, pattern], |row| row.get::<_, String>(0))
+        .context("query proposed_anchors_for_chat")?;
+    let mut anchors = Vec::new();
+    for row in rows {
+        let full = row?;
+        if let Some(anchor) = full.strip_prefix(&prefix) {
+            if !anchor.is_empty() {
+                anchors.push(anchor.to_string());
+            }
+        }
+    }
+    Ok(anchors)
 }
 
 pub fn count_open_candidates() -> Result<i64> {
@@ -409,12 +272,12 @@ pub fn count_open_candidates() -> Result<i64> {
 
 /// Look up one candidate row by id. Used by the Tauri command bridge
 /// when the LLM hands us a `candidate_id` and we need (payload_path,
-/// source, source_ref, etc.) to fulfil the call.
+/// source, source_ref) to fulfil the call.
 pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
     let conn = db::read_conn()?;
     let row = conn
         .query_row(
-            "SELECT id, source, source_kind, source_ref, source_parent,
+            "SELECT id, source, source_kind, source_ref,
                     source_time, sender, title, preview, external_url,
                     payload_path, payload_bytes, decision
              FROM triage_candidate WHERE id = ?1",
@@ -425,15 +288,14 @@ pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
                     source: row.get(1)?,
                     source_kind: row.get(2)?,
                     source_ref: row.get(3)?,
-                    source_parent: row.get(4)?,
-                    source_time: row.get(5)?,
-                    sender: row.get(6)?,
-                    title: row.get(7)?,
-                    preview: row.get(8)?,
-                    external_url: row.get(9)?,
-                    payload_path: row.get(10)?,
-                    payload_bytes: row.get(11)?,
-                    decision: row.get(12)?,
+                    source_time: row.get(4)?,
+                    sender: row.get(5)?,
+                    title: row.get(6)?,
+                    preview: row.get(7)?,
+                    external_url: row.get(8)?,
+                    payload_path: row.get(9)?,
+                    payload_bytes: row.get(10)?,
+                    decision: row.get(11)?,
                 })
             },
         )
@@ -442,13 +304,29 @@ pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
     Ok(row)
 }
 
-/// Used by Layer-2 to record a verdict on one candidate.
-pub fn record_decision(id: &str, decision: &str, reason: Option<&str>) -> Result<()> {
-    let now = now_iso();
+/// Re-open a previously decided candidate. Used by IM fetchers when
+/// new activity arrives on a chat the LLM had already judged — the
+/// user expects the new messages to be re-evaluated rather than
+/// silently dropped because of a stale decision. No-op when the row
+/// was already open.
+pub fn reset_decision(id: &str) -> Result<()> {
     let conn = db::write_conn()?;
     conn.execute(
-        "UPDATE triage_candidate SET decision = ?1, decision_at = ?2, reason = ?3 WHERE id = ?4",
-        params![decision, now, reason, id],
+        "UPDATE triage_candidate
+         SET decision = NULL
+         WHERE id = ?1 AND decision IS NOT NULL",
+        params![id],
+    )
+    .context("reset triage_candidate.decision")?;
+    Ok(())
+}
+
+/// Used by Layer-2 to record a verdict on one candidate.
+pub fn record_decision(id: &str, decision: &str, _reason: Option<&str>) -> Result<()> {
+    let conn = db::write_conn()?;
+    conn.execute(
+        "UPDATE triage_candidate SET decision = ?1 WHERE id = ?2",
+        params![decision, id],
     )
     .context("record candidate decision")?;
     Ok(())
@@ -469,7 +347,6 @@ mod tests {
             source: "github".into(),
             source_kind: "issue".into(),
             source_ref: source_ref.into(),
-            source_parent: Some("foo/bar".into()),
             source_time: Utc.with_ymd_and_hms(2026, 5, 26, 10, 0, 0).unwrap(),
             sender: Some("alice".into()),
             title: Some("Bug: pipeline drops deltas".into()),
@@ -487,7 +364,6 @@ mod tests {
         let r1 = upsert_candidate(&c1).unwrap();
         assert_eq!(r1, UpsertOutcome::Inserted);
 
-        // Same source_ref → UpdatedUnchanged path (refresh metadata).
         let mut c2 = make("gh:1", "1");
         c2.title = Some("Bug: pipeline drops deltas (updated)".into());
         let r2 = upsert_candidate(&c2).unwrap();
@@ -508,83 +384,35 @@ mod tests {
         upsert_candidate(&c).unwrap();
         record_decision("gh:1", "skip", Some("not actionable")).unwrap();
 
-        // Refetching → SkippedDecided.
         let again = upsert_candidate(&c).unwrap();
         assert_eq!(again, UpsertOutcome::SkippedDecided);
 
-        // And it's no longer in the open list.
         assert_eq!(list_open_candidates(10).unwrap().len(), 0);
         assert_eq!(count_open_candidates().unwrap(), 0);
+    }
+
+    #[test]
+    fn reset_decision_reopens_a_decided_row() {
+        let _e = env();
+        let c = make("gh:1", "1");
+        upsert_candidate(&c).unwrap();
+        record_decision("gh:1", "skip", None).unwrap();
+        assert_eq!(count_open_candidates().unwrap(), 0);
+        reset_decision("gh:1").unwrap();
+        assert_eq!(count_open_candidates().unwrap(), 1);
     }
 
     #[test]
     fn cursor_round_trips() {
         let _e = env();
         let cursor = FetchCursor {
-            last_fetched_at: Some("2026-05-26T10:00:00Z".into()),
             last_source_time: Some("2026-05-26T09:00:00Z".into()),
-            last_external_ref: Some("123".into()),
         };
-        write_cursor("github", "foo/bar", &cursor).unwrap();
-        let got = read_cursor("github", "foo/bar").unwrap();
+        write_cursor("lark", "oc_xxx", &cursor).unwrap();
+        let got = read_cursor("lark", "oc_xxx").unwrap();
         assert_eq!(
             got.last_source_time.as_deref(),
             Some("2026-05-26T09:00:00Z")
         );
-        assert_eq!(got.last_external_ref.as_deref(), Some("123"));
-    }
-
-    #[test]
-    fn cursor_partial_update_preserves_old_fields() {
-        let _e = env();
-        write_cursor(
-            "github",
-            "foo/bar",
-            &FetchCursor {
-                last_fetched_at: Some("2026-05-26T10:00:00Z".into()),
-                last_source_time: Some("2026-05-26T09:00:00Z".into()),
-                last_external_ref: Some("first".into()),
-            },
-        )
-        .unwrap();
-        // Partial: only `last_fetched_at` set.
-        write_cursor(
-            "github",
-            "foo/bar",
-            &FetchCursor {
-                last_fetched_at: Some("2026-05-26T11:00:00Z".into()),
-                last_source_time: None,
-                last_external_ref: None,
-            },
-        )
-        .unwrap();
-        let got = read_cursor("github", "foo/bar").unwrap();
-        // last_source_time preserved via COALESCE.
-        assert_eq!(
-            got.last_source_time.as_deref(),
-            Some("2026-05-26T09:00:00Z")
-        );
-        assert_eq!(got.last_external_ref.as_deref(), Some("first"));
-        assert_eq!(got.last_fetched_at.as_deref(), Some("2026-05-26T11:00:00Z"));
-    }
-
-    #[test]
-    fn subscription_upsert_auto_then_pinned() {
-        let _e = env();
-        upsert_subscription_auto("lark", "oc_x", Some("eng-frontend"), None).unwrap();
-        let subs = list_subscriptions("lark").unwrap();
-        assert_eq!(subs.len(), 1);
-        assert_eq!(subs[0].mode, SubscriptionMode::Auto);
-
-        // Pin via raw SQL — public API for that lives outside the fetcher.
-        db::write_conn()
-            .unwrap()
-            .execute(
-                "UPDATE triage_source_subscription SET mode = 'muted'
-                 WHERE source = 'lark' AND source_parent = 'oc_x'",
-                [],
-            )
-            .unwrap();
-        assert_eq!(list_subscriptions("lark").unwrap().len(), 0);
     }
 }

@@ -136,11 +136,16 @@ pub struct ExecuteOk {
 }
 
 /// What the sidecar sends back inside a `triageProposal` event.
-/// Mirror of the new sidecar-side `propose_workspace` payload.
+/// Mirror of the sidecar-side `propose_workspace` payload.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProposalEvent {
     candidate_id: String,
+    /// Anchor message / issue id within the candidate. Composed with
+    /// the candidate's `source_ref` to form the workspace's
+    /// `source_ref = chat_id:anchor`, letting one chat spawn N
+    /// workspaces (one per task).
+    task_anchor: String,
     repo_id: String,
     title: String,
     branch_name: String,
@@ -405,24 +410,45 @@ fn run_one_batch<R: Runtime>(
     })
 }
 
-/// Look up the candidate row, build a `CreateAiWorkspaceParams` from its
-/// `(source, source_ref)`, create the workspace, and record the decision.
+/// Resolve a `triageProposal` into a workspace.
+///
+/// `source_ref` is composed as `<candidate.source_ref>:<task_anchor>`,
+/// so a single chat candidate can spawn N workspaces (one per task the
+/// LLM identified inside the chat window). For forge candidates this
+/// degenerates to e.g. `octo/repo#42:octo/repo#42` — harmless duplicate
+/// but stable; the (source_type, source_ref) UNIQUE constraint on
+/// workspaces still dedups across re-runs.
+///
+/// We do NOT call `record_decision` for chat candidates: their
+/// re-open-on-new-activity semantics mean the fetcher decides when to
+/// reset/keep the decision. We DO call it for forge candidates (whose
+/// fetcher overwrites only metadata, never the decision). Easiest
+/// heuristic: record_decision unconditionally — the IM fetcher will
+/// reset it next tick if new messages arrived. Forge sources have no
+/// new-activity reset path, so `proposed` sticks.
 fn resolve_and_create<R: Runtime>(
     _app: &AppHandle<R>,
     ev: &ProposalEvent,
 ) -> Result<super::workspace_factory::CreateAiWorkspaceResult> {
     let row = candidate_storage::get_candidate(&ev.candidate_id)?
         .ok_or_else(|| anyhow!("candidate {} not found", ev.candidate_id))?;
+    let anchor = ev.task_anchor.trim();
+    if anchor.is_empty() {
+        anyhow::bail!(
+            "proposal for candidate {} missing task_anchor",
+            ev.candidate_id
+        );
+    }
+    let composed_source_ref = format!("{}:{}", row.source_ref, anchor);
     let params = CreateAiWorkspaceParams {
         source_type: row.source.clone(),
-        source_ref: row.source_ref.clone(),
+        source_ref: composed_source_ref,
         repo_id: ev.repo_id.clone(),
         plan_message: ev.plan_message.clone(),
         title: ev.title.clone(),
         branch_name: ev.branch_name.clone(),
     };
     let result = create_ai_workspace(&params)?;
-    // Record decision so the candidate doesn't surface again next tick.
     if let Err(error) = candidate_storage::record_decision(
         &ev.candidate_id,
         "proposed",

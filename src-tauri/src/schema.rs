@@ -1046,10 +1046,7 @@ CREATE TABLE IF NOT EXISTS triage_candidate (
     source TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     source_ref TEXT NOT NULL,
-    source_parent TEXT,
-    fetched_at TEXT NOT NULL,
     source_time TEXT NOT NULL,
-    last_updated_at TEXT,
     sender TEXT,
     title TEXT,
     preview TEXT,
@@ -1057,33 +1054,16 @@ CREATE TABLE IF NOT EXISTS triage_candidate (
     payload_path TEXT NOT NULL,
     payload_bytes INTEGER NOT NULL DEFAULT 0,
     decision TEXT,
-    decision_at TEXT,
-    reason TEXT,
     UNIQUE(source, source_ref)
 );
 
--- Per-(source, source_parent) fetch checkpoint. `source_parent` is '' for
--- inbox-style sources without a parent (GitHub global inbox, Slack search).
+-- Per-(source, source_parent) fetch checkpoint. Only IM-class fetchers
+-- write rows here; forge fetchers don't use the cursor (gh/glab inbox
+-- APIs do their own "what's new" filtering server-side).
 CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
     source TEXT NOT NULL,
     source_parent TEXT NOT NULL,
-    last_fetched_at TEXT NOT NULL,
     last_source_time TEXT,
-    last_external_ref TEXT,
-    PRIMARY KEY (source, source_parent)
-);
-
--- Auto-converged watch set: which source-parents the fetcher should poll.
--- `mode = 'auto'` is the default (heuristically chosen); 'pinned' / 'muted'
--- are user overrides.
-CREATE TABLE IF NOT EXISTS triage_source_subscription (
-    source TEXT NOT NULL,
-    source_parent TEXT NOT NULL,
-    label TEXT,
-    mode TEXT NOT NULL DEFAULT 'auto',
-    last_user_activity_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
     PRIMARY KEY (source, source_parent)
 );
 
@@ -1093,12 +1073,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_repository_id ON workspaces(repository_id);
 CREATE INDEX IF NOT EXISTS idx_triage_candidate_open ON triage_candidate(source_time DESC) WHERE decision IS NULL;
 CREATE INDEX IF NOT EXISTS idx_triage_candidate_source ON triage_candidate(source, source_time DESC);
--- Backs `list_candidates_in_parent`: lets the LLM browse other open
--- candidates in the same chat/repo without touching the heavy payload
--- files. Partial index keeps it small (only open rows ever read here).
-CREATE INDEX IF NOT EXISTS idx_triage_candidate_parent_open
-    ON triage_candidate(source_parent, source_time DESC)
-    WHERE decision IS NULL AND source_parent IS NOT NULL;
 -- idx_workspaces_kind + idx_workspaces_triage_source are created in
 -- `run_migrations` (after the ALTERs on upgraded DBs).
 

@@ -1,16 +1,29 @@
 //! Lark ImBackend.
 //!
-//! Discovery rides on `lark-cli im +chat-list --sort-type
-//! ByActiveTimeDesc --exclude-muted`. Lark's server already sorts by
-//! activity AND drops chats the user has muted (DND), so we just hand
-//! the top slice back to the generic layer.
+//! Discovery rules (matching user intent):
+//!   - DMs (chat_mode = "p2p"): a DM is worth surfacing as soon as
+//!     ANY message lands in it within the lookback window — we don't
+//!     gate on whether the user has replied. The fetch step decides
+//!     whether the DM actually has recent content (empty windows just
+//!     don't write a candidate row).
+//!   - Groups: only those the user has spoken in OR been @ed in. A
+//!     large room the user is a passive member of doesn't earn a
+//!     candidate slot.
 //!
-//! Per-conversation pull uses `chat-messages-list --start <iso>`. The
-//! `lark-cli` calls are async tokio — we drive them via the shared
-//! `super::super::http_runtime()` from `ImBackend`'s sync trait.
+//! Implementation:
+//!   1. `chat-list --sort-type ByActiveTimeDesc --exclude-muted` —
+//!      enumerate every chat (DM + group) the user is in.
+//!   2. `messages-search(sender=me, start=cold_start)` +
+//!      `messages-search(is_at_me=true, start=cold_start)` — derive
+//!      the "I'm involved here" group set.
+//!   3. Keep DMs unconditionally; keep groups iff in the involved set.
+//!      Per-conversation `chat-messages-list` runs later in the
+//!      generic ingest path; empty windows are silently dropped there.
+
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -20,9 +33,12 @@ use super::types::{ImConversation, ImConversationKind, ImMessage};
 use super::ImBackend;
 
 const SOURCE: &str = "lark";
-/// `chat-list` page-size; cap so a heavy account doesn't hog one tick.
-/// The generic layer truncates further to MAX_CONVERSATIONS_PER_TICK.
-const DISCOVERY_PAGE_SIZE: u32 = 100;
+/// Cap per messages-search call. Lark's API maxes at 50 anyway, but
+/// we only need DISTINCT chat ids — 50 usually covers all of them.
+const DISCOVERY_PAGE_SIZE: u32 = 50;
+/// Cap on chat-list. Sorted ByActiveTimeDesc, so the top slice is the
+/// freshest. 100 is the API max.
+const CHAT_LIST_PAGE_SIZE: u32 = 100;
 
 pub struct LarkBackend;
 
@@ -38,17 +54,68 @@ impl ImBackend for LarkBackend {
     }
 
     fn discover_conversations(&self, _limit: usize) -> Result<Vec<ImConversation>> {
-        let raw =
-            super::super::http_runtime().block_on(lark::im::chat_list(lark::im::ChatList {
+        let rt = super::super::http_runtime();
+        rt.block_on(async {
+            let my_open_id = lark::contact::self_open_id()
+                .await
+                .context("resolve self open_id")?;
+            // Cold-start aligned window for "I'm involved" checks. DMs
+            // bypass this — they're kept unconditionally and the ingest
+            // step decides whether they actually have recent activity.
+            let start = (Utc::now() - Duration::days(super::COLD_START_DAYS))
+                .to_rfc3339_opts(SecondsFormat::Secs, true);
+
+            // (1) Build the "I'm involved" set: chats where I sent
+            // something OR someone @ed me, within the window. Used
+            // only to filter GROUPS — DMs bypass this set.
+            let mut involved_groups: BTreeSet<String> = BTreeSet::new();
+            let sent = lark::im::messages_search(lark::im::MessagesSearch {
+                query: None,
+                sender: Some(my_open_id.as_str()),
+                chat_id: None,
+                is_at_me: false,
+                start: Some(start.as_str()),
+                end: None,
+                page_size: DISCOVERY_PAGE_SIZE,
+            })
+            .await
+            .context("messages-search sender=me")?;
+            collect_chat_ids(&sent, &mut involved_groups);
+            let mentions = lark::im::messages_search(lark::im::MessagesSearch {
+                query: None,
+                sender: None,
+                chat_id: None,
+                is_at_me: true,
+                start: Some(start.as_str()),
+                end: None,
+                page_size: DISCOVERY_PAGE_SIZE,
+            })
+            .await
+            .context("messages-search is_at_me")?;
+            collect_chat_ids(&mentions, &mut involved_groups);
+
+            // (2) Enumerate every chat the user is in.
+            let raw_chats = lark::im::chat_list(lark::im::ChatList {
                 sort_type: "ByActiveTimeDesc",
                 exclude_muted: true,
-                page_size: DISCOVERY_PAGE_SIZE,
-                page_token: None,
-            }))?;
-        Ok(parse_chats(&raw)
-            .into_iter()
-            .map(to_im_conversation)
-            .collect())
+                page_size: CHAT_LIST_PAGE_SIZE,
+            })
+            .await
+            .context("chat-list")?;
+
+            // (3) Apply the per-type rule. Empty DMs survive here and
+            // get filtered out at ingest time when fetch_messages
+            // returns nothing within the window.
+            let convs = parse_chat_list(&raw_chats)
+                .into_iter()
+                .filter(|c| {
+                    let is_dm = c.chat_mode.as_deref() == Some("p2p");
+                    is_dm || involved_groups.contains(&c.chat_id)
+                })
+                .map(to_im_conversation)
+                .collect();
+            Ok(convs)
+        })
     }
 
     fn fetch_messages(
@@ -66,74 +133,48 @@ impl ImBackend for LarkBackend {
                 start: start.as_deref(),
             },
         ))?;
-        // `chat_messages_list` returns newest-first. We keep that order
-        // for indexing, but each message's `raw.neighbors` carries the
-        // surrounding ±NEIGHBOR_WINDOW messages sorted chronologically
-        // (oldest first), so the rendered payload reads naturally.
-        let records = parse_messages(&raw);
-        let mut out = Vec::with_capacity(records.len());
-        for (idx, record) in records.iter().enumerate() {
-            let neighbors = collect_neighbors(&records, idx);
-            if let Some(msg) = to_im_message(record.clone(), &neighbors) {
-                out.push(msg);
-            }
-        }
-        Ok(out)
+        Ok(parse_messages(&raw)
+            .into_iter()
+            .filter_map(to_im_message)
+            .collect())
     }
 
-    fn render_payload(&self, conv: &ImConversation, msg: &ImMessage) -> String {
-        // Lark-specific override: surface `chat_mode` and `msg_type` so
-        // the LLM can tell a `post`-style rich message apart from a
-        // plain text one, AND append the ±NEIGHBOR_WINDOW chronological
-        // siblings so a one-line reply isn't read in isolation.
+    fn render_message_block(&self, _conv: &ImConversation, msg: &ImMessage) -> String {
+        // Lark-specific tweak: surface `msg_type` on the same heading
+        // line as the timestamp/sender so the LLM can spot a `post`-
+        // style rich-text bubble vs a plain `text` line at a glance.
         let mut out = String::new();
-        let label = conv.label.as_deref().unwrap_or(&conv.id);
         let sender = msg.sender.as_deref().unwrap_or("(unknown)");
-        out.push_str(&format!("# Lark message — {sender} in {label}\n\n"));
-        out.push_str(&format!("- chat_id: {}\n", conv.id));
-        out.push_str(&format!("- kind: {}\n", conv.kind.as_source_kind()));
-        if let Some(mode) = conv.raw.get("chat_mode").and_then(Value::as_str) {
-            out.push_str(&format!("- chat_mode: {mode}\n"));
+        let ts = msg.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
+        let msg_type = msg
+            .raw
+            .get("msg_type")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty() && *s != "text");
+        match msg_type {
+            Some(kind) => out.push_str(&format!("## {ts} — {sender} · id:{} · {kind}\n", msg.id)),
+            None => out.push_str(&format!("## {ts} — {sender} · id:{}\n", msg.id)),
         }
-        if let Some(msg_type) = msg.raw.get("msg_type").and_then(Value::as_str) {
-            out.push_str(&format!("- msg_type: {msg_type}\n"));
-        }
-        out.push_str(&format!(
-            "- timestamp: {}\n",
-            msg.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
-        ));
-        if let Some(url) = &msg.external_url {
-            out.push_str(&format!("- link: {url}\n"));
-        }
-        out.push_str("\n---\n\n## Message\n\n```\n");
+        out.push_str("```\n");
         out.push_str(msg.text.trim());
         out.push_str("\n```\n");
-
-        if let Some(neighbors) = msg.raw.get("neighbors").and_then(Value::as_array) {
-            if !neighbors.is_empty() {
-                out.push_str("\n## Surrounding context (±3 messages, chronological)\n\n");
-                for n in neighbors {
-                    let ns = n
-                        .get("sender")
-                        .and_then(Value::as_str)
-                        .unwrap_or("(unknown)");
-                    let ts = n
-                        .get("create_time_iso")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    let body = n.get("content").and_then(Value::as_str).unwrap_or("");
-                    out.push_str(&format!("**{ns}** · {ts}\n"));
-                    out.push_str("```\n");
-                    out.push_str(body.trim());
-                    out.push_str("\n```\n\n");
-                }
-            }
-        }
         out
     }
 }
 
-fn parse_chats(raw: &Value) -> Vec<ChatRow> {
+/// Extract distinct chat_ids from a `messages-search` response. We
+/// don't care about anything else — just which chats had me involved.
+fn collect_chat_ids(raw: &Value, sink: &mut BTreeSet<String>) {
+    for m in parse_messages(raw) {
+        if let Some(id) = m.chat_id.filter(|s| !s.is_empty()) {
+            sink.insert(id);
+        }
+    }
+}
+
+/// Parse a `chat-list` envelope. Lark's response wraps rows under
+/// `data.items` (current API) or `data.chats` (older); be liberal.
+fn parse_chat_list(raw: &Value) -> Vec<ChatRow> {
     let arr = raw
         .pointer("/data/items")
         .or_else(|| raw.pointer("/data/chats"))
@@ -167,13 +208,11 @@ fn parse_messages(raw: &Value) -> Vec<MessageRecord> {
 fn to_im_conversation(row: ChatRow) -> ImConversation {
     let kind = match row.chat_mode.as_deref() {
         Some("p2p") => ImConversationKind::Dm,
-        // Lark doesn't expose a public/private distinction at this level
-        // ("group" covers both); default to Channel.
+        // Lark's `chat-list` doesn't separate public/private inside the
+        // "group" bucket; default to Channel for both.
         _ => ImConversationKind::Channel,
     };
-    let raw = json!({
-        "chat_mode": row.chat_mode,
-    });
+    let raw = json!({ "chat_mode": row.chat_mode });
     ImConversation {
         id: row.chat_id,
         label: row.name,
@@ -182,40 +221,7 @@ fn to_im_conversation(row: ChatRow) -> ImConversation {
     }
 }
 
-/// Window radius for "surrounding context" — ±this many messages
-/// (chronological) attached to each candidate's payload.
-const NEIGHBOR_WINDOW: usize = 3;
-
-/// Pick the ±NEIGHBOR_WINDOW neighbours of `records[idx]`, ordered
-/// chronologically (oldest first). `records` comes in newest-first from
-/// `chat_messages_list`, so:
-///   - higher indices = chronologically earlier
-///   - lower indices = chronologically later
-///
-/// We grab a window on each side and sort by parsed `create_time`.
-fn collect_neighbors(records: &[MessageRecord], idx: usize) -> Vec<MessageRecord> {
-    let total = records.len();
-    let earlier_end = (idx + NEIGHBOR_WINDOW + 1).min(total);
-    let later_start = idx.saturating_sub(NEIGHBOR_WINDOW);
-    let mut neighbors: Vec<MessageRecord> = Vec::new();
-    // Earlier-in-time → higher index than `idx`.
-    if idx + 1 < earlier_end {
-        neighbors.extend(records[(idx + 1)..earlier_end].iter().cloned());
-    }
-    // Later-in-time → lower index than `idx`.
-    if later_start < idx {
-        neighbors.extend(records[later_start..idx].iter().cloned());
-    }
-    neighbors.sort_by_key(|n| {
-        n.create_time
-            .as_deref()
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(0)
-    });
-    neighbors
-}
-
-fn to_im_message(m: MessageRecord, neighbors: &[MessageRecord]) -> Option<ImMessage> {
+fn to_im_message(m: MessageRecord) -> Option<ImMessage> {
     let id = m.message_id?;
     if m.deleted.unwrap_or(false) {
         return None;
@@ -226,31 +232,7 @@ fn to_im_message(m: MessageRecord, neighbors: &[MessageRecord]) -> Option<ImMess
         .as_ref()
         .and_then(|s| s.name.clone().or_else(|| s.id.clone()));
     let text = m.content.clone().unwrap_or_default();
-    let neighbor_json: Vec<Value> = neighbors
-        .iter()
-        .filter(|n| !n.deleted.unwrap_or(false))
-        .map(|n| {
-            json!({
-                "sender": n
-                    .sender
-                    .as_ref()
-                    .and_then(|s| s.name.clone().or_else(|| s.id.clone()))
-                    .unwrap_or_default(),
-                "create_time": n.create_time,
-                "create_time_iso": n
-                    .create_time
-                    .as_deref()
-                    .and_then(parse_create_time_str_to_iso)
-                    .unwrap_or_default(),
-                "msg_type": n.msg_type,
-                "content": n.content,
-            })
-        })
-        .collect();
-    let raw = json!({
-        "msg_type": m.msg_type,
-        "neighbors": neighbor_json,
-    });
+    let raw = json!({ "msg_type": m.msg_type });
     Some(ImMessage {
         id,
         timestamp,
@@ -262,27 +244,22 @@ fn to_im_message(m: MessageRecord, neighbors: &[MessageRecord]) -> Option<ImMess
     })
 }
 
-/// Convert Lark's millis-string timestamp into a human-readable ISO
-/// string for the neighbor section. Returns `None` if unparseable.
-fn parse_create_time_str_to_iso(raw: &str) -> Option<String> {
-    let ms: i64 = raw.parse().ok()?;
-    Utc.timestamp_millis_opt(ms)
-        .single()
-        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
-}
-
 fn parse_create_time(raw: Option<&str>) -> Option<DateTime<Utc>> {
     let s = raw?;
     let ms: i64 = s.parse().ok()?;
     Utc.timestamp_millis_opt(ms).single()
 }
 
+/// One row from `chat-list`. Only the fields we actually consume are
+/// captured; everything else is dropped by the `Deserialize` impl.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ChatRow {
     #[serde(default)]
     chat_id: String,
     #[serde(default)]
     name: Option<String>,
+    /// `"p2p"` for DMs, `"group"` (and friends) for everything else.
+    /// `None` when the API omits it — we treat that as group-like.
     #[serde(default)]
     chat_mode: Option<String>,
 }
@@ -296,6 +273,10 @@ struct MessageRecord {
     deleted: Option<bool>,
     message_app_link: Option<String>,
     sender: Option<SenderRecord>,
+    /// Present on `messages-search` responses (each hit carries its
+    /// chat context); absent on `chat-messages-list` rows.
+    #[serde(default)]
+    chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -310,21 +291,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parses_chat_list_envelope() {
+    fn collect_chat_ids_dedupes_across_calls() {
+        let raw1 = json!({
+            "data": {
+                "messages": [
+                    { "message_id": "om_1", "chat_id": "oc_a" },
+                    { "message_id": "om_2", "chat_id": "oc_b" },
+                ]
+            }
+        });
+        let raw2 = json!({
+            "data": {
+                "messages": [
+                    { "message_id": "om_3", "chat_id": "oc_a" },
+                    { "message_id": "om_4", "chat_id": "oc_c" },
+                ]
+            }
+        });
+        let mut sink = BTreeSet::new();
+        collect_chat_ids(&raw1, &mut sink);
+        collect_chat_ids(&raw2, &mut sink);
+        assert_eq!(sink.len(), 3);
+        assert!(sink.contains("oc_a"));
+        assert!(sink.contains("oc_b"));
+        assert!(sink.contains("oc_c"));
+    }
+
+    #[test]
+    fn parse_chat_list_handles_data_items() {
         let raw = json!({
             "data": {
                 "items": [
-                    { "chat_id": "oc_a", "name": "eng-frontend", "chat_mode": "group" },
+                    { "chat_id": "oc_a", "name": "eng", "chat_mode": "group" },
                     { "chat_id": "oc_b", "name": "Alice", "chat_mode": "p2p" },
                 ]
             }
         });
-        let chats = parse_chats(&raw);
-        assert_eq!(chats.len(), 2);
-        let convs: Vec<_> = chats.into_iter().map(to_im_conversation).collect();
+        let rows = parse_chat_list(&raw);
+        assert_eq!(rows.len(), 2);
+        let convs: Vec<_> = rows.into_iter().map(to_im_conversation).collect();
         assert_eq!(convs[0].kind, ImConversationKind::Channel);
         assert_eq!(convs[1].kind, ImConversationKind::Dm);
-        assert_eq!(convs[0].label.as_deref(), Some("eng-frontend"));
     }
 
     #[test]
@@ -343,7 +350,7 @@ mod tests {
             }
         });
         let msgs = parse_messages(&raw);
-        let im_msg = to_im_message(msgs.into_iter().next().unwrap(), &[]).unwrap();
+        let im_msg = to_im_message(msgs.into_iter().next().unwrap()).unwrap();
         assert_eq!(im_msg.id, "om_111");
         assert_eq!(im_msg.sender.as_deref(), Some("Bob"));
         assert_eq!(im_msg.text, "麻烦帮忙看下登录bug");
@@ -362,90 +369,11 @@ mod tests {
             deleted: Some(true),
             ..Default::default()
         };
-        assert!(to_im_message(m, &[]).is_none());
+        assert!(to_im_message(m).is_none());
     }
 
     #[test]
-    fn collect_neighbors_window_around_middle_index() {
-        // Records arrive newest-first: indices 0,1,2,3,4 with create_times
-        // descending. ±NEIGHBOR_WINDOW=3 around idx=3 (the 4th-newest).
-        let records: Vec<MessageRecord> = (0..7)
-            .map(|i| MessageRecord {
-                message_id: Some(format!("om_{i}")),
-                // newest-first → reverse-sorted timestamps
-                create_time: Some((1_700_000_000_000_i64 - (i as i64 * 1000)).to_string()),
-                content: Some(format!("msg-{i}")),
-                ..Default::default()
-            })
-            .collect();
-        let neighbors = collect_neighbors(&records, 3);
-        // Expect indices [0,1,2] (later in time) + [4,5,6] (earlier in time)
-        // sorted chronologically (oldest first) → [6,5,4,2,1,0] by index
-        // → contents ["msg-6","msg-5","msg-4","msg-2","msg-1","msg-0"].
-        let contents: Vec<&str> = neighbors
-            .iter()
-            .filter_map(|n| n.content.as_deref())
-            .collect();
-        assert_eq!(
-            contents,
-            vec!["msg-6", "msg-5", "msg-4", "msg-2", "msg-1", "msg-0"]
-        );
-    }
-
-    #[test]
-    fn neighbors_at_boundary_are_clamped() {
-        let records: Vec<MessageRecord> = (0..3)
-            .map(|i| MessageRecord {
-                message_id: Some(format!("om_{i}")),
-                create_time: Some((1_700_000_000_000_i64 - (i as i64 * 1000)).to_string()),
-                ..Default::default()
-            })
-            .collect();
-        // idx=0 (newest): no later neighbors, 2 earlier ones.
-        assert_eq!(collect_neighbors(&records, 0).len(), 2);
-        // idx=2 (oldest): 2 later neighbors, no earlier ones.
-        assert_eq!(collect_neighbors(&records, 2).len(), 2);
-    }
-
-    #[test]
-    fn render_includes_neighbor_context() {
-        let conv = ImConversation {
-            id: "oc_x".into(),
-            label: Some("eng".into()),
-            kind: ImConversationKind::Channel,
-            raw: json!({ "chat_mode": "group" }),
-        };
-        let msg = ImMessage {
-            id: "om_2".into(),
-            timestamp: Utc.with_ymd_and_hms(2026, 5, 26, 10, 0, 5).unwrap(),
-            sender: Some("Bob".into()),
-            text: "OK".into(),
-            external_url: None,
-            deleted: false,
-            raw: json!({
-                "msg_type": "text",
-                "neighbors": [
-                    {
-                        "sender": "Alice",
-                        "create_time_iso": "2026-05-26T10:00:00Z",
-                        "content": "Anyone seen the login bug?",
-                    },
-                    {
-                        "sender": "Carol",
-                        "create_time_iso": "2026-05-26T10:00:10Z",
-                        "content": "Repro: open /login then…",
-                    }
-                ]
-            }),
-        };
-        let rendered = LarkBackend.render_payload(&conv, &msg);
-        assert!(rendered.contains("## Surrounding context"));
-        assert!(rendered.contains("**Alice** · 2026-05-26T10:00:00Z"));
-        assert!(rendered.contains("Repro: open /login then…"));
-    }
-
-    #[test]
-    fn render_includes_chat_mode_and_msg_type() {
+    fn render_message_block_includes_msg_type_for_non_text() {
         let conv = ImConversation {
             id: "oc_x".into(),
             label: Some("eng".into()),
@@ -456,14 +384,34 @@ mod tests {
             id: "om_1".into(),
             timestamp: Utc.with_ymd_and_hms(2026, 5, 26, 10, 0, 0).unwrap(),
             sender: Some("Bob".into()),
+            text: "see attached".into(),
+            external_url: None,
+            deleted: false,
+            raw: json!({ "msg_type": "post" }),
+        };
+        let rendered = LarkBackend.render_message_block(&conv, &msg);
+        assert!(rendered.contains("· post"));
+        assert!(rendered.contains("```\nsee attached\n```"));
+    }
+
+    #[test]
+    fn render_message_block_omits_msg_type_for_plain_text() {
+        let conv = ImConversation {
+            id: "oc_x".into(),
+            label: None,
+            kind: ImConversationKind::Channel,
+            raw: json!({}),
+        };
+        let msg = ImMessage {
+            id: "om_1".into(),
+            timestamp: Utc.with_ymd_and_hms(2026, 5, 26, 10, 0, 0).unwrap(),
+            sender: Some("Bob".into()),
             text: "hi".into(),
             external_url: None,
             deleted: false,
             raw: json!({ "msg_type": "text" }),
         };
-        let rendered = LarkBackend.render_payload(&conv, &msg);
-        assert!(rendered.contains("- chat_mode: group"));
-        assert!(rendered.contains("- msg_type: text"));
-        assert!(rendered.contains("```\nhi\n```"));
+        let rendered = LarkBackend.render_message_block(&conv, &msg);
+        assert!(!rendered.contains("· text"));
     }
 }

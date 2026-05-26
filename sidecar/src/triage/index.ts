@@ -79,6 +79,7 @@ export async function handleRunTriageTick(
 				type: "triageProposal",
 				params: {
 					candidateId: proposal.candidateId,
+					taskAnchor: proposal.taskAnchor,
 					repoId: proposal.repoId,
 					title: proposal.title,
 					branchName: proposal.branchName,

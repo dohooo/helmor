@@ -15,13 +15,13 @@ import {
 import { logger } from "../logger";
 import { buildSystemPrompt, buildTickUserMessage } from "./prompts";
 import {
-	buildListCandidatesInParentTool,
 	buildListReposTool,
 	buildMarkNotActionableTool,
 	buildProposeWorkspaceTool,
 	buildReadCandidateTool,
 	ProposalAccumulator,
 } from "./tools/helmor";
+import { buildThinkTool } from "./tools/reasoning";
 import type { TriageProposal, TriageTickParams } from "./types";
 
 registerBuiltInApiProviders();
@@ -116,7 +116,10 @@ export async function runTriageTick(
 		buildProposeWorkspaceTool(accumulator, { max: params.maxPerTick }),
 		buildMarkNotActionableTool(accumulator),
 		buildReadCandidateTool(),
-		buildListCandidatesInParentTool(),
+		// Scratchpad — no side effect. Compensates for a small local
+		// model's missing chain-of-thought stability. Time anchors are
+		// injected statically into the system prompt instead of a tool.
+		buildThinkTool(),
 	];
 
 	const model = buildLocalModel(params.localModel);
