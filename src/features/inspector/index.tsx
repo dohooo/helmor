@@ -611,6 +611,7 @@ export function WorkspaceInspectorSidebar({
 					activeRunActionId={activeRunActionId}
 					activeRunActionName={activeAction?.name ?? null}
 					runScript={activeAction?.command ?? null}
+					stopCommand={activeAction?.stopCommand ?? null}
 					hasAnyRunAction={runActions.length > 0}
 					isActive={activeTab === "run"}
 					onOpenSettings={handleOpenRepoScripts}

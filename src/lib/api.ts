@@ -3785,6 +3785,32 @@ export async function stopRepoScript(
 }
 
 /**
+ * Run a run action's configured `stopCommand` as a standalone script —
+ * no preceding main process to terminate. Drives the inspector's
+ * "Cleanup" button, which the user clicks after a start exited (cleanly
+ * or otherwise) to tear down side effects (docker containers, daemons)
+ * that the start spawned but didn't clean up itself.
+ *
+ * Output streams through the same channel shape as `executeRepoScript`,
+ * so the Run tab's terminal naturally shows cleanup output.
+ */
+export async function executeRepoStopCommand(
+	repoId: string,
+	workspaceId: string,
+	actionId: string,
+	onEvent: (event: ScriptEvent) => void,
+): Promise<void> {
+	const channel = new Channel<ScriptEvent>();
+	channel.onmessage = onEvent;
+	await invoke("execute_repo_stop_command", {
+		repoId,
+		workspaceId,
+		actionId,
+		channel,
+	});
+}
+
+/**
  * Send raw bytes to a running script's PTY master. The kernel's tty line
  * discipline translates `\x03` into SIGINT for the foreground process group,
  * so passing `\x03` here is how Ctrl+C in the terminal tab actually kills
