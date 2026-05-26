@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://discord.gg/ukyyuNfnDp"><img src="https://img.shields.io/discord/1499667625267957920?style=flat&logo=discord&label=Discord&color=5865F2" alt="Discord" /></a>
-  <a href="https://docs.helmor.ai"><img src="https://app.dosu.dev/api/images/badge?h=20&message=Docs" alt="Dosu Docs" /></a>
+  <a href="https://app.dosu.dev/9207e853-a462-496b-ac67-bc8e8fde3782"><img src="https://app.dosu.dev/api/images/badge?h=20&message=Docs" alt="Dosu Docs" /></a>
 </p>
 
 > AI made coding faster.
@@ -31,7 +31,7 @@
 
 ## Documentation
 
-[**Read the Helmor docs** →](https://docs.helmor.ai)
+[**Read the Helmor docs** →](https://app.dosu.dev/9207e853-a462-496b-ac67-bc8e8fde3782)
 
 ## Contributing
 
