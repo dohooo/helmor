@@ -21,7 +21,7 @@ export const groupToneClasses: Record<GroupTone, string> = {
 	progress: "text-[var(--workspace-sidebar-status-progress)]",
 	backlog: "text-[var(--workspace-sidebar-status-backlog)]",
 	canceled: "text-[var(--workspace-sidebar-status-canceled)]",
-	"ai-tasks": "text-[var(--workspace-sidebar-status-progress)]",
+	"ai-tasks": "text-[var(--workspace-sidebar-status-triage)]",
 };
 
 export const branchToneClasses: Record<WorkspaceBranchTone, string> = {

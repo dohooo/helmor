@@ -77,7 +77,7 @@ pub struct WorkspaceSidebarRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_user_message_at: Option<String>,
-    /// "manual" or "ai_triage" — routes ai_triage rows into the AI Tasks group.
+    /// "manual" or "ai_triage" — routes ai_triage rows into the Triage group.
     pub kind: String,
     /// True while an ai_triage row still needs the user's first send.
     pub triage_priming_unconsumed: bool,
@@ -231,7 +231,7 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     Ok(vec![
         WorkspaceSidebarGroup {
             id: "ai-tasks".to_string(),
-            label: "AI Tasks".to_string(),
+            label: "Triage".to_string(),
             tone: "ai-tasks".to_string(),
             rows: ai_tasks,
         },

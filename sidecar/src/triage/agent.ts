@@ -179,11 +179,14 @@ export async function runTriageTick(
 	const systemPrompt = buildSystemPrompt({
 		userPromptSuffix: params.systemPrompt,
 		maxPerTick: params.maxPerTick,
+		enabledProviderIds: preflightOk,
 		providerHints,
 		disabledProviders,
 	});
+	// User message also scopes to preflight-passed providers so the
+	// model never sees a disabled source in any part of the context.
 	const userMessage = buildTickUserMessage(
-		params.providers,
+		preflightOk,
 		params.repos,
 		effectiveLastTriagedAt,
 	);

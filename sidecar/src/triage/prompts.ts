@@ -1,6 +1,6 @@
 import type { TriageRepo } from "./types";
 
-const BASE_SYSTEM_PROMPT = `You are Helmor's triage agent. Decide TWO things per item:
+const INTRO = `You are Helmor's triage agent. Decide TWO things per item:
   1. Is this an actionable task the user should do?
   2. If yes, what's the simplest prompt for a coding agent?
 
@@ -10,24 +10,20 @@ on implementation. Identify, match to a repo, propose. Done.
 You MUST:
   - Match each task to a repo via list_repos
   - Call propose_workspace exactly once per real task
-  - Stop when sources are scanned
+  - Stop when sources are scanned`;
 
-# Scratch workflow
+const PLAN_FORMAT = `# Plan message format
 
-Provider tools (lark_*, gitlab_*, github_*) write fetched data into a per-tick
-scratch directory as Markdown. They return only a pointer string. Query via:
+  ## Source
+  Quote + sender / author + link.
+  ## Repo
+  Matched repo and one-line reason.
+  ## Suggested Action
+  ONE sentence on WHAT (not HOW).
+  ## Confirm?
+  Ask user to confirm.`;
 
-  scratch_list          → see what files exist
-  scratch_grep pattern  → regex search across files
-  scratch_read file     → read a slice (offset/limit)
-
-Per source:
-  1. fetch into scratch (filtered by sender/time/keyword when possible)
-  2. scratch_grep for action keywords: 需要|帮|请|麻烦|fix|bug|修|TODO|做|搞|处理|改
-  3. scratch_read around hits only — don't page through whole files
-  4. decide → propose_workspace or move on
-
-# Forge scope — inbox vs repo
+const FORGE_SCOPE = `# Forge scope — inbox vs repo
 
 For GitHub/GitLab there are TWO complementary scan modes:
 - *_inbox_* tools = items where the user is the protagonist (assigned,
@@ -38,57 +34,85 @@ For GitHub/GitLab there are TWO complementary scan modes:
 
 The list_repos tool gives you each Helmor repo's id; pass it directly
 as repo_id to *_list_repo_*. Don't try to derive owner/repo from the
-remote URL yourself — Helmor does that mapping for you.
+remote URL yourself — Helmor does that mapping for you.`;
 
-# Plan message format
+const ATTACHMENT_LINES: Readonly<Record<string, string>> = {
+	lark: "  lark:    lark_save_image(message_id, image_key)",
+	slack: "  slack:   slack_save_attachment(url)",
+	github: "  github:  github_save_attachment(url)",
+	gitlab: "  gitlab:  gitlab_save_attachment(url)",
+};
 
-  ## Source
-  Quote + sender / author + link.
-  ## Repo
-  Matched repo and one-line reason.
-  ## Suggested Action
-  ONE sentence on WHAT (not HOW).
-  ## Confirm?
-  Ask user to confirm.
+const FORGE_IDS = new Set(["github", "gitlab"]);
 
-# Attachments (images, screenshots, files)
+function buildScratchSection(enabledIds: readonly string[]): string {
+	const toolPatterns = enabledIds.map((id) => `${id}_*`).join(", ");
+	return `# Scratch workflow
+
+Provider tools (${toolPatterns}) write fetched data into a per-tick
+scratch directory as Markdown. They return only a pointer string. Query via:
+
+  scratch_list          → see what files exist
+  scratch_grep pattern  → regex search across files
+  scratch_read file     → read a slice (offset/limit)
+
+Per source:
+  1. fetch into scratch (filtered by sender/time/keyword when possible)
+  2. scratch_grep for action keywords: 需要|帮|请|麻烦|fix|bug|修|TODO|做|搞|处理|改
+  3. scratch_read around hits only — don't page through whole files
+  4. decide → propose_workspace or move on`;
+}
+
+function buildAttachmentsSection(enabledIds: readonly string[]): string {
+	const lines = enabledIds
+		.map((id) => ATTACHMENT_LINES[id])
+		.filter((line): line is string => Boolean(line));
+	if (lines.length === 0) return "";
+	return `# Attachments (images, screenshots, files)
 
 If a message body contains an image / screenshot / attachment that's
 relevant to the task, save it BEFORE proposing:
 
-  lark:    lark_save_image(message_id, image_key)
-  slack:   slack_save_attachment(url)
-  github:  github_save_attachment(url)
-  gitlab:  gitlab_save_attachment(url)
+${lines.join("\n")}
 
 Each save tool also INLINES the image bytes back to you as a vision
 block (under ~5 MB) — look at it and:
   - briefly describe what you see in plan_message so the user
     understands the task without re-opening the source,
   - still pass the id in propose_workspace.attachments: [{ id, alt }]
-    so the downstream workspace agent can re-open the original.
+    so the downstream workspace agent can re-open the original.`;
+}
 
-# Workspace creation cap
+function buildCapSection(maxPerTick: number): string {
+	return `# Workspace creation cap
 
-You can create at most {{MAX}} workspaces per tick. Prioritize tasks
+You can create at most ${Math.max(1, maxPerTick)} workspaces per tick. Prioritize tasks
 by RECENCY — always propose the newest/most-recent tasks first, as older
 items may become stale or no longer relevant. When you reach the cap,
 stop proposing and summarize what you found.`;
+}
 
 export interface BuildPromptInput {
 	userPromptSuffix: string;
 	maxPerTick: number;
+	/// Provider ids whose preflight passed AND whose tools are loaded
+	/// in this tick. Drives every conditional section so the model never
+	/// sees instructions or tool names for sources the user disabled.
+	enabledProviderIds: readonly string[];
 	providerHints: readonly string[];
 	disabledProviders: readonly { displayName: string; reason: string }[];
 }
 
 export function buildSystemPrompt(input: BuildPromptInput): string {
-	const sections: string[] = [
-		BASE_SYSTEM_PROMPT.replace(
-			"{{MAX}}",
-			String(Math.max(1, input.maxPerTick)),
-		),
-	];
+	const enabledIds = input.enabledProviderIds;
+	const sections: string[] = [INTRO, buildScratchSection(enabledIds)];
+	if (enabledIds.some((id) => FORGE_IDS.has(id))) {
+		sections.push(FORGE_SCOPE);
+	}
+	sections.push(PLAN_FORMAT);
+	const attachments = buildAttachmentsSection(enabledIds);
+	if (attachments) sections.push(attachments);
+	sections.push(buildCapSection(input.maxPerTick));
 	if (input.providerHints.length > 0) {
 		sections.push("# Active providers", input.providerHints.join("\n\n"));
 	}

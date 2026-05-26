@@ -347,6 +347,18 @@ fn execute_tick<R: Runtime>(
         match create_ai_workspace(&p) {
             Ok(result) => {
                 created += 1;
+                // The priming `session_messages` row is inserted inside
+                // `create_ai_workspace`, but no message-cache invalidation
+                // fires for it on its own. Without this, a user who clicks
+                // the freshly-created workspace before the next periodic
+                // refetch sees an EmptyState placeholder and assumes the
+                // triage produced nothing.
+                ui_sync::publish(
+                    app,
+                    UiMutationEvent::SessionMessagesAppended {
+                        session_id: result.session_id,
+                    },
+                );
                 ui_sync::publish(
                     app,
                     UiMutationEvent::TriageWorkspaceCreated {

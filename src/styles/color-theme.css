@@ -273,6 +273,9 @@
 	--workspace-sidebar-status-backlog: #848f92;
 	--workspace-sidebar-status-canceled: #a86868;
 	--workspace-sidebar-status-neutral: #5b686b;
+	/* Triage / auto-discovered. Distinct violet so the Sparkles icon
+	   reads as "AI-found" and not as another status state. */
+	--workspace-sidebar-status-triage: #7560c2;
 	--workspace-sidebar-branch: #718687;
 	--workspace-sidebar-selected-bg: color-mix(
 		in oklch,
@@ -463,6 +466,7 @@
 	--workspace-sidebar-status-backlog: #b6b2ae;
 	--workspace-sidebar-status-canceled: #ee9b9b;
 	--workspace-sidebar-status-neutral: #afaeac;
+	--workspace-sidebar-status-triage: #b8a4f0;
 	--workspace-sidebar-branch: #b09a84;
 
 	/* Terminal ANSI palette (dark variant) */
