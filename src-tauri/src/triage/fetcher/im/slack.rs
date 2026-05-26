@@ -4,10 +4,10 @@
 //!   - DMs (im) and group-DMs (mpim) → always included; the ingest
 //!     step decides whether they actually have recent activity.
 //!   - public / private channels → only when there's a clear "I'm
-//!     involved here" signal in the last `COLD_START_DAYS`:
-//!     * I posted in the channel  (search: `from:<@me> after:…`)
-//!     * I was @ed in the channel (search: `<@me> after:…`)
-//!       A busy channel I'm a passive member of doesn't earn a slot.
+//!     involved here" signal in the last `COLD_START_DAYS`: either
+//!     `from:<@me> after:…` (I posted) or `<@me> after:…` (I was
+//!     @ed). A busy channel I'm a passive member of doesn't earn a
+//!     slot.
 //!
 //! Per-conversation pull uses `conversations.history` with a
 //! Slack-format `oldest` ts derived from the cursor.

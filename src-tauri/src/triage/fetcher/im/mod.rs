@@ -58,7 +58,7 @@ pub const MAX_CONVERSATIONS_PER_TICK: usize = 30;
 /// Max messages per conversation per fetch call.
 pub const MAX_MESSAGES_PER_CONVERSATION: usize = 50;
 /// Cold-start lookback (used when there's no per-conversation cursor).
-pub const COLD_START_DAYS: i64 = 3;
+pub const COLD_START_DAYS: i64 = 7;
 /// Overlap window applied to the cursor so a message that straddled the
 /// previous tick's boundary still surfaces.
 pub const OVERLAP_HOURS: i64 = 6;
@@ -510,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_start_returns_3d_floor() {
+    fn cold_start_returns_cold_start_floor() {
         let dt = effective_since(None).unwrap();
         let diff = Utc::now().signed_duration_since(dt);
         assert!(diff <= Duration::days(COLD_START_DAYS) + Duration::minutes(1));

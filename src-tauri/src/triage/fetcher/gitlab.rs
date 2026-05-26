@@ -1,14 +1,16 @@
-//! GitLab fetcher — same shape as `github`, talks to `glab` instead.
-//! Discussions don't exist on GitLab, so we only fetch issues + MRs.
+//! GitLab fetcher — per-repo scan, mirror of `github`. Talks to `glab`
+//! via the project-scoped REST endpoints
+//! (`projects/{path}/issues|merge_requests`). Discussions don't exist
+//! on GitLab, so we only fetch issues + MRs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 
 use crate::forge::gitlab::inbox as glab;
 use crate::forge::inbox::{
-    InboxFilters, InboxItem, InboxItemDetail, InboxScopeFilter, InboxSource, InboxToggles,
+    InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter, InboxToggles,
 };
 use crate::forge::remote::parse_remote;
 use crate::models::repos;
@@ -18,7 +20,7 @@ use super::storage::{self, NewCandidate, UpsertOutcome};
 use super::{FetchSummary, Fetcher};
 
 const SOURCE: &str = "gitlab";
-const PER_SCOPE_LIMIT: usize = 30;
+const PER_REPO_LIMIT: usize = 50;
 
 pub struct GitlabFetcher;
 
@@ -28,15 +30,16 @@ impl Fetcher for GitlabFetcher {
     }
 
     fn fetch_once(&self) -> Result<FetchSummary> {
-        let allowed = build_allowed_repos()?;
+        let targets = build_repo_targets()?;
         let mut summary = FetchSummary::default();
-        for (login, owned) in &allowed {
-            match fetch_login(login, owned, &mut summary) {
+        for target in &targets {
+            match fetch_repo(target, &mut summary) {
                 Ok(()) => {}
                 Err(error) => tracing::warn!(
-                    login = %login,
+                    login = %target.login,
+                    repo = %target.owner_path,
                     error = %format!("{error:#}"),
-                    "gitlab fetcher: login failed",
+                    "gitlab fetcher: repo failed",
                 ),
             }
             summary.source_parents_scanned += 1;
@@ -45,14 +48,20 @@ impl Fetcher for GitlabFetcher {
     }
 }
 
-/// `(login → set of "namespace/.../repo")` for Helmor-registered GitLab
-/// repos. Nested namespaces (groups + subgroups) are preserved verbatim
-/// — that's also the shape `forge::gitlab::inbox` emits in
-/// `external_id`. See `github::build_allowed_repos` for the rationale
-/// on client-side filtering.
-fn build_allowed_repos() -> Result<BTreeMap<String, BTreeSet<String>>> {
+/// Helmor-registered GitLab repo, deduped by (login, host, project
+/// path). `host` is carried so self-hosted GitLab instances don't get
+/// routed to gitlab.com via the login's home-host fallback.
+#[derive(Debug, Clone)]
+struct RepoTarget {
+    login: String,
+    host: String,
+    owner_path: String,
+}
+
+fn build_repo_targets() -> Result<Vec<RepoTarget>> {
     let repos = repos::list_repositories().context("list repos for gitlab fetcher")?;
-    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut out: Vec<RepoTarget> = Vec::new();
     for r in repos {
         if r.forge_provider.as_deref() != Some("gitlab") {
             continue;
@@ -66,73 +75,67 @@ fn build_allowed_repos() -> Result<BTreeMap<String, BTreeSet<String>>> {
         let Some(parsed) = parse_remote(remote_url) else {
             continue;
         };
-        let owned = format!(
-            "{}/{}",
-            parsed.namespace.to_ascii_lowercase(),
-            parsed.repo.to_ascii_lowercase()
+        // `namespace/repo` preserves subgroup nesting (parse_remote
+        // rsplits on the last `/`, so `group/sub/proj` → namespace=
+        // `group/sub`, repo=`proj`).
+        let owner_path = format!("{}/{}", parsed.namespace, parsed.repo);
+        let key = (
+            login.to_ascii_lowercase(),
+            parsed.host.to_ascii_lowercase(),
+            owner_path.to_ascii_lowercase(),
         );
-        out.entry(login).or_default().insert(owned);
+        if seen.insert(key) {
+            out.push(RepoTarget {
+                login,
+                host: parsed.host,
+                owner_path,
+            });
+        }
     }
     Ok(out)
 }
 
-fn fetch_login(login: &str, allowed: &BTreeSet<String>, summary: &mut FetchSummary) -> Result<()> {
-    for scope in [
-        InboxScopeFilter::Assignee,
-        InboxScopeFilter::Mentions,
-        InboxScopeFilter::ReviewRequested,
-        InboxScopeFilter::Author,
-    ] {
-        let filters = InboxFilters {
-            scope: Some(vec![scope]),
-            ..Default::default()
-        };
-        let toggles = InboxToggles {
-            issues: true,
-            prs: true,
-            discussions: false,
-        };
-        let page = match glab::list_inbox_items(
-            login,
-            None,
-            toggles,
-            None,
-            PER_SCOPE_LIMIT,
-            None,
-            Some(filters),
-        ) {
-            Ok(page) => page,
-            Err(error) => {
-                tracing::warn!(
-                    login = %login,
-                    scope = ?scope,
-                    error = %format!("{error:#}"),
-                    "gitlab fetcher: list_inbox_items failed",
-                );
-                continue;
-            }
-        };
-        for item in page.items {
-            let parent = parent_from_external_id(&item.external_id).to_ascii_lowercase();
-            if !allowed.contains(&parent) {
-                tracing::trace!(
-                    login = %login,
-                    external_id = %item.external_id,
-                    "gitlab fetcher: item outside Helmor repo allowlist, skipping",
-                );
-                continue;
-            }
-            if let Err(error) = ingest_item(login, &item, summary) {
-                tracing::warn!(
-                    login = %login,
-                    external_id = %item.external_id,
-                    error = %format!("{error:#}"),
-                    "gitlab fetcher: ingest_item failed",
-                );
-            }
+fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
+    let filters = InboxFilters {
+        state: Some(InboxStateFilter::Open),
+        ..Default::default()
+    };
+    let toggles = InboxToggles {
+        issues: true,
+        prs: true,
+        discussions: false,
+    };
+    let page = match glab::list_inbox_items(
+        &target.login,
+        Some(&target.host),
+        toggles,
+        None,
+        PER_REPO_LIMIT,
+        Some(&target.owner_path),
+        Some(filters),
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!(
+                login = %target.login,
+                host = %target.host,
+                repo = %target.owner_path,
+                error = %format!("{error:#}"),
+                "gitlab fetcher: list_inbox_items failed",
+            );
+            return Ok(());
+        }
+    };
+    for item in page.items {
+        if let Err(error) = ingest_item(&target.login, &item, summary) {
+            tracing::warn!(
+                login = %target.login,
+                external_id = %item.external_id,
+                error = %format!("{error:#}"),
+                "gitlab fetcher: ingest_item failed",
+            );
         }
     }
-    // No cursor write: glab inbox handles "what's new" server-side.
     Ok(())
 }
 
@@ -297,15 +300,27 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_handles_nested_namespace() {
-        // GitLab subgroups: the inbox external_id includes the full
-        // path, so the allowlist key must include subgroups too.
-        let parent = parent_from_external_id("platform/tools/api#7").to_ascii_lowercase();
-        let mut allowed = BTreeSet::new();
-        allowed.insert("platform/tools/api".to_string());
-        assert!(allowed.contains(&parent));
-        // Same project under a different subgroup is not the same.
-        let other = parent_from_external_id("platform/api#7").to_ascii_lowercase();
-        assert!(!allowed.contains(&other));
+    fn repo_target_dedupe_distinguishes_host_and_subgroup() {
+        // Same project name under different subgroups must NOT collapse
+        // (`platform/tools/api` ≠ `platform/api`). Same project on
+        // different hosts must NOT collapse either (gitlab.com vs.
+        // self-hosted).
+        let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+        let a = (
+            "alice".into(),
+            "gitlab.com".into(),
+            "platform/tools/api".into(),
+        );
+        let b = ("alice".into(), "gitlab.com".into(), "platform/api".into());
+        let c = (
+            "alice".into(),
+            "gitlab.example.com".into(),
+            "platform/tools/api".into(),
+        );
+        assert!(seen.insert(a.clone()));
+        assert!(seen.insert(b));
+        assert!(seen.insert(c));
+        // Re-inserting `a` is a no-op.
+        assert!(!seen.insert(a));
     }
 }

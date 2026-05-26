@@ -1,17 +1,24 @@
-//! GitHub fetcher: assigned / mentioned / review-requested inbox.
+//! GitHub fetcher: per-repo scan of open issues + PRs.
 //!
-//! Per (provider=github, login) we hit the same inbox API the UI uses,
-//! filtered to scopes that imply the user is on the hook. New items
-//! get a detail fetch for the body; known-open items just refresh
-//! metadata. Decided items are left alone (storage layer enforces).
+//! For every GitHub repo the user has registered in Helmor we hit the
+//! inbox search API with `repo:owner/name is:open` and pull whatever
+//! comes back. The "is this actionable for me" call is the LLM's job,
+//! not the fetcher's — the goal here is to give Layer-2 a complete
+//! picture of what's open in the repos the user actually maintains.
+//!
+//! Why not `assigned/mentioned/review-requested` like before? Those
+//! scopes serve "I'm on the hook" workflows but completely miss the
+//! maintainer view: open issues nobody @ed me on, drive-by PRs, etc.
+//! Maintainers want the whole open queue. IM sources (Slack/Lark) still
+//! cover the passive @-me side via DM + search.messages.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 
 use crate::forge::inbox::{
-    InboxFilters, InboxItem, InboxItemDetail, InboxScopeFilter, InboxSource, InboxToggles,
+    InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter, InboxToggles,
 };
 use crate::forge::remote::parse_remote;
 use crate::forge::{github::inbox as gh, ForgeProvider};
@@ -22,9 +29,10 @@ use super::storage::{self, NewCandidate, UpsertOutcome};
 use super::{FetchSummary, Fetcher};
 
 const SOURCE: &str = "github";
-/// Items per (login, scope) call. Caps the per-tick fan-out — Layer-2
-/// only consumes 20 anyway, and the rest will roll forward next tick.
-const PER_SCOPE_LIMIT: usize = 30;
+/// Issues + PRs per repo per tick. Headroom over Layer-2's
+/// max_per_tick=20 so the LLM has options; older items fall off the
+/// updated-desc tail naturally.
+const PER_REPO_LIMIT: usize = 50;
 
 pub struct GithubFetcher;
 
@@ -34,15 +42,16 @@ impl Fetcher for GithubFetcher {
     }
 
     fn fetch_once(&self) -> Result<FetchSummary> {
-        let allowed = build_allowed_repos()?;
+        let targets = build_repo_targets()?;
         let mut summary = FetchSummary::default();
-        for (login, owned) in &allowed {
-            match fetch_login(login, owned, &mut summary) {
+        for target in &targets {
+            match fetch_repo(target, &mut summary) {
                 Ok(()) => {}
                 Err(error) => tracing::warn!(
-                    login = %login,
+                    login = %target.login,
+                    repo = %target.owner_path,
                     error = %format!("{error:#}"),
-                    "github fetcher: login failed",
+                    "github fetcher: repo failed",
                 ),
             }
             summary.source_parents_scanned += 1;
@@ -51,19 +60,19 @@ impl Fetcher for GithubFetcher {
     }
 }
 
-/// Per-(login → set of `owner/repo`) map of repos the user has actually
-/// added to Helmor. Drives both:
-///   - WHICH logins we run inbox queries for (set keys), and
-///   - WHICH items we keep after the query returns (set values).
-///
-/// We deliberately don't enumerate every `gh auth` login on the
-/// machine and we don't keep inbox items that belong to repos the user
-/// hasn't registered in Helmor. The GitHub inbox API can't filter to a
-/// multi-repo allowlist server-side without N round-trips, so we do
-/// client-side filtering after one inbox call per login per scope.
-fn build_allowed_repos() -> Result<BTreeMap<String, BTreeSet<String>>> {
+/// One (login, owner/repo) pair derived from a Helmor-registered repo.
+/// Deduped on lowercased path so the same repo registered under
+/// different casings is hit once.
+#[derive(Debug, Clone)]
+struct RepoTarget {
+    login: String,
+    owner_path: String,
+}
+
+fn build_repo_targets() -> Result<Vec<RepoTarget>> {
     let repos = repos::list_repositories().context("list repos for github fetcher")?;
-    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out: Vec<RepoTarget> = Vec::new();
     for r in repos {
         if r.forge_provider.as_deref() != Some("github") {
             continue;
@@ -77,85 +86,57 @@ fn build_allowed_repos() -> Result<BTreeMap<String, BTreeSet<String>>> {
         let Some(parsed) = parse_remote(remote_url) else {
             continue;
         };
-        // GitHub external_id format from `forge::github::inbox` is
-        // `<owner>/<repo>` — namespace is exactly one segment, repo is
-        // one segment. Case-insensitive compare later via `parent` (we
-        // normalize both sides to lowercase).
-        let owned = format!(
-            "{}/{}",
-            parsed.namespace.to_ascii_lowercase(),
-            parsed.repo.to_ascii_lowercase()
-        );
-        out.entry(login).or_default().insert(owned);
+        let owner_path = format!("{}/{}", parsed.namespace, parsed.repo);
+        let key = (login.to_ascii_lowercase(), owner_path.to_ascii_lowercase());
+        if seen.insert(key) {
+            out.push(RepoTarget { login, owner_path });
+        }
     }
     Ok(out)
 }
 
-fn fetch_login(login: &str, allowed: &BTreeSet<String>, summary: &mut FetchSummary) -> Result<()> {
-    // One pass per scope. The same item can match multiple scopes (e.g.
-    // assigned AND mentioned) — upsert is idempotent so we don't dedup
-    // upfront. The scope itself never gets stored; Layer-2 reads body +
-    // metadata from disk and decides whether the user actually cares.
-    for scope in [
-        InboxScopeFilter::Assigned,
-        InboxScopeFilter::Mentioned,
-        InboxScopeFilter::ReviewRequested,
-        InboxScopeFilter::Author,
-    ] {
-        let filters = InboxFilters {
-            scope: Some(vec![scope]),
-            ..Default::default()
-        };
-        let toggles = InboxToggles {
-            issues: true,
-            prs: true,
-            discussions: false,
-        };
-        let page = match gh::list_inbox_items(
-            login,
-            toggles,
-            None,
-            PER_SCOPE_LIMIT,
-            None,
-            Some(filters),
-        ) {
-            Ok(page) => page,
-            Err(error) => {
-                tracing::warn!(
-                    login = %login,
-                    scope = ?scope,
-                    error = %format!("{error:#}"),
-                    "github fetcher: list_inbox_items failed",
-                );
-                continue;
-            }
-        };
-        for item in page.items {
-            let parent = parent_from_external_id(&item.external_id).to_ascii_lowercase();
-            if !allowed.contains(&parent) {
-                // Inbox API ignores repo-allowlist filtering server-side,
-                // so we drop items from repos the user hasn't added to
-                // Helmor. Logging at trace because hit rate is usually
-                // high and noise scales with the user's open backlog.
-                tracing::trace!(
-                    login = %login,
-                    external_id = %item.external_id,
-                    "github fetcher: item outside Helmor repo allowlist, skipping",
-                );
-                continue;
-            }
-            if let Err(error) = ingest_item(login, &item, summary) {
-                tracing::warn!(
-                    login = %login,
-                    external_id = %item.external_id,
-                    error = %format!("{error:#}"),
-                    "github fetcher: ingest_item failed",
-                );
-            }
+fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
+    // Open-only; scope=None so query lands as `repo:owner/name is:open`
+    // — i.e. the entire open queue, not just "involves me". Sort defaults
+    // to updated-desc on the inbox side.
+    let filters = InboxFilters {
+        state: Some(InboxStateFilter::Open),
+        ..Default::default()
+    };
+    let toggles = InboxToggles {
+        issues: true,
+        prs: true,
+        discussions: false,
+    };
+    let page = match gh::list_inbox_items(
+        &target.login,
+        toggles,
+        None,
+        PER_REPO_LIMIT,
+        Some(&target.owner_path),
+        Some(filters),
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!(
+                login = %target.login,
+                repo = %target.owner_path,
+                error = %format!("{error:#}"),
+                "github fetcher: list_inbox_items failed",
+            );
+            return Ok(());
+        }
+    };
+    for item in page.items {
+        if let Err(error) = ingest_item(&target.login, &item, summary) {
+            tracing::warn!(
+                login = %target.login,
+                external_id = %item.external_id,
+                error = %format!("{error:#}"),
+                "github fetcher: ingest_item failed",
+            );
         }
     }
-    // No cursor write: gh inbox does its own "what's new" filtering
-    // server-side, so we'd never read this back.
     Ok(())
 }
 
@@ -359,22 +340,19 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_check_is_case_insensitive() {
-        // Real-world: user typed `https://github.com/Octocat/Hello-World.git`
-        // and forge::remote preserves the casing on the namespace/repo
-        // segments. Inbox API returns `octocat/hello-world#…`. We
-        // normalize both to lowercase before comparing.
-        let parent = parent_from_external_id("octocat/hello-world#42").to_ascii_lowercase();
-        let mut allowed = BTreeSet::new();
-        allowed.insert("octocat/hello-world".to_string());
-        assert!(allowed.contains(&parent));
-    }
-
-    #[test]
-    fn allowlist_blocks_foreign_repo() {
-        let parent = parent_from_external_id("vercel/next.js#1234").to_ascii_lowercase();
-        let mut allowed = BTreeSet::new();
-        allowed.insert("octocat/hello-world".to_string());
-        assert!(!allowed.contains(&parent));
+    fn repo_target_dedupe_key_is_case_insensitive() {
+        // Two distinct registrations with mixed casing should collapse to
+        // one target so we don't hit the same repo twice per tick.
+        let mut seen = BTreeSet::new();
+        let first = (
+            "octocat".to_ascii_lowercase(),
+            "Octocat/Hello-World".to_ascii_lowercase(),
+        );
+        let second = (
+            "OCTOCAT".to_ascii_lowercase(),
+            "octocat/hello-world".to_ascii_lowercase(),
+        );
+        assert!(seen.insert(first));
+        assert!(!seen.insert(second));
     }
 }
