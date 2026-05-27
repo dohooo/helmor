@@ -376,7 +376,11 @@ describe("CodexAppServerManager", () => {
 		expect(
 			(threadStart?.params as { developerInstructions?: string })
 				.developerInstructions,
-		).toContain("incomplete evidence");
+		).toContain("next concrete subtask");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("missing or blocked proof");
 	});
 
 	test("forwards effort through codex collaboration mode settings", async () => {
