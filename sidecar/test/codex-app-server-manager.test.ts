@@ -48,13 +48,6 @@ const serverState = {
 const gitAccessState = {
 	directories: [] as string[],
 };
-const codexConfigState = {
-	result: {
-		kind: "alreadyEnabled" as "alreadyEnabled" | "modified",
-		path: "/fake/.codex/config.toml",
-	},
-	calls: 0,
-};
 
 class MockCodexAppServer {
 	killed = false;
@@ -232,14 +225,6 @@ mock.module("../src/git-access.js", () => ({
 	resolveGitAccessDirectories: async () => [...gitAccessState.directories],
 }));
 
-mock.module("../src/codex-config.js", () => ({
-	ensureCodexGoalsFeatureEnabled: async () => {
-		codexConfigState.calls += 1;
-		return { ...codexConfigState.result };
-	},
-	codexConfigPath: () => codexConfigState.result.path,
-}));
-
 const { CodexAppServerManager } = await import(
 	"../src/codex-app-server-manager.js"
 );
@@ -257,11 +242,6 @@ describe("CodexAppServerManager", () => {
 		serverState.instances = [];
 		serverState.responses = [];
 		gitAccessState.directories = [];
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
-		codexConfigState.calls = 0;
 		emitter = createSidecarEmitter(() => {});
 	});
 
@@ -1029,7 +1009,7 @@ describe("parseGoalCommand", () => {
 	});
 });
 
-describe.serial("CodexAppServerManager goal pre-flight", () => {
+describe.serial("CodexAppServerManager goal app-server integration", () => {
 	let emitter: SidecarEmitter;
 
 	beforeEach(() => {
@@ -1052,20 +1032,11 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 			updatedAt: 0,
 		};
 		gitAccessState.directories = [];
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
-		codexConfigState.calls = 0;
 		emitter = createSidecarEmitter(() => {});
 	});
 
-	test("/goal pre-flight: no-op when codex config already enables goals", async () => {
+	test("/goal uses native Codex goal RPC without global config mutation", async () => {
 		const manager = new CodexAppServerManager();
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 
 		await manager.sendMessage(
 			"REQ-goal-noop",
@@ -1083,7 +1054,6 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		expect(codexConfigState.calls).toBe(1);
 		expect(serverState.instances).toHaveLength(1);
 		expect(serverState.instances[0]?.killed).toBe(false);
 		const goalSet = serverState.requests.find(
@@ -1270,14 +1240,10 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 		});
 	});
 
-	test("/goal pre-flight: recycles stale codex and resumes its thread when toml had to be modified", async () => {
+	test("/goal recycles stale codex and resumes its thread before setting the goal", async () => {
 		const manager = new CodexAppServerManager();
 
 		// Seed a session so a stale ctx exists for the recycle.
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 		await manager.sendMessage(
 			"REQ-seed",
 			{
@@ -1296,11 +1262,6 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 		expect(serverState.instances).toHaveLength(1);
 		const stale = serverState.instances[0];
 
-		// Pretend the helper had to flip the flag.
-		codexConfigState.result = {
-			kind: "modified",
-			path: "/fake/.codex/config.toml",
-		};
 		serverState.requests = [];
 
 		await manager.sendMessage(
@@ -1338,13 +1299,9 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 		});
 	});
 
-	test("/goal pre-flight: caller-provided resume wins over stale providerThreadId", async () => {
+	test("/goal caller-provided resume wins over stale providerThreadId", async () => {
 		const manager = new CodexAppServerManager();
 
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 		await manager.sendMessage(
 			"REQ-seed-2",
 			{
@@ -1361,10 +1318,6 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		codexConfigState.result = {
-			kind: "modified",
-			path: "/fake/.codex/config.toml",
-		};
 		serverState.requests = [];
 
 		// Caller's resume wins over the in-memory stale id.
@@ -1390,7 +1343,7 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 		expect(resume?.params).toMatchObject({ threadId: "thread-from-rust" });
 	});
 
-	test("/goal pre-flight: skipped for non-/goal prompts", async () => {
+	test("/goal context recycle is skipped for non-/goal prompts", async () => {
 		const manager = new CodexAppServerManager();
 
 		await manager.sendMessage(
@@ -1409,6 +1362,8 @@ describe.serial("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		expect(codexConfigState.calls).toBe(0);
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			true,
+		);
 	});
 });

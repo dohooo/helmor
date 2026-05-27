@@ -103,7 +103,10 @@ async function driveGoalMessage(prompt: string) {
 	(manager as any).sessions.set("session-goal", {
 		server: fake.server,
 		providerThreadId: "thread-goal",
-		activeTurnId: null,
+		// Keep the fake context from being recycled; these tests exercise
+		// the live-stream goal continuation loop, while the recycle path is
+		// covered by sidecar/test/codex-app-server-manager.test.ts.
+		activeTurnId: "skip-recycle",
 		turnResolve: null,
 		turnReject: null,
 		activeRequestId: null,

@@ -590,11 +590,14 @@ export class CodexAppServerManager implements SessionManager {
 		const goalCommand = parseGoalCommand(prompt);
 		const autoResumeGoal =
 			goalCommand?.kind === "set" || goalCommand?.kind === "resume";
+		const effectiveResume = goalCommand
+			? this.recycleIdleContextForGoal(sessionId, resume)
+			: resume;
 
 		const ctx = await this.ensureContext(
 			sessionId,
 			workDir,
-			resume,
+			effectiveResume,
 			model,
 			permissionMode,
 			effectiveFastMode,
@@ -1587,6 +1590,41 @@ export class CodexAppServerManager implements SessionManager {
 		this.sessions.clear();
 		this.pendingApprovals.clear();
 		this.pendingUserInputs.clear();
+	}
+
+	private clearPendingSessionState(sessionId: string): void {
+		for (const [id, p] of this.pendingApprovals) {
+			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+		}
+		for (const [id, p] of this.pendingUserInputs) {
+			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
+		}
+	}
+
+	private recycleIdleContextForGoal(
+		sessionId: string,
+		callerResume: string | undefined,
+	): string | undefined {
+		const stale = this.sessions.get(sessionId);
+		if (!stale || stale.server.killed) return callerResume;
+		if (stale.turnResolve || stale.turnReject || stale.activeTurnId) {
+			logger.info("Skipping /goal context recycle while turn is active", {
+				sessionId,
+				providerThreadId: stale.providerThreadId ?? "(none)",
+				activeTurnId: stale.activeTurnId ?? "(none)",
+			});
+			return callerResume;
+		}
+
+		const reuseThread = stale.providerThreadId ?? undefined;
+		logger.info("Recycling idle Codex context before /goal", {
+			sessionId,
+			providerThreadId: reuseThread ?? "(none)",
+		});
+		stale.server.kill();
+		this.sessions.delete(sessionId);
+		this.clearPendingSessionState(sessionId);
+		return callerResume ?? reuseThread;
 	}
 
 	// ── Private ──────────────────────────────────────────────────────────
