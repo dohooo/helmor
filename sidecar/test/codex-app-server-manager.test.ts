@@ -10,6 +10,11 @@ type RequestRecord = {
 	params: unknown;
 };
 
+const goalTurnState = new WeakMap<
+	Record<string, unknown>,
+	{ count: number; beforeComplete: number }
+>();
+
 const serverState = {
 	requests: [] as RequestRecord[],
 	onNotification: null as
@@ -75,21 +80,70 @@ class MockCodexAppServer {
 			return { thread: { id: threadId } };
 		}
 		if (method === "thread/goal/set") {
+			const goalParams = params as
+				| { objective?: string; status?: string; threadId?: string }
+				| undefined;
+			if (goalParams?.objective) {
+				const goal = {
+					threadId: goalParams.threadId ?? "thread-1",
+					objective: goalParams.objective,
+					status: "active",
+					tokenBudget: null,
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					createdAt: 0,
+					updatedAt: 0,
+				};
+				serverState.goal = goal;
+				goalTurnState.set(goal, {
+					count: 0,
+					beforeComplete: goalParams.objective.includes(
+						"keep going until complete",
+					)
+						? 1
+						: 0,
+				});
+			} else if (serverState.goal && goalParams?.status) {
+				const prev = serverState.goal;
+				const goal = { ...prev, status: goalParams.status };
+				serverState.goal = goal;
+				const state = goalTurnState.get(prev);
+				if (state) goalTurnState.set(goal, state);
+			}
+			const startsTurn =
+				Boolean(goalParams?.objective) || goalParams?.status === "active";
 			queueMicrotask(() => {
 				serverState.onNotification?.({
 					method: "thread/goal/updated",
 					params: { goal: serverState.goal },
 				});
+				if (!startsTurn) return;
 				serverState.onNotification?.({
 					method: "turn/started",
 					params: { turn: { id: "turn-goal-1" } },
 				});
+				const state = serverState.goal
+					? goalTurnState.get(serverState.goal)
+					: undefined;
+				if (
+					serverState.goal?.status === "active" &&
+					(state?.count ?? 0) >= (state?.beforeComplete ?? 0)
+				) {
+					const prev = serverState.goal;
+					serverState.goal = { ...prev, status: "complete" };
+					if (state) goalTurnState.set(serverState.goal, state);
+					serverState.onNotification?.({
+						method: "thread/goal/updated",
+						params: { goal: serverState.goal },
+					});
+				}
+				if (state) state.count += 1;
 				serverState.onNotification?.({
 					method: "turn/completed",
 					params: { turn: { id: "turn-goal-1" } },
 				});
 			});
-			return {};
+			return { goal: serverState.goal };
 		}
 		if (method === "thread/goal/get") {
 			return { goal: serverState.goal };
@@ -975,7 +1029,7 @@ describe("parseGoalCommand", () => {
 	});
 });
 
-describe("CodexAppServerManager goal pre-flight", () => {
+describe.serial("CodexAppServerManager goal pre-flight", () => {
 	let emitter: SidecarEmitter;
 
 	beforeEach(() => {
@@ -1071,6 +1125,42 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			threadId: "thread-1",
 			objective: "review the wrapped diff",
 		});
+	});
+
+	test("/goal auto-resumes while Codex reports the goal is still active", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-auto-resume",
+			{
+				sessionId: "s-goal-auto-resume",
+				prompt: "/goal keep going until complete",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const goalSets = serverState.requests.filter(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSets.map((r) => r.params)).toHaveLength(2);
+		expect(goalSets[0]?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "keep going until complete",
+		});
+		expect(goalSets[1]?.params).toMatchObject({
+			threadId: "thread-1",
+			status: "active",
+		});
+		expect(
+			serverState.requests.some((r) => r.method === "thread/goal/get"),
+		).toBe(true);
 	});
 
 	test("/goal status reads the goal without starting a turn", async () => {

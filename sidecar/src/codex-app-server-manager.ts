@@ -589,6 +589,8 @@ export class CodexAppServerManager implements SessionManager {
 		// before `ensureContext` and recycles any stale process.
 		const commandText = extractUserCommandText(prompt);
 		const goalCommand = parseGoalCommand(prompt);
+		const autoResumeGoal =
+			goalCommand?.kind === "set" || goalCommand?.kind === "resume";
 		let effectiveResume = resume;
 		if (goalCommand) {
 			effectiveResume = await this.ensureCodexGoalsReady(
@@ -834,6 +836,15 @@ export class CodexAppServerManager implements SessionManager {
 						}
 						for (const [id, p] of this.pendingApprovals) {
 							if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+						}
+						if (autoResumeGoal && ctx.providerThreadId) {
+							void this.maybeContinueActiveGoal(
+								requestId,
+								sessionId,
+								ctx,
+								emitter,
+							);
+							return;
 						}
 						ctx.turnResolve?.();
 						ctx.turnResolve = null;
@@ -1097,6 +1108,54 @@ export class CodexAppServerManager implements SessionManager {
 				ctx.lastRetryNotice = null;
 			}
 		});
+	}
+
+	private async maybeContinueActiveGoal(
+		requestId: string,
+		sessionId: string,
+		ctx: AppServerContext,
+		emitter: SidecarEmitter,
+	): Promise<void> {
+		try {
+			const threadId = ctx.providerThreadId;
+			if (!threadId) {
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+				return;
+			}
+
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			if (goal && typeof goal === "object") {
+				emitter.codexGoalUpdated(requestId, sessionId, JSON.stringify(goal));
+			}
+			if (
+				!goal ||
+				typeof goal !== "object" ||
+				deepGet(goal, "status") !== "active"
+			) {
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+				return;
+			}
+
+			await ctx.server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			);
+		} catch (err) {
+			logger.error("goal auto-resume failed", errorDetails(err));
+			ctx.turnReject?.(err instanceof Error ? err : new Error(String(err)));
+			ctx.turnResolve = null;
+			ctx.turnReject = null;
+		}
 	}
 
 	// ── generateTitle ────────────────────────────────────────────────────
