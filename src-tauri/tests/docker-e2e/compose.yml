@@ -1,0 +1,71 @@
+# End-to-end test stack for the remote-runner SSH transport.
+#
+# `docker compose -f src-tauri/tests/docker-e2e/compose.yml up -d
+#   helmor-test-linux-arm64`  (or  helmor-test-linux-amd64)
+#
+# brings up a Debian container running sshd with a natively-built
+# `helmor-server` baked in (see Dockerfile). The host-side
+# integration test (`src-tauri/tests/remote_docker_e2e.rs`) brings
+# the matching-arch service up before its assertions and tears it
+# down on Drop.
+#
+# Why two services rather than one multi-arch image: a developer on
+# Apple Silicon runs the arm64 leg natively (fast); CI on GitHub's
+# amd64 ubuntu runners runs the amd64 leg natively. Neither pays the
+# QEMU tax for its primary leg. The test picks the service matching
+# the host arch unless `HELMOR_E2E_CROSS_ARCH=1` asks for the
+# emulated one too.
+#
+# Build context is `src-tauri/` (two levels up) so the builder stage
+# can COPY the crate source. `.dockerignore` there keeps target/ +
+# generated dirs out of the transfer.
+
+services:
+  helmor-test-linux-amd64:
+    image: helmor-e2e-debian:linux-amd64
+    build:
+      # Repo root — the build needs both src-tauri/ and the frontend
+      # file src/shared/builtin-claude-providers.json (pulled via
+      # include_str!). Dockerfile.dockerignore trims the heavy dirs.
+      context: ../../..
+      dockerfile: src-tauri/tests/docker-e2e/Dockerfile
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    container_name: helmor-test-linux-amd64
+    ports:
+      # Host port 2222 → container port 22. Avoids the host's own
+      # sshd on 22 (whether macOS Remote Login is enabled or not).
+      - "127.0.0.1:2222:22"
+    volumes:
+      # The test writes ./fixtures/authorized_keys (its ephemeral
+      # ed25519 public key) before bringing the stack up. Read-only
+      # so a container compromise can't tamper with the host file.
+      - ./fixtures/authorized_keys:/home/e2e/.ssh/authorized_keys:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltn | grep -q ':22 '"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+
+  helmor-test-linux-arm64:
+    image: helmor-e2e-debian:linux-arm64
+    build:
+      context: ../../..
+      dockerfile: src-tauri/tests/docker-e2e/Dockerfile
+      platforms:
+        - linux/arm64
+    platform: linux/arm64
+    container_name: helmor-test-linux-arm64
+    ports:
+      # Host port 2223 → container port 22.
+      - "127.0.0.1:2223:22"
+    volumes:
+      - ./fixtures/authorized_keys:/home/e2e/.ssh/authorized_keys:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltn | grep -q ':22 '"]
+      interval: 2s
+      timeout: 4s
+      retries: 60
+      start_period: 5s

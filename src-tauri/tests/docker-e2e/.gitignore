@@ -1,0 +1,3 @@
+# Per-test-run fixtures (SSH keys, etc.) — regenerated each run.
+fixtures/*
+!fixtures/.gitkeep

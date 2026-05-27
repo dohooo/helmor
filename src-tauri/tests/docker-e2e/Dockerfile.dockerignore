@@ -1,0 +1,33 @@
+# Per-Dockerfile ignore (BuildKit resolves `<dockerfile>.dockerignore`
+# before the context-root `.dockerignore`). Context root is the REPO
+# ROOT (see compose.yml build.context), so these patterns are
+# repo-root-relative. Keeps the multi-GB dirs out of the context
+# transfer; the builder only needs source + manifests.
+
+# Version control.
+.git/
+
+# Rust build output (gigabytes). The container builds fresh into its
+# own /build-target.
+src-tauri/target/
+target/
+
+# Node / frontend build output + deps.
+node_modules/
+**/node_modules/
+dist/
+sidecar/dist/
+sidecar/node_modules/
+
+# Tauri-generated platform scaffolding.
+src-tauri/gen/
+
+# The E2E harness itself + heavy test fixtures (circular / irrelevant
+# to the daemon build).
+src-tauri/tests/docker-e2e/fixtures/
+src-tauri/tests/snapshots/
+src-tauri/tests/fixtures/
+
+# Editor / OS cruft.
+**/.DS_Store
+**/*.swp

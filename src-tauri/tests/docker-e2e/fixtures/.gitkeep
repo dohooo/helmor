@@ -1,0 +1,8 @@
+# Per-test-run fixtures land here:
+#   * authorized_keys — ed25519 public key the test generated at
+#     setup time. Mounted read-only into the container at
+#     /home/e2e/.ssh/authorized_keys.
+#
+# Everything in this dir except `.gitkeep` is gitignored by the
+# parent .gitignore — fixtures are transient, regenerated per test
+# run, never committed.
