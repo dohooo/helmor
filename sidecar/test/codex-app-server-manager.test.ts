@@ -361,6 +361,18 @@ describe("CodexAppServerManager", () => {
 			(threadStart?.params as { developerInstructions?: string })
 				.developerInstructions,
 		).toContain("update_goal");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("durable objective");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("Do not call update_goal to mark a goal complete");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("completion audit");
 	});
 
 	test("forwards effort through codex collaboration mode settings", async () => {

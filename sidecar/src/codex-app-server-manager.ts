@@ -212,7 +212,12 @@ const HELMOR_CLIENT_INFO = {
 const HELMOR_CODEX_GOAL_INSTRUCTIONS = [
 	"Helmor runs Codex app-server with the native goals feature enabled.",
 	"When the user asks you to set, create, define, start, or pursue a goal, use Codex's native goal tools directly rather than describing a goal command in prose.",
-	"Create goals with create_goal, inspect them with get_goal, and only call update_goal after a completion audit proves the goal is complete or genuinely blocked.",
+	"Create goals with create_goal and inspect them with get_goal.",
+	"Treat an active goal as a durable objective that can span multiple turns. Do not shrink, reinterpret, or replace it with a smaller one-turn task.",
+	"Do not call update_goal to mark a goal complete just because the current turn ended, you made partial progress, or no obvious next step is immediately visible.",
+	"Before marking complete, perform a completion audit: derive the concrete requirements from the goal, verify each requirement against current files, command output, tests, runtime behavior, or other authoritative evidence, and continue working if any evidence is missing, weak, or contradictory.",
+	"Only call update_goal with complete after the audit proves every requirement is satisfied and no required work remains.",
+	"Only call update_goal with blocked when you are genuinely at an impasse and can state the blocker; otherwise keep the goal active and continue making progress.",
 	"Pause, resume, and clear goal lifecycle controls are handled by the user or Helmor host UI; do not emulate those with normal chat text.",
 ].join("\n");
 
