@@ -222,6 +222,63 @@ describe("Codex app-server goal integration", () => {
 		).toHaveLength(0);
 	});
 
+	test("keeps a model-created goal subscribed across continuation turns until terminal status", async () => {
+		const { fake, events, sendMessagePromise } = await driveGoalMessage(
+			"Create a goal to finish the task and keep working until done.",
+		);
+
+		const initialTurn = await waitForPending(fake, "turn/start");
+		expect(initialTurn.params).toMatchObject({ threadId: "thread-goal" });
+		fake.resolveNext("turn/start", { turn: { id: "turn-1" } });
+		await tick();
+
+		await fake.fireNotification("turn/started", {
+			threadId: "thread-goal",
+			turn: { id: "turn-1" },
+		});
+		await fake.fireNotification("thread/goal/updated", {
+			threadId: "thread-goal",
+			turnId: "turn-1",
+			goal: threadGoal("active"),
+		});
+		await fake.fireNotification("turn/completed", {
+			threadId: "thread-goal",
+			turn: { id: "turn-1" },
+		});
+
+		const firstStatusRead = await waitForPending(fake, "thread/goal/get");
+		expect(firstStatusRead.params).toEqual({ threadId: "thread-goal" });
+		fake.resolveNext("thread/goal/get", { goal: threadGoal("active") });
+		await tick();
+
+		const continuationSet = await waitForPending(fake, "thread/goal/set");
+		expect(continuationSet.params).toEqual({
+			threadId: "thread-goal",
+			status: "active",
+		});
+		fake.resolveNext("thread/goal/set", { goal: threadGoal("active") });
+		await tick();
+
+		await fake.fireNotification("turn/started", {
+			threadId: "thread-goal",
+			turn: { id: "turn-2" },
+		});
+		await fake.fireNotification("turn/completed", {
+			threadId: "thread-goal",
+			turn: { id: "turn-2" },
+		});
+
+		const terminalStatusRead = await waitForPending(fake, "thread/goal/get");
+		expect(terminalStatusRead.params).toEqual({ threadId: "thread-goal" });
+		fake.resolveNext("thread/goal/get", { goal: threadGoal("complete") });
+
+		await sendMessagePromise;
+
+		expect(
+			events.filter((e) => (e as { type?: string }).type === "end"),
+		).toHaveLength(1);
+	});
+
 	test("routes /goal resume through the stream path so Codex continuation turns are observed", async () => {
 		const { fake, sendMessagePromise } = await driveGoalMessage("/goal resume");
 

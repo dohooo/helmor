@@ -595,8 +595,6 @@ export class CodexAppServerManager implements SessionManager {
 		// the user's global ~/.codex/config.toml.
 		const commandText = extractUserCommandText(prompt);
 		const goalCommand = parseGoalCommand(prompt);
-		const autoResumeGoal =
-			goalCommand?.kind === "set" || goalCommand?.kind === "resume";
 		const effectiveResume = goalCommand
 			? this.recycleIdleContextForGoal(sessionId, resume)
 			: resume;
@@ -835,7 +833,7 @@ export class CodexAppServerManager implements SessionManager {
 						for (const [id, p] of this.pendingApprovals) {
 							if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
 						}
-						if (autoResumeGoal && ctx.providerThreadId) {
+						if (!isCompactCommand && ctx.providerThreadId) {
 							void this.maybeContinueActiveGoal(
 								requestId,
 								sessionId,
