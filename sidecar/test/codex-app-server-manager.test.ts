@@ -907,6 +907,7 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("hello world")).toBeNull();
 		expect(parseGoalCommand("/compact")).toBeNull();
 		expect(parseGoalCommand("/goalish trick")).toBeNull();
+		expect(parseGoalCommand("please run /goal improve coverage")).toBeNull();
 	});
 
 	test("recognises bare /goal and /goal status as status", async () => {
@@ -926,6 +927,35 @@ describe("parseGoalCommand", () => {
 			kind: "set",
 			objective: "improve benchmark coverage",
 		});
+	});
+
+	test("recognises /goal commands inside Helmor's wrapped user request", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		const wrapped =
+			"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal improve benchmark coverage";
+		expect(parseGoalCommand(wrapped)).toEqual({
+			kind: "set",
+			objective: "improve benchmark coverage",
+		});
+		expect(
+			parseGoalCommand(`${wrapped}\n\nMore detail in the objective.`),
+		).toEqual({
+			kind: "set",
+			objective: "improve benchmark coverage\n\nMore detail in the objective.",
+		});
+	});
+
+	test("recognises wrapped /goal status", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(
+			parseGoalCommand(
+				"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal status",
+			),
+		).toEqual({ kind: "status" });
 	});
 
 	test("recognises /goal resume as the resume kind", async () => {
@@ -1008,6 +1038,38 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		expect(goalSet?.params).toMatchObject({
 			threadId: "thread-1",
 			objective: "review the diff",
+		});
+	});
+
+	test("wrapped /goal uses Codex goal RPC instead of starting a normal turn", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-wrapped",
+			{
+				sessionId: "s-goal-wrapped",
+				prompt:
+					"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal review the wrapped diff",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			false,
+		);
+		const goalSet = serverState.requests.find(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSet?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "review the wrapped diff",
 		});
 	});
 

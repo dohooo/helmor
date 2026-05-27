@@ -125,8 +125,15 @@ export type GoalCommand =
 	| { kind: "clear" }
 	| { kind: "status" };
 
+export function extractUserCommandText(prompt: string): string {
+	const trimmed = prompt.trim();
+	const match = trimmed.match(/(?:^|\n)User request:\n([\s\S]*)$/);
+	return (match?.[1] ?? trimmed).trim();
+}
+
 export function parseGoalCommand(prompt: string): GoalCommand | null {
-	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	const commandText = extractUserCommandText(prompt);
+	const m = commandText.match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!m) return null;
 	const arg = (m[1] ?? "").trim();
 	if (arg === "" || arg === "status") return { kind: "status" };
@@ -580,6 +587,7 @@ export class CodexAppServerManager implements SessionManager {
 		// `/goal` needs `[features] goals = true` in `~/.codex/config.toml`.
 		// Codex reads its config once at startup, so the pre-flight runs
 		// before `ensureContext` and recycles any stale process.
+		const commandText = extractUserCommandText(prompt);
 		const goalCommand = parseGoalCommand(prompt);
 		let effectiveResume = resume;
 		if (goalCommand) {
@@ -616,7 +624,7 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
+		const isCompactCommand = !goalCommand && commandText === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
