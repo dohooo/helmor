@@ -842,12 +842,11 @@ export const WorkspaceComposerContainer = memo(
 						});
 						return;
 					}
-					if (
-						arg &&
-						arg !== "resume" &&
+					const shouldConfirmGoalReplace =
 						activeGoal &&
-						arg !== activeGoal.objective
-					) {
+						activeGoal.status !== "complete" &&
+						arg !== activeGoal.objective;
+					if (arg && arg !== "resume" && shouldConfirmGoalReplace) {
 						setGoalReplaceConfirm({
 							newObjective: arg,
 							args: [prompt, imagePaths, filePaths, customTags, options],

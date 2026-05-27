@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { CodexGoalState } from "@/lib/api";
 import { createHelmorQueryClient, helmorQueryKeys } from "@/lib/query-client";
 import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
@@ -73,6 +74,12 @@ const composerMockState = vi.hoisted(() => ({
 		onSave: (objective: string) => void;
 		onCancel: () => void;
 	} | null,
+	lastGoalReplace: null as {
+		currentObjective: string;
+		newObjective: string;
+		onReplace: () => void;
+		onCancel: () => void;
+	} | null,
 }));
 
 vi.mock("./index", async () => {
@@ -109,6 +116,12 @@ vi.mock("./index", async () => {
 				onSave: (objective: string) => void;
 				onCancel: () => void;
 			} | null;
+			goalReplace?: {
+				currentObjective: string;
+				newObjective: string;
+				onReplace: () => void;
+				onCancel: () => void;
+			} | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -129,6 +142,7 @@ vi.mock("./index", async () => {
 				props.onChangePermissionMode ?? null;
 			composerMockState.lastOnChangeFastMode = props.onChangeFastMode ?? null;
 			composerMockState.lastGoalEdit = props.goalEdit ?? null;
+			composerMockState.lastGoalReplace = props.goalReplace ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -261,6 +275,7 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.lastOnChangePermissionMode = null;
 		composerMockState.lastOnChangeFastMode = null;
 		composerMockState.lastGoalEdit = null;
+		composerMockState.lastGoalReplace = null;
 		apiMockState.listSlashCommands.mockReset();
 		apiMockState.loadAgentModelSections.mockReset();
 		apiMockState.loadAgentModelSections.mockResolvedValue(MODEL_SECTIONS);
@@ -1091,10 +1106,10 @@ describe("WorkspaceComposerContainer", () => {
 	// app commands instead of user prompts. Pause / clear / status go
 	// through `mutateCodexGoal`; edit takes over the composer body.
 	describe("/goal command interception", () => {
-		const ACTIVE_GOAL = {
+		const ACTIVE_GOAL: CodexGoalState = {
 			threadId: "t1",
 			objective: "improve test coverage",
-			status: "active" as const,
+			status: "active",
 			tokenBudget: null,
 			tokensUsed: 100,
 			timeUsedSeconds: 30,
@@ -1102,7 +1117,9 @@ describe("WorkspaceComposerContainer", () => {
 			updatedAt: 0,
 		};
 
-		function setupCodexSessionWithGoal(): {
+		function setupCodexSessionWithGoal(
+			goal: typeof ACTIVE_GOAL = ACTIVE_GOAL,
+		): {
 			queryClient: ReturnType<typeof createHelmorQueryClient>;
 		} {
 			const queryClient = createHelmorQueryClient();
@@ -1120,9 +1137,9 @@ describe("WorkspaceComposerContainer", () => {
 			);
 			queryClient.setQueryData(
 				helmorQueryKeys.sessionCodexGoal("session-2"),
-				ACTIVE_GOAL,
+				goal,
 			);
-			apiMockState.getSessionCodexGoal.mockResolvedValue(ACTIVE_GOAL);
+			apiMockState.getSessionCodexGoal.mockResolvedValue(goal);
 			return { queryClient };
 		}
 
@@ -1272,6 +1289,64 @@ describe("WorkspaceComposerContainer", () => {
 			edit?.onSave("improve docs coverage");
 
 			await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+			expect(onSubmit).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: "/goal improve docs coverage" }),
+			);
+		});
+
+		it("asks before replacing an unfinished goal", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.(
+				"/goal improve docs coverage",
+				[],
+				[],
+				[],
+			);
+
+			await waitFor(() => {
+				expect(composerMockState.lastGoalReplace).toMatchObject({
+					currentObjective: "improve test coverage",
+					newObjective: "improve docs coverage",
+				});
+			});
+			expect(onSubmit).not.toHaveBeenCalled();
+
+			composerMockState.lastGoalReplace?.onReplace();
+
+			await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+			expect(onSubmit).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: "/goal improve docs coverage" }),
+			);
+		});
+
+		it("does not ask before replacing a completed goal", async () => {
+			const { queryClient } = setupCodexSessionWithGoal({
+				...ACTIVE_GOAL,
+				status: "complete",
+			});
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.(
+				"/goal improve docs coverage",
+				[],
+				[],
+				[],
+			);
+
+			expect(composerMockState.lastGoalReplace).toBeNull();
+			expect(onSubmit).toHaveBeenCalledTimes(1);
 			expect(onSubmit).toHaveBeenCalledWith(
 				expect.objectContaining({ prompt: "/goal improve docs coverage" }),
 			);
