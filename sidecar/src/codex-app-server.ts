@@ -84,14 +84,17 @@ export function buildCodexAppServerArgs(): string[] {
 /**
  * Codex ships ripgrep next to its binary and spawns it by name on PATH for
  * in-thread search. Two layouts to support:
- *   - dev (node_modules):  <pkg>/vendor/<triple>/codex/codex
- *                          <pkg>/vendor/<triple>/path/rg          ← parent's sibling
+ *   - dev (node_modules):  <pkg>/vendor/<triple>/bin/codex
+ *                          <pkg>/vendor/<triple>/codex-path/rg    ← current
+ *                          <pkg>/vendor/<triple>/codex/codex
+ *                          <pkg>/vendor/<triple>/path/rg          ← legacy
  *   - staged (release):    dist/vendor/codex/codex
  *                          dist/vendor/codex/path/rg              ← own sibling
  */
 function buildCodexEnv(binaryPath: string): NodeJS.ProcessEnv {
 	const env = { ...process.env };
 	const candidates = [
+		join(dirname(binaryPath), "..", "codex-path"),
 		join(dirname(binaryPath), "..", "path"),
 		join(dirname(binaryPath), "path"),
 	];

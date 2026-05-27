@@ -8,8 +8,8 @@
  *     cheap, but rendering the chrome shouldn't happen for sessions
  *     without a goal — most sessions).
  *   - Clear button fires `mutateCodexGoal(sessionId, "clear")`.
- *   - Paused state shows the Resume button + clicking it fires the
- *     host-supplied `onResume` callback.
+ *   - Resumable terminal states show the Resume button + clicking it
+ *     fires the host-supplied `onResume` callback.
  *   - Active state hides the Resume button.
  *
  * The mutate call is mocked via `vi.mock("@/lib/api", ...)` so the
@@ -59,6 +59,14 @@ function pausedGoal(): CodexGoalState {
 	return { ...activeGoal(), status: "paused" };
 }
 
+function blockedGoal(): CodexGoalState {
+	return { ...activeGoal(), status: "blocked" };
+}
+
+function usageLimitedGoal(): CodexGoalState {
+	return { ...activeGoal(), status: "usageLimited" };
+}
+
 function renderWithGoal(goal: CodexGoalState | null, onResume?: () => void) {
 	const queryClient = createHelmorQueryClient();
 	queryClient.setQueryData(helmorQueryKeys.sessionCodexGoal("session-1"), goal);
@@ -88,16 +96,16 @@ describe("CodexGoalBanner", () => {
 		).toBeNull();
 	});
 
-	it("renders objective + status + tokens when an active goal exists", async () => {
+	it("renders Codex-style status indicator when an active goal exists", async () => {
 		renderWithGoal(activeGoal());
 
 		await waitFor(() => {
 			expect(screen.getByTestId("codex-goal-banner")).toBeInTheDocument();
 		});
-		expect(screen.getByText("improve test coverage")).toBeInTheDocument();
-		expect(screen.getByText("active")).toBeInTheDocument();
-		// tokens render as "Used: 1.2K" via formatTokens.
-		expect(screen.getByText(/Used:/)).toBeInTheDocument();
+		expect(screen.getByText("Pursuing goal (1m)")).toBeInTheDocument();
+		expect(
+			screen.getByText("Objective: improve test coverage"),
+		).toBeInTheDocument();
 	});
 
 	it("Clear button fires mutateCodexGoal with action=clear", async () => {
@@ -147,6 +155,20 @@ describe("CodexGoalBanner", () => {
 		// Message stream subscription catches the goal-continuation turn
 		// codex auto-spawns.
 		expect(apiMockState.mutateCodexGoal).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["blocked", blockedGoal()],
+		["usage limited", usageLimitedGoal()],
+	])("shows Resume button when goal is %s", async (_label, goal) => {
+		const onResume = vi.fn();
+		renderWithGoal(goal, onResume);
+
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: /resume goal/i }),
+			).toBeInTheDocument();
+		});
 	});
 
 	it("hides the Resume button when paused but no onResume is provided", async () => {

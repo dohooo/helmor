@@ -162,8 +162,8 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
             continue;
         }
 
-        // codex /goal lifecycle markers (Goal paused / resumed / cleared
-        // / set: <objective>). Inserted by `codex_goal::write_codex_goal_meta`
+        // codex /goal lifecycle markers (Goal active / paused / cleared,
+        // etc.). Inserted by `codex_goal::write_codex_goal_meta`
         // out-of-band whenever the goal state transitions in a way the
         // user should see in chat history.
         if msg_type == Some("goal_status") {

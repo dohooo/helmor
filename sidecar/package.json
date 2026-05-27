@@ -18,7 +18,7 @@
 		"@cursor/sdk": "^1.0.12",
 		"@earendil-works/pi-agent-core": "^0.75.4",
 		"@earendil-works/pi-ai": "^0.75.4",
-		"@openai/codex": "0.130.0"
+		"@openai/codex": "0.134.0"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3.11",

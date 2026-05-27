@@ -26,26 +26,7 @@ import {
 	sessionCodexGoalQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
-
-const STATUS_LABEL: Record<CodexGoalState["status"], string> = {
-	active: "active",
-	paused: "paused",
-	budgetLimited: "budget reached",
-	complete: "complete",
-};
-
-const STATUS_TONE: Record<CodexGoalState["status"], string> = {
-	active: "text-foreground",
-	paused: "text-muted-foreground",
-	budgetLimited: "text-amber-500",
-	complete: "text-emerald-500",
-};
-
-function formatTokens(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-	return n.toString();
-}
+import { goalStatusIndicatorText } from "./codex-goal-display";
 
 export function CodexGoalBanner({
 	sessionId,
@@ -92,10 +73,11 @@ export function CodexGoalBanner({
 
 	if (!goal) return null;
 
-	const used = formatTokens(goal.tokensUsed);
-	const budget =
-		goal.tokenBudget != null ? formatTokens(goal.tokenBudget) : null;
-	const isPaused = goal.status === "paused";
+	const indicator = goalStatusIndicatorText(goal);
+	const canResume =
+		goal.status === "paused" ||
+		goal.status === "blocked" ||
+		goal.status === "usageLimited";
 	const isPending = clearMutation.isPending || disabled;
 
 	return (
@@ -113,22 +95,19 @@ export function CodexGoalBanner({
 				strokeWidth={1.8}
 				aria-hidden
 			/>
-			<span className="truncate text-small font-medium tracking-[0.01em] text-foreground">
-				{goal.objective}
-			</span>
-			<span
-				className={cn(
-					"shrink-0 text-mini uppercase tracking-wider",
-					STATUS_TONE[goal.status],
-				)}
-			>
-				{STATUS_LABEL[goal.status]}
-			</span>
-			<span className="shrink-0 text-mini tabular-nums text-muted-foreground/70">
-				Used: {budget ? `${used} / ${budget}` : used}
-			</span>
+			<div className="flex min-w-0 flex-1 items-center gap-2">
+				<span className="min-w-0 truncate text-small font-medium tracking-[0.01em] text-foreground">
+					{indicator}
+				</span>
+				<span className="hidden shrink-0 text-mini text-muted-foreground/45 sm:inline">
+					•
+				</span>
+				<span className="hidden min-w-0 truncate text-small text-muted-foreground/80 sm:inline">
+					Objective: {goal.objective}
+				</span>
+			</div>
 			<div className="ml-auto flex shrink-0 items-center gap-1">
-				{isPaused && onResume ? (
+				{canResume && onResume ? (
 					<Button
 						type="button"
 						variant="ghost"

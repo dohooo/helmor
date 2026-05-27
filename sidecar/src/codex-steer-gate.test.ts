@@ -127,6 +127,7 @@ async function driveToSendMessage(sessionId: string) {
 		lastSentModel: "",
 		lastRetryAt: null,
 		lastRetryNotice: null,
+		latestGoalStatus: null,
 	});
 
 	const sendMessagePromise = manager.sendMessage(
@@ -180,6 +181,10 @@ const userPromptTypes = (events: object[]) =>
 		})
 		.map((e) => e.type);
 
+const eventTypes = userPromptTypes;
+
+const waitTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 	test("notifications during turn/steer RPC land AFTER synthetic user_prompt", async () => {
 		const { manager, fake, events, sendMessagePromise } =
@@ -218,6 +223,59 @@ describe("CodexAppServerManager.steer gate — real manager wiring", () => {
 		expect(afterSteer.length).toBeGreaterThanOrEqual(2);
 
 		await finish(fake, sendMessagePromise);
+	});
+
+	test("active goal keeps stream open across continuation turns", async () => {
+		const { fake, events, sendMessagePromise } =
+			await driveToSendMessage("goal-session");
+		let settled = false;
+		sendMessagePromise.then(() => {
+			settled = true;
+		});
+
+		fake.fireNotification("thread/goal/updated", {
+			goal: { objective: "finish everything", status: "active" },
+		});
+		fake.fireNotification("turn/completed", { turn: { id: "turn-active" } });
+		await waitTick();
+
+		expect(settled).toBe(false);
+		expect(eventTypes(events).filter((type) => type === "end")).toHaveLength(0);
+
+		fake.fireNotification("turn/started", { turn: { id: "turn-2" } });
+		fake.fireNotification("thread/goal/updated", {
+			goal: { objective: "finish everything", status: "complete" },
+		});
+		fake.fireNotification("turn/completed", { turn: { id: "turn-2" } });
+
+		await sendMessagePromise;
+		expect(settled).toBe(true);
+		expect(eventTypes(events).filter((type) => type === "end")).toHaveLength(1);
+	});
+
+	test("late terminal goal update settles stream after active turn completed", async () => {
+		const { fake, events, sendMessagePromise } =
+			await driveToSendMessage("goal-session-late");
+		let settled = false;
+		sendMessagePromise.then(() => {
+			settled = true;
+		});
+
+		fake.fireNotification("thread/goal/updated", {
+			goal: { objective: "finish everything", status: "active" },
+		});
+		fake.fireNotification("turn/completed", { turn: { id: "turn-active" } });
+		await waitTick();
+
+		expect(settled).toBe(false);
+
+		fake.fireNotification("thread/goal/updated", {
+			goal: { objective: "finish everything", status: "complete" },
+		});
+
+		await sendMessagePromise;
+		expect(settled).toBe(true);
+		expect(eventTypes(events).filter((type) => type === "end")).toHaveLength(1);
 	});
 
 	test("server-initiated requests are ALSO gated behind synthetic", async () => {

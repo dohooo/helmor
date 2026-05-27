@@ -60,6 +60,10 @@ const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
 		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
 		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
 	},
+	"0.134.0": {
+		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
+		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
+	},
 };
 
 // Same versioning rule as Codex: must match whatever sidecar/package.json
@@ -183,6 +187,10 @@ function ensureExists(path: string, label: string): void {
 function copyFile(src: string, dest: string): void {
 	mkdirSync(dirname(dest), { recursive: true });
 	cpSync(src, dest);
+}
+
+function firstExisting(paths: string[]): string {
+	return paths.find((path) => existsSync(path)) ?? paths[0] ?? "";
 }
 
 function humanSize(path: string): string {
@@ -447,9 +455,10 @@ function readCodexVersion(): string {
  * Stage codex out of `<vendorRoot>/<triple>/`.
  *
  * Source layout (npm tarball or installed package):
- *   <triple>/codex/codex      — the binary
- *   <triple>/path/rg          — ripgrep, expected on PATH at runtime
- *                                (codex spawns it for /search)
+ *   <triple>/bin/codex        — current binary layout
+ *   <triple>/codex-path/rg    — current ripgrep layout
+ *   <triple>/codex/codex      — legacy binary layout
+ *   <triple>/path/rg          — legacy ripgrep layout
  *
  * Output:
  *   dist/vendor/codex/codex
@@ -459,7 +468,10 @@ function readCodexVersion(): string {
  * env when spawning, so codex finds `rg` without it being globally installed.
  */
 function stageCodexFromVendorRoot(archRoot: string): void {
-	const binSrc = join(archRoot, "codex", "codex");
+	const binSrc = firstExisting([
+		join(archRoot, "bin", "codex"),
+		join(archRoot, "codex", "codex"),
+	]);
 	if (!existsSync(binSrc)) {
 		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
 	}
@@ -468,7 +480,10 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
 
-	const pathSrc = join(archRoot, "path");
+	const pathSrc = firstExisting([
+		join(archRoot, "codex-path"),
+		join(archRoot, "path"),
+	]);
 	if (existsSync(pathSrc)) {
 		const pathDest = join(DIST_VENDOR, "codex", "path");
 		cpSync(pathSrc, pathDest, { recursive: true });
@@ -489,7 +504,10 @@ function stageCodexBinary(target: TargetInfo): void {
 		"vendor",
 		target.codexTriple,
 	);
-	if (existsSync(join(installedRoot, "codex", "codex"))) {
+	if (
+		existsSync(join(installedRoot, "bin", "codex")) ||
+		existsSync(join(installedRoot, "codex", "codex"))
+	) {
 		stageCodexFromVendorRoot(installedRoot);
 		return;
 	}

@@ -44,7 +44,7 @@ pub(super) fn write_codex_goal_meta(
     };
 
     // Read previous meta to detect transitions worth narrating in the
-    // chat as a system message ("Goal paused", "Goal resumed", etc.).
+    // chat as a system message ("Goal active", "Goal paused", etc.).
     let previous_meta: Option<String> = conn
         .query_row(
             "SELECT codex_goal_meta FROM sessions WHERE id = ?1",
@@ -98,15 +98,12 @@ pub(super) fn goal_transition_label(
     }
     match (prev, curr) {
         (None, None) => None,
-        // Brand-new goal — `Goal set` regardless of starting status.
-        (None, Some(_)) => Some("Goal set"),
+        // Brand-new goal — mirror Codex's `Goal <status>` wording.
+        (None, Some(status)) => Some(status.transition_label()),
         // Cleared.
         (Some(_), None) => Some("Goal cleared"),
         // Status flips while goal exists.
-        (Some(_), Some(GoalStatus::Paused)) => Some("Goal paused"),
-        (Some(_), Some(GoalStatus::Active)) => Some("Goal resumed"),
-        (Some(_), Some(GoalStatus::BudgetLimited)) => Some("Goal reached token budget"),
-        (Some(_), Some(GoalStatus::Complete)) => Some("Goal complete"),
+        (Some(_), Some(status)) => Some(status.transition_label()),
     }
 }
 
@@ -114,8 +111,23 @@ pub(super) fn goal_transition_label(
 enum GoalStatus {
     Active,
     Paused,
+    Blocked,
+    UsageLimited,
     BudgetLimited,
     Complete,
+}
+
+impl GoalStatus {
+    fn transition_label(self) -> &'static str {
+        match self {
+            GoalStatus::Active => "Goal active",
+            GoalStatus::Paused => "Goal paused",
+            GoalStatus::Blocked => "Goal blocked",
+            GoalStatus::UsageLimited => "Goal usage limited",
+            GoalStatus::BudgetLimited => "Goal limited by budget",
+            GoalStatus::Complete => "Goal complete",
+        }
+    }
 }
 
 fn parse_goal_status(meta: &str) -> Option<GoalStatus> {
@@ -124,6 +136,8 @@ fn parse_goal_status(meta: &str) -> Option<GoalStatus> {
     match s {
         "active" => Some(GoalStatus::Active),
         "paused" => Some(GoalStatus::Paused),
+        "blocked" => Some(GoalStatus::Blocked),
+        "usageLimited" => Some(GoalStatus::UsageLimited),
         "budgetLimited" => Some(GoalStatus::BudgetLimited),
         "complete" => Some(GoalStatus::Complete),
         _ => None,
@@ -417,7 +431,7 @@ mod tests {
         // the objective text — repeating it on the system row would just
         // be noise. So the label is the same regardless of objective.
         let label = goal_transition_label(None, Some(meta("active", "fix the bug").as_str()));
-        assert_eq!(label, Some("Goal set"));
+        assert_eq!(label, Some("Goal active"));
     }
 
     #[test]
@@ -435,7 +449,7 @@ mod tests {
             Some(meta("paused", "x").as_str()),
             Some(meta("active", "x").as_str()),
         );
-        assert_eq!(label, Some("Goal resumed"));
+        assert_eq!(label, Some("Goal active"));
     }
 
     #[test]
@@ -468,7 +482,25 @@ mod tests {
             Some(meta("active", "x").as_str()),
             Some(meta("budgetLimited", "x").as_str()),
         );
-        assert_eq!(label, Some("Goal reached token budget"));
+        assert_eq!(label, Some("Goal limited by budget"));
+    }
+
+    #[test]
+    fn transition_label_blocked() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("blocked", "x").as_str()),
+        );
+        assert_eq!(label, Some("Goal blocked"));
+    }
+
+    #[test]
+    fn transition_label_usage_limited() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("usageLimited", "x").as_str()),
+        );
+        assert_eq!(label, Some("Goal usage limited"));
     }
 
     #[test]

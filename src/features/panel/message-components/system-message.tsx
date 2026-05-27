@@ -103,7 +103,7 @@ function SystemText({ text }: { text: string }) {
 	}
 	// Codex `/goal` lifecycle markers — narrated by
 	// `agents::streaming::codex_goal::goal_transition_label` on the
-	// backend ("Goal set" / "Goal paused" / etc.). Prefix-detect them
+	// backend ("Goal active" / "Goal paused" / etc.). Prefix-detect them
 	// here so they share an icon, same shape as the Error case above.
 	if (text.startsWith("Goal ")) {
 		return (

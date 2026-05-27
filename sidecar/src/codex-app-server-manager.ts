@@ -67,15 +67,15 @@ function resolveCodexBinPath(): string {
 		try {
 			const require = createRequire(import.meta.url);
 			const pkgJson = require.resolve(`${platformPkg}/package.json`);
-			const candidate = join(
-				dirname(pkgJson),
-				"vendor",
-				triple,
-				"codex",
-				process.platform === "win32" ? "codex.exe" : "codex",
-			);
-			if (existsSync(candidate)) {
-				return candidate;
+			const vendorRoot = join(dirname(pkgJson), "vendor", triple);
+			const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
+			for (const candidate of [
+				join(vendorRoot, "bin", binaryName),
+				join(vendorRoot, "codex", binaryName),
+			]) {
+				if (existsSync(candidate)) {
+					return candidate;
+				}
 			}
 		} catch {
 			// Platform sub-package missing (e.g. --omit=optional) — fall through.
@@ -377,6 +377,10 @@ interface AppServerContext {
 	/** Tracks sub-agent thread metadata (nickname, role) so we can enrich
 	 *  `collabAgentToolCall(spawnAgent)` items before forwarding them. */
 	subAgentTracker: SubAgentTracker;
+	/** Latest Codex goal status seen on this app-server stream. Used to
+	 *  keep Helmor's request-scoped stream alive across Codex's automatic
+	 *  goal-continuation turns. */
+	latestGoalStatus: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -754,15 +758,33 @@ export class CodexAppServerManager implements SessionManager {
 				if (n.method === "thread/goal/updated") {
 					const goal = deepGet(n.params, "goal");
 					if (goal && typeof goal === "object") {
+						const status = (goal as Record<string, unknown>).status;
+						ctx.latestGoalStatus =
+							typeof status === "string" ? status : ctx.latestGoalStatus;
 						emitter.codexGoalUpdated(
 							requestId,
 							sessionId,
 							JSON.stringify(goal),
 						);
+						if (
+							ctx.turnResolve &&
+							ctx.activeTurnId === null &&
+							!isActiveGoalStatus(ctx.latestGoalStatus)
+						) {
+							ctx.turnResolve();
+							ctx.turnResolve = null;
+							ctx.turnReject = null;
+						}
 					}
 				}
 				if (n.method === "thread/goal/cleared") {
+					ctx.latestGoalStatus = null;
 					emitter.codexGoalUpdated(requestId, sessionId, null);
+					if (ctx.turnResolve && ctx.activeTurnId === null) {
+						ctx.turnResolve();
+						ctx.turnResolve = null;
+						ctx.turnReject = null;
+					}
 				}
 
 				// Forward Codex token usage to the context-usage ring.
@@ -799,6 +821,14 @@ export class CodexAppServerManager implements SessionManager {
 						}
 						for (const [id, p] of this.pendingApprovals) {
 							if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
+						}
+						if (isActiveGoalStatus(ctx.latestGoalStatus)) {
+							logger.info("Keeping Codex stream open for active goal", {
+								sessionId,
+								requestId,
+								completedTurnId,
+							});
+							return;
 						}
 						ctx.turnResolve?.();
 						ctx.turnResolve = null;
@@ -1723,6 +1753,7 @@ export class CodexAppServerManager implements SessionManager {
 			lastRetryAt: null,
 			lastRetryNotice: null,
 			subAgentTracker: new SubAgentTracker(server),
+			latestGoalStatus: null,
 		};
 
 		this.sessions.set(sessionId, ctx);
@@ -1737,6 +1768,10 @@ export class CodexAppServerManager implements SessionManager {
 
 function retryNoticeKey(message: string): string {
 	return message.replace(/…/g, "...").replace(/\s+/g, " ").trim();
+}
+
+function isActiveGoalStatus(status: string | null): boolean {
+	return status === "active";
 }
 
 function emitRetryNotice(

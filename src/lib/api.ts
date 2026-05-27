@@ -3792,7 +3792,13 @@ export async function setSessionContextUsage(
 export type CodexGoalState = {
 	threadId: string;
 	objective: string;
-	status: "active" | "paused" | "budgetLimited" | "complete";
+	status:
+		| "active"
+		| "paused"
+		| "blocked"
+		| "usageLimited"
+		| "budgetLimited"
+		| "complete";
 	tokenBudget: number | null;
 	tokensUsed: number;
 	timeUsedSeconds: number;
