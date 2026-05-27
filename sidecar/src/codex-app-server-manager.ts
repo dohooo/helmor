@@ -16,7 +16,6 @@ import {
 	type JsonRpcNotification,
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
-import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
 import { SubAgentTracker } from "./codex-subagent-tracker.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
@@ -584,29 +583,18 @@ export class CodexAppServerManager implements SessionManager {
 			promptLen: prompt.length,
 		});
 
-		// `/goal` needs `[features] goals = true` in `~/.codex/config.toml`.
-		// Codex reads its config once at startup, so the pre-flight runs
-		// before `ensureContext` and recycles any stale process.
+		// `codex app-server` is spawned with `--enable goals`, so `/goal`
+		// commands can use the native thread/goal RPCs without mutating
+		// the user's global ~/.codex/config.toml.
 		const commandText = extractUserCommandText(prompt);
 		const goalCommand = parseGoalCommand(prompt);
 		const autoResumeGoal =
 			goalCommand?.kind === "set" || goalCommand?.kind === "resume";
-		let effectiveResume = resume;
-		if (goalCommand) {
-			effectiveResume = await this.ensureCodexGoalsReady(
-				sessionId,
-				effectiveResume,
-			);
-			effectiveResume = this.recycleIdleContextForGoal(
-				sessionId,
-				effectiveResume,
-			);
-		}
 
 		const ctx = await this.ensureContext(
 			sessionId,
 			workDir,
-			effectiveResume,
+			resume,
 			model,
 			permissionMode,
 			effectiveFastMode,
@@ -1435,51 +1423,6 @@ export class CodexAppServerManager implements SessionManager {
 		}
 	}
 
-	// ── ensureCodexGoalsReady ────────────────────────────────────────────
-
-	// Writes `[features] goals = true` if missing, then recycles any stale
-	// codex process so the new config takes effect. Returns a resume thread
-	// id (caller's wins; otherwise the stale ctx's). Best-effort — IO
-	// failures are logged and the caller falls through to codex's own error.
-	private async ensureCodexGoalsReady(
-		sessionId: string,
-		callerResume: string | undefined,
-	): Promise<string | undefined> {
-		let result: Awaited<ReturnType<typeof ensureCodexGoalsFeatureEnabled>>;
-		try {
-			result = await ensureCodexGoalsFeatureEnabled();
-		} catch (err) {
-			logger.error("ensureCodexGoalsFeatureEnabled failed", errorDetails(err));
-			return callerResume;
-		}
-		if (result.kind !== "modified") return callerResume;
-
-		const stale = this.sessions.get(sessionId);
-		if (!stale) {
-			logger.info("Enabled codex goals feature", {
-				sessionId,
-				path: result.path,
-			});
-			return callerResume;
-		}
-
-		logger.info("Enabled codex goals feature; recycling stale session", {
-			sessionId,
-			path: result.path,
-			providerThreadId: stale.providerThreadId ?? "(none)",
-		});
-		const reuseThread = stale.providerThreadId ?? undefined;
-		stale.server.kill();
-		this.sessions.delete(sessionId);
-		for (const [id, p] of this.pendingApprovals) {
-			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
-		}
-		for (const [id, p] of this.pendingUserInputs) {
-			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
-		}
-		return callerResume ?? reuseThread;
-	}
-
 	// ── stopSession / shutdown ───────────────────────────────────────────
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -1644,41 +1587,6 @@ export class CodexAppServerManager implements SessionManager {
 		this.sessions.clear();
 		this.pendingApprovals.clear();
 		this.pendingUserInputs.clear();
-	}
-
-	private clearPendingSessionState(sessionId: string): void {
-		for (const [id, p] of this.pendingApprovals) {
-			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
-		}
-		for (const [id, p] of this.pendingUserInputs) {
-			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
-		}
-	}
-
-	private recycleIdleContextForGoal(
-		sessionId: string,
-		callerResume: string | undefined,
-	): string | undefined {
-		const stale = this.sessions.get(sessionId);
-		if (!stale || stale.server.killed) return callerResume;
-		if (stale.turnResolve || stale.turnReject || stale.activeTurnId) {
-			logger.info("Skipping /goal context recycle while turn is active", {
-				sessionId,
-				providerThreadId: stale.providerThreadId ?? "(none)",
-				activeTurnId: stale.activeTurnId ?? "(none)",
-			});
-			return callerResume;
-		}
-
-		const reuseThread = stale.providerThreadId ?? undefined;
-		logger.info("Recycling idle Codex context before /goal", {
-			sessionId,
-			providerThreadId: reuseThread ?? "(none)",
-		});
-		stale.server.kill();
-		this.sessions.delete(sessionId);
-		this.clearPendingSessionState(sessionId);
-		return callerResume ?? reuseThread;
 	}
 
 	// ── Private ──────────────────────────────────────────────────────────
