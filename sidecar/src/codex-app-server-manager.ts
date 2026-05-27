@@ -381,10 +381,22 @@ function buildCodexAnswers(
 	return answers;
 }
 
+function shouldContinueGoalAfterTurn(
+	goalCommand: GoalCommand | null,
+	ctx: AppServerContext,
+): boolean {
+	return (
+		goalCommand?.kind === "set" ||
+		goalCommand?.kind === "resume" ||
+		ctx.goalStatus === "active"
+	);
+}
+
 interface AppServerContext {
 	server: CodexAppServer;
 	providerThreadId: string | null;
 	activeTurnId: string | null;
+	goalStatus: string | null;
 	turnResolve: (() => void) | null;
 	turnReject: ((err: Error) => void) | null;
 	/** Request id for the currently streaming sendMessage invocation —
@@ -787,6 +799,8 @@ export class CodexAppServerManager implements SessionManager {
 				if (n.method === "thread/goal/updated") {
 					const goal = deepGet(n.params, "goal");
 					if (goal && typeof goal === "object") {
+						const status = deepGet(goal, "status");
+						ctx.goalStatus = typeof status === "string" ? status : null;
 						emitter.codexGoalUpdated(
 							requestId,
 							sessionId,
@@ -795,6 +809,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				}
 				if (n.method === "thread/goal/cleared") {
+					ctx.goalStatus = null;
 					emitter.codexGoalUpdated(requestId, sessionId, null);
 				}
 
@@ -833,7 +848,11 @@ export class CodexAppServerManager implements SessionManager {
 						for (const [id, p] of this.pendingApprovals) {
 							if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
 						}
-						if (!isCompactCommand && ctx.providerThreadId) {
+						if (
+							!isCompactCommand &&
+							ctx.providerThreadId &&
+							shouldContinueGoalAfterTurn(goalCommand, ctx)
+						) {
 							void this.maybeContinueActiveGoal(
 								requestId,
 								sessionId,
@@ -1128,7 +1147,11 @@ export class CodexAppServerManager implements SessionManager {
 			);
 			const goal = deepGet(response, "goal");
 			if (goal && typeof goal === "object") {
+				const status = deepGet(goal, "status");
+				ctx.goalStatus = typeof status === "string" ? status : null;
 				emitter.codexGoalUpdated(requestId, sessionId, JSON.stringify(goal));
+			} else {
+				ctx.goalStatus = null;
 			}
 			if (
 				!goal ||
@@ -1794,6 +1817,7 @@ export class CodexAppServerManager implements SessionManager {
 			server,
 			providerThreadId: threadId,
 			activeTurnId: null,
+			goalStatus: null,
 			turnResolve: null,
 			turnReject: null,
 			activeRequestId: null,

@@ -119,6 +119,7 @@ async function driveToSendMessage(sessionId: string) {
 		server: fake.server,
 		providerThreadId: "thread-xyz",
 		activeTurnId: null, // `sendMessage` populates on turn/start reply
+		goalStatus: null,
 		turnResolve: null,
 		turnReject: null,
 		activeRequestId: null,

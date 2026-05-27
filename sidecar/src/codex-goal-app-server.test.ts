@@ -107,6 +107,7 @@ async function driveGoalMessage(prompt: string) {
 		// the live-stream goal continuation loop, while the recycle path is
 		// covered by sidecar/test/codex-app-server-manager.test.ts.
 		activeTurnId: "skip-recycle",
+		goalStatus: null,
 		turnResolve: null,
 		turnReject: null,
 		activeRequestId: null,
