@@ -310,9 +310,13 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 // this stub those fire-and-forget calls reject and surface as unhandled
 // rejections that flake the suite. The stub returns a dummy callback id so
 // construction succeeds and the (no-op in tests) channel is harmless.
-if (typeof window !== "undefined" && !window.__TAURI_INTERNALS__) {
-	(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ =
-		{
+{
+	const tauriWindow =
+		typeof window !== "undefined"
+			? (window as unknown as { __TAURI_INTERNALS__?: unknown })
+			: null;
+	if (tauriWindow && !tauriWindow.__TAURI_INTERNALS__) {
+		tauriWindow.__TAURI_INTERNALS__ = {
 			transformCallback: (
 				callback?: (response: unknown) => void,
 				_once = false,
@@ -321,6 +325,7 @@ if (typeof window !== "undefined" && !window.__TAURI_INTERNALS__) {
 				return Math.floor(Math.random() * 1_000_000);
 			},
 		};
+	}
 }
 
 if (
