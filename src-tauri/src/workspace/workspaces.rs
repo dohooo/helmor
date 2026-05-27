@@ -238,7 +238,7 @@ pub fn list_workspace_groups() -> Result<Vec<WorkspaceSidebarGroup>> {
     Ok(vec![
         WorkspaceSidebarGroup {
             id: "ai-tasks".to_string(),
-            label: "Triage".to_string(),
+            label: "Proposed tasks".to_string(),
             tone: "ai-tasks".to_string(),
             rows: ai_tasks,
         },
