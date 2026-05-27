@@ -632,6 +632,7 @@ export function WorkspaceInspectorSidebar({
 						key={instance.id}
 						repoId={repoId ?? null}
 						workspaceId={workspaceId ?? null}
+						runtimeName={workspaceRuntimeName ?? null}
 						instance={instance}
 						isActive={activeTab === instance.id}
 					/>

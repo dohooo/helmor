@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	isRemoteRuntime,
+	RuntimeHostChip,
+} from "@/components/runtime-host-chip";
+import {
 	type TerminalHandle,
 	TerminalOutput,
 } from "@/components/terminal-output";
@@ -49,6 +53,13 @@ function scheduleXtermMount(callback: () => void): () => void {
 type TerminalInstancePanelProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	/**
+	 * The workspace's bound runtime. When it's a remote, the shell behind
+	 * this terminal is a PTY on that host (not the laptop) — so we surface a
+	 * corner badge making "this terminal runs on dev.box" unmistakable.
+	 * `null` / `"local"` renders no badge.
+	 */
+	runtimeName?: string | null;
 	instance: TerminalInstance;
 	isActive: boolean;
 };
@@ -57,6 +68,7 @@ type TerminalInstancePanelProps = {
 export function TerminalInstancePanel({
 	repoId,
 	workspaceId,
+	runtimeName,
 	instance,
 	isActive,
 }: TerminalInstancePanelProps) {
@@ -160,6 +172,12 @@ export function TerminalInstancePanel({
 					className="h-full"
 					onData={handleData}
 					onResize={handleResize}
+				/>
+			) : null}
+			{isRemoteRuntime(runtimeName) ? (
+				<RuntimeHostChip
+					runtimeName={runtimeName}
+					className="pointer-events-none absolute right-2 top-2 z-10 shadow-sm"
 				/>
 			) : null}
 		</div>

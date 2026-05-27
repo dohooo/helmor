@@ -38,22 +38,28 @@ export function RuntimeHostChip({
 	className,
 }: RuntimeHostChipProps) {
 	if (!isRemoteRuntime(runtimeName)) return null;
+	// Prominent "this runs remotely" treatment — tinted with the locked
+	// status-info palette (blue = remote) so it reads as a live status
+	// badge, not a muted tag. This is the always-on cue an operator scans
+	// for ("am I on my laptop or dev.box?"), analogous to VS Code's remote
+	// indicator. The status palette is light/dark-only (never theme-tinted)
+	// so the badge stays legible under every chrome preset.
 	const sizing =
 		variant === "compact"
-			? "h-5 px-1.5 text-[11px] gap-1"
-			: "h-4 px-1 text-[10px] gap-0.5";
-	const iconSize = variant === "compact" ? "size-3" : "size-2.5";
+			? "h-5 px-2 text-[11px] gap-1.5"
+			: "h-5 px-1.5 text-[11px] gap-1";
 	return (
 		<span
 			aria-label={`Workspace runtime: ${runtimeName}`}
 			title={`Workspace runs on ${runtimeName}`}
 			className={cn(
-				"inline-flex shrink-0 items-center rounded-full border border-border/50 bg-muted/60 font-mono uppercase tracking-wide text-muted-foreground",
+				"inline-flex shrink-0 items-center rounded-full font-mono font-medium uppercase tracking-wide",
+				"border border-status-info/45 bg-status-info/12 text-status-info",
 				sizing,
 				className,
 			)}
 		>
-			<Server className={iconSize} strokeWidth={1.8} />
+			<Server className="size-3" strokeWidth={2} />
 			<span className="lowercase">{runtimeName}</span>
 		</span>
 	);
