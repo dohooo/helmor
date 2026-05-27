@@ -53,6 +53,30 @@ Source: [`src-tauri/src/remote/`](../src-tauri/src/remote/) and the
 binary entry point at
 [`src-tauri/src/bin/helmor-server.rs`](../src-tauri/src/bin/helmor-server.rs).
 
+> **Build/runtime coupling (known, deliberate).** `helmor-server`
+> lives in the same crate as the desktop app (`helmor_lib`), which
+> declares `tauri` as a non-optional dependency. Tauri's
+> plugin/command registration uses link-time static registration
+> the linker cannot dead-strip, so the daemon binary links the GUI
+> stack (`libwebkit2gtk`, `libgtk-3`, `libjavascriptcoregtk`) into
+> its runtime `NEEDED` set **even though it never opens a window**.
+> Consequences:
+> - On **Linux** the daemon needs those GTK/webkit runtime
+>   libraries installed on the remote (it loads them but never
+>   calls `gtk_init`, so no `DISPLAY` is required). See the user
+>   guide's prerequisites.
+> - The release pipeline builds each Linux arch **natively** (no
+>   `cross`) with the Tauri v2 GTK *dev* libs present at link time.
+> - Verified end-to-end by the Docker E2E
+>   ([`src-tauri/tests/docker-e2e/`](../src-tauri/tests/docker-e2e/)),
+>   which builds the daemon for Linux + runs it headless in a
+>   slim container with only the runtime libs.
+>
+> The GUI coupling buys the daemon nothing — feature-gating `tauri`
+> out of the headless binary (without touching the desktop app)
+> would drop the remote GTK prerequisite + shrink the binary. It's
+> deliberately deferred; the daemon stays GUI-tied for now.
+
 ### 2.2 `helmor-sidecar`
 
 - Same binary the desktop ships locally — wraps the

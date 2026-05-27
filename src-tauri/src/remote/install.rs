@@ -371,15 +371,46 @@ fn probe_remote_version<R: SshRunner>(runner: &R, host: &str, binary: &str) -> P
                 None => ProbeOutcome::Missing,
             }
         }
-        Ok(_) => {
-            // Non-zero exit. Could be "command not found" (127),
-            // could be the binary segfaulting, could be a write
-            // error on stdout. Either way, treat as missing — the
-            // install step will overwrite cleanly.
+        Ok(output) => {
+            // Non-zero exit. The binary IS present + correct-arch but
+            // its dynamic loader can't resolve a NEEDED library (the
+            // daemon links the GTK/webkit stack) → surface that as a
+            // distinct, actionable error rather than treating it as
+            // "missing" and re-installing the same binary into the
+            // same broken state forever.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if let Some(missing_lib) = missing_shared_library(&stderr) {
+                return ProbeOutcome::TransportError(anyhow::anyhow!(
+                    "`{binary}` is installed on `{host}` but can't start: missing shared \
+                     library `{missing_lib}`. The helmor-server daemon links the GTK/webkit \
+                     runtime; install it on the remote (Debian/Ubuntu: `sudo apt-get install \
+                     libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2 \
+                     libsoup-3.0-0`). See docs/remote-server-user-guide.md → Prerequisites."
+                ));
+            }
+            // Otherwise: "command not found" (127), a segfault, a
+            // stdout write error, etc. Treat as missing — the install
+            // step overwrites cleanly.
             ProbeOutcome::Missing
         }
         Err(err) => ProbeOutcome::TransportError(err),
     }
+}
+
+/// Pull the offending library name out of a dynamic-loader failure
+/// like `…: error while loading shared libraries: libwebkit2gtk-4.1.so.0:
+/// cannot open shared object file: No such file or directory`.
+/// Returns `None` when the stderr isn't a loader error.
+fn missing_shared_library(stderr: &str) -> Option<String> {
+    if !stderr.contains("cannot open shared object file") {
+        return None;
+    }
+    // The lib name precedes the `: cannot open …` clause.
+    stderr
+        .split("cannot open shared object file")
+        .next()
+        .and_then(|prefix| prefix.rsplit(['\n', ' ']).find(|t| t.contains(".so")))
+        .map(|t| t.trim_end_matches(':').to_string())
 }
 
 /// Policy for the install step. Operator override
@@ -1053,6 +1084,46 @@ mod tests {
             probe_remote_version(&runner, "dev.box", "helmor-server"),
             ProbeOutcome::Missing
         ));
+    }
+
+    #[test]
+    fn probe_surfaces_missing_gtk_runtime_lib_as_actionable_error() {
+        // The binary is present + correct-arch but the GTK runtime
+        // libs aren't installed on the remote → the loader fails.
+        // This must NOT be treated as "missing" (which would loop on
+        // reinstalling the same un-loadable binary); it must bubble a
+        // clear "install the runtime libs" error.
+        let runner = RecordingRunner::default();
+        runner.queue_ssh(err_output_with_stderr(
+            127,
+            "/home/e2e/.helmor/server/helmor-server: error while loading shared \
+             libraries: libwebkit2gtk-4.1.so.0: cannot open shared object file: \
+             No such file or directory\n",
+        ));
+        match probe_remote_version(&runner, "dev.box", "helmor-server") {
+            ProbeOutcome::TransportError(err) => {
+                let msg = format!("{err:#}");
+                assert!(msg.contains("libwebkit2gtk-4.1.so.0"), "{msg}");
+                assert!(msg.contains("apt-get install"), "{msg}");
+            }
+            other => panic!("expected TransportError with a libs hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_shared_library_extracts_lib_name() {
+        let stderr = "helmor-server: error while loading shared libraries: \
+                      libgtk-3.so.0: cannot open shared object file: No such file";
+        assert_eq!(
+            missing_shared_library(stderr).as_deref(),
+            Some("libgtk-3.so.0")
+        );
+        // A plain non-zero exit (no loader error) → None, so the
+        // caller still treats it as "missing" + reinstalls.
+        assert_eq!(
+            missing_shared_library("bash: helmor-server: not found"),
+            None
+        );
     }
 
     // ── Phase D4: protocol-version gating ───────────────────────

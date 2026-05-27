@@ -59,6 +59,23 @@ On the **remote** machine:
 - ~50 MB free under `$HOME/.helmor/server/`.
 - For agent workloads: the same `$HELMOR_SIDECAR_PATH` (or default
   managed location) where the `helmor-sidecar` binary will live.
+- **(Linux only) GTK/webkit runtime libraries.** The
+  `helmor-server` daemon currently links the GUI toolkit
+  transitively, so its dynamic loader needs these present at
+  startup — even though the daemon never opens a window (it runs
+  fully headless; no `DISPLAY` required). On Debian/Ubuntu:
+  ```bash
+  sudo apt-get install -y \
+    libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 \
+    librsvg2-2 libsoup-3.0-0
+  ```
+  (Fedora/RHEL: the `webkit2gtk4.1`, `gtk3`, `libsoup3`,
+  `librsvg2` packages. Alpine: `webkit2gtk-4.1`, `gtk+3.0`.)
+  If they're missing, the daemon fails to start with a loader
+  error like `error while loading shared libraries:
+  libwebkit2gtk-4.1.so.0: cannot open shared object file` — and
+  the desktop surfaces that verbatim on connect. macOS remotes
+  need nothing extra (WebKit is a system framework).
 
 Helmor does **not** capture SSH passwords or keys — auth flows
 through your existing `~/.ssh/config`, `ssh-agent`, and (optionally)
