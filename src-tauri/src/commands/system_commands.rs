@@ -1572,7 +1572,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
 
     // 2. If tasks are in flight, gracefully stop every active stream.
     if force {
-        let sidecar = app.state::<sidecar::ManagedSidecar>();
+        let sidecar = app.state::<std::sync::Arc<sidecar::ManagedSidecar>>();
         let active = app.state::<agents::ActiveStreams>();
         agents::abort_all_active_streams_blocking(
             &sidecar,
@@ -1597,7 +1597,7 @@ pub async fn request_quit(app: tauri::AppHandle, force: bool) {
     }
 
     // 4. Cooperative sidecar teardown: shutdown RPC → SIGTERM → SIGKILL.
-    let sidecar = app.state::<sidecar::ManagedSidecar>();
+    let sidecar = app.state::<std::sync::Arc<sidecar::ManagedSidecar>>();
     let (cooperative, escalation) = if force {
         (
             std::time::Duration::from_millis(2000),
@@ -1638,7 +1638,7 @@ pub struct DevResetResult {
 pub async fn dev_reset_all_data(app: tauri::AppHandle) -> CmdResult<DevResetResult> {
     // 1. Stop all active agent streams so they don't write into deleted sessions.
     {
-        let sidecar_state = app.state::<sidecar::ManagedSidecar>();
+        let sidecar_state = app.state::<std::sync::Arc<sidecar::ManagedSidecar>>();
         let active = app.state::<agents::ActiveStreams>();
         agents::abort_all_active_streams_blocking(
             &sidecar_state,
