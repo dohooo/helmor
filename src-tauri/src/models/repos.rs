@@ -1425,13 +1425,16 @@ pub fn clone_repository_from_url(
     }
 
     let parent = Path::new(clone_directory.trim());
-    if !parent.exists() {
-        bail!(
-            "Clone location does not exist: {}. Please choose an existing directory.",
-            parent.display()
-        );
-    }
-    if !parent.is_dir() {
+    // Auto-create the clone location when missing so users don't have to mkdir
+    // up front. If the path exists but isn't a directory, that's a real
+    // conflict — keep erroring loudly. Track whether we created it so we can
+    // tear it back down if the clone fails and we'd otherwise leave an empty
+    // shell behind.
+    let parent_created = !parent.exists();
+    if parent_created {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create clone location: {}", parent.display()))?;
+    } else if !parent.is_dir() {
         bail!("Clone location is not a directory: {}", parent.display());
     }
 
@@ -1459,6 +1462,11 @@ pub fn clone_repository_from_url(
         // "target directory already exists" branch above.
         if target_dir.exists() {
             let _ = fs::remove_dir_all(&target_dir);
+        }
+        // If we created the parent just for this clone, remove it too so a
+        // failed attempt doesn't leave a stray empty folder on disk.
+        if parent_created && parent.exists() {
+            let _ = fs::remove_dir_all(parent);
         }
         return Err(error.context("Failed to clone repository"));
     }
@@ -2088,5 +2096,41 @@ mod tests {
         // String form never carries stop.
         let single = parse_project_run_actions(Some(&Value::String("npm dev".into())), repo_id);
         assert!(single[0].stop_command.is_none());
+    }
+
+    #[test]
+    fn clone_from_url_creates_missing_parent_directory() {
+        let env = crate::testkit::TestEnv::new("repos-clone-mkdir");
+        let origin = crate::testkit::GitTestRepo::init();
+        let origin_url = origin.path().display().to_string();
+
+        // Nested location that does not exist yet — the old behaviour bailed
+        // here; the new behaviour mkdirs -p.
+        let parent = env.root.join("nested").join("clones");
+        assert!(!parent.exists(), "precondition: target parent missing");
+
+        let response =
+            clone_repository_from_url(&origin_url, &parent.display().to_string()).unwrap();
+
+        assert!(parent.is_dir(), "parent directory was created");
+        assert!(response.created_repository, "new repo row was inserted");
+    }
+
+    #[test]
+    fn clone_from_url_rejects_path_that_is_a_file() {
+        let env = crate::testkit::TestEnv::new("repos-clone-file-conflict");
+        let file_path = env.root.join("not-a-dir");
+        fs::write(&file_path, b"hi").unwrap();
+
+        let err = clone_repository_from_url(
+            "https://example.com/repo.git",
+            &file_path.display().to_string(),
+        )
+        .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("is not a directory"),
+            "expected non-directory error, got: {err:#}"
+        );
     }
 }
