@@ -139,6 +139,7 @@ type WorkspaceComposerContainerProps = {
 	restoreImages: string[];
 	restoreFiles: string[];
 	restoreCustomTags?: ComposerCustomTag[];
+	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce: number;
 	pendingUserInput?: PendingUserInput | null;
 	onUserInputResponse?: UserInputResponseHandler;
@@ -202,6 +203,7 @@ type WorkspaceComposerContainerProps = {
 	queueItems?: readonly QueuedSubmit[];
 	onSteerQueued?: (itemId: string) => void;
 	onRemoveQueued?: (itemId: string) => void;
+	onEditQueued?: (itemId: string) => void;
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	startSubmitMenu?: boolean;
@@ -242,6 +244,7 @@ export const WorkspaceComposerContainer = memo(
 		restoreImages,
 		restoreFiles,
 		restoreCustomTags = [],
+		restoreEditorState = null,
 		restoreNonce,
 		pendingUserInput = null,
 		onUserInputResponse = noopUserInputResponse,
@@ -267,6 +270,7 @@ export const WorkspaceComposerContainer = memo(
 		queueItems = EMPTY_QUEUE_ITEMS,
 		onSteerQueued,
 		onRemoveQueued,
+		onEditQueued,
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		startSubmitMenu = false,
@@ -1029,6 +1033,7 @@ export const WorkspaceComposerContainer = memo(
 							items={queueItems}
 							onSteer={(id) => onSteerQueued?.(id)}
 							onRemove={(id) => onRemoveQueued?.(id)}
+							onEdit={(id) => onEditQueued?.(id)}
 							disabled={composerUnavailable}
 						/>
 					</div>
@@ -1075,6 +1080,7 @@ export const WorkspaceComposerContainer = memo(
 						restoreImages={restoreImages}
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
+						restoreEditorState={restoreEditorState}
 						restoreNonce={restoreNonce}
 						pendingUserInput={pendingUserInput}
 						onUserInputResponse={onUserInputResponse}

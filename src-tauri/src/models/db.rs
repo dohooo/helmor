@@ -1,8 +1,8 @@
 //! DB connection pools + unified API.
 //!
 //! Two pools match SQLite's concurrency model:
-//!   - read pool  (size = 8) — WAL readers run fully concurrently
-//!   - write pool (size = 1) — single-writer executor; app-layer queue
+//!   - read pool  (size = 16) — WAL readers run fully concurrently
+//!   - write pool (size = 1)  — single-writer executor; app-layer queue
 //!     eliminates SQLITE_BUSY
 //!
 //! Initialise once at startup via [`init_pools`]. All DB access goes
@@ -64,7 +64,7 @@ fn pool_slot() -> &'static RwLock<Option<PoolBundle>> {
     P.get_or_init(|| RwLock::new(None))
 }
 
-const READ_POOL_SIZE: u32 = 8;
+const READ_POOL_SIZE: u32 = 16;
 const WRITE_POOL_SIZE: u32 = 1;
 const POOL_GET_TIMEOUT: Duration = Duration::from_secs(30);
 

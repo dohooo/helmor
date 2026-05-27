@@ -611,6 +611,7 @@ export function useConversationStreaming({
 				fastMode,
 				forceQueue,
 				followUpBehaviorOverride,
+				editorStateSnapshot,
 			}: SubmitPayload,
 			// Override for drain / queued-steer. When present, all
 			// session/workspace lookups use the override instead of the
@@ -691,6 +692,7 @@ export function useConversationStreaming({
 							effortLevel,
 							permissionMode,
 							fastMode,
+							editorStateSnapshot,
 						},
 					);
 					storeActions.setComposerRestore(null);
@@ -736,6 +738,7 @@ export function useConversationStreaming({
 						images: imagePaths,
 						files: filePaths,
 						customTags,
+						editorState: editorStateSnapshot ?? null,
 						nonce: Date.now(),
 					});
 				};
@@ -985,6 +988,7 @@ export function useConversationStreaming({
 						images: imagePaths,
 						files: filePaths,
 						customTags,
+						editorState: editorStateSnapshot ?? null,
 						nonce: Date.now(),
 					});
 				}
@@ -1119,6 +1123,29 @@ export function useConversationStreaming({
 		[submitQueue],
 	);
 
+	// Edit: pull this row back into the composer and drop it from the
+	// queue. Only this row is affected — sibling queued items stay put.
+	// Restore prefers the captured Lexical snapshot so badges (image / file
+	// / customTag) round-trip exactly as authored; the flattened fields are
+	// passed too as a defensive fallback if the snapshot can't be parsed.
+	const handleEditQueued = useCallback(
+		(itemId: string) => {
+			const item = submitQueue.findById(itemId);
+			if (!item) return;
+			submitQueue.remove(item.context.sessionId, itemId);
+			storeActions.setComposerRestore({
+				contextKey: item.context.contextKey,
+				draft: item.payload.prompt,
+				images: item.payload.imagePaths,
+				files: item.payload.filePaths,
+				customTags: item.payload.customTags,
+				editorState: item.payload.editorStateSnapshot ?? null,
+				nonce: Date.now(),
+			});
+		},
+		[storeActions, submitQueue],
+	);
+
 	const restoreActive = composerRestoreState?.contextKey === composerContextKey;
 
 	return {
@@ -1131,12 +1158,16 @@ export function useConversationStreaming({
 		handleStopStream,
 		handleSteerQueued,
 		handleRemoveQueued,
+		handleEditQueued,
 		hasPlanReview,
 		isSending,
 		pendingUserInput,
 		pendingPermissions,
 		restoreCustomTags: restoreActive ? composerRestoreState.customTags : [],
 		restoreDraft: restoreActive ? composerRestoreState.draft : null,
+		restoreEditorState: restoreActive
+			? (composerRestoreState.editorState ?? null)
+			: null,
 		restoreFiles: restoreActive ? composerRestoreState.files : EMPTY_FILES,
 		restoreImages: restoreActive ? composerRestoreState.images : EMPTY_IMAGES,
 		restoreNonce: restoreActive ? composerRestoreState.nonce : 0,

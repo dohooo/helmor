@@ -21,6 +21,7 @@
  * Zustand's selector re-render fan-out scoped to consumers whose slice
  * changed.
  */
+import type { SerializedEditorState } from "lexical";
 import { create } from "zustand";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
 import type { ComposerCustomTag } from "@/lib/composer-insert";
@@ -49,6 +50,11 @@ export type ComposerRestoreState = {
 	images: string[];
 	files: string[];
 	customTags: ComposerCustomTag[];
+	/** Optional full Lexical editor state. When present the composer restores
+	 *  via `setEditorState(parseEditorState(...))` — a clean, lossless round
+	 *  trip. The `draft / images / files / customTags` fields above remain as
+	 *  a fallback for callers that don't have a snapshot. */
+	editorState?: SerializedEditorState | null;
 	nonce: number;
 };
 

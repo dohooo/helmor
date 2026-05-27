@@ -1,5 +1,5 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import type { SerializedEditorState } from "lexical";
+import { $getRoot, type SerializedEditorState } from "lexical";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	clearPersistedDraft,
@@ -22,6 +22,11 @@ type DraftPersistencePluginProps = {
 	restoreImages?: string[];
 	restoreFiles?: string[];
 	restoreCustomTags?: ComposerCustomTag[];
+	/** Lossless Lexical snapshot. When present takes priority over the
+	 *  flattened `(draft, images, files, customTags)` fields — those carry
+	 *  `@<path>` references inlined in `draft`, which a node-level rebuild
+	 *  would render twice (once as text, once as a badge). */
+	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce?: number;
 };
 
@@ -45,6 +50,7 @@ export function DraftPersistencePlugin({
 	restoreImages = [],
 	restoreFiles = [],
 	restoreCustomTags = [],
+	restoreEditorState = null,
 	restoreNonce = 0,
 }: DraftPersistencePluginProps) {
 	const [editor] = useLexicalComposerContext();
@@ -103,6 +109,22 @@ export function DraftPersistencePlugin({
 	);
 
 	const applyRestorePayload = useCallback(() => {
+		// Lossless path: a captured Lexical snapshot round-trips badges
+		// (image / file / customTag) without the ambiguity of reconstructing
+		// them from `@<path>` references inlined in the flattened prompt.
+		if (restoreEditorState) {
+			try {
+				editor.setEditorState(editor.parseEditorState(restoreEditorState));
+				editor.update(() => {
+					$getRoot().selectEnd();
+				});
+				return;
+			} catch {
+				// Snapshot couldn't be parsed (schema drift, corrupted state).
+				// Fall through to the flattened rebuild — better to render the
+				// inlined paths as text than to drop the user's draft entirely.
+			}
+		}
 		editor.update(() => {
 			$setEditorContent(
 				restoreDraft ?? "",
@@ -110,8 +132,18 @@ export function DraftPersistencePlugin({
 				restoreFiles,
 				restoreCustomTags,
 			);
+			// Default Lexical caret lands at offset 0; for a restored draft
+			// the user wants to continue from the end of what they wrote.
+			$getRoot().selectEnd();
 		});
-	}, [editor, restoreCustomTags, restoreDraft, restoreFiles, restoreImages]);
+	}, [
+		editor,
+		restoreCustomTags,
+		restoreDraft,
+		restoreEditorState,
+		restoreFiles,
+		restoreImages,
+	]);
 
 	const restorePersistedDraft = useCallback(
 		(targetContextKey: string): boolean => {
@@ -164,6 +196,7 @@ export function DraftPersistencePlugin({
 
 		prevRestoreNonceRef.current = restoreNonce;
 		if (
+			!restoreEditorState &&
 			!restoreDraft &&
 			restoreImages.length === 0 &&
 			restoreFiles.length === 0 &&
@@ -173,7 +206,10 @@ export function DraftPersistencePlugin({
 		}
 
 		applyRestorePayload();
-	}, [applyRestorePayload, restoreNonce]);
+		// Restore is triggered by a button outside the editor (e.g. Edit on a
+		// queued message). Focus so the user can type immediately.
+		editor.focus();
+	}, [applyRestorePayload, editor, restoreNonce]);
 
 	useEffect(() => {
 		return editor.registerUpdateListener(

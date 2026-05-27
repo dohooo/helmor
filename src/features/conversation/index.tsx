@@ -250,12 +250,14 @@ export const WorkspaceConversationContainer = memo(
 			handleStopStream,
 			handleSteerQueued,
 			handleRemoveQueued,
+			handleEditQueued,
 			userInputResponsePending,
 			isSending,
 			pendingUserInput,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
+			restoreEditorState,
 			restoreFiles,
 			restoreImages,
 			restoreNonce,
@@ -582,6 +584,7 @@ export const WorkspaceConversationContainer = memo(
 						restoreImages={restoreImages}
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
+						restoreEditorState={restoreEditorState}
 						restoreNonce={restoreNonce}
 						pendingUserInput={pendingUserInput}
 						onUserInputResponse={userInputResponse}
@@ -608,6 +611,7 @@ export const WorkspaceConversationContainer = memo(
 						queueItems={queueItems}
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
+						onEditQueued={handleEditQueued}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}

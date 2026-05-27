@@ -143,6 +143,7 @@ type WorkspaceComposerProps = {
 	restoreImages?: string[];
 	restoreFiles?: string[];
 	restoreCustomTags?: ComposerCustomTag[];
+	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce?: number;
 	pendingInsertRequests?: ResolvedComposerInsertRequest[];
 	onPendingInsertRequestsConsumed?: (ids: string[]) => void;
@@ -258,6 +259,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	restoreImages = [],
 	restoreFiles = [],
 	restoreCustomTags = [],
+	restoreEditorState = null,
 	restoreNonce = 0,
 	pendingInsertRequests = [],
 	onPendingInsertRequestsConsumed,
@@ -841,6 +843,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							restoreImages={restoreImages}
 							restoreFiles={restoreFiles}
 							restoreCustomTags={restoreCustomTags}
+							restoreEditorState={restoreEditorState}
 							restoreNonce={restoreNonce}
 						/>
 						{getInputHistory ? (
