@@ -241,6 +241,7 @@ describe("CodexAppServerManager", () => {
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
+		serverState.goal = null;
 		gitAccessState.directories = [];
 		emitter = createSidecarEmitter(() => {});
 	});
@@ -1168,6 +1169,40 @@ describe.serial("CodexAppServerManager goal app-server integration", () => {
 		});
 		expect(
 			serverState.requests.some((r) => r.method === "thread/goal/get"),
+		).toBe(true);
+	});
+
+	test("resumed active native goal keeps a normal prompt subscribed across continuation", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-resume-normal-prompt",
+			{
+				sessionId: "s-goal-resume-normal-prompt",
+				prompt: "continue from here",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: "thread-1",
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "thread/resume")).toBe(
+			true,
+		);
+		expect(
+			serverState.requests.some((r) => r.method === "thread/goal/get"),
+		).toBe(true);
+		expect(
+			serverState.requests.some(
+				(r) =>
+					r.method === "thread/goal/set" &&
+					(r.params as { status?: string }).status === "active",
+			),
 		).toBe(true);
 	});
 

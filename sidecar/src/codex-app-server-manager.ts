@@ -1831,7 +1831,30 @@ export class CodexAppServerManager implements SessionManager {
 
 		this.sessions.set(sessionId, ctx);
 		ctxRef.current = ctx;
+		await this.refreshContextGoalStatus(ctx);
 		return ctx;
+	}
+
+	private async refreshContextGoalStatus(ctx: AppServerContext): Promise<void> {
+		const threadId = ctx.providerThreadId;
+		if (!threadId) return;
+		try {
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			if (goal && typeof goal === "object") {
+				const status = deepGet(goal, "status");
+				ctx.goalStatus = typeof status === "string" ? status : null;
+			} else {
+				ctx.goalStatus = null;
+			}
+		} catch (err) {
+			logger.debug("initial goal status refresh failed", errorDetails(err));
+			ctx.goalStatus = null;
+		}
 	}
 }
 
