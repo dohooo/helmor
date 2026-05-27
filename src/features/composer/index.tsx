@@ -81,6 +81,7 @@ import { SubmitPlugin } from "./editor/plugins/submit-plugin";
 import { $extractComposerContent } from "./editor/utils";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
+import { GoalEditPanel } from "./goal-edit-panel";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import type { InputHistoryEntry } from "./input-history";
 import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
@@ -170,6 +171,11 @@ type WorkspaceComposerProps = {
 		currentObjective: string;
 		newObjective: string;
 		onReplace: () => void;
+		onCancel: () => void;
+	} | null;
+	goalEdit?: {
+		currentObjective: string;
+		onSave: (objective: string) => void;
 		onCancel: () => void;
 	} | null;
 	hasPlanReview?: boolean;
@@ -278,6 +284,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	pendingPermission = null,
 	onPermissionResponse = noopPermissionResponse,
 	goalReplace = null,
+	goalEdit = null,
 	hasPlanReview = false,
 	alwaysShowContextUsage = false,
 	sessionId = null,
@@ -420,8 +427,12 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const hasPendingUserInput = pendingUserInput !== null;
 	const hasPendingPermission = pendingPermission !== null;
 	const hasGoalReplace = goalReplace !== null;
+	const hasGoalEdit = goalEdit !== null;
 	const hasPendingInteraction =
-		hasPendingUserInput || hasPendingPermission || hasGoalReplace;
+		hasPendingUserInput ||
+		hasPendingPermission ||
+		hasGoalReplace ||
+		hasGoalEdit;
 	const inputDisabled = disabled || hasPendingInteraction;
 	const toolbarDisabled = disabled || hasPendingInteraction;
 	useEffect(() => {
@@ -719,6 +730,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 					newObjective={goalReplace.newObjective}
 					onReplace={goalReplace.onReplace}
 					onCancel={goalReplace.onCancel}
+					disabled={disabled}
+				/>
+			) : hasGoalEdit ? (
+				<GoalEditPanel
+					currentObjective={goalEdit.currentObjective}
+					onSave={goalEdit.onSave}
+					onCancel={goalEdit.onCancel}
 					disabled={disabled}
 				/>
 			) : (

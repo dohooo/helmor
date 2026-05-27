@@ -134,7 +134,7 @@ pub async fn mutate_codex_goal(
     session_id: String,
     action: String,
 ) -> CmdResult<()> {
-    if !matches!(action.as_str(), "pause" | "clear") {
+    if !matches!(action.as_str(), "pause" | "clear" | "status") {
         return Err(anyhow::anyhow!("Invalid mutateCodexGoal action: {action}").into());
     }
     tracing::info!(session_id = %session_id, action = %action, "mutate_codex_goal");
@@ -156,6 +156,7 @@ pub async fn mutate_codex_goal(
     }
 
     let rid = request_id.clone();
+    let app_for_events = app.clone();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
@@ -167,6 +168,13 @@ pub async fn mutate_codex_goal(
                 Ok(event) => {
                     if event.event_type() == "pong" {
                         return Ok(());
+                    }
+                    if event.event_type() == "codexGoalUpdated" {
+                        crate::agents::streaming::codex_goal::persist_codex_goal_event(
+                            &app_for_events,
+                            &event.raw,
+                        );
+                        continue;
                     }
                     if event.event_type() == "error" {
                         let msg = event
@@ -197,6 +205,10 @@ pub async fn mutate_codex_goal(
     let outcome =
         join_result.map_err(|e| anyhow::anyhow!("mutate_codex_goal worker join failed: {e}"))?;
     outcome?;
+
+    if action == "status" {
+        return Ok(());
+    }
 
     // Mirror the goal mutation locally so the banner reflects the new
     // state on the next React Query refetch. Codex eventually pushes

@@ -8,6 +8,10 @@ import { DEFAULT_SETTINGS, SettingsContext } from "@/lib/settings";
 
 const apiMockState = vi.hoisted(() => ({
 	listSlashCommands: vi.fn(),
+	loadAgentModelSections: vi.fn(),
+	loadWorkspaceDetail: vi.fn(),
+	loadWorkspaceSessions: vi.fn(),
+	getSessionCodexGoal: vi.fn(),
 	listWorkspaceLinkedDirectories: vi.fn(),
 	setWorkspaceLinkedDirectories: vi.fn(),
 	mutateCodexGoal: vi.fn(),
@@ -18,6 +22,10 @@ vi.mock("@/lib/api", async () => {
 	return {
 		...actual,
 		listSlashCommands: apiMockState.listSlashCommands,
+		loadAgentModelSections: apiMockState.loadAgentModelSections,
+		loadWorkspaceDetail: apiMockState.loadWorkspaceDetail,
+		loadWorkspaceSessions: apiMockState.loadWorkspaceSessions,
+		getSessionCodexGoal: apiMockState.getSessionCodexGoal,
 		listWorkspaceLinkedDirectories: apiMockState.listWorkspaceLinkedDirectories,
 		setWorkspaceLinkedDirectories: apiMockState.setWorkspaceLinkedDirectories,
 		mutateCodexGoal: apiMockState.mutateCodexGoal,
@@ -60,6 +68,11 @@ const composerMockState = vi.hoisted(() => ({
 	lastOnSelectEffort: null as ((level: string) => void) | null,
 	lastOnChangePermissionMode: null as ((mode: string) => void) | null,
 	lastOnChangeFastMode: null as ((enabled: boolean) => void) | null,
+	lastGoalEdit: null as {
+		currentObjective: string;
+		onSave: (objective: string) => void;
+		onCancel: () => void;
+	} | null,
 }));
 
 vi.mock("./index", async () => {
@@ -91,6 +104,11 @@ vi.mock("./index", async () => {
 			permissionMode?: string;
 			onChangePermissionMode?: (mode: string) => void;
 			onChangeFastMode?: (enabled: boolean) => void;
+			goalEdit?: {
+				currentObjective: string;
+				onSave: (objective: string) => void;
+				onCancel: () => void;
+			} | null;
 		}) => {
 			composerMockState.renders.push(props.contextKey);
 			composerMockState.lastSlashCommands = [...(props.slashCommands ?? [])];
@@ -110,6 +128,7 @@ vi.mock("./index", async () => {
 			composerMockState.lastOnChangePermissionMode =
 				props.onChangePermissionMode ?? null;
 			composerMockState.lastOnChangeFastMode = props.onChangeFastMode ?? null;
+			composerMockState.lastGoalEdit = props.goalEdit ?? null;
 			React.useEffect(() => {
 				composerMockState.mounts += 1;
 				return () => {
@@ -241,7 +260,16 @@ describe("WorkspaceComposerContainer", () => {
 		composerMockState.lastOnSelectEffort = null;
 		composerMockState.lastOnChangePermissionMode = null;
 		composerMockState.lastOnChangeFastMode = null;
+		composerMockState.lastGoalEdit = null;
 		apiMockState.listSlashCommands.mockReset();
+		apiMockState.loadAgentModelSections.mockReset();
+		apiMockState.loadAgentModelSections.mockResolvedValue(MODEL_SECTIONS);
+		apiMockState.loadWorkspaceDetail.mockReset();
+		apiMockState.loadWorkspaceDetail.mockResolvedValue(WORKSPACE_DETAIL);
+		apiMockState.loadWorkspaceSessions.mockReset();
+		apiMockState.loadWorkspaceSessions.mockResolvedValue(WORKSPACE_SESSIONS);
+		apiMockState.getSessionCodexGoal.mockReset();
+		apiMockState.getSessionCodexGoal.mockResolvedValue(null);
 		apiMockState.listWorkspaceLinkedDirectories.mockReset();
 		apiMockState.listWorkspaceLinkedDirectories.mockResolvedValue([]);
 		apiMockState.setWorkspaceLinkedDirectories.mockReset();
@@ -1059,13 +1087,10 @@ describe("WorkspaceComposerContainer", () => {
 		});
 	});
 
-	// Regression coverage for the review-flagged bug where typing
-	// `/goal pause` (or `/goal clear`) was interpreted by the sidecar
-	// parser as `{kind: "set", objective: "pause"}` and would silently
-	// overwrite the existing goal. The container intercept must short-
-	// circuit these out-of-band so they go through `mutateCodexGoal`
-	// instead of leaking to the agent stream.
-	describe("/goal pause/clear interception", () => {
+	// Regression coverage for `/goal` subcommands that should behave like
+	// app commands instead of user prompts. Pause / clear / status go
+	// through `mutateCodexGoal`; edit takes over the composer body.
+	describe("/goal command interception", () => {
 		const ACTIVE_GOAL = {
 			threadId: "t1",
 			objective: "improve test coverage",
@@ -1097,6 +1122,7 @@ describe("WorkspaceComposerContainer", () => {
 				helmorQueryKeys.sessionCodexGoal("session-2"),
 				ACTIVE_GOAL,
 			);
+			apiMockState.getSessionCodexGoal.mockResolvedValue(ACTIVE_GOAL);
 			return { queryClient };
 		}
 
@@ -1197,6 +1223,57 @@ describe("WorkspaceComposerContainer", () => {
 			expect(onSubmit).toHaveBeenCalledTimes(1);
 			expect(onSubmit).toHaveBeenCalledWith(
 				expect.objectContaining({ prompt: "/goal resume" }),
+			);
+		});
+
+		it("routes /goal status to mutateCodexGoal and does NOT call onSubmit", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal status", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
+				"session-2",
+				"status",
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+		});
+
+		it("opens an in-place edit panel for /goal edit", async () => {
+			const { queryClient } = setupCodexSessionWithGoal();
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+			await waitFor(() => {
+				expect(screen.getByTestId("workspace-composer-mock")).toHaveTextContent(
+					"gpt-5.4",
+				);
+			});
+
+			composerMockState.lastOnSubmit?.("/goal edit", [], [], []);
+
+			await waitFor(() => {
+				expect(composerMockState.lastGoalEdit).toMatchObject({
+					currentObjective: "improve test coverage",
+				});
+			});
+
+			const edit = composerMockState.lastGoalEdit;
+			expect(edit).not.toBeNull();
+			edit?.onSave("improve docs coverage");
+
+			await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+			expect(onSubmit).toHaveBeenCalledWith(
+				expect.objectContaining({ prompt: "/goal improve docs coverage" }),
 			);
 		});
 	});

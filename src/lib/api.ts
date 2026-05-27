@@ -3514,7 +3514,13 @@ export async function setSessionContextUsage(
 export type CodexGoalState = {
 	threadId: string;
 	objective: string;
-	status: "active" | "paused" | "budgetLimited" | "complete";
+	status:
+		| "active"
+		| "paused"
+		| "budgetLimited"
+		| "usageLimited"
+		| "blocked"
+		| "complete";
 	tokenBudget: number | null;
 	tokensUsed: number;
 	timeUsedSeconds: number;
@@ -3539,13 +3545,14 @@ export async function getSessionCodexGoal(
 
 /** Out-of-band Codex `/goal` lifecycle control. `pause` is fired by the
  *  Composer Stop button (so abort doesn't get re-spawned by codex's
- *  continuation loop); `clear` is the banner's Clear button. Resume is
- *  intentionally NOT here — it goes through `/goal resume` on the
- *  sendMessage path so the resulting stream subscription catches the
- *  goal-continuation turn codex auto-spawns. */
+ *  continuation loop); `clear` is the banner's Clear button; `status`
+ *  refreshes the persisted goal via `thread/goal/get` without adding a
+ *  chat message. Resume is intentionally NOT here — it goes through
+ *  `/goal resume` on the sendMessage path so the resulting stream
+ *  subscription catches the goal-continuation turn codex auto-spawns. */
 export async function mutateCodexGoal(
 	sessionId: string,
-	action: "pause" | "clear",
+	action: "pause" | "clear" | "status",
 ): Promise<void> {
 	await invoke("mutate_codex_goal", { sessionId, action });
 }

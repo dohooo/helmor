@@ -113,27 +113,27 @@ function codexTargetTriple(): string | null {
 const CODEX_BIN_PATH = resolveCodexBinPath();
 
 /**
- * Recognised `/goal` slash-command shapes. `set` carries the objective;
- * `resume` exists so the user can recover an active goal after a pause
- * by typing `/goal resume`. We deliberately route `resume` through the
- * sendMessage path (rather than `mutateCodexGoal`) — the resulting
- * stream subscription is what catches the goal-continuation turn that
- * codex auto-spawns, otherwise those events fire into a dead handler.
- *
- * Pause / Clear are NOT here on purpose: they live on banner / Composer
- * Stop and go through `mutateCodexGoal` so they don't show up as user
- * messages in the chat.
+ * Recognised `/goal` slash-command shapes. `set` carries the objective.
+ * `resume` deliberately stays on the sendMessage path because Codex may
+ * spawn a continuation turn after the goal becomes active again, and the
+ * stream subscription is what captures that turn.
  */
 export type GoalCommand =
 	| { kind: "set"; objective: string }
-	| { kind: "resume" };
+	| { kind: "resume" }
+	| { kind: "pause" }
+	| { kind: "clear" }
+	| { kind: "status" };
 
 export function parseGoalCommand(prompt: string): GoalCommand | null {
 	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!m) return null;
 	const arg = (m[1] ?? "").trim();
-	if (arg === "") return null;
+	if (arg === "" || arg === "status") return { kind: "status" };
 	if (arg === "resume") return { kind: "resume" };
+	if (arg === "pause") return { kind: "pause" };
+	if (arg === "clear") return { kind: "clear" };
+	if (arg === "edit") return { kind: "status" };
 	return { kind: "set", objective: arg };
 }
 
@@ -141,7 +141,7 @@ function dispatchGoalCommand(
 	server: CodexAppServer,
 	threadId: string,
 	cmd: GoalCommand,
-): { method: string; promise: Promise<unknown> } {
+): { method: string; promise: Promise<unknown>; resolvesWithoutTurn: boolean } {
 	if (cmd.kind === "resume") {
 		return {
 			method: "thread/goal/set",
@@ -150,6 +150,32 @@ function dispatchGoalCommand(
 				{ threadId, status: "active" },
 				20_000,
 			),
+			resolvesWithoutTurn: false,
+		};
+	}
+	if (cmd.kind === "pause") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "paused" },
+				20_000,
+			),
+			resolvesWithoutTurn: true,
+		};
+	}
+	if (cmd.kind === "clear") {
+		return {
+			method: "thread/goal/clear",
+			promise: server.sendRequest("thread/goal/clear", { threadId }, 20_000),
+			resolvesWithoutTurn: true,
+		};
+	}
+	if (cmd.kind === "status") {
+		return {
+			method: "thread/goal/get",
+			promise: server.sendRequest("thread/goal/get", { threadId }, 20_000),
+			resolvesWithoutTurn: true,
 		};
 	}
 	return {
@@ -159,6 +185,7 @@ function dispatchGoalCommand(
 			{ threadId, objective: cmd.objective },
 			20_000,
 		),
+		resolvesWithoutTurn: false,
 	};
 }
 
@@ -994,6 +1021,7 @@ export class CodexAppServerManager implements SessionManager {
 			const dispatchPrompt = (): {
 				method: string;
 				promise: Promise<unknown>;
+				resolvesWithoutTurn?: boolean;
 			} => {
 				if (isCompactCommand) {
 					return {
@@ -1018,13 +1046,31 @@ export class CodexAppServerManager implements SessionManager {
 				};
 			};
 
-			const { method, promise: requestPromise } = dispatchPrompt();
+			const {
+				method,
+				promise: requestPromise,
+				resolvesWithoutTurn = false,
+			} = dispatchPrompt();
 
 			requestPromise
 				.then((response) => {
+					if (goalCommand?.kind === "status") {
+						const goal = deepGet(response, "goal");
+						emitter.codexGoalUpdated(
+							requestId,
+							sessionId,
+							goal && typeof goal === "object" ? JSON.stringify(goal) : null,
+						);
+					}
 					const turnId = deepGet(response, "turn", "id");
 					if (typeof turnId === "string") {
 						ctx.activeTurnId = turnId;
+					}
+					if (resolvesWithoutTurn) {
+						ctx.activeTurnId = null;
+						ctx.turnResolve?.();
+						ctx.turnResolve = null;
+						ctx.turnReject = null;
 					}
 				})
 				.catch((err) => {
@@ -1219,13 +1265,14 @@ export class CodexAppServerManager implements SessionManager {
 
 	/**
 	 * Out-of-band Codex `/goal` lifecycle control. Called when the user
-	 * clicks Pause / Resume / Clear on the goal banner — these operations
-	 * shouldn't appear in chat history, so they bypass the prompt-parsing
-	 * path entirely and go straight to the right `thread/goal/*` RPC.
+	 * clicks goal banner buttons or types a goal command that should not
+	 * appear in chat history, so it bypasses prompt parsing and goes
+	 * straight to the right `thread/goal/*` RPC.
 	 */
 	async mutateGoal(
 		sessionId: string,
-		action: "pause" | "clear",
+		action: "pause" | "clear" | "status",
+		onStatus?: (goal: string | null) => void,
 	): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
 		logger.info("mutateGoal request", {
@@ -1250,6 +1297,19 @@ export class CodexAppServerManager implements SessionManager {
 			return;
 		}
 		const threadId = ctx.providerThreadId;
+
+		if (action === "status") {
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			onStatus?.(
+				goal && typeof goal === "object" ? JSON.stringify(goal) : null,
+			);
+			return;
+		}
 
 		// Pause-only: codex's `thread/goal/set { paused }` stops the
 		// continuation loop but doesn't abort the in-flight turn, leaving

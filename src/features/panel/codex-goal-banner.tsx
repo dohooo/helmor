@@ -31,6 +31,8 @@ const STATUS_LABEL: Record<CodexGoalState["status"], string> = {
 	active: "active",
 	paused: "paused",
 	budgetLimited: "budget reached",
+	usageLimited: "usage limited",
+	blocked: "blocked",
 	complete: "complete",
 };
 
@@ -38,6 +40,8 @@ const STATUS_TONE: Record<CodexGoalState["status"], string> = {
 	active: "text-foreground",
 	paused: "text-muted-foreground",
 	budgetLimited: "text-amber-500",
+	usageLimited: "text-amber-500",
+	blocked: "text-amber-500",
 	complete: "text-emerald-500",
 };
 

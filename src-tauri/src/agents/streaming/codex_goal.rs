@@ -106,6 +106,8 @@ pub(super) fn goal_transition_label(
         (Some(_), Some(GoalStatus::Paused)) => Some("Goal paused"),
         (Some(_), Some(GoalStatus::Active)) => Some("Goal resumed"),
         (Some(_), Some(GoalStatus::BudgetLimited)) => Some("Goal reached token budget"),
+        (Some(_), Some(GoalStatus::UsageLimited)) => Some("Goal hit usage limit"),
+        (Some(_), Some(GoalStatus::Blocked)) => Some("Goal blocked"),
         (Some(_), Some(GoalStatus::Complete)) => Some("Goal complete"),
     }
 }
@@ -115,6 +117,8 @@ enum GoalStatus {
     Active,
     Paused,
     BudgetLimited,
+    UsageLimited,
+    Blocked,
     Complete,
 }
 
@@ -125,6 +129,8 @@ fn parse_goal_status(meta: &str) -> Option<GoalStatus> {
         "active" => Some(GoalStatus::Active),
         "paused" => Some(GoalStatus::Paused),
         "budgetLimited" => Some(GoalStatus::BudgetLimited),
+        "usageLimited" => Some(GoalStatus::UsageLimited),
+        "blocked" => Some(GoalStatus::Blocked),
         "complete" => Some(GoalStatus::Complete),
         _ => None,
     }
@@ -230,7 +236,7 @@ fn project_action_on_prev(
     Ok(Some(value.to_string()))
 }
 
-pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
+pub(crate) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
     let outcome = match crate::models::db::write_conn() {
         Ok(conn) => match write_codex_goal_meta(&conn, raw) {
             Ok(outcome) => outcome,
@@ -469,6 +475,24 @@ mod tests {
             Some(meta("budgetLimited", "x").as_str()),
         );
         assert_eq!(label, Some("Goal reached token budget"));
+    }
+
+    #[test]
+    fn transition_label_usage_limited() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("usageLimited", "x").as_str()),
+        );
+        assert_eq!(label, Some("Goal hit usage limit"));
+    }
+
+    #[test]
+    fn transition_label_blocked() {
+        let label = goal_transition_label(
+            Some(meta("active", "x").as_str()),
+            Some(meta("blocked", "x").as_str()),
+        );
+        assert_eq!(label, Some("Goal blocked"));
     }
 
     #[test]

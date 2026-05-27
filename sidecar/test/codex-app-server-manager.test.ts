@@ -29,6 +29,16 @@ const serverState = {
 	exitAfterTurnStarted: false,
 	instances: [] as MockCodexAppServer[],
 	responses: [] as Array<{ id: string | number; result: unknown }>,
+	goal: {
+		threadId: "thread-1",
+		objective: "review the diff",
+		status: "active",
+		tokenBudget: null,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		createdAt: 0,
+		updatedAt: 0,
+	} as Record<string, unknown> | null,
 };
 const gitAccessState = {
 	directories: [] as string[],
@@ -67,12 +77,29 @@ class MockCodexAppServer {
 		if (method === "thread/goal/set") {
 			queueMicrotask(() => {
 				serverState.onNotification?.({
+					method: "thread/goal/updated",
+					params: { goal: serverState.goal },
+				});
+				serverState.onNotification?.({
 					method: "turn/started",
 					params: { turn: { id: "turn-goal-1" } },
 				});
 				serverState.onNotification?.({
 					method: "turn/completed",
 					params: { turn: { id: "turn-goal-1" } },
+				});
+			});
+			return {};
+		}
+		if (method === "thread/goal/get") {
+			return { goal: serverState.goal };
+		}
+		if (method === "thread/goal/clear") {
+			serverState.goal = null;
+			queueMicrotask(() => {
+				serverState.onNotification?.({
+					method: "thread/goal/cleared",
+					params: {},
 				});
 			});
 			return {};
@@ -882,12 +909,13 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("/goalish trick")).toBeNull();
 	});
 
-	test("returns null for bare /goal so the agent handles it", async () => {
+	test("recognises bare /goal and /goal status as status", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
 		);
-		expect(parseGoalCommand("/goal")).toBeNull();
-		expect(parseGoalCommand("  /goal  ")).toBeNull();
+		expect(parseGoalCommand("/goal")).toEqual({ kind: "status" });
+		expect(parseGoalCommand("  /goal  ")).toEqual({ kind: "status" });
+		expect(parseGoalCommand("/goal status")).toEqual({ kind: "status" });
 	});
 
 	test("treats free-form text as the objective", async () => {
@@ -907,26 +935,13 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("/goal resume")).toEqual({ kind: "resume" });
 	});
 
-	// Contract: pause/clear are NOT recognised by the sidecar parser. The
-	// container-level intercept catches them BEFORE the prompt ever reaches
-	// the sidecar — they're routed through `mutateCodexGoal` so they don't
-	// pollute chat history. If this changes (e.g. parser starts returning
-	// pause/clear variants), the container intercept must lose its short-
-	// circuit too, or `/goal pause` will be both lifecycle-mutated AND
-	// echoed as a chat user prompt.
-	test("does NOT recognise /goal pause or /goal clear (handled by container intercept)", async () => {
+	test("recognises /goal pause, /goal clear, and /goal edit as commands", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
 		);
-		// Sidecar treats them as plain objectives if they ever arrive here.
-		expect(parseGoalCommand("/goal pause")).toEqual({
-			kind: "set",
-			objective: "pause",
-		});
-		expect(parseGoalCommand("/goal clear")).toEqual({
-			kind: "set",
-			objective: "clear",
-		});
+		expect(parseGoalCommand("/goal pause")).toEqual({ kind: "pause" });
+		expect(parseGoalCommand("/goal clear")).toEqual({ kind: "clear" });
+		expect(parseGoalCommand("/goal edit")).toEqual({ kind: "status" });
 	});
 });
 
@@ -942,6 +957,16 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
+		serverState.goal = {
+			threadId: "thread-1",
+			objective: "review the diff",
+			status: "active",
+			tokenBudget: null,
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: 0,
+			updatedAt: 0,
+		};
 		gitAccessState.directories = [];
 		codexConfigState.result = {
 			kind: "alreadyEnabled",
@@ -984,6 +1009,46 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			threadId: "thread-1",
 			objective: "review the diff",
 		});
+	});
+
+	test("/goal status reads the goal without starting a turn", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		await manager.sendMessage(
+			"REQ-goal-status",
+			{
+				sessionId: "s-goal-status",
+				prompt: "/goal status",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			false,
+		);
+		const goalGet = serverState.requests.find(
+			(r) => r.method === "thread/goal/get",
+		);
+		expect(goalGet?.params).toMatchObject({ threadId: "thread-1" });
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				id: "REQ-goal-status",
+				type: "codexGoalUpdated",
+				sessionId: "s-goal-status",
+				goal: JSON.stringify(serverState.goal),
+			}),
+		);
 	});
 
 	test("/goal recycles idle context so continuation inherits full access", async () => {
