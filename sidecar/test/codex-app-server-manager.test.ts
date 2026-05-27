@@ -376,7 +376,11 @@ describe("CodexAppServerManager", () => {
 		expect(
 			(threadStart?.params as { developerInstructions?: string })
 				.developerInstructions,
-		).toContain("next concrete subtask");
+		).toContain("longer-running workflow");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("remaining state clear");
 		expect(
 			(threadStart?.params as { developerInstructions?: string })
 				.developerInstructions,

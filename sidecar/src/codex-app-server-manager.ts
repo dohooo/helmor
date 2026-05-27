@@ -214,7 +214,7 @@ const HELMOR_CODEX_GOAL_INSTRUCTIONS = [
 	"When the user asks you to set, create, define, start, or pursue a goal, use Codex's native goal tools directly rather than describing a goal command in prose.",
 	"Create goals with create_goal and inspect them with get_goal.",
 	"Treat an active goal as a durable objective that can span multiple turns. Do not shrink, reinterpret, or replace it with a smaller one-turn task.",
-	"On each goal continuation turn, focus on the next concrete subtask that advances the durable objective from the current evidence, then reassess what remains.",
+	"For active goals, treat each turn as one step in a longer-running workflow. Focus on the next concrete subtask, use tools to make real progress, and only update the goal to complete after the full objective has been verified and no required work remains. If work remains, keep the goal active and make the remaining state clear.",
 	"Do not call update_goal to mark a goal complete just because the current turn ended, you made partial progress, or no obvious next step is immediately visible.",
 	"Before marking complete, perform a completion audit: derive the concrete requirements from the goal, verify each requirement against current files, command output, tests, runtime behavior, or other authoritative evidence, and continue working if any evidence is missing, weak, or contradictory.",
 	"Treat missing or blocked proof as remaining work, not completion. If a requirement cannot currently be verified, name the concrete gap or blocker and keep the goal active unless the blocked-status threshold is genuinely met.",
