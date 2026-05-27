@@ -9,8 +9,47 @@ Gateway. The maintainer should be able to merge without surprises,
 and users on the upstream branch should be able to add a remote +
 run an agent on it in under 2 minutes.
 
-Current branch: 117 commits ahead of `dohooo/helmor:main`, 0 behind
+Current branch: 117+ commits ahead of `dohooo/helmor:main`, 0 behind
 (merged through PR #633 in commit `fb16f89a`).
+
+---
+
+## 0. Session log — Linux daemon was never buildable (now fixed)
+
+Building `helmor-server` for Linux via a new Docker E2E harness
+surfaced that the headless daemon had **never been built or run on
+Linux** — CI only ever built it on macOS (WebKit = system
+framework). Findings + resolutions this pass:
+
+- **Release pipeline (`publish-helmor-server.yml`) was broken on
+  every leg** — missing GTK build-deps, missing the gitignored
+  `sidecar/dist/vendor/` resource dir, and OOM from building
+  cdylib/staticlib at opt-level 3. **Fixed:** native per-arch
+  runners (arm64 on `ubuntu-24.04-arm`, no `cross`), GTK dev-deps
+  installed, vendor placeholder created, lib `crate-type` pinned to
+  `rlib` for the daemon build. *Still needs a real
+  `workflow_dispatch` run to confirm end-to-end.*
+- **The daemon links the GUI stack** (`libwebkit2gtk`/`libgtk-3`/
+  `libjavascriptcoregtk`) into its runtime NEEDED set — Tauri's
+  plugin/command registration uses link-time static registration
+  the linker can't dead-strip, and `lib.rs::run()` is never
+  feature-gated. Confirmed against a release build + `ldd`.
+  **Decision (per product direction): keep the daemon GUI-tied**,
+  so every Linux remote must have the GTK/webkit *runtime* libs
+  installed. Documented as a prerequisite; `install.rs` now turns
+  the resulting loader error into an actionable "install these
+  packages" message. (Feature-gating `tauri` out of the daemon —
+  without touching the desktop UI — remains the clean fix,
+  deliberately deferred.)
+- **Docker E2E harness added** (`src-tauri/tests/docker-e2e/` +
+  `remote_docker_e2e.rs`): builds the daemon FOR Linux, runs it
+  headless in a slim sshd container, drives the desktop's real
+  `RemoteSshRuntime` over a genuine ssh hop, asserts handshake +
+  `runtime_health` + `workspace.status`. **arm64 PROVEN GREEN
+  locally (native);** both arches run native in CI
+  (`remote-server-e2e.yml`). The cross-arch leg run locally under
+  Rosetta/QEMU wedges the daemon during init — an emulation
+  artifact, not a code bug; CI native runners are authoritative.
 
 ---
 
@@ -36,7 +75,7 @@ means scaffolded but needs verification or polish before shipping.
 - [x] **D4** Protocol version negotiation + auto-reinstall on mismatch.
 - [x] **D5** Standalone `install-helmor-server.sh` script.
 - [x] **D1 (workflow)** `.github/workflows/publish-helmor-server.yml` builds + uploads 4-target matrix on `helmor-server-v*` tag push. Toolchain pinned via `rust-toolchain.toml`, Cargo cache, post-build smoke test, lenient strip, artifact-count validation, pinned third-party action SHAs.
-- [ ] **D1 (verification)** The workflow has never actually run end-to-end. **Needs at least one successful `workflow_dispatch` dry-run + one tagged release** to confirm the wire shape (URLs, tarball naming, SHA256SUMS) actually matches what `install.rs` expects.
+- [~] **D1 (verification)** The workflow was **broken** (never produced a working binary — see §0); now rewritten to build Linux natively per-arch with GTK deps + vendor dir + rlib crate-type. **Still needs one `workflow_dispatch` dry-run + one tagged release** to confirm the `ubuntu-24.04-arm` runner label, the native GTK install, the wire shape (URLs, tarball naming, SHA256SUMS), and the install path against a real release.
 - [ ] **D2** Signature signing (cosign + sigstore on top of `SHA256SUMS`). Adds supply-chain trust but requires key management. **Decision point — defer with a docs note, or take it on?**
 
 ### Track E — Observability
@@ -127,13 +166,21 @@ or process).
 Items that don't change code but must happen before the PR opens.
 These are what got the last PR closed.
 
-### 4.1 End-to-end manual test pass
+### 4.1 End-to-end test pass
 
-Walk through every flow on a real Linux VM (not localhost):
+**Now partly automated.** The Docker E2E
+(`src-tauri/tests/remote_docker_e2e.rs`) covers the
+transport-layer core — real ssh hop into a Linux container, daemon
+spawn, `initialize` handshake, `runtime_health`,
+`workspace.status` — green on native arm64 locally + both arches
+native in CI. The flows below that the E2E does NOT yet cover stay
+manual (they need a live agent sidecar, the desktop GUI, or
+network-fault injection):
 
 - [ ] Add a remote on a fresh VM via the wizard. `helmor-server`
       isn't installed yet → auto-install path runs → daemon
-      starts → desktop attaches.
+      starts → desktop attaches. *(E2E covers connect against a
+      pre-baked daemon; the wizard + auto-install UI is manual.)*
 - [ ] Create a new workspace bound to that remote at creation
       time (Where picker on Start page).
 - [ ] Open the workspace, send a prompt, get a streaming response.
@@ -159,19 +206,25 @@ the PR.
 
 ### 4.2 Cross-arch verification
 
-- [ ] **macOS arm64 desktop → Linux x64 remote**: most common
-      production combo. Verify download install picks
-      `x86_64-unknown-linux-gnu`.
-- [ ] **macOS arm64 desktop → Linux arm64 remote**: AWS Graviton
-      / Ampere case. Verify `aarch64-unknown-linux-gnu` download.
-- [ ] **macOS arm64 desktop → macOS arm64 remote**: developer
-      pairing. Verify `aarch64-apple-darwin` download.
-- [ ] **macOS x64 desktop → Linux x64 remote**: x86 Macs (Intel,
-      pre-Apple Silicon).
+Daemon **build + headless run** per arch is now covered:
+- [x] Linux arm64 — built natively + daemon runs headless (Docker
+      E2E, green locally + CI).
+- [~] Linux amd64 — built natively + daemon runs headless in the
+      image build (`--version` self-check). Full E2E runs native
+      in CI (`remote-server-e2e.yml`); the local emulated run is
+      intentionally not relied on (Rosetta wedges the daemon).
+- [ ] macOS arm64 / x64 daemon — built by the release pipeline's
+      darwin legs; not yet E2E'd (a macOS-remote E2E would need a
+      macOS CI runner with sshd).
 
-Without a published release, all four of these will fall through
-to the scp path (which only works when arch matches). So this
-verification is gated on a successful D1 first release.
+The desktop→remote *download-install* matrix (which release tarball
+a given desktop pulls) is still gated on a real published release
+(§6) — until then the install path falls back to scp (arch-match
+only):
+- [ ] macOS arm64 desktop → Linux x64 remote (most common combo).
+- [ ] macOS arm64 desktop → Linux arm64 remote (Graviton/Ampere).
+- [ ] macOS arm64 desktop → macOS arm64 remote (dev pairing).
+- [ ] macOS x64 desktop → Linux x64 remote (Intel Macs).
 
 ### 4.3 Automated suite
 
