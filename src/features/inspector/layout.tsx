@@ -1,5 +1,12 @@
 import { ChevronDown, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, useCallback, useContext } from "react";
+import {
+	createContext,
+	type RefObject,
+	useCallback,
+	useContext,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
 	ContextMenu,
@@ -9,6 +16,15 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
@@ -16,9 +32,11 @@ import {
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import type { RunAction } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { ScriptIconState } from "./hooks/use-script-status";
+import { useScriptStatus } from "./hooks/use-script-status";
 import { useHoverZoom } from "./layout/use-hover-zoom";
 import { ScriptStatusIcon } from "./script-status-icon";
 import {
@@ -44,13 +62,6 @@ export const TABS_BLUR_HOLD_UNTIL_MS = TABS_HOVER_TRANSITION_MS - 50;
 /** 32px header (h-8) + 1px section border-b. */
 export const INSPECTOR_SECTION_HEADER_HEIGHT = 33;
 const TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX = INSPECTOR_SECTION_HEADER_HEIGHT;
-
-// CSS variables written on the inspector container by `useWorkspaceInspectorSidebar`.
-// Vars written directly by mousemove during drag — same strategy as
-// shell/use-panels.ts horizontal drag, skipping React per frame.
-export const INSPECTOR_CHANGES_BODY_VAR = "--inspector-changes-body-height";
-export const INSPECTOR_ACTIONS_BODY_VAR = "--inspector-actions-body-height";
-export const INSPECTOR_TABS_BODY_VAR = "--inspector-tabs-body-height";
 
 // Inspector layout persistence
 export const INSPECTOR_ACTIONS_OPEN_STORAGE_KEY =
@@ -203,6 +214,32 @@ type InspectorTabsSectionProps = {
 	setupScriptState: ScriptIconState;
 	runScriptState: ScriptIconState;
 	/**
+	 * Text rendered inside the Run tab. "Run" for the single-action case
+	 * (the dropdown carries identity); the active action's name when the
+	 * workspace has multiple configured, so the user can tell at a glance
+	 * which output buffer is on-screen once the placeholder copy is gone.
+	 */
+	runTabLabel: string;
+	/** Current workspace id — needed so each Run-tab dropdown item can
+	 * subscribe to its own action's live status (per-action loading /
+	 * success / failure glyph). `null` outside a workspace context — the
+	 * dropdown then renders each item without a status icon. */
+	workspaceId: string | null;
+	/**
+	 * All run actions configured for the current repo (DB + helmor.json
+	 * merged). Empty when none configured — the Run-tab dropdown still
+	 * renders, but only carries the "Create new" entry.
+	 */
+	runActions: RunAction[];
+	/** id of the run action the user has picked as active in this workspace
+	 * (or `null` to mean "the first action"). */
+	activeRunActionId: string | null;
+	/** Setting a new active id from the dropdown radio. */
+	onSelectRunAction: (actionId: string) => void;
+	/** "Create" item in the dropdown — opens the repo settings UI focused
+	 * on the run-scripts section. */
+	onCreateRunAction: () => void;
+	/**
 	 * Live list of terminal sub-tabs for the current workspace. Each instance
 	 * becomes a tab in the unified row, identified by `instance.id` as the
 	 * activeTab value. Display labels are positional (`getTerminalDisplayTitle`).
@@ -217,7 +254,6 @@ type InspectorTabsSectionProps = {
 	onToggleTerminalHoverZoom: (instanceId: string, disabled: boolean) => void;
 	/** False when there's no repo/workspace context — disables the "+" button. */
 	canSpawnTerminal: boolean;
-	bodyHeight: number;
 	/**
 	 * Gate for the hover-to-zoom effect. When false, hovering the body does
 	 * nothing — used so we only zoom when there's actual terminal output worth
@@ -236,12 +272,17 @@ export function InspectorTabsSection({
 	tabActions,
 	setupScriptState,
 	runScriptState,
+	runTabLabel,
+	workspaceId,
+	runActions,
+	activeRunActionId,
+	onSelectRunAction,
+	onCreateRunAction,
 	terminalInstances,
 	onAddTerminal,
 	onCloseTerminal,
 	onToggleTerminalHoverZoom,
 	canSpawnTerminal,
-	bodyHeight,
 	canHoverExpand,
 	children,
 }: InspectorTabsSectionProps) {
@@ -280,6 +321,36 @@ export function InspectorTabsSection({
 		[open, activeTab, onTabChange, onToggle],
 	);
 
+	// Run-tab dropdown open state is lifted here so the Run label button
+	// can also act as a trigger when the tab is already active — letting
+	// the user click anywhere on the active Run tab (not just the chevron)
+	// to open the action menu. While Run is inactive the label keeps its
+	// normal tab-switching role; only the chevron opens the menu.
+	const [runMenuOpen, setRunMenuOpen] = useState(false);
+	const runLabelRef = useRef<HTMLButtonElement>(null);
+
+	const handleRunMenuOpenChange = useCallback(
+		(next: boolean) => {
+			setRunMenuOpen(next);
+			// Keep the hover-zoom controller in the loop so the panel
+			// doesn't collapse mid-menu when the cursor enters a portaled
+			// item — same fix the chevron always relied on.
+			handleTabContextMenuOpenChange(next);
+		},
+		[handleTabContextMenuOpenChange],
+	);
+
+	const handleRunTabClick = useCallback(() => {
+		if (activeTab !== "run") {
+			handleTabClick("run");
+			return;
+		}
+		// Already on Run — the whole tab acts as the dropdown trigger.
+		// Toggle so a second click on the label closes the menu, matching
+		// the chevron's behaviour.
+		handleRunMenuOpenChange(!runMenuOpen);
+	}, [activeTab, handleRunMenuOpenChange, handleTabClick, runMenuOpen]);
+
 	// "+" / placeholder Terminal: spawning a terminal while the panel is
 	// collapsed would create one the user can't see — pop the panel open too.
 	const handleNewTerminalClick = useCallback(() => {
@@ -294,15 +365,8 @@ export function InspectorTabsSection({
 				"relative flex min-h-0 shrink-0 flex-col",
 				!isZoomPresented && "overflow-hidden",
 			)}
-			style={{
-				// Height via CSS var, written by useWorkspaceInspectorSidebar's
-				// mousemove during drag — skips React renders. Collapsed state pins
-				// to the header height to keep the parent flex column stable.
-				height: open
-					? `calc(${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px + var(${INSPECTOR_TABS_BODY_VAR}, ${bodyHeight}px))`
-					: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-				minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px`,
-			}}
+			// Height written via `wrapperRef` by `useWorkspaceInspectorSidebar`.
+			style={{ minHeight: `${TABS_WRAPPER_COLLAPSED_MIN_HEIGHT_PX}px` }}
 		>
 			<div
 				data-tabs-zoomed={isZoomPresented ? "true" : undefined}
@@ -426,22 +490,51 @@ export function InspectorTabsSection({
 										)}
 									/>
 								</button>
-								<button
-									type="button"
-									role="tab"
-									id="inspector-tab-run"
-									aria-controls="inspector-panel-run"
-									aria-selected={activeTab === "run"}
-									tabIndex={activeTab === "run" ? 0 : -1}
-									className={cn(
-										INSPECTOR_TAB_BUTTON_CLASS,
-										"shrink-0",
-										activeTab === "run" && "text-foreground",
-									)}
-									onClick={() => handleTabClick("run")}
-								>
-									<ScriptStatusIcon state={runScriptState} />
-									Run
+								{/* Run tab + dropdown chevron share a wrapper so the
+								    active-tab underline can span both — covering the
+								    chevron too, not just the "Run" label. */}
+								<div className="relative flex shrink-0 items-stretch">
+									<button
+										type="button"
+										role="tab"
+										ref={runLabelRef}
+										id="inspector-tab-run"
+										aria-controls="inspector-panel-run"
+										aria-selected={activeTab === "run"}
+										// Once Run is the active tab, the label doubles as the
+										// dropdown trigger; advertise that to assistive tech.
+										aria-haspopup={activeTab === "run" ? "menu" : undefined}
+										aria-expanded={
+											activeTab === "run" ? runMenuOpen : undefined
+										}
+										tabIndex={activeTab === "run" ? 0 : -1}
+										className={cn(
+											INSPECTOR_TAB_BUTTON_CLASS,
+											// Tighten right padding so the dropdown chevron sits
+											// flush against the label instead of inheriting the
+											// full tab gutter.
+											"shrink-0 pr-1",
+											activeTab === "run" && "text-foreground",
+										)}
+										onClick={handleRunTabClick}
+									>
+										<ScriptStatusIcon state={runScriptState} />
+										{/* Capped width + truncate so a long custom action
+										    name (helmor.json) can't push the dropdown chevron
+										    off-screen or stretch the tab past its neighbours. */}
+										<span className="max-w-[8rem] truncate">{runTabLabel}</span>
+									</button>
+									<RunActionsDropdown
+										activeTab={activeTab}
+										workspaceId={workspaceId}
+										runActions={runActions}
+										activeRunActionId={activeRunActionId}
+										onSelectRunAction={onSelectRunAction}
+										onCreateRunAction={onCreateRunAction}
+										open={runMenuOpen}
+										onOpenChange={handleRunMenuOpenChange}
+										labelRef={runLabelRef}
+									/>
 									<span
 										aria-hidden="true"
 										className={cn(
@@ -449,7 +542,7 @@ export function InspectorTabsSection({
 											activeTab === "run" && "opacity-100",
 										)}
 									/>
-								</button>
+								</div>
 								{terminalInstances.length === 0 ? (
 									// Placeholder tab so the Terminal entry point is always
 									// discoverable, even on a fresh workspace with no live
@@ -677,5 +770,164 @@ export function HorizontalResizeHandle({
 				}`}
 			/>
 		</div>
+	);
+}
+
+/**
+ * Chevron trigger rendered to the right of the Run tab label. Clicking it
+ * (a) does NOT switch tabs — the dropdown handles its own focus — and
+ * (b) shows the list of configured run actions plus a "Create" entry
+ * that punts to the repository settings panel.
+ *
+ * Composition-only: uses the project's standard shadcn DropdownMenu
+ * primitives (RadioGroup / RadioItem / Separator / Item) so visual style
+ * stays consistent with every other menu in the app.
+ */
+function RunActionsDropdown({
+	activeTab,
+	workspaceId,
+	runActions,
+	activeRunActionId,
+	onSelectRunAction,
+	onCreateRunAction,
+	open,
+	onOpenChange,
+	labelRef,
+}: {
+	activeTab: string;
+	workspaceId: string | null;
+	runActions: RunAction[];
+	activeRunActionId: string | null;
+	onSelectRunAction: (id: string) => void;
+	onCreateRunAction: () => void;
+	/** Controlled open state — lifted to the parent so the Run label can
+	 * also toggle this menu when the tab is active. */
+	open: boolean;
+	/** Combined sink: updates the lifted state AND bridges to the hover-zoom
+	 * controller (so the portaled menu doesn't collapse the panel the moment
+	 * the cursor enters a menu item). */
+	onOpenChange: (open: boolean) => void;
+	/** Reference to the Run-tab label button. Used by the menu's outside-
+	 * click handler so a click on the label is owned by the label's own
+	 * toggle rather than being auto-closed by Radix mid-toggle. */
+	labelRef: RefObject<HTMLButtonElement | null>;
+}) {
+	// Resolve which radio value should be checked. Falls back to the first
+	// action when the persisted id is missing or stale (recently deleted).
+	const resolvedActiveId =
+		runActions.find((a) => a.id === activeRunActionId)?.id ??
+		runActions[0]?.id ??
+		"";
+	return (
+		<DropdownMenu open={open} onOpenChange={onOpenChange}>
+			<DropdownMenuTrigger asChild>
+				<button
+					type="button"
+					aria-label="Switch run action"
+					// Sit visually adjacent to the Run tab without claiming
+					// tab semantics — pure menu trigger. Pull a hair to the
+					// left so it nests against the label.
+					//
+					// Hover feedback mirrors the inline-icon-button pattern
+					// already used in this file: muted → foreground text +
+					// a soft `bg-accent/60` halo so the affordance reads
+					// even when the chevron is already at full color
+					// (active-Run case). `data-[state=open]` keeps the bg
+					// pinned while the dropdown is open — Radix sets that
+					// attribute on the trigger automatically.
+					className={cn(
+						"-ml-0.5 flex h-full w-5 shrink-0 cursor-interactive items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-0 data-[state=open]:bg-accent/60 data-[state=open]:text-foreground",
+						activeTab === "run" && "text-foreground",
+					)}
+					// Don't bubble the click — the parent tablist would
+					// otherwise interpret it as activating the Run tab.
+					onClick={(e) => e.stopPropagation()}
+				>
+					<ChevronDown className="size-3" strokeWidth={2} />
+				</button>
+			</DropdownMenuTrigger>
+			{/* `align="end"` pins the dropdown's right edge to the chevron's
+			    right edge — the menu extends leftward, so each item's
+			    right edge lines up cleanly with the trigger. Min width is
+			    tight; Radix grows the panel to fit the longest item, so
+			    short labels stay compact. */}
+			<DropdownMenuContent
+				align="end"
+				className="min-w-[112px]"
+				onPointerDownOutside={(event) => {
+					// Only when Run is the active tab does the label double as
+					// the dropdown trigger — and only then does Radix's
+					// outside-close race the label's own toggle. While Run is
+					// inactive the label is just a tab switcher, so letting
+					// Radix close the menu naturally is the right behaviour.
+					if (activeTab !== "run") return;
+					const target = event.target as Node | null;
+					if (target && labelRef.current?.contains(target)) {
+						event.preventDefault();
+					}
+				}}
+			>
+				{runActions.length > 0 && (
+					<>
+						<DropdownMenuRadioGroup
+							value={resolvedActiveId}
+							onValueChange={onSelectRunAction}
+						>
+							{runActions.map((action) => (
+								<RunActionDropdownItem
+									key={action.id}
+									action={action}
+									workspaceId={workspaceId}
+								/>
+							))}
+						</DropdownMenuRadioGroup>
+						<DropdownMenuSeparator />
+					</>
+				)}
+				{/* Leading-icon shape: glyph on the left, label after. Sits in
+				    the normal flex flow (gap-1.5 from the shared item class)
+				    rather than mirroring the radio rows' right-pinned `✓`
+				    column — this is an action row, not a selection row, so
+				    the icon-then-label reading order signals "do" instead of
+				    "current". */}
+				<DropdownMenuItem onSelect={onCreateRunAction} className="gap-2">
+					<Plus className="size-3" strokeWidth={1.8} />
+					<span>Create</span>
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
+/**
+ * Single radio item in the Run dropdown. Pulled out so each row can own
+ * its own `useScriptStatus` subscription — that's how the per-action
+ * loading / success / failure glyph stays live without the parent
+ * re-rendering the whole list on every status tick.
+ *
+ * `aria-hidden` on the icon keeps the radio item's accessible name as
+ * just the action's display name (matching the header tab convention).
+ */
+function RunActionDropdownItem({
+	action,
+	workspaceId,
+}: {
+	action: RunAction;
+	workspaceId: string | null;
+}) {
+	const state = useScriptStatus(
+		workspaceId,
+		"run",
+		action.command.trim().length > 0,
+		action.id,
+	);
+	return (
+		<DropdownMenuRadioItem
+			value={action.id}
+			className="flex items-center gap-2"
+		>
+			<ScriptStatusIcon state={state} />
+			<span className="truncate">{action.name}</span>
+		</DropdownMenuRadioItem>
 	);
 }

@@ -2,6 +2,13 @@ let cssColorProbe: HTMLDivElement | null = null;
 let cssColorCanvas: CanvasRenderingContext2D | null = null;
 let unsupportedColorSentinel: CanvasGradient | null = null;
 
+// Memoize resolved colors; invalidate on every `<html>` class change.
+const cssColorCache = new Map<string, string>();
+
+export function invalidateCssColorCache(): void {
+	cssColorCache.clear();
+}
+
 function getCssColorProbe(): HTMLDivElement {
 	if (!cssColorProbe) {
 		cssColorProbe = document.createElement("div");
@@ -35,6 +42,10 @@ function toHexByte(n: number): string {
 }
 
 export function resolveCssColor(value: string, alphaOverride?: number): string {
+	const cacheKey = `${value}::${alphaOverride ?? ""}`;
+	const hit = cssColorCache.get(cacheKey);
+	if (hit !== undefined) return hit;
+
 	const probe = getCssColorProbe();
 	probe.style.backgroundColor = "";
 	probe.style.backgroundColor = value;
@@ -61,5 +72,7 @@ export function resolveCssColor(value: string, alphaOverride?: number): string {
 		alphaOverride === undefined ? baseAlpha : Math.round(alphaOverride * 255);
 	const alphaHex = alpha >= 255 ? "" : toHexByte(alpha);
 
-	return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}${alphaHex}`;
+	const result = `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}${alphaHex}`;
+	cssColorCache.set(cacheKey, result);
+	return result;
 }

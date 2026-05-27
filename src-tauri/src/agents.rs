@@ -17,6 +17,7 @@ mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;
+pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
@@ -693,6 +694,9 @@ pub struct UserInputResponseRequest {
     /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
+    /// Provider-specific meta (e.g. Codex `{ persist: "session" }`). Opaque.
+    #[serde(default)]
+    pub meta: Option<Value>,
 }
 
 #[tauri::command]
@@ -712,6 +716,7 @@ pub async fn respond_to_user_input(
             "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
+            "meta": request.meta,
         }),
     };
     sidecar

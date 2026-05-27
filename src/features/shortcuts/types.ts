@@ -4,6 +4,7 @@ export type ShortcutId =
 	| "workspace.quickSwitchNext"
 	| "workspace.quickSwitchPrevious"
 	| "workspace.new"
+	| "workspace.justChat"
 	| "workspace.addRepository"
 	| "workspace.filterSidebar"
 	| "workspace.search"

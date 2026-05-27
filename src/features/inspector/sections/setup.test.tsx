@@ -156,6 +156,7 @@ describe("SetupTab", () => {
 			"setup",
 			expect.any(Function),
 			"ws-1",
+			null,
 		);
 	});
 
@@ -179,6 +180,7 @@ describe("SetupTab", () => {
 			"repo-1",
 			"setup",
 			"ws-1",
+			null,
 		);
 	});
 

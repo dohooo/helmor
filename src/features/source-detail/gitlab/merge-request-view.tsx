@@ -1,7 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
-import { getInboxItemDetail } from "@/lib/api";
-import { helmorQueryKeys } from "@/lib/query-client";
-import { GitHubDetailPage, type SourceDetailProps } from "../common";
+import {
+	GitHubDetailPage,
+	type SourceDetailProps,
+	toRefreshControl,
+	useInboxItemDetailQuery,
+} from "../common";
 
 export function GitLabMergeRequestView({
 	card,
@@ -9,19 +11,7 @@ export function GitLabMergeRequestView({
 }: SourceDetailProps) {
 	const detailRef =
 		card.detailRef?.source === "gitlab_mr" ? card.detailRef : null;
-	const detailQuery = useQuery({
-		queryKey: detailRef
-			? helmorQueryKeys.inboxItemDetail(
-					detailRef.provider,
-					detailRef.login,
-					detailRef.source,
-					detailRef.externalId,
-				)
-			: ["inboxItemDetail", "missing", card.id],
-		queryFn: () => getInboxItemDetail(detailRef!),
-		enabled: detailRef !== null,
-		staleTime: 60_000,
-	});
+	const detailQuery = useInboxItemDetailQuery(detailRef, card.id);
 	const detail =
 		detailQuery.data?.type === "gitlab_mr" ? detailQuery.data.data : null;
 
@@ -33,6 +23,7 @@ export function GitLabMergeRequestView({
 			error={detailQuery.error}
 			isLoading={detailQuery.isLoading}
 			kindLabel="merge request"
+			refresh={detailRef ? toRefreshControl(detailQuery) : undefined}
 		/>
 	);
 }

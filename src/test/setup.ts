@@ -194,6 +194,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 					lastAttemptAt: null,
 					downloadedAt: null,
 				};
+			case "get_helmor_components_update_check":
+				return {
+					cli: {
+						installed: false,
+						installPath: null,
+						buildMode: "development",
+						installState: "missing",
+					},
+					skills: {
+						installed: false,
+						claude: false,
+						codex: false,
+						command:
+							"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					},
+					lastCheckedVersion: null,
+					currentVersion: "0.0.0-test",
+					cliError: null,
+					skillsError: null,
+				};
 			case "load_auto_close_action_kinds":
 				return [];
 			case "load_auto_close_opt_in_asked":
@@ -202,8 +222,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_workspace_files":
 				return [];
-			case "list_workspace_changes_with_content":
-				return { items: [], prefetched: [] };
+			case "list_workspace_changes":
+				return [];
 			case "list_slash_commands":
 				return [];
 			case "list_workspace_linked_directories":
@@ -281,6 +301,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 // cmdk calls `scrollIntoView` which jsdom doesn't implement.
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 	Element.prototype.scrollIntoView = () => {};
+}
+
+// A handful of API helpers (e.g. `subscribeUiMutations`) construct a Tauri
+// `Channel` via a *dynamic* `import("@tauri-apps/api/core")`, which can slip
+// past the static module mock above and reach the real `Channel`, whose
+// constructor reads `window.__TAURI_INTERNALS__.transformCallback`. Without
+// this stub those fire-and-forget calls reject and surface as unhandled
+// rejections that flake the suite. The stub returns a dummy callback id so
+// construction succeeds and the (no-op in tests) channel is harmless.
+if (typeof window !== "undefined" && !window.__TAURI_INTERNALS__) {
+	(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ =
+		{
+			transformCallback: (
+				callback?: (response: unknown) => void,
+				_once = false,
+			) => {
+				void callback;
+				return Math.floor(Math.random() * 1_000_000);
+			},
+		};
 }
 
 if (

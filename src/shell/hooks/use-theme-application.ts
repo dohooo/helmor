@@ -3,6 +3,7 @@
 // the rest of the app picks up the right tokens without each component
 // reaching into settings.
 import { useEffect } from "react";
+import { invalidateCssColorCache } from "@/lib/css-color";
 import {
 	type ColorTheme,
 	resolveTheme,
@@ -65,10 +66,11 @@ export function useThemeApplication(opts: ThemeApplicationOptions): void {
 			if (preset && preset !== "default") {
 				root.classList.add(`theme-${preset}`);
 			}
-			// Monaco's theme is synced via a MutationObserver inside
-			// `monaco-runtime.ts` — avoid importing it here to keep Monaco out
-			// of the critical boot path and out of tests that never open the
-			// editor.
+			// CSS variables changed — drop cached resolutions.
+			invalidateCssColorCache();
+			// Monaco's theme is synced via a MutationObserver in
+			// `monaco-runtime.ts`; not imported here to stay off the boot
+			// path.
 		};
 
 		apply();

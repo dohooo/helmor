@@ -27,12 +27,31 @@ export const defaultInvokeHandlers: Record<string, InvokeHandler> = {
 		command:
 			"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 	}),
+	get_helmor_components_update_check: () => ({
+		cli: {
+			installed: false,
+			installPath: null,
+			buildMode: "development",
+			installState: "missing",
+		},
+		skills: {
+			installed: false,
+			claude: false,
+			codex: false,
+			command:
+				"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+		},
+		lastCheckedVersion: null,
+		currentVersion: "0.0.0-test",
+		cliError: null,
+		skillsError: null,
+	}),
 	get_app_settings: () => ({}),
 	load_auto_close_action_kinds: () => [],
 	load_auto_close_opt_in_asked: () => [],
 	list_remote_branches: () => [],
 	list_workspace_files: () => [],
-	list_workspace_changes_with_content: () => ({ items: [], prefetched: [] }),
+	list_workspace_changes: () => [],
 	list_slash_commands: () => [],
 	list_forge_labels: () => [],
 	list_inbox_kind_labels: () => [],

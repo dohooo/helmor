@@ -239,13 +239,12 @@ pub fn prepare_workspace_from_repo_impl(
             tracing::warn!(%error, "Failed to load repo scripts during prepare; defaulting to empty");
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: true,
-                run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         }
     };
@@ -392,13 +391,12 @@ pub fn prepare_local_workspace_impl(
         repos::load_repo_scripts(repo_id, Some(&workspace_id)).unwrap_or_else(|_| {
             repos::RepoScripts {
                 setup_script: None,
-                run_script: None,
                 archive_script: None,
                 setup_from_project: false,
                 run_from_project: false,
                 archive_from_project: false,
                 auto_run_setup: false,
-                run_script_mode: "concurrent".to_string(),
+                run_actions: Vec::new(),
             }
         });
 
@@ -493,13 +491,12 @@ pub fn prepare_chat_workspace_impl(
         // No setup/run scripts for chat mode — return the empty shape.
         repo_scripts: repos::RepoScripts {
             setup_script: None,
-            run_script: None,
             archive_script: None,
             setup_from_project: false,
             run_from_project: false,
             archive_from_project: false,
             auto_run_setup: false,
-            run_script_mode: "concurrent".to_string(),
+            run_actions: Vec::new(),
         },
         working_directory: Some(working_directory.display().to_string()),
         branch_intent: WorkspaceBranchIntent::UseBranch,
@@ -626,6 +623,21 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
                 git_ops::create_worktree_attached(&repo_root, &workspace_dir, &branch)?;
                 created_worktree = true;
             }
+        }
+
+        // Scratch space for agents to share files across sessions. The
+        // directory lives at `<workspace>/.agent-contexts/` and the
+        // worktree-local git exclude entry keeps it out of every diff.
+        // Best-effort — a failure here doesn't block workspace creation
+        // (agents just lose cross-session file sharing for this WS).
+        if let Err(err) =
+            crate::workspace::agent_contexts::ensure_agent_contexts_in_worktree(&workspace_dir)
+        {
+            tracing::warn!(
+                workspace_id = %workspace_id,
+                error = %format!("{err:#}"),
+                "Failed to provision .agent-contexts/ — workspace still usable",
+            );
         }
 
         // Defer setup to the frontend inspector: if a script is configured AND

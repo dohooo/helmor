@@ -233,6 +233,9 @@ pub fn list_workspace_files_inner(workspace_root: &Path) -> Vec<EditorFileListIt
     build_list_items(workspace_root, discovered_files)
 }
 
+/// List the editor's quick-open files alongside prefetched contents for
+/// every non-oversized entry. The remote runtime uses this to fold the
+/// list + the first batch of file reads into one round trip over SSH.
 pub fn list_editor_files_with_content(
     workspace_root_path: &str,
 ) -> Result<EditorFilesWithContentResponse> {
@@ -240,6 +243,32 @@ pub fn list_editor_files_with_content(
     let prefetched = prefetch_items(&items, true);
 
     Ok(EditorFilesWithContentResponse { items, prefetched })
+}
+
+/// Read the contents of each listed item that is small enough to be worth
+/// shipping eagerly. Skips deletions (unless `include_deleted`), files over
+/// `MAX_PREFETCH_BYTES`, and anything that isn't valid UTF-8.
+fn prefetch_items(
+    items: &[EditorFileListItem],
+    include_deleted: bool,
+) -> Vec<EditorFilePrefetchItem> {
+    items
+        .iter()
+        .filter(|item| include_deleted || item.status != "D")
+        .filter_map(|item| {
+            let path = Path::new(&item.absolute_path);
+            let metadata = fs::metadata(path).ok()?;
+            if metadata.len() > MAX_PREFETCH_BYTES {
+                return None;
+            }
+            let bytes = fs::read(path).ok()?;
+            let content = String::from_utf8(bytes).ok()?;
+            Some(EditorFilePrefetchItem {
+                absolute_path: item.absolute_path.clone(),
+                content,
+            })
+        })
+        .collect()
 }
 
 /// Best-effort variant for read-only listers. Returns `None` if the
@@ -287,29 +316,6 @@ fn build_list_items(
                 staged_status: None,
                 unstaged_status: None,
                 committed_status: None,
-            })
-        })
-        .collect()
-}
-
-fn prefetch_items(
-    items: &[EditorFileListItem],
-    include_deleted: bool,
-) -> Vec<EditorFilePrefetchItem> {
-    items
-        .iter()
-        .filter(|item| include_deleted || item.status != "D")
-        .filter_map(|item| {
-            let path = Path::new(&item.absolute_path);
-            let metadata = fs::metadata(path).ok()?;
-            if metadata.len() > MAX_PREFETCH_BYTES {
-                return None;
-            }
-            let bytes = fs::read(path).ok()?;
-            let content = String::from_utf8(bytes).ok()?;
-            Some(EditorFilePrefetchItem {
-                absolute_path: item.absolute_path.clone(),
-                content,
             })
         })
         .collect()

@@ -96,7 +96,7 @@ describe("App unread — re-click selected workspace clears dot", () => {
 		apiMocks.getClaudeRateLimits.mockResolvedValue(null);
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: null,
-			runScript: null,
+			runActions: [],
 			archiveScript: null,
 			setupFromProject: false,
 			runFromProject: false,
@@ -218,7 +218,7 @@ describe("App unread — re-click selected workspace clears dot", () => {
 				state: "initializing",
 				repoScripts: {
 					setupScript: null,
-					runScript: null,
+					runActions: [],
 					archiveScript: null,
 					setupFromProject: false,
 					runFromProject: false,

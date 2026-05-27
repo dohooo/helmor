@@ -4,7 +4,7 @@ import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import type { LexicalEditor, SerializedEditorState } from "lexical";
-import { $getRoot } from "lexical";
+import { $createParagraphNode, $createTextNode, $getRoot } from "lexical";
 import {
 	ArrowUp,
 	Check,
@@ -84,6 +84,11 @@ import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
 import type { InputHistoryEntry } from "./input-history";
 import { PermissionPanel, type PermissionPanelProps } from "./permission-panel";
+import {
+	type ComposerPrefill,
+	consumeComposerPrefill,
+	subscribeComposerPrefill,
+} from "./prefill-queue";
 import type { StartSubmitMode } from "./start-submit-mode";
 import { UsageStatsIndicator } from "./usage-stats-indicator";
 import type { UserInputResponseHandler } from "./user-input";
@@ -327,6 +332,45 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		return () =>
 			window.removeEventListener("helmor:focus-composer", handleFocusComposer);
 	}, [disabled]);
+
+	// Apply a one-shot composer prefill (e.g. from the Inspector's
+	// "Create run action" flow). Structure:
+	//   - intro line on top, caret placed at its end so the user can
+	//     finish the sentence;
+	//   - blank line + horizontal rule;
+	//   - body lines below.
+	// Pulls a queued prefill on mount AND subscribes for live deliveries
+	// so a click that targets the currently-mounted session also lands.
+	useEffect(() => {
+		if (!sessionId) return;
+		const apply = (prefill: ComposerPrefill) => {
+			const editor = editorRef.current;
+			if (!editor) {
+				// EditorRefPlugin sets the ref in a mount-time effect, so on
+				// the very first paint the ref may still be null. Retry on
+				// the next frame — by then Lexical's child plugins have run.
+				requestAnimationFrame(() => apply(prefill));
+				return;
+			}
+			editor.update(() => {
+				const root = $getRoot();
+				root.clear();
+				const introText = $createTextNode(prefill.intro);
+				const introPara = $createParagraphNode().append(introText);
+				const blankPara = $createParagraphNode();
+				const rulePara = $createParagraphNode().append($createTextNode("---"));
+				const bodyParas = prefill.body
+					.split("\n")
+					.map((line) => $createParagraphNode().append($createTextNode(line)));
+				root.append(introPara, blankPara, rulePara, ...bodyParas);
+				introText.select(prefill.intro.length, prefill.intro.length);
+			});
+			editor.focus();
+		};
+		const queued = consumeComposerPrefill(sessionId);
+		if (queued) apply(queued);
+		return subscribeComposerPrefill(sessionId, apply);
+	}, [sessionId]);
 	const selectedModel = useMemo(() => {
 		for (const section of modelSections) {
 			for (const option of section.options) {

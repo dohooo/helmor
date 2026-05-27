@@ -1,0 +1,8 @@
+---
+source: tests/schema_migrations.rs
+expression: repo_run_actions_stop_columns(&connection)
+---
+- - stop_command
+  - TEXT
+  - 0
+  - ~

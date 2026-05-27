@@ -27,8 +27,9 @@ const SCRIPT_ACTION_COPY: Record<
 		icon: Hammer,
 	},
 	run: {
-		title: "Create run script",
-		description: "Default command launched with Cmd+R.",
+		title: "Create run actions",
+		description:
+			"Named commands you'll pick from the Inspector's Run dropdown.",
 		icon: Play,
 	},
 	archive: {

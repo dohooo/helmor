@@ -58,16 +58,33 @@ Your flow:
    - the final scripts.setup
    - any local files that still need confirmation
    - your key assumptions`,
-	run: `Please help me initialize the Helmor run script for this workspace and write the final result into the current workspace's helmor.json.
+	run: `Please help me initialize the Helmor run actions for this workspace and write the final result into the current workspace's helmor.json.
 
 Context:
-- This run script executes when I press Cmd+R.
-- Its job is to give this workspace a practical default command for daily work.
-- There may not be a single obvious answer, so you should inspect first and then let me choose from the best candidates.
+- Run actions are named commands I can pick from the Inspector's Run dropdown. Cmd+R fires whichever action is currently selected.
+- One workspace can have several run actions (e.g. "Dev", "Tests", "Lint", "DB"). Each runs in its own PTY, independently startable / stoppable.
+- They are configured via the \`scripts.run\` array in helmor.json. Every entry must have a non-blank \`name\` and a non-blank \`command\` — entries missing either are silently ignored.
+- An entry may also carry an optional \`stopCommand\`: a short cleanup shell snippet that runs (same env + cwd as \`command\`) when I click Stop, before Helmor signals the main process. Use it when the main command leaves external state behind (containers up, services running, ports held by detached children). A second Stop click force-kills, so \`stopCommand\` should be short and non-interactive.
+- An entry may also carry an optional \`mode\`: \`"concurrent"\` (default) or \`"non-concurrent"\`. \`"non-concurrent"\` makes starting a new run of this action stop any other run of the same action across workspaces in the repo — the Exclusive toggle in the UI. Use it when the command binds a fixed port, holds a single named resource (a DB socket, a debugger port, a unique container name), or otherwise can't safely coexist with itself across workspaces.
+
+Required shape (use the array form, even when there is only one action):
+\`\`\`
+{
+  "scripts": {
+    "run": [
+      { "name": "Dev",   "command": "npm run dev" },
+      { "name": "Tests", "command": "npm test" },
+      { "name": "DB",    "command": "docker compose up", "stopCommand": "docker compose down", "mode": "non-concurrent" }
+    ]
+  }
+}
+\`\`\`
+
+A legacy string form (\`"run": "npm dev"\`) is still parsed for backwards compatibility, but DO NOT emit it for new configs — always write the array form so the user can extend the list later without restructuring.
 
 Rules:
 1. Inspect the repository first before asking questions.
-2. Your goal is to actually create or update scripts.run in helmor.json, not just give advice.
+2. Your goal is to actually create or update \`scripts.run\` (the array) in helmor.json, not just give advice.
 3. This is a worktree-based workspace. Use the environment variables correctly:
    - HELMOR_ROOT_PATH: the original repository root.
    - HELMOR_WORKSPACE_PATH: the current workspace's worktree path, and the directory where the script runs.
@@ -84,11 +101,15 @@ Rules:
      - CONDUCTOR_DEFAULT_BRANCH → HELMOR_DEFAULT_BRANCH
      - CONDUCTOR_PORT → HELMOR_PORT
    - After this step, only work on helmor.json.
-5. If the migrated helmor.json already contains scripts.run, stop and tell me the migration is complete.
-6. Do not overfit this run script to the current task, a single test file, or a one-off command.
+   - If the migrated \`scripts.run\` is still in the legacy string form, convert it to the array form (\`[{"name": "Default", "command": "<old string>"}]\`) before writing.
+5. If \`scripts.run\` already exists with one or more valid array entries, stop and tell me the configuration is complete.
+6. Do not overfit any single action to the current task, a single test file, or a one-off command.
 7. Do not quietly choose a heavy, destructive, or highly opinionated command when multiple reasonable defaults exist.
 8. For dev servers or local services, prefer HELMOR_PORT over hardcoded defaults so parallel workspaces do not collide. If the project needs multiple ports, use the range from HELMOR_PORT through HELMOR_PORT + HELMOR_PORT_COUNT - 1.
-9. Ask at most 3 rounds of questions, and only when they materially change the choice.
+9. Action names should be short, capitalized, and describe intent (e.g. "Dev", "Tests", "Lint", "DB"). Avoid duplicates.
+10. Add \`stopCommand\` only for actions whose \`command\` leaves external state behind that won't be cleaned up by killing the process tree — typical cases are \`docker compose up\`, \`supabase start\`, or long-running services that detach. Skip \`stopCommand\` for plain dev servers, test runners, lint, and anything that exits cleanly on SIGTERM.
+11. Set \`"mode": "non-concurrent"\` only when the command can't safely run twice at once in the same repo — it binds a fixed port that doesn't read \`HELMOR_PORT\`, attaches to a single shared resource (named container, exclusive DB lock, debugger port), or otherwise has cross-workspace contention. Leave \`mode\` off (defaulting to concurrent) for everything that reads \`HELMOR_PORT\` or has no shared state — parallel workspaces are the whole point.
+12. Ask at most 3 rounds of questions, and only when they materially change the lineup.
 
 What to inspect:
 - helmor.json, conductor.json
@@ -104,15 +125,19 @@ Your flow:
 3. Show me the candidates in a concise list. For each one, explain:
    - what it likely does
    - who or what workflow it suits
-   - why it could be a good Cmd+R default
-4. Give me your recommended default.
-5. Ask me to choose, ideally so I can answer with A / B / C.
-6. After I choose, create or update helmor.json.
+   - whether it deserves to be its own named action, or could be folded into another
+   - whether it needs a \`stopCommand\` (per rule 10) and, if so, what that would be
+   - whether it needs \`"mode": "non-concurrent"\` (per rule 11)
+4. Recommend a lineup:
+   - If only ONE candidate genuinely fits, propose a single-entry array (\`[{ "name": "Default", "command": "…" }]\`).
+   - If 2+ fit, propose them all as named entries (\`[{ "name": "Dev", … }, { "name": "Tests", … }]\`).
+5. Ask me to confirm, ideally so I can answer with A / B / C / "all".
+6. After I confirm, create or update helmor.json with the ARRAY form.
 7. End with a short summary:
    - which file you changed
-   - the final scripts.run
-   - why it fits Cmd+R
-   - how I can switch to another candidate later`,
+   - the final \`scripts.run\` array (formatted JSON)
+   - what each entry does
+   - reminder that I can add or rename actions later by editing helmor.json (or via the repo's Scripts settings panel)`,
 	archive: `Please help me initialize the Helmor archive script for this workspace and write the final result into the current workspace's helmor.json.
 
 Context:

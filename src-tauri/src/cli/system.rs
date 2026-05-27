@@ -28,7 +28,8 @@ struct CliStatusPayload {
 }
 
 pub fn cli_status(cli: &Cli) -> Result<()> {
-    let install_path = std::path::PathBuf::from(format!("/usr/local/bin/{}", installed_cli_name()));
+    let install_path =
+        std::path::PathBuf::from(format!("/usr/local/bin/{}", super::installed_cli_name()));
     let installed = install_path.exists();
     let current = std::env::current_exe()
         .ok()
@@ -73,17 +74,14 @@ pub fn completions(shell: CompletionShell) -> Result<()> {
         CompletionShell::Elvish => Shell::Elvish,
     };
     let mut stdout = std::io::stdout();
-    clap_complete::generate(clap_shell, &mut cmd, installed_cli_name(), &mut stdout);
+    clap_complete::generate(
+        clap_shell,
+        &mut cmd,
+        super::installed_cli_name(),
+        &mut stdout,
+    );
     stdout.flush()?;
     Ok(())
-}
-
-fn installed_cli_name() -> &'static str {
-    if crate::data_dir::is_dev() {
-        "helmor-dev"
-    } else {
-        "helmor"
-    }
 }
 
 /// Tell the running app to shut down.

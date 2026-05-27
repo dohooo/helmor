@@ -124,7 +124,7 @@ describe("App create workspace flow", () => {
 		apiMocks.loadRepoScripts.mockReset();
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: null,
-			runScript: null,
+			runActions: [],
 			archiveScript: null,
 			setupFromProject: false,
 			runFromProject: false,
@@ -306,7 +306,7 @@ describe("App create workspace flow", () => {
 				state: "initializing",
 				repoScripts: {
 					setupScript: null,
-					runScript: null,
+					runActions: [],
 					archiveScript: null,
 					setupFromProject: false,
 					runFromProject: false,

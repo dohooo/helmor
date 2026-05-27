@@ -1,6 +1,6 @@
 [package]
 name = "helmor"
-version = "0.23.4"
+version = "0.26.0"
 description = "The local-first IDE for coding agent orchestration."
 authors = ["Caspian Zhao", "Nathan Lian"]
 edition = "2021"
@@ -20,23 +20,43 @@ dotenvy = "0.15"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+aes = "0.8"
 anyhow = "1"
 base64 = "0.22.1"
+cbc = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 glob = "0.3"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false }
 rand = "0.10.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+rusty-leveldb = "3"
+sha1 = "0.10"
+# `wreq` (and the `wreq-util` companion) is a hard fork of `reqwest`
+# with built-in browser TLS / HTTP-2 fingerprint emulation. We use it
+# only for Slack: stock reqwest's rustls ClientHello bytes do not
+# match any real browser, and Slack's Cloudflare-fronted edge
+# classifies them as "spoofed_user_agent" / "unexpected_scraping" and
+# replies `invalid_auth` BEFORE inspecting the token. See
+# `korotovsky/slack-mcp-server#86`.
+wreq = { version = "5", default-features = false, features = ["json"] }
+wreq-util = "2"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tempfile = "3"
+hex = "0.4"
 tauri = { version = "2", features = ["protocol-asset", "test", "devtools"] }
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+tempfile = "3"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
@@ -45,11 +65,24 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+] }
 notify = "7"
 notify-debouncer-full = "0.4"
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "chrono"] }
+tracing-subscriber = { version = "0.3", features = [
+    "json",
+    "env-filter",
+    "chrono",
+] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
@@ -110,11 +143,11 @@ codegen-units = 256          # max intra-crate parallelism
 incremental = false          # required for sccache compatibility
 
 [profile.dev.package."*"]
-debug = false                # deps don't need debug info at all
+debug = false       # deps don't need debug info at all
 opt-level = 0
 codegen-units = 256
 
 [profile.dev.build-override]
-debug = false                # build scripts & proc-macros: fastest possible
+debug = false       # build scripts & proc-macros: fastest possible
 opt-level = 0
 codegen-units = 256

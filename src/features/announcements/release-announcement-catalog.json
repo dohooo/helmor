@@ -2,6 +2,102 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.26.0",
+			"items": [
+				{
+					"text": "Coding agents in Helmor can now drive Helmor itself — spawn sibling workspaces, dispatch ship actions, and read other agents' transcripts. Just ask them in any chat. Helmor CLI and skills install automatically in the background."
+				},
+				{
+					"text": "Every new workspace now has a gitignored `.agent-contexts/` directory agents can use to share files across sessions without polluting diffs."
+				},
+				{
+					"text": "Slack, GitHub, and GitLab context detail panels now refresh automatically when you open them or refocus Helmor, and there's a manual refresh button in the toolbar.",
+					"action": {
+						"label": "Open Context",
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.25.0",
+			"items": [
+				{
+					"text": "Cmd+Shift+N now opens the new-workspace composer in Just-chat mode, and Cmd+N opens it in worktree mode.",
+					"action": {
+						"label": "Open Shortcuts",
+						"value": {
+							"type": "openSettings",
+							"section": "shortcuts"
+						}
+					}
+				},
+				{
+					"text": "Slack is now a Context source — connect your workspaces and the agent can read threads (with images) the same way you do.",
+					"action": {
+						"label": "Open Context",
+						"value": {
+							"type": "setRightSidebarMode",
+							"mode": "context"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.24.0",
+			"items": [
+				{
+					"text": "Local LLM lands as a very experimental preview — it powers session title and branch name generation for now. More features coming soon.",
+					"action": {
+						"label": "Open Local LLM",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				},
+				{
+					"text": "Desktop notifications can now play a sound — pick from 12 effects in Settings → General.",
+					"action": {
+						"label": "Open General",
+						"value": {
+							"type": "openSettings",
+							"section": "general"
+						}
+					}
+				},
+				{
+					"text": "Each run script can now declare an optional cleanup command that runs when you click Stop — handy for docker compose, supabase, or anything with external resources to tear down. A second Stop click force-kills if you don't want to wait.",
+					"action": {
+						"label": "Open Run scripts",
+						"value": {
+							"type": "openSettings",
+							"section": "repo:current"
+						}
+					}
+				}
+			]
+		},
+		{
+			"releaseVersion": "0.23.5",
+			"items": [
+				{
+					"text": "You can now configure multiple run scripts per repository",
+					"action": {
+						"label": "Open Run scripts",
+						"value": {
+							"type": "openSettings",
+							"section": "repo:current"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.23.4",
 			"items": [
 				{

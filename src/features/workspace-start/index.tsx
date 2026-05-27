@@ -143,6 +143,10 @@ export function WorkspaceStartPage({
 		settings.shortcuts,
 		"startSurface.cycleRepository",
 	);
+	const justChatShortcut = getShortcut(
+		settings.shortcuts,
+		"workspace.justChat",
+	);
 
 	const selectNextRepository = useCallback(() => {
 		if (repositories.length === 0) {
@@ -555,6 +559,12 @@ export function WorkspaceStartPage({
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
 											<span>Just chat</span>
+											{justChatShortcut ? (
+												<InlineShortcutDisplay
+													hotkey={justChatShortcut}
+													className="ml-auto text-muted-foreground"
+												/>
+											) : null}
 										</DropdownMenuItem>
 									</>
 								) : (
@@ -582,6 +592,12 @@ export function WorkspaceStartPage({
 										>
 											<MessageCircle className="size-3.5" strokeWidth={1.8} />
 											<span>Just chat</span>
+											{justChatShortcut ? (
+												<InlineShortcutDisplay
+													hotkey={justChatShortcut}
+													className="ml-auto text-muted-foreground"
+												/>
+											) : null}
 										</DropdownMenuItem>
 									</>
 								)}

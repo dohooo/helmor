@@ -6,7 +6,6 @@ import {
 	Terminal,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
 	getCliStatus,
@@ -20,6 +19,35 @@ import type { OnboardingStep } from "../types";
 const SETUP_FAILED_MESSAGE =
 	"Something went wrong — don't worry, Helmor will work fine without it.";
 
+/**
+ * The CLI binary name to show in the "Power up Helmor" mockup
+ * terminal. Mirrors the Rust-side `installed_cli_name()` decision:
+ * release builds install the canonical `helmor`, dev builds install
+ * `helmor-dev` (so they don't shadow a release install on the same
+ * machine). Driven by `import.meta.env.DEV` rather than an IPC call
+ * because (a) it's known at build time, (b) we don't want a flash of
+ * the wrong name while a status query resolves, (c) this is purely
+ * cosmetic — actual CLI invocation is handled by the install flow.
+ */
+const ONBOARDING_CLI_NAME = import.meta.env.DEV ? "helmor-dev" : "helmor";
+
+/**
+ * Onboarding "Power up Helmor" step.
+ *
+ * Behaviour contract:
+ * - On entry the step kicks off Helmor CLI + Helmor Skills install in
+ *   the background. The user sees a spinner per item that flips to a
+ *   ready check when each finishes.
+ * - The user never has to click "Set up" — that primary path is the
+ *   silent auto-install. The button only re-appears (labelled "Retry")
+ *   when an install fails, so the user can recover without leaving the
+ *   step.
+ * - If the user advances past this step before installs finish, the
+ *   in-flight Tauri invocations keep running on the Rust side; only the
+ *   local component setState calls get short-circuited via `cancelled`.
+ *   That matches the user's request: "if they skip quickly we still
+ *   install for them in the background".
+ */
 export function SkillsStep({
 	step,
 	onBack,
@@ -31,61 +59,69 @@ export function SkillsStep({
 	onNext: () => void;
 	isRoutingImport: boolean;
 }) {
-	const [isInstallingCli, setIsInstallingCli] = useState(false);
+	const [isInstallingCli, setIsInstallingCli] = useState(true);
 	const [cliInstalled, setCliInstalled] = useState(false);
 	const [cliInstallFailed, setCliInstallFailed] = useState(false);
-	const [isInstallingSkills, setIsInstallingSkills] = useState(false);
+	const [isInstallingSkills, setIsInstallingSkills] = useState(true);
 	const [skillsInstalled, setSkillsInstalled] = useState(false);
 	const [skillsInstallFailed, setSkillsInstallFailed] = useState(false);
 
-	useEffect(() => {
-		let cancelled = false;
-		void Promise.all([getCliStatus(), getHelmorSkillsStatus()])
-			.then(([cliStatus, skillsStatus]) => {
-				if (!cancelled) {
-					setCliInstalled(cliStatus.installState === "managed");
-					setSkillsInstalled(skillsStatus.installed);
-				}
-			})
-			.catch(() => {});
-		return () => {
-			cancelled = true;
-		};
-	}, []);
-
-	const handleInstallCli = useCallback(async () => {
-		if (isInstallingCli) {
-			return;
-		}
+	const runInstallCli = useCallback(async () => {
 		setIsInstallingCli(true);
 		setCliInstallFailed(false);
 		try {
 			const status = await installCli();
 			setCliInstalled(status.installState === "managed");
-			toast("Helmor CLI installed.");
 		} catch {
 			setCliInstallFailed(true);
 		} finally {
 			setIsInstallingCli(false);
 		}
-	}, [isInstallingCli]);
+	}, []);
 
-	const handleInstallSkills = useCallback(async () => {
-		if (isInstallingSkills) {
-			return;
-		}
+	const runInstallSkills = useCallback(async () => {
 		setIsInstallingSkills(true);
 		setSkillsInstallFailed(false);
 		try {
 			const status = await installHelmorSkills();
 			setSkillsInstalled(status.installed);
-			toast("Helmor skills installed.");
 		} catch {
 			setSkillsInstallFailed(true);
 		} finally {
 			setIsInstallingSkills(false);
 		}
-	}, [isInstallingSkills]);
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			// Probe current state first so we don't redo work for users
+			// re-entering onboarding with everything already installed.
+			const [cliStatus, skillsStatus] = await Promise.all([
+				getCliStatus().catch(() => null),
+				getHelmorSkillsStatus().catch(() => null),
+			]);
+			if (cancelled) return;
+
+			const cliReady = cliStatus?.installState === "managed";
+			const skillsReady = !!skillsStatus?.installed;
+			setCliInstalled(cliReady);
+			setSkillsInstalled(skillsReady);
+
+			// Drop the spinner if there's nothing left to do.
+			if (cliReady) setIsInstallingCli(false);
+			if (skillsReady) setIsInstallingSkills(false);
+
+			// Fire-and-forget installs for whatever isn't ready. We
+			// deliberately don't await — the user may navigate away
+			// (onNext) before either finishes, and that's fine.
+			if (!cliReady) void runInstallCli();
+			if (!skillsReady) void runInstallSkills();
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [runInstallCli, runInstallSkills]);
 
 	return (
 		<section
@@ -131,17 +167,17 @@ export function SkillsStep({
 							<span className="size-2 rounded-full bg-muted-foreground/25" />
 							<span className="size-2 rounded-full bg-muted-foreground/20" />
 							<span className="ml-2 text-micro font-medium text-muted-foreground">
-								helmor --help
+								{`${ONBOARDING_CLI_NAME} --help`}
 							</span>
 						</div>
 						<div className="h-[calc(100%-2rem)] overflow-hidden px-4 py-3 font-mono text-nano leading-[13px] text-muted-foreground group-hover:overflow-y-auto">
 							<pre className="whitespace-pre-wrap break-words font-mono">
-								<span className="text-foreground">$ helmor --help</span>
+								<span className="text-foreground">{`$ ${ONBOARDING_CLI_NAME} --help`}</span>
 								{`
 Remote-control Helmor from the terminal.
 Works against the same SQLite database the desktop app uses.
 
-Usage: helmor [OPTIONS] <COMMAND>
+Usage: ${ONBOARDING_CLI_NAME} [OPTIONS] <COMMAND>
 
 Commands:
   data         Data directory, database, and mode info
@@ -156,7 +192,7 @@ Commands:
   scripts      Inspect repo-level setup/run/archive scripts
   conductor    Migrate from Helmor v1 (Conductor)
   completions  Shell completion scripts
-  cli-status   Report whether helmor is installed to PATH
+  cli-status   Report whether ${ONBOARDING_CLI_NAME} is installed to PATH
   quit         Ask a running Helmor app to quit
   mcp          Run as an MCP server over stdio
   help         Print this message
@@ -177,8 +213,9 @@ Options:
 						Power up Helmor
 					</h2>
 					<p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted-foreground">
-						Install the CLI and skills so Helmor can split work, run agents,
-						call tools, and carry context across your workspaces.
+						Helmor is installing the CLI and skills in the background so it can
+						split work, run agents, call tools, and carry context across your
+						workspaces.
 					</p>
 				</div>
 
@@ -187,8 +224,8 @@ Options:
 						icon={<Terminal className="size-5" />}
 						label="Helmor CLI"
 						description="Control Helmor from your terminal: create workspaces, send prompts, inspect files, and script repeatable flows."
-						actionLabel={isInstallingCli ? "Installing" : "Set up"}
-						onAction={handleInstallCli}
+						actionLabel={isInstallingCli ? "Installing" : "Retry"}
+						onAction={runInstallCli}
 						busy={isInstallingCli}
 						ready={cliInstalled}
 						error={cliInstallFailed ? SETUP_FAILED_MESSAGE : null}
@@ -197,8 +234,8 @@ Options:
 						icon={<PackageCheck className="size-5" />}
 						label="Helmor Skills (Beta)"
 						description="Install skills so Helmor can help with more workflows across every workspace."
-						actionLabel={isInstallingSkills ? "Installing" : "Set up"}
-						onAction={handleInstallSkills}
+						actionLabel={isInstallingSkills ? "Installing" : "Retry"}
+						onAction={runInstallSkills}
 						busy={isInstallingSkills}
 						ready={skillsInstalled}
 						error={skillsInstallFailed ? SETUP_FAILED_MESSAGE : null}

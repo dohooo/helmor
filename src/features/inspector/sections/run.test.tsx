@@ -17,6 +17,7 @@ import { RunTab } from "./run";
 
 const apiMocks = vi.hoisted(() => ({
 	executeRepoScript: vi.fn(),
+	executeRepoStopCommand: vi.fn(),
 	stopRepoScript: vi.fn(),
 	writeRepoScriptStdin: vi.fn(),
 	resizeRepoScript: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		executeRepoScript: apiMocks.executeRepoScript,
+		executeRepoStopCommand: apiMocks.executeRepoStopCommand,
 		stopRepoScript: apiMocks.stopRepoScript,
 		writeRepoScriptStdin: apiMocks.writeRepoScriptStdin,
 		resizeRepoScript: apiMocks.resizeRepoScript,
@@ -44,7 +46,11 @@ vi.mock("@/components/terminal-output", () => ({
 const defaults = {
 	repoId: "repo-1",
 	workspaceId: "ws-1",
+	activeRunActionId: "action-1" as string | null,
+	activeRunActionName: "Default" as string | null,
 	runScript: "npm test" as string | null,
+	stopCommand: null as string | null,
+	hasAnyRunAction: true,
 	isActive: true,
 	onOpenSettings: vi.fn(),
 };
@@ -112,6 +118,7 @@ function renderRun(
 describe("RunTab", () => {
 	beforeEach(() => {
 		apiMocks.executeRepoScript.mockReset().mockResolvedValue(undefined);
+		apiMocks.executeRepoStopCommand.mockReset().mockResolvedValue(undefined);
 		apiMocks.stopRepoScript.mockReset().mockResolvedValue(true);
 		apiMocks.writeRepoScriptStdin.mockReset().mockResolvedValue(true);
 		apiMocks.resizeRepoScript.mockReset().mockResolvedValue(true);
@@ -126,7 +133,11 @@ describe("RunTab", () => {
 	// ── Empty / idle states ────────────────────────────────────────────────
 
 	it("shows empty state when no script is configured", () => {
-		renderRun({ runScript: null });
+		renderRun({
+			runScript: null,
+			activeRunActionId: null,
+			hasAnyRunAction: false,
+		});
 
 		expect(
 			screen.getByRole("button", { name: /add run script/i }),
@@ -152,6 +163,7 @@ describe("RunTab", () => {
 			"run",
 			expect.any(Function),
 			"ws-1",
+			"action-1",
 		);
 	});
 
@@ -175,6 +187,7 @@ describe("RunTab", () => {
 			"repo-1",
 			"run",
 			"ws-1",
+			"action-1",
 		);
 	});
 
@@ -254,5 +267,122 @@ describe("RunTab", () => {
 				screen.getByRole("button", { name: /rerun/i }),
 			).toBeInTheDocument();
 		});
+	});
+
+	// ── Cleanup button ─────────────────────────────────────────────────────
+
+	it("does not show Cleanup button before the action has run", () => {
+		renderRun(
+			{ stopCommand: "supabase stop" },
+			{ settings: { terminalHoverExpansion: false } },
+		);
+
+		expect(
+			screen.queryByRole("button", { name: /run stop command/i }),
+		).not.toBeInTheDocument();
+	});
+
+	it("does not show Cleanup button while the script is running", async () => {
+		const user = userEvent.setup();
+		renderRun(
+			{ stopCommand: "supabase stop" },
+			{ settings: { terminalHoverExpansion: false } },
+		);
+
+		await user.click(screen.getByRole("button", { name: /^run$/i }));
+
+		// While running, the floating area shows Stop only — the existing
+		// stopRepoScript path already runs `stopCommand` as part of cleanup,
+		// so a separate Cleanup button would be redundant.
+		expect(
+			screen.queryByRole("button", { name: /run stop command/i }),
+		).not.toBeInTheDocument();
+	});
+
+	it("shows Cleanup button after exit when stopCommand is configured", async () => {
+		const user = userEvent.setup();
+
+		let onEvent: (e: unknown) => void = () => {};
+		apiMocks.executeRepoScript.mockImplementation(
+			(_r: string, _t: string, cb: (e: unknown) => void) => {
+				onEvent = cb;
+				return Promise.resolve();
+			},
+		);
+
+		renderRun(
+			{ stopCommand: "supabase stop" },
+			{ settings: { terminalHoverExpansion: false } },
+		);
+		await user.click(screen.getByRole("button", { name: /^run$/i }));
+
+		onEvent({ type: "exited", code: 1 });
+
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: /run stop command/i }),
+			).toBeInTheDocument();
+		});
+		// Rerun is still there — Cleanup sits alongside, not in place of.
+		expect(screen.getByRole("button", { name: /rerun/i })).toBeInTheDocument();
+	});
+
+	it("does not show Cleanup button when stopCommand is empty/whitespace", async () => {
+		const user = userEvent.setup();
+
+		let onEvent: (e: unknown) => void = () => {};
+		apiMocks.executeRepoScript.mockImplementation(
+			(_r: string, _t: string, cb: (e: unknown) => void) => {
+				onEvent = cb;
+				return Promise.resolve();
+			},
+		);
+
+		renderRun(
+			{ stopCommand: "   " },
+			{ settings: { terminalHoverExpansion: false } },
+		);
+		await user.click(screen.getByRole("button", { name: /^run$/i }));
+		onEvent({ type: "exited", code: 0 });
+
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: /rerun/i }),
+			).toBeInTheDocument();
+		});
+		expect(
+			screen.queryByRole("button", { name: /run stop command/i }),
+		).not.toBeInTheDocument();
+	});
+
+	it("clicking Cleanup invokes executeRepoStopCommand", async () => {
+		const user = userEvent.setup();
+
+		let onEvent: (e: unknown) => void = () => {};
+		apiMocks.executeRepoScript.mockImplementation(
+			(_r: string, _t: string, cb: (e: unknown) => void) => {
+				onEvent = cb;
+				return Promise.resolve();
+			},
+		);
+
+		renderRun(
+			{ stopCommand: "supabase stop" },
+			{ settings: { terminalHoverExpansion: false } },
+		);
+		await user.click(screen.getByRole("button", { name: /^run$/i }));
+		onEvent({ type: "exited", code: 1 });
+
+		const cleanupButton = await screen.findByRole("button", {
+			name: /run stop command/i,
+		});
+		await user.click(cleanupButton);
+
+		expect(apiMocks.executeRepoStopCommand).toHaveBeenCalledWith(
+			"repo-1",
+			"ws-1",
+			"action-1",
+			expect.any(Function),
+		);
 	});
 });

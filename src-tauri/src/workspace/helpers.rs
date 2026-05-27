@@ -935,6 +935,7 @@ mod tests {
             last_user_message_at: None,
             setup_completed_at: None,
             runtime_name: None,
+            active_run_action_id: None,
         }
     }
 

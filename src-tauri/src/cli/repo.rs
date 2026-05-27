@@ -114,9 +114,10 @@ fn add(path: &str, cli: &Cli) -> Result<()> {
         }
         match r.selected_workspace_id.as_deref() {
             Some(ws_id) => lines.push(format!("Selected workspace {ws_id}")),
-            None => lines.push(
-                "No workspace selected — use `helmor workspace create` to start one.".to_string(),
-            ),
+            None => lines.push(format!(
+                "No workspace selected — use `{} workspace new` to start one.",
+                super::installed_cli_name(),
+            )),
         }
         lines.join("\n")
     })
@@ -178,13 +179,22 @@ fn show_scripts(repo_ref: &str, workspace: Option<&str>, cli: &Cli) -> Result<()
             s.setup_from_project,
             s.setup_script.as_deref().unwrap_or("-"),
             s.run_from_project,
-            s.run_script.as_deref().unwrap_or("-"),
+            s.run_actions
+                .first()
+                .map(|a| a.command.as_str())
+                .unwrap_or("-"),
             s.archive_from_project,
             s.archive_script.as_deref().unwrap_or("-"),
         )
     })
 }
 
+/// Update one or more repo scripts. `--run` and `clear run` operate on
+/// the repo's first DB-owned run action: `--run "cmd"` updates an
+/// existing first action's command (or creates a "Default" action when
+/// none exists yet); `clear run` deletes the first action if present.
+/// helmor.json-owned actions are read-only here — modify them by
+/// editing the JSON file.
 fn update_scripts(
     repo_ref: &str,
     setup: Option<&str>,
@@ -194,34 +204,62 @@ fn update_scripts(
     cli: &Cli,
 ) -> Result<()> {
     let id = service::resolve_repo_ref(repo_ref)?;
-    // Load current to preserve unspecified fields.
     let existing = repos::load_repo_scripts(&id, None)?;
     let mut setup_val = existing.setup_script;
-    let mut run_val = existing.run_script;
     let mut archive_val = existing.archive_script;
     if let Some(v) = setup {
         setup_val = Some(v.to_string());
     }
-    if let Some(v) = run {
-        run_val = Some(v.to_string());
-    }
     if let Some(v) = archive {
         archive_val = Some(v.to_string());
+    }
+
+    let mut run_pending: Option<Option<String>> = None;
+    if let Some(v) = run {
+        run_pending = Some(Some(v.to_string()));
     }
     for kind in clear {
         match kind.as_str() {
             "setup" => setup_val = None,
-            "run" => run_val = None,
+            "run" => run_pending = Some(None),
             "archive" => archive_val = None,
             other => anyhow::bail!("Unknown script kind to clear: {other}"),
         }
     }
-    repos::update_repo_scripts(
-        &id,
-        setup_val.as_deref(),
-        run_val.as_deref(),
-        archive_val.as_deref(),
-    )?;
+
+    repos::update_repo_scripts(&id, setup_val.as_deref(), archive_val.as_deref())?;
+
+    if let Some(next_run) = run_pending {
+        if existing.run_from_project {
+            anyhow::bail!(
+                "Run actions for this repo are defined in helmor.json — edit that file instead"
+            );
+        }
+        let first_db = existing
+            .run_actions
+            .iter()
+            .find(|a| !a.from_project)
+            .cloned();
+        match (next_run, first_db) {
+            (Some(cmd), Some(action)) => {
+                repos::update_repo_run_action(
+                    &action.id,
+                    &action.name,
+                    &cmd,
+                    &action.mode,
+                    action.stop_command.clone(),
+                )?;
+            }
+            (Some(cmd), None) => {
+                repos::create_repo_run_action(&id, "Default", &cmd, "concurrent", None)?;
+            }
+            (None, Some(action)) => {
+                repos::delete_repo_run_action(&action.id)?;
+            }
+            (None, None) => {}
+        }
+    }
+
     notify_ui_event(UiMutationEvent::RepositoryChanged { repo_id: id });
     output::print_ok(cli, "Scripts updated");
     Ok(())

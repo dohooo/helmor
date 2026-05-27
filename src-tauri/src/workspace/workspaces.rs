@@ -188,6 +188,11 @@ pub struct WorkspaceDetail {
     /// workspace was created before this column existed). Drives the
     /// inspector's Setup tab "ran in another session" notice.
     pub setup_completed_at: Option<String>,
+    /// `repo_run_actions.id` the user last picked from the Run-tab
+    /// dropdown in this workspace. NULL means "use the first action"
+    /// (either fresh or because the previously-active id no longer
+    /// exists; the frontend re-renders against the first item).
+    pub active_run_action_id: Option<String>,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -341,7 +346,7 @@ pub fn mark_workspace_unread(workspace_id: &str) -> Result<()> {
 }
 
 /// Guard for status/pin operations: chat workspaces live in their own
-/// bucket and don't participate in the kanban (status / pinned). All
+/// bucket and don't participate in workspace status / pinning. All
 /// three commands bail rather than silently no-op so the call site
 /// (frontend menu, automated PR-sync) can surface the rejection.
 fn assert_not_chat(transaction: &Transaction<'_>, workspace_id: &str) -> Result<()> {
@@ -1398,6 +1403,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         forge_login: record.forge_login,
         runtime_name: record.runtime_name,
         setup_completed_at: record.setup_completed_at,
+        active_run_action_id: record.active_run_action_id,
     }
 }
 
@@ -2121,8 +2127,8 @@ mod tests {
 
     // ── Chat-mode workspace tests ────────────────────────────────────────
     //
-    // Chat workspaces are a parallel universe to the kanban: own bucket,
-    // own scratch dir, no git. The tests below pin the contract that
+    // Chat workspaces are a parallel universe to the status grouping:
+    // own bucket, own scratch dir, no git. The tests below pin the contract that
     // (a) prepare lays a row + dir down, (b) the drag-policy walls
     // around the bucket hold both directions, (c) permanently_delete
     // really wipes the scratch dir, and (d) archive is a pure DB flip.

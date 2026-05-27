@@ -61,7 +61,10 @@ export function useGitMutations({
 	const invalidateChanges = useCallback(() => {
 		if (!workspaceRootPath) return;
 		queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceChanges(workspaceRootPath),
+			queryKey: helmorQueryKeys.workspaceChanges(
+				workspaceRootPath,
+				workspaceId,
+			),
 		});
 		if (workspaceId) {
 			queryClient.invalidateQueries({

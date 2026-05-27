@@ -7,8 +7,8 @@ mod watcher;
 
 pub use changes::{
     discard_workspace_file, discard_workspace_file_inner, list_workspace_changes,
-    list_workspace_changes_with_content, stage_workspace_file, stage_workspace_file_inner,
-    unstage_workspace_file, unstage_workspace_file_inner,
+    list_workspace_changes_for_workspace, list_workspace_changes_with_content, stage_workspace_file,
+    stage_workspace_file_inner, unstage_workspace_file, unstage_workspace_file_inner,
 };
 pub use editor::{
     list_editor_files, list_editor_files_inner, list_editor_files_with_content,

@@ -19,14 +19,7 @@ import {
 	PlusIcon,
 	Undo2Icon,
 } from "lucide-react";
-import {
-	type CSSProperties,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { Badge } from "@/components/ui/badge";
@@ -72,10 +65,6 @@ import {
 import { buildRemoteFileUrl } from "@/lib/remote-file-url";
 import { cn } from "@/lib/utils";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import {
-	INSPECTOR_CHANGES_BODY_VAR,
-	INSPECTOR_SECTION_HEADER_HEIGHT,
-} from "../layout";
 import { useChangesState } from "./changes/use-changes-state";
 import { useGitMutations } from "./changes/use-git-mutations";
 import { GitSectionHeader } from "./git-section-header";
@@ -85,11 +74,6 @@ const STATUS_COLORS: Record<InspectorFileItem["status"], string> = {
 	A: "text-green-500",
 	D: "text-red-500",
 };
-
-const CHANGE_ROW_VISIBILITY_STYLE = {
-	contentVisibility: "auto",
-	containIntrinsicSize: "auto 21px",
-} satisfies CSSProperties;
 
 /** A change item already projected into a single area's line counts.
  * `insertions`/`deletions` are derived from the corresponding area
@@ -124,11 +108,13 @@ type ChangesSectionProps = {
 	changeRequest: ChangeRequestInfo | null;
 	/** Cold-fetch indicator owned by App; drives the git-header shimmer. */
 	forgeIsRefreshing?: boolean;
-	/** Height of the changes body (excluding the section header). */
-	bodyHeight: number;
+	/** Ref handed to the inspector's resize hook so it can write `style.height`
+	 * directly during drag, bypassing React and CSS custom-property
+	 * invalidation. */
+	sectionRef?: React.RefObject<HTMLElement | null>;
 };
 
-export function ChangesSection({
+function ChangesSectionImpl({
 	workspaceId,
 	workspaceRootPath,
 	workspaceBranch,
@@ -146,7 +132,7 @@ export function ChangesSection({
 	commitButtonState,
 	changeRequest,
 	forgeIsRefreshing = false,
-	bodyHeight,
+	sectionRef,
 }: ChangesSectionProps) {
 	const queryClient = useQueryClient();
 	const {
@@ -298,17 +284,12 @@ export function ChangesSection({
 
 	return (
 		<section
+			ref={sectionRef}
 			aria-label="Inspector section Git"
 			className="flex min-h-0 shrink-0 flex-col overflow-hidden border-b border-border/60 bg-sidebar"
-			style={{
-				// Height var written by mousemove directly; fallback covers the first
-				// mount frame before the layout effect runs.
-				height: `calc(${INSPECTOR_SECTION_HEADER_HEIGHT}px + var(${INSPECTOR_CHANGES_BODY_VAR}, ${bodyHeight}px))`,
-				// Full containment isolates the file-list reflow (rows + Radix triggers
-				// + truncate spans) from the rest of the page during inspector drag.
-				// Section already has overflow-hidden, so `paint` doesn't change clipping.
-				contain: "layout style paint",
-			}}
+			// Height written via `sectionRef` by `useWorkspaceInspectorSidebar`
+			// — kept out of JSX so incidental re-renders can't clobber it.
+			style={{ contain: "layout style paint" }}
 		>
 			<GitSectionHeader
 				commitButtonMode={commitButtonMode}
@@ -419,6 +400,10 @@ export function ChangesSection({
 		</section>
 	);
 }
+
+// memo so root state changes that don't touch Changes props (e.g. opening
+// Settings) skip this subtree entirely.
+export const ChangesSection = memo(ChangesSectionImpl);
 
 type StageActionKind = "stage" | "unstage";
 
@@ -864,7 +849,6 @@ function TreeNodeList({
 							<div
 								className="flex cursor-interactive items-center gap-1 py-[1.5px] pr-2 text-muted-foreground transition-colors hover:bg-accent/60"
 								style={{
-									...CHANGE_ROW_VISIBILITY_STYLE,
 									paddingLeft: `${depth * 12 + 8}px`,
 								}}
 								onClick={() => onToggle(node.path)}
@@ -927,7 +911,6 @@ function TreeNodeList({
 									: "bg-muted/60 text-foreground"),
 						)}
 						style={{
-							...CHANGE_ROW_VISIBILITY_STYLE,
 							paddingLeft: `${depth * 12 + 22}px`,
 						}}
 						role="treeitem"
@@ -1034,7 +1017,6 @@ function ChangesFlatView({
 										? "bg-accent text-foreground"
 										: "bg-muted/60 text-foreground"),
 							)}
-							style={CHANGE_ROW_VISIBILITY_STYLE}
 							role="button"
 							tabIndex={0}
 							onClick={() =>
