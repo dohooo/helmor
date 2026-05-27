@@ -1,0 +1,12 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Helmor Custom",
+	"identifier": "ai.helmor.desktop.custom",
+	"plugins": {
+		"deep-link": {
+			"desktop": {
+				"schemes": ["helmor-custom"]
+			}
+		}
+	}
+}

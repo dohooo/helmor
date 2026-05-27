@@ -16,6 +16,8 @@
 		"dev:prepare": "cd sidecar && bun run dev:prepare",
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
+		"build:custom-app": "HELMOR_DEFAULT_DATA_DIR_NAME=helmor-custom HELMOR_UPDATER_ENDPOINTS= HELMOR_UPDATER_PUBKEY= bun run tauri build -- --bundles app --config src-tauri/tauri.custom.conf.json",
+		"install:custom-app": "bun run build:custom-app && rm -rf '/Applications/Helmor Custom.app' && ditto 'src-tauri/target/release/bundle/macos/Helmor Custom.app' '/Applications/Helmor Custom.app'",
 		"preview": "vite preview",
 		"test": "bun run test:frontend && bun run test:sidecar && bun run test:rust",
 		"test:frontend": "vitest run",
