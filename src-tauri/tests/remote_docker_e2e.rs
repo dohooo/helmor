@@ -25,10 +25,19 @@
 //!
 //! By default the test targets the container matching the host arch
 //! (arm64 on Apple Silicon → port 2223; amd64 elsewhere → port
-//! 2222), so neither a laptop nor a CI runner pays the QEMU tax for
-//! its primary leg. `HELMOR_E2E_DOCKER_SERVICE=helmor-test-linux-amd64`
-//! (or `...-arm64`) forces a specific leg — used by CI to run the
-//! amd64 leg natively on its amd64 runners.
+//! 2222), so it always runs **natively**.
+//! `HELMOR_E2E_DOCKER_SERVICE=helmor-test-linux-amd64` (or
+//! `...-arm64`) forces a specific leg — used by CI to run each leg
+//! natively on its matching-arch runner.
+//!
+//! **Do not rely on the cross-arch leg locally.** Running the
+//! non-host arch means emulation (Rosetta / QEMU), and the
+//! webkit-linked, multithreaded daemon wedges during init under
+//! emulation (the process starts but never binds its socket — no
+//! code bug, the native build of the same code initialises fine).
+//! CI is the source of truth for the non-host arch: it runs both
+//! legs on native same-arch runners
+//! (`.github/workflows/remote-server-e2e.yml`).
 //!
 //! ## SSH wiring
 //!

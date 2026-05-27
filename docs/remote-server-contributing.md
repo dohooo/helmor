@@ -65,27 +65,60 @@ Tail the daemon log on a successful install:
 tail -f "$HOME/.helmor/server/daemon.log"
 ```
 
-### Option C: Docker (optional, for isolation)
+### Option C: automated Docker E2E (the real SSH transport)
 
-If you specifically want to test against a different OS / arch /
-filesystem layout than your host, you can run `helmor-server`
-inside a Docker container with sshd exposed on `localhost:2222`.
-This is **not required** — Options A and B cover the same code
-paths against your host kernel + filesystem, with no Docker
-dependency.
+The desktop builds + tests `helmor-server` on macOS, where WebKit
+is a system framework — so the **Linux** daemon build and the real
+`ssh user@host` transport are never exercised by the macOS quality
+suite. The Docker E2E covers exactly that gap, and it's automated:
 
-The container approach is most useful when:
-- You're testing the download install path (D3) against a clean
-  Linux user account without manually wiping `~/.helmor/`.
-- You need to verify the `linux-x64` or `linux-arm64` release
-  artefacts on a macOS desktop.
-- You're reproducing a layout-specific bug (paths, `$HOME`
-  resolution, etc.) reported by a user on a different platform.
+```bash
+# Build the matching-arch image (compiles helmor-server FOR Linux
+# inside the container, bakes it + the GTK runtime libs into a slim
+# sshd image, self-verifies `--version`):
+docker compose -f src-tauri/tests/docker-e2e/compose.yml \
+  build helmor-test-linux-arm64        # or ...-amd64
 
-Any standard `linuxserver/openssh-server`-style image works —
-follow that image's docs for key setup, then add the runtime via
-the wizard with host `user@localhost:2222`. Nothing in this
-repo depends on a specific container image or compose file.
+# Run the E2E (opt-in; picks the host-arch leg by default):
+cd src-tauri
+HELMOR_E2E_DOCKER=1 cargo test --test remote_docker_e2e -- --nocapture
+```
+
+It generates an ephemeral SSH key, writes a sentinel-bounded
+`Host` block into your `~/.ssh/config` (removed on teardown), brings
+the container up, drives the desktop's real
+`RemoteSshRuntime::connect_ssh` over a genuine ssh hop, asserts the
+`initialize` handshake + `runtime_health` + `workspace.status`
+round-trip, then tears the container + config block down.
+
+- Gated behind `HELMOR_E2E_DOCKER=1` so a plain `cargo test` never
+  spins up Docker.
+- Defaults to the **host-arch** leg, so it always runs natively.
+- `HELMOR_E2E_DOCKER_SERVICE=helmor-test-linux-amd64` forces a
+  specific leg — but **don't rely on the cross-arch leg locally**:
+  the non-host arch runs under emulation (Rosetta/QEMU), where the
+  webkit-linked daemon wedges during init (process starts, never
+  binds its socket — an emulation artifact, not a code bug; the
+  native build of the same code is fine).
+- CI is the source of truth for both arches: it runs each leg
+  **natively** on a matching-arch runner (arm64 on
+  `ubuntu-24.04-arm`) via
+  [`.github/workflows/remote-server-e2e.yml`](../.github/workflows/remote-server-e2e.yml).
+
+Harness lives in
+[`src-tauri/tests/docker-e2e/`](../src-tauri/tests/docker-e2e/)
+(Dockerfile, compose.yml) + the test at
+[`src-tauri/tests/remote_docker_e2e.rs`](../src-tauri/tests/remote_docker_e2e.rs).
+
+> **Why the image installs GTK/webkit:** the headless daemon links
+> the GUI stack transitively (see
+> [architecture §2.1](./remote-server-architecture.md)), so its
+> dynamic loader needs the runtime libs present even though it never
+> opens a window. The runtime stage installs the `-0` packages; a
+> real Linux remote has the same prerequisite.
+
+For a quick manual check without the harness, Options A/B above
+cover the same code paths against your host with no Docker.
 
 ## Where the seams are
 

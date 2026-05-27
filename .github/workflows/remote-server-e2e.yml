@@ -1,0 +1,88 @@
+name: Remote server E2E
+
+# End-to-end test of the remote-runner SSH transport against a real
+# Linux `helmor-server` running in Docker (the layer the macOS-only
+# quality suite can't reach). Builds the daemon FOR Linux, runs it
+# headless in a container, and drives the desktop's real
+# `RemoteSshRuntime` over a genuine `ssh` hop.
+#
+# Both legs run NATIVELY on same-arch GitHub runners (arm64 on
+# `ubuntu-24.04-arm`) — no QEMU, no cross-sysroot. This is the only
+# place the Linux daemon build + SSH transport are exercised in CI;
+# everything else builds helmor-server on macOS only.
+
+on:
+  pull_request:
+    paths:
+      # Anything that can affect the daemon, the transport, the
+      # install path, or the harness itself.
+      - "src-tauri/src/remote/**"
+      - "src-tauri/src/agents/streaming/**"
+      - "src-tauri/src/bin/helmor-server.rs"
+      - "src-tauri/tests/remote_docker_e2e.rs"
+      - "src-tauri/tests/docker-e2e/**"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - ".github/workflows/remote-server-e2e.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: remote-server-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: SSH transport E2E (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            service: helmor-test-linux-amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            service: helmor-test-linux-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build the E2E daemon image
+        # Native same-arch build (the runner arch matches the target
+        # leg), so the in-container Rust compile + GTK link is native,
+        # not emulated. The image bakes a headless helmor-server +
+        # the GTK runtime libs and self-verifies `--version` at build
+        # time.
+        run: |
+          docker compose -f src-tauri/tests/docker-e2e/compose.yml \
+            build ${{ matrix.service }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master 2026-02
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: src-tauri
+          key: e2e-${{ matrix.arch }}
+
+      - name: Run the SSH transport E2E
+        working-directory: src-tauri
+        env:
+          HELMOR_E2E_DOCKER: "1"
+          # Target the leg matching this runner's arch explicitly so
+          # the test doesn't have to infer it.
+          HELMOR_E2E_DOCKER_SERVICE: ${{ matrix.service }}
+        run: cargo test --test remote_docker_e2e -- --nocapture --test-threads=1
