@@ -57,8 +57,22 @@ On the **remote** machine:
   macOS). Again, either works.
 - `tar` on `$PATH` (universal).
 - ~50 MB free under `$HOME/.helmor/server/`.
-- For agent workloads: the same `$HELMOR_SIDECAR_PATH` (or default
-  managed location) where the `helmor-sidecar` binary will live.
+- For agent workloads (running Claude Code / Codex *on the remote*): a
+  `helmor-sidecar` binary **built for the remote's platform**, with
+  `$HELMOR_SIDECAR_PATH` pointed at it (or placed in the default managed
+  location). Two things to know:
+  - **It is not auto-installed.** The connect flow installs/upgrades
+    `helmor-server` (the transport daemon) automatically, but **not** the
+    sidecar — the operator places it. Without it the remote connects and
+    file-ops / terminals / git all work, but `agent.send` returns a
+    legible "agent bridge not configured" error instead of running a turn.
+  - **It must match the remote's OS/arch.** Helmor's bundled sidecar is
+    built for macOS, so a **macOS remote** works out of the box (copy the
+    desktop's `helmor-sidecar` over). A **Linux remote** needs a
+    Linux-built `helmor-sidecar` (plus Linux agent-CLI binaries); Helmor's
+    distribution does not yet produce one, so today agent-on-remote is a
+    macOS-remote (or hand-built-Linux-sidecar) capability. The transport
+    daemon itself is fully cross-platform.
 - **(Linux only) GTK/webkit runtime libraries.** The
   `helmor-server` daemon currently links the GUI toolkit
   transitively, so its dynamic loader needs these present at
