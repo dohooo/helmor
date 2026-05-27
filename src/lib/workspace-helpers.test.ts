@@ -888,11 +888,7 @@ describe("findReplacementWorkspaceIdAfterRemoval", () => {
 		expect(next).toBe("a");
 	});
 
-	// Group-aware: removing the LAST row in a multi-group sidebar should
-	// fall back to the previous sibling in the SAME group, not jump to
-	// the first row of the next group. This is what makes a "Dismiss"
-	// loop inside the AI proposals group feel natural — you stay in
-	// the lane until it's empty.
+	// Last row in a group falls back to the previous sibling, not the next group.
 	it("falls back inside the same group before jumping to the next group", () => {
 		const currentGroups = [
 			group("ai-tasks", ["t1", "t2", "t3"]),

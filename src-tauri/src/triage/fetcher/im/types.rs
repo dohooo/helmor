@@ -1,11 +1,4 @@
-//! Shared types crossing the IM-backend boundary.
-//!
-//! Both `ImConversation` and `ImMessage` use a `raw: serde_json::Value`
-//! escape hatch. The generic `ImFetcher` never touches `raw` — it just
-//! hands it back to the backend on subsequent calls. That lets us model
-//! Slack channels, Lark p2p chats, Dingtalk groups, … through one struct
-//! without exploding into associated types (which trait-object usage
-//! would have to navigate).
+//! Shared types for IM backends; `raw: Value` is the per-backend escape hatch (ImFetcher never reads it).
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -39,33 +32,44 @@ impl ImConversationKind {
 
 #[derive(Debug, Clone)]
 pub struct ImConversation {
-    /// Backend-stable id used as `triage_fetch_cursor.source_parent` and
-    /// the cache-path segment. Must be unique within a backend.
+    /// Backend-stable id; cursor + cache-path key.
     pub id: String,
     /// Human-readable label for subscription rows and rendered headers.
     pub label: Option<String>,
     pub kind: ImConversationKind,
-    /// Opaque backend payload. ImFetcher never reads it; backend pulls it
-    /// out in `fetch_messages` / `render_payload` if it needs extras.
+    /// Opaque backend payload.
     pub raw: Value,
 }
 
 #[derive(Debug, Clone)]
 pub struct ImMessage {
-    /// Backend-stable message id (Lark `om_…`, Slack `ts`, etc.).
-    /// Unique within the backend so we can build `source_ref` from it
-    /// directly.
+    /// Backend-stable message id (Lark `om_…`, Slack `ts`).
     pub id: String,
     pub timestamp: DateTime<Utc>,
     pub sender: Option<String>,
-    /// Already-resolved human-readable body (mentions expanded to display
-    /// names, blocks walked, etc.). Backends do the platform-specific
-    /// extraction so the generic renderer sees one shape.
+    /// Display-ready body (mentions resolved, blocks walked).
     pub text: String,
     pub external_url: Option<String>,
-    /// Whether the upstream marked this message deleted/tombstoned.
-    /// Fetcher skips these so we don't fill the candidate table with
-    /// ghost rows.
+    /// Upstream tombstone — fetcher skips.
     pub deleted: bool,
+    /// Attachments fetched alongside this message (images, files).
+    /// Empty when there are none.
+    pub attachments: Vec<ImAttachment>,
     pub raw: Value,
+}
+
+/// One downloaded attachment associated with an `ImMessage`. Path is
+/// inside the per-candidate staging dir; absolute on disk.
+#[derive(Debug, Clone)]
+pub struct ImAttachment {
+    /// Filename inside the staging dir.
+    pub filename: String,
+    /// Absolute path on disk (under `staging_dir(source, candidate_id)`).
+    pub local_path: std::path::PathBuf,
+    /// MIME guess (`image/png` etc.) — `None` for non-images.
+    pub mime_type: Option<String>,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// Display label (alt text). Backend-specific (image_key, file name).
+    pub alt: Option<String>,
 }

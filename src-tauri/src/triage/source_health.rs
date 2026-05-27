@@ -1,19 +1,4 @@
-//! Per-source health detection for the Settings → Triage panel.
-//!
-//! Each fetcher auto-enables based on whether the underlying CLI /
-//! workspace is connected. Users still need to see WHY a source isn't
-//! producing candidates — which is the whole point of this module.
-//!
-//! Three states surface to the UI:
-//!   - `Ok` → fetcher will run for this source.
-//!   - `NotInstalled` → required CLI binary missing (Lark only — `gh`
-//!     and `glab` are bundled).
-//!   - `NotAuthed` → CLI / workspace present but no usable login.
-//!   - `NotConfigured` → no Helmor repos or Slack workspaces wired up,
-//!     so even with auth there's nothing to fetch.
-//!
-//! Detection is best-effort and time-bounded — a flaky CLI shouldn't
-//! make the Settings panel hang.
+//! Per-source health detection (Connected / NotInstalled / NotAuthed / NotConfigured) for the Settings → Triage panel.
 
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -31,15 +16,11 @@ const LARK_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 #[serde(rename_all = "camelCase")]
 pub enum SourceHealthState {
     Ok,
-    /// Required CLI binary is not on PATH. User must install it (e.g.
-    /// `brew install lark-cli`). Currently only Lark — `gh` and `glab`
-    /// ship inside Helmor.
+    /// CLI binary missing on PATH (Lark only).
     NotInstalled,
     /// CLI / workspace present but no usable login.
     NotAuthed,
-    /// Auth fine but nothing for the fetcher to pull (no repos / no
-    /// workspaces). Hidden separately so the user knows it's not an
-    /// auth bug.
+    /// Auth OK but no repos/workspaces to fetch from.
     NotConfigured,
 }
 
@@ -49,15 +30,12 @@ pub struct SourceHealth {
     pub source: &'static str,
     pub display_name: &'static str,
     pub state: SourceHealthState,
-    /// Free-form hint shown under the source row. Keep it actionable
-    /// (one short sentence, ideally with the command to run).
+    /// Actionable one-line hint shown under the source row.
     pub detail: String,
 }
 
 pub async fn detect_all() -> Vec<SourceHealth> {
-    // Order is part of the UX contract — the Settings panel renders
-    // these top-to-bottom: GitHub, GitLab, Slack, Lark. Code-first
-    // sources first, then chat.
+    // Order is part of the UX contract: GitHub, GitLab, Slack, Lark.
     let lark = detect_lark().await;
     // GitHub / GitLab / Slack probes are sync-only; run them on the
     // blocking pool so a slow forge CLI doesn't park the async runtime.
@@ -72,8 +50,7 @@ pub async fn detect_all() -> Vec<SourceHealth> {
 }
 
 async fn detect_lark() -> SourceHealth {
-    // Phase 1: is the binary on PATH? `--version` is the cheapest probe
-    // and works without auth.
+    // Phase 1: PATH probe.
     let spawn = Command::new("lark-cli")
         .arg("--version")
         .stdin(std::process::Stdio::null())
@@ -133,7 +110,7 @@ fn detect_slack() -> SourceHealth {
             source: "slack",
             display_name: "Slack",
             state: SourceHealthState::NotAuthed,
-            detail: "Connect in Settings → Slack".into(),
+            detail: "No workspace connected".into(),
         };
     }
     let n = workspaces.len();

@@ -22,15 +22,8 @@ pub struct Asset {
     /// `files[0]` is the on-disk name (or the extracted top-level
     /// directory name for `ArchiveKind::TarGz`).
     pub files: Vec<String>,
-    /// Best-effort companions. Downloaded alongside `files` on fresh
-    /// fetches, but their absence on disk does NOT make the asset
-    /// "incomplete" — useful for LLM mmproj projectors where the main
-    /// weights are functional standalone. Existing downloads with only
-    /// the essential files keep showing as `Downloaded`.
-    ///
-    /// Each entry carries a separate remote (HF path) and local (on-disk)
-    /// filename so multiple assets sharing the same projector basename
-    /// in different repos don't collide in the flat target dir.
+    /// Best-effort companions; absence doesn't demote from Downloaded.
+    /// Separate remote/local names so flat dirs don't collide.
     pub optional_files: Vec<OptionalFile>,
     /// Where bytes come from.
     pub source: AssetSource,

@@ -1,6 +1,4 @@
-// Layer-2 LLM tools: list_repos, propose_workspace, mark_not_actionable,
-// read_candidate. Together they replace the entire old provider /
-// scratch tool surface.
+// Layer-2 LLM tools: list_repos, propose_workspace, mark_not_actionable, read_candidate.
 
 import { Type } from "@earendil-works/pi-ai";
 import { callHost } from "../../host-bridge";
@@ -193,11 +191,6 @@ export function buildMarkNotActionableTool(accumulator: ProposalAccumulator) {
 	};
 }
 
-/// `read_candidate` — read the chat/issue markdown file.
-///   - default: whole file truncated at 8 KB
-///   - `grep`: substring filter ±3 lines context
-///   - `tail`: last N lines (useful for chat files when you want the
-///             most recent activity even if the file is >8KB)
 export function buildReadCandidateTool() {
 	return {
 		name: "read_candidate",

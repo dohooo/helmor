@@ -124,7 +124,7 @@ export function SlackWorkspaceSwitcher({
 					)}
 					{importMutation.isPending
 						? "Reading session…"
-						: "Import from Slack desktop"}
+						: "Connect another workspace"}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

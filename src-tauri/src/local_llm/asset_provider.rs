@@ -25,13 +25,8 @@ impl AssetProvider for CatalogAssetProvider {
 
 fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> Asset {
     let estimated_bytes = entry.total_bytes();
-    // mmproj is optional: an existing main-weights-only install stays
-    // "Downloaded" instead of regressing to "Paused", and a missing/404
-    // mmproj on a fresh fetch still yields a usable text-only model.
-    // Local name carries a per-repo suffix so projectors from different
-    // Qwen variants (all named `mmproj-F16.gguf` upstream) don't collide
-    // in the flat target dir; entries from the same repo (q4/q8 of one
-    // model) still share a single file on disk.
+    // mmproj is optional: missing projector doesn't demote an install.
+    // Per-repo suffix prevents collisions across Qwen variants.
     let optional_files: Vec<OptionalFile> = entry
         .mmproj_file
         .into_iter()
@@ -52,9 +47,7 @@ fn catalog_entry_to_asset(entry: CatalogEntry, target_dir: &std::path::Path) -> 
     }
 }
 
-/// `mmproj-F16.gguf` + repo `unsloth/Qwen3.6-27B-GGUF`
-/// → `mmproj-F16.unsloth_Qwen3.6-27B-GGUF.gguf`. The repo segment is
-/// sanitised so the result is a valid filename on every OS.
+/// e.g. `mmproj-F16.gguf` + `unsloth/Qwen3.6-27B-GGUF` → `mmproj-F16.unsloth_Qwen3.6-27B-GGUF.gguf`.
 pub fn mmproj_local_name(remote_name: &str, repo: &str) -> String {
     let (stem, ext) = match remote_name.rsplit_once('.') {
         Some((s, e)) => (s, e),

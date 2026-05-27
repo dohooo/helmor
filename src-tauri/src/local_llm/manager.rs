@@ -28,9 +28,7 @@ pub struct Manager {
     start_lock: Mutex<()>,
     server: Mutex<Option<server::ServerInstance>>,
     starting: Mutex<bool>,
-    /// Arc-wrapped so warmup + healthcheck background threads can write
-    /// failures back from outside the Manager (CUDA hang post-spawn,
-    /// alias mismatch surfacing only on first request, etc).
+    /// Arc so warmup/healthcheck threads can write back.
     last_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -160,19 +158,14 @@ impl Manager {
         let token = instance.token.clone();
         *self.server.lock().unwrap_or_else(|p| p.into_inner()) = Some(instance);
         *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        // Fire-and-forget warmup so the first real request hits a hot
-        // model. Cold load can take 5–10s on first run. Failures here
-        // (alias mismatch, post-spawn OOM, CUDA init failure) write
-        // back to `last_error` so the UI surfaces a real reason
-        // instead of a green "Running" pill that never replies.
+        // Fire-and-forget warmup (cold load ~5–10s). Failures write to `last_error`
+        // so the UI doesn't show a green pill on a wedged server.
         spawn_warmup(
             endpoint.clone(),
             token.clone(),
             Arc::clone(&self.last_error),
         );
-        // Continuous healthcheck: catches post-warmup hangs (CUDA
-        // driver wedge, swap thrash) that `child_is_running` can't
-        // see. Exits when the server dies or the model changes.
+        // Continuous healthcheck — catches post-warmup hangs.
         spawn_healthcheck(endpoint, token, Arc::clone(&self.last_error));
         Ok(())
     }
@@ -275,11 +268,7 @@ fn spawn_warmup(endpoint: String, token: String, last_error: Arc<Mutex<Option<St
 const HEALTHCHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 const HEALTHCHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Background poll of `/v1/models` so a server that's "alive" at the
-/// process level but wedged at the model level (CUDA hang, swap
-/// thrash) flips `last_error` instead of showing a permanent green
-/// "Running" pill. Exits when the endpoint stops answering at all —
-/// the next `start()` spawns a fresh watcher.
+/// Poll `/v1/models` to catch process-alive-but-model-wedged. Exits on connect-refused.
 fn spawn_healthcheck(endpoint: String, token: String, last_error: Arc<Mutex<Option<String>>>) {
     std::thread::Builder::new()
         .name("local-llm-healthcheck".to_string())
@@ -377,11 +366,7 @@ fn spawn_llm_server(model: &str) -> Result<server::ServerInstance> {
     })
 }
 
-/// Resolve `model` to llama-server `--model` args. Local file path only;
-/// curated catalog flows through our own download manager so `-hf` would
-/// bypass it. Auto-appends `--mmproj` when the matching projector is on
-/// disk — for catalog entries that's the per-repo `mmproj_local_name`,
-/// for custom paths it's any sibling `mmproj-*.gguf`.
+/// Resolve `--model` (and `--mmproj` when a projector sits beside the weights).
 fn llama_model_args(model: &str) -> Result<Vec<String>> {
     let trimmed = model.trim();
     if trimmed.is_empty() {
@@ -402,11 +387,8 @@ fn llama_model_args(model: &str) -> Result<Vec<String>> {
     Ok(args)
 }
 
-/// Pick the right mmproj for `model_path`. Catalog matches use the exact
-/// per-repo `mmproj_local_name` so a 9B projector never gets paired with
-/// 35B-A3B weights (different embedding dims → llama-server crash on
-/// load). Custom paths fall back to "any sibling `mmproj-*.gguf`" since
-/// the user can pick whatever filename they want.
+/// Match mmproj for `model_path`. Catalog: exact per-repo name (wrong-size
+/// projectors crash llama-server). Custom: any sibling `mmproj-*.gguf`.
 fn resolve_mmproj_for_model(model_path: &std::path::Path) -> Option<PathBuf> {
     let parent = model_path.parent()?;
     let file_name = model_path.file_name().and_then(|n| n.to_str())?;

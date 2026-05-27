@@ -97,9 +97,7 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
 }
 
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
-    // Open + non-draft. `draft=Exclude` maps to `wip=no` for MRs; issues
-    // ignore the flag. A WIP MR flipped to ready bumps `updated_at`, so
-    // it'll resurface in a later tick automatically — no extra state.
+    // Open + non-draft. WIP→ready bumps `updated_at` so it resurfaces naturally.
     let filters = InboxFilters {
         state: Some(InboxStateFilter::Open),
         draft: Some(InboxDraftFilter::Exclude),

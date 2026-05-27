@@ -62,9 +62,7 @@ fn empty_404() -> tauri::http::Response<Vec<u8>> {
         .expect("404 response builder is infallible")
 }
 
-/// Best-effort MIME sniff by extension for the `helmor-attachment`
-/// protocol responder. Falls back to `application/octet-stream` so the
-/// webview at least downloads / displays the bytes rather than rejecting.
+/// Extension-based MIME sniff for the `helmor-attachment` protocol.
 fn mime_for_path(path: &std::path::Path) -> &'static str {
     match path
         .extension()
@@ -128,12 +126,7 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        // Triage priming attachments. Markdown emits
-        // `helmor-attachment://<workspace_id>/<filename>`; this handler
-        // resolves it to a file in `<data>/triage/attachments/...` and
-        // streams the bytes back. Done as a custom protocol (vs the
-        // default asset protocol) so streamdown's rehype-sanitize +
-        // rehype-harden allowlist can opt this scheme in explicitly.
+        // Triage priming attachments. Custom scheme so rehype-sanitize can opt it in.
         .register_asynchronous_uri_scheme_protocol(
             "helmor-attachment",
             |_app, request, responder| {
@@ -332,11 +325,7 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
-            // Install the reverse-IPC dispatcher BEFORE anything that
-            // might spawn the sidecar (prewarm / autostart / scheduler).
-            // Reader threads now look the sender up dynamically, so
-            // ordering is no longer load-bearing for correctness — but
-            // installing first still avoids the early-boot warnings.
+            // Install reverse-IPC dispatcher early to skip early-boot warnings; ordering isn't load-bearing.
             let host_rx = app
                 .state::<sidecar::ManagedSidecar>()
                 .install_host_dispatcher();
@@ -449,9 +438,7 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
-            // Triage: one thread runs the fetcher every 5 min and,
-            // when auto_run + LLM are on, fires a Layer-2 tick right
-            // after each fetch so the LLM always judges fresh data.
+            // Triage: fetcher + auto-fire tick on the same 5-min thread.
             triage::fetcher::spawn_scheduler(app.handle().clone());
 
             // On macOS, the default app-menu Quit item goes straight to

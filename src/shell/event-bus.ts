@@ -6,11 +6,20 @@
 // `addEventListener("helmor:foo")` callsites in features/* keep working
 // during the gradual migration.
 import { useEffect, useRef } from "react";
-import type { SettingsSection } from "@/features/settings/types";
+import type {
+	ContextProviderTab,
+	SettingsSection,
+} from "@/features/settings/types";
 import type { WorkspaceMode } from "@/lib/api";
 
 export type ShellEvent =
-	| { type: "open-settings"; section?: SettingsSection }
+	| {
+			type: "open-settings";
+			section?: SettingsSection;
+			// Sub-route for `section: "inbox"` — selects a provider tab inside
+			// the Contexts panel. Ignored when section ≠ "inbox".
+			inboxProvider?: ContextProviderTab;
+	  }
 	| { type: "reload-settings" }
 	| { type: "open-model-picker" }
 	// `mode` is a one-shot override: when set, the start surface forces the
@@ -23,7 +32,9 @@ export type ShellEvent =
 	| { type: "run-script" }
 	| { type: "focus-composer" }
 	| { type: "toggle-context-panel" }
-	| { type: "focus-active-terminal" };
+	| { type: "focus-active-terminal" }
+	// Imperative archive from surfaces outside the sidebar controller (reuses its optimistic path).
+	| { type: "request-archive-workspace"; workspaceId: string };
 
 export type ShellEventType = ShellEvent["type"];
 

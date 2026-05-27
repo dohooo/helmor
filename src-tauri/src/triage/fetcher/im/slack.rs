@@ -1,16 +1,5 @@
-//! Slack ImBackend.
-//!
-//! Discovery follows the same rule the Lark backend enforces:
-//!   - DMs (im) and group-DMs (mpim) → always included; the ingest
-//!     step decides whether they actually have recent activity.
-//!   - public / private channels → only when there's a clear "I'm
-//!     involved here" signal in the last `COLD_START_DAYS`: either
-//!     `from:<@me> after:…` (I posted) or `<@me> after:…` (I was
-//!     @ed). A busy channel I'm a passive member of doesn't earn a
-//!     slot.
-//!
-//! Per-conversation pull uses `conversations.history` with a
-//! Slack-format `oldest` ts derived from the cursor.
+//! Slack ImBackend. DMs/MPIMs unconditional; channels only when the user
+//! posted (`from:<@me>`) or was @ed (`<@me>`) within `COLD_START_DAYS`.
 
 use std::collections::BTreeSet;
 
@@ -19,11 +8,13 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;
 
 use crate::models::slack_workspaces;
-use crate::slack::api::{self, ConversationRow, RawMessage};
+use crate::slack::api::{self, ConversationRow, RawFile, RawMessage};
 use crate::slack::credentials::{self, SlackCreds};
+use crate::slack::files as slack_files;
 use crate::slack::types::SlackWorkspace;
+use crate::triage::attachments;
 
-use super::types::{ImConversation, ImConversationKind, ImMessage};
+use super::types::{ImAttachment, ImConversation, ImConversationKind, ImMessage};
 use super::ImBackend;
 
 const SOURCE: &str = "slack";
@@ -52,11 +43,7 @@ impl ImBackend for SlackBackend {
                 None => continue,
             };
 
-            // Build the "I'm involved here" channel set: messages I
-            // posted OR messages mentioning me, within COLD_START_DAYS.
-            // Search failures are non-fatal — we degrade to "no
-            // channels pass the filter" rather than aborting the
-            // workspace entirely. DMs still flow through.
+            // Channel involvement signal (sent or @ed). Search failures degrade silently; DMs still flow.
             let involved_channels = collect_involved_channels(ws, &creds);
 
             let mut rows = match api::users_conversations(
@@ -117,7 +104,8 @@ impl ImBackend for SlackBackend {
         .with_context(|| format!("slack conversations.history {channel_id}"))?;
         let mut messages = Vec::with_capacity(raws.len());
         for raw in raws {
-            if let Some(m) = to_im_message(team_id, &creds, &raw) {
+            if let Some(mut m) = to_im_message(team_id, &creds, &raw) {
+                m.attachments = download_image_attachments(&conv.id, &raw);
                 messages.push(m);
             }
         }
@@ -125,9 +113,74 @@ impl ImBackend for SlackBackend {
     }
 }
 
-/// Run two `search.messages` queries (mentions + from-me) bounded by
-/// `COLD_START_DAYS` and collect distinct `channel.id` hits. Failures
-/// in either query fall back to whatever the other one returned.
+/// Pull image attachments off the message and stage them under the
+/// triage attachment dir. Non-image files are ignored (priming markdown
+/// can still mention them via the inline text body).
+fn download_image_attachments(candidate_id: &str, raw: &RawMessage) -> Vec<ImAttachment> {
+    if raw.files.is_empty() {
+        return Vec::new();
+    }
+    let Ok(staging) = attachments::staging_dir(SOURCE, candidate_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for file in &raw.files {
+        let Some(url) = file.url_private.as_deref() else {
+            continue;
+        };
+        let mime = file.mimetype.as_deref().unwrap_or("");
+        if !mime.starts_with("image/") {
+            continue;
+        }
+        let cache_path = match slack_files::resolve_to_path(url) {
+            Ok(p) => p,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    file_id = %file.id,
+                    "slack: resolve_to_path failed",
+                );
+                continue;
+            }
+        };
+        if let Some(att) = stage_one(&staging, &cache_path, file, mime) {
+            out.push(att);
+        }
+    }
+    out
+}
+
+fn stage_one(
+    staging: &std::path::Path,
+    cache_path: &std::path::Path,
+    file: &RawFile,
+    mime: &str,
+) -> Option<ImAttachment> {
+    let ext = cache_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let filename = format!("{}.{}", file.id, ext);
+    let dest = staging.join(&filename);
+    if let Err(error) = std::fs::copy(cache_path, &dest) {
+        tracing::warn!(error = %error, file_id = %file.id, "slack: copy to staging failed");
+        return None;
+    }
+    let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    if bytes == 0 {
+        let _ = std::fs::remove_file(&dest);
+        return None;
+    }
+    Some(ImAttachment {
+        filename,
+        local_path: dest,
+        mime_type: Some(mime.to_string()),
+        bytes,
+        alt: file.title.clone().or_else(|| file.name.clone()),
+    })
+}
+
+/// Two search.messages queries (mentions + from-me) → distinct channel ids.
 fn collect_involved_channels(ws: &SlackWorkspace, creds: &SlackCreds) -> BTreeSet<String> {
     let after = (Utc::now() - Duration::days(super::COLD_START_DAYS))
         .format("%Y-%m-%d")
@@ -159,9 +212,7 @@ fn collect_involved_channels(ws: &SlackWorkspace, creds: &SlackCreds) -> BTreeSe
     channels
 }
 
-/// Slack stores per-conversation context in our `ImConversation.id` as
-/// `<team_id>:<channel_id>` so the cursor / cache layout stays scoped per
-/// workspace AND per channel. `raw` carries the original ConversationRow.
+/// `ImConversation.id = <team_id>:<channel_id>`.
 struct ConvHandle<'a> {
     team_id: &'a str,
     #[allow(dead_code)]
@@ -222,8 +273,7 @@ fn to_im_message(team_id: &str, creds: &SlackCreds, raw: &RawMessage) -> Option<
         .map(|u| u.display_name)
         .or_else(|| raw.username_fallback.clone());
     let timestamp = ts_string_to_utc(&raw.ts).unwrap_or_else(Utc::now);
-    // Carry only the bits a future render-override might need (e.g. thread
-    // context). RawMessage doesn't implement Serialize, so we hand-build.
+    // RawMessage isn't Serialize — hand-build.
     let raw_blob = json!({
         "thread_ts": raw.thread_ts,
         "files": raw.files.len(),
@@ -236,6 +286,7 @@ fn to_im_message(team_id: &str, creds: &SlackCreds, raw: &RawMessage) -> Option<
         text,
         external_url: raw.permalink.clone(),
         deleted: false,
+        attachments: Vec::new(), // filled later by fetch_messages override
         raw: raw_blob,
     })
 }

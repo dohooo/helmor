@@ -1,16 +1,5 @@
-//! GitHub fetcher: per-repo scan of open issues + PRs.
-//!
-//! For every GitHub repo the user has registered in Helmor we hit the
-//! inbox search API with `repo:owner/name is:open` and pull whatever
-//! comes back. The "is this actionable for me" call is the LLM's job,
-//! not the fetcher's — the goal here is to give Layer-2 a complete
-//! picture of what's open in the repos the user actually maintains.
-//!
-//! Why not `assigned/mentioned/review-requested` like before? Those
-//! scopes serve "I'm on the hook" workflows but completely miss the
-//! maintainer view: open issues nobody @ed me on, drive-by PRs, etc.
-//! Maintainers want the whole open queue. IM sources (Slack/Lark) still
-//! cover the passive @-me side via DM + search.messages.
+//! GitHub fetcher: per-repo scan of open issues + PRs (`repo:owner/name is:open`).
+//! Maintainer view — LLM does actionable-or-not.
 
 use std::collections::BTreeSet;
 
@@ -30,9 +19,7 @@ use super::storage::{self, NewCandidate, UpsertOutcome};
 use super::{FetchSummary, Fetcher};
 
 const SOURCE: &str = "github";
-/// Issues + PRs per repo per tick. Headroom over Layer-2's
-/// max_per_tick=20 so the LLM has options; older items fall off the
-/// updated-desc tail naturally.
+/// Per-repo per-tick cap (headroom over Layer-2's max_per_tick).
 const PER_REPO_LIMIT: usize = 50;
 
 pub struct GithubFetcher;
@@ -61,9 +48,7 @@ impl Fetcher for GithubFetcher {
     }
 }
 
-/// One (login, owner/repo) pair derived from a Helmor-registered repo.
-/// Deduped on lowercased path so the same repo registered under
-/// different casings is hit once.
+/// Helmor repo target; deduped on lowercased path.
 #[derive(Debug, Clone)]
 struct RepoTarget {
     login: String,
@@ -97,12 +82,7 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
 }
 
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
-    // Open-only, non-draft; scope=None so query lands as
-    // `repo:owner/name is:open -is:draft` for PRs (the qualifier is a
-    // no-op on issues). Sort defaults to updated-desc on the inbox side.
-    // Drafts are intentionally excluded — the moment a draft is marked
-    // ready-for-review its `updated_at` moves, so it'll re-surface in a
-    // later tick without us needing to track state.
+    // Open + non-draft. Draft→ready bumps `updated_at`, so flipping resurfaces automatically.
     let filters = InboxFilters {
         state: Some(InboxStateFilter::Open),
         draft: Some(InboxDraftFilter::Exclude),
@@ -134,10 +114,7 @@ fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
     };
     let cutoff_ms = super::cold_start_cutoff_ms();
     for item in page.items {
-        // Server returns updated-desc, so older items past the cutoff
-        // are guaranteed tail-only — we could break, but the filter is
-        // cheap and skipping is more defensive against API ordering
-        // assumptions changing under us.
+        // Tail-only past cutoff, but skip rather than break for safety.
         if item.last_activity_at < cutoff_ms {
             continue;
         }

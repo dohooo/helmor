@@ -749,11 +749,7 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "ai_priming_consumed",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
-        // Triage source provenance: `(source_type, source_ref)` uniquely
-        // identifies the upstream thing a triage tick proposed against
-        // (e.g. lark om_… message id, github_pr 1234). The scheduler
-        // uses this to skip re-proposing the same source across ticks
-        // even when the time-window overlap exposes a stale message.
+        // Triage source provenance: `(source_type, source_ref)` dedups across ticks.
         add_column_if_missing(connection, "workspaces", "triage_source_type", "TEXT")?;
         add_column_if_missing(connection, "workspaces", "triage_source_ref", "TEXT")?;
         // Index goes after the ALTER above — else old DBs would index a missing column.

@@ -72,26 +72,9 @@ export function flattenWorkspaceRowsForNavigation(
 }
 
 /**
- * Pick a replacement workspace to focus after `removedWorkspaceId` is
- * archived/deleted. Group-aware: stays inside the removed workspace's
- * bucket when possible, so e.g. dismissing a triage proposal lands on
- * the next triage proposal — not a random pinned workspace.
- *
- * Algorithm:
- *   1. Locate the removed workspace's bucket (one of the
- *      `currentGroups` rows or the `currentArchivedRows` lane) and its
- *      index inside that bucket.
- *   2. If the same bucket still has rows in `next…`, pick the row at
- *      the same index (or the previous one). This is the
- *      "stay in your lane" case.
- *   3. Otherwise the bucket was exhausted — fall back to the first
- *      row in the first non-empty group in `nextGroups`, then to the
- *      archived lane. `null` when the whole sidebar is empty.
- *
- * Callers MUST pass `currentGroups` and `nextGroups` in the same
- * visual layout (both status-grouped, both repo-grouped, …) so the
- * "same bucket" lookup is meaningful. `projectVisualSidebar` is the
- * convergence point that guarantees this.
+ * Pick a replacement focus after removal. Group-aware: stay in the same
+ * bucket → next-non-empty group → archived. Callers MUST pass current/next
+ * in the same visual layout (`projectVisualSidebar` enforces this).
  */
 export function findReplacementWorkspaceIdAfterRemoval({
 	currentGroups,
@@ -136,9 +119,7 @@ export function findReplacementWorkspaceIdAfterRemoval({
 		}
 	}
 
-	// (2) Bucket exhausted (or removed id wasn't anywhere). Pick the
-	// first non-empty group in flat sidebar order; treat archived as
-	// the trailing fallback.
+	// (2) Bucket exhausted — first non-empty group, then archived.
 	for (const group of nextGroups) {
 		const firstId = group.rows[0]?.id;
 		if (firstId) return firstId;

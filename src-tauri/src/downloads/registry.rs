@@ -142,10 +142,7 @@ impl DownloadsManager {
                     return Ok(());
                 }
                 if existing.state == AssetState::Downloaded {
-                    // Essentials are on disk; top-up only when an optional
-                    // file is still missing (lets the user add mmproj to an
-                    // already-installed model without losing it to Delete +
-                    // redownload). True no-op when everything is in place.
+                    // Already Downloaded — top up only when an optional file is still missing.
                     let all_optional_present = asset
                         .optional_files
                         .iter()
@@ -200,13 +197,7 @@ impl DownloadsManager {
                 );
             }
             let registry = app_clone.state::<DownloadsManager>();
-            // Drop the `active` marker so a fresh `start()` for an
-            // unrelated reason can rerun, but KEEP the `cancelling`
-            // marker — that's the flag `start()` checks to refuse
-            // re-spawning while we're still cleaning the disk. If we
-            // cleared it before `delete_asset_files`, a racing new
-            // `start()` could spawn a worker whose `.part` we'd then
-            // wipe a few microseconds later.
+            // Drop `active` but keep `cancelling` until disk cleanup finishes (race vs a fresh `start()`).
             let was_cancelling = {
                 let mut inner = registry.inner.lock().unwrap_or_else(|p| p.into_inner());
                 inner.active.remove(&asset_id);
@@ -394,10 +385,7 @@ fn delete_asset_files(asset: &Asset) {
     }
 }
 
-/// Disk scan: derive an `AssetStatus` purely from what's on disk. The
-/// state machine looks at `files` only — `optional_files` contribute to
-/// the on-disk footprint reported as `downloaded` but their absence
-/// never demotes the asset out of `Downloaded`.
+/// Disk-only AssetStatus; optional_files add to bytes but never demote from Downloaded.
 fn scan_asset_state(asset: &Asset) -> AssetStatus {
     let mut downloaded: u64 = 0;
     let mut all_complete = true;

@@ -282,10 +282,7 @@ pub async fn send_agent_message_stream(
         if let Some(session_id) = priming_session_to_consume {
             match crate::triage::mark_consumed_for_session(&session_id) {
                 Ok(true) => {
-                    // Kind flipped from `ai_triage` → `manual`; the sidebar's
-                    // Triage bucket would still show this workspace until
-                    // its next periodic refetch. Publishing here makes the
-                    // graduation visible instantly.
+                    // Publish so the sidebar repaints the kind flip immediately.
                     crate::ui_sync::publish(
                         &app,
                         crate::ui_sync::UiMutationEvent::WorkspaceListChanged,

@@ -48,10 +48,7 @@ pub fn delete_payload(rel_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Sanitize an arbitrary source fragment (chat id, repo slug, message ts)
-/// into a filesystem-safe segment. Keeps ASCII alphanumeric + `_-`,
-/// replaces everything else with `_`, and truncates to 80 chars so the
-/// resulting path stays well under common FS limits.
+/// Sanitize a fragment for filesystem use; alnum + `_-`, max 80 chars.
 pub fn safe_segment(input: &str) -> String {
     let mut out = String::with_capacity(input.len().min(80));
     for c in input.chars().take(120) {
@@ -70,9 +67,7 @@ pub fn safe_segment(input: &str) -> String {
     out
 }
 
-/// Best-effort: ensure the cache root exists. Called by the fetcher
-/// scheduler at startup so subsequent writes never race against the dir
-/// not yet existing.
+/// Ensure cache root exists at startup.
 #[allow(dead_code)]
 pub fn ensure_cache_root() -> Result<PathBuf> {
     cache_root()
@@ -92,8 +87,6 @@ pub fn resolve_for_read(rel_path: &str) -> Result<PathBuf> {
     Ok(canon)
 }
 
-/// Re-export a tiny helper for tests so callers don't reach into
-/// `Path::join` themselves.
 #[cfg(test)]
 pub fn root_for_test() -> PathBuf {
     cache_root().expect("test cache root")

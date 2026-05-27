@@ -1,7 +1,6 @@
-// Layer-2 prompts. Built from XML-tagged sections — 7-9B local models
-// weigh structural tags more consistently than markdown headings, and
-// the tags also survive truncation/compaction in the SDK's context.
+// Layer-2 prompts. XML-tagged so small local models keep structure under compaction.
 
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { TriageCandidate, TriageRepo } from "./types";
 
 const ROLE = `<role>
@@ -119,9 +118,7 @@ const WEEKDAYS_EN = [
 
 const WEEKDAYS_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-// Computed once at tick start so the model always has a date anchor
-// without having to remember to call a tool. Local-tz format is the
-// stable `YYYY-MM-DDTHH:mm:ss` shape (sv-SE locale trick).
+// Tick-start date anchor so the model doesn't need a tool for relative dates.
 function timeSection(now: Date): string {
 	const iso = now.toISOString();
 	const local = now
@@ -180,16 +177,11 @@ function escapeXmlText(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function renderCandidate(c: TriageCandidate): string {
+function renderCandidate(c: TriageCandidate, imageOffset: number): string {
 	const lines: string[] = [];
 	const sender = c.sender ?? "(unknown sender)";
 	const title = c.title?.trim() || "(no title)";
-	// `id:` on its own line, unbracketed. The earlier `[<id>] ...` form
-	// made small local models include the brackets in tool calls
-	// (`candidate_id: "[lark:oc_xxx]"`) — the host's `WHERE id = ?` is
-	// strict equality, so every read_candidate / mark_not_actionable
-	// against the bracketed form returned "not found" and the agent
-	// burned turns retrying.
+	// Unbracketed: small models otherwise copy the brackets into tool calls and never match.
 	lines.push(`id: ${c.id}`);
 	lines.push(`  source:       ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
 	lines.push(`  participants: ${escapeXmlText(sender)}`);
@@ -205,15 +197,34 @@ function renderCandidate(c: TriageCandidate): string {
 		lines.push(`  link:         ${c.externalUrl}`);
 	}
 	lines.push(`  payload:      ${c.payloadBytes} bytes — use read_candidate`);
+	const attachments = c.attachments ?? [];
+	if (attachments.length > 0) {
+		lines.push(`  attachments:`);
+		attachments.forEach((a, i) => {
+			const index = imageOffset + i + 1;
+			const alt = escapeXmlText(a.alt ?? a.filename);
+			lines.push(
+				`    [image_${index}] ${a.mimeType} — message=${a.messageId} alt=${alt}`,
+			);
+		});
+	}
 	return lines.join("\n");
+}
+
+export interface BuiltTickUserMessage {
+	readonly text: string;
+	readonly images: ImageContent[];
 }
 
 export function buildTickUserMessage(
 	candidates: readonly TriageCandidate[],
 	repos: readonly TriageRepo[],
-): string {
+): BuiltTickUserMessage {
 	if (candidates.length === 0) {
-		return "No open candidates this tick. End the conversation.";
+		return {
+			text: "No open candidates this tick. End the conversation.",
+			images: [],
+		};
 	}
 	const repoList =
 		repos.length === 0
@@ -224,8 +235,22 @@ export function buildTickUserMessage(
 							`- ${r.id} :: ${escapeXmlText(r.name)}${r.remoteUrl ? ` (${r.remoteUrl})` : ""}`,
 					)
 					.join("\n");
-	const rendered = candidates.map(renderCandidate).join("\n\n");
-	return `<candidates count="${candidates.length}">
+	const images: ImageContent[] = [];
+	const renderedParts: string[] = [];
+	for (const c of candidates) {
+		renderedParts.push(renderCandidate(c, images.length));
+		for (const a of c.attachments ?? []) {
+			if (a.dataBase64 && a.mimeType) {
+				images.push({
+					type: "image",
+					data: a.dataBase64,
+					mimeType: a.mimeType,
+				});
+			}
+		}
+	}
+	const rendered = renderedParts.join("\n\n");
+	const text = `<candidates count="${candidates.length}">
 ${rendered}
 </candidates>
 
@@ -234,6 +259,7 @@ ${repoList}
 </repos>
 
 Decide every candidate. End the conversation when done.`;
+	return { text, images };
 }
 
 function truncate(s: string, max: number): string {

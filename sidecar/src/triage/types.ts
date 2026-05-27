@@ -1,16 +1,3 @@
-/**
- * Wire shapes for one triage tick.
- *
- * Layer-2 lives entirely on `triage_candidate` rows the Rust fetcher
- * has already collected. The sidecar receives:
- *   - the candidate slice to judge,
- *   - the repo list (so propose_workspace can match),
- *   - local-model endpoint.
- *
- * Provider-discovery params (`providers` / `lastTriagedAt`) are gone —
- * Rust does all data fetching now.
- */
-
 export interface TriageRepo {
 	readonly id: string;
 	readonly name: string;
@@ -38,6 +25,22 @@ export interface TriageCandidate {
 	readonly externalUrl: string | null;
 	readonly payloadPath: string;
 	readonly payloadBytes: number;
+	/** Image attachments (base64) bundled by the Rust scheduler so the
+	 *  vision-capable local LLM can see them without a host round-trip. */
+	readonly attachments?: readonly TriageAttachment[];
+}
+
+export interface TriageAttachment {
+	/** Anchor message id this attachment belongs to. */
+	readonly messageId: string;
+	/** Filename in the staging dir (preserved when moved to a workspace). */
+	readonly filename: string;
+	/** Display alt text — image_key / file name / title. */
+	readonly alt: string | null;
+	/** MIME like `image/png`. */
+	readonly mimeType: string;
+	/** Raw bytes base64-encoded (omit when too large). */
+	readonly dataBase64: string;
 }
 
 export interface TriageTickParams {
@@ -51,13 +54,19 @@ export interface TriageTickParams {
 
 export interface TriageProposal {
 	readonly candidateId: string;
-	/** Stable id of the anchor message / issue / PR this task is about.
-	 *  Lets a single chat candidate spawn N independent workspaces, one
-	 *  per anchor. Composed into `source_ref = candidate_source_ref:anchor`
-	 *  by the Rust scheduler before workspace creation. */
+	/** Anchor id; chat candidate can spawn N workspaces, one per anchor. */
 	readonly taskAnchor: string;
 	readonly repoId: string;
 	readonly title: string;
 	readonly branchName: string;
 	readonly planMessage: string;
+}
+
+/** Subset of {@link TriageAttachment} the agent forwards to Rust on
+ *  `propose_workspace`. The full base64 stays in the original candidate
+ *  payload — only the identifying fields cross back. */
+export interface TriageProposalAttachment {
+	readonly messageId: string;
+	readonly filename: string;
+	readonly alt: string | null;
 }

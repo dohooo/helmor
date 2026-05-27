@@ -1,8 +1,6 @@
-//! AI-triage. Background fetcher (`fetcher::spawn_scheduler`) runs
-//! every 5 min; when the user has triage + auto_run + local-LLM all on,
-//! that same loop fires a Layer-2 tick right after each fetch so the
-//! LLM always judges fresh data. Manual fires go through
-//! `trigger_tick_now`.
+//! AI-triage. Fetcher (`fetcher::spawn_scheduler`) runs every 5 min and
+//! auto-fires a Layer-2 tick when triage + auto_run + local-LLM are on;
+//! manual fires via `trigger_tick_now`.
 
 pub mod active_status;
 pub mod attachments;

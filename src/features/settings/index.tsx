@@ -83,9 +83,9 @@ const NOTIFICATION_SOUND_OPTIONS = VALID_NOTIFICATION_SOUNDS.map((value) => ({
 	label: NOTIFICATION_SOUND_LABELS[value],
 })) satisfies readonly { value: NotificationSound; label: string }[];
 
-export type { SettingsSection } from "./types";
+export type { ContextProviderTab, SettingsSection } from "./types";
 
-import type { SettingsSection } from "./types";
+import type { ContextProviderTab, SettingsSection } from "./types";
 
 /// Display labels for settings sections in the sidebar / dialog title.
 /// Most match the section key with a leading capital, but a few names
@@ -128,12 +128,14 @@ export const SettingsDialog = memo(function SettingsDialog({
 	workspaceId,
 	workspaceRepoId,
 	initialSection,
+	initialInboxProvider,
 	onClose,
 }: {
 	open: boolean;
 	workspaceId: string | null;
 	workspaceRepoId: string | null;
 	initialSection?: SettingsSection;
+	initialInboxProvider?: ContextProviderTab;
 	onClose: () => void;
 }) {
 	const { settings, updateSettings } = useSettings();
@@ -607,7 +609,10 @@ export const SettingsDialog = memo(function SettingsDialog({
 							)}
 
 							{activeSection === "inbox" && (
-								<InboxSettingsPanel repositories={repositories} />
+								<InboxSettingsPanel
+									repositories={repositories}
+									initialProvider={initialInboxProvider}
+								/>
 							)}
 
 							{activeRepo && (

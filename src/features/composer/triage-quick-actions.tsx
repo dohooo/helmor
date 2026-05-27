@@ -10,16 +10,7 @@ type TriageQuickActionsProps = {
 	disabled?: boolean;
 };
 
-/**
- * Composer affordance shown above triage workspaces the user hasn't
- * engaged with yet. Start sends a canned "Go ahead." message (which also
- * graduates the workspace out of the AI proposals group); Dismiss
- * archives the workspace.
- *
- * Reuses the auto-close ActionRow shell for visual consistency but
- * deliberately omits the ShineBorder pulse — these are calls to action,
- * not background hints.
- */
+// Composer Start/Dismiss row for un-engaged triage workspaces.
 export function TriageQuickActions({
 	onStart,
 	onDismiss,

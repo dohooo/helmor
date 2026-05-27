@@ -87,11 +87,7 @@ async fn run_hf(
         }
     };
 
-    // Top-up mode: every essential already on disk AND at least one
-    // optional missing. The UI's progress bar gets scoped to just the
-    // optional bytes so the user doesn't see a misleading "20.5/22.0 GB
-    // · 93%" the instant they click "Add vision" — which previously
-    // read like the model was being re-downloaded.
+    // Top-up mode: all essentials on disk, ≥1 optional missing. Progress scoped to optional bytes only.
     let mut all_essentials_present = true;
     for file in &asset.files {
         if tokio::fs::metadata(asset.target_dir.join(file))
@@ -131,9 +127,7 @@ async fn run_hf(
     let mut last_bytes_marker = 0u64;
     let mut any_sha_verified = false;
 
-    // Essential files: any failure aborts the whole asset. Skipped in
-    // top-up mode — we already verified every essential is on disk so
-    // the loop body would only `continue` anyway.
+    // Essential files: failure aborts the whole asset. Skipped in top-up mode.
     if !top_up_mode {
         for file in &asset.files {
             let final_path = asset.target_dir.join(file);
@@ -207,11 +201,7 @@ async fn run_hf(
         }
     } // end !top_up_mode
 
-    // Optional files: best-effort. A missing/failed projector still
-    // leaves the main weights usable as text-only; we log and continue.
-    // `remote_name` keys the HF fetch + manifest; `local_name` is the on-disk
-    // filename (kept distinct so two assets with the same projector basename
-    // in different repos can coexist in a flat target dir).
+    // Optional files: best-effort. `remote_name` keys HF; `local_name` lives on disk.
     for opt in &asset.optional_files {
         let final_path = asset.target_dir.join(&opt.local_name);
         let part_path = asset.target_dir.join(format!("{}.part", opt.local_name));
@@ -509,10 +499,7 @@ fn compute_total_hf(asset: &Asset, manifest: Option<&HfManifest>) -> u64 {
     asset.estimated_bytes
 }
 
-/// Sum of `optional_files` sizes only — for top-up runs where the
-/// essentials are already on disk and we want the progress bar scoped
-/// to just the optional portion. Falls back to 0 if the manifest is
-/// missing (UI will switch to indeterminate spinner, which is honest).
+/// Top-up: sum optional sizes only. 0 when manifest missing → UI spinner.
 fn compute_total_optional_hf(asset: &Asset, manifest: Option<&HfManifest>) -> u64 {
     let Some(manifest) = manifest else {
         return 0;

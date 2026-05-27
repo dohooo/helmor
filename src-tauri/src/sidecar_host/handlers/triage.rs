@@ -1,13 +1,5 @@
-//! `triage.*` host methods — Layer-2 LLM's only window into Helmor.
-//!
-//! Replaces the old `forge.*` / `lark.*` / `slack.*` LLM-facing surface.
-//! The sidecar agent calls these to:
-//!   - read open candidates (handed to it pre-formatted in the prompt,
-//!     but it can re-query if it dismisses some and wants more)
-//!   - read one candidate's full payload (with optional grep)
-//!   - record a decision (skip / dismissed); proposals still flow
-//!     through the existing `triageProposal` event so the scheduler can
-//!     drive the workspace-creation path.
+//! `triage.*` host methods: list_open_candidates, read_candidate, record_decision.
+//! Proposals still flow via the `triageProposal` event.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -50,10 +42,7 @@ struct ReadCandidateParams {
     candidate_id: String,
     #[serde(default)]
     grep: Option<String>,
-    /// Return only the last N "## "-delimited message blocks. Mutually
-    /// exclusive with `grep`; `tail` wins if both are set. Useful on
-    /// chat candidates where the LLM wants the freshest activity even
-    /// when the file is bigger than `READ_MAX_BYTES`.
+    /// Last N `## `-delimited blocks. Mutually exclusive with `grep` (tail wins).
     #[serde(default)]
     tail: Option<u32>,
 }
@@ -81,10 +70,7 @@ async fn read_candidate(params: Value) -> Result<Value> {
     Ok(json!({ "body": body }))
 }
 
-/// Return the file's header + the last `n` "## "-delimited blocks.
-/// Blocks are detected by lines starting with `## ` — that's the
-/// per-message header `im::default_message_block` emits. If the file
-/// has fewer blocks than requested, returns the whole file.
+/// Header + last `n` `## `-delimited blocks (whole file if fewer).
 fn tail_blocks(body: &str, n: usize) -> String {
     // Find every line index that starts a block.
     let mut block_starts: Vec<usize> = body

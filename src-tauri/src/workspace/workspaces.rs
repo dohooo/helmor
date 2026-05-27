@@ -181,12 +181,7 @@ pub struct WorkspaceDetail {
     /// (either fresh or because the previously-active id no longer
     /// exists; the frontend re-renders against the first item).
     pub active_run_action_id: Option<String>,
-    /// True when this workspace was auto-created by triage (`kind ==
-    /// "ai_triage"`) and the user hasn't sent their first message yet
-    /// (`ai_priming_consumed == 0`). Drives the composer's Start /
-    /// Dismiss quick-action row. Flips to false the moment the user
-    /// (or a quick action) sends a message — `mark_consumed_for_session`
-    /// also graduates `kind` to `"manual"`.
+    /// Drives the composer's Start/Dismiss row; flips on first user send via `mark_consumed_for_session`.
     pub triage_priming_unconsumed: bool,
 }
 

@@ -8,17 +8,13 @@ use tokio::sync::Mutex;
 
 use super::cli::run;
 
-/// Process-wide cache for the current user's `open_id`. The CLI shell-
-/// out is ~200ms so a single lookup per app run is enough; the value is
-/// stable for the session (`lark-cli auth login` is the only thing that
-/// changes it, and we restart on auth changes anyway).
+/// Process-wide `open_id` cache; CLI is ~200ms and auth-login restarts the app.
 fn cached() -> &'static Mutex<Option<String>> {
     static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-/// Open-id of the currently-authed Lark user. Used by the triage
-/// fetcher to filter messages_search to "chats I've participated in".
+/// Open-id of the authed user.
 pub async fn self_open_id() -> Result<String> {
     let mut guard = cached().lock().await;
     if let Some(id) = guard.as_ref() {
@@ -42,11 +38,7 @@ pub async fn self_open_id() -> Result<String> {
     Ok(open_id)
 }
 
-/// `lark-cli contact +get-user` wraps the Lark Open API response shape,
-/// which has bounced between `data.user.open_id` and `data.open_id`
-/// across versions. Walk both paths plus a generic deep search before
-/// giving up — the field is plain enough that any of these mean the
-/// same thing.
+/// Lark response shape bounced between `data.user.open_id` and `data.open_id`; walk both then deep-search.
 fn extract_open_id(raw: &Value) -> Option<String> {
     if let Some(s) = raw
         .pointer("/data/user/open_id")

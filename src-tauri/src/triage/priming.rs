@@ -78,13 +78,7 @@ pub fn extract_plan_text(raw: &str) -> Option<String> {
     }
 }
 
-/// Flip `ai_priming_consumed = 1` AND graduate `kind` from `ai_triage`
-/// to `manual`. The kind flip is what removes the workspace from the
-/// sidebar's Triage bucket — once the user has sent the first message,
-/// the workspace's lifecycle is indistinguishable from a manually-
-/// created one. Returns `Ok(true)` when a row was actually updated
-/// (caller publishes `WorkspaceListChanged` so the sidebar repaints).
-/// Idempotent: already-consumed rows return Ok(false) with no writes.
+/// Flip `ai_priming_consumed=1` and graduate `kind` to 'manual'. Idempotent; `Ok(true)` only on first flip.
 pub fn mark_consumed_for_session(helmor_session_id: &str) -> Result<bool> {
     let connection = db::write_conn()?;
     let rows = connection

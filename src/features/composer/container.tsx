@@ -23,10 +23,8 @@ import type {
 import {
 	createSession,
 	mutateCodexGoal,
-	prepareArchiveWorkspace,
 	saveAutoCloseActionKinds,
 	setWorkspaceLinkedDirectories,
-	startArchiveWorkspace,
 } from "@/lib/api";
 import { isAutoHideableActionKind } from "@/lib/commit-button-prompts";
 import type {
@@ -35,14 +33,12 @@ import type {
 } from "@/lib/composer-insert";
 import {
 	agentModelSectionsQueryOptions,
-	archivedWorkspacesQueryOptions,
 	autoCloseActionKindsQueryOptions,
 	helmorQueryKeys,
 	sessionCodexGoalQueryOptions,
 	slashCommandsQueryOptions,
 	workspaceCandidateDirectoriesQueryOptions,
 	workspaceDetailQueryOptions,
-	workspaceGroupsQueryOptions,
 	workspaceLinkedDirectoriesQueryOptions,
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
@@ -53,11 +49,11 @@ import { cn } from "@/lib/utils";
 import {
 	clampEffortToModel,
 	findModelOption,
-	findReplacementWorkspaceIdAfterRemoval,
 	getComposerContextKey,
 	isNewSession,
 	resolveSessionSelectedModelId,
 } from "@/lib/workspace-helpers";
+import { publishShellEvent } from "@/shell/event-bus";
 import { CodexGoalBanner } from "../panel/codex-goal-banner";
 import type { AddDirPickerEntry } from "./editor/add-dir/typeahead-plugin";
 import { WorkspaceComposer } from "./index";
@@ -162,10 +158,6 @@ type WorkspaceComposerContainerProps = {
 	onChangePermissionMode: (contextKey: string, mode: string) => void;
 	onChangeFastMode: (contextKey: string, enabled: boolean) => void;
 	onSwitchSession?: (sessionId: string) => void;
-	/** Switch the currently selected workspace. Used by the Triage
-	 *  Dismiss quick-action to focus the next sibling before archiving
-	 *  the current one. Optional because most surfaces don't need it. */
-	onSelectWorkspace?: (workspaceId: string | null) => void;
 	onSubmit: (payload: {
 		prompt: string;
 		imagePaths: string[];
@@ -269,7 +261,6 @@ export const WorkspaceComposerContainer = memo(
 		onChangePermissionMode,
 		onChangeFastMode,
 		onSwitchSession,
-		onSelectWorkspace,
 		onSubmit,
 		pendingPromptForSession = null,
 		onPendingPromptConsumed,
@@ -956,21 +947,7 @@ export const WorkspaceComposerContainer = memo(
 		const autoCloseHelpText =
 			"When enabled, action sessions will close automatically when finished.";
 
-		// Triage workspaces that were auto-spawned and the user hasn't
-		// engaged with yet get a Start / Dismiss quick-action row above
-		// the composer. Start sends a canned "Go ahead." prompt (which
-		// also graduates the workspace out of the AI proposals group via
-		// `mark_consumed_for_session`); Dismiss archives the workspace
-		// AND immediately focuses the next sibling in the same sidebar
-		// group, so a "review-and-clean-out" pass through the AI
-		// proposals stays in-lane until the lane is empty.
-		const triageGroupsQuery = useQuery(workspaceGroupsQueryOptions());
-		const triageArchivedQuery = useQuery(archivedWorkspacesQueryOptions());
-		// Local "I just clicked Start/Dismiss" flags so the action row
-		// hides instantly — without waiting for the backend to flip
-		// `ai_priming_consumed` (Start) or the archive worker to update
-		// the sidebar (Dismiss). Both reset whenever the displayed
-		// workspace changes so the flags can't leak across navigation.
+		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
 		const [triageGraduating, setTriageGraduating] = useState(false);
 		const [triageDismissing, setTriageDismissing] = useState(false);
 		useEffect(() => {
@@ -990,66 +967,13 @@ export const WorkspaceComposerContainer = memo(
 
 		const handleTriageDismiss = useCallback(() => {
 			if (!displayedWorkspaceId || triageDismissing) return;
-
-			// (1) Compute the next selection BEFORE invoking onSelectWorkspace
-			// so the optimistic group state matches the row about to be
-			// removed. `findReplacementWorkspaceIdAfterRemoval` is group-aware:
-			// it prefers the next sibling in the same group, only crossing
-			// groups when the lane is exhausted. Falling back to `null` here
-			// is OK — App's selection controller treats that as "go to start
-			// page", which matches our spec for the empty-lane terminus.
-			const currentGroups = triageGroupsQuery.data ?? [];
-			const currentArchivedRows = triageArchivedQuery.data ?? [];
-			const stripWorkspace = (groups: typeof currentGroups) =>
-				groups.map((g) => ({
-					...g,
-					rows: g.rows.filter((r) => r.id !== displayedWorkspaceId),
-				}));
-			const nextId = findReplacementWorkspaceIdAfterRemoval({
-				currentGroups,
-				currentArchivedRows,
-				nextGroups: stripWorkspace(currentGroups),
-				nextArchivedRows: currentArchivedRows.filter(
-					(r) => r.id !== displayedWorkspaceId,
-				),
-				removedWorkspaceId: displayedWorkspaceId,
-			});
-
 			setTriageDismissing(true);
-			onSelectWorkspace?.(nextId);
-
-			void (async () => {
-				try {
-					await prepareArchiveWorkspace(displayedWorkspaceId);
-				} catch (error) {
-					setTriageDismissing(false);
-					toast.error(
-						error instanceof Error
-							? error.message
-							: "Failed to dismiss this proposal.",
-					);
-					return;
-				}
-				// Fire-and-forget: the navigation controller's
-				// `archive-execution-succeeded` listener handles sidebar
-				// invalidation. Selection has already moved above, so a
-				// failure here just leaves a row in archive-pending limbo
-				// — we surface a toast and let the user retry.
-				void startArchiveWorkspace(displayedWorkspaceId).catch((error) => {
-					toast.error(
-						error instanceof Error
-							? error.message
-							: "Failed to dismiss this proposal.",
-					);
-				});
-			})();
-		}, [
-			displayedWorkspaceId,
-			triageDismissing,
-			triageGroupsQuery.data,
-			triageArchivedQuery.data,
-			onSelectWorkspace,
-		]);
+			// Delegates archive to the sidebar controller (one optimistic path).
+			publishShellEvent({
+				type: "request-archive-workspace",
+				workspaceId: displayedWorkspaceId,
+			});
+		}, [displayedWorkspaceId, triageDismissing]);
 
 		return (
 			// `z-20` lifts the entire composer stacking context above the thread

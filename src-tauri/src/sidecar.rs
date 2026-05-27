@@ -335,11 +335,7 @@ pub struct HostRequestEnvelope {
     pub params: serde_json::Value,
 }
 
-/// `mpsc::Sender` is `Send` but `!Sync`, so it can't ride in a plain
-/// `Arc<OnceLock<…>>`. The `Mutex<Option<…>>` wrapper lets the reader
-/// thread (which captures an `Arc` clone) look the sender up
-/// dynamically per event — so the install order between sidecar spawn
-/// and `install_host_dispatcher` no longer matters.
+/// `Mutex<Option<Sender>>` (Sender is !Sync); reader looks up per event so install order doesn't matter.
 type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
 
 pub struct ManagedSidecar {
@@ -347,9 +343,6 @@ pub struct ManagedSidecar {
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
-    /// Reader threads each hold an `Arc` clone and look the sender up
-    /// per `hostRequest`, so `install_host_dispatcher` can run AFTER
-    /// the first sidecar spawn without losing events.
     host_request_tx: HostRequestSenderSlot,
 }
 
@@ -439,11 +432,7 @@ impl ManagedSidecar {
             let (process, reader) = SidecarProcess::start()?;
             *guard = Some(process);
 
-            // Start the reader/dispatcher thread (always spawns fresh).
-            // Hand the reader an `Arc` clone so it can look the sender up
-            // per event — if `install_host_dispatcher` runs AFTER the
-            // first spawn, the reader picks the sender up on the next
-            // `hostRequest` instead of dropping it.
+            // Start reader (always fresh). Pass an Arc so install ordering doesn't matter.
             let host_tx_slot = Arc::clone(&self.host_request_tx);
             if let Err(error) = self.start_reader_thread(reader, host_tx_slot) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");

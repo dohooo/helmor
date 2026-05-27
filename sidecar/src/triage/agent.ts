@@ -1,9 +1,4 @@
-// Runs one Layer-2 triage tick.
-//
-// Inputs: pre-fetched candidate list, repo list, local-model endpoint.
-// Output: a stream of `triageProposal` events the Rust scheduler turns
-// into workspaces. Decisions of kind `skip` are recorded inline via the
-// `triage.record_decision` host bridge.
+// Runs one Layer-2 triage tick. Emits `triageProposal` events; `skip` decisions go through `triage.record_decision`.
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import {
@@ -39,9 +34,9 @@ function buildLocalModel(
 		provider: PROVIDER_ID,
 		baseUrl: params.baseUrl.replace(/\/$/, ""),
 		reasoning: false,
-		// Layer-2 doesn't pass image blocks (attachments aren't handled at
-		// this layer). Vision capability is irrelevant; text-only is enough.
-		input: ["text"],
+		// Multimodal — IM candidates may carry image attachments the
+		// fetcher inlined as base64.
+		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 32_768,
 		maxTokens: 4_096,
@@ -116,9 +111,7 @@ export async function runTriageTick(
 		buildProposeWorkspaceTool(accumulator, { max: params.maxPerTick }),
 		buildMarkNotActionableTool(accumulator),
 		buildReadCandidateTool(),
-		// Scratchpad — no side effect. Compensates for a small local
-		// model's missing chain-of-thought stability. Time anchors are
-		// injected statically into the system prompt instead of a tool.
+		// Scratchpad — no side effect. Stabilises small-model multi-step decisions.
 		buildThinkTool(),
 	];
 
@@ -127,12 +120,16 @@ export async function runTriageTick(
 		userPromptSuffix: params.systemPrompt,
 		maxPerTick: params.maxPerTick,
 	});
-	const userMessage = buildTickUserMessage(params.candidates, params.repos);
+	const { text: userText, images: userImages } = buildTickUserMessage(
+		params.candidates,
+		params.repos,
+	);
 
 	logger.info(`${logTag} agent.build`, {
 		toolCount: tools.length,
 		candidateCount: params.candidates.length,
-		userMessagePreview: preview(userMessage),
+		imageCount: userImages.length,
+		userMessagePreview: preview(userText),
 	});
 
 	const agent = new Agent({
@@ -153,9 +150,7 @@ export async function runTriageTick(
 			provider === PROVIDER_ID ? params.localModel.token : undefined,
 	});
 
-	// Layer-2 needs many fewer turns than the old "discover-then-judge"
-	// loop. The cap is mainly a runaway-protection (one prompt cycle per
-	// candidate + a few read_candidate drilldowns).
+	// Cap is runaway protection; ~1 turn per candidate + a few read_candidate calls.
 	const MAX_TURNS = Math.max(20, params.candidates.length * 2 + 10);
 	let turnIndex = 0;
 	let aborted = false;
@@ -206,7 +201,7 @@ export async function runTriageTick(
 
 	try {
 		try {
-			await agent.prompt(userMessage);
+			await agent.prompt(userText, userImages);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			if (aborted) {

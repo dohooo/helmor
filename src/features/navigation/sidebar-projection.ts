@@ -321,12 +321,7 @@ function compareStrings(left: string, right: string): number {
  *   orthogonal to repo (workspaces the user has elevated, and workspaces
  *   queued for later) and are worth preserving as their own buckets in
  *   either grouping mode.
- * - "chats" and "ai-tasks" also pass through at the head. Chats have no
- *   repo at all; Triage rows DO have a repo but the group itself is a
- *   cross-repo concern (a single triage tick fans out across every
- *   connected source), so a top-level bucket is more useful than
- *   scattering them under each repo where the "needs your attention"
- *   signal would get lost.
+ * - Pass through at head: chats (no repo) + ai-tasks (cross-repo by nature).
  * - Everything else (in-flight creates, in-progress, in review, done,
  *   canceled) flattens into per-repo buckets keyed by `repoId`. Each repo
  *   group's title is the repository name.
@@ -356,12 +351,6 @@ export function regroupByRepo(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 			group.id === "chats" ||
 			group.id === "ai-tasks"
 		) {
-			// Triage and chats are cross-repo by nature (a triage tick
-			// spans every connected source; chats have no repo at all).
-			// Keep them as their own buckets in repo mode instead of
-			// scattering their rows into per-repo groups where they'd
-			// lose the semantic grouping. Empty buckets are hidden by
-			// the renderer.
 			head.push(group);
 			continue;
 		}

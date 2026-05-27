@@ -1,10 +1,4 @@
-//! `hostRequest` handlers grouped by namespace prefix.
-//!
-//! Only one namespace today: `triage.*` — Layer-2 LLM's window into
-//! `triage_candidate` rows. The old `forge.*` / `lark.*` / `slack.*`
-//! handlers existed to feed the previous LLM's discovery loop; that
-//! loop is gone (fetcher pre-builds the candidate index) and so are
-//! the handlers.
+//! `hostRequest` handlers, namespaced. Only `triage.*` today.
 
 pub mod triage;
 

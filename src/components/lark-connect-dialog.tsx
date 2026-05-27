@@ -1,13 +1,4 @@
-//! In-app terminal modal for the `lark-cli` connect flow.
-//!
-//! Two actions:
-//!   - `install`: `npm install -g @larksuite/cli && lark-cli auth login`
-//!   - `signIn`: just `lark-cli auth login`
-//!
-//! After the user closes the dialog we poll `getTriageSourceHealth` for
-//! up to ~8s waiting for Lark to flip to `ok`, because lark-cli's token
-//! write can lag a beat behind the PTY exit. Toast + cache invalidation
-//! fires on the first OK we see.
+// In-app `lark-cli` connect modal. Actions: install / signIn. Post-close polls source-health for ~8s (token-write lag).
 
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";

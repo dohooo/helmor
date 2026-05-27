@@ -1,10 +1,4 @@
-//! DB ops for `triage_candidate` and `triage_fetch_cursor`.
-//!
-//! Minimal-by-design: every column listed here has at least one prod
-//! read site. Anything that was only ever written got pruned (`fetched_at`,
-//! `last_updated_at`, `decision_at`, `reason`, `source_parent`,
-//! `last_fetched_at`, `last_external_ref`, and the whole subscription table).
-//! Re-add them if a real read site shows up.
+//! DB ops for `triage_candidate` and `triage_fetch_cursor`. Minimal-by-design — every column has a prod read site.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -32,10 +26,7 @@ pub struct NewCandidate {
 pub enum UpsertOutcome {
     Inserted,
     UpdatedUnchanged,
-    /// Row already had a non-NULL `decision`; we leave it alone so the
-    /// fetcher never resurrects items the LLM (or the user) already
-    /// decided. IM fetchers can explicitly call [`reset_decision`] when
-    /// new activity arrives; this path is for the default "no change".
+    /// Row already decided; left alone. IM fetchers explicitly call `reset_decision` when new activity arrives.
     SkippedDecided,
 }
 
@@ -227,10 +218,7 @@ pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
         .context("collect list_open_candidates")
 }
 
-/// Anchors (message_ids) that already drove a workspace creation for
-/// a given chat. Read from `workspaces.triage_source_ref` matching
-/// `<chat_id>:<anchor>`. Fed into the chat payload header so the LLM
-/// can skip tasks it already proposed in earlier ticks.
+/// Anchors already used for a workspace, by chat. Fed to the LLM so it skips re-proposing.
 pub fn proposed_anchors_for_chat(source: &str, chat_id: &str) -> Result<Vec<String>> {
     let conn = db::read_conn()?;
     let mut stmt = conn
@@ -270,9 +258,7 @@ pub fn count_open_candidates() -> Result<i64> {
     Ok(n)
 }
 
-/// Look up one candidate row by id. Used by the Tauri command bridge
-/// when the LLM hands us a `candidate_id` and we need (payload_path,
-/// source, source_ref) to fulfil the call.
+/// Look up one candidate row by id.
 pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
     let conn = db::read_conn()?;
     let row = conn
@@ -304,11 +290,7 @@ pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
     Ok(row)
 }
 
-/// Re-open a previously decided candidate. Used by IM fetchers when
-/// new activity arrives on a chat the LLM had already judged — the
-/// user expects the new messages to be re-evaluated rather than
-/// silently dropped because of a stale decision. No-op when the row
-/// was already open.
+/// Re-open a decided candidate when new activity lands. No-op if already open.
 pub fn reset_decision(id: &str) -> Result<()> {
     let conn = db::write_conn()?;
     conn.execute(

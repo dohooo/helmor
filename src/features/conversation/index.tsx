@@ -83,10 +83,6 @@ type WorkspaceConversationContainerProps = {
 	repoId?: string | null;
 	sessionSelectionHistory?: string[];
 	onSelectSession: (sessionId: string | null) => void;
-	/** Switch the currently selected workspace. Currently consumed by the
-	 *  composer's Triage Dismiss flow to focus the next sibling after
-	 *  archiving the current one. */
-	onSelectWorkspace?: (workspaceId: string | null) => void;
 	onResolveDisplayedSession: (sessionId: string | null) => void;
 	onInteractionSessionsChange?: (
 		sessionWorkspaceMap: Map<string, string>,
@@ -182,7 +178,6 @@ export const WorkspaceConversationContainer = memo(
 		repoId = null,
 		sessionSelectionHistory = [],
 		onSelectSession,
-		onSelectWorkspace,
 		onResolveDisplayedSession,
 		onInteractionSessionsChange,
 		activeStreams,
@@ -605,7 +600,6 @@ export const WorkspaceConversationContainer = memo(
 						onChangeFastMode={handleChangeFastMode}
 						onSwitchSession={onSelectSession}
 						onSubmit={handleComposerSubmitWrapper}
-						onSelectWorkspace={onSelectWorkspace}
 						onStop={handleStopStream}
 						pendingPromptForSession={pendingPromptForSession}
 						onPendingPromptConsumed={onPendingPromptConsumed}

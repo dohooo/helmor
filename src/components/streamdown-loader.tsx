@@ -15,13 +15,7 @@ const LazyStreamdown = lazy(async () => {
 		React.ComponentProps<typeof Streamdown>["rehypePlugins"]
 	>[number];
 
-	// Streamdown's default `rehype-sanitize` schema only allows `http` /
-	// `https` for `<img src>`, which strips our `helmor-attachment://`
-	// URLs. With the src gone, `rehype-harden` then replaces the image
-	// with a `[Image blocked: ...]` span. Extend the schema to opt our
-	// own custom Tauri protocols in (helmor-attachment for triage
-	// previews, slack-file for inbox previews) — the rest of the
-	// default plugin chain stays untouched.
+	// Default sanitize schema only allows http(s) for img src — opt in our Tauri schemes (helmor-attachment, slack-file, asset).
 	const helmorSanitizeSchema = {
 		...defaultSchema,
 		protocols: {

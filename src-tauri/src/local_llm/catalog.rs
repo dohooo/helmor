@@ -60,8 +60,7 @@ pub struct CatalogEntry {
 }
 
 impl CatalogEntry {
-    /// Sum of main weights + mmproj (when present). What the UI / progress
-    /// bars / RAM-fit hints should treat as the entry's footprint.
+    /// Main weights + mmproj (the footprint the UI should show).
     pub fn total_bytes(&self) -> u64 {
         self.bytes + self.mmproj_bytes
     }

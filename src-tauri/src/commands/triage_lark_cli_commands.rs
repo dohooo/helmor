@@ -1,12 +1,4 @@
-//! Tauri commands for the in-app Lark CLI auth terminal.
-//!
-//! Mirrors the `*_forge_cli_auth_terminal_*` quartet (spawn / stop /
-//! write_stdin / resize) but for `lark-cli`. Two actions:
-//!   - `install`: runs `npm install -g @larksuite/cli && lark-cli auth login`
-//!   - `signIn`: runs just `lark-cli auth login`
-//!
-//! The frontend opens the dialog, picks an action based on the current
-//! source-health state, and the user completes the OAuth flow inline.
+//! Lark CLI in-app auth terminal. Mirrors `*_forge_cli_auth_terminal_*` for `lark-cli`. Actions: install / signIn.
 
 use serde::Deserialize;
 use tauri::{ipc::Channel, State};
@@ -33,17 +25,7 @@ impl LarkAuthAction {
         format!("lark-cli-auth:{key}:{instance_id}")
     }
 
-    /// Full shell snippet auto-typed into the PTY when the dialog
-    /// opens. Pattern:
-    ///   1. `clear` to wipe the auto-typed line + shell prompt so the
-    ///      user only sees our banner + the real CLI output.
-    ///   2. A small colored Helmor banner + 1–2 lines explaining what's
-    ///      about to happen (which browser opens, what's required).
-    ///   3. The real CLI command(s). `&&` between install and login so
-    ///      a failed `npm install` doesn't pretend we can sign in.
-    ///
-    /// `printf` instead of `echo -e` for portability across bash/zsh.
-    /// Raw strings so the literal `\033` (ESC) reaches the shell as-is.
+    /// PTY boot: clear, banner, then the real command(s). `printf` for bash/zsh portability; raw strings so `\033` reaches the shell.
     fn boot_command(self) -> &'static str {
         match self {
             LarkAuthAction::Install => concat!(

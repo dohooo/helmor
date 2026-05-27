@@ -39,9 +39,7 @@ pub async fn cancel_triage_tick<R: Runtime>(app: AppHandle<R>) -> CmdResult<bool
     run_blocking(move || triage::cancel_tick_in_flight(&app)).await
 }
 
-/// Layer-2: open candidates for the next tick's prompt. Returns at most
-/// `limit` rows, ordered newest-first. Used by the sidecar's `triage.*`
-/// host bridge AND by future UI inspector panels.
+/// Open candidates, newest-first.
 #[tauri::command]
 pub async fn list_open_triage_candidates(
     limit: u32,
@@ -55,9 +53,7 @@ pub async fn count_open_triage_candidates() -> CmdResult<i64> {
     run_blocking(fetcher_storage::count_open_candidates).await
 }
 
-/// Read a candidate's full markdown payload, optionally filtered by a
-/// regex `grep`. Empty grep returns the whole file (truncated to a 8 KB
-/// cap so a runaway payload doesn't pop the LLM context).
+/// Read a candidate payload; optional grep filter, 8 KB truncation cap.
 #[tauri::command]
 pub async fn read_triage_candidate(
     candidate_id: String,
@@ -96,9 +92,7 @@ fn read_candidate_inner(candidate_id: &str, grep: Option<&str>) -> anyhow::Resul
     }
 }
 
-/// Naive line-grep with ±3 line context, joined with `---` separators.
-/// Substring match (case-insensitive) — keeps the helper dependency-free
-/// and "good enough" for the LLM to drill into long bodies.
+/// Line-grep, case-insensitive, ±3 lines context joined by `---`.
 fn grep_filter(body: &str, needle: &str) -> String {
     let lower_needle = needle.to_lowercase();
     let lines: Vec<&str> = body.lines().collect();
@@ -136,9 +130,7 @@ fn truncate_bytes(body: &str, max: usize) -> String {
     if body.len() <= max {
         return body.to_string();
     }
-    // Walk back to a UTF-8 char boundary. `str::is_char_boundary` is the
-    // standard-library answer — handles continuation bytes AND
-    // multi-byte start bytes correctly.
+    // Walk back to a UTF-8 char boundary.
     let mut end = max;
     while end > 0 && !body.is_char_boundary(end) {
         end -= 1;

@@ -1,11 +1,5 @@
-//! Background fetchers that build the `triage_candidate` index.
-//!
-//! Each provider implements [`Fetcher`] and runs on its own cadence. The
-//! scheduler thread drives them serially; provider failures are logged
-//! and isolated so a flaky API doesn't block the others.
-//!
-//! Layer-2 (the local-LLM tick) reads from `triage_candidate` and never
-//! invokes provider APIs directly — see [`storage::list_open_candidates`].
+//! Background fetchers that populate `triage_candidate`. Layer-2 reads from
+//! there; failures are isolated per provider.
 
 pub mod cache;
 pub mod github;
@@ -22,16 +16,10 @@ use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Runtime as TauriRuntime};
 use tokio::runtime::{Builder, Runtime};
 
-/// How far back any fetcher looks on cold start (no cursor / no DB
-/// history). Applies uniformly across sources: GitHub/GitLab drop items
-/// not updated within this window, IM backends only enumerate
-/// conversations active within it. Keep small so a fresh user doesn't
-/// drown in week-old noise.
+/// Cold-start lookback — kept small so fresh users don't drown in old noise.
 pub const COLD_START_DAYS: i64 = 3;
 
-/// Earliest timestamp a candidate is allowed to have. Helpers below
-/// expose it as both DateTime and unix-ms for the forge clients that
-/// surface `last_activity_at` as a raw millisecond integer.
+/// Cold-start cutoff (DateTime + unix-ms helpers below).
 pub fn cold_start_cutoff() -> DateTime<Utc> {
     Utc::now() - chrono::Duration::days(COLD_START_DAYS)
 }
@@ -47,9 +35,7 @@ pub trait Fetcher: Send + Sync {
     /// `triage_candidate.source` and as the cursor key.
     fn source(&self) -> &'static str;
 
-    /// Run one fetch tick. Returns a brief summary the scheduler logs.
-    /// Errors abort this tick but do NOT propagate — the scheduler logs
-    /// them so a partial failure can't take down the loop.
+    /// Run one tick; errors logged, never propagated.
     fn fetch_once(&self) -> Result<FetchSummary>;
 }
 
@@ -88,15 +74,8 @@ pub fn http_runtime() -> &'static Runtime {
 const STARTUP_DELAY_SEC: u64 = 45;
 const TICK_INTERVAL_SEC: u64 = 300; // 5 min
 
-/// Spawn the fetcher scheduler thread. One process-wide instance —
-/// drives BOTH the fetcher pipeline (always) AND the Layer-2 LLM tick
-/// (only when triage is enabled + auto_run + local LLM is on).
-///
-/// We deliberately collapse what used to be two separate schedulers
-/// (`fetcher` + `triage` heartbeat) into this single loop so a tick
-/// always runs against freshly-fetched data. `auto_run=false` keeps
-/// the fetcher running on the same cadence but skips the post-fetch
-/// tick — the user can still fire one manually via the Run-now button.
+/// Spawn the fetcher scheduler thread. Single loop drives fetch + (when
+/// enabled) Layer-2 tick on freshly-fetched data.
 pub fn spawn_scheduler<R: TauriRuntime>(app: AppHandle<R>) {
     if let Err(error) = thread::Builder::new()
         .name("triage-fetcher".into())
@@ -123,14 +102,8 @@ fn scheduler_loop<R: TauriRuntime>(app: AppHandle<R>) {
     }
 }
 
-/// Bridge fetcher → triage tick. Conditions must all hold:
-///   - triage feature enabled in settings
-///   - auto-run on (else the user expects only manual fires)
-///   - local LLM running
-///
-/// Failure modes are logged (not propagated) so a busted tick can't
-/// stop the fetcher loop. Filtered out the noisy "another tick in
-/// flight" case — the previous tick is still doing the job.
+/// Fire a Layer-2 tick post-fetch when enabled + auto_run + LLM on. Logs
+/// failures (swallows the noisy `in flight` case).
 fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
     let cfg = match crate::triage::load_config() {
         Ok(c) => c,
@@ -153,9 +126,7 @@ fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
     }
 }
 
-/// Run every registered fetcher once. Logs per-provider summary +
-/// errors. Public so the manual "Run now" command path (TODO) can reuse
-/// it without going through the scheduler thread.
+/// Run every registered fetcher once. Logs per-provider summary.
 pub fn run_once() {
     for fetcher in registered_fetchers() {
         let source = fetcher.source();

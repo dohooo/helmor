@@ -1,29 +1,8 @@
-//! Lark ImBackend.
-//!
-//! Discovery rules (matching user intent):
-//!   - DMs (p2p): surfaced as soon as ANY message lands in them within
-//!     the lookback window — we don't gate on whether the user replied.
-//!   - Groups: only those the user has spoken in OR been @ed in. A
-//!     large room the user is a passive member of doesn't earn a slot.
-//!
-//! Implementation note on DMs: Lark's `chat-list` API only lists
-//! GROUPS — there's no equivalent of Slack's `users.conversations`
-//! that returns DMs alongside groups. To discover active DMs we run a
-//! separate `messages-search --chat-type p2p` (Lark's default behavior
-//! omits p2p; the filter has to be explicit) and treat each distinct
-//! `chat_id` as one DM ImConversation. This matches the "active in the
-//! last COLD_START_DAYS" semantics naturally.
-//!
-//! Pipeline:
-//!   1. `messages-search(sender=me, start=cold_start)` +
-//!      `messages-search(is_at_me=true, start=cold_start)` → derive
-//!      the "I'm involved here" GROUP set.
-//!   2. `messages-search(chat_type=p2p, start=cold_start)` → derive
-//!      the "active DM" set, plus the counterpart's display name from
-//!      the message sender.
-//!   3. `chat-list --sort-type ByActiveTimeDesc --exclude-muted` →
-//!      enumerate every GROUP the user is in. Filter to involved set.
-//!   4. Merge: groups (from chat-list) + DMs (from p2p search).
+//! Lark ImBackend. Discovery: DMs surface on any activity; groups only when the
+//! user posted or was @ed. Lark's `chat-list` doesn't return DMs, so DMs are
+//! derived from `messages-search --chat-type p2p`. Pipeline:
+//! messages-search(sender=me, is_at_me) → involved groups;
+//! messages-search(p2p) → DMs; chat-list → group enumeration; merge.
 
 use std::collections::BTreeSet;
 
@@ -33,16 +12,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::lark;
+use crate::triage::attachments;
 
-use super::types::{ImConversation, ImConversationKind, ImMessage};
+use super::types::{ImAttachment, ImConversation, ImConversationKind, ImMessage};
 use super::ImBackend;
 
 const SOURCE: &str = "lark";
-/// Cap per messages-search call. Lark's API maxes at 50 anyway, but
-/// we only need DISTINCT chat ids — 50 usually covers all of them.
+/// Lark API max.
 const DISCOVERY_PAGE_SIZE: u32 = 50;
-/// Cap on chat-list. Sorted ByActiveTimeDesc, so the top slice is the
-/// freshest. 100 is the API max.
+/// Lark API max.
 const CHAT_LIST_PAGE_SIZE: u32 = 100;
 
 pub struct LarkBackend;
@@ -97,10 +75,7 @@ impl ImBackend for LarkBackend {
             .context("messages-search is_at_me")?;
             collect_chat_ids(&mentions, &mut involved_groups);
 
-            // (2) Discover active DMs. Lark's chat-list does NOT
-            // include p2p chats; messages-search with chat_type=p2p is
-            // the only way to enumerate DMs that had any activity in
-            // the window.
+            // (2) Active DMs via messages-search(p2p).
             let p2p = lark::im::messages_search(lark::im::MessagesSearch {
                 query: None,
                 sender: None,
@@ -124,9 +99,7 @@ impl ImBackend for LarkBackend {
             .await
             .context("chat-list")?;
 
-            // (4) Filter groups to the "involved" set and merge with
-            // the DM list. DMs go first so they survive the per-tick
-            // truncate in the generic layer.
+            // (4) Filter groups to involved set; DMs first to survive truncation.
             let group_convs: Vec<ImConversation> = parse_chat_list(&raw_chats)
                 .into_iter()
                 .filter(|c| involved_groups.contains(&c.chat_id))
@@ -146,23 +119,30 @@ impl ImBackend for LarkBackend {
     ) -> Result<Vec<ImMessage>> {
         let chat_id = conv.id.as_str();
         let start = since.map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true));
-        let raw = super::super::http_runtime().block_on(lark::im::chat_messages_list(
-            lark::im::ChatMessages {
-                chat_id,
-                page_size: limit.min(u32::MAX as usize) as u32,
-                start: start.as_deref(),
-            },
-        ))?;
-        Ok(parse_messages(&raw)
+        let rt = super::super::http_runtime();
+        let raw = rt.block_on(lark::im::chat_messages_list(lark::im::ChatMessages {
+            chat_id,
+            page_size: limit.min(u32::MAX as usize) as u32,
+            start: start.as_deref(),
+        }))?;
+        let messages: Vec<ImMessage> = parse_messages(&raw)
             .into_iter()
             .filter_map(to_im_message)
-            .collect())
+            .collect();
+        // Best-effort: download referenced image attachments per message.
+        // candidate_id == chat_id (one chat → one triage candidate).
+        let mut out = Vec::with_capacity(messages.len());
+        for mut msg in messages {
+            if !msg.attachments.is_empty() {
+                rt.block_on(download_attachments(&mut msg, chat_id));
+            }
+            out.push(msg);
+        }
+        Ok(out)
     }
 
     fn render_message_block(&self, _conv: &ImConversation, msg: &ImMessage) -> String {
-        // Lark-specific tweak: surface `msg_type` on the same heading
-        // line as the timestamp/sender so the LLM can spot a `post`-
-        // style rich-text bubble vs a plain `text` line at a glance.
+        // Surface `msg_type` in heading for non-text bubbles.
         let mut out = String::new();
         let sender = msg.sender.as_deref().unwrap_or("(unknown)");
         let ts = msg.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -182,8 +162,7 @@ impl ImBackend for LarkBackend {
     }
 }
 
-/// Extract distinct chat_ids from a `messages-search` response. We
-/// don't care about anything else — just which chats had me involved.
+/// Distinct chat_ids from a messages-search response.
 fn collect_chat_ids(raw: &Value, sink: &mut BTreeSet<String>) {
     for m in parse_messages(raw) {
         if let Some(id) = m.chat_id.filter(|s| !s.is_empty()) {
@@ -192,10 +171,7 @@ fn collect_chat_ids(raw: &Value, sink: &mut BTreeSet<String>) {
     }
 }
 
-/// Walk a p2p `messages-search` response, group by `chat_id`, and build
-/// one `ImConversation` per DM. Label is the counterpart's display name
-/// (the sender of the first message NOT sent by me); falls back to a
-/// generic `"DM"` if all messages in the page are mine or unnamed.
+/// Group p2p messages by `chat_id` → one ImConversation per DM. Label = counterpart's display name.
 fn build_dm_conversations(raw: &Value, my_open_id: &str) -> Vec<ImConversation> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<ImConversation> = Vec::new();
@@ -268,10 +244,7 @@ fn parse_messages(raw: &Value) -> Vec<MessageRecord> {
 }
 
 fn to_im_conversation(row: ChatRow) -> ImConversation {
-    // Lark's `chat-list` only returns groups (p2p DMs are discovered
-    // separately via messages-search). It also doesn't distinguish
-    // public/private inside the group bucket, so everything maps to
-    // Channel.
+    // chat-list returns groups only; no public/private distinction → Channel.
     ImConversation {
         id: row.chat_id,
         label: row.name,
@@ -291,6 +264,7 @@ fn to_im_message(m: MessageRecord) -> Option<ImMessage> {
         .as_ref()
         .and_then(|s| s.name.clone().or_else(|| s.id.clone()));
     let text = m.content.clone().unwrap_or_default();
+    let attachments = extract_attachment_placeholders(&text);
     let raw = json!({ "msg_type": m.msg_type });
     Some(ImMessage {
         id,
@@ -299,8 +273,115 @@ fn to_im_message(m: MessageRecord) -> Option<ImMessage> {
         text,
         external_url: m.message_app_link,
         deleted: false,
+        attachments,
         raw,
     })
+}
+
+/// Walk lark-cli's `[Image: <key>]` placeholders out of a message body.
+/// Produces empty-path placeholders that `download_attachments` fills.
+fn extract_attachment_placeholders(text: &str) -> Vec<ImAttachment> {
+    let mut out = Vec::new();
+    let mut cursor = text;
+    while let Some(start) = cursor.find("[Image:") {
+        cursor = &cursor[start + "[Image:".len()..];
+        let body = cursor.trim_start();
+        let Some(end) = body.find(']') else { break };
+        let key = body[..end].trim();
+        if !key.is_empty() {
+            out.push(ImAttachment {
+                filename: format!("{key}.bin"),
+                local_path: std::path::PathBuf::new(),
+                mime_type: None,
+                bytes: 0,
+                alt: Some(key.to_string()),
+            });
+        }
+        cursor = &body[end + 1..];
+    }
+    out
+}
+
+/// Download each placeholder via lark-cli; fills `local_path` / `bytes` /
+/// `mime_type` / refined `filename` (extension from magic bytes). Drops
+/// entries that fail to download.
+async fn download_attachments(msg: &mut ImMessage, chat_id: &str) {
+    let Ok(staging) = attachments::staging_dir("lark", chat_id) else {
+        msg.attachments.clear();
+        return;
+    };
+    let mut kept = Vec::with_capacity(msg.attachments.len());
+    for mut att in std::mem::take(&mut msg.attachments) {
+        let Some(key) = att.alt.clone() else { continue };
+        let initial_name = att.filename.clone();
+        if let Err(e) =
+            lark::im::download_resource(&msg.id, "image", &key, &staging, &initial_name).await
+        {
+            tracing::warn!(
+                error = %e,
+                message_id = %msg.id,
+                key = %key,
+                "lark: download_resource failed"
+            );
+            continue;
+        }
+        let raw_path = staging.join(&initial_name);
+        let Ok(meta) = std::fs::metadata(&raw_path) else {
+            continue;
+        };
+        if meta.len() == 0 {
+            let _ = std::fs::remove_file(&raw_path);
+            continue;
+        }
+        // Sniff MIME and rename to the right extension if needed.
+        let mime = sniff_image_mime(&raw_path);
+        let final_name = match mime {
+            Some(m) => format!("{key}{}", ext_for_mime(m)),
+            None => initial_name.clone(),
+        };
+        let final_path = staging.join(&final_name);
+        if final_path != raw_path {
+            let _ = std::fs::rename(&raw_path, &final_path);
+        }
+        att.filename = final_name;
+        att.local_path = final_path;
+        att.mime_type = mime.map(str::to_string);
+        att.bytes = meta.len();
+        kept.push(att);
+    }
+    msg.attachments = kept;
+}
+
+fn sniff_image_mime(path: &std::path::Path) -> Option<&'static str> {
+    let mut buf = [0u8; 12];
+    let n = std::fs::File::open(path)
+        .ok()
+        .and_then(|mut f| std::io::Read::read(&mut f, &mut buf).ok())?;
+    let head = &buf[..n];
+    if head.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if head.starts_with(&[0x42, 0x4D]) {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
+fn ext_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/bmp" => ".bmp",
+        _ => ".bin",
+    }
 }
 
 fn parse_create_time(raw: Option<&str>) -> Option<DateTime<Utc>> {
@@ -309,9 +390,7 @@ fn parse_create_time(raw: Option<&str>) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(ms).single()
 }
 
-/// One row from `chat-list`. Only the fields we actually consume are
-/// captured. Lark's `chat-list` response doesn't include a chat_mode
-/// field — and only returns groups anyway, so we don't need one.
+/// Subset of chat-list row fields we consume.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ChatRow {
     #[serde(default)]
@@ -474,6 +553,7 @@ mod tests {
             text: "see attached".into(),
             external_url: None,
             deleted: false,
+            attachments: Vec::new(),
             raw: json!({ "msg_type": "post" }),
         };
         let rendered = LarkBackend.render_message_block(&conv, &msg);
@@ -496,9 +576,27 @@ mod tests {
             text: "hi".into(),
             external_url: None,
             deleted: false,
+            attachments: Vec::new(),
             raw: json!({ "msg_type": "text" }),
         };
         let rendered = LarkBackend.render_message_block(&conv, &msg);
         assert!(!rendered.contains("· text"));
+    }
+
+    #[test]
+    fn extract_attachment_placeholders_handles_multiple_images() {
+        let text = "see this [Image: img_v3_aaa] and that [Image: img_v3_bbb] please";
+        let atts = extract_attachment_placeholders(text);
+        assert_eq!(atts.len(), 2);
+        assert_eq!(atts[0].alt.as_deref(), Some("img_v3_aaa"));
+        assert_eq!(atts[1].alt.as_deref(), Some("img_v3_bbb"));
+        assert_eq!(atts[0].filename, "img_v3_aaa.bin");
+    }
+
+    #[test]
+    fn extract_attachment_placeholders_skips_unclosed() {
+        let text = "broken [Image: img_v3_xxx";
+        let atts = extract_attachment_placeholders(text);
+        assert!(atts.is_empty());
     }
 }

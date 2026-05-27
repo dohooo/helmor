@@ -8,8 +8,7 @@ use serde_json::Value;
 use super::cli::{run, run_in};
 
 pub struct ChatList<'a> {
-    /// Use `ByActiveTimeDesc` for triage — most-recent activity first
-    /// is the only sort the fetcher cares about.
+    /// Triage uses ByActiveTimeDesc.
     pub sort_type: &'a str,
     /// User-identity only — drops chats the user has muted (DND).
     pub exclude_muted: bool,

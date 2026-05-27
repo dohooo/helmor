@@ -57,6 +57,7 @@ import {
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
+import { publishShellEvent } from "@/shell/event-bus";
 import { SettingsReleaseBadge } from "../components/release-marker";
 
 const LOCAL_LLM_STATUS_KEY = ["localLlmStatus"] as const;
@@ -358,11 +359,7 @@ function Field({
 	);
 }
 
-/// Hover to open. Long markdown content (LLM final reply) renders
-/// inside a popover with a capped max-height + scroll, rather than the
-/// old whitespace-pre-wrap tooltip that broke on code blocks / lists.
-/// HoverCard (not Tooltip) so the card itself accepts pointer + wheel
-/// events — users need to mouse over to scroll long summaries.
+// HoverCard (not Tooltip) so users can scroll long markdown summaries.
 function SummaryPopover({ text }: { text: string }) {
 	return (
 		<HoverCard openDelay={120} closeDelay={120}>
@@ -580,14 +577,12 @@ function stateBadge(state: TriageSourceHealthState): {
 function SourceRow({ row }: { row: TriageSourceHealth }) {
 	const Icon = SOURCE_ICONS[row.source] ?? AlertTriangle;
 	const { label, tone, Icon: StateIcon } = stateBadge(row.state);
-	// Lark is the only source today that can drive an in-app terminal
-	// flow — gh / glab are bundled and Slack uses its own settings panel.
+	// Lark = in-app terminal; Slack = jump to Contexts panel; gh/glab need no CTA.
 	const larkAction = larkConnectAction(row);
+	const slackNeedsConnect = slackConnectNeeded(row);
 	const [dialogOpen, setDialogOpen] = useState(false);
-	// When a Connect button is available, the button itself signals
-	// "action required" — no need to also stamp the row with an
-	// "Install required" / "Sign-in required" badge.
-	const showBadge = !larkAction;
+	// Button replaces the badge when present.
+	const showBadge = !larkAction && !slackNeedsConnect;
 	return (
 		<>
 			<div className="flex items-center gap-3 px-3 py-2.5">
@@ -602,6 +597,22 @@ function SourceRow({ row }: { row: TriageSourceHealth }) {
 						variant="outline"
 						size="sm"
 						onClick={() => setDialogOpen(true)}
+					>
+						Connect
+					</Button>
+				) : null}
+				{slackNeedsConnect ? (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() =>
+							publishShellEvent({
+								type: "open-settings",
+								section: "inbox",
+								inboxProvider: "slack",
+							})
+						}
 					>
 						Connect
 					</Button>
@@ -634,4 +645,8 @@ function larkConnectAction(row: TriageSourceHealth): LarkAuthAction | null {
 	if (row.state === "notInstalled") return "install";
 	if (row.state === "notAuthed") return "signIn";
 	return null;
+}
+
+function slackConnectNeeded(row: TriageSourceHealth): boolean {
+	return row.source === "slack" && row.state === "notAuthed";
 }

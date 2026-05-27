@@ -1,22 +1,7 @@
-//! Layer-2 LLM tick runner. No standalone heartbeat — the fetcher
-//! scheduler (`fetcher::spawn_scheduler`) drives both pipelines: it
-//! pulls fresh data into `triage_candidate`, then (when triage is
-//! enabled + auto_run + LLM is running) fires a tick on top of the
-//! freshly-fetched data via `trigger_tick_now`.
-//!
-//! Manual fires (Settings → Run now) also land here.
-//!
-//! Tick path:
-//!   1. Pull open candidates from `triage_candidate`.
-//!   2. Hand the slice to the sidecar LLM with repo list + endpoint.
-//!   3. For each `triageProposal` event:
-//!      - look up candidate row → `(source, source_ref)`
-//!      - call `create_ai_workspace` (also dedups on source pair)
-//!      - mark the candidate `decision='proposed'`
-//!
-//! `mark_not_actionable` writes `decision='skip'` from the sidecar
-//! directly via the `triage.record_decision` host bridge — the
-//! scheduler never sees those.
+//! Layer-2 LLM tick runner. Driven by `fetcher::spawn_scheduler` after each
+//! fetch (auto-fire) or by `trigger_tick_now` (manual). Resolves
+//! `triageProposal` events → workspaces; `mark_not_actionable`
+//! short-circuits via the host bridge.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -31,18 +16,23 @@ use crate::sidecar::{ManagedSidecar, SidecarRequest};
 use crate::ui_sync::{self, UiMutationEvent};
 
 use super::active_status::{ActiveStatusStore, TickOutcome};
+use super::attachments;
 use super::config::{load_config, TriageConfig};
+use super::fetcher::im as fetcher_im;
 use super::fetcher::storage as candidate_storage;
 use super::workspace_factory::{create_ai_workspace, CreateAiWorkspaceParams};
+use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 
-/// How many candidates we hand to the LLM per BATCH. Sized to fit a
-/// 32k-token local model with 400-char previews + room for tool calls.
+/// Per-tick cap on inlined image bytes across ALL candidates. base64
+/// inflation factor is ~1.34 — total wire payload stays ≤ ~16 MB which
+/// still fits the local llama-server's default request size and leaves
+/// room in the 32k context after vision tokenisation.
+const PER_TICK_INLINE_BUDGET: u64 = 12 * 1024 * 1024;
+
+/// Per-batch cap, sized for a 32k local context.
 const CANDIDATES_PER_BATCH: i64 = 20;
-/// Upper bound on batches we'll loop through within a single tick.
-/// `CANDIDATES_PER_BATCH * MAX_BATCHES_PER_TICK = 100` candidates max
-/// per tick — typical backlogs clear in one tick without making the
-/// loop unbounded if upstream goes wild.
+/// Per-tick batch cap (100 candidates total).
 const MAX_BATCHES_PER_TICK: u32 = 5;
 
 static TICK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -135,16 +125,12 @@ pub struct ExecuteOk {
     pub workspace_failures: u32,
 }
 
-/// What the sidecar sends back inside a `triageProposal` event.
-/// Mirror of the sidecar-side `propose_workspace` payload.
+/// Mirror of sidecar's `propose_workspace` payload.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProposalEvent {
     candidate_id: String,
-    /// Anchor message / issue id within the candidate. Composed with
-    /// the candidate's `source_ref` to form the workspace's
-    /// `source_ref = chat_id:anchor`, letting one chat spawn N
-    /// workspaces (one per task).
+    /// Anchor id; composed into `source_ref = chat_id:anchor`.
     task_anchor: String,
     repo_id: String,
     title: String,
@@ -152,11 +138,8 @@ struct ProposalEvent {
     plan_message: String,
 }
 
-/// Run up to MAX_BATCHES_PER_TICK back-to-back LLM batches. Each batch
-/// pulls a fresh slice of open candidates (the previous batch's
-/// decisions are already persisted in DB, so the next SELECT naturally
-/// skips them). Stops early when the queue is empty or the user
-/// cancels.
+/// Loop up to MAX_BATCHES_PER_TICK batches; previous batch's decisions
+/// persist in DB so SELECT naturally advances.
 fn execute_tick<R: Runtime>(
     app: &AppHandle<R>,
     cfg: &TriageConfig,
@@ -208,9 +191,7 @@ fn execute_tick<R: Runtime>(
         )?;
         total.created += batch.created;
         total.workspace_failures += batch.workspace_failures;
-        // Keep the most recent non-empty summary — typically the last
-        // batch's "nothing more to judge" / cap-reached message is the
-        // one users want to see in the outcome line.
+        // Last non-empty batch summary wins.
         if batch.summary.is_some() {
             total.summary = batch.summary;
         }
@@ -225,8 +206,7 @@ fn execute_tick<R: Runtime>(
     Ok(total)
 }
 
-/// One sidecar request → drain events → resolve `triageProposal`s into
-/// workspaces. Caller (`execute_tick`) aggregates across batches.
+/// Drain one sidecar batch's events into workspaces.
 #[allow(clippy::too_many_arguments)]
 fn run_one_batch<R: Runtime>(
     app: &AppHandle<R>,
@@ -242,6 +222,7 @@ fn run_one_batch<R: Runtime>(
     let sidecar = app.state::<ManagedSidecar>();
     let rx = sidecar.subscribe(&request_id);
 
+    let enriched_candidates = enrich_with_attachments(candidates);
     let request = SidecarRequest {
         id: request_id.clone(),
         method: "runTriageTick".into(),
@@ -249,7 +230,7 @@ fn run_one_batch<R: Runtime>(
             "tickId": tick_id,
             "systemPrompt": cfg.system_prompt,
             "maxPerTick": cfg.max_per_tick,
-            "candidates": candidates,
+            "candidates": enriched_candidates,
             "repos": repos,
             "localModel": {
                 "baseUrl": endpoint_url,
@@ -410,22 +391,7 @@ fn run_one_batch<R: Runtime>(
     })
 }
 
-/// Resolve a `triageProposal` into a workspace.
-///
-/// `source_ref` is composed as `<candidate.source_ref>:<task_anchor>`,
-/// so a single chat candidate can spawn N workspaces (one per task the
-/// LLM identified inside the chat window). For forge candidates this
-/// degenerates to e.g. `octo/repo#42:octo/repo#42` — harmless duplicate
-/// but stable; the (source_type, source_ref) UNIQUE constraint on
-/// workspaces still dedups across re-runs.
-///
-/// We do NOT call `record_decision` for chat candidates: their
-/// re-open-on-new-activity semantics mean the fetcher decides when to
-/// reset/keep the decision. We DO call it for forge candidates (whose
-/// fetcher overwrites only metadata, never the decision). Easiest
-/// heuristic: record_decision unconditionally — the IM fetcher will
-/// reset it next tick if new messages arrived. Forge sources have no
-/// new-activity reset path, so `proposed` sticks.
+/// Resolve a proposal to a workspace; `source_ref = candidate.source_ref:task_anchor` (one chat can spawn N).
 fn resolve_and_create<R: Runtime>(
     _app: &AppHandle<R>,
     ev: &ProposalEvent,
@@ -443,12 +409,15 @@ fn resolve_and_create<R: Runtime>(
     let params = CreateAiWorkspaceParams {
         source_type: row.source.clone(),
         source_ref: composed_source_ref,
+        candidate_source_ref: row.source_ref.clone(),
+        task_anchor: anchor.to_string(),
         repo_id: ev.repo_id.clone(),
         plan_message: ev.plan_message.clone(),
         title: ev.title.clone(),
         branch_name: ev.branch_name.clone(),
     };
     let result = create_ai_workspace(&params)?;
+    // IM fetcher resets next tick; forge has no reset path
     if let Err(error) = candidate_storage::record_decision(
         &ev.candidate_id,
         "proposed",
@@ -461,6 +430,77 @@ fn resolve_and_create<R: Runtime>(
         );
     }
     Ok(result)
+}
+
+/// Attach inline base64 image previews to each candidate's JSON payload
+/// so the vision-capable local LLM can see them. Non-IM sources pass
+/// through untouched. Stops adding images once `PER_TICK_INLINE_BUDGET`
+/// is reached — remaining attachments still surface as markdown lines
+/// in the chat file the LLM can `read_candidate` for.
+fn enrich_with_attachments(candidates: &[candidate_storage::CandidateRow]) -> Vec<Value> {
+    let mut remaining: u64 = PER_TICK_INLINE_BUDGET;
+    candidates
+        .iter()
+        .map(|row| enrich_one_candidate(row, &mut remaining))
+        .collect()
+}
+
+fn enrich_one_candidate(
+    row: &candidate_storage::CandidateRow,
+    remaining_budget: &mut u64,
+) -> Value {
+    let mut value = serde_json::to_value(row).unwrap_or(Value::Null);
+    let conv_id = row.source_ref.as_str();
+    if !matches!(row.source.as_str(), "slack" | "lark") || conv_id.is_empty() {
+        return value;
+    }
+    let entries = fetcher_im::read_attachments_sidecar(&row.source, conv_id);
+    if entries.is_empty() {
+        return value;
+    }
+    let mut inlined: Vec<InlineAttachment> = Vec::new();
+    for entry in entries {
+        if *remaining_budget == 0 {
+            break;
+        }
+        let Some(inline) = attachments::inline_preview(Path::new(&entry.local_path))
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let cost = inline.data_base64.len() as u64;
+        if cost > *remaining_budget {
+            continue;
+        }
+        *remaining_budget -= cost;
+        inlined.push(InlineAttachment {
+            message_id: entry.message_id,
+            filename: entry.filename,
+            alt: entry.alt,
+            mime_type: inline.mime_type,
+            data_base64: inline.data_base64,
+        });
+    }
+    if !inlined.is_empty() {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "attachments".into(),
+                serde_json::to_value(inlined).unwrap_or(Value::Null),
+            );
+        }
+    }
+    value
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineAttachment {
+    message_id: String,
+    filename: String,
+    alt: Option<String>,
+    mime_type: String,
+    data_base64: String,
 }
 
 fn list_repos_payload() -> Result<Value> {

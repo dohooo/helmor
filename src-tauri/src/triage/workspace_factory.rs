@@ -1,10 +1,14 @@
 //! Atomic creation of an AI-triage workspace + priming message.
 
+use std::path::Path;
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::models::db;
+use crate::triage::attachments;
+use crate::triage::fetcher::im as fetcher_im;
 use crate::workspace::branching as workspace_branching;
 use crate::workspace::helpers as workspace_helpers;
 use crate::workspace::lifecycle as wlifecycle;
@@ -15,17 +19,19 @@ use crate::workspace_status::WorkspaceStatus;
 #[serde(rename_all = "camelCase")]
 pub struct CreateAiWorkspaceParams {
     pub source_type: String,
+    /// Composed `<candidate_source_ref>:<task_anchor>` for dedup.
     pub source_ref: String,
+    /// Raw candidate id used to find the IM attachment sidecar (chat_id
+    /// for Lark/Slack; same as `source_ref` for forge sources).
+    pub candidate_source_ref: String,
+    /// Anchor message id (chat) or issue/PR id (forge). Filters which
+    /// attachments to inline into the priming message.
+    pub task_anchor: String,
     pub repo_id: String,
     pub plan_message: String,
-    /// Short, human-readable label the agent generated for the workspace.
-    /// Becomes the session title — what the user sees in the sidebar /
-    /// thread header instead of "Untitled".
+    /// Session title shown in sidebar.
     pub title: String,
-    /// Lowercase-hyphen slug for the git branch. Composed with the
-    /// user's branch prefix at create time. Best-effort: if the slug
-    /// collides with an existing branch we keep the auto-generated
-    /// celestial-body name.
+    /// Git-branch slug; best-effort if it collides.
     pub branch_name: String,
 }
 
@@ -127,11 +133,14 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
         }
     }
 
+    let plan_message =
+        render_plan_with_attachments(&params.plan_message, params, &prepared.workspace_id);
+
     let message_id = uuid::Uuid::new_v4().to_string();
     let content_json = json!({
         "type": "assistant",
         "message": {
-            "content": [{ "type": "text", "text": params.plan_message }]
+            "content": [{ "type": "text", "text": plan_message }]
         }
     })
     .to_string();
@@ -150,6 +159,63 @@ pub fn create_ai_workspace(params: &CreateAiWorkspaceParams) -> Result<CreateAiW
         workspace_id: prepared.workspace_id,
         session_id: prepared.initial_session_id,
     })
+}
+
+/// Append a markdown `## Attachments` block to the plan message, moving
+/// the anchor's staged images into the workspace's persistent store so
+/// the downstream agent can both `Read` the absolute path and the
+/// webview can render the `helmor-attachment://` URL. Best-effort: a
+/// failure on one attachment skips just that entry.
+fn render_plan_with_attachments(
+    plan: &str,
+    params: &CreateAiWorkspaceParams,
+    workspace_id: &str,
+) -> String {
+    if !matches!(params.source_type.as_str(), "slack" | "lark") {
+        return plan.to_string();
+    }
+    if params.candidate_source_ref.is_empty() || params.task_anchor.is_empty() {
+        return plan.to_string();
+    }
+    let entries =
+        fetcher_im::read_attachments_sidecar(&params.source_type, &params.candidate_source_ref);
+    let anchor_entries: Vec<_> = entries
+        .into_iter()
+        .filter(|e| e.message_id == params.task_anchor)
+        .collect();
+    if anchor_entries.is_empty() {
+        return plan.to_string();
+    }
+    let mut block = String::from("\n\n## Attachments\n");
+    let mut any = false;
+    for entry in anchor_entries {
+        match attachments::move_into_store(Path::new(&entry.local_path), workspace_id) {
+            Ok(moved) => {
+                any = true;
+                let alt = entry.alt.unwrap_or_else(|| moved.filename.clone());
+                block.push_str(&format!(
+                    "- ![{}]({}) — `{}`\n",
+                    alt,
+                    moved.url,
+                    moved.absolute_path.display(),
+                ));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    path = %entry.local_path,
+                    "workspace_factory: move_into_store failed; skipping attachment",
+                );
+            }
+        }
+    }
+    if any {
+        let mut out = plan.to_string();
+        out.push_str(&block);
+        out
+    } else {
+        plan.to_string()
+    }
 }
 
 /// Return the id of a non-archived triage workspace that already maps

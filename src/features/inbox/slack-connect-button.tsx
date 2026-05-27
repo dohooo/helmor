@@ -51,8 +51,8 @@ export function SlackConnectState({
 					Connect a Slack workspace
 				</div>
 				<div className="text-pretty text-small leading-5 text-muted-foreground">
-					Import directly from your signed-in Slack desktop app. Everything
-					stays local and secure on your device.
+					Connects to your signed-in Slack desktop app. Everything stays local
+					and secure on your device.
 				</div>
 			</div>
 			<Button
@@ -69,7 +69,7 @@ export function SlackConnectState({
 						Reading session…
 					</>
 				) : (
-					"Import from Slack desktop"
+					"Connect Slack"
 				)}
 			</Button>
 		</div>
@@ -95,7 +95,7 @@ function handleImportResult(
 	if (importedCount === 0 && alreadyCount === 0 && failedCount === 0) {
 		pushToast(
 			"No signed-in Slack workspaces were found in your desktop app.",
-			"Nothing to import",
+			"Nothing to connect",
 			"default",
 		);
 		return;
@@ -104,7 +104,7 @@ function handleImportResult(
 	const parts: string[] = [];
 	if (importedCount > 0)
 		parts.push(
-			`Imported ${importedCount} workspace${importedCount === 1 ? "" : "s"}`,
+			`Connected ${importedCount} workspace${importedCount === 1 ? "" : "s"}`,
 		);
 	if (alreadyCount > 0) parts.push(`${alreadyCount} already connected`);
 	const message =
@@ -116,7 +116,7 @@ function handleImportResult(
 
 	pushToast(
 		message,
-		failedCount > 0 ? "Slack import: partial" : "Slack import",
+		failedCount > 0 ? "Slack connect: partial" : "Slack connect",
 		failedCount > 0 ? "destructive" : "default",
 	);
 }
@@ -175,7 +175,7 @@ export function useSlackImportMutation(opts?: {
 				error instanceof Error
 					? error.message
 					: "Couldn't read Slack desktop session.";
-			pushToast(message, "Import failed", "destructive");
+			pushToast(message, "Connect failed", "destructive");
 		},
 	});
 }

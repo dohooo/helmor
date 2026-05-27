@@ -341,13 +341,7 @@ export function StreamdownAnchor({
 	);
 }
 
-/**
- * Image override. Triage priming messages render `![alt](.helmor/...)`
- * with workspace-relative paths; the webview can't load those directly,
- * so we resolve against the panel's workspace root and route through the
- * Tauri `asset://` protocol. Absolute URLs (http(s), data:, asset:) pass
- * straight through.
- */
+// Image override: resolves workspace-relative paths through Tauri `asset://`.
 export function StreamdownImage({
 	src,
 	alt,

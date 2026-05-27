@@ -61,8 +61,7 @@ export async function handleRunTriageTick(
 		return;
 	}
 	if (params.candidates.length === 0) {
-		// Nothing to decide. Tell the scheduler so it can record a
-		// "no actionable items" outcome and not spin the LLM at all.
+		// Nothing to decide — let scheduler record an empty-tick outcome.
 		emitter.end(requestId);
 		return;
 	}

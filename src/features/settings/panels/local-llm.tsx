@@ -121,11 +121,7 @@ export function LocalLlmPanel({
 		};
 		void subscribeLocalLlmDownloads(channel).then((snapshot) => {
 			if (!mounted) return;
-			// Merge: a channel event may have landed BEFORE the IPC reply
-			// resolved (e.g. a `started` mid-tick). Replacing wholesale
-			// would clobber whatever progressed in that window. Prefer
-			// the existing row whenever it's more "advanced" than the
-			// snapshot's stale view.
+			// Merge — channel event may beat IPC reply; prefer the more-advanced row.
 			setDownloads((prev) => {
 				const next: Record<string, DownloadRow> = { ...prev };
 				for (const row of snapshot) {
@@ -1399,13 +1395,10 @@ function CustomModelPathSection({
 	 *  and kicks the server. */
 	onCommit: (path: string) => void;
 }) {
-	// Local draft so per-keystroke updates don't round-trip through the
-	// settings DB + `settingsChanged` reload — that race could overwrite
-	// in-progress edits (e.g. clear half the input on a fast paste).
+	// Local draft — avoid round-tripping through settings reload while typing.
 	const [draft, setDraft] = useState(value);
 	const inputRef = useRef<HTMLInputElement>(null);
-	// Re-sync to the committed value, but only when the input isn't
-	// focused — never clobber whatever the user is actively typing.
+	// Re-sync only when not focused.
 	useEffect(() => {
 		if (document.activeElement !== inputRef.current) {
 			setDraft(value);
@@ -1542,12 +1535,7 @@ function formatEta(seconds: number): string {
 	return rem === 0 ? `${hours}h` : `${hours}h${rem}m`;
 }
 
-/// Pick the more advanced of two `DownloadRow` snapshots. The state
-/// machine's terminal-ish states (`downloaded`, `failed`, in-flight
-/// `downloading` past byte 0) reflect real disk/wire progress that a
-/// stale disk snapshot can't see — so we prefer them. A snapshot only
-/// wins when the existing row is still on the default `not_downloaded`
-/// view.
+// Snapshot wins only when existing row is still `not_downloaded` or snapshot reports `downloaded`.
 function isSnapshotMoreAdvanced(
 	snap: LocalLlmDownloadStatus,
 	existing: DownloadRow,

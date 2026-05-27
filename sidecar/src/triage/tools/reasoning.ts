@@ -1,9 +1,4 @@
-// Reasoning aid for the local triage judge.
-//
-// `think` is a no-op scratchpad — the model writes structured reasoning
-// and the tool returns a fixed "noted". Small models (7-9B Qwen) make
-// noticeably more stable multi-step decisions when given an explicit
-// thinking step before they commit to a tool call.
+// Reasoning aid: no-op scratchpad that stabilises small-model multi-step decisions.
 
 import { Type } from "@earendil-works/pi-ai";
 

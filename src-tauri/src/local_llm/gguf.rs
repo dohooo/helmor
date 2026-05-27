@@ -29,12 +29,7 @@ const GGUF_MAGIC: u32 = 0x4655_4747; // b"GGUF" little-endian
 /// ever read a byte of payload. 10K is ~50× the largest legitimate count
 /// we've seen — buy headroom, bail past it.
 const MAX_METADATA_KV_COUNT: u64 = 10_000;
-/// Cumulative bound on bytes read into metadata strings/arrays. The
-/// per-string cap (64 MB) is already restrictive but says nothing about
-/// totals — `MAX_METADATA_KV_COUNT × per-string cap` is ~640 GB. Real
-/// GGUF metadata sits under 100 MB even with full tokenizer vocab.
-/// 256 MB buys generous headroom for unusual layouts while keeping a
-/// corrupted file from OOMing the host.
+/// Cumulative metadata-bytes cap (256 MB) — corrupted files can't OOM the host.
 const MAX_METADATA_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Subset of GGUF metadata Helmor consumes. Other 30+ keys (rope params,

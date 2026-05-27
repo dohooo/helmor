@@ -1,42 +1,8 @@
-//! Shared scaffolding for "office IM" sources (Slack, Lark, future
-//! Dingtalk / WeChat / Teams). Each platform implements [`ImBackend`];
-//! the generic [`ImFetcher`] wraps a backend into the top-level
-//! [`super::Fetcher`] contract and handles every common concern.
-//!
-//! Candidate model
-//! ---------------
-//!
-//! IM candidates are **chat-level**, not message-level:
-//!   - One `triage_candidate` row per chat / channel / DM.
-//!   - One markdown file per chat under `cache/triage/<source>/<conv>.md`,
-//!     containing a trimmed window of recent messages.
-//!   - The LLM reads the whole file when judging the chat, so it sees
-//!     full multi-message context (the single-message model couldn't
-//!     identify tasks made of several exchanges).
-//!
-//! When the LLM proposes a workspace it must pass a `task_anchor`
-//! (typically the anchor message's id). The scheduler composes
-//! `source_ref = <chat_id>:<anchor>` for `create_ai_workspace`, so a
-//! single chat can spawn multiple workspaces — one per anchor.
-//!
-//! Decisions
-//! ---------
-//!
-//! Unlike forge candidates where a decision is terminal, IM decisions
-//! are **re-opened** by the fetcher when new activity arrives:
-//!   - User dismissed the chat last tick → `decision='skip'`
-//!   - Three new messages land → fetcher sees `new_messages > 0` and
-//!     calls `reset_decision(id)` so the LLM sees the chat again.
-//!
-//! Window trimming
-//! ---------------
-//!
-//! Each chat file is bounded by THREE limits, applied at write time:
-//!   - last `WINDOW_DAYS` days,
-//!   - max `WINDOW_MAX_MESSAGES` messages,
-//!   - max `WINDOW_MAX_BYTES` bytes.
-//!
-//! Oldest messages are dropped first.
+//! Shared scaffolding for office-IM sources (Slack, Lark). Each `ImBackend`
+//! produces chat-level candidates: one markdown file per chat, sliding
+//! `WINDOW_DAYS`/`WINDOW_MAX_MESSAGES`/`WINDOW_MAX_BYTES` window. Decisions
+//! reset when new activity arrives. Workspaces compose
+//! `source_ref = chat_id:anchor`.
 
 pub mod lark;
 pub mod slack;
@@ -52,14 +18,11 @@ use super::storage::{self, NewCandidate, UpsertOutcome};
 use super::{FetchSummary, Fetcher};
 pub use types::{ImConversation, ImConversationKind, ImMessage};
 
-/// Per-tick conversation cap (defense in depth — backends already
-/// pre-filter via platform signals).
+/// Per-tick conversation cap.
 pub const MAX_CONVERSATIONS_PER_TICK: usize = 30;
 /// Max messages per conversation per fetch call.
 pub const MAX_MESSAGES_PER_CONVERSATION: usize = 50;
-/// Cold-start lookback (used when there's no per-conversation cursor).
-/// Re-exported from `triage::fetcher` so the shared cross-source value
-/// is the single source of truth.
+/// Re-export of `COLD_START_DAYS`.
 pub use super::COLD_START_DAYS;
 /// Overlap window applied to the cursor so a message that straddled the
 /// previous tick's boundary still surfaces.
@@ -96,10 +59,7 @@ pub trait ImBackend: Send + Sync {
         limit: usize,
     ) -> Result<Vec<ImMessage>>;
 
-    /// Render one message into a markdown block inside the chat file.
-    /// Default: `## <iso-ts> — <sender>\n\`\`\`\n<text>\n\`\`\``.
-    /// Backends override to add platform-specific extras (msg_type,
-    /// file refs, …) inside each block.
+    /// Render one message block. Default header + fenced text; backends can override.
     fn render_message_block(&self, conv: &ImConversation, msg: &ImMessage) -> String {
         default_message_block(conv, msg)
     }
@@ -153,13 +113,8 @@ impl<B: ImBackend + 'static> Fetcher for ImFetcher<B> {
     }
 }
 
-/// Chat-level ingest:
-///   1. Pull recent messages from the backend (delta vs cursor).
-///   2. Merge with messages still in the trimmed window file.
-///   3. Trim window, render to markdown with `last_proposed_anchors`
-///      header.
-///   4. UPSERT the candidate row. If new messages arrived on a row
-///      that was already decided, reset decision so the LLM sees it.
+/// Per-chat ingest: pull → merge with window file → trim → render → upsert.
+/// Resets decision when new activity lands on a previously-decided row.
 fn ingest_conversation<B: ImBackend + ?Sized>(
     backend: &B,
     conv: &ImConversation,
@@ -173,9 +128,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
         .fetch_messages(conv, since, MAX_MESSAGES_PER_CONVERSATION)
         .with_context(|| format!("{source} fetch_messages for {}", conv.id))?;
 
-    // Old messages: still in the existing file (if any). We reuse
-    // them so the LLM keeps seeing >5min-old context even when only
-    // 2 new messages arrived this tick.
+    // Reuse existing file's messages so window context survives small deltas.
     let candidate_id = format!("{source}:{}", conv.id);
     let existing_row = storage::get_candidate(&candidate_id)?;
     let mut merged_index = load_existing_messages(existing_row.as_ref());
@@ -203,9 +156,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     trim_window(&mut ordered, backend, conv);
 
     if ordered.is_empty() {
-        // Nothing to write yet (cold start + empty chat). Don't write a
-        // cursor row either — the only useful column is
-        // `last_source_time` and we have none.
+        // Cold start with empty chat — skip cursor write too.
         return Ok(());
     }
 
@@ -214,6 +165,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     let payload = render_chat_payload(backend, conv, &ordered, &proposed_anchors);
     let payload_path = build_payload_path(source, &conv.id);
     let payload_bytes = cache::write_payload(&payload_path, &payload)?;
+    write_attachments_sidecar(source, &conv.id, &ordered)?;
 
     let (title, preview, sender) = build_candidate_summary(conv, &ordered);
     let candidate = NewCandidate {
@@ -262,9 +214,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     Ok(())
 }
 
-/// Read the existing chat file (if any) and parse it back into an
-/// `ImMessage` map indexed by id. Best-effort: corruption / format
-/// drift just means we re-fetch a wider window next tick.
+/// Parse existing chat file into a message map; best-effort.
 fn load_existing_messages(existing: Option<&storage::CandidateRow>) -> BTreeMap<String, ImMessage> {
     let Some(row) = existing else {
         return BTreeMap::new();
@@ -276,9 +226,7 @@ fn load_existing_messages(existing: Option<&storage::CandidateRow>) -> BTreeMap<
     parse_chat_payload(&raw)
 }
 
-/// Trim the message vector down to the configured window. Drops oldest
-/// first by timestamp, but also clips byte budget so a single
-/// pathological message can't break the cap.
+/// Trim window: time floor → message cap → byte cap.
 fn trim_window<B: ImBackend + ?Sized>(
     messages: &mut Vec<ImMessage>,
     backend: &B,
@@ -289,9 +237,7 @@ fn trim_window<B: ImBackend + ?Sized>(
     while messages.len() > WINDOW_MAX_MESSAGES {
         messages.remove(0);
     }
-    // Estimate byte size by rendering and pop oldest until under cap.
-    // We re-render once at the end; this cheap loop is just to bound
-    // memory and final file size.
+    // Pop oldest until rendered size fits the byte cap.
     loop {
         let probe_bytes: usize = messages
             .iter()
@@ -377,19 +323,78 @@ fn render_chat_payload<B: ImBackend + ?Sized>(
     out.push_str("\n---\n\n");
     for m in messages {
         out.push_str(&backend.render_message_block(conv, m));
+        for att in &m.attachments {
+            let alt = att.alt.as_deref().unwrap_or(&att.filename);
+            let mime = att
+                .mime_type
+                .as_deref()
+                .unwrap_or("application/octet-stream");
+            out.push_str(&format!(
+                "📎 attachment: {alt} ({mime}, {} bytes) — {}\n",
+                att.bytes,
+                att.local_path.display(),
+            ));
+        }
         out.push('\n');
     }
     out
 }
 
-/// Minimal regex-free parser for the chat-file format we emit. Reads
-/// ID, timestamp, sender, and the body inside the fenced block. Lines
-/// outside the header/blocks are skipped — corruption returns a
-/// (possibly empty) best-effort map.
+fn build_attachments_sidecar_path(source: &str, conv_id: &str) -> String {
+    let source_seg = cache::safe_segment(source);
+    let conv_seg = cache::safe_segment(conv_id);
+    format!("{source_seg}/{conv_seg}.attachments.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct AttachmentEntry {
+    pub message_id: String,
+    pub filename: String,
+    pub local_path: String,
+    pub mime_type: Option<String>,
+    pub bytes: u64,
+    pub alt: Option<String>,
+}
+
+fn write_attachments_sidecar(source: &str, conv_id: &str, messages: &[ImMessage]) -> Result<()> {
+    let rel = build_attachments_sidecar_path(source, conv_id);
+    let mut entries: Vec<AttachmentEntry> = Vec::new();
+    for m in messages {
+        for att in &m.attachments {
+            entries.push(AttachmentEntry {
+                message_id: m.id.clone(),
+                filename: att.filename.clone(),
+                local_path: att.local_path.display().to_string(),
+                mime_type: att.mime_type.clone(),
+                bytes: att.bytes,
+                alt: att.alt.clone(),
+            });
+        }
+    }
+    if entries.is_empty() {
+        let _ = cache::delete_payload(&rel);
+        return Ok(());
+    }
+    let json =
+        serde_json::to_string_pretty(&entries).context("serialize triage attachments sidecar")?;
+    cache::write_payload(&rel, &json)?;
+    Ok(())
+}
+
+/// Read the sidecar JSON written by `write_attachments_sidecar`.
+/// `Ok(vec![])` for missing / unreadable / empty.
+pub fn read_attachments_sidecar(source: &str, conv_id: &str) -> Vec<AttachmentEntry> {
+    let rel = build_attachments_sidecar_path(source, conv_id);
+    let Ok(raw) = cache::read_payload(&rel) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<AttachmentEntry>>(&raw).unwrap_or_default()
+}
+
+/// Regex-free parser for our chat-file format; corruption returns best-effort.
 fn parse_chat_payload(raw: &str) -> BTreeMap<String, ImMessage> {
     let mut out = BTreeMap::new();
-    // We split on the `## ` block delimiter we emit in
-    // `default_message_block`. The first chunk is the chat-level header.
+    // Split on `## ` block delimiter; first chunk is the header.
     let mut blocks = raw.split("\n## ");
     let _header = blocks.next();
     for block in blocks {
@@ -449,6 +454,9 @@ fn parse_message_block(block: &str) -> Option<ImMessage> {
         text,
         external_url: None,
         deleted: false,
+        // Reload path: history-file parse doesn't reconstruct attachments
+        // (they live in staging; next fetch re-emits fresh entries).
+        attachments: Vec::new(),
         raw: serde_json::Value::Null,
     })
 }
@@ -507,6 +515,7 @@ mod tests {
             text: text.into(),
             external_url: None,
             deleted: false,
+            attachments: Vec::new(),
             raw: Value::Null,
         }
     }
@@ -634,6 +643,7 @@ mod tests {
                 text: "ancient".into(),
                 external_url: None,
                 deleted: false,
+                attachments: Vec::new(),
                 raw: Value::Null,
             },
             ImMessage {
@@ -643,6 +653,7 @@ mod tests {
                 text: "fresh".into(),
                 external_url: None,
                 deleted: false,
+                attachments: Vec::new(),
                 raw: Value::Null,
             },
         ];
