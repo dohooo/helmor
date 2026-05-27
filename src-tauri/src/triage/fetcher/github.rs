@@ -18,7 +18,8 @@ use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 
 use crate::forge::inbox::{
-    InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter, InboxToggles,
+    InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter,
+    InboxToggles,
 };
 use crate::forge::remote::parse_remote;
 use crate::forge::{github::inbox as gh, ForgeProvider};
@@ -96,11 +97,15 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
 }
 
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
-    // Open-only; scope=None so query lands as `repo:owner/name is:open`
-    // — i.e. the entire open queue, not just "involves me". Sort defaults
-    // to updated-desc on the inbox side.
+    // Open-only, non-draft; scope=None so query lands as
+    // `repo:owner/name is:open -is:draft` for PRs (the qualifier is a
+    // no-op on issues). Sort defaults to updated-desc on the inbox side.
+    // Drafts are intentionally excluded — the moment a draft is marked
+    // ready-for-review its `updated_at` moves, so it'll re-surface in a
+    // later tick without us needing to track state.
     let filters = InboxFilters {
         state: Some(InboxStateFilter::Open),
+        draft: Some(InboxDraftFilter::Exclude),
         ..Default::default()
     };
     let toggles = InboxToggles {

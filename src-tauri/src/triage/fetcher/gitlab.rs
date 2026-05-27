@@ -10,7 +10,8 @@ use chrono::{TimeZone, Utc};
 
 use crate::forge::gitlab::inbox as glab;
 use crate::forge::inbox::{
-    InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter, InboxToggles,
+    InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter,
+    InboxToggles,
 };
 use crate::forge::remote::parse_remote;
 use crate::models::repos;
@@ -96,8 +97,12 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
 }
 
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
+    // Open + non-draft. `draft=Exclude` maps to `wip=no` for MRs; issues
+    // ignore the flag. A WIP MR flipped to ready bumps `updated_at`, so
+    // it'll resurface in a later tick automatically — no extra state.
     let filters = InboxFilters {
         state: Some(InboxStateFilter::Open),
+        draft: Some(InboxDraftFilter::Exclude),
         ..Default::default()
     };
     let toggles = InboxToggles {

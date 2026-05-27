@@ -355,6 +355,10 @@ export type WorkspaceDetail = {
 	 * this workspace. NULL means "use the first action" — either fresh,
 	 * or because the previously-active action was deleted. */
 	activeRunActionId?: string | null;
+	/** True when this workspace was auto-spawned by triage and the user
+	 * hasn't sent their first message yet. Drives the composer's
+	 * Start / Dismiss quick-action row. */
+	triagePrimingUnconsumed?: boolean;
 };
 
 export type WorkspaceSessionSummary = {

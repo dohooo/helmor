@@ -71,6 +71,28 @@ export function flattenWorkspaceRowsForNavigation(
 	return [...groups.flatMap((group) => group.rows), ...archivedRows];
 }
 
+/**
+ * Pick a replacement workspace to focus after `removedWorkspaceId` is
+ * archived/deleted. Group-aware: stays inside the removed workspace's
+ * bucket when possible, so e.g. dismissing a triage proposal lands on
+ * the next triage proposal — not a random pinned workspace.
+ *
+ * Algorithm:
+ *   1. Locate the removed workspace's bucket (one of the
+ *      `currentGroups` rows or the `currentArchivedRows` lane) and its
+ *      index inside that bucket.
+ *   2. If the same bucket still has rows in `next…`, pick the row at
+ *      the same index (or the previous one). This is the
+ *      "stay in your lane" case.
+ *   3. Otherwise the bucket was exhausted — fall back to the first
+ *      row in the first non-empty group in `nextGroups`, then to the
+ *      archived lane. `null` when the whole sidebar is empty.
+ *
+ * Callers MUST pass `currentGroups` and `nextGroups` in the same
+ * visual layout (both status-grouped, both repo-grouped, …) so the
+ * "same bucket" lookup is meaningful. `projectVisualSidebar` is the
+ * convergence point that guarantees this.
+ */
 export function findReplacementWorkspaceIdAfterRemoval({
 	currentGroups,
 	currentArchivedRows,
@@ -84,27 +106,67 @@ export function findReplacementWorkspaceIdAfterRemoval({
 	nextArchivedRows: WorkspaceRow[];
 	removedWorkspaceId: string;
 }): string | null {
-	const currentRows = flattenWorkspaceRowsForNavigation(
+	const removed = locateInLayout(
 		currentGroups,
 		currentArchivedRows,
-	);
-	const removedIndex = currentRows.findIndex(
-		(row) => row.id === removedWorkspaceId,
-	);
-	const nextRows = flattenWorkspaceRowsForNavigation(
-		nextGroups,
-		nextArchivedRows,
+		removedWorkspaceId,
 	);
 
-	if (nextRows.length === 0) {
-		return null;
+	// (1) Stay inside the removed workspace's bucket when it still has
+	// siblings.
+	if (removed.kind === "group") {
+		const nextSameGroup = nextGroups.find((g) => g.id === removed.groupId);
+		const rows = nextSameGroup?.rows ?? [];
+		if (rows.length > 0) {
+			return (
+				rows[removed.indexInGroup]?.id ??
+				rows[removed.indexInGroup - 1]?.id ??
+				rows[rows.length - 1]?.id ??
+				null
+			);
+		}
+	} else if (removed.kind === "archived") {
+		if (nextArchivedRows.length > 0) {
+			return (
+				nextArchivedRows[removed.indexInArchived]?.id ??
+				nextArchivedRows[removed.indexInArchived - 1]?.id ??
+				nextArchivedRows[nextArchivedRows.length - 1]?.id ??
+				null
+			);
+		}
 	}
 
-	if (removedIndex === -1) {
-		return nextRows[0]?.id ?? null;
+	// (2) Bucket exhausted (or removed id wasn't anywhere). Pick the
+	// first non-empty group in flat sidebar order; treat archived as
+	// the trailing fallback.
+	for (const group of nextGroups) {
+		const firstId = group.rows[0]?.id;
+		if (firstId) return firstId;
 	}
+	return nextArchivedRows[0]?.id ?? null;
+}
 
-	return nextRows[removedIndex]?.id ?? nextRows[removedIndex - 1]?.id ?? null;
+type WorkspaceLayoutLocation =
+	| { kind: "group"; groupId: string; indexInGroup: number }
+	| { kind: "archived"; indexInArchived: number }
+	| { kind: "none" };
+
+function locateInLayout(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+	id: string,
+): WorkspaceLayoutLocation {
+	for (const group of groups) {
+		const indexInGroup = group.rows.findIndex((r) => r.id === id);
+		if (indexInGroup !== -1) {
+			return { kind: "group", groupId: group.id, indexInGroup };
+		}
+	}
+	const indexInArchived = archivedRows.findIndex((r) => r.id === id);
+	if (indexInArchived !== -1) {
+		return { kind: "archived", indexInArchived };
+	}
+	return { kind: "none" };
 }
 
 export function hasWorkspaceId(

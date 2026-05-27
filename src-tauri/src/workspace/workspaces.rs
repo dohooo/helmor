@@ -181,6 +181,13 @@ pub struct WorkspaceDetail {
     /// (either fresh or because the previously-active id no longer
     /// exists; the frontend re-renders against the first item).
     pub active_run_action_id: Option<String>,
+    /// True when this workspace was auto-created by triage (`kind ==
+    /// "ai_triage"`) and the user hasn't sent their first message yet
+    /// (`ai_priming_consumed == 0`). Drives the composer's Start /
+    /// Dismiss quick-action row. Flips to false the moment the user
+    /// (or a quick action) sends a message — `mark_consumed_for_session`
+    /// also graduates `kind` to `"manual"`.
+    pub triage_priming_unconsumed: bool,
 }
 
 // Workspace persistence lives in `crate::models::workspaces`.
@@ -1399,6 +1406,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         forge_login: record.forge_login,
         setup_completed_at: record.setup_completed_at,
         active_run_action_id: record.active_run_action_id,
+        triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
     }
 }
 

@@ -888,6 +888,71 @@ describe("findReplacementWorkspaceIdAfterRemoval", () => {
 		expect(next).toBe("a");
 	});
 
+	// Group-aware: removing the LAST row in a multi-group sidebar should
+	// fall back to the previous sibling in the SAME group, not jump to
+	// the first row of the next group. This is what makes a "Dismiss"
+	// loop inside the AI proposals group feel natural — you stay in
+	// the lane until it's empty.
+	it("falls back inside the same group before jumping to the next group", () => {
+		const currentGroups = [
+			group("ai-tasks", ["t1", "t2", "t3"]),
+			group("progress", ["p1", "p2"]),
+		];
+		const nextGroups = [
+			group("ai-tasks", ["t1", "t2"]),
+			group("progress", ["p1", "p2"]),
+		];
+		// t3 was the last in ai-tasks → fall back to t2 (NOT p1, which
+		// the old flat-index algorithm would have picked).
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: [],
+				nextGroups,
+				nextArchivedRows: [],
+				removedWorkspaceId: "t3",
+			}),
+		).toBe("t2");
+	});
+
+	// Group-aware: when the removed workspace's group becomes empty,
+	// fall back to the first row of the first non-empty group.
+	it("jumps to the next non-empty group when the removed group is exhausted", () => {
+		const currentGroups = [
+			group("ai-tasks", ["t1"]),
+			group("progress", ["p1", "p2"]),
+		];
+		const nextGroups = [group("ai-tasks", []), group("progress", ["p1", "p2"])];
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: [],
+				nextGroups,
+				nextArchivedRows: [],
+				removedWorkspaceId: "t1",
+			}),
+		).toBe("p1");
+	});
+
+	// Group-aware: archived rows are their own bucket — removing one
+	// stays inside the archived lane while it has siblings.
+	it("treats archived rows as their own bucket for same-bucket fallback", () => {
+		const currentGroups = [group("progress", ["p1"])];
+		const currentArchived = [row("z1"), row("z2"), row("z3")];
+		const nextGroups = [group("progress", ["p1"])];
+		const nextArchived = [row("z1"), row("z2")];
+		// z3 was last archived → fall back to z2 (NOT p1).
+		expect(
+			findReplacementWorkspaceIdAfterRemoval({
+				currentGroups,
+				currentArchivedRows: currentArchived,
+				nextGroups,
+				nextArchivedRows: nextArchived,
+				removedWorkspaceId: "z3",
+			}),
+		).toBe("z2");
+	});
+
 	// Regression: caller MUST pass currentGroups and nextGroups in the same
 	// visual layout (both status-grouped or both repo-grouped). Mixing them
 	// causes the index lookup to land on a totally unrelated workspace.

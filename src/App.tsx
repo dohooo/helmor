@@ -1676,6 +1676,7 @@ function AppShell({
 														repoId={startRepository?.id ?? null}
 														sessionSelectionHistory={[]}
 														onSelectSession={handleSelectSession}
+														onSelectWorkspace={handleSelectWorkspace}
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
 														}
@@ -1737,6 +1738,7 @@ function AppShell({
 														),
 													]}
 													onSelectSession={handleSelectSession}
+													onSelectWorkspace={handleSelectWorkspace}
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
 													}
