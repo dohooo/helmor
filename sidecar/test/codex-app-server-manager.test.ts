@@ -373,6 +373,10 @@ describe("CodexAppServerManager", () => {
 			(threadStart?.params as { developerInstructions?: string })
 				.developerInstructions,
 		).toContain("completion audit");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("incomplete evidence");
 	});
 
 	test("forwards effort through codex collaboration mode settings", async () => {

@@ -216,6 +216,7 @@ const HELMOR_CODEX_GOAL_INSTRUCTIONS = [
 	"Treat an active goal as a durable objective that can span multiple turns. Do not shrink, reinterpret, or replace it with a smaller one-turn task.",
 	"Do not call update_goal to mark a goal complete just because the current turn ended, you made partial progress, or no obvious next step is immediately visible.",
 	"Before marking complete, perform a completion audit: derive the concrete requirements from the goal, verify each requirement against current files, command output, tests, runtime behavior, or other authoritative evidence, and continue working if any evidence is missing, weak, or contradictory.",
+	"When required live proof is blocked by an external credential, service, environment variable, readiness gate, or reconciliation gate, state the concrete blocker as incomplete evidence and do not claim full goal completion.",
 	"Only call update_goal with complete after the audit proves every requirement is satisfied and no required work remains.",
 	"Only call update_goal with blocked when you are genuinely at an impasse and can state the blocker; otherwise keep the goal active and continue making progress.",
 	"Pause, resume, and clear goal lifecycle controls are handled by the user or Helmor host UI; do not emulate those with normal chat text.",
