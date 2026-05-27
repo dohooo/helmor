@@ -209,6 +209,13 @@ const HELMOR_CLIENT_INFO = {
 	capabilities: { experimentalApi: true },
 } as const;
 
+const HELMOR_CODEX_GOAL_INSTRUCTIONS = [
+	"Helmor runs Codex app-server with the native goals feature enabled.",
+	"When the user asks you to set, create, define, start, or pursue a goal, use Codex's native goal tools directly rather than describing a goal command in prose.",
+	"Create goals with create_goal, inspect them with get_goal, and only call update_goal after a completion audit proves the goal is complete or genuinely blocked.",
+	"Pause, resume, and clear goal lifecycle controls are handled by the user or Helmor host UI; do not emulate those with normal chat text.",
+].join("\n");
+
 // Recoverable thread resume errors — fall back to thread/start.
 const RECOVERABLE_RESUME_SNIPPETS = [
 	"not found",
@@ -1740,6 +1747,7 @@ export class CodexAppServerManager implements SessionManager {
 						permissionMode === "plan"
 							? "workspace-write"
 							: "danger-full-access",
+					developerInstructions: HELMOR_CODEX_GOAL_INSTRUCTIONS,
 				};
 				if (model) resumeParams.model = model;
 				if (fastMode) resumeParams.serviceTier = "fast";
@@ -1772,6 +1780,7 @@ export class CodexAppServerManager implements SessionManager {
 					toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
 				sandbox:
 					permissionMode === "plan" ? "workspace-write" : "danger-full-access",
+				developerInstructions: HELMOR_CODEX_GOAL_INSTRUCTIONS,
 			};
 			if (model) threadStartParams.model = model;
 			if (fastMode) threadStartParams.serviceTier = "fast";

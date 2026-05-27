@@ -324,6 +324,44 @@ describe("CodexAppServerManager", () => {
 		);
 	});
 
+	test("starts Codex threads with native goal tool instructions", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-tool-instructions",
+			{
+				sessionId: "session-goal-tools",
+				prompt: "create a goal to finish this task",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const threadStart = serverState.requests.find(
+			(request) => request.method === "thread/start",
+		);
+
+		expect(threadStart?.params).toEqual(
+			expect.objectContaining({
+				developerInstructions: expect.stringContaining("create_goal"),
+			}),
+		);
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("get_goal");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("update_goal");
+	});
+
 	test("forwards effort through codex collaboration mode settings", async () => {
 		const manager = new CodexAppServerManager();
 
@@ -1288,7 +1326,10 @@ describe.serial("CodexAppServerManager goal app-server integration", () => {
 		const resume = serverState.requests.find(
 			(r) => r.method === "thread/resume",
 		);
-		expect(resume?.params).toMatchObject({ threadId: "thread-1" });
+		expect(resume?.params).toMatchObject({
+			threadId: "thread-1",
+			developerInstructions: expect.stringContaining("create_goal"),
+		});
 
 		const goalSet = serverState.requests.find(
 			(r) => r.method === "thread/goal/set",
