@@ -166,6 +166,13 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     let payload_path = build_payload_path(source, &conv.id);
     let payload_bytes = cache::write_payload(&payload_path, &payload)?;
     write_attachments_sidecar(source, &conv.id, &ordered)?;
+    // Window-evicted messages' attachments are now unreferenced — drop
+    // them from staging so disk usage stays bounded.
+    let keep: std::collections::BTreeSet<String> = ordered
+        .iter()
+        .flat_map(|m| m.attachments.iter().map(|a| a.filename.clone()))
+        .collect();
+    crate::triage::attachments::prune_candidate_staging(source, &conv.id, &keep);
 
     let (title, preview, sender) = build_candidate_summary(conv, &ordered);
     let candidate = NewCandidate {

@@ -225,7 +225,7 @@ export function TriagePanel() {
 
 					<Field
 						label="Sources"
-						hint="Where Helmor pulls triage candidates from."
+						hint="Where Helmor pulls triage candidates from. Incremental fetch every 5 minutes."
 					>
 						<div className="flex flex-col divide-y divide-border/40 rounded-md border border-border/60 bg-background/30">
 							{sourceHealth.data?.map((row) => (
@@ -269,10 +269,17 @@ export function TriagePanel() {
 									</TooltipTrigger>
 									<TooltipContent
 										side="top"
-										className="max-w-[260px] text-[11px] leading-5"
+										className="max-w-[260px] flex-col items-start space-y-1.5 text-[11px] leading-5"
 									>
-										When on, a tick fires every 10 minutes. Overlapping ticks
-										are skipped. Off = ticks only run when you press Run now.
+										<p>
+											<span className="font-semibold">On</span> — a tick fires
+											right after each fetch (every 5 minutes). Overlapping
+											ticks are skipped.
+										</p>
+										<p>
+											<span className="font-semibold">Off</span> — ticks only
+											run when you press Run now.
+										</p>
 									</TooltipContent>
 								</Tooltip>
 							</TooltipProvider>
@@ -367,7 +374,7 @@ function SummaryPopover({ text }: { text: string }) {
 				<button
 					type="button"
 					aria-label="Show agent reasoning"
-					className="inline-flex shrink-0 cursor-help text-muted-foreground/60 hover:text-foreground"
+					className="inline-flex shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
 				>
 					<MessageSquareQuote className="size-3" />
 				</button>

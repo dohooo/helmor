@@ -313,6 +313,23 @@ async fn download_attachments(msg: &mut ImMessage, chat_id: &str) {
     let mut kept = Vec::with_capacity(msg.attachments.len());
     for mut att in std::mem::take(&mut msg.attachments) {
         let Some(key) = att.alt.clone() else { continue };
+        // Skip re-download when this key is already staged from a prior
+        // tick (filename = `<key>.<ext>`, set by the rename below).
+        if let Some((existing_path, bytes)) =
+            attachments::find_staged_by_stem("lark", chat_id, &key)
+        {
+            let mime = sniff_image_mime(&existing_path);
+            att.filename = existing_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+                .unwrap_or(att.filename);
+            att.local_path = existing_path;
+            att.mime_type = mime.map(str::to_string);
+            att.bytes = bytes;
+            kept.push(att);
+            continue;
+        }
         let initial_name = att.filename.clone();
         if let Err(e) =
             lark::im::download_resource(&msg.id, "image", &key, &staging, &initial_name).await

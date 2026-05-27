@@ -172,6 +172,61 @@ pub fn sweep_workspace_store(workspace_id: &str) {
     }
 }
 
+/// Per-tick prune: drop staged files whose filename isn't in `keep`.
+/// Used after `trim_window` so window-evicted messages' attachments
+/// don't linger on disk.
+pub fn prune_candidate_staging(
+    source: &str,
+    candidate_id: &str,
+    keep: &std::collections::BTreeSet<String>,
+) {
+    let Ok(dir) = staging_dir(source, candidate_id) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if keep.contains(&name) {
+            continue;
+        }
+        let path = entry.path();
+        if let Err(error) = std::fs::remove_file(&path) {
+            tracing::warn!(
+                error = %error,
+                path = %path.display(),
+                "triage: staging prune failed",
+            );
+        }
+    }
+}
+
+/// Find a staged file whose filename stem matches `key`, regardless of
+/// extension. Returns the path + size; caller can skip re-downloading.
+pub fn find_staged_by_stem(source: &str, candidate_id: &str, key: &str) -> Option<(PathBuf, u64)> {
+    let dir = staging_dir(source, candidate_id).ok()?;
+    let entries = std::fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if stem != key {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if meta.len() > 0 {
+            return Some((path, meta.len()));
+        }
+    }
+    None
+}
+
 /// GC: drop a candidate's staging dir when the row is removed.
 pub fn sweep_candidate_staging(source: &str, candidate_id: &str) {
     let Ok(dir) = staging_dir(source, candidate_id) else {
