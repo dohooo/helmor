@@ -184,7 +184,14 @@ function renderCandidate(c: TriageCandidate): string {
 	const lines: string[] = [];
 	const sender = c.sender ?? "(unknown sender)";
 	const title = c.title?.trim() || "(no title)";
-	lines.push(`[${c.id}] ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
+	// `id:` on its own line, unbracketed. The earlier `[<id>] ...` form
+	// made small local models include the brackets in tool calls
+	// (`candidate_id: "[lark:oc_xxx]"`) — the host's `WHERE id = ?` is
+	// strict equality, so every read_candidate / mark_not_actionable
+	// against the bracketed form returned "not found" and the agent
+	// burned turns retrying.
+	lines.push(`id: ${c.id}`);
+	lines.push(`  source:       ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
 	lines.push(`  participants: ${escapeXmlText(sender)}`);
 	lines.push(`  title:        ${escapeXmlText(truncate(title, 120))}`);
 	if (c.preview && c.preview.trim().length > 0) {
