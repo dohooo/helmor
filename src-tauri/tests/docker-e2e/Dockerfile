@@ -32,7 +32,11 @@
 FROM rust:1.94-bookworm AS builder
 
 # Tauri v2 Linux build deps — needed at LINK time even for the
-# headless binary.
+# headless binary. `cmake` + `clang`/`libclang-dev` are required by
+# `boring-sys2` (BoringSSL), pulled in transitively via the `wreq`
+# Slack-client dependency: its build script shells out to cmake to
+# compile BoringSSL from source, and bindgen needs libclang to
+# generate the FFI bindings.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         libwebkit2gtk-4.1-dev \
@@ -42,6 +46,9 @@ RUN apt-get update \
         libsoup-3.0-dev \
         libjavascriptcoregtk-4.1-dev \
         pkg-config \
+        cmake \
+        clang \
+        libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /repo

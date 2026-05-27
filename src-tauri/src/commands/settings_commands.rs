@@ -43,7 +43,11 @@ pub async fn get_app_settings() -> CmdResult<std::collections::HashMap<String, S
 
 #[tauri::command]
 pub async fn update_app_settings(
-    sidecar: State<'_, ManagedSidecar>,
+    // `ManagedSidecar` is managed behind an `Arc` (lib.rs Phase 23c), so the
+    // resolved state type must match exactly or Tauri fails at runtime with
+    // "state not managed for field `sidecar`". The upstream version of this
+    // command took the bare type; reconciled here during the origin/main merge.
+    sidecar: State<'_, std::sync::Arc<ManagedSidecar>>,
     settings_map: std::collections::HashMap<String, String>,
 ) -> CmdResult<()> {
     let touched_cursor_key = settings_map.contains_key("app.cursor_provider");
