@@ -157,6 +157,39 @@ describe("buildSystemPrompt: source-family gating", () => {
 		expect(prompt).toMatch(/ALWAYS call `read_candidate`/);
 	});
 
+	it("always includes the skip-policy block", () => {
+		// Core skip-policy must be present regardless of which sources are active.
+		for (const src of ["lark", "slack", "github", "gitlab"] as const) {
+			const prompt = buildSystemPrompt({
+				...BASE_INPUT,
+				candidates: [makeCandidate(src)],
+			});
+			expect(prompt).toMatch(/<skip-policy>/);
+			expect(prompt).toMatch(/LAST\s+RESORT/);
+			// Logic-driven, not pattern-driven: must articulate the
+			// INTENT-vs-COMPLETION distinction without listing phrases to match.
+			expect(prompt).toMatch(/Intent|INTENT/);
+			expect(prompt).toMatch(/completion|COMPLETION|shipped/);
+			// And must explicitly call out the cap escape hatch so the
+			// model doesn't read the cap rule as contradicting skip-policy.
+			expect(prompt).toMatch(/CAP\s+REACHED/);
+		}
+	});
+
+	it("skip-policy does not pin to specific surface phrasings", () => {
+		// Guardrail: if someone re-adds literal phrase lists ("我改改", "I'll fix it",
+		// "认领", etc.) the policy turns into brittle keyword matching. The test
+		// flags that regression — keep guidance abstract.
+		const prompt = buildSystemPrompt({
+			...BASE_INPUT,
+			candidates: [makeCandidate("slack")],
+		});
+		const policy = prompt.match(/<skip-policy>[\s\S]*?<\/skip-policy>/)?.[0];
+		expect(policy).toBeDefined();
+		expect(policy).not.toMatch(/我改改|我看看|我来|认领/);
+		expect(policy).not.toMatch(/I'?ll fix|I'?ll take|@me/i);
+	});
+
 	it("appends user-additions suffix when present", () => {
 		const prompt = buildSystemPrompt({
 			...BASE_INPUT,
