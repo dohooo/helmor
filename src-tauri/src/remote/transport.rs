@@ -201,10 +201,28 @@ impl OpenSshTransport {
             cmd.arg("-o")
                 .arg(format!("ControlPath={}/%C", dir.display()));
         }
-        let remote_cmd = format!(
+        // The remote command we want sh to evaluate is
+        //     <bin> --ensure-daemon && exec <bin> --proxy
+        // Inner `shell_quote` lets paths with spaces/quotes survive into the
+        // remote shell. The OUTER `shell_quote` is the load-bearing part:
+        // `Command::new("ssh").arg(...)` passes our args to OpenSSH, which
+        // space-joins everything after the host and ships the result to the
+        // remote without any re-quoting. So if we hand `ssh` the args
+        //     sh -c <inner>
+        // OpenSSH ends up running, on the remote,
+        //     sh -c <inner-tok-0> <inner-tok-1> ...
+        // and the remote shell treats `&&` and `exec` as its OWN operators
+        // — the `--ensure-daemon` flag becomes `$0` of the `sh -c <bin>`
+        // command and the binary defaults to ServeStdio mode (no persistent
+        // daemon, no socket, no daemon.log). Wrapping `<inner>` in another
+        // layer of `'...'` makes the remote shell see a single -c argument
+        // again, restoring the intended `--ensure-daemon && exec --proxy`
+        // pipeline.
+        let inner = format!(
             "{quoted_bin} --ensure-daemon && exec {quoted_bin} --proxy",
             quoted_bin = shell_quote(&self.remote_binary)
         );
+        let remote_cmd = shell_quote(&inner);
         cmd.arg(&self.host).arg("sh").arg("-c").arg(remote_cmd);
         cmd
     }
@@ -410,9 +428,29 @@ mod tests {
             "ensure-daemon missing: {rendered}",
         );
         assert!(rendered.contains("--proxy"), "proxy missing: {rendered}",);
-        assert!(
-            rendered.contains("'/usr/local/bin/helmor-server'"),
-            "single-quoted bin path missing: {rendered}",
+        // Semantic check: the LAST argv slot is the blob ssh ships to the
+        // remote. Run it through a real `sh -c '...'` round-trip on the
+        // host and assert the post-shell-evaluation form is what the
+        // remote daemon will actually receive. This catches the
+        // word-splitting bug (where `&&` and the trailing `--proxy` would
+        // get parsed as separate commands instead of part of a single
+        // pipeline that runs ensure-daemon THEN execs proxy).
+        let last_arg = cmd
+            .get_args()
+            .last()
+            .expect("ssh command should have at least one arg")
+            .to_string_lossy()
+            .into_owned();
+        let evaluated = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s' {last_arg}"))
+            .output()
+            .expect("sh -c round-trip");
+        let evaluated = String::from_utf8(evaluated.stdout).expect("utf8");
+        assert_eq!(
+            evaluated,
+            "'/usr/local/bin/helmor-server' --ensure-daemon && exec '/usr/local/bin/helmor-server' --proxy",
+            "after a `sh -c` evaluation, the remote should see one single-quoted blob containing the full --ensure-daemon && exec --proxy pipeline",
         );
     }
 
@@ -452,10 +490,12 @@ mod tests {
     #[test]
     fn open_ssh_transport_quotes_a_path_containing_a_single_quote() {
         // The classic edge case for `shell_quote`. A binary path like
-        // `/foo's/server` must round-trip through `sh -c` intact.
-        // Inspect the last argv slot directly rather than the Debug
-        // rendering — Debug escapes backslashes for display, which
-        // would obscure the literal `'\''` sequence we care about.
+        // `/foo's/server` must round-trip through TWO layers of `sh -c`
+        // (the outer single-quote wrap we added + the inner per-bin
+        // wrap) and come out the other side intact. We verify via a
+        // real `sh -c` evaluation rather than counting escape chars,
+        // since the byte-level count drifts whenever we touch the
+        // quoting strategy.
         let transport =
             OpenSshTransport::with_control_dir("h", "/foo's/server", std::env::temp_dir());
         let cmd = transport.build_command();
@@ -465,18 +505,29 @@ mod tests {
             .expect("ssh command should have at least one arg")
             .to_string_lossy()
             .into_owned();
-        // Two `'\''` sequences — one per occurrence of the literal `'`
-        // in `/foo's/server` (`shell_quote` is called twice, once for
-        // each `{quoted_bin}` substitution).
-        assert!(
-            last_arg.contains("'/foo'\\''s/server'"),
-            "single-quote escape failed in last argv: {last_arg}"
-        );
+        // First layer: outer single-quote strip → the inner pipeline.
+        let outer_evaluated = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s' {last_arg}"))
+            .output()
+            .expect("outer sh -c round-trip");
+        let outer_evaluated = String::from_utf8(outer_evaluated.stdout).expect("utf8");
         assert_eq!(
-            last_arg.matches("'\\''").count(),
-            2,
-            "expected exactly 2 escape sequences (one per substitution): {last_arg}",
+            outer_evaluated,
+            "'/foo'\\''s/server' --ensure-daemon && exec '/foo'\\''s/server' --proxy",
+            "after the outer single-quote strip, the remote sees the inner pipeline verbatim",
         );
+        // Second layer: feed just the bin substring through sh -c to
+        // confirm it unquotes back to the original path with the inner
+        // apostrophe intact.
+        let bin_quoted = "'/foo'\\''s/server'";
+        let bin_evaluated = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s' {bin_quoted}"))
+            .output()
+            .expect("inner sh -c round-trip");
+        let bin_evaluated = String::from_utf8(bin_evaluated.stdout).expect("utf8");
+        assert_eq!(bin_evaluated, "/foo's/server");
     }
 
     #[test]
