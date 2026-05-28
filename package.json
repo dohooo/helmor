@@ -22,7 +22,7 @@
 		"test:frontend:watch": "vitest",
 		"test:sidecar": "cd sidecar && bun test",
 		"test:sidecar:watch": "cd sidecar && bun test --watch",
-		"test:rust": "cd src-tauri && cargo test",
+		"test:rust": "cd src-tauri && cargo test -- --test-threads=1",
 		"test:rust:lib": "cd src-tauri && cargo test --lib",
 		"test:rust:integration": "cd src-tauri && cargo test --tests",
 		"test:rust:update-snapshots": "cd src-tauri && INSTA_UPDATE=always cargo test --tests",

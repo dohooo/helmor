@@ -24,7 +24,7 @@ Tests are **three targets** — `bun run test` runs all three (frontend -> sidec
 bun run test                 # All three suites
 bun run test:frontend        # vitest run (jsdom, @testing-library/react)
 bun run test:sidecar         # cd sidecar && bun test
-bun run test:rust            # cd src-tauri && cargo test
+bun run test:rust            # cd src-tauri && cargo test -- --test-threads=1
 bun run test:rust:update-snapshots    # INSTA_UPDATE=always
 bun run test:watch           # vitest watch (frontend only)
 ```
