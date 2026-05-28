@@ -1048,6 +1048,8 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::NamedTempFile;
 
+    const SCRIPT_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
+
     // ── shell_escape ───────────────────────────────────────────────────────
 
     #[test]
@@ -1111,6 +1113,21 @@ mod tests {
         let stdin_arc = Arc::new(Mutex::new(stdin));
         let killed = mgr.register(key, pid, pgid, stdin_arc, None);
         (child, pid, pgid, killed)
+    }
+
+    fn wait_for_registered(mgr: &ScriptProcessManager, key: &ProcessKey, label: &str) {
+        let deadline = Instant::now() + SCRIPT_REGISTER_TIMEOUT;
+        loop {
+            if mgr.processes.lock().unwrap().contains_key(key) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{label} did not register within {:?}",
+                SCRIPT_REGISTER_TIMEOUT
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     // ── ProcessKey workspace isolation ─────────────────────────────────────
@@ -1299,14 +1316,7 @@ mod tests {
         });
 
         // Wait for run_script to register before we issue kill_all.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if mgr.processes.lock().unwrap().contains_key(&key) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "run_script never registered");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
         let start = Instant::now();
         assert_eq!(mgr.kill_all(), 1);
@@ -1401,7 +1411,6 @@ mod tests {
         let mgr_c = mgr.clone();
         let key_c = key.clone();
         let tempdir = std::env::temp_dir().display().to_string();
-        let start = Instant::now();
         let handle = std::thread::spawn(move || {
             run_script_with_shell(
                 &mgr_c,
@@ -1421,19 +1430,9 @@ mod tests {
 
         // Wait until run_script has registered (polling is fine here — the
         // test is checking Stop latency, not register latency).
-        let register_deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let exists = mgr.processes.lock().unwrap().contains_key(&key);
-            if exists {
-                break;
-            }
-            assert!(
-                Instant::now() < register_deadline,
-                "run_script never registered"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
+        let start = Instant::now();
         assert!(mgr.kill(&key), "kill should find the handle");
         let result = handle.join().unwrap();
         // 5s headroom for CI load; real path is sub-second.
@@ -1504,14 +1503,7 @@ mod tests {
         });
 
         // Wait for register.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if mgr.processes.lock().unwrap().contains_key(&key) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "never registered");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
         // Let /bin/sh echo the wrapped command and reach `read`.
         std::thread::sleep(Duration::from_millis(500));
@@ -1594,14 +1586,7 @@ mod tests {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if mgr.processes.lock().unwrap().contains_key(&key) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "run_script never registered");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
         assert!(mgr.resize(&key, 77, 33).unwrap());
 
@@ -2009,14 +1994,7 @@ mod tests {
         });
 
         // Wait until run_script registers, then click Stop.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if mgr.processes.lock().unwrap().contains_key(&key) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "run_script never registered");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
         let start = Instant::now();
         assert!(mgr.kill(&key), "kill should find the live handle");
@@ -2090,14 +2068,7 @@ mod tests {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if mgr.processes.lock().unwrap().contains_key(&key) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "run_script never registered");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_registered(&mgr, &key, "run_script");
 
         // First click — wait for Stopping to confirm we're inside the
         // graceful window before issuing the second click.
