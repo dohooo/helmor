@@ -1049,6 +1049,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     const SCRIPT_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
+    static SCRIPT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     // ── shell_escape ───────────────────────────────────────────────────────
 
@@ -1284,6 +1285,7 @@ mod tests {
     /// invariant.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1397,6 +1399,7 @@ mod tests {
 
     #[test]
     fn kill_terminates_running_script_quickly() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1452,6 +1455,7 @@ mod tests {
 
     #[test]
     fn write_stdin_delivers_bytes_to_running_script() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1536,6 +1540,7 @@ mod tests {
 
     #[test]
     fn resize_updates_pty_winsize() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = ScriptContext {
             root_path: std::env::temp_dir().display().to_string(),
@@ -1619,6 +1624,7 @@ mod tests {
     }
 
     fn run_simple_with_shell(script: &str, shell_path: &str, shell_args: &[&str]) -> Option<i32> {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1690,6 +1696,7 @@ mod tests {
     /// keep working alongside the new ones.
     #[test]
     fn script_env_includes_helmor_port_vars_when_range_present() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1767,6 +1774,7 @@ mod tests {
     /// `${HELMOR_PORT:-3000}` keep their default.
     #[test]
     fn script_env_omits_helmor_port_vars_when_range_missing() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = ScriptProcessManager::new();
         let dir = std::env::temp_dir();
         let ctx = ScriptContext {
@@ -1959,6 +1967,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_runs_stop_command_then_escalates() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
@@ -2032,6 +2041,7 @@ mod tests {
     #[test]
     #[ignore = "fork-heavy; run via `cargo test graceful_kill -- --ignored`"]
     fn graceful_kill_force_stop_on_second_click_short_circuits() {
+        let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = Arc::new(ScriptProcessManager::new());
         let ctx = empty_ctx();
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
