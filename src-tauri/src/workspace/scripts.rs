@@ -1275,65 +1275,32 @@ mod tests {
     }
 
     /// Regression: `kill_all` must drop the process-map lock BEFORE
-    /// signaling, otherwise the `run_script` thread's post-wait
-    /// `unregister` — which takes the same lock — would deadlock the
-    /// quit path. We exercise the exact ordering by spawning a real
-    /// `run_script` that exits the moment it's signaled (so its reaper
-    /// thread calls `unregister` while `kill_all` is still iterating
-    /// over its victim list). The test would hang the suite if the
-    /// lock were held; finishing under the timeout proves the
-    /// invariant.
+    /// signaling, otherwise a script owner trying to unregister after
+    /// reaping would contend with the quit path. Use a directly
+    /// registered child here instead of a PTY-backed `run_script`; the
+    /// PTY path has its own tests, and this regression only needs the
+    /// manager's signal/unregister ordering.
     #[test]
     fn kill_all_does_not_deadlock_against_concurrent_unregister() {
         let _guard = SCRIPT_TEST_LOCK.lock().unwrap();
         let mgr = std::sync::Arc::new(ScriptProcessManager::new());
-        let ctx = ScriptContext {
-            root_path: std::env::temp_dir().display().to_string(),
-            workspace_path: None,
-            workspace_name: None,
-            default_branch: None,
-            port_base: None,
-            port_count: None,
-        };
         let key: ProcessKey = ("repo".into(), "run".into(), Some("ws".into()));
 
-        let mgr_c = mgr.clone();
-        let key_c = key.clone();
-        let tempdir = std::env::temp_dir().display().to_string();
-        let runner = std::thread::spawn(move || {
-            run_script_with_shell(
-                &mgr_c,
-                &key_c.0,
-                &key_c.1,
-                key_c.2.as_deref(),
-                Some("sleep 60"),
-                &tempdir,
-                &ctx,
-                make_channel(),
-                "/bin/sh",
-                &[],
-                None,
-                None,
-            )
-        });
-
-        // Wait for run_script to register before we issue kill_all.
-        wait_for_registered(&mgr, &key, "run_script");
+        let (mut child, pid, _, killed) = spawn_and_register(&mgr, key.clone());
 
         let start = Instant::now();
         assert_eq!(mgr.kill_all(), 1);
-        // run_script's reaper must have unregistered + returned. If
-        // kill_all held the map lock past the signal, the unregister
-        // would have blocked and this join would hang.
-        let _ = runner.join().unwrap();
-        // Real path is sub-second (PROCESS_TERM + PROCESS_KILL = 700ms
-        // upper bound). 5s headroom for CI load; a real regression
-        // (deadlock / missed signal) hangs indefinitely and still trips.
+
+        let status = child.wait().expect("reap child");
+        mgr.unregister(&key, pid);
+
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "kill_all + reap took too long: {:?}",
             start.elapsed()
         );
+        assert!(!status.success(), "child should have been terminated");
+        assert!(killed.load(Ordering::Acquire), "killed flag set");
         assert!(mgr.processes.lock().unwrap().is_empty());
     }
 
