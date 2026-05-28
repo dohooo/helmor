@@ -918,6 +918,64 @@ pub async fn reinstall_remote_daemon(
     .await
 }
 
+/// Install (or update) the agent-runtime bundle on the named SSH
+/// runtime. Idempotent: a current install is a no-op (manifest match);
+/// stale or missing files are scp-ed + sha256-verified + atomically
+/// moved into place. The on-remote layout afterwards is:
+///
+/// ```text
+/// $HOME/.helmor/server/
+///   helmor-server          (our shell wrapper)
+///   helmor-server.real     (the actual daemon binary)
+///   helmor-sidecar         (cross-compiled bun --compile ELF)
+///   claude                 (claude-code CLI)
+///   MANIFEST.json          (sha256 commit marker)
+/// ```
+///
+/// Writes are confined to `$HOME/.helmor/server/`. No sudo, no
+/// modifications to the user's shell rc files, no package-manager
+/// installs. Every byte we put on the remote is sha256-verified
+/// against a locally-pinned manifest before it goes live.
+#[tauri::command]
+pub async fn install_remote_bundle(
+    registry: tauri::State<'_, Arc<RuntimeRegistry>>,
+    name: String,
+) -> CmdResult<crate::remote::install_bundle::EnsureRemoteBundleOutcome> {
+    if name.trim().is_empty() {
+        return Err(anyhow::anyhow!("runtime name must not be empty").into());
+    }
+    if name == crate::remote::LOCAL_RUNTIME_NAME {
+        return Err(anyhow::anyhow!(
+            "install_remote_bundle is only valid for SSH-backed remote runtimes (got `{name}`)"
+        )
+        .into());
+    }
+    let registry = Arc::clone(&registry);
+    run_blocking(move || {
+        let config = registry.config_for(&name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime `{name}` has no persisted config; connect it first via the Add-remote-server wizard"
+            )
+        })?;
+        let host = match &config {
+            RuntimeConnectionConfig::Ssh { host, .. } => host.clone(),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "runtime `{name}` is not SSH-backed; bundle install only supports the SSH transport",
+                ));
+            }
+        };
+
+        // Detect the remote target so we know which local bundle dir
+        // to push. The probe is a cheap `uname -s; uname -m` over ssh.
+        let runner = crate::remote::install::ProcessSshRunner;
+        let target = crate::remote::install_bundle::detect_remote_target(&runner, &host)?;
+        let bundle_dir = crate::remote::install_bundle::resolve_local_bundle_dir(target)?;
+        crate::remote::install_bundle::ensure_remote_bundle(&runner, &host, &bundle_dir)
+    })
+    .await
+}
+
 /// Track G2 read side: snapshot which providers have a key configured
 /// on the named remote runtime's daemon. Returns presence + optional
 /// base URLs; the literal API key value never crosses the wire. Used

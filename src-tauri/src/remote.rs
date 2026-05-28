@@ -32,6 +32,7 @@ pub mod connection;
 pub mod daemon;
 pub mod host;
 pub mod install;
+pub mod install_bundle;
 pub mod liveness;
 pub mod methods;
 pub mod owned_terminals;
