@@ -2,6 +2,24 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.27.0",
+			"items": [
+				{
+					"text": "Queued messages now have an Edit button — click it to pull a queued message back into the composer for revision, leaving the rest of the queue in place."
+				},
+				{
+					"text": "Smart Triage: let the local LLM scan Slack / Lark / GitHub / GitLab and pre-fill AI workspaces for actionable items.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.26.0",
 			"items": [
 				{
