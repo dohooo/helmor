@@ -248,7 +248,22 @@ pub async fn send_agent_message_stream(
         .into());
     }
 
-    let working_directory = resolve_stream_working_directory(&request)?;
+    let mut working_directory = resolve_stream_working_directory(&request)?;
+    // Track F2 path translation for remote runs: the request carries the
+    // LOCAL worktree path, but a workspace bound to a remote runs the agent
+    // in its REMOTE worktree location. Swap in the remote_path so the cwd
+    // (and the Helmor system-prompt's workspace root, both derived from
+    // `working_directory` downstream) point at the right place on the
+    // daemon's filesystem. Local/anonymous sessions and same-path remotes
+    // fall through unchanged. Without this, `agent.send` ships a cwd that
+    // doesn't exist on the remote and the spawned agent CLI fails.
+    if let Some(hsid) = request.helmor_session_id.as_deref() {
+        if let Some(remote_dir) =
+            self::streaming::transports::resolve_remote_workspace_dir(&app, hsid)
+        {
+            working_directory = std::path::PathBuf::from(remote_dir);
+        }
+    }
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 

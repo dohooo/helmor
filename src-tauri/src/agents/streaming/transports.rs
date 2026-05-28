@@ -396,6 +396,35 @@ fn resolve_runtime_name_for_session(app: &AppHandle, helmor_session_id: &str) ->
     bindings.lookup(&workspace_id)
 }
 
+/// The remote worktree path for a session's workspace, if the workspace
+/// is bound to a remote runtime with a per-host path override (set when
+/// the workspace was moved/cloned onto that runtime).
+///
+/// The desktop only knows the LOCAL worktree path; the daemon must run
+/// the agent in the worktree's REMOTE location. Without this, `agent.send`
+/// ships the desktop's `~/helmor*/workspaces/...` cwd to the daemon, which
+/// doesn't exist on the remote, so the spawned agent CLI fails immediately.
+/// `None` (no override) means callers pass the local path through unchanged
+/// — the same-path macOS↔Linux case. Mirrors
+/// `ResolvedRuntime::translate_workspace_dir` (file-op commands) and the
+/// workspace-watch translation.
+pub fn resolve_remote_workspace_dir(app: &AppHandle, helmor_session_id: &str) -> Option<String> {
+    let workspace_id: Option<String> = crate::models::db::read_conn()
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT workspace_id FROM sessions WHERE id = ?1",
+                [helmor_session_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+        })
+        .flatten();
+    let workspace_id = workspace_id?;
+    let bindings = app.try_state::<Arc<WorkspaceRuntimeBindings>>()?;
+    bindings.lookup_remote_path(&workspace_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

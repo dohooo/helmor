@@ -29,7 +29,9 @@ use uuid::Uuid;
 use crate::remote::methods::{
     WorkspaceFileEventNotification, WorkspaceStartWatchParams, WorkspaceStopWatchParams,
 };
-use crate::remote::{NotificationSubscription, RuntimeRegistry, LOCAL_RUNTIME_NAME};
+use crate::remote::{
+    NotificationSubscription, RuntimeRegistry, WorkspaceRuntimeBindings, LOCAL_RUNTIME_NAME,
+};
 use crate::ui_sync::{publish, UiMutationEvent};
 use crate::workspace::files::FileWatcher;
 
@@ -126,17 +128,20 @@ pub async fn start_workspace_watch(
     app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     manager: tauri::State<'_, Arc<WorkspaceFileWatchManager>>,
+    bindings: tauri::State<'_, Arc<WorkspaceRuntimeBindings>>,
     workspace_id: String,
     workspace_dir: String,
     runtime_name: Option<String>,
 ) -> CmdResult<StartWorkspaceWatchResult> {
     let registry = Arc::clone(&registry);
     let manager = Arc::clone(&manager);
+    let bindings = Arc::clone(&bindings);
     run_blocking(move || {
         start_workspace_watch_inner(
             app,
             &registry,
             &manager,
+            &bindings,
             workspace_id,
             workspace_dir,
             runtime_name.as_deref(),
@@ -149,6 +154,7 @@ pub(crate) fn start_workspace_watch_inner(
     app: tauri::AppHandle,
     registry: &Arc<RuntimeRegistry>,
     manager: &Arc<WorkspaceFileWatchManager>,
+    bindings: &Arc<WorkspaceRuntimeBindings>,
     workspace_id: String,
     workspace_dir: String,
     runtime_name: Option<&str>,
@@ -190,6 +196,20 @@ pub(crate) fn start_workspace_watch_inner(
             .lookup(Some(&name))
             .with_context(|| format!("resolve remote runtime `{name}` for workspace watch"))?;
 
+        // Track F2 path translation: the desktop hands us the LOCAL
+        // workspace root, but the daemon must watch the worktree at its
+        // remote location (set when the workspace was moved/cloned onto
+        // the runtime). Without this the daemon tries to watch the
+        // desktop's `~/helmor*/workspaces/...` path, which doesn't exist
+        // on the remote, and `workspace.startWatch` fails on every
+        // workspace-open. `None` (no per-host override) passes the path
+        // through unchanged — the same-path macOS↔Linux case. Mirrors
+        // `ResolvedRuntime::translate_workspace_dir` used by the file-op
+        // commands, which is why those already worked on remote.
+        let remote_dir = bindings
+            .lookup_remote_path(&workspace_id)
+            .unwrap_or_else(|| workspace_dir.clone());
+
         // Use a UUID per-start so re-starting a watch on the same
         // workspace produces a fresh server-side watch id (avoids
         // the daemon's "already running" rejection).
@@ -197,7 +217,7 @@ pub(crate) fn start_workspace_watch_inner(
 
         let _result = runtime
             .workspace_start_watch(WorkspaceStartWatchParams {
-                workspace_dir: workspace_dir.clone(),
+                workspace_dir: remote_dir.clone(),
                 watch_id: watch_id.clone(),
             })
             .with_context(|| {
