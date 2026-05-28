@@ -119,6 +119,7 @@ export async function runTriageTick(
 	const systemPrompt = buildSystemPrompt({
 		userPromptSuffix: params.systemPrompt,
 		maxPerTick: params.maxPerTick,
+		candidates: params.candidates,
 	});
 	const { text: userText, images: userImages } = buildTickUserMessage(
 		params.candidates,
