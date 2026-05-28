@@ -104,12 +104,32 @@ pub enum WatchKindLabel {
     Remote,
 }
 
-/// Treat `None`, empty string, and the reserved `"local"` name as
-/// "use the local path". Anything else hits the registry.
-fn wants_local(runtime_name: Option<&str>) -> bool {
+/// Resolve which runtime should host this watch.
+///
+/// Mirrors the file-op `resolve_runtime_for_call` contract: an explicit
+/// `runtime_name` always wins (so dev probes / migration tools can target
+/// `local` even on a bound workspace), but absent an explicit choice the
+/// workspace's binding decides — a workspace bound to `docker-linux-arm64`
+/// should auto-route its watcher onto that runtime instead of silently
+/// falling back to a local walker of a path that doesn't exist on the
+/// remote. Returns `None` when the effective answer is "watch locally".
+fn resolve_watch_runtime(
+    bindings: &WorkspaceRuntimeBindings,
+    workspace_id: &str,
+    runtime_name: Option<&str>,
+) -> Option<String> {
     match runtime_name.map(str::trim) {
-        None | Some("") | Some(LOCAL_RUNTIME_NAME) => true,
-        Some(_) => false,
+        // Explicit `local` is an opt-out: dev probes / migrations may
+        // want the local walker even on a bound workspace, so honor it.
+        Some(name) if name == LOCAL_RUNTIME_NAME => None,
+        // Explicit non-empty non-local name wins regardless of binding.
+        Some(name) if !name.is_empty() => Some(name.to_string()),
+        // None or empty/whitespace — fall back to the workspace binding.
+        // A binding to `local` is honored as "watch locally" (so it acts
+        // as an explicit opt-out, mirroring the `Some("local")` arm).
+        _ => bindings
+            .lookup(workspace_id)
+            .filter(|name| name != LOCAL_RUNTIME_NAME),
     }
 }
 
@@ -169,29 +189,9 @@ pub(crate) fn start_workspace_watch_inner(
     let app_for_cb = app.clone();
     let workspace_id_for_cb = workspace_id.clone();
 
-    let (active_watch, label) = if wants_local(runtime_name) {
-        let watcher = FileWatcher::start(
-            PathBuf::from(&workspace_dir),
-            Box::new(move |_changes| {
-                publish(
-                    &app_for_cb,
-                    UiMutationEvent::WorkspaceFilesChanged {
-                        workspace_id: workspace_id_for_cb.clone(),
-                    },
-                );
-            }),
-        )
-        .with_context(|| format!("start local watcher for `{workspace_dir}`"))?;
-        (
-            ActiveWatch::Local { _watcher: watcher },
-            WatchKindLabel::Local,
-        )
-    } else {
-        // Safe to unwrap because `wants_local` returned false →
-        // runtime_name is non-empty and not "local".
-        let name = runtime_name
-            .expect("remote branch implies Some(name)")
-            .to_string();
+    let effective_runtime = resolve_watch_runtime(bindings, &workspace_id, runtime_name);
+
+    let (active_watch, label) = if let Some(name) = effective_runtime {
         let runtime = registry
             .lookup(Some(&name))
             .with_context(|| format!("resolve remote runtime `{name}` for workspace watch"))?;
@@ -254,6 +254,24 @@ pub(crate) fn start_workspace_watch_inner(
                 _subscription: subscription,
             },
             WatchKindLabel::Remote,
+        )
+    } else {
+        // No runtime in scope → fall back to the local notify watcher.
+        let watcher = FileWatcher::start(
+            PathBuf::from(&workspace_dir),
+            Box::new(move |_changes| {
+                publish(
+                    &app_for_cb,
+                    UiMutationEvent::WorkspaceFilesChanged {
+                        workspace_id: workspace_id_for_cb.clone(),
+                    },
+                );
+            }),
+        )
+        .with_context(|| format!("start local watcher for `{workspace_dir}`"))?;
+        (
+            ActiveWatch::Local { _watcher: watcher },
+            WatchKindLabel::Local,
         )
     };
 
@@ -358,14 +376,40 @@ mod tests {
     }
 
     #[test]
-    fn wants_local_treats_none_empty_and_local_uniformly() {
-        assert!(wants_local(None));
-        assert!(wants_local(Some("")));
-        assert!(wants_local(Some("   ")));
-        assert!(wants_local(Some(LOCAL_RUNTIME_NAME)));
-        // Any other name is remote.
-        assert!(!wants_local(Some("dev.box")));
-        assert!(!wants_local(Some("stub.box")));
+    fn resolve_watch_runtime_prefers_explicit_then_binding() {
+        let bindings = WorkspaceRuntimeBindings::new();
+        bindings.set("ws-bound", "docker.box", None);
+
+        // Explicit non-local runtime wins, even on a bound workspace.
+        assert_eq!(
+            resolve_watch_runtime(&bindings, "ws-bound", Some("dev.box")),
+            Some("dev.box".to_string()),
+        );
+        // Explicit `local` opts out of binding lookup — a dev probe wants
+        // the local walker even when the workspace is bound to a remote.
+        assert_eq!(
+            resolve_watch_runtime(&bindings, "ws-bound", Some(LOCAL_RUNTIME_NAME)),
+            None,
+        );
+        // Explicit empty / whitespace is treated like None.
+        assert_eq!(
+            resolve_watch_runtime(&bindings, "ws-bound", Some("   ")),
+            Some("docker.box".to_string()),
+        );
+        // No explicit choice + bound workspace → use the binding.
+        assert_eq!(
+            resolve_watch_runtime(&bindings, "ws-bound", None),
+            Some("docker.box".to_string()),
+        );
+        // No explicit choice + unbound workspace → local.
+        assert_eq!(resolve_watch_runtime(&bindings, "ws-orphan", None), None);
+        // Binding to `local` is honored as "watch locally" (not as the
+        // string "local" naming a remote runtime).
+        bindings.set("ws-local-binding", LOCAL_RUNTIME_NAME, None);
+        assert_eq!(
+            resolve_watch_runtime(&bindings, "ws-local-binding", None),
+            None,
+        );
     }
 
     #[test]
