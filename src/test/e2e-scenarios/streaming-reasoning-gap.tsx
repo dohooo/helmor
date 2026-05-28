@@ -23,7 +23,7 @@ import type {
 // Scenario walks one reasoning at a time:
 //   step 0..N-1   reasoning N is streaming, 0..N-1 are just-finished
 //   final tool    a tool_use is appended after the last reasoning, mirroring
-//                 the user's "突然多了一个工具调用" trigger
+//                 the "a tool call suddenly appears" trigger reported by users
 
 const SESSION_ID = "e2e-streaming-reasoning-gap";
 const HISTORY_COUNT = 16;
@@ -177,7 +177,7 @@ export function StreamingReasoningGapScenario() {
 
 	return (
 		<div className="flex h-screen flex-col bg-background text-foreground">
-			<div className="flex items-center gap-3 border-b border-border/50 px-4 py-2 text-xs">
+			<div className="flex items-center gap-3 border-b border-border/50 px-4 py-2 text-small">
 				<span className="font-medium">Streaming Reasoning Gap</span>
 				<span className="text-muted-foreground">
 					step <span data-testid="step-index">{stepIndex}</span> /{" "}

@@ -281,6 +281,22 @@ fn user_json_text_swallowed() {
 }
 
 #[test]
+fn user_json_text_after_assistant_swallowed() {
+    let msgs = vec![
+        assistant_json(
+            "a1",
+            json!([{ "type": "text", "text": "Using skill..." }]),
+            None,
+        ),
+        user_json(
+            "u1",
+            json!([{ "type": "text", "text": "# Skill\n\nInternal instructions" }]),
+        ),
+    ];
+    assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
 fn user_tool_result_only_no_prev() {
     let msgs = vec![user_json(
         "u1",
@@ -1604,4 +1620,34 @@ fn codex_collab_close_agent() {
         &serde_json::to_string(&parsed).unwrap(),
     )];
     assert_yaml_snapshot!(run_normalized(msgs));
+}
+
+#[test]
+fn triage_priming_message_renders_as_assistant_text() {
+    // Exact content stored by `triage::workspace_factory::create_ai_workspace`
+    // (verified against a live DB row from a real triage tick). Notably:
+    //   - the `message` object has NO `role` field (production code only
+    //     writes `content`), so the adapter must not require it
+    //   - top-level `type: "assistant"` is what the adapter dispatches on
+    let raw_content = "{\"message\":{\"content\":[{\"text\":\"## Source\\nfoo\\n\\n## Repo\\nbar\\n\\n## Suggested Action\\nbaz\\n\\n## Confirm?\\nyes\",\"type\":\"text\"}]},\"type\":\"assistant\"}";
+    let msgs = vec![make_record("priming-1", "assistant", raw_content)];
+    let rendered = MessagePipeline::convert_historical(&msgs);
+    assert_eq!(
+        rendered.len(),
+        1,
+        "expected 1 rendered message, got {}",
+        rendered.len()
+    );
+    let msg = &rendered[0];
+    assert_eq!(role_str(&msg.role), "assistant");
+    // Expect at least one text content block carrying the plan_message body.
+    let has_plan_text = msg.content.iter().any(|part| {
+        let s = serde_json::to_string(part).unwrap_or_default();
+        s.contains("Source") && s.contains("Suggested Action")
+    });
+    assert!(
+        has_plan_text,
+        "priming text missing from rendered content: {:#?}",
+        msg.content
+    );
 }

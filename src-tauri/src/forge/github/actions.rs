@@ -19,6 +19,7 @@ use crate::forge::{
 use super::accounts as gh_accounts;
 use super::api::{run_graphql, GraphqlOutcome, GITHUB_HOST};
 use super::context::GithubContext;
+use super::pr_match::matches_workspace_pr;
 use super::types::{
     ActionCheckContextNode, ActionDeploymentNode, ActionGraphqlEnvelope, ActionPullRequestNode,
     GithubCheckRunDetail,
@@ -37,7 +38,9 @@ query($owner: String!, $name: String!, $head: String!) {
         merged
         reviewDecision
         mergeable
+        mergeStateStatus
         isCrossRepository
+        headRepositoryOwner { login }
         commits(last: 1) {
           nodes {
             commit {
@@ -139,16 +142,24 @@ pub(super) fn query_workspace_pr_action_status(
             "GitHub repository was not returned",
         ));
     };
-    let Some(pr) = pick_in_repo_action_pr(repository.pull_requests.nodes) else {
+    let Some(pr) = pick_workspace_action_pr(repository.pull_requests.nodes, &context.login) else {
         return Ok(ForgeActionStatus::no_change_request());
     };
 
     Ok(build_action_status(pr))
 }
 
-/// Action-status counterpart to `pull_request::pick_in_repo_pr`.
-fn pick_in_repo_action_pr(nodes: Vec<ActionPullRequestNode>) -> Option<ActionPullRequestNode> {
-    nodes.into_iter().find(|node| !node.is_cross_repository)
+fn pick_workspace_action_pr(
+    nodes: Vec<ActionPullRequestNode>,
+    bound_login: &str,
+) -> Option<ActionPullRequestNode> {
+    nodes.into_iter().find(|node| {
+        matches_workspace_pr(
+            node.is_cross_repository,
+            node.head_repository_owner.as_ref(),
+            bound_login,
+        )
+    })
 }
 
 /// REST-side companion: fetch the human-readable detail blob for a
@@ -249,6 +260,7 @@ fn build_action_status(node: ActionPullRequestNode) -> ForgeActionStatus {
     };
     let review_decision = node.review_decision;
     let mergeable = node.mergeable;
+    let merge_state_status = node.merge_state_status;
     let latest_commit = node
         .commits
         .nodes
@@ -286,6 +298,7 @@ fn build_action_status(node: ActionPullRequestNode) -> ForgeActionStatus {
         change_request: Some(pr),
         review_decision,
         mergeable,
+        merge_state_status,
         deployments,
         checks,
         remote_state: RemoteState::Ok,
@@ -497,6 +510,7 @@ fn parse_github_datetime(value: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::HeadRepositoryOwner;
     use super::*;
     use crate::forge::github::types::{
         ActionCheckApp, ActionCheckContextConnection, ActionCheckRunNode, ActionCheckSuite,
@@ -677,7 +691,7 @@ mod tests {
         assert_eq!(format_duration(None, Some("2026-04-10T00:00:00Z")), None);
     }
 
-    fn make_action_node(number: i64, cross: bool) -> ActionPullRequestNode {
+    fn make_action_node(number: i64, cross: bool, owner: Option<&str>) -> ActionPullRequestNode {
         ActionPullRequestNode {
             url: format!("https://github.com/octocat/hello-world/pull/{number}"),
             number,
@@ -686,22 +700,48 @@ mod tests {
             merged: false,
             review_decision: None,
             mergeable: None,
+            merge_state_status: None,
             is_cross_repository: cross,
+            head_repository_owner: owner.map(|login| HeadRepositoryOwner {
+                login: login.to_string(),
+            }),
             commits: ActionCommitConnection { nodes: vec![] },
         }
     }
 
     #[test]
-    fn pick_in_repo_action_pr_skips_cross_repository_nodes() {
-        let nodes = vec![make_action_node(433, true), make_action_node(100, false)];
-        let picked = pick_in_repo_action_pr(nodes).expect("expected an in-repo PR");
+    fn pick_workspace_action_pr_skips_unrelated_cross_repository_nodes() {
+        let nodes = vec![
+            make_action_node(433, true, Some("other-user")),
+            make_action_node(100, false, None),
+        ];
+        let picked = pick_workspace_action_pr(nodes, "octocat").expect("expected an in-repo PR");
         assert_eq!(picked.number, 100);
     }
 
     #[test]
-    fn pick_in_repo_action_pr_returns_none_when_only_cross_repo_matches() {
-        let nodes = vec![make_action_node(433, true)];
-        assert!(pick_in_repo_action_pr(nodes).is_none());
+    fn pick_workspace_action_pr_matches_cross_repository_node_from_bound_login() {
+        let nodes = vec![make_action_node(473, true, Some("Aidxun"))];
+        let picked = pick_workspace_action_pr(nodes, "aidxun").expect("expected bound fork PR");
+        assert_eq!(picked.number, 473);
+    }
+
+    #[test]
+    fn pick_workspace_action_pr_does_not_match_cross_repository_node_for_different_login() {
+        let nodes = vec![make_action_node(473, true, Some("fork-owner"))];
+        assert!(pick_workspace_action_pr(nodes, "authorized-collaborator").is_none());
+    }
+
+    #[test]
+    fn pick_workspace_action_pr_returns_none_when_only_unrelated_cross_repo_matches() {
+        let nodes = vec![make_action_node(433, true, Some("other-user"))];
+        assert!(pick_workspace_action_pr(nodes, "octocat").is_none());
+    }
+
+    #[test]
+    fn pick_workspace_action_pr_returns_none_for_cross_repo_without_owner() {
+        let nodes = vec![make_action_node(433, true, None)];
+        assert!(pick_workspace_action_pr(nodes, "octocat").is_none());
     }
 
     #[test]
@@ -714,7 +754,9 @@ mod tests {
             merged: false,
             review_decision: Some("CHANGES_REQUESTED".to_string()),
             mergeable: Some("CONFLICTING".to_string()),
+            merge_state_status: Some("DIRTY".to_string()),
             is_cross_repository: false,
+            head_repository_owner: None,
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {
@@ -758,6 +800,7 @@ mod tests {
         assert_eq!(status.remote_state, RemoteState::Ok);
         assert_eq!(status.review_decision.as_deref(), Some("CHANGES_REQUESTED"));
         assert_eq!(status.mergeable.as_deref(), Some("CONFLICTING"));
+        assert_eq!(status.merge_state_status.as_deref(), Some("DIRTY"));
         assert_eq!(status.checks.len(), 1);
         assert_eq!(status.checks[0].status, ActionStatusKind::Success);
         assert_eq!(status.checks[0].provider, ActionProvider::Github);
@@ -776,7 +819,9 @@ mod tests {
             merged: false,
             review_decision: None,
             mergeable: Some("MERGEABLE".to_string()),
+            merge_state_status: Some("CLEAN".to_string()),
             is_cross_repository: false,
+            head_repository_owner: None,
             commits: ActionCommitConnection {
                 nodes: vec![ActionPullRequestCommitNode {
                     commit: ActionCommitNode {

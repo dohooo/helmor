@@ -95,7 +95,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 					disabled={disabled}
 					aria-label="Usage Stats"
 					className={cn(
-						"flex size-7 cursor-pointer items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
+						"flex size-7 cursor-interactive items-center justify-center rounded-md disabled:cursor-not-allowed disabled:opacity-50",
 						className,
 					)}
 				>
@@ -108,7 +108,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 			<HoverCardContent side="top" align="end" className="w-[280px]">
 				<div className="flex flex-col gap-3 px-1 py-1">
 					<div className="flex items-center justify-between">
-						<div className="text-[14px] font-semibold text-foreground">
+						<div className="text-body font-semibold text-foreground">
 							Usage Stats
 						</div>
 						<span
@@ -139,7 +139,7 @@ export function UsageStatsIndicator({ agentType, disabled, className }: Props) {
 							{stats.notes.map((note) => (
 								<div
 									key={note.label}
-									className="flex items-center justify-between text-[12px]"
+									className="flex items-center justify-between text-small"
 								>
 									<span className="text-muted-foreground">{note.label}</span>
 									<span className="font-medium tabular-nums text-foreground">

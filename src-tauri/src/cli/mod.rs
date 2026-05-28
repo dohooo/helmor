@@ -34,11 +34,61 @@ use clap::{CommandFactory, FromArgMatches};
 pub use self::args::{Cli, Commands};
 use crate::ui_sync::UiMutationEvent;
 
-fn installed_cli_name() -> &'static str {
+/// The CLI's user-facing binary name for this build.
+///
+/// - Release builds: `helmor` (the canonical name; the installer
+///   creates `/usr/local/bin/helmor` as a symlink to the bundled
+///   `helmor-cli`).
+/// - Dev builds: `helmor-dev` (a separate symlink name so a dev
+///   install doesn't shadow a release install on the same machine).
+///
+/// **Important caveat for dev builds**: each worktree builds its own
+/// `target/debug/helmor-cli`, but `/usr/local/bin/helmor-dev` (if it
+/// exists at all) can only point at one of them. Callers that need a
+/// *reliable* dev invocation — in particular code that hands a
+/// command string to an agent running inside this Helmor instance —
+/// should use [`agent_invocation_path`] instead, which returns the
+/// absolute path of THIS process's sibling `helmor-cli`.
+///
+/// Use this function for terminal-user-visible output (e.g. error
+/// messages telling the user which command to run themselves) — the
+/// user can be expected to manage their own `/usr/local/bin`
+/// state. Don't use it from prompt assembly or other agent-facing
+/// code paths.
+pub(crate) fn installed_cli_name() -> &'static str {
     if crate::data_dir::is_dev() {
         "helmor-dev"
     } else {
         "helmor"
+    }
+}
+
+/// The CLI invocation an agent running inside this Helmor instance
+/// should use.
+///
+/// - Release: returns `helmor` (the on-PATH symlink is stable).
+/// - Dev: returns the absolute path of the `helmor-cli` binary sitting
+///   next to the currently-running Helmor executable. This is the
+///   *only* reliable invocation under the worktree-based dev workflow,
+///   where multiple Helmor dev instances coexist and a shared
+///   `/usr/local/bin/helmor-dev` symlink (if any) can only target one
+///   worktree's binary.
+///
+/// Falls back to `helmor-cli` (bare name, relying on PATH) only if
+/// `current_exe()` itself fails — which would already imply Helmor is
+/// in a broken state. The fallback exists so prompt assembly never
+/// returns an empty / nonsense string.
+pub(crate) fn agent_invocation_path() -> String {
+    if !crate::data_dir::is_dev() {
+        return installed_cli_name().to_string();
+    }
+
+    match std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("helmor-cli")))
+    {
+        Some(path) => path.display().to_string(),
+        None => "helmor-cli".to_string(),
     }
 }
 
@@ -116,4 +166,38 @@ fn ensure_ready() -> Result<()> {
         .with_context(|| format!("Failed to open database at {db_path:?}"))?;
     crate::schema_init(&conn);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cargo test` always runs as a debug build, so `is_dev()` is
+    /// `true` here — this exercises the dev branch end-to-end.
+    /// Pinning the *shape* of the returned path (absolute, ends with
+    /// `/helmor-cli`) protects against a future refactor that
+    /// accidentally drops back to the bare `helmor-dev` name, which
+    /// would silently misroute agents to the wrong worktree's CLI.
+    #[test]
+    fn agent_invocation_path_returns_absolute_helmor_cli_in_dev() {
+        let path = agent_invocation_path();
+        // Either an absolute path ending in `/helmor-cli`, or the
+        // bare-name fallback when `current_exe()` is unavailable.
+        assert!(
+            path.ends_with("/helmor-cli") || path == "helmor-cli",
+            "unexpected dev invocation path: {path}"
+        );
+        // Never the bare `helmor-dev` symlink name — that's the
+        // ambiguous-under-worktree case this helper exists to avoid.
+        assert_ne!(path, "helmor-dev", "must not emit bare `helmor-dev`");
+        assert_ne!(path, "helmor", "must not emit release name in dev");
+    }
+
+    /// `installed_cli_name` is the terminal-user-facing name and
+    /// must stay aligned with what `cli_status` reports / what the
+    /// installer creates as a symlink. Debug builds = `helmor-dev`.
+    #[test]
+    fn installed_cli_name_uses_dev_suffix_in_debug_builds() {
+        assert_eq!(installed_cli_name(), "helmor-dev");
+    }
 }

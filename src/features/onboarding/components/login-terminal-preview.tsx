@@ -76,7 +76,7 @@ export function OnboardingTerminalPreview({
 							type="button"
 							onClick={onClose}
 							aria-label="Close login terminal"
-							className="group/close grid size-2.5 cursor-pointer place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-[#ff5c5f]"
+							className="group/close grid size-2.5 cursor-interactive place-items-center rounded-full bg-muted-foreground/35 leading-none transition-colors hover:bg-status-danger"
 						>
 							<X
 								strokeWidth={4.5}
@@ -88,7 +88,7 @@ export function OnboardingTerminalPreview({
 					)}
 					<span className="size-2.5 rounded-full bg-muted-foreground/25" />
 					<span className="size-2.5 rounded-full bg-muted-foreground/20" />
-					<span className="ml-2 text-xs font-medium text-muted-foreground">
+					<span className="ml-2 text-small font-medium text-muted-foreground">
 						{title}
 					</span>
 				</div>

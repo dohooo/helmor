@@ -226,7 +226,7 @@ function Harness({
 			className="flex flex-col gap-2"
 			style={{ width: `${width}px`, maxWidth: "100%" }}
 		>
-			<div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+			<div className="text-mini font-semibold uppercase tracking-[0.08em] text-muted-foreground">
 				{label}
 			</div>
 			{/*

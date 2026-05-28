@@ -402,6 +402,7 @@ fn import_workspace_db_records(conn: &Connection, workspace_id: &str) -> Result<
         rusqlite::params![workspace_id, canonical_repo.id],
     )
     .context("Failed to import workspace")?;
+    crate::schema::ensure_schema(conn).context("Failed to normalize imported workspace order")?;
 
     // 3. Insert sessions (handles claude_session_id → provider_session_id rename)
     let (sess_main, sess_src) = import_column_lists(conn, "sessions")?;
@@ -771,6 +772,17 @@ fn import_column_lists(conn: &Connection, table: &str) -> Result<(String, String
     let mut source_parts = Vec::new();
 
     for col in &main_cols {
+        // Coalesce post-migration NOT NULL columns so pre-triage source DBs import cleanly.
+        if table == "session_messages" && col == "is_ai_priming" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("is_ai_priming") {
+                "COALESCE(is_ai_priming, 0) AS is_ai_priming".to_string()
+            } else {
+                "0 AS is_ai_priming".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             // Column exists in both with the same name
             main_parts.push(col.clone());
@@ -890,6 +902,40 @@ fn import_workspace_column_lists(conn: &Connection) -> Result<(String, String)> 
             continue;
         }
 
+        if col == "display_order" {
+            main_parts.push(col.clone());
+            // Imported rows arrive with display_order = 0; the schema migration
+            // (`seed_workspace_display_orders`) lays them out on the sparse
+            // grid on the next startup. Avoids leaking Conductor's ordering
+            // (which used a different column) into Helmor's sidebar.
+            source_parts.push(if source_set.contains("display_order") {
+                "COALESCE(display_order, 0) AS display_order".to_string()
+            } else {
+                "0 AS display_order".to_string()
+            });
+            continue;
+        }
+
+        // Coalesce AI-triage NOT NULL columns so pre-triage Conductor DBs import cleanly.
+        if col == "kind" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("kind") {
+                "COALESCE(kind, 'manual') AS kind".to_string()
+            } else {
+                "'manual' AS kind".to_string()
+            });
+            continue;
+        }
+        if col == "ai_priming_consumed" {
+            main_parts.push(col.clone());
+            source_parts.push(if source_set.contains("ai_priming_consumed") {
+                "COALESCE(ai_priming_consumed, 0) AS ai_priming_consumed".to_string()
+            } else {
+                "0 AS ai_priming_consumed".to_string()
+            });
+            continue;
+        }
+
         if source_set.contains(col.as_str()) {
             main_parts.push(col.clone());
             source_parts.push(col.clone());
@@ -988,7 +1034,7 @@ mod tests {
         conn.execute_batch(
             r#"
             INSERT INTO main.repos (id, name) VALUES ('r1', 'my-repo');
-            INSERT INTO main.workspaces (id, repository_id, directory_name) VALUES ('w1', 'r1', 'boston');
+            INSERT INTO main.workspaces (id, repository_id, directory_name, display_order) VALUES ('w1', 'r1', 'boston', 1024);
 
             ATTACH DATABASE ':memory:' AS source;
             CREATE TABLE source.repos AS SELECT * FROM main.repos WHERE 0;
@@ -1226,8 +1272,14 @@ mod tests {
             .unwrap();
         conductor_conn
             .execute(
-                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, datetime('now'), datetime('now'))",
-                rusqlite::params!["w1", "r1", "broken-import", "missing/branch"],
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, branch, display_order, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, datetime('now'), datetime('now'))",
+                rusqlite::params![
+                    "w1",
+                    "r1",
+                    "broken-import",
+                    "missing/branch",
+                    crate::workspace::sidebar_order::ORDER_STEP,
+                ],
             )
             .unwrap();
         conductor_conn

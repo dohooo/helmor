@@ -1,15 +1,10 @@
 /** Queue overlay that sits above the composer without reserving layout space. */
 
-import { Clock, CornerDownLeft, Trash2 } from "lucide-react";
+import { Clock, CornerDownLeft, Pencil, Trash2 } from "lucide-react";
 import { useMemo } from "react";
 import { ActionRow } from "@/components/action-row";
 import { FileMentionBadge } from "@/components/file-mention-badge";
 import { Button } from "@/components/ui/button";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
 	isFileMentionPart,
 	isTextPart,
@@ -22,6 +17,7 @@ export type SubmitQueueListProps = {
 	items: readonly QueuedSubmit[];
 	onSteer: (id: string) => void;
 	onRemove: (id: string) => void;
+	onEdit?: (id: string) => void;
 	disabled?: boolean;
 };
 
@@ -29,6 +25,7 @@ export function SubmitQueueList({
 	items,
 	onSteer,
 	onRemove,
+	onEdit,
 	disabled,
 }: SubmitQueueListProps) {
 	if (items.length === 0) return null;
@@ -44,6 +41,7 @@ export function SubmitQueueList({
 					isLast={idx === items.length - 1}
 					onSteer={() => onSteer(item.id)}
 					onRemove={() => onRemove(item.id)}
+					onEdit={onEdit ? () => onEdit(item.id) : undefined}
 					disabled={disabled}
 				/>
 			))}
@@ -56,12 +54,14 @@ function QueueRow({
 	isLast,
 	onSteer,
 	onRemove,
+	onEdit,
 	disabled,
 }: {
 	item: QueuedSubmit;
 	isLast: boolean;
 	onSteer: () => void;
 	onRemove: () => void;
+	onEdit?: () => void;
 	disabled?: boolean;
 }) {
 	const { prompt, imagePaths, filePaths } = item.payload;
@@ -85,7 +85,7 @@ function QueueRow({
 						strokeWidth={1.8}
 						aria-hidden
 					/>
-					<div className="flex min-w-0 items-center gap-0 overflow-hidden whitespace-nowrap text-[12px] font-medium tracking-[0.01em] text-foreground">
+					<div className="flex min-w-0 items-center gap-0 overflow-hidden whitespace-nowrap text-small font-medium tracking-[0.01em] text-foreground">
 						{parts.map((part, idx) => {
 							if (isTextPart(part)) {
 								return (
@@ -111,43 +111,48 @@ function QueueRow({
 			}
 			trailing={
 				<>
-					<Button
-						type="button"
-						aria-label="Steer now"
-						variant="ghost"
-						size="sm"
-						disabled={disabled}
-						onClick={onSteer}
-						className="h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-					>
-						<CornerDownLeft
-							className="size-[13px] shrink-0"
-							strokeWidth={1.8}
-						/>
-						<span>Steer</span>
-					</Button>
-					<Tooltip>
-						<TooltipTrigger asChild>
+					<div className="flex items-center gap-0.5">
+						{onEdit ? (
 							<Button
 								type="button"
-								aria-label="Remove from queue"
+								aria-label="Edit in composer"
 								variant="ghost"
-								size="icon-xs"
+								size="sm"
 								disabled={disabled}
-								onClick={onRemove}
-								className="size-7 rounded-md text-muted-foreground hover:text-destructive"
+								onClick={onEdit}
+								className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 							>
-								<Trash2 className="size-3.5" strokeWidth={1.8} />
+								<Pencil className="size-[13px] shrink-0" strokeWidth={1.8} />
+								<span>Edit</span>
 							</Button>
-						</TooltipTrigger>
-						<TooltipContent
-							side="top"
-							sideOffset={4}
-							className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+						) : null}
+						<Button
+							type="button"
+							aria-label="Steer now"
+							variant="ghost"
+							size="sm"
+							disabled={disabled}
+							onClick={onSteer}
+							className="h-7 gap-1 rounded-md px-2 text-small font-medium text-muted-foreground hover:text-foreground"
 						>
-							<span>Remove from queue</span>
-						</TooltipContent>
-					</Tooltip>
+							<CornerDownLeft
+								className="size-[13px] shrink-0"
+								strokeWidth={1.8}
+							/>
+							<span>Steer</span>
+						</Button>
+					</div>
+					<Button
+						type="button"
+						aria-label="Remove from queue"
+						variant="ghost"
+						size="icon-xs"
+						disabled={disabled}
+						onClick={onRemove}
+						className="size-7 rounded-md text-muted-foreground hover:text-destructive"
+					>
+						<Trash2 className="size-3.5" strokeWidth={1.8} />
+					</Button>
 				</>
 			}
 		/>

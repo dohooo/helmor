@@ -10,13 +10,15 @@ checkpoints:
     event_type: cursor/status
     roles:
       - assistant
+      - system
     last_part_types:
       - text
 final_state:
-  message_count: 1
+  message_count: 2
   roles:
     - assistant
-  total_parts: 1
+    - system
+  total_parts: 2
 persisted_turns:
   turn_count: 1
   total_blocks: 1

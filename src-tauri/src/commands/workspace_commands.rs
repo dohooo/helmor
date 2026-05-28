@@ -21,23 +21,73 @@ fn notify_workspace_changed_in_background(app: AppHandle) {
 /// frontend should follow up with `finalize_workspace_from_repo` to kick
 /// off the slow git worktree creation; UI remains visible during that
 /// phase with state=initializing.
+/// `seed_session_id`: frontend-provided UUID for the initial session
+/// row, so pre-submit paste-cache files (`cache/paste/<seed>/`) survive
+/// submit. Backend mints one when absent.
 #[tauri::command]
 pub async fn prepare_workspace_from_repo(
     app: AppHandle,
     repo_id: String,
     source_branch: Option<String>,
     mode: Option<crate::workspace_state::WorkspaceMode>,
+    branch_intent: Option<crate::workspace_state::WorkspaceBranchIntent>,
+    initial_status: Option<WorkspaceStatus>,
+    seed_session_id: Option<String>,
 ) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
     let mode = mode.unwrap_or_default();
+    let branch_intent = branch_intent.unwrap_or_default();
+    let initial_status = initial_status.unwrap_or_default();
     let result = {
         let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
         run_blocking(move || match mode {
             crate::workspace_state::WorkspaceMode::Worktree => {
-                workspaces::prepare_workspace_from_repo_impl(&repo_id, source_branch.as_deref())
+                workspaces::prepare_workspace_from_repo_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    branch_intent,
+                    initial_status,
+                    seed_session_id.as_deref(),
+                )
             }
             crate::workspace_state::WorkspaceMode::Local => {
-                workspaces::prepare_local_workspace_impl(&repo_id, source_branch.as_deref())
+                // Local mode ignores `branch_intent` (no separate worktree).
+                workspaces::prepare_local_workspace_impl(
+                    &repo_id,
+                    source_branch.as_deref(),
+                    initial_status,
+                    seed_session_id.as_deref(),
+                )
             }
+            crate::workspace_state::WorkspaceMode::Chat => {
+                // Chat workspaces don't bind to a repository; callers
+                // should use `prepare_chat_workspace` directly.
+                anyhow::bail!(
+                    "Chat workspaces must be created via prepare_chat_workspace, not prepare_workspace_from_repo"
+                )
+            }
+        })
+        .await?
+    };
+    notify_workspace_changed_in_background(app);
+    Ok(result)
+}
+
+/// One-shot creation of a Chat-mode workspace. Chat workspaces aren't
+/// bound to any repository — they're a scratch directory under
+/// `<data_dir>/chats/<YYYY-MM-DD>/new-chat[-N]` used as cwd for a plain
+/// AI chat session. No git, no branch, no finalize phase.
+/// `seed_session_id`: see `prepare_workspace_from_repo`.
+#[tauri::command]
+pub async fn prepare_chat_workspace(
+    app: AppHandle,
+    initial_status: Option<WorkspaceStatus>,
+    seed_session_id: Option<String>,
+) -> CmdResult<workspaces::PrepareWorkspaceResponse> {
+    let initial_status = initial_status.unwrap_or_default();
+    let result = {
+        let _lock = db::WORKSPACE_FS_MUTATION_LOCK.lock().await;
+        run_blocking(move || {
+            workspaces::prepare_chat_workspace_impl(initial_status, seed_session_id.as_deref())
         })
         .await?
     };
@@ -146,6 +196,30 @@ pub async fn list_branches_for_local_picker(repo_id: String) -> CmdResult<Vec<St
     .await
 }
 
+/// Same source as `list_branches_for_local_picker` (local + remote refs,
+/// purely local fs reads) but returns where each branch lives so the
+/// picker can show a source icon and the pill can decide whether to
+/// prefix with `origin/`. Sorted by name.
+#[tauri::command]
+pub async fn list_branches_for_workspace_picker(
+    repo_id: String,
+) -> CmdResult<Vec<workspaces::BranchPickerEntry>> {
+    run_blocking(
+        move || -> anyhow::Result<Vec<workspaces::BranchPickerEntry>> {
+            let Some(repo) = crate::repos::load_repository_by_id(&repo_id)? else {
+                return Ok(Vec::new());
+            };
+            let repo_root = std::path::PathBuf::from(repo.root_path.trim());
+            if !repo_root.is_dir() {
+                return Ok(Vec::new());
+            }
+            let remote = repo.remote.unwrap_or_else(|| "origin".to_string());
+            Ok(workspaces::list_branch_picker_entries(&repo_root, &remote))
+        },
+    )
+    .await
+}
+
 /// Legacy combined flow (prepare + finalize in a single call). Retained
 /// for CLI / MCP / add-repository callers that don't benefit from the
 /// two-phase UI split.
@@ -208,6 +282,28 @@ pub async fn unpin_workspace(workspace_id: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn set_workspace_status(workspace_id: String, status: WorkspaceStatus) -> CmdResult<()> {
     run_blocking(move || workspaces::set_workspace_status(&workspace_id, status)).await
+}
+
+/// Sidebar drag-and-drop entry point. `target_group_id` is a sidebar group
+/// id from the frontend — `"pinned"`, a status lane (`"done"` / `"review"`
+/// / `"progress"` / `"backlog"` / `"canceled"`), or a repo bucket
+/// (`"repo:<repo_id>"`). The backend writes the corresponding `pinned_at`
+/// / `status` mutation plus a single `display_order` cell, only falling
+/// back to a full-group rebalance when the sparse gap runs out.
+#[tauri::command]
+pub async fn move_workspace_in_sidebar(
+    workspace_id: String,
+    target_group_id: String,
+    before_workspace_id: Option<String>,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        workspaces::move_workspace_in_sidebar(
+            &workspace_id,
+            &target_group_id,
+            before_workspace_id.as_deref(),
+        )
+    })
+    .await
 }
 
 /// `/add-dir` feature: list the extra directories the user has linked to
@@ -375,7 +471,7 @@ pub async fn prepare_archive_workspace(
 
 #[tauri::command]
 pub async fn start_archive_workspace(app: AppHandle, workspace_id: String) -> CmdResult<()> {
-    workspaces::start_archive_workspace(&app, &workspace_id)?;
+    workspaces::start_archive_workspace(&app, &workspace_id, workspaces::ArchiveOrigin::Manual)?;
     Ok(())
 }
 

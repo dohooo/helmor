@@ -1,15 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, LoaderCircle } from "lucide-react";
+import { LoaderCircle, SquareArrowOutUpRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { pickDefaultCursorModelIds } from "@/features/settings/panels/cursor-models";
 import { type CursorModelEntry, listCursorModels } from "@/lib/api";
 import {
@@ -114,36 +108,31 @@ export function CursorApiKeyAction({
 				onChange={(event) => setDraft(event.target.value)}
 				placeholder="API key"
 				disabled={isValidating}
-				className="h-8 w-[180px] border-border/50 bg-muted/20 text-[12px]"
+				className="h-8 w-[180px] border-border/50 bg-muted/20 text-small"
 			/>
-			<TooltipProvider>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							type="button"
-							variant="outline"
-							size="icon-sm"
-							aria-label={
-								isValidating ? "Validating API key" : "Get Cursor API key"
-							}
-							disabled={isValidating}
-							onClick={() => {
-								if (isValidating) return;
-								void openUrl(CURSOR_DASHBOARD_URL);
-							}}
-						>
-							{isValidating ? (
-								<LoaderCircle className="size-3.5 animate-spin" />
-							) : (
-								<ExternalLink className="size-3.5" />
-							)}
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>
-						{isValidating ? "Validating…" : "Get API key"}
-					</TooltipContent>
-				</Tooltip>
-			</TooltipProvider>
+			{isValidating ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					aria-label="Validating API key"
+					disabled
+				>
+					<LoaderCircle className="size-3.5 animate-spin" />
+					Validating…
+				</Button>
+			) : !draft ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					aria-label="Get Cursor API key"
+					onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
+				>
+					Get your API key
+					<SquareArrowOutUpRight className="size-3.5" />
+				</Button>
+			) : null}
 		</div>
 	);
 }

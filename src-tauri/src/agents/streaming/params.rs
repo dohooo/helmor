@@ -22,6 +22,13 @@ pub struct BuildSendMessageParamsInput<'a> {
     pub claude_base_url: Option<&'a str>,
     pub claude_auth_token: Option<&'a str>,
     pub agent_proxy: Option<&'a Value>,
+    /// Forwarded as `claudeThinkingDisplay` to the sidecar. Expected
+    /// values: `"summarized"` or `"omitted"`. Omitted from the wire
+    /// payload when `None` so the sidecar falls back to its default.
+    /// Only the Claude Code sidecar reads this; the Codex sidecar
+    /// silently ignores the field, so we forward unconditionally rather
+    /// than gating on `provider`.
+    pub claude_thinking_display: Option<&'a str>,
     /// Image attachments to forward to the sidecar. Omitted from the
     /// wire payload when empty.
     pub images: &'a [String],
@@ -63,6 +70,11 @@ pub fn build_send_message_params(input: BuildSendMessageParamsInput<'_>) -> Valu
     if !input.images.is_empty() {
         if let Some(obj) = params.as_object_mut() {
             obj.insert("images".to_string(), Value::from(input.images.to_vec()));
+        }
+    }
+    if let Some(display) = input.claude_thinking_display {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("claudeThinkingDisplay".to_string(), Value::from(display));
         }
     }
     if let (Some(base_url), Some(auth_token)) = (input.claude_base_url, input.claude_auth_token) {
@@ -199,9 +211,9 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO workspaces (id, repository_id, directory_name, state,
-             status, linked_directory_paths) VALUES (?1, 'r-1', 'ws', 'ready',
-             'in-progress', ?2)",
-            rusqlite::params![ws_id, linked],
+             status, linked_directory_paths, display_order) VALUES (?1, 'r-1', 'ws', 'ready',
+             'in-progress', ?2, ?3)",
+            rusqlite::params![ws_id, linked, crate::workspace::sidebar_order::ORDER_STEP],
         )
         .unwrap();
         conn.execute(

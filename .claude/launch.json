@@ -1,0 +1,29 @@
+{
+	"version": "0.0.1",
+	"configurations": [
+		{
+			"name": "helmor-app",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": ["run", "dev"],
+			"port": 1420
+		},
+		{
+			"name": "helmor-e2e-vite",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": ["run", "dev:e2e"],
+			"port": 1430
+		},
+		{
+			"name": "storybook",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": ["run", "storybook"],
+			"port": 6006
+		},
+		{
+			"name": "marketing",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": ["--cwd", "apps/marketing", "run", "dev"],
+			"port": 3000
+		}
+	]
+}

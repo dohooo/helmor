@@ -1,14 +1,20 @@
 pub mod agents;
 pub mod cli;
+pub(crate) mod codex_config;
 pub(crate) mod commands;
 pub mod data_dir;
+pub mod downloads;
 pub mod error;
+pub mod feedback;
 pub mod forge;
 pub mod git;
 pub mod global_hotkey;
 pub mod image_store;
 mod import;
+pub mod lark;
+pub mod local_llm;
 pub mod logging;
+pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod pipeline;
@@ -17,7 +23,10 @@ pub mod schema;
 pub mod service;
 mod shell_env;
 pub mod sidecar;
+pub mod sidecar_host;
+pub mod slack;
 mod system_limits;
+pub mod triage;
 pub mod ui_sync;
 pub mod updater;
 pub mod workspace;
@@ -40,7 +49,36 @@ pub use workspace::state as workspace_state;
 pub use workspace::status as workspace_status;
 pub use workspace::workspaces;
 
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
+
+/// Fallback `404 Not Found` response with an empty body. Used by the
+/// custom-protocol handlers when the upstream fetch fails — the
+/// webview falls back to the `<img alt="">` text gracefully.
+fn empty_404() -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(404)
+        .body(Vec::new())
+        .expect("404 response builder is infallible")
+}
+
+/// Extension-based MIME sniff for the `helmor-attachment` protocol.
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
 
 /// Initialise the database schema (call once at startup).
 pub fn schema_init(conn: &rusqlite::Connection) {
@@ -58,7 +96,78 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Inline Slack file previews. The webview hits
+        // `slack-file://files-tmb/T…-F…/image.png`, we proxy the request
+        // through the workspace cookie, and stream the bytes back as a
+        // normal HTTP response. Cached on disk after the first fetch.
+        .register_asynchronous_uri_scheme_protocol("slack-file", |_app, request, responder| {
+            let uri = request.uri().to_string();
+            std::thread::spawn(move || {
+                let response = match slack::files::resolve(&uri) {
+                    Ok(file) => tauri::http::Response::builder()
+                        .header("Content-Type", file.content_type)
+                        // Slack file URLs are content-stable — bytes
+                        // never change for a given URL — so let the
+                        // webview cache them aggressively.
+                        .header("Cache-Control", "public, max-age=2592000, immutable")
+                        .body(file.bytes)
+                        .unwrap_or_else(|_| empty_404()),
+                    Err(error) => {
+                        tracing::warn!(
+                            uri = %uri,
+                            error = %format!("{error:#}"),
+                            "slack-file protocol fetch failed",
+                        );
+                        empty_404()
+                    }
+                };
+                responder.respond(response);
+            });
+        })
+        // Triage priming attachments. Custom scheme so rehype-sanitize can opt it in.
+        .register_asynchronous_uri_scheme_protocol(
+            "helmor-attachment",
+            |_app, request, responder| {
+                let uri = request.uri().to_string();
+                std::thread::spawn(move || {
+                    let response = match triage::attachments::resolve_attachment_url(&uri) {
+                        Ok(Some(path)) => match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                let content_type = mime_for_path(&path);
+                                tauri::http::Response::builder()
+                                    .header("Content-Type", content_type)
+                                    // Attachment files are content-stable
+                                    // (uuid-named, never rewritten); cache
+                                    // hard so re-renders don't pay disk IO.
+                                    .header("Cache-Control", "public, max-age=2592000, immutable")
+                                    .body(bytes)
+                                    .unwrap_or_else(|_| empty_404())
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    uri = %uri,
+                                    error = %error,
+                                    "helmor-attachment read failed",
+                                );
+                                empty_404()
+                            }
+                        },
+                        Ok(None) => empty_404(),
+                        Err(error) => {
+                            tracing::warn!(
+                                uri = %uri,
+                                error = %format!("{error:#}"),
+                                "helmor-attachment resolve failed",
+                            );
+                            empty_404()
+                        }
+                    };
+                    responder.respond(response);
+                });
+            },
+        );
 
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
@@ -68,9 +177,17 @@ pub fn run() {
         .manage(agents::ActiveStreams::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
+        .manage(local_llm::Manager::default())
+        // Top-level downloads manager. The local-LLM catalog is supplied
+        // through `CatalogAssetProvider`; the downloads module itself
+        // stays business-agnostic.
+        .manage(downloads::DownloadsManager::new(Arc::new(
+            local_llm::CatalogAssetProvider,
+        )))
         .manage(git_watcher::GitWatcherManager::new())
         .manage(workspace::scripts::ScriptProcessManager::new())
         .manage(ui_sync::UiSyncManager::new())
+        .manage(triage::ActiveStatusStore::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .setup(|app| {
@@ -95,11 +212,45 @@ pub fn run() {
             // Build read/write connection pools (must happen after schema).
             db::init_pools()?;
 
+            // Refresh the synthetic chat repo's display name in case the
+            // canonical value moved between releases. No-op for installs
+            // that have never created a chat workspace (no row to update).
+            if let Err(error) = models::repos::refresh_system_chat_repo_name_if_exists() {
+                tracing::warn!(%error, "Failed to refresh chat repo name");
+            }
+
             tracing::info!(
                 mode = data_dir::data_mode_label(),
                 data = %db_path.display(),
                 "Helmor started"
             );
+
+            // Sweep `.trash-*` dirs left over from a prior run (worker killed
+            // mid-cleanup, OS crash). Hands them to the global serial queue so
+            // the slow recursive deletes happen one at a time in the
+            // background. Spawned so a slow `read_dir` can't stall startup.
+            if let Ok(workspaces_root) = data_dir::workspaces_dir() {
+                std::thread::Builder::new()
+                    .name("helmor-trash-sweep".into())
+                    .spawn(move || {
+                        git::trash::sweep_workspaces_root(&workspaces_root);
+                    })
+                    .ok();
+            }
+
+            // GC orphan `cache/paste/<id>/` buckets. Off the main thread
+            // — slow IO can't stall startup. Legacy `paste-cache/` and
+            // `query-cache/` at the data-dir root are intentionally
+            // left alone (historical messages embed absolute paths into
+            // them).
+            std::thread::Builder::new()
+                .name("helmor-paste-cache-sweep".into())
+                .spawn(|| {
+                    if let Err(error) = maintenance::paste_cache::sweep() {
+                        tracing::warn!(error = %error, "paste-cache sweep failed");
+                    }
+                })
+                .ok();
 
             // Reconcile workspaces whose directory was deleted outside the
             // app: degrade them to `archived` so chat history is preserved
@@ -174,7 +325,94 @@ pub fn run() {
             updater::spawn_startup_check(app.handle().clone());
             updater::spawn_interval_worker(app.handle().clone());
 
+            // Install reverse-IPC dispatcher early to skip early-boot warnings; ordering isn't load-bearing.
+            let host_rx = app
+                .state::<sidecar::ManagedSidecar>()
+                .install_host_dispatcher();
+            let dispatcher_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("sidecar-host-dispatcher".into())
+                .spawn(move || {
+                    while let Ok(env) = host_rx.recv() {
+                        let app_clone = dispatcher_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let response = match sidecar_host::dispatch(
+                                app_clone.clone(),
+                                &env.method,
+                                env.params,
+                            )
+                            .await
+                            {
+                                Ok(value) => sidecar_host::HostResponse::success(
+                                    env.callback_id.clone(),
+                                    value,
+                                ),
+                                Err(error) => sidecar_host::HostResponse::failure(
+                                    env.callback_id.clone(),
+                                    format!("{error:#}"),
+                                ),
+                            };
+                            let sidecar_state = app_clone.state::<sidecar::ManagedSidecar>();
+                            if let Err(error) = sidecar_state.send_host_response(&response) {
+                                tracing::warn!(
+                                    error = %format!("{error:#}"),
+                                    method = %env.method,
+                                    "hostResponse write failed"
+                                );
+                            }
+                        });
+                    }
+                    tracing::debug!("host dispatcher channel closed");
+                })
+                .ok();
+
+            // Per-version silent re-check of the Helmor CLI symlink and
+            // the Helmor Skills package. Runs once per app version
+            // (cached by version string in app_settings); a clean pass
+            // updates the cache, a failure leaves it untouched so the
+            // next launch retries. Gated on onboarding_completed inside
+            // the spawn so the onboarding auto-install owns the
+            // first-run path. Must come AFTER
+            // `shell_env::inherit_login_shell_env()` above so the
+            // spawned `npx` call resolves through the user's login PATH.
+            commands::system_commands::spawn_startup_components_check();
+
             agents::prewarm_slash_command_cache(app.handle());
+
+            // Reap any orphan llama-server from a prior Helmor process
+            // that was force-quit / crashed / hot-reloaded — its
+            // `local_llm::Manager::drop` never ran. Doing this BEFORE the
+            // auto-start guarantees we don't accumulate duplicates
+            // across dev reloads or unclean exits.
+            local_llm::sweep_orphan_server();
+
+            // Auto-start the bundled llama-server when the user has
+            // flipped Local LLM on in settings. Spawned so a slow
+            // first-time model download can't stall the rest of setup.
+            // `local_llm::Manager::drop` handles teardown on app exit.
+            let local_llm_handle = app.handle().clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("local-llm-autostart".into())
+                .spawn(move || {
+                    let settings = local_llm::load_settings();
+                    if !settings.enabled || !settings.auto_start {
+                        return;
+                    }
+                    let manager = local_llm_handle.state::<local_llm::Manager>();
+                    if let Err(error) = manager.start() {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            "Local LLM auto-start failed"
+                        );
+                    }
+                })
+            {
+                tracing::error!(error = %error, "Failed to spawn local-llm autostart thread");
+            }
+
+            // Re-register the user's saved global hotkey at startup. Missing
+            // this leaves the hotkey unregistered after a cold launch until
+            // the user re-saves it in settings.
             if let Err(error) = global_hotkey::sync_from_settings(app.handle()) {
                 tracing::warn!(
                     error = %format!("{error:#}"),
@@ -200,6 +438,9 @@ pub fn run() {
                 tracing::error!(error = %error, "Failed to start UI sync listener");
             }
 
+            // Triage: fetcher + auto-fire tick on the same 5-min thread.
+            triage::fetcher::spawn_scheduler(app.handle().clone());
+
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
             // Install a custom menu so Cmd+Q flows through the same
@@ -221,6 +462,7 @@ pub fn run() {
             agents::generate_session_title,
             agents::list_slash_commands,
             agents::prewarm_slash_commands_for_workspace,
+            agents::prewarm_slash_commands_for_repo,
             commands::workspace_commands::prepare_archive_workspace,
             commands::workspace_commands::start_archive_workspace,
             commands::workspace_commands::validate_archive_workspace,
@@ -228,11 +470,27 @@ pub fn run() {
             commands::workspace_commands::complete_workspace_setup,
             commands::workspace_commands::create_workspace_from_repo,
             commands::workspace_commands::prepare_workspace_from_repo,
+            commands::workspace_commands::prepare_chat_workspace,
             commands::workspace_commands::finalize_workspace_from_repo,
             commands::repository_commands::get_add_repository_defaults,
             commands::settings_commands::get_app_settings,
             commands::settings_commands::get_claude_rate_limits,
             commands::settings_commands::get_codex_rate_limits,
+            commands::local_llm_commands::detect_local_llm_hardware,
+            commands::local_llm_commands::get_local_llm_status,
+            commands::local_llm_commands::list_local_llm_catalog,
+            commands::local_llm_commands::inspect_local_llm_model,
+            commands::local_llm_commands::inspect_local_llm_catalog_entry,
+            commands::local_llm_commands::list_local_llm_downloads,
+            commands::local_llm_commands::subscribe_local_llm_downloads,
+            commands::local_llm_commands::start_local_llm_download,
+            commands::local_llm_commands::pause_local_llm_download,
+            commands::local_llm_commands::cancel_local_llm_download,
+            commands::local_llm_commands::activate_local_llm_model,
+            commands::local_llm_commands::set_local_llm_context_override,
+            commands::local_llm_commands::start_local_llm,
+            commands::local_llm_commands::stop_local_llm,
+            commands::local_llm_commands::get_local_llm_endpoint,
             commands::system_commands::get_cli_status,
             commands::system_commands::get_data_info,
             commands::system_commands::get_agent_login_status,
@@ -242,6 +500,8 @@ pub fn run() {
             commands::system_commands::write_query_cache,
             commands::system_commands::delete_query_cache,
             commands::system_commands::install_helmor_skills,
+            commands::system_commands::get_helmor_components_update_check,
+            commands::system_commands::recheck_helmor_components,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
             commands::system_commands::open_agent_login_terminal,
@@ -252,7 +512,8 @@ pub fn run() {
             commands::forge_commands::get_workspace_forge,
             commands::forge_commands::list_forge_accounts,
             commands::forge_commands::list_inbox_items,
-            commands::forge_commands::list_github_labels,
+            commands::forge_commands::list_inbox_kind_labels,
+            commands::forge_commands::list_forge_labels,
             commands::forge_commands::get_inbox_item_detail,
             commands::forge_commands::get_workspace_account_profile,
             commands::forge_commands::cache_forge_avatar,
@@ -281,18 +542,38 @@ pub fn run() {
             commands::repository_commands::load_repo_preferences,
             commands::repository_commands::update_repo_scripts,
             commands::repository_commands::update_repo_auto_run_setup,
-            commands::repository_commands::update_repo_run_script_mode,
             commands::repository_commands::update_repo_preferences,
             commands::repository_commands::delete_repository,
+            commands::repository_commands::move_repository_in_sidebar,
             commands::repository_commands::retry_repo_forge_binding,
             commands::script_commands::execute_repo_script,
+            commands::script_commands::execute_repo_stop_command,
             commands::script_commands::stop_repo_script,
             commands::script_commands::write_repo_script_stdin,
             commands::script_commands::resize_repo_script,
+            commands::script_commands::create_repo_run_action,
+            commands::script_commands::update_repo_run_action,
+            commands::script_commands::delete_repo_run_action,
+            commands::script_commands::reorder_repo_run_actions,
+            commands::script_commands::set_workspace_active_run_action,
             commands::terminal_commands::spawn_terminal,
             commands::terminal_commands::stop_terminal,
             commands::terminal_commands::write_terminal_stdin,
             commands::terminal_commands::resize_terminal,
+            commands::triage_commands::get_triage_config,
+            commands::triage_commands::update_triage_config,
+            commands::triage_commands::get_triage_active_status,
+            commands::triage_commands::trigger_triage_tick_now,
+            commands::triage_commands::cancel_triage_tick,
+            commands::triage_commands::list_open_triage_candidates,
+            commands::triage_commands::count_open_triage_candidates,
+            commands::triage_commands::read_triage_candidate,
+            commands::triage_commands::record_triage_decision,
+            commands::triage_commands::get_triage_source_health,
+            commands::triage_lark_cli_commands::spawn_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::stop_lark_cli_auth_terminal,
+            commands::triage_lark_cli_commands::write_lark_cli_auth_terminal_stdin,
+            commands::triage_lark_cli_commands::resize_lark_cli_auth_terminal,
             commands::session_commands::list_session_thread_messages,
             commands::workspace_commands::list_workspace_groups,
             commands::session_commands::list_workspace_sessions,
@@ -303,6 +584,7 @@ pub fn run() {
             commands::session_commands::delete_session,
             commands::session_commands::list_hidden_sessions,
             commands::session_commands::get_session_context_usage,
+            commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,
@@ -312,6 +594,7 @@ pub fn run() {
             commands::session_commands::mark_session_unread,
             commands::workspace_commands::list_remote_branches,
             commands::workspace_commands::list_branches_for_local_picker,
+            commands::workspace_commands::list_branches_for_workspace_picker,
             commands::workspace_commands::get_repo_current_branch,
             commands::workspace_commands::create_and_checkout_branch,
             commands::workspace_commands::move_local_workspace_to_worktree,
@@ -325,10 +608,8 @@ pub fn run() {
             commands::workspace_commands::pin_workspace,
             commands::workspace_commands::unpin_workspace,
             commands::editor_commands::list_editor_files,
-            commands::editor_commands::list_editor_files_with_content,
             commands::editor_commands::list_workspace_files,
             commands::editor_commands::list_workspace_changes,
-            commands::editor_commands::list_workspace_changes_with_content,
             commands::editor_commands::discard_workspace_file,
             commands::editor_commands::stage_workspace_file,
             commands::editor_commands::unstage_workspace_file,
@@ -337,11 +618,13 @@ pub fn run() {
             commands::editor_commands::read_editor_file,
             commands::editor_commands::read_file_at_ref,
             commands::workspace_commands::set_workspace_status,
+            commands::workspace_commands::move_workspace_in_sidebar,
             commands::workspace_commands::list_workspace_linked_directories,
             commands::workspace_commands::set_workspace_linked_directories,
             commands::workspace_commands::list_workspace_candidate_directories,
             commands::workspace_commands::trigger_workspace_fetch,
             commands::editors::detect_installed_editors,
+            commands::editors::open_file_in_editor,
             commands::editors::open_workspace_in_editor,
             commands::editors::open_workspace_in_finder,
             commands::workspace_commands::permanently_delete_workspace,
@@ -351,6 +634,9 @@ pub fn run() {
             commands::conductor_commands::list_conductor_repos,
             commands::conductor_commands::list_conductor_workspaces,
             commands::conductor_commands::import_conductor_workspaces,
+            commands::feedback_commands::fork_helmor_upstream,
+            commands::feedback_commands::create_helmor_issue,
+            commands::feedback_commands::find_existing_helmor_repo,
             commands::system_commands::save_pasted_image,
             commands::system_commands::save_text_file_as,
             commands::system_commands::show_image_in_finder,
@@ -370,7 +656,15 @@ pub fn run() {
             commands::updater_commands::get_app_update_status,
             commands::updater_commands::check_for_app_update,
             commands::updater_commands::install_downloaded_app_update,
-            commands::editor_commands::write_editor_file
+            commands::editor_commands::write_editor_file,
+            commands::slack_commands::slack_import_from_desktop,
+            commands::slack_commands::slack_list_workspaces,
+            commands::slack_commands::slack_disconnect_workspace,
+            commands::slack_commands::slack_list_inbox_items,
+            commands::slack_commands::slack_search_messages,
+            commands::slack_commands::slack_get_thread_detail,
+            commands::slack_commands::slack_list_emoji,
+            commands::slack_commands::slack_prepare_thread_context
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

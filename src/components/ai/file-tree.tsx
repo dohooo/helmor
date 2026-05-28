@@ -69,7 +69,7 @@ export const FileTree = ({
 		>
 			<div
 				className={cn(
-					"rounded-lg border bg-background font-mono text-sm",
+					"rounded-lg border bg-background font-mono text-body",
 					className,
 				)}
 				role="tree"
@@ -187,7 +187,7 @@ export const FileTreeFile = ({
 		<FileTreeFileContext.Provider value={{ path, name }}>
 			<div
 				className={cn(
-					"flex cursor-pointer items-center gap-1 rounded px-2 py-1 transition-colors hover:bg-muted/50",
+					"flex cursor-interactive items-center gap-1 rounded px-2 py-1 transition-colors hover:bg-muted/50",
 					isSelected && "bg-muted",
 					className,
 				)}

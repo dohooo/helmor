@@ -6,13 +6,16 @@ use crate::git_ops;
 use crate::models::workspaces as workspace_models;
 use crate::service;
 use crate::ui_sync::UiMutationEvent;
+use crate::workspace::ship_actions::{
+    run_workspace_ship_action, WorkspaceShipActionKind, WorkspaceShipActionResult,
+};
 use crate::workspace_state::WorkspaceState;
 use crate::workspace_status::WorkspaceStatus;
 use crate::workspaces;
 
 use super::args::{
     BranchAction, Cli, LinkedDirsAction, ReadState, TargetBranchAction, WorkspaceAction,
-    WorkspaceStatusAction, WorkspaceStatusValue,
+    WorkspaceShipAction, WorkspaceStatusAction, WorkspaceStatusValue,
 };
 use super::{notify_ui_event, notify_ui_events, output};
 
@@ -52,6 +55,79 @@ pub fn dispatch(action: &WorkspaceAction, cli: &Cli) -> Result<()> {
         WorkspaceAction::Push { workspace_ref } => push(workspace_ref, cli),
         WorkspaceAction::Fetch { workspace_ref } => fetch(workspace_ref, cli),
         WorkspaceAction::LinkedDirs { action } => linked_dirs(action, cli),
+        WorkspaceAction::RunAction {
+            workspace_ref,
+            action,
+        } => run_action(workspace_ref, *action, cli),
+    }
+}
+
+fn run_action(workspace_ref: &str, action: WorkspaceShipAction, cli: &Cli) -> Result<()> {
+    let result = run_workspace_ship_action(workspace_ref, action.into())?;
+    notify_ui_events(result.ui_events());
+
+    match result {
+        WorkspaceShipActionResult::Direct {
+            action,
+            workspace_id,
+            result,
+        } => {
+            let action_label = action.cli_label();
+            let verb = match action {
+                WorkspaceShipActionKind::MergePr => "Merged change request for",
+                WorkspaceShipActionKind::PullLatest => "Pulled latest into",
+                _ => unreachable!("agent action returned as direct action"),
+            };
+            output::print(
+                cli,
+                &serde_json::json!({
+                    "ok": true,
+                    "action": action_label,
+                    "workspaceId": workspace_id,
+                    "result": result,
+                }),
+                |_| format!("{verb} workspace {workspace_id}"),
+            )
+        }
+        WorkspaceShipActionResult::Dispatched {
+            action,
+            workspace_id,
+            dispatch,
+        } => {
+            let action_label = action.cli_label();
+            output::print(
+                cli,
+                &serde_json::json!({
+                    "ok": true,
+                    "action": action_label,
+                    "workspaceId": workspace_id,
+                    "sessionId": dispatch.session_id,
+                    "dispatched": true,
+                    "provider": dispatch.provider,
+                    "model": dispatch.model,
+                }),
+                |_| {
+                    format!(
+                        "Dispatched `{action_label}` to workspace {ws_id} (session {})",
+                        dispatch.session_id,
+                        ws_id = workspace_id,
+                    )
+                },
+            )
+        }
+    }
+}
+
+impl From<WorkspaceShipAction> for WorkspaceShipActionKind {
+    fn from(value: WorkspaceShipAction) -> Self {
+        match value {
+            WorkspaceShipAction::MergePr => Self::MergePr,
+            WorkspaceShipAction::PullLatest => Self::PullLatest,
+            WorkspaceShipAction::CommitAndPush => Self::CommitAndPush,
+            WorkspaceShipAction::CreatePr => Self::CreatePr,
+            WorkspaceShipAction::FixErrors => Self::FixErrors,
+            WorkspaceShipAction::ResolveConflicts => Self::ResolveConflicts,
+        }
     }
 }
 
@@ -506,6 +582,45 @@ fn linked_dirs(action: &LinkedDirsAction, cli: &Cli) -> Result<()> {
                     .collect::<Vec<_>>()
                     .join("\n")
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_ship_action_maps_to_shared_action_kind() {
+        let cases = [
+            (
+                WorkspaceShipAction::MergePr,
+                WorkspaceShipActionKind::MergePr,
+            ),
+            (
+                WorkspaceShipAction::PullLatest,
+                WorkspaceShipActionKind::PullLatest,
+            ),
+            (
+                WorkspaceShipAction::CommitAndPush,
+                WorkspaceShipActionKind::CommitAndPush,
+            ),
+            (
+                WorkspaceShipAction::CreatePr,
+                WorkspaceShipActionKind::CreatePr,
+            ),
+            (
+                WorkspaceShipAction::FixErrors,
+                WorkspaceShipActionKind::FixErrors,
+            ),
+            (
+                WorkspaceShipAction::ResolveConflicts,
+                WorkspaceShipActionKind::ResolveConflicts,
+            ),
+        ];
+
+        for (cli_action, shared_action) in cases {
+            assert_eq!(WorkspaceShipActionKind::from(cli_action), shared_action);
         }
     }
 }

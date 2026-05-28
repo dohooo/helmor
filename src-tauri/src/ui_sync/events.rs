@@ -43,6 +43,11 @@ pub enum UiMutationEvent {
     RepositoryChanged {
         repo_id: String,
     },
+    /// A repo's `repo_run_actions` list changed (create / update / delete /
+    /// reorder). Frontends invalidate `["repoScripts", repoId, ...]`.
+    RepoRunActionsChanged {
+        repo_id: String,
+    },
     SettingsChanged {
         key: Option<String>,
     },
@@ -58,6 +63,24 @@ pub enum UiMutationEvent {
     /// `list_active_streams`. See `agents::streaming::active_streams` for
     /// the source of truth this notification mirrors.
     ActiveStreamsChanged,
+    /// Connected-Slack-workspace set changed (Connect / Disconnect).
+    /// Frontends invalidate the workspace list query and the inbox
+    /// queries for any affected team.
+    SlackWorkspacesChanged,
+    /// A Slack workspace's stored credentials no longer authenticate
+    /// (xoxc rotation, account logout, admin revoke). The frontend
+    /// surfaces a "Reconnect" affordance for this workspace.
+    SlackTokenInvalidated {
+        team_id: String,
+    },
+    /// AI-triage config changed.
+    TriageConfigChanged,
+    /// Active tick status changed (begin / progress / end).
+    TriageActiveStatusChanged,
+    /// An AI-triage workspace was created. Frontend invalidates sidebar.
+    TriageWorkspaceCreated {
+        workspace_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +146,9 @@ mod tests {
             UiMutationEvent::RepositoryChanged {
                 repo_id: "r".into(),
             },
+            UiMutationEvent::RepoRunActionsChanged {
+                repo_id: "r".into(),
+            },
             UiMutationEvent::SettingsChanged { key: None },
             UiMutationEvent::PendingCliSendQueued {
                 workspace_id: "w".into(),
@@ -132,6 +158,14 @@ mod tests {
                 permission_mode: None,
             },
             UiMutationEvent::ActiveStreamsChanged,
+            UiMutationEvent::SlackTokenInvalidated {
+                team_id: "T1".into(),
+            },
+            UiMutationEvent::TriageConfigChanged,
+            UiMutationEvent::TriageActiveStatusChanged,
+            UiMutationEvent::TriageWorkspaceCreated {
+                workspace_id: "w".into(),
+            },
         ];
         for event in cases {
             let s = serde_json::to_string(&event).unwrap();

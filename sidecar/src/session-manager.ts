@@ -19,6 +19,9 @@ export interface SendMessageParams {
 	readonly permissionMode: string | undefined;
 	readonly effortLevel: string | undefined;
 	readonly fastMode: boolean | undefined;
+	/** Mirrors the Claude Agent SDK's `thinking.display` field. When
+	 *  absent, the manager falls back to its hardcoded default. */
+	readonly claudeThinkingDisplay?: "summarized" | "omitted";
 	readonly claudeEnvironment?: Readonly<Record<string, string>>;
 	readonly agentProxy?: AgentProxySettings;
 	/**
@@ -97,8 +100,17 @@ export interface SlashCommandInfo {
  * happens inside each manager's resolver closure.
  */
 export type UserInputResolution =
-	| { action: "submit"; content: Record<string, unknown> }
-	| { action: "decline"; content?: Record<string, unknown> }
+	| {
+			action: "submit";
+			content: Record<string, unknown>;
+			/** Provider-specific meta (e.g. Codex `{ persist: "session" | "always" }`). */
+			meta?: Record<string, unknown>;
+	  }
+	| {
+			action: "decline";
+			content?: Record<string, unknown>;
+			meta?: Record<string, unknown>;
+	  }
 	| { action: "cancel" };
 
 /** Mirrors `ModelParameterDefinition` from @cursor/sdk. Single source of

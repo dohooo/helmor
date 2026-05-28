@@ -43,18 +43,18 @@ export function InspectorChangeRowUI({
 			onClick={onClick}
 			className={cn(
 				"group/row flex items-center gap-1.5 py-[1.5px] pl-2 pr-2 text-muted-foreground transition-colors hover:bg-accent/60",
-				onClick && "cursor-pointer",
+				onClick && "cursor-interactive",
 				active && "bg-muted/60 text-foreground",
 			)}
 		>
 			{icon}
 			<span className="min-w-0 max-w-[60%] truncate">{name}</span>
-			<span className="min-w-0 flex-1 truncate text-right text-[10px] text-muted-foreground">
+			<span className="min-w-0 flex-1 truncate text-right text-micro text-muted-foreground">
 				{folder}
 			</span>
 			<span className="flex shrink-0 items-center gap-1 tabular-nums">
 				{insertions !== null || deletions !== null ? (
-					<span className="text-[10px] tabular-nums">
+					<span className="text-micro tabular-nums">
 						{insertions ? (
 							<span className="text-green-500">+{insertions}</span>
 						) : null}
@@ -66,7 +66,7 @@ export function InspectorChangeRowUI({
 				) : null}
 				<span
 					className={cn(
-						"inline-flex h-4 w-4 items-center justify-center text-[10px] font-semibold",
+						"inline-flex h-4 w-4 items-center justify-center text-micro font-semibold",
 						STATUS_COLORS[status],
 					)}
 				>

@@ -8,7 +8,7 @@ import {
 
 type ButtonActionMode = Exclude<
 	WorkspaceCommitButtonMode,
-	"push" | "merge" | "closed" | "merged"
+	"push" | "checks-running" | "merge-blocked" | "merge" | "closed" | "merged"
 >;
 type ActionSessionMode = ButtonActionMode | "review";
 
@@ -87,6 +87,14 @@ export function isActionSessionMode(
 	);
 }
 
+export function usesActionModelOverride(
+	mode: WorkspaceCommitButtonMode,
+): mode is "create-pr" | "commit-and-push" | "open-pr" {
+	return (
+		mode === "create-pr" || mode === "commit-and-push" || mode === "open-pr"
+	);
+}
+
 /** Whether a session created with this `ActionKind` is eligible for the
  *  auto-hide flow (i.e. can be silently hidden once its post-stream verifier
  *  passes). Auto-created action sessions still get fixed titles, but only a
@@ -115,6 +123,10 @@ export function describeActionKind(actionKind: string): string {
 			return "Push";
 		case "resolve-conflicts":
 			return "Resolve Conflicts";
+		case "checks-running":
+			return "Checks Running";
+		case "merge-blocked":
+			return "Merge Blocked";
 		case "merge":
 			return "Merge";
 		case "open-pr":

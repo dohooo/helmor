@@ -25,6 +25,7 @@ import {
 	listConductorWorkspaces,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow } from "../components/settings-row";
 
@@ -83,14 +84,14 @@ function ImportRepoRow({
 			)}
 			onClick={onClick}
 		>
-			<div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-[11px] font-semibold uppercase text-muted-foreground">
+			<div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-mini font-semibold uppercase text-muted-foreground">
 				{repo.name.slice(0, 2)}
 			</div>
 			<div className="min-w-0 flex-1">
-				<span className="block truncate text-[13px] font-medium text-foreground">
+				<span className="block truncate text-ui font-medium text-foreground">
 					{repo.name}
 				</span>
-				<span className="block text-[11px] tracking-[0.04em] text-muted-foreground">
+				<span className="block text-mini tracking-[0.04em] text-muted-foreground">
 					{allImported
 						? "All imported"
 						: repo.alreadyImportedCount > 0
@@ -116,10 +117,10 @@ function ImportWorkspaceRow({
 			<div className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 opacity-40">
 				<Checkbox checked disabled aria-hidden />
 				<div className="min-w-0 flex-1">
-					<span className="block truncate text-[13px] font-medium text-muted-foreground">
+					<span className="block truncate text-ui font-medium text-muted-foreground">
 						{workspace.prTitle || humanize(workspace.directoryName)}
 					</span>
-					<span className="block text-[11px] tracking-[0.04em] text-muted-foreground">
+					<span className="block text-mini tracking-[0.04em] text-muted-foreground">
 						Already imported
 					</span>
 				</div>
@@ -132,7 +133,7 @@ function ImportWorkspaceRow({
 	return (
 		<label
 			htmlFor={checkboxId}
-			className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
+			className="flex w-full cursor-interactive items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-accent/60"
 		>
 			<Checkbox
 				id={checkboxId}
@@ -141,10 +142,10 @@ function ImportWorkspaceRow({
 				aria-label={`Select ${workspace.prTitle || humanize(workspace.directoryName)}`}
 			/>
 			<div className="min-w-0 flex-1">
-				<span className="block truncate text-[13px] font-medium text-foreground">
+				<span className="block truncate text-ui font-medium text-foreground">
 					{workspace.prTitle || humanize(workspace.directoryName)}
 				</span>
-				<div className="flex items-center gap-2 text-[11px] tracking-[0.04em] text-muted-foreground">
+				<div className="flex items-center gap-2 text-mini tracking-[0.04em] text-muted-foreground">
 					{workspace.branch && (
 						<span className="flex items-center gap-0.5 truncate">
 							<GitBranch className="size-2.5 shrink-0" strokeWidth={2} />
@@ -252,12 +253,7 @@ export function ConductorImportPanel() {
 	}, [selectedIds.size, importableWorkspaces]);
 
 	const invalidateAfterImport = useCallback(() => {
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.workspaceGroups,
-		});
-		void queryClient.invalidateQueries({
-			queryKey: helmorQueryKeys.archivedWorkspaces,
-		});
+		requestSidebarReconcile(queryClient);
 		void queryClient.invalidateQueries({
 			queryKey: helmorQueryKeys.repositories,
 		});
@@ -365,7 +361,7 @@ export function ConductorImportPanel() {
 							}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							onKeyDown={(e) => e.stopPropagation()}
-							className="text-[13px] text-foreground placeholder:text-muted-foreground/50"
+							className="text-ui text-foreground placeholder:text-muted-foreground/50"
 						/>
 					</InputGroup>
 				</div>
@@ -376,11 +372,11 @@ export function ConductorImportPanel() {
 					<div className="flex flex-col items-center justify-center gap-3 py-8">
 						<Loader2 className="size-5 animate-spin text-muted-foreground" />
 						<div className="text-center">
-							<p className="text-[13px] font-medium text-foreground">
+							<p className="text-ui font-medium text-foreground">
 								Importing {selectedIds.size} workspace
 								{selectedIds.size === 1 ? "" : "s"}
 							</p>
-							<p className="mt-1 text-[11px] text-muted-foreground">
+							<p className="mt-1 text-mini text-muted-foreground">
 								Setting up repositories and copying data...
 							</p>
 						</div>
@@ -395,7 +391,7 @@ export function ConductorImportPanel() {
 							<Button
 								variant="ghost"
 								size="xs"
-								className="mb-1 w-full justify-start rounded-lg px-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+								className="mb-1 w-full justify-start rounded-lg px-2 text-mini uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
 								onClick={toggleAll}
 							>
 								{selectedIds.size === importableWorkspaces.length
@@ -446,14 +442,14 @@ export function ConductorImportPanel() {
 					<Separator className="mb-4 bg-border/30" />
 					{importError && (
 						<p
-							className="mb-2 text-[11px] leading-relaxed text-red-400/90"
+							className="mb-2 text-mini leading-relaxed text-red-400/90"
 							title={importError}
 						>
 							{importError}
 						</p>
 					)}
 					{importSuccess && (
-						<p className="mb-2 text-[11px] leading-relaxed text-chart-2">
+						<p className="mb-2 text-mini leading-relaxed text-chart-2">
 							{importSuccess}
 						</p>
 					)}

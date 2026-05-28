@@ -23,6 +23,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "workspace.quickSwitchNext",
+		title: "Quick switch workspace",
+		group: "Navigation",
+		defaultHotkey: "Control+Tab",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "workspace.quickSwitchPrevious",
+		title: "Quick switch workspace (reverse)",
+		group: "Navigation",
+		defaultHotkey: "Control+Shift+Tab",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "session.previous",
 		title: "Previous session",
 		group: "Navigation",
@@ -80,9 +96,17 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	},
 	{
 		id: "workspace.new",
-		title: "Create new workspace",
+		title: "Open Start Page",
 		group: "Workspace",
 		defaultHotkey: "Mod+N",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "workspace.justChat",
+		title: "Open Start Page (Just chat)",
+		group: "Workspace",
+		defaultHotkey: "Mod+Shift+N",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -90,7 +114,17 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: "workspace.addRepository",
 		title: "Add repository",
 		group: "Workspace",
-		defaultHotkey: "Mod+Shift+N",
+		// Unbound by default — Mod+Shift+N now opens the start composer in
+		// "Just chat" mode. Users can rebind from settings if they want.
+		defaultHotkey: null,
+		scopes: ["app"],
+		editable: true,
+	},
+	{
+		id: "workspace.filterSidebar",
+		title: "Filter and sort sidebar",
+		group: "Workspace",
+		defaultHotkey: "Mod+Shift+F",
 		scopes: ["app"],
 		editable: true,
 	},
@@ -239,9 +273,22 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		title: "Toggle plan mode",
 		group: "Composer",
 		defaultHotkey: "Shift+Tab",
-		// composer-only: don't let Shift+Tab steal default a11y focus traversal
-		// from the inspector / message list.
-		scopes: ["composer"],
+		// workspace-composer only: plan mode is a per-session concept with
+		// no UI on the start surface. Bound to the narrower sibling scope so
+		// the start surface can reclaim Shift+Tab for cycling repositories
+		// without scope-overlap forcing both to disable each other.
+		scopes: ["workspace-composer"],
+		editable: true,
+	},
+	{
+		id: "startSurface.cycleRepository",
+		title: "Switch repository",
+		group: "Start surface",
+		defaultHotkey: "Shift+Tab",
+		// start-composer only: cycles through repositories in the start
+		// composer. Sibling scope to workspace-composer, so the two
+		// Shift+Tab bindings don't scope-overlap and stay both enabled.
+		scopes: ["start-composer"],
 		editable: true,
 	},
 	{
@@ -266,6 +313,30 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		group: "Composer",
 		defaultHotkey: "Mod+Enter",
 		scopes: ["composer"],
+		editable: true,
+	},
+	{
+		id: "editor.edit",
+		title: "Toggle diff and edit",
+		group: "Editor",
+		defaultHotkey: "Mod+E",
+		scopes: ["editor"],
+		editable: true,
+	},
+	{
+		id: "editor.new",
+		title: "Open file",
+		group: "Editor",
+		defaultHotkey: "Mod+T",
+		scopes: ["editor"],
+		editable: true,
+	},
+	{
+		id: "editor.close",
+		title: "Close current file",
+		group: "Editor",
+		defaultHotkey: "Mod+W",
+		scopes: ["editor"],
 		editable: true,
 	},
 	{

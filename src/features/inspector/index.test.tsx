@@ -14,7 +14,7 @@ import { renderWithProviders } from "@/test/render-with-providers";
 import { WorkspaceInspectorSidebar } from "./index";
 
 const apiMocks = vi.hoisted(() => ({
-	listWorkspaceChangesWithContent: vi.fn(),
+	listWorkspaceChanges: vi.fn(),
 	getWorkspaceForgeCheckInsertText: vi.fn(),
 	loadWorkspaceGitActionStatus: vi.fn(),
 	loadWorkspaceForgeActionStatus: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 	return {
 		...actual,
 		getWorkspaceForgeCheckInsertText: apiMocks.getWorkspaceForgeCheckInsertText,
-		listWorkspaceChangesWithContent: apiMocks.listWorkspaceChangesWithContent,
+		listWorkspaceChanges: apiMocks.listWorkspaceChanges,
 		loadWorkspaceGitActionStatus: apiMocks.loadWorkspaceGitActionStatus,
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		syncWorkspaceWithTargetBranch: apiMocks.syncWorkspaceWithTargetBranch,
@@ -104,17 +104,14 @@ function expectTextBefore(
 
 describe("WorkspaceInspectorSidebar Actions section", () => {
 	beforeEach(() => {
-		apiMocks.listWorkspaceChangesWithContent.mockReset();
+		apiMocks.listWorkspaceChanges.mockReset();
 		apiMocks.getWorkspaceForgeCheckInsertText.mockReset();
 		apiMocks.loadWorkspaceGitActionStatus.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.syncWorkspaceWithTargetBranch.mockReset();
 		openerMocks.openUrl.mockReset();
 
-		apiMocks.listWorkspaceChangesWithContent.mockResolvedValue({
-			items: [],
-			prefetched: [],
-		});
+		apiMocks.listWorkspaceChanges.mockResolvedValue([]);
 		apiMocks.getWorkspaceForgeCheckInsertText.mockResolvedValue(
 			"Content Log:\ncheck output",
 		);
@@ -798,7 +795,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		});
 		const openButton = screen.getByRole("button", { name: "Open changes" });
 
-		expect(appendButton).toHaveClass("cursor-pointer");
+		expect(appendButton).toHaveClass("cursor-interactive");
 		expect(appendButton).toHaveClass("size-4");
 		expect(appendButton).toHaveClass("opacity-0");
 		expect(appendButton).toHaveClass("pointer-events-none");
@@ -808,7 +805,7 @@ describe("WorkspaceInspectorSidebar Actions section", () => {
 		);
 		expect(appendButton).toHaveClass("hover:opacity-100");
 
-		expect(openButton).toHaveClass("cursor-pointer");
+		expect(openButton).toHaveClass("cursor-interactive");
 		expect(openButton).toHaveClass("size-5");
 		expect(openButton).toHaveClass("opacity-55");
 		expect(openButton).toHaveClass("hover:opacity-100");

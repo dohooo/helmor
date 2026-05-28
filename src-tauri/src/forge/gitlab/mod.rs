@@ -29,6 +29,7 @@ use super::types::{
 pub(super) mod accounts;
 mod api;
 mod context;
+pub mod inbox;
 mod merge_request;
 mod pipeline;
 mod review;
@@ -37,7 +38,8 @@ mod types;
 use self::api::{command_detail, encode_path_component, glab_api, looks_like_auth_error};
 use self::context::{load_gitlab_context, GitlabContext, GitlabResolution};
 use self::merge_request::{
-    determine_squash_choice, find_workspace_mr, gitlab_mergeable, mr_info, SquashChoice,
+    determine_squash_choice, find_workspace_mr, gitlab_merge_state_status, gitlab_mergeable,
+    mr_info, SquashChoice,
 };
 use self::pipeline::{
     build_gitlab_check_insert_text, load_job_trace, load_pipeline_jobs, pipeline_item,
@@ -191,6 +193,7 @@ pub(super) fn lookup_workspace_mr_action_status(workspace_id: &str) -> Result<Fo
         change_request: Some(mr_info(&mr)),
         review_decision,
         mergeable: gitlab_mergeable(&mr),
+        merge_state_status: gitlab_merge_state_status(&mr),
         deployments: Vec::new(),
         checks,
         remote_state: RemoteState::Ok,

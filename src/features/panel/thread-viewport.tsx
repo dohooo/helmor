@@ -1,4 +1,5 @@
-import { ArrowDown } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 import {
 	type ComponentType,
 	createElement,
@@ -19,9 +20,14 @@ import { HelmorProfiler } from "@/lib/dev-react-profiler";
 import { estimateThreadRowHeights } from "@/lib/message-layout-estimator";
 import { measureSync } from "@/lib/perf-marks";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
+import { expandSessionThread } from "@/lib/query-client";
+import { useSessionThreadPagination } from "@/lib/session-thread-pagination";
 import { useSettings } from "@/lib/settings";
 import type { WorkspaceScriptType } from "@/lib/workspace-script-actions";
+import { isShellResizing, onShellResize } from "@/shell/hooks/use-panels";
 import { EmptyState, MemoConversationMessage } from "./message-components";
+import { useEscapeBottomLock } from "./thread-viewport/use-escape-bottom-lock";
+import { useStreamingIndicatorSync } from "./thread-viewport/use-streaming-indicator-sync";
 
 export type PresentedSessionPane = {
 	sessionId: string;
@@ -38,7 +44,6 @@ type ThreadViewportSlot = ComponentType<Record<string, never>>;
 // (e.g. when switching sessions/workspaces and back).
 const streamingStartTimes = new Map<string, number>();
 
-const CHAT_LAYOUT_CACHE_VERSION = "chat-layout-v1";
 const NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT = 12;
 const PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT = 900;
 const PROGRESSIVE_VIEWPORT_HEADER_HEIGHT = 24;
@@ -48,17 +53,11 @@ const CONVERSATION_BOTTOM_SPACER_HEIGHT = 40;
 export function resolveConversationRowHeight({
 	estimatedHeight,
 	measuredHeight,
-	streaming,
 }: {
 	estimatedHeight: number;
 	measuredHeight?: number;
-	streaming: boolean;
 }) {
-	if (measuredHeight === undefined) {
-		return estimatedHeight;
-	}
-
-	return streaming ? Math.max(measuredHeight, estimatedHeight) : measuredHeight;
+	return measuredHeight ?? estimatedHeight;
 }
 
 export function ActiveThreadViewport({
@@ -74,7 +73,10 @@ export function ActiveThreadViewport({
 }) {
 	const stackRef = useRef<HTMLDivElement | null>(null);
 	const [widthBucket, setWidthBucket] = useState(0);
-	const [paneWidth, setPaneWidth] = useState(0);
+	const pendingBucketRef = useRef<number | null>(null);
+	// 32px buckets so estimator/measureHeights caches only invalidate when
+	// the drag crosses a bucket boundary.
+	const paneWidth = widthBucket * 32;
 
 	useLayoutEffect(() => {
 		if (
@@ -89,10 +91,22 @@ export function ActiveThreadViewport({
 			return;
 		}
 
+		const computeBucket = (width: number) =>
+			width > 0 ? Math.max(1, Math.round(width / 32)) : 0;
+
+		// During drag the stack's clientWidth changes per frame via CSS var,
+		// so the RO fires at 60Hz — but we don't want a React render each
+		// time (text wrapping is already handled by the browser reflow).
+		// Buffer to pending and flush when onShellResize(false) fires.
 		const updateWidthBucket = () => {
 			const width = stack.clientWidth;
-			setPaneWidth(width);
-			setWidthBucket(width > 0 ? Math.max(1, Math.round(width / 32)) : 0);
+			const next = computeBucket(width);
+			if (isShellResizing()) {
+				pendingBucketRef.current = next;
+				return;
+			}
+			pendingBucketRef.current = null;
+			setWidthBucket((current) => (current === next ? current : next));
 		};
 
 		updateWidthBucket();
@@ -101,8 +115,17 @@ export function ActiveThreadViewport({
 		});
 		observer.observe(stack);
 
+		const unsubscribe = onShellResize((active) => {
+			if (active) return;
+			const pending = pendingBucketRef.current;
+			pendingBucketRef.current = null;
+			if (pending === null) return;
+			setWidthBucket((current) => (current === pending ? current : pending));
+		});
+
 		return () => {
 			observer.disconnect();
+			unsubscribe();
 		};
 	}, []);
 
@@ -114,7 +137,6 @@ export function ActiveThreadViewport({
 			<div className="relative z-10 flex min-h-0 min-w-0 flex-1">
 				<ChatThread
 					hasSession={hasSession}
-					layoutCacheKey={getSessionLayoutCacheKey(pane.sessionId, widthBucket)}
 					messages={pane.messages}
 					missingScriptTypes={missingScriptTypes}
 					onInitializeScript={onInitializeScript}
@@ -128,7 +150,6 @@ export function ActiveThreadViewport({
 }
 
 function ChatThread({
-	layoutCacheKey,
 	messages,
 	hasSession,
 	missingScriptTypes,
@@ -137,7 +158,6 @@ function ChatThread({
 	sessionId,
 	sending,
 }: {
-	layoutCacheKey: string;
 	messages: ThreadMessageLike[];
 	hasSession: boolean;
 	missingScriptTypes: WorkspaceScriptType[];
@@ -148,6 +168,8 @@ function ChatThread({
 }) {
 	const threadMessages = messages;
 	const { settings } = useSettings();
+	const queryClient = useQueryClient();
+	const pagination = useSessionThreadPagination(sessionId);
 	const usePlainThread =
 		threadMessages.length <= NON_VIRTUALIZED_THREAD_MESSAGE_LIMIT;
 	const hasStreamingMessage = threadMessages.some(
@@ -167,6 +189,65 @@ function ChatThread({
 		},
 		[scrollRef],
 	);
+
+	// "Load earlier" state. We capture the pre-expand scroll geometry so the
+	// post-expand layout effect can offset `scrollTop` by the height of the
+	// newly-prepended messages — that's what keeps the visible region from
+	// jumping when older history slides in above the user's reading position.
+	const [expanding, setExpanding] = useState(false);
+	const pendingScrollAnchorRef = useRef<{
+		prevScrollHeight: number;
+		prevScrollTop: number;
+	} | null>(null);
+
+	const handleLoadEarlier = useCallback(async () => {
+		if (expanding || !pagination.hasMore) return;
+		const parent = scrollParentRef.current;
+		if (parent) {
+			pendingScrollAnchorRef.current = {
+				prevScrollHeight: parent.scrollHeight,
+				prevScrollTop: parent.scrollTop,
+			};
+		}
+		setExpanding(true);
+		try {
+			await expandSessionThread(queryClient, sessionId);
+		} catch (error) {
+			pendingScrollAnchorRef.current = null;
+			console.error("[thread-viewport] expand failed", error);
+		} finally {
+			setExpanding(false);
+		}
+	}, [expanding, pagination.hasMore, queryClient, sessionId]);
+
+	// After expand: the new messages mounted, contentRef.scrollHeight grew.
+	// Push scrollTop by exactly the delta so the user's visible message stays
+	// pinned in place. `messages` is the layout-causing dep — once React
+	// commits the new array, the layout effect runs synchronously before paint.
+	useLayoutEffect(() => {
+		const anchor = pendingScrollAnchorRef.current;
+		if (!anchor) return;
+		const parent = scrollParentRef.current;
+		if (!parent) return;
+		const delta = parent.scrollHeight - anchor.prevScrollHeight;
+		if (delta > 0) {
+			parent.scrollTop = anchor.prevScrollTop + delta;
+		}
+		pendingScrollAnchorRef.current = null;
+	}, [messages]);
+
+	// Discard a stale anchor when the user switches sessions mid-expand — the
+	// remembered scrollHeight belongs to a different thread, so applying its
+	// delta would mis-position the new thread.
+	useEffect(() => {
+		return () => {
+			pendingScrollAnchorRef.current = null;
+		};
+	}, []);
+
+	const loadEarlierBanner = pagination.hasMore ? (
+		<LoadEarlierBanner loading={expanding} onClick={handleLoadEarlier} />
+	) : null;
 	// Track streaming start time per session so the timer survives session switches.
 	if (sending && !streamingStartTimes.has(sessionId)) {
 		streamingStartTimes.set(sessionId, Date.now());
@@ -206,6 +287,51 @@ function ChatThread({
 		void scrollToBottom("instant");
 	}, [scrollToBottom, sessionId, usePlainThread]);
 
+	// Editor close path: when chat container's `hidden` class is removed,
+	// snap to bottom and pin for ~20 frames so the virtualized list's
+	// progressive content growth doesn't show as a long smooth scroll. A
+	// brief flash of top messages before the pin catches up is the accepted
+	// tradeoff for not breaking streaming animations.
+	useEffect(() => {
+		if (typeof MutationObserver === "undefined") {
+			return;
+		}
+		const scrollParent = scrollParentRef.current;
+		const chatContainer = scrollParent?.closest('[data-focus-scope="chat"]');
+		if (!chatContainer || !scrollParent) {
+			return;
+		}
+		let wasHidden = chatContainer.classList.contains("hidden");
+		let rafId: number | null = null;
+		const observer = new MutationObserver(() => {
+			const isHidden = chatContainer.classList.contains("hidden");
+			if (wasHidden && !isHidden) {
+				void scrollToBottom("instant");
+				let frames = 20;
+				const pin = () => {
+					scrollParent.scrollTop = scrollParent.scrollHeight;
+					if (frames-- > 0) {
+						rafId = requestAnimationFrame(pin);
+					} else {
+						rafId = null;
+					}
+				};
+				pin();
+			}
+			wasHidden = isHidden;
+		});
+		observer.observe(chatContainer, {
+			attributes: true,
+			attributeFilter: ["class"],
+		});
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) {
+				cancelAnimationFrame(rafId);
+			}
+		};
+	}, [scrollToBottom]);
+
 	const itemContent = useCallback(
 		(index: number, message: RenderedMessage) => {
 			let previousAssistantMessage: RenderedMessage | null = null;
@@ -234,14 +360,14 @@ function ChatThread({
 			<ConversationViewport
 				contentRef={contentRef}
 				data={threadMessages}
-				fontSize={settings.fontSize}
+				fontSize={settings.chatFontSize}
 				hasSession={hasSession}
 				itemContent={itemContent}
-				layoutCacheKey={layoutCacheKey}
 				missingScriptTypes={missingScriptTypes}
 				onInitializeScript={onInitializeScript}
 				paneWidth={paneWidth}
 				pinTailRows={pinTailRows}
+				prologueSlot={loadEarlierBanner}
 				scrollRef={handleScrollRef}
 				sessionId={sessionId}
 				sending={sending}
@@ -273,11 +399,11 @@ function ConversationViewport({
 	fontSize,
 	hasSession,
 	itemContent,
-	layoutCacheKey,
 	missingScriptTypes,
 	onInitializeScript,
 	paneWidth,
 	pinTailRows,
+	prologueSlot,
 	scrollRef,
 	sessionId,
 	sending,
@@ -291,11 +417,11 @@ function ConversationViewport({
 	fontSize: number;
 	hasSession: boolean;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	layoutCacheKey: string;
 	missingScriptTypes: WorkspaceScriptType[];
 	onInitializeScript?: (scriptType: WorkspaceScriptType) => void;
 	paneWidth: number;
 	pinTailRows: boolean;
+	prologueSlot?: ReactNode;
 	scrollRef: React.RefCallback<HTMLElement>;
 	sessionId: string;
 	sending: boolean;
@@ -335,6 +461,7 @@ function ConversationViewport({
 				ref={viewportRef}
 				className="conversation-scroll-viewport h-full w-full overflow-x-hidden overflow-y-auto"
 			>
+				{prologueSlot}
 				{usePlainThread ? (
 					<div ref={contentRef} className="flex min-h-full flex-col">
 						{Header ? createElement(Header) : null}
@@ -362,7 +489,6 @@ function ConversationViewport({
 						fontSize={fontSize}
 						header={Header}
 						itemContent={itemContent}
-						layoutCacheKey={layoutCacheKey}
 						paneWidth={paneWidth}
 						pinTailRows={pinTailRows}
 						scrollParent={scrollParent}
@@ -415,7 +541,6 @@ function ProgressiveConversationViewport({
 	fontSize,
 	header: Header,
 	itemContent,
-	layoutCacheKey,
 	paneWidth,
 	pinTailRows,
 	scrollParent,
@@ -429,7 +554,6 @@ function ProgressiveConversationViewport({
 	fontSize: number;
 	header?: ThreadViewportSlot;
 	itemContent: (index: number, message: RenderedMessage) => ReactNode;
-	layoutCacheKey: string;
 	paneWidth: number;
 	pinTailRows: boolean;
 	scrollParent: HTMLDivElement | null;
@@ -462,9 +586,14 @@ function ProgressiveConversationViewport({
 		setStreamingRowEl(node);
 	}, []);
 
-	const [lastLayoutCacheKey, setLastLayoutCacheKey] = useState(layoutCacheKey);
-	if (lastLayoutCacheKey !== layoutCacheKey) {
-		setLastLayoutCacheKey(layoutCacheKey);
+	// Reset only on sessionId change. Triggering on layoutCacheKey (which
+	// included widthBucket) used to clear measuredHeights whenever a drag
+	// crossed a 32px bound, causing visible row-height jumps and a full
+	// remeasure. Within a session the message refs are stable, so the
+	// ResizeObserver naturally reports new heights after the DOM reflows.
+	const [lastSessionId, setLastSessionId] = useState(sessionId);
+	if (lastSessionId !== sessionId) {
+		setLastSessionId(sessionId);
 		setCommittedScrollState({ scrollTop: 0, viewportHeight: 0 });
 		setMeasuredHeights({});
 		initialScrollAppliedRef.current = false;
@@ -573,63 +702,14 @@ function ProgressiveConversationViewport({
 		};
 	}, [flushDeferredMeasuredHeights, isTauri, scrollParent]);
 
+	// Flush row heights deferred during shell resize once the drag ends.
 	useEffect(() => {
-		if (!scrollParent || typeof window === "undefined") {
-			return;
-		}
-		const escapeBottomLock = () => {
-			hasUserScrolledRef.current = true;
-			stopScroll();
-		};
-		const inScrollParent = (target: EventTarget | null) => {
-			return (
-				target instanceof Node &&
-				(scrollParent === target || scrollParent.contains(target))
-			);
-		};
-		const onWheel = (event: WheelEvent) => {
-			if (event.deltaY < -2 && inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (
-				(event.key === "ArrowUp" ||
-					event.key === "PageUp" ||
-					event.key === "Home") &&
-				inScrollParent(event.target)
-			) {
-				escapeBottomLock();
-			}
-		};
-		const onTouchMove = (event: TouchEvent) => {
-			if (inScrollParent(event.target)) {
-				escapeBottomLock();
-			}
-		};
-		window.addEventListener("wheel", onWheel as EventListener, {
-			passive: true,
+		return onShellResize((active) => {
+			if (!active) flushDeferredMeasuredHeights();
 		});
-		window.addEventListener("keydown", onKeyDown as unknown as EventListener, {
-			passive: true,
-		});
-		window.addEventListener(
-			"touchmove",
-			onTouchMove as unknown as EventListener,
-			{ passive: true },
-		);
-		return () => {
-			window.removeEventListener("wheel", onWheel as EventListener);
-			window.removeEventListener(
-				"keydown",
-				onKeyDown as unknown as EventListener,
-			);
-			window.removeEventListener(
-				"touchmove",
-				onTouchMove as unknown as EventListener,
-			);
-		};
-	}, [scrollParent, stopScroll]);
+	}, [flushDeferredMeasuredHeights]);
+
+	useEscapeBottomLock({ scrollParent, stopScroll, hasUserScrolledRef });
 
 	const estimatedHeights = useMemo(
 		() => estimateThreadRowHeights(data, { fontSize, paneWidth }),
@@ -649,7 +729,6 @@ function ProgressiveConversationViewport({
 						const height = resolveConversationRowHeight({
 							estimatedHeight,
 							measuredHeight,
-							streaming: message.streaming === true,
 						});
 						result.push({
 							height,
@@ -711,29 +790,11 @@ function ProgressiveConversationViewport({
 	// length. When the streaming row isn't mounted yet (request sent but
 	// assistant hasn't started emitting), we fall back to the state-driven
 	// row.top so the indicator doesn't collapse to y=0.
-	useLayoutEffect(() => {
-		const indicator = indicatorElRef.current;
-		if (!indicator) {
-			return;
-		}
-		if (streamingRowEl) {
-			const sync = () => {
-				indicator.style.top = `${
-					streamingRowEl.offsetTop + streamingRowEl.offsetHeight
-				}px`;
-			};
-			sync();
-			if (typeof ResizeObserver === "undefined") {
-				return;
-			}
-			const observer = new ResizeObserver(sync);
-			observer.observe(streamingRowEl);
-			return () => observer.disconnect();
-		}
-		if (indicatorFallbackTop !== undefined) {
-			indicator.style.top = `${indicatorFallbackTop}px`;
-		}
-	}, [streamingRowEl, indicatorFallbackTop]);
+	useStreamingIndicatorSync({
+		indicatorElRef,
+		streamingRowEl,
+		indicatorFallbackTop,
+	});
 	const headerHeight = Header ? PROGRESSIVE_VIEWPORT_HEADER_HEIGHT : 0;
 	const effectiveViewportHeight =
 		viewportHeight > 0 ? viewportHeight : PROGRESSIVE_VIEWPORT_DEFAULT_HEIGHT;
@@ -766,7 +827,14 @@ function ProgressiveConversationViewport({
 
 					const inWindow = rows.filter((row) => {
 						const rowBottom = row.top + row.height;
-						return rowBottom >= windowTop && row.top <= windowBottom;
+						// Tall rows (multi-viewport reasoning blocks) keep a
+						// mount zone scaled to their own height so scrolling
+						// past and back doesn't tear down the smoothing-hook
+						// progress and streamdown's internal block state.
+						const localExpand = row.height > buffer ? row.height - buffer : 0;
+						const localTop = windowTop - localExpand;
+						const localBottom = windowBottom + localExpand;
+						return rowBottom >= localTop && row.top <= localBottom;
 					});
 					if (!pinTailRows || rows.length === 0) {
 						return inWindow;
@@ -788,6 +856,7 @@ function ProgressiveConversationViewport({
 				{ totalRows: rows.length },
 			),
 		[
+			buffer,
 			distanceFromBottom,
 			effectiveViewportHeight,
 			isTauri,
@@ -849,7 +918,14 @@ function ProgressiveConversationViewport({
 				return;
 			}
 
-			if (isTauri && hasUserScrolledRef.current && isUserScrollingRef.current) {
+			// Defer during shell resize too: each visible row's RO fires per frame
+			// as the main pane width changes, and committing all of them would
+			// thrash React. Same buffered path as user-scrolling.
+			if (
+				isTauri &&
+				((hasUserScrolledRef.current && isUserScrollingRef.current) ||
+					isShellResizing())
+			) {
 				deferredMeasuredHeightsRef.current[rowKey] = roundedHeight;
 				return;
 			}
@@ -1062,16 +1138,76 @@ function ConversationRowShell({ children }: { children: ReactNode }) {
 	);
 }
 
-function getSessionLayoutCacheKey(sessionId: string, widthBucket: number) {
-	return [CHAT_LAYOUT_CACHE_VERSION, sessionId, String(widthBucket)].join(":");
-}
-
 export function ConversationColdPlaceholder() {
 	return <div className="flex min-h-0 flex-1" aria-hidden="true" />;
 }
 
 function ConversationHeaderSpacer() {
 	return <div className="h-6 shrink-0" />;
+}
+
+/**
+ * Affordance shown at the top of the scroll viewport whenever older
+ * messages exist beyond the loaded window. Self-triggers via an
+ * IntersectionObserver as the user scrolls up to it; clicking is the
+ * fallback for keyboard / pointer users.
+ */
+function LoadEarlierBanner({
+	loading,
+	onClick,
+}: {
+	loading: boolean;
+	onClick: () => void;
+}) {
+	const sentinelRef = useRef<HTMLDivElement | null>(null);
+	const onClickRef = useRef(onClick);
+	useEffect(() => {
+		onClickRef.current = onClick;
+	}, [onClick]);
+
+	// Auto-trigger when the banner enters the viewport. We re-create the
+	// observer each render cycle that toggles `loading` so we don't fire
+	// again while an expand is in flight.
+	useEffect(() => {
+		const node = sentinelRef.current;
+		if (!node || loading) return;
+		if (typeof IntersectionObserver === "undefined") return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((entry) => entry.isIntersecting)) {
+					onClickRef.current();
+				}
+			},
+			{ root: null, rootMargin: "100px 0px 0px 0px", threshold: 0 },
+		);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [loading]);
+
+	return (
+		<div
+			ref={sentinelRef}
+			className="flex shrink-0 items-center justify-center py-2"
+		>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				disabled={loading}
+				onClick={onClick}
+				className="h-7 gap-1.5 px-2.5 text-small text-muted-foreground hover:text-foreground"
+			>
+				{loading ? (
+					<Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
+				) : (
+					<ArrowUp className="size-3.5" strokeWidth={2} />
+				)}
+				<span>
+					{loading ? "Loading earlier messages…" : "Load earlier messages"}
+				</span>
+			</Button>
+		</div>
+	);
 }
 
 function ConversationBottomSpacer() {
@@ -1105,7 +1241,7 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 	return (
 		<div
 			data-testid="streaming-footer"
-			className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground"
+			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
 			{display}

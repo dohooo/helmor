@@ -1,5 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Play, RotateCcw, Settings2, Square } from "lucide-react";
+import {
+	CircleStop,
+	ExternalLink,
+	Play,
+	RotateCcw,
+	Settings2,
+	Square,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type TerminalHandle,
@@ -19,6 +26,7 @@ import { extractPort } from "../detect-urls";
 import { TABS_EASING, TABS_HOVER_TRANSITION_MS, useTabsZoom } from "../layout";
 import {
 	attach,
+	cleanupScript,
 	detach,
 	resizeScript,
 	type ScriptStatus,
@@ -31,8 +39,30 @@ import {
 type RunTabProps = {
 	repoId: string | null;
 	workspaceId: string | null;
+	/**
+	 * `RunAction.id` for the action whose lifecycle this panel mirrors. `null`
+	 * when no action is selected yet (e.g. fresh repo with zero configured
+	 * actions) — the body falls back to the "add first script" placeholder.
+	 */
+	activeRunActionId: string | null;
+	/** Display name of the active action; surfaces in the empty-state heading
+	 * so the user knows which action the Run button will trigger. */
+	activeRunActionName: string | null;
+	/** `RunAction.command` for the active action, or `null` when no action
+	 * is selected. Used to decide which placeholder copy to render. */
 	runScript: string | null;
+	/** `RunAction.stopCommand` for the active action, or `null` when none
+	 * is configured. When set AND the user has run this action at least
+	 * once this session, a Cleanup button appears alongside Rerun so the
+	 * user can tear down side effects (containers, daemons) left by an
+	 * exited start before retrying. */
+	stopCommand: string | null;
+	/** True when at least one run action is configured. Drives whether the
+	 * empty state offers "Add run script" (no actions yet) or the per-action
+	 * empty state with the Run button. */
+	hasAnyRunAction: boolean;
 	isActive: boolean;
+	/** Open the repo settings panel. */
 	onOpenSettings: () => void;
 	onStatusChange?: (status: ScriptStatus) => void;
 	onUrlsChange?: (urls: string[]) => void;
@@ -118,7 +148,7 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 								type="button"
 								role="menuitem"
 								onClick={() => handleOpen(url)}
-								className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+								className="flex cursor-interactive items-center gap-2 rounded-md px-2 py-1.5 text-left text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
 							>
 								<ExternalLink
 									className="size-3 shrink-0 text-muted-foreground"
@@ -139,7 +169,11 @@ export function OpenDevServerButton({ urls }: { urls: string[] }) {
 export function RunTab({
 	repoId,
 	workspaceId,
+	activeRunActionId,
+	activeRunActionName,
 	runScript,
+	stopCommand,
+	hasAnyRunAction,
 	isActive,
 	onOpenSettings,
 	onStatusChange,
@@ -147,6 +181,7 @@ export function RunTab({
 }: RunTabProps) {
 	const termRef = useRef<TerminalHandle | null>(null);
 	const [status, setStatus] = useState<ScriptStatus>("idle");
+	const [stopping, setStopping] = useState(false);
 	const [hasRun, setHasRun] = useState(false);
 	const { isZoomPresented, isHoverExpanded } = useTabsZoom();
 	const { settings } = useSettings();
@@ -159,27 +194,39 @@ export function RunTab({
 	}, [status, onStatusChange]);
 
 	useEffect(() => {
-		if (!workspaceId) {
+		if (!workspaceId || !activeRunActionId) {
 			onUrlsChange?.([]);
+			setHasRun(false);
+			setStatus("idle");
+			setStopping(false);
+			termRef.current?.clear();
 			return;
 		}
 
-		const existing = attach(workspaceId, "run", {
-			onChunk: (data) => termRef.current?.write(data),
-			onStatusChange: setStatus,
-			onUrlsChange: (urls) => onUrlsChange?.(urls),
-			// When a fresh run is triggered externally (e.g. Cmd+R while this
-			// tab is mounted), wipe the terminal so old output doesn't bleed
-			// into the new run's stream.
-			onReset: () => {
-				termRef.current?.clear();
-				setHasRun(true);
+		const existing = attach(
+			workspaceId,
+			"run",
+			{
+				onChunk: (data) => termRef.current?.write(data),
+				onStatusChange: setStatus,
+				onStoppingChange: setStopping,
+				onUrlsChange: (urls) => onUrlsChange?.(urls),
+				// When a fresh run is triggered externally (e.g. Cmd+R while
+				// this tab is mounted), wipe the terminal so old output
+				// doesn't bleed into the new run's stream.
+				onReset: () => {
+					termRef.current?.clear();
+					setHasRun(true);
+					setStopping(false);
+				},
 			},
-		});
+			activeRunActionId,
+		);
 
 		if (existing) {
 			setHasRun(true);
 			setStatus(existing.status);
+			setStopping(existing.stopping);
 			// Replay URLs already detected on this entry so the parent's state
 			// mirrors the store the moment the component mounts.
 			onUrlsChange?.([...existing.urls]);
@@ -195,45 +242,73 @@ export function RunTab({
 		} else {
 			setHasRun(false);
 			setStatus("idle");
+			setStopping(false);
 			onUrlsChange?.([]);
 			termRef.current?.clear();
 		}
 
-		return () => detach(workspaceId, "run");
-	}, [workspaceId]);
+		return () => detach(workspaceId, "run", activeRunActionId);
+	}, [workspaceId, activeRunActionId]);
 
 	const handleRun = useCallback(() => {
-		if (!repoId || !workspaceId) return;
+		if (!repoId || !workspaceId || !activeRunActionId) return;
 		termRef.current?.clear();
 		setStatus("running");
 		setHasRun(true);
-		startScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		startScript(repoId, "run", workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
 
 	const handleStop = useCallback(() => {
-		if (!repoId || !workspaceId) return;
-		stopScript(repoId, "run", workspaceId);
-	}, [repoId, workspaceId]);
+		if (!repoId || !workspaceId || !activeRunActionId) return;
+		stopScript(repoId, "run", workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
+
+	// Run the configured `stopCommand` standalone. Available after the
+	// action has been run at least once this session (so the user has a
+	// reason to clean up) — clears terminal & flips status to "running"
+	// for the duration of the cleanup, then back to "exited".
+	const handleCleanup = useCallback(() => {
+		if (!repoId || !workspaceId || !activeRunActionId) return;
+		termRef.current?.clear();
+		setStatus("running");
+		setHasRun(true);
+		cleanupScript(repoId, workspaceId, activeRunActionId);
+	}, [repoId, workspaceId, activeRunActionId]);
 
 	// Forward keystrokes to the PTY. The backend silently ignores writes
 	// when no script is live, so we don't gate this on status.
 	const handleData = useCallback(
 		(data: string) => {
-			if (!repoId || !workspaceId) return;
-			writeStdin(repoId, "run", workspaceId, data);
+			if (!repoId || !workspaceId || !activeRunActionId) return;
+			writeStdin(repoId, "run", workspaceId, data, activeRunActionId);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, activeRunActionId],
 	);
 
 	const handleResize = useCallback(
 		(cols: number, rows: number) => {
-			if (!repoId || !workspaceId) return;
-			resizeScript(repoId, "run", workspaceId, cols, rows);
+			if (!repoId || !workspaceId || !activeRunActionId) return;
+			resizeScript(repoId, "run", workspaceId, cols, rows, activeRunActionId);
 		},
-		[repoId, workspaceId],
+		[repoId, workspaceId, activeRunActionId],
 	);
 
 	const hasScript = !!runScript?.trim();
+	const trimmedStopCommand = stopCommand?.trim() ?? "";
+	const autoExpandEnabled = settings.terminalHoverExpansion;
+	// Auto-expand off → zoom never fires, so anchor the button unconditionally.
+	const showFloatingAction =
+		(status === "running" || status === "exited") &&
+		(autoExpandEnabled ? isZoomPresented : true);
+	// Cleanup is only useful after the action has actually started something —
+	// before the first run there's nothing to tear down. Hidden while the
+	// script is running (the existing Stop button covers that case, since
+	// `stopRepoScript` already runs `stopCommand` as part of SIGTERM cleanup).
+	const showCleanupButton =
+		status === "exited" &&
+		hasRun &&
+		!!trimmedStopCommand &&
+		!!activeRunActionId;
 
 	return (
 		<div
@@ -257,28 +332,59 @@ export function RunTab({
 						/>
 					</div>
 
-					{isZoomPresented && (status === "running" || status === "exited") && (
+					{showFloatingAction && (
+						// z-20 keeps the buttons above xterm's link-layer canvas (z:2).
 						<div
-							className="absolute bottom-3 right-4"
-							style={{
-								opacity: isHoverExpanded ? 1 : 0,
-								pointerEvents: isHoverExpanded ? "auto" : "none",
-								transition: `opacity ${TABS_HOVER_TRANSITION_MS}ms ${TABS_EASING}`,
-							}}
+							className="absolute right-4 bottom-3 z-20 flex items-center gap-2"
+							style={
+								autoExpandEnabled
+									? {
+											opacity: isHoverExpanded ? 1 : 0,
+											pointerEvents: isHoverExpanded ? "auto" : "none",
+											transition: `opacity ${TABS_HOVER_TRANSITION_MS}ms ${TABS_EASING}`,
+										}
+									: undefined
+							}
 						>
+							{showCleanupButton && (
+								// Surfaces the user-configured `stopCommand` after the
+								// start has exited — for commands like `supabase start`
+								// / `docker compose up` that leave containers running
+								// after the spawned process dies. Without this, Rerun
+								// is sabotaged by "already running" state and the user
+								// has to drop to a real terminal to recover.
+								<Button
+									variant="outline"
+									size="sm"
+									className="text-small shadow-sm backdrop-blur-sm transition-none"
+									onClick={handleCleanup}
+									title={`Run stop command: ${trimmedStopCommand}`}
+									aria-label={`Run stop command: ${trimmedStopCommand}`}
+								>
+									<CircleStop className="size-3" strokeWidth={2} />
+								</Button>
+							)}
 							<Button
 								variant={status === "running" ? "destructive" : "secondary"}
 								size="sm"
-								className="text-[12px] shadow-sm backdrop-blur-sm transition-none"
+								className="text-small shadow-sm backdrop-blur-sm transition-none"
 								onClick={status === "running" ? handleStop : handleRun}
 								disabled={status === "exited" && !hasScript}
+								// Title clarifies the escalation semantic when a
+								// cleanup command is still running — second click
+								// short-circuits to SIGKILL on the backend.
+								title={stopping ? "Skip cleanup and force-kill" : undefined}
 							>
 								{status === "running" ? (
 									<Square className="size-3" strokeWidth={2} />
 								) : (
 									<RotateCcw className="size-3" strokeWidth={2} />
 								)}
-								{status === "running" ? "Stop" : "Rerun"}
+								{status === "running"
+									? stopping
+										? "Force Stop"
+										: "Stop"
+									: "Rerun"}
 								{runShortcut ? (
 									<InlineShortcutDisplay
 										hotkey={runShortcut}
@@ -293,34 +399,42 @@ export function RunTab({
 						</div>
 					)}
 				</>
-			) : !hasScript ? (
+			) : !hasAnyRunAction ? (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
 					<Button
 						variant="outline"
 						size="sm"
-						className="gap-1.5 text-[12px]"
+						className="gap-1.5 text-small"
 						onClick={onOpenSettings}
 					>
 						<Settings2 className="size-3.5" strokeWidth={1.8} />
 						Add run script
 					</Button>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Run tests or a development server to test changes in this workspace.
 					</p>
 				</div>
 			) : (
 				<div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-					<p className="text-[13px] text-muted-foreground">
-						No run script output
+					{/* Inline the active action's name in the heading so the
+					    user always sees which action the Run button will
+					    trigger — important now that one workspace can have
+					    several. */}
+					<p className="text-ui text-muted-foreground">
+						No output for{" "}
+						<span className="font-medium text-foreground">
+							{activeRunActionName ?? "Default"}
+						</span>
 					</p>
-					<p className="text-[12px] text-muted-foreground/70">
+					<p className="text-small text-muted-foreground/70">
 						Run script output will appear here after running.
 					</p>
 					<Button
 						variant="outline"
 						size="sm"
-						className="mt-1 gap-2 text-[12px]"
+						className="mt-1 gap-2 text-small"
 						onClick={handleRun}
+						disabled={!hasScript}
 					>
 						<Play className="size-3" strokeWidth={2} />
 						Run

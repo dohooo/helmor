@@ -62,7 +62,7 @@ function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
 					type="button"
 					variant="outline"
 					size="xs"
-					className="my-1 h-auto rounded-md border-border/60 bg-accent/35 px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent/60"
+					className="my-1 h-auto rounded-md border-border/60 bg-accent/35 px-2 py-1 text-mini text-muted-foreground hover:bg-accent/60"
 					onClick={() => {
 						const composer = document.querySelector<HTMLTextAreaElement>(
 							"textarea[data-composer-input]",
@@ -84,7 +84,7 @@ function PromptSuggestion({ part }: { part: PromptSuggestionPart }) {
 			</TooltipTrigger>
 			<TooltipContent
 				sideOffset={4}
-				className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+				className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 			>
 				<span>Use this prompt</span>
 			</TooltipContent>
@@ -124,10 +124,10 @@ function MessageTimestamp({ createdAt }: { createdAt?: string }) {
 	if (Number.isNaN(date.getTime())) return null;
 	return (
 		<>
-			<span className="inline-flex h-4 items-center text-[11px] leading-none text-muted-foreground/60">
+			<span className="inline-flex h-4 items-center text-mini leading-none text-muted-foreground/60">
 				•
 			</span>
-			<span className="inline-flex h-4 shrink-0 items-center text-[11px] leading-none tabular-nums text-muted-foreground">
+			<span className="inline-flex h-4 shrink-0 items-center text-mini leading-none tabular-nums text-muted-foreground">
 				{formatDistanceToNow(date, { addSuffix: true })}
 			</span>
 		</>
@@ -161,7 +161,7 @@ export function ChatSystemMessage({
 			data-message-role="system"
 			className="group/sys flex min-w-0 items-center gap-1.5"
 		>
-			<div className="flex min-w-0 items-center gap-1.5 py-1 text-[11px] leading-none text-muted-foreground">
+			<div className="flex min-w-0 items-center gap-1.5 py-1 text-mini leading-none text-muted-foreground">
 				{parts.map((part, index) => {
 					if (isSystemNoticePart(part)) {
 						return <SystemNotice key={index} part={part} />;

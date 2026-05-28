@@ -75,9 +75,9 @@ export function EditDiffTrigger({
 				onMouseEnter={show}
 				onMouseLeave={hideDelayed}
 				className={cn(
-					"items-center gap-1.5 text-[12px] leading-4 text-muted-foreground transition-colors",
+					"items-center gap-1.5 text-small leading-4 text-muted-foreground transition-colors",
 					variant === "row"
-						? "flex w-full cursor-pointer rounded-md px-2 py-1 hover:bg-accent/60"
+						? "flex w-full cursor-interactive rounded-md px-2 py-1 hover:bg-accent/60"
 						: "inline-flex self-start rounded-md border border-border/60 px-1.5 py-0.5 hover:border-muted-foreground/40 hover:bg-accent/40",
 				)}
 			>
@@ -86,7 +86,7 @@ export function EditDiffTrigger({
 				{diffAdd != null || diffDel != null ? (
 					<span
 						className={cn(
-							"flex shrink-0 items-center gap-1 text-[11px]",
+							"flex shrink-0 items-center gap-1 text-mini",
 							variant === "row" ? "" : "ml-auto",
 						)}
 					>
@@ -112,10 +112,10 @@ export function EditDiffTrigger({
 								maxHeight: pos.maxHeight,
 							}}
 						>
-							<div className="shrink-0 border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+							<div className="shrink-0 border-b border-border/50 px-3 py-1.5 text-mini text-muted-foreground">
 								{file}
 							</div>
-							<div className="min-h-0 max-h-[24rem] flex-1 overflow-auto font-mono text-[11px] leading-5">
+							<div className="min-h-0 max-h-[24rem] flex-1 overflow-auto font-mono text-mini leading-5">
 								{oldStr
 									? oldStr.split("\n").map((line, index) => (
 											<div

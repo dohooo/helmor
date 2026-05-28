@@ -43,18 +43,18 @@ export const SourceCard = memo(function SourceCard({
 			}}
 			className={cn(
 				"group relative flex flex-col gap-2 overflow-hidden rounded-lg border border-border/70 bg-[var(--sidebar)] px-3 pt-2.5 pb-2 text-left shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/70",
-				onOpen && "cursor-pointer",
+				onOpen && "cursor-interactive",
 				"hover:border-border hover:bg-[var(--accent)]",
 				selected && "border-border bg-[var(--accent)]",
 			)}
 		>
 			<div className="min-w-0 flex-1">
-				<div className="line-clamp-2 text-[13px] font-medium leading-[18px] text-foreground">
+				<div className="line-clamp-2 text-ui font-medium leading-[18px] text-foreground">
 					{card.title}
 				</div>
 			</div>
 
-			<div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
+			<div className="flex min-w-0 items-center justify-between gap-2 text-mini text-muted-foreground">
 				<div className="flex min-w-0 items-center gap-1.5">
 					<SourceIcon
 						source={card.source}
@@ -91,7 +91,7 @@ export const SourceCard = memo(function SourceCard({
 							}
 							errorTitle="Couldn't insert context card"
 							className={cn(
-								"flex size-7.5 cursor-pointer items-center justify-center rounded-md",
+								"flex size-7.5 cursor-interactive items-center justify-center rounded-md",
 								"border-0 bg-transparent text-muted-foreground opacity-0 shadow-none",
 								"transition-[background-color,color,opacity,transform] duration-150",
 								"group-hover:opacity-100",
@@ -147,12 +147,16 @@ function buildCardContextLabel(card: ContextCard) {
 	const number =
 		card.meta.type === "github_issue" ||
 		card.meta.type === "github_pr" ||
-		card.meta.type === "github_discussion"
+		card.meta.type === "github_discussion" ||
+		card.meta.type === "gitlab_issue" ||
+		card.meta.type === "gitlab_mr"
 			? card.meta.number
 			: null;
 
 	if (number) {
-		return `${card.title} #${number}`;
+		// GitLab MRs are conventionally referenced with `!N`; issues with `#N`.
+		const prefix = card.meta.type === "gitlab_mr" ? "!" : "#";
+		return `${card.title} ${prefix}${number}`;
 	}
 
 	return `${card.title} ${card.externalId}`.trim();

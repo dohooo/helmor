@@ -9,6 +9,7 @@
  * @see https://streamdown.ai/docs/components
  */
 
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DownloadIcon } from "lucide-react";
@@ -118,7 +119,7 @@ function TableDownloadMenu() {
 				<button
 					ref={triggerRef}
 					type="button"
-					className="cursor-pointer p-1 text-muted-foreground transition-all hover:text-foreground"
+					className="cursor-interactive p-1 text-muted-foreground transition-all hover:text-foreground"
 					title="Download table"
 				>
 					<DownloadIcon size={14} />
@@ -340,12 +341,52 @@ export function StreamdownAnchor({
 	);
 }
 
+// Image override: resolves workspace-relative paths through Tauri `asset://`.
+export function StreamdownImage({
+	src,
+	alt,
+	className,
+	...props
+}: {
+	src?: string;
+	alt?: string;
+	className?: string;
+} & Record<string, unknown>) {
+	const { workspaceRootPath } = useFileLinkContext();
+	const resolved = resolveImageSrc(src, workspaceRootPath ?? null);
+	return (
+		<img
+			{...(props as Omit<
+				React.ImgHTMLAttributes<HTMLImageElement>,
+				"src" | "alt" | "className"
+			>)}
+			src={resolved}
+			alt={alt ?? ""}
+			className={cn("max-h-[480px] max-w-full rounded-md border", className)}
+		/>
+	);
+}
+
+function resolveImageSrc(
+	src: string | undefined,
+	workspaceRootPath: string | null,
+): string | undefined {
+	if (!src) return src;
+	if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return src;
+	if (src.startsWith("//")) return src;
+	if (!workspaceRootPath) return src;
+	const rel = src.replace(/^\.?\/+/, "");
+	const sep = workspaceRootPath.endsWith("/") ? "" : "/";
+	return convertFileSrc(`${workspaceRootPath}${sep}${rel}`);
+}
+
 // ---------------------------------------------------------------------------
 // Aggregated components map
 // ---------------------------------------------------------------------------
 
 export const streamdownComponents = {
 	a: StreamdownAnchor,
+	img: StreamdownImage,
 	pre: StreamdownPre,
 	table: StreamdownTable,
 	thead: StreamdownTableHeader,

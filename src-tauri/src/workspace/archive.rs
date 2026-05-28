@@ -6,14 +6,27 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
+    agents::ActiveStreams,
     error::{extract_code, outermost_message, ErrorCode},
-    git_watcher,
+    git_watcher, settings,
 };
 
 use super::lifecycle::{execute_archive_plan, prepare_archive_plan, ArchivePreparedPlan};
 
 pub const ARCHIVE_EXECUTION_FAILED_EVENT: &str = "archive-execution-failed";
 pub const ARCHIVE_EXECUTION_SUCCEEDED_EVENT: &str = "archive-execution-succeeded";
+
+/// What kicked off this archive run. Plumbed through to the success /
+/// failure events so the frontend can branch on it — manual flow drives
+/// the sidebar via the existing `archiveGate` + `pendingArchives`
+/// machinery; auto flow has no such state and needs its own sidebar
+/// reconcile + a calmer failure toast.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArchiveOrigin {
+    Manual,
+    AutoAfterMerge,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,12 +40,14 @@ pub struct ArchiveExecutionFailedPayload {
     pub workspace_id: String,
     pub code: ErrorCode,
     pub message: String,
+    pub origin: ArchiveOrigin,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveExecutionSucceededPayload {
     pub workspace_id: String,
+    pub origin: ArchiveOrigin,
 }
 
 #[derive(Default)]
@@ -101,7 +116,75 @@ impl ArchiveJobManager {
     }
 }
 
-pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &str) -> Result<()> {
+/// Opt-in auto-archive triggered when a workspace's PR transitions to
+/// merged. Fires once at the edge — callers gate on
+/// `state_changed && next_state == Merged` (see `forge_commands`), and
+/// `PrSyncState::Merged` is an absorbing state in
+/// `stabilize_pr_sync_state`, so this can't re-fire on subsequent polls.
+///
+/// Best-effort: every skip path logs and returns. Failures are routed
+/// through the existing `ARCHIVE_EXECUTION_FAILED_EVENT` so the UI toast
+/// still surfaces them.
+pub fn try_auto_archive_after_merge<R: Runtime>(app: &AppHandle<R>, workspace_id: &str) {
+    let enabled = match settings::load_auto_archive_on_merge_enabled() {
+        Ok(v) => v,
+        Err(error) => {
+            tracing::warn!(
+                workspace_id,
+                error = %error,
+                "Auto-archive: failed to read setting, skipping"
+            );
+            return;
+        }
+    };
+    if !enabled {
+        return;
+    }
+
+    // Active agent turn → skip. Yanking the worktree out from under a
+    // running session would crash it.
+    if app
+        .state::<ActiveStreams>()
+        .has_active_for_workspace(workspace_id)
+    {
+        tracing::info!(
+            workspace_id,
+            "Auto-archive skipped: workspace has an active session"
+        );
+        return;
+    }
+
+    // `prepare` covers eligibility + missing repo/worktree + already-
+    // running archive in one shot. A failure here is the right outcome
+    // for "conditions not met" — log and bail without retry.
+    let manager = app.state::<ArchiveJobManager>();
+    if let Err(error) = manager.prepare(workspace_id) {
+        tracing::info!(
+            workspace_id,
+            error = %error,
+            "Auto-archive skipped: prepare failed"
+        );
+        return;
+    }
+
+    // Hand off to the existing async path so success / failure events,
+    // git unwatch, and the toast pipeline are all reused.
+    if let Err(error) = start_archive_workspace(app, workspace_id, ArchiveOrigin::AutoAfterMerge) {
+        tracing::warn!(
+            workspace_id,
+            error = %error,
+            "Auto-archive: failed to start archive task"
+        );
+    } else {
+        tracing::info!(workspace_id, "Auto-archive started after merge");
+    }
+}
+
+pub fn start_archive_workspace<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    origin: ArchiveOrigin,
+) -> Result<()> {
     let manager = app.state::<ArchiveJobManager>();
     let plan = manager.start_prepared(workspace_id)?;
     let app_handle = app.clone();
@@ -141,6 +224,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                     ARCHIVE_EXECUTION_SUCCEEDED_EVENT,
                     ArchiveExecutionSucceededPayload {
                         workspace_id: workspace_id.clone(),
+                        origin,
                     },
                 );
             }
@@ -158,6 +242,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                         workspace_id: workspace_id.clone(),
                         code: extract_code(&error),
                         message: outermost_message(&error),
+                        origin,
                     },
                 );
             }
@@ -170,6 +255,7 @@ pub fn start_archive_workspace<R: Runtime>(app: &AppHandle<R>, workspace_id: &st
                         workspace_id: workspace_id.clone(),
                         code: ErrorCode::Unknown,
                         message: format!("Archive task failed: {error}"),
+                        origin,
                     },
                 );
             }

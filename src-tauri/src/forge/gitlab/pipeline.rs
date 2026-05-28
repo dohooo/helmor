@@ -109,10 +109,34 @@ fn job_item(job: GitlabJob) -> ForgeActionItem {
 }
 
 fn normalize_gitlab_status(status: Option<&str>) -> ActionStatusKind {
+    // GitLab job/pipeline status reference:
+    // https://docs.gitlab.com/api/jobs/#list-project-jobs
+    //
+    // We bucket anything "pipeline is in flight" as Running so the row matches
+    // what GitLab itself shows for the parent pipeline. Concretely: a job in
+    // `pending` (queued waiting for a runner) or `created` (not yet enqueued)
+    // still drives the pipeline header to "Running" in GitLab's UI — keeping
+    // the row gray here would tell the user "nothing is happening" when the
+    // pipeline is in fact actively in progress. `preparing` and
+    // `waiting_for_resource` are even further along.
+    //
+    // `manual` and `scheduled` stay Pending: those jobs will NOT run without
+    // an external trigger (a click / a scheduled time), so gray "waiting on
+    // you" reads more honestly than amber "running".
+    //
+    // This intentionally diverges from the GitHub mapping in
+    // `forge::github::actions::normalize_check_run_status`, which treats
+    // `QUEUED` / `WAITING` / `REQUESTED` as Pending. GitHub surfaces a per-run
+    // status that's already disambiguated from the workflow-level state;
+    // GitLab only gives us per-job status, so we lean toward the
+    // pipeline-level reading.
     match status.unwrap_or_default() {
         "success" | "skipped" => ActionStatusKind::Success,
         "failed" | "canceled" => ActionStatusKind::Failure,
-        "running" => ActionStatusKind::Running,
+        "running" | "preparing" | "waiting_for_resource" | "pending" | "created" => {
+            ActionStatusKind::Running
+        }
+        "scheduled" | "manual" => ActionStatusKind::Pending,
         _ => ActionStatusKind::Pending,
     }
 }
@@ -172,8 +196,38 @@ mod tests {
             ActionStatusKind::Running
         );
         assert_eq!(
+            normalize_gitlab_status(Some("preparing")),
+            ActionStatusKind::Running
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("waiting_for_resource")),
+            ActionStatusKind::Running
+        );
+        // `pending` / `created` collapse into Running on purpose — see the
+        // comment on `normalize_gitlab_status`.
+        assert_eq!(
             normalize_gitlab_status(Some("pending")),
+            ActionStatusKind::Running
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("created")),
+            ActionStatusKind::Running
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("scheduled")),
             ActionStatusKind::Pending
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("manual")),
+            ActionStatusKind::Pending
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("skipped")),
+            ActionStatusKind::Success
+        );
+        assert_eq!(
+            normalize_gitlab_status(Some("canceled")),
+            ActionStatusKind::Failure
         );
     }
 

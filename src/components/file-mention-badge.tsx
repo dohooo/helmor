@@ -32,8 +32,8 @@ export function FileMentionBadge({
 		[isImage, path],
 	);
 
-	const wrapperClass = cn(compact && "text-[12px]", className);
-	const labelClass = compact ? "text-[12px]" : undefined;
+	const wrapperClass = cn(compact && "text-small", className);
+	const labelClass = compact ? "text-small" : undefined;
 
 	if (isImage) {
 		return (

@@ -5,10 +5,11 @@ import type { ComposerCreatePrepareOutcome } from "@/features/conversation";
 import {
 	type FinalizeWorkspaceResponse,
 	finalizeWorkspaceFromRepo,
+	prepareChatWorkspace,
 	prepareWorkspaceFromRepo,
 	setWorkspaceLinkedDirectories,
-	setWorkspaceStatus,
 	updateSessionSettings,
+	type WorkspaceBranchIntent,
 	type WorkspaceMode,
 } from "@/lib/api";
 import { getComposerContextKey } from "@/lib/workspace-helpers";
@@ -29,18 +30,29 @@ export async function createWorkspaceFromStartComposer({
 	repoId,
 	sourceBranch,
 	mode,
+	branchIntent,
 	submitMode,
 	editorStateSnapshot,
 	composerConfig,
 	linkedDirectories,
+	seedSessionId,
 }: {
+	/** Ignored in `chat` mode. */
 	repoId: string;
+	/** Ignored in `chat` mode. */
 	sourceBranch: string;
 	mode: WorkspaceMode;
+	/** Defaults to `from_branch` when omitted. */
+	branchIntent?: WorkspaceBranchIntent;
 	submitMode: StartSubmitMode;
 	editorStateSnapshot?: SerializedEditorState;
-	/** StartPage composer picks. Only persisted to the session row on
-	 *  saveForLater; startNow consumes them via the submit payload. */
+	/** StartPage composer picks. Persisted to the session row in all submit
+	 *  modes so the row reflects the user's choice from the moment the
+	 *  workspace exists — independent of whether/when the first turn runs.
+	 *  Without this, switching away to start-page (which unmounts the
+	 *  conversation container and drops its in-memory composer caches) and
+	 *  coming back snaps the chips back to settings defaults on any session
+	 *  whose first turn hasn't yet finalised. */
 	composerConfig?: {
 		modelId?: string;
 		effortLevel?: string;
@@ -51,8 +63,27 @@ export async function createWorkspaceFromStartComposer({
 	 *  workspace row immediately so the conversation-mode composer (which
 	 *  reads the workspace-scoped query) sees them on first mount. */
 	linkedDirectories?: readonly string[];
+	/** Pre-allocated session UUID; forwarded to the prepare IPC so the
+	 *  new `sessions.id` matches the paste-cache bucket already on disk. */
+	seedSessionId?: string;
 }): Promise<WorkspaceStartCreateResult> {
-	const prepared = await prepareWorkspaceFromRepo(repoId, sourceBranch, mode);
+	// "Save for later" creates the workspace directly in `backlog` status
+	// — passing it through to Phase 1 means the DB row is born in the
+	// right group and the sidebar never flashes through "In progress"
+	// while finalize runs. Other submit modes default to in-progress.
+	const initialStatus = submitMode === "saveForLater" ? "backlog" : null;
+	// Chat mode has no repo/branch — single-phase create.
+	const prepared =
+		mode === "chat"
+			? await prepareChatWorkspace(initialStatus, seedSessionId)
+			: await prepareWorkspaceFromRepo(
+					repoId,
+					sourceBranch,
+					mode,
+					branchIntent ?? null,
+					initialStatus,
+					seedSessionId,
+				);
 
 	// Persist pending /add-dir picks before kicking off finalize. The DB
 	// write is fast and the column is just a property of the existing
@@ -63,22 +94,34 @@ export async function createWorkspaceFromStartComposer({
 		]);
 	}
 
+	// Chat workspaces are single-phase — prepare returns a `ready` row, no
+	// finalize needed. Worktree/local workspaces still need finalize.
+	const finalize =
+		mode === "chat"
+			? null
+			: () => finalizeWorkspaceFromRepo(prepared.workspaceId);
+
+	// Single source of truth for the composer-pick persist. Awaited in every
+	// submit mode — the write is one UPDATE and finishes long before the
+	// user can switch surfaces, so it's not worth the complexity of racing
+	// it against finalize.
+	const persistComposerConfig = composerConfig
+		? updateSessionSettings(prepared.initialSessionId, {
+				model: composerConfig.modelId,
+				effortLevel: composerConfig.effortLevel,
+				permissionMode: composerConfig.permissionMode,
+				fastMode: composerConfig.fastMode,
+			})
+		: Promise.resolve();
+
 	if (submitMode === "saveForLater") {
 		await Promise.all([
-			finalizeWorkspaceFromRepo(prepared.workspaceId),
+			finalize?.() ?? Promise.resolve(),
 			editorStateSnapshot
 				? persistSessionDraft(prepared.initialSessionId, editorStateSnapshot)
 				: Promise.resolve(),
-			composerConfig
-				? updateSessionSettings(prepared.initialSessionId, {
-						model: composerConfig.modelId,
-						effortLevel: composerConfig.effortLevel,
-						permissionMode: composerConfig.permissionMode,
-						fastMode: composerConfig.fastMode,
-					})
-				: Promise.resolve(),
+			persistComposerConfig,
 		]);
-		await setWorkspaceStatus(prepared.workspaceId, "backlog");
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
@@ -88,7 +131,10 @@ export async function createWorkspaceFromStartComposer({
 	}
 
 	if (submitMode === "createOnly") {
-		await finalizeWorkspaceFromRepo(prepared.workspaceId);
+		await Promise.all([
+			finalize?.() ?? Promise.resolve(),
+			persistComposerConfig,
+		]);
 		return {
 			outcome: { shouldStream: false },
 			workspaceId: prepared.workspaceId,
@@ -97,8 +143,13 @@ export async function createWorkspaceFromStartComposer({
 		};
 	}
 
+	// startNow: don't block the surface swap on finalize, but do await the
+	// (very fast) settings write so by the time conversation mounts and
+	// reads `sessions.effort_level / model / permission_mode / fast_mode`
+	// the row already reflects the user's pick.
+	await persistComposerConfig;
 	return {
-		finalizePromise: finalizeWorkspaceFromRepo(prepared.workspaceId),
+		finalizePromise: finalize?.(),
 		workspaceId: prepared.workspaceId,
 		sessionId: prepared.initialSessionId,
 		preparedWorkingDirectory: prepared.workingDirectory,

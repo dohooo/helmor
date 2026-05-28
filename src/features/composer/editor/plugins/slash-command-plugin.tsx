@@ -72,26 +72,56 @@ function dedupeByName(
 	return out;
 }
 
-function filterCommands(
+function compactCommandSearchText(input: string): string {
+	return input.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isOrderedSubsequence(query: string, value: string): boolean {
+	let queryIndex = 0;
+	for (const char of value) {
+		if (char === query[queryIndex]) {
+			queryIndex += 1;
+			if (queryIndex === query.length) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Rank slash commands against a query. Higher score = better match.
+ * - 5: literal command name starts with query
+ * - 4: literal command name contains query
+ * - 3: separator-normalized command name starts with query
+ * - 2: separator-normalized command name contains query
+ * - 1: ordered fuzzy match on separator-normalized name
+ * - 0: no match
+ */
+export function rankCommand(command: SlashCommandEntry, query: string): number {
+	if (!query) return 1;
+	const q = query.toLowerCase();
+	const name = command.name.toLowerCase();
+	if (name.startsWith(q)) return 5;
+	if (name.includes(q)) return 4;
+
+	const compactQuery = compactCommandSearchText(q);
+	const compactName = compactCommandSearchText(name);
+	if (!compactQuery) return 1;
+	if (compactName.startsWith(compactQuery)) return 3;
+	if (compactName.includes(compactQuery)) return 2;
+	if (isOrderedSubsequence(compactQuery, compactName)) return 1;
+	return 0;
+}
+
+export function filterCommands(
 	commands: readonly SlashCommandEntry[],
 	query: string,
 ): readonly SlashCommandEntry[] {
 	if (!query) return commands;
-	const q = query.toLowerCase();
-	// Two-pass: prefix matches first (typing "co" surfaces /commit,
-	// /context, /compact in that order), then any remaining substring
-	// matches.
-	const prefix: SlashCommandEntry[] = [];
-	const substring: SlashCommandEntry[] = [];
-	for (const cmd of commands) {
-		const name = cmd.name.toLowerCase();
-		if (name.startsWith(q)) {
-			prefix.push(cmd);
-		} else if (name.includes(q)) {
-			substring.push(cmd);
-		}
-	}
-	return [...prefix, ...substring];
+	const ranked = commands
+		.map((command) => ({ command, score: rankCommand(command, query) }))
+		.filter((entry) => entry.score > 0);
+	ranked.sort((a, b) => b.score - a.score);
+	return ranked.map((entry) => entry.command);
 }
 
 export function SlashCommandPlugin({
@@ -206,7 +236,7 @@ export function SlashCommandPlugin({
 				if (!hasOptions) {
 					if (isLoading) {
 						stateRow = (
-							<div className="flex items-center gap-2 px-3 py-2 text-[13px] text-muted-foreground">
+							<div className="flex items-center gap-2 px-3 py-2 text-ui text-muted-foreground">
 								<Loader2 className="size-3.5 shrink-0 animate-spin" />
 								<span>Loading commands…</span>
 							</div>
@@ -219,7 +249,7 @@ export function SlashCommandPlugin({
 								size="sm"
 								onPointerDown={(event) => event.preventDefault()}
 								onClick={() => onRetry?.()}
-								className="h-auto w-full justify-start gap-2 px-3 py-2 text-left text-[13px] text-muted-foreground hover:text-foreground"
+								className="h-auto w-full justify-start gap-2 px-3 py-2 text-left text-ui text-muted-foreground hover:text-foreground"
 							>
 								<RefreshCw
 									data-icon="inline-start"
@@ -230,13 +260,13 @@ export function SlashCommandPlugin({
 						);
 					} else if (queryActive) {
 						stateRow = (
-							<div className="px-3 py-2 text-[13px] text-muted-foreground">
+							<div className="px-3 py-2 text-ui text-muted-foreground">
 								No matches
 							</div>
 						);
 					} else {
 						stateRow = (
-							<div className="px-3 py-2 text-[13px] text-muted-foreground">
+							<div className="px-3 py-2 text-ui text-muted-foreground">
 								No commands available
 							</div>
 						);
@@ -289,7 +319,7 @@ export function SlashCommandPlugin({
 													// typing.
 													onPointerDown={(event) => event.preventDefault()}
 													className={cn(
-														"min-w-0 rounded-lg px-2.5 py-2 text-[13px]",
+														"min-w-0 rounded-lg px-2.5 py-2 text-ui",
 														isSelected && "bg-muted text-foreground",
 													)}
 												>
@@ -300,7 +330,7 @@ export function SlashCommandPlugin({
 														{cmd.name}
 													</span>
 													<span
-														className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-muted-foreground"
+														className="min-w-0 flex-1 truncate whitespace-nowrap text-small text-muted-foreground"
 														title={cmd.description}
 													>
 														{cmd.description}

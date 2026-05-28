@@ -46,7 +46,7 @@ export function MoveToWorktreeDialog({
 				<DialogHeader>
 					<DialogTitle>Move into a new worktree</DialogTitle>
 				</DialogHeader>
-				<div className="flex flex-col gap-2 text-[13px] leading-snug text-muted-foreground">
+				<div className="flex flex-col gap-2 text-ui leading-snug text-muted-foreground">
 					<p>
 						<span className="font-medium text-foreground">
 							{workspaceTitle}

@@ -11,20 +11,21 @@ import {
 	listenArchiveExecutionSucceeded,
 	loadAddRepositoryDefaults,
 	markWorkspaceUnread,
+	moveRepositoryInSidebar,
+	moveWorkspaceInSidebar,
 	permanentlyDeleteWorkspace,
 	pinWorkspace,
 	prepareArchiveWorkspace,
 	prepareWorkspaceFromRepo,
-	type RepositoryCreateOption,
 	restoreWorkspace,
 	setWorkspaceStatus,
 	startArchiveWorkspace,
 	unpinWorkspace,
 	validateRestoreWorkspace,
 	type WorkspaceDetail,
+	type WorkspaceGroup,
 	type WorkspaceRow,
 	type WorkspaceSessionSummary,
-	type WorkspaceState,
 	type WorkspaceStatus,
 } from "@/lib/api";
 import { extractError, isRecoverableByPurge } from "@/lib/errors";
@@ -40,29 +41,35 @@ import {
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import {
-	beginSidebarMutation as gateBeginSidebarMutation,
-	endSidebarMutation as gateEndSidebarMutation,
-	flushSidebarLists as gateFlushSidebarLists,
-	isSidebarMutationInFlight,
+	createScopedSidebarGate,
+	holdSidebarMutation,
+	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import {
+	applyRepoReorder,
 	createOptimisticCreatingWorkspaceDetail,
 	describeUnknownError,
 	findInitialWorkspaceId,
 	findReplacementWorkspaceIdAfterRemoval,
 	hasWorkspaceId,
-	insertRowByCreatedAtDesc,
+	insertRowBySidebarOrder,
+	reorderWorkspaceInSidebar,
 	rowToWorkspaceSummary,
 	summaryToArchivedRow,
 	workspaceGroupIdFromStatus,
 } from "@/lib/workspace-helpers";
+import { useShellEvent } from "@/shell/event-bus";
 import {
 	type PendingArchiveEntry,
 	type PendingCreationEntry,
-	projectSidebarLists,
+	projectVisualSidebar,
 	shouldReconcilePendingArchive,
 	shouldReconcilePendingCreation,
 } from "../sidebar-projection";
+import {
+	createOptimisticWorkspaceSession,
+	createPreparedWorkspaceRow,
+} from "./controller/optimistic-rows";
 
 type WorkspaceToastVariant = "default" | "destructive";
 
@@ -102,7 +109,7 @@ export function useWorkspacesSidebarController({
 	pushWorkspaceToast,
 }: UseWorkspacesSidebarControllerArgs) {
 	const queryClient = useQueryClient();
-	const { settings } = useSettings();
+	const { settings, updateSettings } = useSettings();
 	const [addingRepository, setAddingRepository] = useState(false);
 	const [isCloneDialogOpen, setIsCloneDialogOpen] = useState(false);
 	const [cloneDefaultDirectory, setCloneDefaultDirectory] = useState<
@@ -135,20 +142,23 @@ export function useWorkspacesSidebarController({
 	const selectedWorkspaceIdRef = useRef(selectedWorkspaceId);
 	selectedWorkspaceIdRef.current = selectedWorkspaceId;
 
-	const flushSidebarLists = useCallback(() => {
-		gateFlushSidebarLists(queryClient);
-	}, [queryClient]);
-
-	const beginSidebarMutation = useCallback(() => {
-		gateBeginSidebarMutation();
-	}, []);
-
-	const endSidebarMutation = useCallback(() => {
-		gateEndSidebarMutation();
-		if (!isSidebarMutationInFlight()) {
-			flushSidebarLists();
-		}
-	}, [flushSidebarLists]);
+	// Archive is fire-and-forget: `startArchiveWorkspace` resolves once
+	// the worker has been launched, not when the DB row is actually
+	// archived. The gate must stay live until the
+	// `archive-execution-succeeded` / `-failed` event arrives, so
+	// concurrent flushes don't refetch the still-pre-archive groups
+	// and clobber the optimistic move. `createScopedSidebarGate` makes
+	// per-workspace begin/end idempotent so duplicate or
+	// out-of-sequence events never imbalance the counter.
+	const archiveGateRef = useRef(createScopedSidebarGate(queryClient));
+	const archiveGate = archiveGateRef.current;
+	useEffect(() => {
+		// If the controller unmounts mid-archive (HMR, Tauri webview
+		// reload, future route change), release any outstanding holds
+		// so the module-level counter doesn't permanently silence
+		// `requestSidebarReconcile` for the next mount.
+		return () => archiveGate.disposeAll();
+	}, [archiveGate]);
 
 	const groupsQuery = useQuery(workspaceGroupsQueryOptions());
 	const archivedQuery = useQuery(archivedWorkspacesQueryOptions());
@@ -156,22 +166,43 @@ export function useWorkspacesSidebarController({
 
 	const baseGroups = groupsQuery.data ?? [];
 	const baseArchivedSummaries = archivedQuery.data ?? [];
+	const availableRepoIds = useMemo(
+		() => (repositoriesQuery.data ?? []).map((repository) => repository.id),
+		[repositoriesQuery.data],
+	);
 	const projectedSidebar = useMemo(
 		() =>
-			projectSidebarLists({
-				baseGroups,
-				baseArchivedSummaries,
-				pendingArchives,
-				pendingCreations: new Map(
-					Array.from(pendingCreations.entries()).map(
-						([workspaceId, pendingCreation]) => [
-							workspaceId,
-							pendingCreation.entry,
-						],
+			projectVisualSidebar(
+				{
+					baseGroups,
+					baseArchivedSummaries,
+					pendingArchives,
+					pendingCreations: new Map(
+						Array.from(pendingCreations.entries()).map(
+							([workspaceId, pendingCreation]) => [
+								workspaceId,
+								pendingCreation.entry,
+							],
+						),
 					),
-				),
-			}),
-		[baseArchivedSummaries, baseGroups, pendingArchives, pendingCreations],
+				},
+				settings.sidebarGrouping,
+				{
+					availableRepoIds,
+					repoFilterIds: settings.sidebarRepoFilterIds,
+					sort: settings.sidebarSort,
+				},
+			),
+		[
+			availableRepoIds,
+			baseArchivedSummaries,
+			baseGroups,
+			pendingArchives,
+			pendingCreations,
+			settings.sidebarGrouping,
+			settings.sidebarRepoFilterIds,
+			settings.sidebarSort,
+		],
 	);
 	const groups = projectedSidebar.groups;
 	const archivedSummaries = useMemo(
@@ -262,8 +293,15 @@ export function useWorkspacesSidebarController({
 				return next;
 			});
 
+			// Release the gate this archive opened — covers both the
+			// startArchive.catch path and the listenArchiveExecutionFailed
+			// listener path. `archiveGate.end` is idempotent, so calling
+			// it here when no gate was acquired (e.g. failed event with
+			// no pending entry) is safe.
+			archiveGate.end(workspaceId);
+
 			if (!rollback) {
-				flushSidebarLists();
+				requestSidebarReconcile(queryClient);
 			}
 
 			// Always offer the permanent-delete escape hatch on archive failure —
@@ -277,7 +315,7 @@ export function useWorkspacesSidebarController({
 				fallbackMessage,
 			);
 		},
-		[flushSidebarLists, updateArchivingWorkspaceId],
+		[archiveGate, queryClient, updateArchivingWorkspaceId],
 	);
 
 	useEffect(() => {
@@ -287,6 +325,17 @@ export function useWorkspacesSidebarController({
 
 		void listenArchiveExecutionFailed((payload) => {
 			if (disposed) {
+				return;
+			}
+			// Auto-archive has no pendingArchives / gate to roll back, and the
+			// destructive "Permanently Delete" recovery toast is wrong for a
+			// failure the user didn't initiate. Surface a calm notice instead.
+			if (payload.origin === "autoAfterMerge") {
+				const { message } = extractError(
+					payload,
+					"Unable to auto-archive workspace.",
+				);
+				pushWorkspaceToast(message, "Auto-archive failed", "default");
 				return;
 			}
 			rollbackArchivedWorkspace(
@@ -306,6 +355,17 @@ export function useWorkspacesSidebarController({
 			if (disposed) {
 				return;
 			}
+			// Auto-archive bypasses the optimistic pendingArchives flow, so the
+			// regular gate.end -> reconcile path is a no-op for it. Trigger the
+			// sidebar reconcile ourselves; otherwise the row stays in its
+			// pre-archive group until something else refetches.
+			if (payload.origin === "autoAfterMerge") {
+				requestSidebarReconcile(queryClient);
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.archivedWorkspaces,
+				});
+				return;
+			}
 			setPendingArchives((current) => {
 				const existing = current.get(payload.workspaceId);
 				if (!existing || existing.stage === "confirmed") {
@@ -318,12 +378,11 @@ export function useWorkspacesSidebarController({
 				});
 				return next;
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			});
+			// `archiveGate.end` reconciles sidebar lists when the gate
+			// counter hits zero, which already invalidates workspaceGroups
+			// and archivedWorkspaces. Avoid an extra duplicate invalidation
+			// pair here — it would cause a redundant refetch.
+			archiveGate.end(payload.workspaceId);
 		}).then((cleanup) => {
 			if (disposed) {
 				cleanup();
@@ -337,7 +396,7 @@ export function useWorkspacesSidebarController({
 			unlistenFailure?.();
 			unlistenSuccess?.();
 		};
-	}, [queryClient, rollbackArchivedWorkspace]);
+	}, [archiveGate, pushWorkspaceToast, queryClient, rollbackArchivedWorkspace]);
 
 	useEffect(() => {
 		if (pendingArchives.size === 0) {
@@ -505,17 +564,14 @@ export function useWorkspacesSidebarController({
 	);
 
 	const refetchNavigation = useCallback(async () => {
-		await Promise.all([
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.repositories,
-			}),
-		]);
+		// Sidebar lists are reconciled through the gate so a concurrent
+		// archive / restore / pin can't be clobbered by this refresh.
+		// The fetchQuery calls below still pull canonical data — they're
+		// what wires the loadedGroups / loadedArchived return values.
+		requestSidebarReconcile(queryClient);
+		await queryClient.invalidateQueries({
+			queryKey: helmorQueryKeys.repositories,
+		});
 
 		const [loadedGroups, loadedArchived] = await Promise.all([
 			queryClient.fetchQuery(workspaceGroupsQueryOptions()),
@@ -538,11 +594,14 @@ export function useWorkspacesSidebarController({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				}),
 			]);
-			if (!opts?.skipSidebarFlush && !isSidebarMutationInFlight()) {
-				flushSidebarLists();
+			if (!opts?.skipSidebarFlush) {
+				// `requestSidebarReconcile` is itself gated, so callers
+				// that hold a sidebar mutation will see this turn into a
+				// no-op until the active mutation releases the gate.
+				requestSidebarReconcile(queryClient);
 			}
 		},
-		[flushSidebarLists, queryClient],
+		[queryClient],
 	);
 
 	const handleSelectWorkspace = useCallback(
@@ -630,6 +689,11 @@ export function useWorkspacesSidebarController({
 
 	const handleTogglePin = useCallback(
 		async (workspaceId: string, currentlyPinned: boolean) => {
+			// Gate sidebar flushes so concurrent mark-read / mark-unread don't
+			// refetch workspaceGroups mid-flight and clobber the optimistic
+			// pin/unpin move (the row migrates between Pinned and its status
+			// group).
+			const releaseSidebar = holdSidebarMutation(queryClient);
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) => {
 				if (!Array.isArray(current)) {
 					return current;
@@ -682,12 +746,14 @@ export function useWorkspacesSidebarController({
 				}
 				await invalidateWorkspaceSummary(workspaceId);
 			} catch (error) {
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				});
+				// Error rollback — gate is still held; releasing below
+				// reconciles, which pulls the canonical post-failure
+				// state from the server.
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to update pin state."),
 				);
+			} finally {
+				releaseSidebar();
 			}
 		},
 		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
@@ -697,14 +763,89 @@ export function useWorkspacesSidebarController({
 		async (workspaceId: string, status: WorkspaceStatus) => {
 			try {
 				await setWorkspaceStatus(workspaceId, status);
-				flushSidebarLists();
+				requestSidebarReconcile(queryClient);
 			} catch (error) {
 				pushWorkspaceToast(
 					describeUnknownError(error, "Unable to set status."),
 				);
 			}
 		},
-		[flushSidebarLists, pushWorkspaceToast],
+		[pushWorkspaceToast, queryClient],
+	);
+
+	const handleMoveRepositoryInSidebar = useCallback(
+		async (repoId: string, beforeRepoId: string | null) => {
+			// Optimistic: rewrite `repoSidebarOrder` on every row whose repo
+			// participates in the reorder, so `regroupByRepo` re-buckets in
+			// the new order immediately.
+			//
+			// On success we deliberately do NOT invalidate the sidebar query —
+			// the optimistic cache already mirrors the final state. A refetch
+			// here only swaps the array reference, which is what users see as
+			// a flicker right after dropping. The next natural refetch (focus
+			// / mount / another mutation) reconciles `repos.display_order` to
+			// the canonical sparse values; the relative order is identical.
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				(current: WorkspaceGroup[] | undefined) =>
+					applyRepoReorder(current, repoId, beforeRepoId),
+			);
+
+			try {
+				await moveRepositoryInSidebar(repoId, beforeRepoId);
+			} catch (error) {
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to reorder repository."),
+				);
+			}
+		},
+		[pushWorkspaceToast, queryClient],
+	);
+
+	const handleMoveWorkspaceInSidebar = useCallback(
+		async (
+			workspaceId: string,
+			targetGroupId: string,
+			beforeWorkspaceId: string | null,
+		) => {
+			queryClient.setQueryData(
+				helmorQueryKeys.workspaceGroups,
+				(current: WorkspaceGroup[] | undefined) =>
+					reorderWorkspaceInSidebar(
+						current,
+						workspaceId,
+						targetGroupId,
+						beforeWorkspaceId,
+					),
+			);
+
+			try {
+				await moveWorkspaceInSidebar(
+					workspaceId,
+					targetGroupId,
+					beforeWorkspaceId,
+				);
+				// Detail invalidate is fine — it only affects the inspector,
+				// not the sidebar list — but we skip the sidebar flush so the
+				// optimistic cache stays in place and the row doesn't visibly
+				// jump when the refetch returns the same relative ordering
+				// with different display_order values.
+				await invalidateWorkspaceSummary(workspaceId, {
+					skipSidebarFlush: true,
+				});
+			} catch (error) {
+				void queryClient.invalidateQueries({
+					queryKey: helmorQueryKeys.workspaceGroups,
+				});
+				pushWorkspaceToast(
+					describeUnknownError(error, "Unable to move workspace."),
+				);
+			}
+		},
+		[invalidateWorkspaceSummary, pushWorkspaceToast, queryClient],
 	);
 
 	const handleCreateWorkspaceFromRepo = useCallback(
@@ -1135,25 +1276,28 @@ export function useWorkspacesSidebarController({
 			);
 
 			if (selectedWorkspaceId === workspaceId) {
+				// Pick the neighbour so virtualizer doesn't fling to the top.
 				const optimisticGroups =
 					(queryClient.getQueryData(
 						helmorQueryKeys.workspaceGroups,
 					) as typeof groups) ?? [];
-				const optimisticArchived =
-					(queryClient.getQueryData(
-						helmorQueryKeys.archivedWorkspaces,
-					) as typeof archivedSummaries) ?? [];
-				const nextWorkspaceId =
-					findInitialWorkspaceId(optimisticGroups) ??
-					optimisticArchived[0]?.id ??
-					null;
+				const nextArchivedRows = archivedRows.filter(
+					(row) => row.id !== workspaceId,
+				);
+				const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+					currentGroups: groups,
+					currentArchivedRows: archivedRows,
+					nextGroups: optimisticGroups,
+					nextArchivedRows,
+					removedWorkspaceId: workspaceId,
+				});
 				if (nextWorkspaceId) {
 					prefetchWorkspace(nextWorkspaceId);
 				}
 				onSelectWorkspace(nextWorkspaceId);
 			}
 
-			beginSidebarMutation();
+			const releaseSidebar = holdSidebarMutation(queryClient);
 			void permanentlyDeleteWorkspace(workspaceId)
 				.catch((error) => {
 					queryClient.setQueryData(
@@ -1173,11 +1317,11 @@ export function useWorkspacesSidebarController({
 						"destructive",
 					);
 				})
-				.finally(endSidebarMutation);
+				.finally(releaseSidebar);
 		},
 		[
-			beginSidebarMutation,
-			endSidebarMutation,
+			archivedRows,
+			groups,
 			onSelectWorkspace,
 			prefetchWorkspace,
 			pushWorkspaceToast,
@@ -1330,27 +1474,43 @@ export function useWorkspacesSidebarController({
 					return next;
 				});
 
+				// Gate concurrent mark-read / mark-unread flushes so they don't
+				// clobber the optimistic move-to-archived while the backend
+				// archive worker is in flight. The gate lives until the
+				// matching `archive-execution-succeeded` / `-failed` event
+				// fires (see listener effect) or the .catch path rolls back.
+				archiveGate.begin(workspaceId);
 				queryClient.setQueryData(
 					helmorQueryKeys.workspaceGroups,
 					optimisticGroups,
 				);
 
-				const optimisticArchived = projectSidebarLists({
-					baseGroups: optimisticGroups,
-					baseArchivedSummaries,
-					pendingArchives: new Map([
-						...pendingArchives,
-						[workspaceId, pendingArchive],
-					]),
-					pendingCreations: new Map(
-						Array.from(pendingCreations.entries()).map(
-							([optimisticWorkspaceId, pendingCreation]) => [
-								optimisticWorkspaceId,
-								pendingCreation.entry,
-							],
+				// Project the post-archive snapshot through the same visual
+				// pipeline used for the live sidebar so the replacement search
+				// below compares apples to apples — without this, repo-mode
+				// flattens the "before" view by repo bucket and the "after"
+				// view by status bucket, and selection jumps to whichever
+				// workspace happens to share the removed row's flat index in
+				// the wrong layout.
+				const optimisticVisual = projectVisualSidebar(
+					{
+						baseGroups: optimisticGroups,
+						baseArchivedSummaries,
+						pendingArchives: new Map([
+							...pendingArchives,
+							[workspaceId, pendingArchive],
+						]),
+						pendingCreations: new Map(
+							Array.from(pendingCreations.entries()).map(
+								([optimisticWorkspaceId, pendingCreation]) => [
+									optimisticWorkspaceId,
+									pendingCreation.entry,
+								],
+							),
 						),
-					),
-				});
+					},
+					settings.sidebarGrouping,
+				);
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
@@ -1360,8 +1520,8 @@ export function useWorkspacesSidebarController({
 						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
 							currentGroups: groups,
 							currentArchivedRows: archivedRows,
-							nextGroups: optimisticGroups,
-							nextArchivedRows: optimisticArchived.archivedRows,
+							nextGroups: optimisticVisual.groups,
+							nextArchivedRows: optimisticVisual.archivedRows,
 							removedWorkspaceId: workspaceId,
 						});
 						if (nextWorkspaceId) {
@@ -1385,24 +1545,35 @@ export function useWorkspacesSidebarController({
 			})();
 		},
 		[
+			archivedRows,
+			archiveGate,
 			archivingWorkspaceIds,
 			baseArchivedSummaries,
 			groups,
 			onSelectWorkspace,
 			onOpenNewWorkspace,
 			pendingArchives,
+			pendingCreations,
 			prefetchWorkspace,
 			pushWorkspaceErrorToast,
 			pushWorkspaceToast,
 			queryClient,
 			rollbackArchivedWorkspace,
 			selectedWorkspaceId,
+			settings.sidebarGrouping,
 			updateArchivingWorkspaceId,
 		],
 	);
 
 	const executeRestore = useCallback(
 		(workspaceId: string, targetBranchOverride?: string) => {
+			// Acquire the gate BEFORE any cache writes / selection changes,
+			// so concurrent flushes (mark-read on selection change, git
+			// watcher refs events on worktree (re)appearance, etc.) skip
+			// instead of refetching the still-pre-restore server state and
+			// clobbering the optimistic move from archived → active.
+			const releaseSidebar = holdSidebarMutation(queryClient);
+
 			const previousGroups = queryClient.getQueryData(
 				helmorQueryKeys.workspaceGroups,
 			);
@@ -1417,7 +1588,6 @@ export function useWorkspacesSidebarController({
 				: undefined;
 
 			if (!archivedSummary) {
-				beginSidebarMutation();
 				void restoreWorkspace(workspaceId, targetBranchOverride)
 					.then((response) => {
 						prefetchWorkspace(workspaceId);
@@ -1435,7 +1605,7 @@ export function useWorkspacesSidebarController({
 							"Unable to restore workspace.",
 						);
 					})
-					.finally(endSidebarMutation);
+					.finally(releaseSidebar);
 				return;
 			}
 
@@ -1455,26 +1625,37 @@ export function useWorkspacesSidebarController({
 				archivedSummary.status,
 				archivedSummary.pinnedAt,
 			);
-			// Sorted insert by createdAt DESC so the row lands where the server
-			// will place it on refetch — avoids the reorder flicker we'd get from
-			// unconditionally prepending.
+			// Sorted insert by `display_order ASC, created_at DESC` (same key the
+			// backend uses for live groups) so the row lands where the refetch
+			// will place it — avoids the reorder flicker we'd get from a naive
+			// prepend or a createdAt-only sort. The archived summary carries
+			// `displayOrder`, which restore_workspace_impl does NOT reset.
 			queryClient.setQueryData(helmorQueryKeys.workspaceGroups, (current) =>
 				Array.isArray(current)
 					? (current as typeof groups).map((group) =>
 							group.id === targetGroupId
 								? {
 										...group,
-										rows: insertRowByCreatedAtDesc(group.rows, placeholderRow),
+										rows: insertRowBySidebarOrder(group.rows, placeholderRow),
 									}
 								: group,
 						)
 					: current,
 			);
 
-			prefetchWorkspace(workspaceId);
-			onSelectWorkspace(workspaceId);
-
-			beginSidebarMutation();
+			// Defer prefetch + selection until backend restore completes.
+			// The sidebar row already moved to its target group via the
+			// optimistic cache writes above (and shows a spinner via
+			// `restoringWorkspaceId`), so the user gets immediate visual
+			// feedback. Selecting before restore_impl finishes triggers a
+			// fan-out of queries against a still-archived workspace — git
+			// status against a missing worktree, slash-command prewarm
+			// that spawns a fresh `claude-code` subprocess (~4s),
+			// per-workspace fetch, forge HTTP, avatar lookup — and that
+			// fan-out is what freezes the webview for several seconds.
+			// Waiting until the worktree exists means every downstream
+			// query sees a real workspace and resolves in a single
+			// frame's worth of work.
 			void restoreWorkspace(workspaceId, targetBranchOverride)
 				.then(async (response) => {
 					await Promise.all([
@@ -1485,6 +1666,8 @@ export function useWorkspacesSidebarController({
 							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 						}),
 					]);
+					prefetchWorkspace(workspaceId);
+					onSelectWorkspace(workspaceId);
 					if (response.branchRename) {
 						notifyBranchRename(response.branchRename);
 					}
@@ -1506,11 +1689,9 @@ export function useWorkspacesSidebarController({
 						"Unable to restore workspace.",
 					);
 				})
-				.finally(endSidebarMutation);
+				.finally(releaseSidebar);
 		},
 		[
-			beginSidebarMutation,
-			endSidebarMutation,
 			notifyBranchRename,
 			notifyTargetBranchRestore,
 			onSelectWorkspace,
@@ -1520,6 +1701,11 @@ export function useWorkspacesSidebarController({
 			queryClient,
 		],
 	);
+
+	// Bridge for surfaces outside the controller (e.g. composer triage Dismiss).
+	useShellEvent("request-archive-workspace", (event) => {
+		handleArchiveWorkspace(event.workspaceId);
+	});
 
 	const handleRestoreWorkspace = useCallback(
 		(workspaceId: string) => {
@@ -1567,6 +1753,10 @@ export function useWorkspacesSidebarController({
 		creatingWorkspaceRepoId,
 		cloneDefaultDirectory,
 		groups,
+		sidebarGrouping: settings.sidebarGrouping,
+		sidebarRepoFilterIds: settings.sidebarRepoFilterIds,
+		sidebarSort: settings.sidebarSort,
+		updateSettings,
 		handleAddRepository,
 		handleArchiveWorkspace,
 		handleCloneFromUrl,
@@ -1576,73 +1766,12 @@ export function useWorkspacesSidebarController({
 		handleOpenCloneDialog,
 		handleRestoreWorkspace,
 		handleSelectWorkspace,
+		handleMoveWorkspaceInSidebar,
+		handleMoveRepositoryInSidebar,
 		handleSetWorkspaceStatus,
 		handleTogglePin,
 		isCloneDialogOpen,
 		prefetchWorkspace,
 		setIsCloneDialogOpen,
-	};
-}
-
-function createPreparedWorkspaceRow(
-	repository: RepositoryCreateOption,
-	prepared: {
-		workspaceId: string;
-		initialSessionId: string;
-		directoryName: string;
-		branch: string;
-		state: WorkspaceState;
-	},
-): WorkspaceRow {
-	return {
-		id: prepared.workspaceId,
-		// Prepare returns the final directory and branch, so the row is
-		// already in its terminal shape — no placeholder → real swap.
-		title: `${repository.name} workspace`,
-		directoryName: prepared.directoryName,
-		repoName: repository.name,
-		repoIconSrc: repository.repoIconSrc ?? null,
-		repoInitials: repository.repoInitials ?? null,
-		state: prepared.state,
-		hasUnread: false,
-		workspaceUnread: 0,
-		unreadSessionCount: 0,
-		status: "in-progress",
-		branch: prepared.branch,
-		activeSessionId: prepared.initialSessionId,
-		activeSessionTitle: "Untitled",
-		activeSessionAgentType: null,
-		activeSessionStatus: "idle",
-		prTitle: null,
-		pinnedAt: null,
-		sessionCount: 1,
-		messageCount: 0,
-		createdAt: new Date().toISOString(),
-	};
-}
-
-function createOptimisticWorkspaceSession(
-	workspaceId: string,
-	sessionId: string,
-	createdAt: string,
-): WorkspaceSessionSummary {
-	return {
-		id: sessionId,
-		workspaceId,
-		title: "Untitled",
-		agentType: null,
-		status: "idle",
-		model: null,
-		permissionMode: "default",
-		providerSessionId: null,
-		effortLevel: null,
-		unreadCount: 0,
-		fastMode: false,
-		createdAt,
-		updatedAt: createdAt,
-		lastUserMessageAt: null,
-		isHidden: false,
-		actionKind: null,
-		active: true,
 	};
 }

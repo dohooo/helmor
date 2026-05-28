@@ -17,6 +17,7 @@ import {
 	chmodSync,
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -55,9 +56,9 @@ const GLAB_SHA256 = {
 // must match THAT version — bump them together (or staging cross-arch will
 // abort with a clear error).
 const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
-	"0.128.0": {
-		arm64: "25499d957ae18d317cd13012750e681a60a1d7ce45f577c6f07e53d374199d9b",
-		x64: "1f4ffa3c70c243c2993dedb67635f6a98c13d3f2b86a5caa445ef762532fc21f",
+	"0.130.0": {
+		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
+		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
 	},
 };
 
@@ -67,10 +68,26 @@ const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
 const CLAUDE_CODE_SHA256: Readonly<
 	Record<string, { arm64: string; x64: string }>
 > = {
-	"2.1.126": {
-		arm64: "8ef17e23ed2987a3fdd39beae7750acef7b45026c9b7a9384d98a8808c4ba5f8",
-		x64: "0aa89a9bfc0b3667bc652c21df2e8cb09a26b32f8c4faf11b94d2128b96acffc",
+	"2.1.139": {
+		arm64: "ed9a4c64c8b5374da8389ff6aa4b58fce7a792f90ef2261a14445d9082a80799",
+		x64: "71d18ce1d457f37b427bdcb5933424c83bf22b39b2b7628415028585b832fe6c",
 	},
+};
+
+// llama.cpp bundled binary. Drives `local_llm::Manager` (the
+// auto-rename / local-LLM stack). Versions are `b<N>` build tags from
+// github.com/ggml-org/llama.cpp/releases. Bumping the version: replace
+// LLAMA_VERSION and the matching arm64/x64 sha256 (computed below from
+// the upstream zip on first run; see DEV-fallback notes in
+// `downloadAndVerifyLlama`). Wipe sidecar/.bundle-cache when bumping
+// so the new archive isn't blocked by a wrong-sha cached copy.
+const LLAMA_VERSION = "b9294";
+// Leave entries blank to skip strict verification during local dev —
+// stage-vendor will warn + trust HTTPS, print the computed sha, and
+// proceed. Fill these in (and commit) to lock the build in CI.
+const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
+	arm64: "8cb59947211ac84f84a3afe6db83e6b8167ef24e70ca3dde199df48ff6591e44",
+	x64: "72ba8001fe1ec75ff6d5fd0fe5be244f25d4c560c2501abbcfcbbfbac6b2d1c1",
 };
 
 // ---------------------------------------------------------------------------
@@ -508,6 +525,157 @@ function stageCodexBinary(target: TargetInfo): void {
 }
 
 // ---------------------------------------------------------------------------
+// llama.cpp — download official macOS binary release for the target arch.
+// Different from gh/glab: ships as a fat zip containing llama-server +
+// llama-cli + a pile of shared libs (libllama, libggml-*, libmtmd, ...).
+// We stage the whole bin/ directory as a unit so the dylib RPATHs that
+// upstream baked in (`@loader_path/.`) keep resolving.
+// ---------------------------------------------------------------------------
+
+/// Soft-verifying download: if `LLAMA_SHA256` for this arch is filled
+/// in we treat mismatches as fatal (release-build hardening); when it's
+/// empty we print the computed digest and trust HTTPS so dev runs
+/// aren't blocked by a missing pinned hash.
+function downloadAndVerifyLlama(
+	url: string,
+	dest: string,
+	expectedSha256: string,
+): void {
+	if (existsSync(dest)) {
+		const actual = sha256OfFile(dest);
+		if (!expectedSha256 || actual === expectedSha256) return;
+		console.warn(
+			`[stage-vendor] cached ${dest} has wrong sha256 (got ${actual}); re-downloading`,
+		);
+		rmSync(dest, { force: true });
+	}
+	console.log(`[stage-vendor] downloading ${url}`);
+	mkdirSync(dirname(dest), { recursive: true });
+	execFileSync("curl", ["-fL", "--retry", "3", "-o", dest, url], {
+		stdio: "inherit",
+	});
+	const actual = sha256OfFile(dest);
+	if (!expectedSha256) {
+		console.warn(
+			`[stage-vendor] LLAMA_SHA256 is blank for this arch — got ${actual}. ` +
+				"Fill it in to lock the version for CI / release builds.",
+		);
+		return;
+	}
+	if (actual !== expectedSha256) {
+		rmSync(dest, { force: true });
+		throw new Error(
+			`[stage-vendor] sha256 mismatch for ${url}\n  expected: ${expectedSha256}\n  actual:   ${actual}`,
+		);
+	}
+}
+
+function stageLlamaCppBinaries(target: TargetInfo): string {
+	ensureCacheDir();
+	const archSlug = target.arch === "arm64" ? "macos-arm64" : "macos-x64";
+	const slug = `llama-${LLAMA_VERSION}-bin-${archSlug}`;
+	// Upstream ships macOS builds as `.tar.gz` (not `.zip` like the
+	// Windows artefacts) — extension matters for both the cache file
+	// name and the extract command below.
+	const archive = join(BUNDLE_CACHE, `${slug}.tar.gz`);
+	const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_VERSION}/${slug}.tar.gz`;
+	downloadAndVerifyLlama(url, archive, LLAMA_SHA256[target.arch]);
+
+	const extractDir = join(BUNDLE_CACHE, slug);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	// The archive nests everything under a single `llama-<ver>/` folder
+	// (binaries + dylibs side-by-side, no `bin/`). Earlier upstream
+	// shapes used `bin/` or `build/bin/` — probe both so future bumps
+	// keep working without script changes.
+	const candidates: string[] = [
+		...readdirSync(extractDir).flatMap((entry) => [
+			join(extractDir, entry),
+			join(extractDir, entry, "bin"),
+			join(extractDir, entry, "build", "bin"),
+		]),
+		join(extractDir, "bin"),
+		join(extractDir, "build", "bin"),
+	];
+	const binDir = candidates.find(
+		(p) => existsSync(p) && existsSync(join(p, "llama-server")),
+	);
+	if (!binDir) {
+		throw new Error(
+			`[stage-vendor] llama-server missing under ${extractDir} — checked ${candidates.join(", ")}`,
+		);
+	}
+
+	const dest = join(DIST_VENDOR, "llama-cpp");
+	freshExtractDir(dest);
+	// `cpSync` with `dereference: false` preserves the dylib version
+	// symlinks (libggml.dylib → libggml.0.dylib → libggml.0.11.0.dylib).
+	// Following them would balloon the bundle ~3× and break the
+	// upstream RPATH layout.
+	cpSync(binDir, dest, { recursive: true, dereference: false });
+
+	// Upstream tarball is the full llama.cpp toolbox — 25 CLIs + rpc-server
+	// + their per-tool `*-impl.dylib`s. We only call `llama-server` at
+	// runtime, so prune everything else: smaller bundle and ~10 Mach-O
+	// files to sign/notarize instead of ~40.
+	//
+	// The keep-list is intentionally hard-coded against LLAMA_VERSION:
+	// if a future bump introduces a new runtime dylib (e.g. a new ggml
+	// backend), dev launch of `llama-server` will fail immediately with
+	// `dyld: Library not loaded`, which is the cleanest signal to update
+	// this list. Closure was confirmed via `otool -L` on llama-server +
+	// every first-level dep.
+	const keepFiles = new Set(["llama-server", "LICENSE"]);
+	const keepDylibStems = new Set([
+		"libllama",
+		"libllama-common",
+		"libllama-server-impl",
+		"libmtmd",
+		"libggml",
+		"libggml-base",
+		"libggml-blas",
+		"libggml-cpu",
+		"libggml-metal",
+		"libggml-rpc",
+	]);
+	// Matches `libfoo.dylib`, `libfoo.0.dylib`, `libfoo.0.12.0.dylib`.
+	const dylibRe = /^(lib[a-zA-Z0-9-]+?)(?:\.[\d.]+)?\.dylib$/;
+	for (const entry of readdirSync(dest)) {
+		if (keepFiles.has(entry)) continue;
+		const m = entry.match(dylibRe);
+		if (m && keepDylibStems.has(m[1]!)) continue;
+		rmSync(join(dest, entry), { force: true, recursive: true });
+	}
+
+	// Re-assert exec bit on llama-server — tarball preserves modes
+	// already, but cpSync between filesystems sometimes flips them and
+	// an un-executable `llama-server` would just fail to spawn with a
+	// confusing EACCES.
+	chmodSync(join(dest, "llama-server"), 0o755);
+
+	// Sign every Mach-O file. Notarization rejects the bundle if ANY
+	// binary inside Resources/ is unsigned, lacks a secure timestamp,
+	// or (for executables) doesn't have hardened runtime. `llama-server`
+	// needs `allow-jit` / `allow-unsigned-executable-memory` because
+	// Metal compute does runtime codegen on Apple Silicon. Dylibs are
+	// signed without entitlements (codesign ignores them on libraries).
+	// `lstatSync` skips the dylib version symlinks (libfoo.dylib →
+	// libfoo.0.dylib → libfoo.0.12.0.dylib) — signing the real file
+	// covers all three names.
+	for (const entry of readdirSync(dest)) {
+		if (entry === "LICENSE") continue;
+		const path = join(dest, entry);
+		const stat = lstatSync(path);
+		if (!stat.isFile()) continue;
+		maybeSignMacBinary(path, !entry.endsWith(".dylib"));
+	}
+	return dest;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -531,9 +699,13 @@ stageCodexBinary(target);
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
 
+// ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
+stageLlamaCppBinaries(target);
+
 // ----- Summary -----
 console.log(`[stage-vendor] ✓ staged → ${DIST_VENDOR}`);
 console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
+console.log(`  llama-cpp   ${humanSize(join(DIST_VENDOR, "llama-cpp"))}`);

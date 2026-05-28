@@ -57,6 +57,7 @@ describe("useSetupAutoRun", () => {
 			"setup",
 			expect.any(Function),
 			"ws-1",
+			null,
 		);
 	});
 

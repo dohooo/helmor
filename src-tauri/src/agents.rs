@@ -17,6 +17,7 @@ mod queries;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;
+pub(crate) mod system_prompt;
 
 pub use self::action_kind::ActionKind;
 pub use self::catalog::{resolve_model, AgentModelOption, AgentModelSection, ResolvedModel};
@@ -61,12 +62,24 @@ pub async fn prewarm_slash_commands_for_workspace(
     Ok(())
 }
 
+/// Tauri command — called from the start page on repo switch. There's no
+/// workspace yet, so we prewarm using the repo's local `root_path`.
+#[tauri::command]
+pub async fn prewarm_slash_commands_for_repo(app: AppHandle, repo_id: String) -> CmdResult<()> {
+    queries::prewarm_slash_command_cache_for_repo(&app, &repo_id);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Streaming event types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AgentStreamEvent {
     /// Full snapshot — sent on finalization events (assistant, user, result).
     /// The frontend replaces its entire message array.
@@ -100,11 +113,8 @@ pub enum AgentStreamEvent {
         reason: String,
     },
     PermissionRequest {
-        #[serde(rename = "permissionId")]
         permission_id: String,
-        #[serde(rename = "toolName")]
         tool_name: String,
-        #[serde(rename = "toolInput")]
         tool_input: Value,
         title: Option<String>,
         description: Option<String>,
@@ -127,7 +137,6 @@ pub enum AgentStreamEvent {
         session_id: Option<String>,
         working_directory: String,
         permission_mode: Option<String>,
-        #[serde(rename = "userInputId")]
         user_input_id: String,
         source: String,
         message: String,
@@ -210,13 +219,36 @@ pub async fn list_cursor_models(
 pub async fn send_agent_message_stream(
     app: AppHandle,
     sidecar: tauri::State<'_, crate::sidecar::ManagedSidecar>,
-    request: AgentSendRequest,
+    mut request: AgentSendRequest,
     on_event: Channel<AgentStreamEvent>,
 ) -> CmdResult<()> {
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err(anyhow::anyhow!("Prompt cannot be empty.").into());
     }
+
+    // Inject triage priming as a hidden prefix; consumed flag flips only after sidecar accepts.
+    let priming_session_to_consume: Option<String> = match request.helmor_session_id.as_deref() {
+        Some(session_id) => match crate::triage::load_priming_prefix_for_session(session_id) {
+            Ok(Some(priming_prefix)) => {
+                request.prompt_prefix = crate::triage::combine_prefixes(
+                    Some(priming_prefix),
+                    request.prompt_prefix.take(),
+                );
+                Some(session_id.to_string())
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    session_id,
+                    "triage: load_priming_prefix_for_session failed"
+                );
+                None
+            }
+        },
+        None => None,
+    };
 
     let model = resolve_model(&request.model_id, Some(request.provider.as_str()));
 
@@ -233,7 +265,7 @@ pub async fn send_agent_message_stream(
     let stream_id = Uuid::new_v4().to_string();
     let active_streams = app.state::<ActiveStreams>();
 
-    stream_via_sidecar(
+    let send_result = stream_via_sidecar(
         app.clone(),
         on_event,
         &sidecar,
@@ -243,7 +275,32 @@ pub async fn send_agent_message_stream(
         &prompt,
         &request,
         &working_directory,
-    )
+    );
+
+    // Mark consumed only after the prompt actually streamed; retries should keep the priming.
+    if send_result.is_ok() {
+        if let Some(session_id) = priming_session_to_consume {
+            match crate::triage::mark_consumed_for_session(&session_id) {
+                Ok(true) => {
+                    // Publish so the sidebar repaints the kind flip immediately.
+                    crate::ui_sync::publish(
+                        &app,
+                        crate::ui_sync::UiMutationEvent::WorkspaceListChanged,
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        session_id,
+                        "triage: failed to mark priming consumed; injection will recur"
+                    );
+                }
+            }
+        }
+    }
+
+    send_result
 }
 
 fn resolve_stream_working_directory(
@@ -463,6 +520,9 @@ pub struct UserInputResponseRequest {
     /// elicitation accept/decline/cancel, Codex answer payload).
     pub action: String,
     pub content: Option<Value>,
+    /// Provider-specific meta (e.g. Codex `{ persist: "session" }`). Opaque.
+    #[serde(default)]
+    pub meta: Option<Value>,
 }
 
 #[tauri::command]
@@ -482,6 +542,7 @@ pub async fn respond_to_user_input(
             "userInputId": request.user_input_id,
             "action": request.action,
             "content": request.content,
+            "meta": request.meta,
         }),
     };
     sidecar
@@ -696,8 +757,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO workspaces (id, repository_id, directory_name, state) VALUES ('w1', 'r1', 'test', 'ready')",
-            [],
+            "INSERT INTO workspaces (id, repository_id, directory_name, state, display_order) VALUES ('w1', 'r1', 'test', 'ready', ?1)",
+            [crate::workspace::sidebar_order::ORDER_STEP],
         ).unwrap();
         drop(conn);
         crate::models::db::init_pools().expect("failed to init test DB pools");

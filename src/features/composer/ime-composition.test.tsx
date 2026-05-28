@@ -139,10 +139,10 @@ describe("WorkspaceComposer — CJK IME composition", () => {
 
 		// Realistic IME flow: user types pinyin "nihao" with a Chinese IME,
 		// the IME shows candidates, then the user presses Enter to confirm
-		// the highlighted candidate "你好". In Chrome the browser fires:
+		// the highlighted CJK candidate. In Chrome the browser fires:
 		//   1. compositionstart            (IME begins)
 		//   2. compositionupdate("nihao")  (pinyin buffer updates)
-		//   3. compositionend("你好")      (clears editor.isComposing())
+		//   3. compositionend(<CJK>)       (clears editor.isComposing())
 		//   4. keydown Enter, isComposing=true, keyCode=229
 		//
 		// Step 4 is the one that triggers the bug: Lexical no longer thinks
@@ -213,10 +213,10 @@ describe("WorkspaceComposer — CJK IME composition", () => {
 
 		const editor = screen.getByLabelText("Workspace input");
 
-		// User types pinyin "nihao" with the IME and confirms the candidate
-		// "你好" via mouse-click (NOT Enter), so the composition cycle ends
-		// cleanly with no Enter keydown attached. This is the realistic state
-		// we land in right before the user presses Enter to actually send.
+		// User types pinyin "nihao" with the IME and confirms the CJK candidate
+		// via mouse-click (NOT Enter), so the composition cycle ends cleanly
+		// with no Enter keydown attached. This is the realistic state we land
+		// in right before the user presses Enter to actually send.
 		fireEvent.compositionStart(editor, { data: "" });
 		fireEvent.compositionUpdate(editor, { data: "nihao" });
 		fireEvent.compositionEnd(editor, { data: "你好" });

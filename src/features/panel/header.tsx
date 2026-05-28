@@ -10,6 +10,7 @@ import {
 	History,
 	Laptop,
 	Layers,
+	MessageCircle,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -44,24 +45,16 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { clearPersistedDraft } from "@/features/composer/draft-storage";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type AgentProvider,
 	type ChangeRequestInfo,
-	createSession,
-	deleteSession,
 	listRemoteBranches,
-	loadHiddenSessions,
 	prefetchRemoteRefs,
-	renameSession,
-	renameWorkspaceBranch,
-	unhideSession,
 	updateIntendedTargetBranch,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
-import { extractError } from "@/lib/errors";
 import { initialsFor } from "@/lib/initials";
 import {
 	helmorQueryKeys,
@@ -75,9 +68,9 @@ import {
 	type WorkspaceBranchTone,
 } from "@/lib/workspace-helpers";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
-import { normalizeBranchRenameInput } from "./branch-rename";
-import { seedNewSessionInCache } from "./session-cache";
-import { closeWorkspaceSession } from "./session-close";
+import { useBranchRename } from "./header/use-branch-rename";
+import { useHiddenHistory } from "./header/use-hidden-history";
+import { useSessionActions } from "./header/use-session-actions";
 import { isSessionRunningStatus } from "./session-running";
 import type { SessionCloseRequest } from "./use-confirm-session-close";
 
@@ -139,10 +132,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	const tabsValue = contextPreviewActive
 		? contextTabValue
 		: (selectedSessionId ?? sessions[0]?.id);
-	const [showHistory, setShowHistory] = useState(false);
-	const [hiddenSessions, setHiddenSessions] = useState<
-		WorkspaceSessionSummary[]
-	>([]);
 	const pushToast = useWorkspaceToast();
 	const queryClient = useQueryClient();
 	const branchesQuery = useQuery({
@@ -165,18 +154,40 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	// Mirror the inspector's Connect-CTA condition: when the workspace is
 	// in `unauthenticated` state, the bound `forgeLogin` no longer has
 	// access (token revoked / removed account / etc.). Suppress the
-	// avatar in that case so it doesn't masquerade as another account
-	// while the right-side panel is asking the user to reconnect.
+	// avatar so it doesn't masquerade as another account while the
+	// right-side panel asks the user to reconnect.
 	const forgeStatusQuery = useQuery({
 		...workspaceForgeActionStatusQueryOptions(workspace?.id ?? ""),
 		enabled: !!workspace?.id,
 	});
 	const forgeNeedsConnect =
 		forgeStatusQuery.data?.remoteState === "unauthenticated";
-	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-	const [editingTitle, setEditingTitle] = useState("");
-	const [editingBranch, setEditingBranch] = useState<string | null>(null);
-	const [branchCopied, setBranchCopied] = useState(false);
+
+	const branchRename = useBranchRename({
+		workspace,
+		queryClient,
+		pushToast,
+		onWorkspaceChanged,
+	});
+	const hiddenHistory = useHiddenHistory({
+		workspace,
+		onSelectSession,
+		onSessionsChanged,
+	});
+	const sessionActions = useSessionActions({
+		workspace,
+		sessions,
+		selectedSessionId,
+		sessionDisplayProviders,
+		queryClient,
+		pushToast,
+		onSelectSession,
+		onSessionsChanged,
+		onSessionRenamed,
+		onRequestCloseSession,
+		onAfterDelete: hiddenHistory.pruneFromHistory,
+	});
+
 	const tabsScrollRef = useRef<HTMLDivElement>(null);
 	const [hasRightOverflow, setHasRightOverflow] = useState(false);
 
@@ -195,194 +206,6 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		return () => ro.disconnect();
 	}, [updateOverflow, sessions.length]);
 
-	const handleStartBranchRename = useCallback(() => {
-		if (!workspace?.branch) {
-			return;
-		}
-		setEditingBranch(workspace.branch);
-	}, [workspace?.branch]);
-
-	const handleCommitBranchRename = useCallback(async () => {
-		if (editingBranch === null || !workspace) {
-			return;
-		}
-		const normalized = normalizeBranchRenameInput(editingBranch);
-		if (normalized && normalized !== workspace.branch) {
-			const detailKey = helmorQueryKeys.workspaceDetail(workspace.id);
-			const previous = queryClient.getQueryData<WorkspaceDetail | null>(
-				detailKey,
-			);
-			if (previous) {
-				queryClient.setQueryData<WorkspaceDetail | null>(detailKey, {
-					...previous,
-					branch: normalized,
-				});
-			}
-			try {
-				await renameWorkspaceBranch(workspace.id, normalized);
-				onWorkspaceChanged?.();
-			} catch (error: unknown) {
-				if (previous) {
-					queryClient.setQueryData<WorkspaceDetail | null>(detailKey, previous);
-				}
-				const { message } = extractError(error, "Unable to rename branch.");
-				pushToast(message, "Branch rename failed", "destructive");
-			}
-		}
-		setEditingBranch(null);
-	}, [editingBranch, onWorkspaceChanged, pushToast, queryClient, workspace]);
-
-	const handleCancelBranchRename = useCallback(() => {
-		setEditingBranch(null);
-	}, []);
-
-	const handleCreateSession = useCallback(async () => {
-		if (!workspace) {
-			return;
-		}
-		try {
-			const result = await createSession(workspace.id);
-			seedNewSessionInCache({
-				queryClient,
-				workspaceId: workspace.id,
-				sessionId: result.sessionId,
-				workspace,
-				existingSessions: sessions,
-				createdAt: new Date().toISOString(),
-			});
-
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.repoScripts(workspace.repoId, workspace.id),
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(result.sessionId);
-		} catch (error) {
-			console.error("Failed to create session:", error);
-		}
-	}, [onSelectSession, onSessionsChanged, queryClient, sessions, workspace]);
-
-	const handleHideSession = useCallback(
-		async (sessionId: string, event: React.MouseEvent) => {
-			event.stopPropagation();
-			if (!workspace) {
-				return;
-			}
-			const targetSession =
-				sessions.find((session) => session.id === sessionId) ?? null;
-			if (!targetSession) {
-				return;
-			}
-
-			// When the caller provided a shared confirm-close hook
-			// (`onRequestCloseSession`), delegate — it handles the running-
-			// session confirmation dialog itself. Otherwise fall back to an
-			// unconditional close.
-			if (onRequestCloseSession) {
-				onRequestCloseSession({
-					workspace,
-					sessions,
-					session: targetSession,
-					activateAdjacent: targetSession.id === selectedSessionId,
-					provider: sessionDisplayProviders?.[targetSession.id] ?? null,
-					onSessionsChanged,
-				});
-				return;
-			}
-
-			await closeWorkspaceSession({
-				queryClient,
-				workspace,
-				sessions,
-				sessionId,
-				activateAdjacent: sessionId === selectedSessionId,
-				onSelectSession,
-				onSessionsChanged,
-				pushToast,
-			});
-		},
-		[
-			onRequestCloseSession,
-			onSelectSession,
-			onSessionsChanged,
-			pushToast,
-			queryClient,
-			selectedSessionId,
-			sessionDisplayProviders,
-			sessions,
-			workspace,
-		],
-	);
-
-	const handleToggleHistory = useCallback(
-		async (open: boolean) => {
-			if (open && workspace) {
-				const hidden = await loadHiddenSessions(workspace.id);
-				setHiddenSessions(hidden);
-			}
-			setShowHistory(open);
-		},
-		[workspace],
-	);
-
-	const handleUnhide = useCallback(
-		async (sessionId: string) => {
-			await unhideSession(sessionId);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-			onSelectSession?.(sessionId);
-		},
-		[onSelectSession, onSessionsChanged],
-	);
-
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			await deleteSession(sessionId);
-			clearPersistedDraft(`session:${sessionId}`);
-			setHiddenSessions((current) => {
-				const next = current.filter((session) => session.id !== sessionId);
-				if (next.length === 0) {
-					setShowHistory(false);
-				}
-				return next;
-			});
-			onSessionsChanged?.();
-		},
-		[onSessionsChanged],
-	);
-
-	const handleStartRename = useCallback(
-		(session: WorkspaceSessionSummary, event: React.MouseEvent) => {
-			event.stopPropagation();
-			setEditingSessionId(session.id);
-			setEditingTitle(displaySessionTitle(session));
-		},
-		[],
-	);
-
-	const handleCommitRename = useCallback(async () => {
-		if (!editingSessionId) {
-			return;
-		}
-		const trimmed = editingTitle.trim();
-		if (trimmed) {
-			await renameSession(editingSessionId, trimmed);
-			onSessionRenamed?.(editingSessionId, trimmed);
-		}
-		setEditingSessionId(null);
-		setEditingTitle("");
-	}, [editingSessionId, editingTitle, onSessionRenamed]);
-
-	const handleCancelRename = useCallback(() => {
-		setEditingSessionId(null);
-		setEditingTitle("");
-	}, []);
-
 	const stopTabActionPointerDown = useCallback((event: React.PointerEvent) => {
 		event.preventDefault();
 		event.stopPropagation();
@@ -397,226 +220,241 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 			>
 				<div
 					data-tauri-drag-region
-					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[12.5px]"
+					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-small"
 				>
 					{headerLeading}
-					<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
-						{(() => {
-							// Avatar always wins when we have a URL AND the
-							// workspace's bound account is still valid (mirrors the
-							// right-side Connect CTA). Otherwise fall back to a
-							// mode-appropriate glyph: Laptop for local, GitBranch
-							// for worktree.
-							const FallbackIcon =
-								workspace?.mode === "local" ? Laptop : GitBranch;
-							const showAvatar =
-								accountProfile?.avatarUrl && !forgeNeedsConnect;
-							const hoverInfo = showAvatar
-								? accountInfoFromForgeAccount(accountProfile)
-								: null;
-							if (!showAvatar || !hoverInfo) {
-								return (
-									<FallbackIcon
-										className={cn(
-											"size-3.5 shrink-0",
-											getBranchToneClassName(branchTone),
-										)}
-										strokeWidth={1.9}
-									/>
-								);
-							}
-							return (
-								<HoverCard openDelay={120} closeDelay={80}>
-									<HoverCardTrigger asChild>
-										<span className="inline-flex">
-											<CachedAvatar
-												className="size-4 shrink-0 cursor-default"
-												src={accountProfile?.avatarUrl}
-												alt={accountLogin ?? ""}
-												fallback={initialsFor(accountDisplayName)}
-												fallbackClassName="bg-muted text-[8px] font-semibold uppercase text-muted-foreground"
-											/>
-										</span>
-									</HoverCardTrigger>
-									<HoverCardContent
-										side="bottom"
-										align="start"
-										sideOffset={8}
-										className="w-auto max-w-[260px] p-3"
-									>
-										<AccountHoverCardContent account={hoverInfo} />
-									</HoverCardContent>
-								</HoverCard>
-							);
-						})()}
-						{editingBranch !== null ? (
-							<Input
-								autoFocus
-								value={editingBranch}
-								onChange={(event) => setEditingBranch(event.target.value)}
-								onKeyDown={(event) => {
-									if (event.key === "Enter") {
-										event.preventDefault();
-										void handleCommitBranchRename();
-									} else if (event.key === "Escape") {
-										handleCancelBranchRename();
-									}
-								}}
-								onBlur={() => void handleCommitBranchRename()}
-								onClick={(event) => event.stopPropagation()}
-								className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-[12.5px] font-medium text-foreground"
+					{workspace?.mode === "chat" ? (
+						<span className="inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+							<MessageCircle
+								className="size-3.5 shrink-0 text-muted-foreground"
+								strokeWidth={1.9}
 							/>
-						) : (
-							<>
-								<HyperText
-									key={workspace?.id}
-									text={workspace?.branch ?? "No branch"}
-									className="truncate"
-								/>
-								{workspace?.branch && workspace.state !== "archived" ? (
-									<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
-										<span
-											role="button"
-											aria-label="Rename branch"
-											onClick={handleStartBranchRename}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-										>
-											<Pencil className="size-3" strokeWidth={2} />
+							{/* `workspace.title` is computed server-side by
+							 *  `helpers::display_title`, the same source the
+							 *  sidebar row + hover card use. Keeps the three
+							 *  surfaces visually in sync without rebuilding
+							 *  the precedence rules in TS. */}
+							<span className="min-w-0 truncate">{workspace.title}</span>
+						</span>
+					) : (
+						<>
+							<span className="group/branch relative inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">
+								{(() => {
+									// Avatar always wins when we have a URL AND the
+									// workspace's bound account is still valid (mirrors the
+									// right-side Connect CTA). Otherwise fall back to a
+									// mode-appropriate glyph: Laptop for local, GitBranch
+									// for worktree.
+									const FallbackIcon =
+										workspace?.mode === "local" ? Laptop : GitBranch;
+									const showAvatar =
+										accountProfile?.avatarUrl && !forgeNeedsConnect;
+									const hoverInfo = showAvatar
+										? accountInfoFromForgeAccount(accountProfile)
+										: null;
+									if (!showAvatar || !hoverInfo) {
+										return (
+											<FallbackIcon
+												className={cn(
+													"size-3.5 shrink-0",
+													getBranchToneClassName(branchTone),
+												)}
+												strokeWidth={1.9}
+											/>
+										);
+									}
+									return (
+										<HoverCard openDelay={120} closeDelay={80}>
+											<HoverCardTrigger asChild>
+												<span className="inline-flex">
+													<CachedAvatar
+														className="size-4 shrink-0 cursor-default"
+														src={accountProfile?.avatarUrl}
+														alt={accountLogin ?? ""}
+														fallback={initialsFor(accountDisplayName)}
+														fallbackClassName="bg-muted text-nano font-semibold uppercase text-muted-foreground"
+													/>
+												</span>
+											</HoverCardTrigger>
+											<HoverCardContent
+												side="bottom"
+												align="start"
+												sideOffset={8}
+												className="w-auto max-w-[260px] p-3"
+											>
+												<AccountHoverCardContent account={hoverInfo} />
+											</HoverCardContent>
+										</HoverCard>
+									);
+								})()}
+								{branchRename.editingBranch !== null ? (
+									<Input
+										autoFocus
+										value={branchRename.editingBranch}
+										onChange={(event) =>
+											branchRename.setEditingBranch(event.target.value)
+										}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") {
+												event.preventDefault();
+												void branchRename.commitBranchRename();
+											} else if (event.key === "Escape") {
+												branchRename.cancelBranchRename();
+											}
+										}}
+										onBlur={() => void branchRename.commitBranchRename()}
+										onClick={(event) => event.stopPropagation()}
+										className="h-5 w-32 truncate rounded-md border-border bg-background px-1.5 py-0 text-small font-medium text-foreground"
+									/>
+								) : (
+									<>
+										<HyperText
+											key={workspace?.id}
+											text={workspace?.branch ?? "No branch"}
+											className="truncate"
+										/>
+										{workspace?.branch && workspace.state !== "archived" ? (
+											<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 bg-[linear-gradient(to_right,transparent_0%,var(--background)_35%,var(--background)_100%)] pl-5 pr-1 group-hover/branch:pointer-events-auto group-hover/branch:visible">
+												<span
+													role="button"
+													aria-label="Rename branch"
+													onClick={branchRename.startBranchRename}
+													className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+												>
+													<Pencil className="size-3" strokeWidth={2} />
+												</span>
+												<span
+													role="button"
+													aria-label="Copy branch name"
+													onClick={branchRename.copyBranchName}
+													className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+												>
+													{branchRename.branchCopied ? (
+														<Check
+															className="size-3 text-green-400"
+															strokeWidth={2}
+														/>
+													) : (
+														<Copy className="size-3" strokeWidth={2} />
+													)}
+												</span>
+											</span>
+										) : null}
+									</>
+								)}
+							</span>
+							{workspace?.intendedTargetBranch ? (
+								<>
+									<ArrowRight
+										className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
+										strokeWidth={1.8}
+									/>
+									{workspace.state === "archived" ? (
+										<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
+											{workspace.remote ?? "origin"}/
+											{workspace.intendedTargetBranch}
 										</span>
-										<span
-											role="button"
-											aria-label="Copy branch name"
-											onClick={() => {
-												if (!workspace.branch) {
+									) : (
+										<BranchPicker
+											currentBranch={workspace.intendedTargetBranch ?? ""}
+											displayRemote={workspace.remote ?? "origin"}
+											branches={remoteBranches}
+											loading={loadingBranches}
+											onOpen={() => {
+												void branchesQuery.refetch();
+												void prefetchRemoteRefs({ workspaceId: workspace.id })
+													.then((result) => {
+														if (result.fetched) {
+															void branchesQuery.refetch();
+														}
+													})
+													.catch(() => {});
+											}}
+											onSelect={(branch: string) => {
+												if (branch === workspace.intendedTargetBranch) {
 													return;
 												}
-												void navigator.clipboard.writeText(workspace.branch);
-												setBranchCopied(true);
-												setTimeout(() => setBranchCopied(false), 1500);
-											}}
-											className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-										>
-											{branchCopied ? (
-												<Check
-													className="size-3 text-green-400"
-													strokeWidth={2}
-												/>
-											) : (
-												<Copy className="size-3" strokeWidth={2} />
-											)}
-										</span>
-									</span>
-								) : null}
-							</>
-						)}
-					</span>
-					{workspace?.intendedTargetBranch ? (
-						<>
-							<ArrowRight
-								className="relative top-px size-3 shrink-0 self-center text-muted-foreground"
-								strokeWidth={1.8}
-							/>
-							{workspace.state === "archived" ? (
-								<span className="min-w-0 truncate px-1 py-0.5 font-medium text-muted-foreground">
-									{workspace.remote ?? "origin"}/
-									{workspace.intendedTargetBranch}
-								</span>
-							) : (
-								<BranchPicker
-									currentBranch={workspace.intendedTargetBranch ?? ""}
-									displayRemote={workspace.remote ?? "origin"}
-									branches={remoteBranches}
-									loading={loadingBranches}
-									onOpen={() => {
-										void branchesQuery.refetch();
-										void prefetchRemoteRefs({ workspaceId: workspace.id })
-											.then((result) => {
-												if (result.fetched) {
-													void branchesQuery.refetch();
+												const detailKey = helmorQueryKeys.workspaceDetail(
+													workspace.id,
+												);
+												const previousDetail =
+													queryClient.getQueryData<WorkspaceDetail | null>(
+														detailKey,
+													);
+												if (previousDetail) {
+													queryClient.setQueryData<WorkspaceDetail | null>(
+														detailKey,
+														{
+															...previousDetail,
+															intendedTargetBranch: branch,
+														},
+													);
 												}
-											})
-											.catch(() => {});
-									}}
-									onSelect={(branch: string) => {
-										if (branch === workspace.intendedTargetBranch) {
-											return;
-										}
-										const detailKey = helmorQueryKeys.workspaceDetail(
-											workspace.id,
-										);
-										const previousDetail =
-											queryClient.getQueryData<WorkspaceDetail | null>(
-												detailKey,
-											);
-										if (previousDetail) {
-											queryClient.setQueryData<WorkspaceDetail | null>(
-												detailKey,
-												{
-													...previousDetail,
-													intendedTargetBranch: branch,
-												},
-											);
-										}
 
-										// Invalidate changes so diff section shows loading.
-										if (workspace.rootPath) {
-											void queryClient.invalidateQueries({
-												queryKey: helmorQueryKeys.workspaceChanges(
-													workspace.rootPath,
-												),
-											});
-										}
-
-										void updateIntendedTargetBranch(workspace.id, branch)
-											.then(({ reset }) => {
-												onWorkspaceChanged?.();
-												// Recompute sync status vs. new target now; don't wait for 10s poll.
-												void queryClient.invalidateQueries({
-													queryKey: helmorQueryKeys.workspaceGitActionStatus(
-														workspace.id,
-													),
-												});
+												// Invalidate changes so diff section shows loading.
 												if (workspace.rootPath) {
 													void queryClient.invalidateQueries({
 														queryKey: helmorQueryKeys.workspaceChanges(
 															workspace.rootPath,
+															workspace.id,
 														),
 													});
 												}
-												if (reset) {
-													pushToast(
-														`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
-														`Switched to ${branch}`,
-														"default",
-													);
-												} else {
-													pushToast(
-														"Target branch updated",
-														`Switched to ${branch}`,
-														"default",
-													);
-												}
-											})
-											.catch((error: unknown) => {
-												if (previousDetail) {
-													queryClient.setQueryData<WorkspaceDetail | null>(
-														detailKey,
-														previousDetail,
-													);
-												}
-												pushToast(
-													error instanceof Error
-														? error.message
-														: String(error),
-													"Branch switch failed",
-													"destructive",
-												);
-											});
-									}}
-								/>
-							)}
+
+												void updateIntendedTargetBranch(workspace.id, branch)
+													.then(({ reset }) => {
+														onWorkspaceChanged?.();
+														// Recompute sync status vs. new target now; don't wait for 10s poll.
+														void queryClient.invalidateQueries({
+															queryKey:
+																helmorQueryKeys.workspaceGitActionStatus(
+																	workspace.id,
+																),
+														});
+														if (workspace.rootPath) {
+															void queryClient.invalidateQueries({
+																queryKey: helmorQueryKeys.workspaceChanges(
+																	workspace.rootPath,
+																	workspace.id,
+																),
+															});
+														}
+														if (reset) {
+															pushToast(
+																`Local branch reset to ${workspace.remote ?? "origin"}/${branch}`,
+																`Switched to ${branch}`,
+																"default",
+															);
+														} else {
+															pushToast(
+																"Target branch updated",
+																`Switched to ${branch}`,
+																"default",
+															);
+														}
+													})
+													.catch((error: unknown) => {
+														if (previousDetail) {
+															queryClient.setQueryData<WorkspaceDetail | null>(
+																detailKey,
+																previousDetail,
+															);
+														}
+														pushToast(
+															error instanceof Error
+																? error.message
+																: String(error),
+															"Branch switch failed",
+															"destructive",
+														);
+													});
+											}}
+										/>
+									)}
+								</>
+							) : null}
 						</>
-					) : null}
+					)}
 				</div>
 				{headerActions ? (
 					<div className="relative z-10 flex shrink-0 items-center gap-1 bg-background pl-1">
@@ -636,7 +474,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						className="scrollbar-none min-w-0 flex-1 overflow-x-auto"
 					>
 						{loadingWorkspace ? (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-small text-muted-foreground">
 								<Clock3 className="size-3 animate-pulse" strokeWidth={1.8} />
 								Loading
 							</div>
@@ -673,7 +511,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														event.stopPropagation();
 														onCloseContextPreview?.();
 													}}
-													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+													className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-ui text-muted-foreground data-[state=active]:text-foreground"
 												>
 													<span className="tab-content-fade flex min-w-0 flex-1 items-center gap-1.5">
 														<Layers className="size-3.5" strokeWidth={1.8} />
@@ -691,7 +529,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																event.stopPropagation();
 																onCloseContextPreview?.();
 															}}
-															className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+															className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 														>
 															<X className="size-3" strokeWidth={2} />
 														</span>
@@ -701,7 +539,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<TooltipContent
 												side="bottom"
 												sideOffset={4}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+												className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 											>
 												<span>{contextPreviewCard.title}</span>
 											</TooltipContent>
@@ -720,7 +558,8 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											isActivelySending && !isInteractionRequired;
 										const hasStatusDot =
 											isInteractionRequired || (!selected && hasUnread);
-										const isEditing = editingSessionId === session.id;
+										const isEditing =
+											sessionActions.editingSessionId === session.id;
 
 										return (
 											<Tooltip key={session.id}>
@@ -733,7 +572,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														onFocus={() => {
 															onPrefetchSession?.(session.id);
 														}}
-														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-[13px] text-muted-foreground data-[state=active]:text-foreground"
+														className="group/tab relative h-full w-auto min-w-[6.5rem] max-w-[14rem] shrink-0 flex-none justify-start gap-1.5 overflow-hidden pr-5 text-ui text-muted-foreground data-[state=active]:text-foreground"
 													>
 														{/* Content wrapper: text fades out on the right when hovered so
 														    the action icons can sit on the tab's own background. */}
@@ -748,21 +587,25 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															{isEditing ? (
 																<Input
 																	autoFocus
-																	value={editingTitle}
+																	value={sessionActions.editingTitle}
 																	onChange={(event) =>
-																		setEditingTitle(event.target.value)
+																		sessionActions.setEditingTitle(
+																			event.target.value,
+																		)
 																	}
 																	onKeyDown={(event) => {
 																		if (event.key === "Enter") {
 																			event.preventDefault();
-																			void handleCommitRename();
+																			void sessionActions.commitRename();
 																		} else if (event.key === "Escape") {
-																			handleCancelRename();
+																			sessionActions.cancelRename();
 																		}
 																	}}
-																	onBlur={() => void handleCommitRename()}
+																	onBlur={() =>
+																		void sessionActions.commitRename()
+																	}
 																	onClick={(event) => event.stopPropagation()}
-																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-[13px] font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
+																	className="h-auto min-w-0 flex-1 truncate border-0 bg-transparent px-0 py-0 text-ui font-medium text-inherit shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-none"
 																/>
 															) : (
 																<span
@@ -799,9 +642,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	aria-label="Rename session"
 																	onPointerDown={stopTabActionPointerDown}
 																	onClick={(event) =>
-																		handleStartRename(session, event)
+																		sessionActions.startRename(session, event)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<Pencil className="size-3" strokeWidth={2} />
 																</span>
@@ -810,9 +653,12 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 																	aria-label="Close session"
 																	onPointerDown={stopTabActionPointerDown}
 																	onClick={(event) =>
-																		handleHideSession(session.id, event)
+																		sessionActions.hideSession(
+																			session.id,
+																			event,
+																		)
 																	}
-																	className="flex cursor-pointer items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+																	className="flex cursor-interactive items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
 																>
 																	<X className="size-3" strokeWidth={2} />
 																</span>
@@ -823,7 +669,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												<TooltipContent
 													side="bottom"
 													sideOffset={4}
-													className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+													className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 												>
 													<span>{displaySessionTitle(session)}</span>
 												</TooltipContent>
@@ -833,7 +679,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 								</TabsList>
 							</Tabs>
 						) : (
-							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-[12px] text-muted-foreground">
+							<div className="flex h-[1.85rem] items-center gap-1.5 px-2 text-small text-muted-foreground">
 								<AlertCircle className="size-3" strokeWidth={1.8} />
 								No sessions
 							</div>
@@ -845,7 +691,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label="New session"
-							onClick={handleCreateSession}
+							onClick={sessionActions.createSession}
 							variant="ghost"
 							size="icon-sm"
 							className="ml-0.5 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -856,7 +702,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					<TooltipContent
 						side="bottom"
 						sideOffset={4}
-						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 					>
 						<span>New session</span>
 						{newSessionShortcut ? (
@@ -868,7 +714,10 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					</TooltipContent>
 				</Tooltip>
 
-				<DropdownMenu open={showHistory} onOpenChange={handleToggleHistory}>
+				<DropdownMenu
+					open={hiddenHistory.showHistory}
+					onOpenChange={hiddenHistory.toggleHistory}
+				>
 					<DropdownMenuTrigger asChild>
 						<Button
 							aria-label="Session history"
@@ -876,7 +725,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 							size="icon-sm"
 							className={cn(
 								"ml-1 shrink-0 text-muted-foreground hover:bg-accent/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0",
-								showHistory && "bg-accent/60 text-foreground",
+								hiddenHistory.showHistory && "bg-accent/60 text-foreground",
 							)}
 						>
 							<History className="size-3.5" strokeWidth={1.8} />
@@ -886,11 +735,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 						align="end"
 						className="max-h-96 w-56 overscroll-contain"
 					>
-						{hiddenSessions.length > 0 ? (
-							hiddenSessions.map((session) => (
+						{hiddenHistory.hiddenSessions.length > 0 ? (
+							hiddenHistory.hiddenSessions.map((session) => (
 								<Tooltip key={session.id}>
 									<TooltipTrigger asChild>
-										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-accent/60">
+										<div className="flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-small text-muted-foreground hover:bg-accent/60">
 											<div className="flex min-w-0 items-center gap-1.5">
 												<SessionProviderIcon
 													agentType={session.agentType}
@@ -903,7 +752,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<div className="flex shrink-0 items-center gap-0.5">
 												<Button
 													aria-label="Restore session"
-													onClick={() => handleUnhide(session.id)}
+													onClick={() => hiddenHistory.unhide(session.id)}
 													variant="ghost"
 													size="icon-xs"
 													className="text-muted-foreground hover:text-foreground"
@@ -912,7 +761,9 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 												</Button>
 												<Button
 													aria-label="Delete session permanently"
-													onClick={() => handleDelete(session.id)}
+													onClick={() =>
+														sessionActions.deleteHiddenSession(session.id)
+													}
 													variant="ghost"
 													size="icon-xs"
 													className="text-muted-foreground hover:text-destructive"
@@ -925,14 +776,14 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									<TooltipContent
 										side="left"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 									>
 										<span>{displaySessionTitle(session)}</span>
 									</TooltipContent>
 								</Tooltip>
 							))
 						) : (
-							<div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+							<div className="px-2.5 py-1.5 text-mini text-muted-foreground">
 								No hidden sessions
 							</div>
 						)}
@@ -1012,7 +863,7 @@ function BranchPicker({
 				type="button"
 				variant="ghost"
 				size="xs"
-				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+				className="h-6 min-w-0 max-w-[180px] gap-1 rounded-md px-1.5 text-ui font-medium text-muted-foreground hover:text-foreground"
 			>
 				<span className="block min-w-0 truncate">
 					{displayRemote}/{currentBranch}

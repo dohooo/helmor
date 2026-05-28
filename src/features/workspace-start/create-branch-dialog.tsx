@@ -72,7 +72,7 @@ export function CreateBranchDialog({
 				<form onSubmit={handleSubmit} className="flex flex-col gap-1.5">
 					<label
 						htmlFor="create-branch-name"
-						className="text-[12px] font-medium text-muted-foreground"
+						className="text-small font-medium text-muted-foreground"
 					>
 						Branch name
 					</label>
@@ -90,7 +90,7 @@ export function CreateBranchDialog({
 					/>
 					<div
 						className={cn(
-							"min-h-4 text-[12px]",
+							"min-h-4 text-small",
 							error ? "text-destructive" : "text-muted-foreground",
 						)}
 					>

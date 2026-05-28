@@ -43,7 +43,10 @@ export function InteractionStepTabs({
 							key={item.key}
 							value={item.key}
 							disabled={disabled}
-							className={cn("h-6 px-2 text-xs", !item.complete && "opacity-55")}
+							className={cn(
+								"h-6 px-2 text-small",
+								!item.complete && "opacity-55",
+							)}
 						>
 							{item.required ? (
 								<span>

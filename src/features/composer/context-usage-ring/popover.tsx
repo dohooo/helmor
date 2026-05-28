@@ -3,7 +3,6 @@ import type { DisplayResolution } from "./parse";
 import {
 	AutoCompactNote,
 	CategoryList,
-	TokensOnlyHeader,
 	UsageBar,
 	UsageHeader,
 } from "./popover-parts";
@@ -26,9 +25,7 @@ export function ContextUsagePopoverContent({
 
 	return (
 		<div className="flex flex-col gap-3 px-1 py-1">
-			{display.kind === "tokensOnly" ? (
-				<TokensOnlyHeader usedTokens={display.usedTokens} />
-			) : display.kind === "full" ? (
+			{display.kind === "full" ? (
 				<>
 					<UsageHeader
 						used={display.usedTokens}
@@ -54,7 +51,7 @@ export function ContextUsagePopoverContent({
 			)}
 
 			{richLoading && !showCategories ? (
-				<div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+				<div className="flex items-center gap-2 text-mini text-muted-foreground">
 					<HelmorThinkingIndicator size={12} />
 					<span>Loading context details…</span>
 				</div>

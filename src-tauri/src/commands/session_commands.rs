@@ -14,17 +14,31 @@ pub async fn list_workspace_sessions(
     run_blocking(move || sessions::list_workspace_sessions(&workspace_id)).await
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionThreadMessagesPage {
+    pub messages: Vec<pipeline::types::ThreadMessageLike>,
+    pub has_more: bool,
+}
+
 #[tauri::command]
 pub async fn list_session_thread_messages(
     session_id: String,
-) -> CmdResult<Vec<pipeline::types::ThreadMessageLike>> {
+    tail_limit: Option<usize>,
+) -> CmdResult<SessionThreadMessagesPage> {
     run_blocking(move || {
-        let historical = sessions::list_session_historical_records(&session_id)?;
-        Ok(pipeline::MessagePipeline::convert_historical(&historical))
+        let windowed = sessions::list_session_historical_records_windowed(&session_id, tail_limit)?;
+        let messages = pipeline::MessagePipeline::convert_historical(&windowed.records);
+        Ok(SessionThreadMessagesPage {
+            messages,
+            has_more: windowed.has_more,
+        })
     })
     .await
 }
 
+/// `seed_session_id`: see `sessions::CreateSessionOverrides::seed_session_id` —
+/// frontend-provided UUID used as the new `sessions.id` when present.
 #[tauri::command]
 pub async fn create_session(
     workspace_id: String,
@@ -33,6 +47,7 @@ pub async fn create_session(
     model: Option<String>,
     effort_level: Option<String>,
     fast_mode: Option<bool>,
+    seed_session_id: Option<String>,
 ) -> CmdResult<sessions::CreateSessionResponse> {
     run_blocking(move || {
         sessions::create_session(
@@ -43,6 +58,7 @@ pub async fn create_session(
                 model: model.as_deref(),
                 effort_level: effort_level.as_deref(),
                 fast_mode,
+                seed_session_id: seed_session_id.as_deref(),
             },
         )
     })
@@ -79,6 +95,27 @@ pub async fn list_hidden_sessions(
 #[tauri::command]
 pub async fn get_session_context_usage(session_id: String) -> CmdResult<Option<String>> {
     run_blocking(move || sessions::get_session_context_usage(&session_id)).await
+}
+
+/// Frontend-initiated write of `context_usage_meta`. Used when a
+/// trustworthy Claude hover fetch returns fresher numbers than the
+/// last persisted turn-end record — promotes them into the DB so the
+/// ring stays accurate across cold starts.
+#[tauri::command]
+pub async fn set_session_context_usage(
+    app: tauri::AppHandle,
+    session_id: String,
+    meta: String,
+) -> CmdResult<()> {
+    run_blocking(move || {
+        crate::agents::streaming::context_usage::persist_context_usage_meta(
+            &app,
+            &session_id,
+            &meta,
+        );
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

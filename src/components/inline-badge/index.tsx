@@ -45,14 +45,19 @@ export type InlineBadgeProps = {
 	/** Optional remove action — when set, a trailing X button is rendered. */
 	onRemove?: () => void;
 	removeLabel?: string;
+	/**
+	 * Enables in-place editing for text-kind previews. Called once on blur;
+	 * the popover closes automatically after the commit. Ignored unless
+	 * `preview.kind === "text"`.
+	 */
+	onEdit?: (nextText: string) => void;
 	/** Extra classes on the outer wrapper. */
 	className?: string;
 	/** Extra classes on the label span. */
 	labelClassName?: string;
 	/**
-	 * If true (default), applies `select-none cursor-default` — correct for
-	 * non-editable decorator nodes inside Lexical. Bubble / inline contexts
-	 * should pass `false` so users can select and copy the label.
+	 * If true (default), prevents text selection for non-editable decorator
+	 * nodes inside Lexical. Bubble / inline contexts should pass `false`.
 	 */
 	nonSelectable?: boolean;
 };
@@ -76,6 +81,7 @@ export function InlineBadge({
 	className,
 	labelClassName,
 	nonSelectable = true,
+	onEdit,
 }: InlineBadgeProps) {
 	const [open, setOpen] = useState(false);
 	const [loaderState, setLoaderState] = useState<LoaderState>({
@@ -83,10 +89,31 @@ export function InlineBadge({
 	});
 	const closeTimerRef = useRef<number | null>(null);
 	const hasFetchedRef = useRef(false);
+	// Lock the popover while editing: set true on textarea focus so
+	// hover-leave doesn't close the card being edited.
+	const editingRef = useRef(false);
+
+	const editHandlers = useMemo(() => {
+		if (!onEdit) return null;
+		return {
+			onEditFocus: () => {
+				editingRef.current = true;
+				if (closeTimerRef.current !== null) {
+					window.clearTimeout(closeTimerRef.current);
+					closeTimerRef.current = null;
+				}
+			},
+			onEditBlur: (nextText: string) => {
+				editingRef.current = false;
+				onEdit(nextText);
+				setOpen(false);
+			},
+		};
+	}, [onEdit]);
 
 	const syncPreviewContent = useMemo(
-		() => renderInlineBadgePreview(preview ?? null),
-		[preview],
+		() => renderInlineBadgePreview(preview ?? null, editHandlers),
+		[preview, editHandlers],
 	);
 	const hasSyncPreview = syncPreviewContent !== null;
 	const hasAsyncPreview = !preview && typeof previewLoader === "function";
@@ -99,13 +126,20 @@ export function InlineBadge({
 			case "loading":
 				return <PreviewLoadingFrame title={label} />;
 			case "ready":
-				return renderInlineBadgePreview(loaderState.payload);
+				return renderInlineBadgePreview(loaderState.payload, editHandlers);
 			case "error":
 				return <PreviewErrorFrame title={label} />;
 			default:
 				return <PreviewLoadingFrame title={label} />;
 		}
-	}, [hasSyncPreview, syncPreviewContent, hasAsyncPreview, loaderState, label]);
+	}, [
+		hasSyncPreview,
+		syncPreviewContent,
+		hasAsyncPreview,
+		loaderState,
+		label,
+		editHandlers,
+	]);
 
 	const clearCloseTimer = useCallback(() => {
 		if (closeTimerRef.current !== null) {
@@ -132,6 +166,7 @@ export function InlineBadge({
 
 	const scheduleClose = useCallback(() => {
 		if (!canPreview) return;
+		if (editingRef.current) return; // keep open while editing
 		clearCloseTimer();
 		closeTimerRef.current = window.setTimeout(() => {
 			setOpen(false);
@@ -144,9 +179,10 @@ export function InlineBadge({
 	const badge = (
 		<span
 			className={cn(
-				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-[14px] leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
-				nonSelectable && "cursor-default select-none",
-				canPreview && "cursor-pointer",
+				"mx-0.5 inline-flex items-baseline rounded-sm border border-border/60 text-body leading-none transition-colors hover:border-muted-foreground/40 hover:bg-accent/40",
+				nonSelectable && "select-none",
+				nonSelectable && !canPreview && "cursor-default",
+				canPreview && "cursor-interactive",
 				className,
 			)}
 			onPointerEnter={openPreview}
@@ -172,7 +208,7 @@ export function InlineBadge({
 				<button
 					type="button"
 					aria-label={removeLabel}
-					className="mr-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+					className="mr-1 inline-flex size-4 shrink-0 cursor-interactive items-center justify-center self-center rounded-sm text-muted-foreground/40 transition-colors hover:text-muted-foreground"
 					onMouseDown={(event) => {
 						event.preventDefault();
 						event.stopPropagation();

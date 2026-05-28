@@ -27,7 +27,7 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -256,7 +256,15 @@ export class CursorSessionManager implements SessionManager {
 			),
 		]);
 		const text = typeof result?.result === "string" ? result.result : "";
-		const { title, branchName } = parseTitleAndBranch(text);
+		const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+			requestId,
+			text,
+			{
+				model: modelId,
+				generateBranch,
+				logError: (message, meta) => logger.error(message, meta),
+			},
+		);
 		emitter.titleGenerated(requestId, title, branchName);
 	}
 

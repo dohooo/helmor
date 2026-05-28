@@ -1,12 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import {
-	type MutableRefObject,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type ChangeRequestInfo,
 	closeWorkspaceChangeRequest,
@@ -27,6 +20,9 @@ import {
 import {
 	deriveCommitButtonMode,
 	deriveCommitButtonState,
+	getMergeBlockedReason,
+	hasNonPassingForgeChecks,
+	mergeBlockedDetailText,
 } from "@/lib/commit-button-logic";
 import {
 	buildCommitButtonPrompt,
@@ -37,13 +33,13 @@ import {
 	workspaceForgeQueryOptions,
 } from "@/lib/query-client";
 import {
-	beginSidebarMutation,
-	endSidebarMutation,
-	flushSidebarListsIfIdle,
+	holdSidebarMutation,
+	requestSidebarReconcile,
 } from "@/lib/sidebar-mutation-gate";
 import { moveWorkspaceToGroup } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { CommitButtonState, WorkspaceCommitButtonMode } from "../button";
+import { useMergeConfirmation } from "./use-merge-confirmation";
 
 /**
  * Derive the workspace lane this PR state implies. Mirrors the backend's
@@ -111,6 +107,8 @@ function getActionFailureTitle(
 			return "Fix CI failed";
 		case "resolve-conflicts":
 			return "Resolve conflicts failed";
+		case "checks-running":
+		case "merge-blocked":
 		case "merge":
 			return "Merge failed";
 		case "open-pr":
@@ -147,7 +145,7 @@ export type PendingPromptForSession = {
 export function useWorkspaceCommitLifecycle({
 	queryClient,
 	selectedWorkspaceId,
-	selectedWorkspaceIdRef,
+	getSelectedWorkspaceId,
 	selectedRepoId,
 	selectedWorkspaceTargetBranch,
 	selectedWorkspaceRemote,
@@ -164,7 +162,10 @@ export function useWorkspaceCommitLifecycle({
 }: {
 	queryClient: QueryClient;
 	selectedWorkspaceId: string | null;
-	selectedWorkspaceIdRef: MutableRefObject<string | null>;
+	/** Resolves the latest selected workspace at call time. Lets the
+	 *  callbacks read the current value without depending on a ref the
+	 *  caller has to thread through. */
+	getSelectedWorkspaceId: () => string | null;
 	selectedRepoId: string | null;
 	selectedWorkspaceTargetBranch?: string | null;
 	/** Git remote name (e.g. "origin") for the selected workspace's repo.
@@ -186,6 +187,8 @@ export function useWorkspaceCommitLifecycle({
 		useState<PendingPromptForSession | null>(null);
 	const [commitLifecycle, setCommitLifecycle] =
 		useState<CommitLifecycle | null>(null);
+	const { requestMergeConfirmation, mergeConfirmDialogNode } =
+		useMergeConfirmation();
 	const currentChangeRequest = changeRequest ?? null;
 	const currentForgeActionStatus = forgeActionStatus ?? null;
 	const changeRequestName = forgeDetection?.labels.changeRequestName ?? "PR";
@@ -211,9 +214,7 @@ export function useWorkspaceCommitLifecycle({
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 		},
 		[queryClient],
 	);
@@ -227,7 +228,7 @@ export function useWorkspaceCommitLifecycle({
 				fastMode?: boolean | null;
 			},
 		) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+			const workspaceId = getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[commitButton] action ignored: no selected workspace");
 				return;
@@ -236,10 +237,15 @@ export function useWorkspaceCommitLifecycle({
 			completedSessionHandledRef.current = null;
 			console.log("[commitButton] begin", { mode, workspaceId });
 
-			if (mode === "merge" || mode === "closed") {
+			const isMergeAction =
+				mode === "merge" ||
+				mode === "checks-running" ||
+				mode === "merge-blocked";
+			if (isMergeAction || mode === "closed") {
 				// ── Merge pre-validation ─────────────────────────────────
-				if (mode === "merge") {
-					const currentMergeable = forgeActionStatusRef.current?.mergeable;
+				if (isMergeAction) {
+					const currentStatus = forgeActionStatusRef.current;
+					const currentMergeable = currentStatus?.mergeable;
 					if (currentMergeable === "CONFLICTING") {
 						console.warn(
 							`[commitButton] merge blocked: ${changeRequestName} has merge conflicts`,
@@ -266,6 +272,45 @@ export function useWorkspaceCommitLifecycle({
 						});
 						return;
 					}
+					const checksHaveNotPassed = hasNonPassingForgeChecks(currentStatus);
+					if (checksHaveNotPassed) {
+						const confirmed = await requestMergeConfirmation({
+							title: "Merge before checks pass?",
+							description:
+								"GitHub checks have not passed yet. Merge anyway and bypass them?",
+							confirmLabel: "Merge anyway",
+						});
+						if (!confirmed) {
+							console.warn(
+								"[commitButton] merge cancelled: checks have not passed",
+							);
+							void queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+							});
+							return;
+						}
+					}
+					const blockedReason = checksHaveNotPassed
+						? null
+						: getMergeBlockedReason(currentStatus);
+					if (blockedReason) {
+						const confirmed = await requestMergeConfirmation({
+							title: "Try blocked merge?",
+							description: mergeBlockedDetailText(blockedReason),
+							confirmLabel: "Try anyway",
+						});
+						if (!confirmed) {
+							console.warn(
+								"[commitButton] merge cancelled: GitHub blocked merge",
+							);
+							void queryClient.invalidateQueries({
+								queryKey:
+									helmorQueryKeys.workspaceForgeActionStatus(workspaceId),
+							});
+							return;
+						}
+					}
 				}
 
 				const cachedChangeRequest =
@@ -276,14 +321,14 @@ export function useWorkspaceCommitLifecycle({
 					cachedChangeRequest
 						? {
 								...cachedChangeRequest,
-								state: mode === "merge" ? "MERGED" : "CLOSED",
-								isMerged: mode === "merge",
+								state: isMergeAction ? "MERGED" : "CLOSED",
+								isMerged: isMergeAction,
 							}
 						: null;
 				setCommitLifecycle({
 					workspaceId,
 					trackedSessionId: null,
-					mode,
+					mode: isMergeAction ? "merge" : mode,
 					phase: "done",
 					changeRequest: optimisticChangeRequest,
 				});
@@ -298,19 +343,18 @@ export function useWorkspaceCommitLifecycle({
 				const restoreWorkspaceStatus = applyOptimisticWorkspaceStatus(
 					queryClient,
 					workspaceId,
-					mode === "merge" ? "done" : "canceled",
+					isMergeAction ? "done" : "canceled",
 				);
 
 				// Gate sidebar flushes during the forge round-trip — without
 				// this, mark-read on workspace-switch would refetch the
 				// still-pre-merge groups and clobber the optimistic row.
-				beginSidebarMutation();
+				const release = holdSidebarMutation(queryClient);
 				void (async () => {
 					try {
-						const result =
-							mode === "merge"
-								? await mergeWorkspaceChangeRequest(workspaceId)
-								: await closeWorkspaceChangeRequest(workspaceId);
+						const result = isMergeAction
+							? await mergeWorkspaceChangeRequest(workspaceId)
+							: await closeWorkspaceChangeRequest(workspaceId);
 						queryClient.setQueryData(
 							helmorQueryKeys.workspaceChangeRequest(workspaceId),
 							result,
@@ -337,9 +381,7 @@ export function useWorkspaceCommitLifecycle({
 								: prev,
 						);
 					} finally {
-						endSidebarMutation();
-						// Reconcile flushes skipped during the gate hold.
-						flushSidebarListsIfIdle(queryClient);
+						release();
 					}
 				})();
 				return;
@@ -435,7 +477,8 @@ export function useWorkspaceCommitLifecycle({
 			selectedRepoId,
 			selectedWorkspaceTargetBranch,
 			selectedWorkspaceRemote,
-			selectedWorkspaceIdRef,
+			getSelectedWorkspaceId,
+			requestMergeConfirmation,
 		],
 	);
 
@@ -456,7 +499,7 @@ export function useWorkspaceCommitLifecycle({
 			effort?: string | null;
 			fastMode?: boolean | null;
 		}) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
+			const workspaceId = getSelectedWorkspaceId();
 			if (!workspaceId) {
 				console.warn("[review] action ignored: no selected workspace");
 				return;
@@ -506,7 +549,7 @@ export function useWorkspaceCommitLifecycle({
 			pushToast,
 			queryClient,
 			selectedRepoId,
-			selectedWorkspaceIdRef,
+			getSelectedWorkspaceId,
 			selectedWorkspaceTargetBranch,
 			selectedWorkspaceRemote,
 		],
@@ -684,6 +727,7 @@ export function useWorkspaceCommitLifecycle({
 			void (async () => {
 				try {
 					if (!trackedSessionId) return;
+					if (mode === "checks-running" || mode === "merge-blocked") return;
 					const optedIn = await loadAutoCloseActionKinds();
 					if (!optedIn.includes(mode)) return;
 					await hideSession(trackedSessionId);
@@ -760,6 +804,7 @@ export function useWorkspaceCommitLifecycle({
 		handleInspectorCommitAction,
 		handleInspectorReviewAction,
 		handlePendingPromptConsumed,
+		mergeConfirmDialogNode,
 		pendingPromptForSession,
 		queuePendingPromptForSession,
 	};

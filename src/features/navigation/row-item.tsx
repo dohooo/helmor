@@ -12,7 +12,14 @@ import {
 	Split,
 	Trash2,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+	memo,
+	type PointerEvent as ReactPointerEvent,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,14 +33,15 @@ import {
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HyperText } from "@/components/ui/hyper-text";
+import { ShineBorder } from "@/components/ui/shine-border";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-	getScriptState,
-	subscribeStatus,
+	isAnyRunScriptRunning,
+	subscribeWorkspaceRunStatus,
 } from "@/features/inspector/script-store";
 import type { WorkspaceRow, WorkspaceStatus } from "@/lib/api";
 import { recordSidebarRowRender } from "@/lib/dev-render-debug";
@@ -50,7 +58,7 @@ import {
 import { WorkspaceHoverCard } from "./workspace-hover-card";
 
 const rowVariants = cva(
-	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-[13px] cursor-pointer",
+	"group/row relative flex h-7.5 select-none items-center gap-2 rounded-md px-2.5 text-ui cursor-interactive",
 	{
 		variants: {
 			active: {
@@ -69,6 +77,14 @@ export type WorkspaceRowItemProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** Drop the per-row repo avatar — used when the surrounding group header
+	 *  already shows it (i.e. rows inside a real repo bucket in repo
+	 *  grouping mode), where rendering it again on every row is pure
+	 *  noise. The branch icon takes over the leading slot AND becomes
+	 *  the carrier for the unread / interaction-required status dot and
+	 *  the run-script ShineBorder, so those affordances aren't lost when
+	 *  the avatar is hidden. */
+	hideRepoAvatar?: boolean;
 	rowRef?: (element: HTMLDivElement | null) => void;
 	onSelect?: (workspaceId: string) => void;
 	onPrefetch?: (workspaceId: string) => void;
@@ -80,6 +96,16 @@ export type WorkspaceRowItemProps = {
 	onDeleteWorkspace?: (workspaceId: string) => void;
 	onTogglePin?: (workspaceId: string, currentlyPinned: boolean) => void;
 	onSetWorkspaceStatus?: (workspaceId: string, status: WorkspaceStatus) => void;
+	/** Live group id — flows through props so no stale closure on grouping flip. */
+	groupId?: string;
+	onDragPointerDown?: (args: {
+		event: ReactPointerEvent<HTMLElement>;
+		row: WorkspaceRow;
+		groupId: string;
+		title: string;
+	}) => void;
+	disableHoverCard?: boolean;
+	dragPreview?: boolean;
 	archivingWorkspaceIds?: Set<string>;
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
@@ -87,20 +113,28 @@ export type WorkspaceRowItemProps = {
 };
 
 /**
- * Subscribes to this workspace's `run`-script status via the module-level
- * script-store used by the inspector. Returns true only while the script is
- * actively executing (not "idle" or "exited"). Per-row subscription keeps the
- * re-render fan-out narrow — only rows whose status flipped re-render.
+ * Subscribes to ANY run-action's status for this workspace. With multi
+ * run-action support a single workspace can have several concurrent runs
+ * (e.g. Dev + Tests); the row indicator lights up whenever at least one
+ * is live. Per-row subscription keeps the re-render fan-out narrow — only
+ * rows whose status flipped re-render. The store handles the per-action
+ * → per-workspace fan-in.
  */
 function useIsRunScriptRunning(workspaceId: string): boolean {
-	const [running, setRunning] = useState(
-		() => getScriptState(workspaceId, "run")?.status === "running",
+	const [running, setRunning] = useState(() =>
+		isAnyRunScriptRunning(workspaceId),
 	);
 	useEffect(() => {
-		// Re-sync when the row is reused for a different workspace (virtual list).
-		setRunning(getScriptState(workspaceId, "run")?.status === "running");
-		return subscribeStatus(workspaceId, "run", (status) => {
-			setRunning(status === "running");
+		// Re-sync when the row is reused for a different workspace
+		// (virtual list slot recycling).
+		setRunning(isAnyRunScriptRunning(workspaceId));
+		return subscribeWorkspaceRunStatus(workspaceId, (status) => {
+			// Each event reports the action that just flipped. When it
+			// goes "running" we know the workspace has at least one live
+			// run; when it goes "exited" we have to re-check the store
+			// in case another action is still live.
+			if (status === "running") setRunning(true);
+			else setRunning(isAnyRunScriptRunning(workspaceId));
 		});
 	}, [workspaceId]);
 	return running;
@@ -112,6 +146,7 @@ export const WorkspaceRowItem = memo(
 		selected,
 		isSending,
 		isInteractionRequired,
+		hideRepoAvatar = false,
 		rowRef,
 		onSelect,
 		onPrefetch,
@@ -123,6 +158,10 @@ export const WorkspaceRowItem = memo(
 		onDeleteWorkspace,
 		onTogglePin,
 		onSetWorkspaceStatus,
+		groupId,
+		onDragPointerDown,
+		disableHoverCard,
+		dragPreview,
 		archivingWorkspaceIds,
 		markingUnreadWorkspaceId,
 		restoringWorkspaceId,
@@ -145,22 +184,56 @@ export const WorkspaceRowItem = memo(
 			}
 		}, []);
 		const handlePointerEnter = useCallback(() => {
+			if (disableHoverCard || dragPreview) {
+				return;
+			}
 			cancelPendingPrefetch();
 			const id = row.id;
 			prefetchTimerRef.current = window.setTimeout(() => {
 				prefetchTimerRef.current = null;
 				onPrefetch?.(id);
 			}, 120);
-		}, [cancelPendingPrefetch, onPrefetch, row.id]);
+		}, [
+			cancelPendingPrefetch,
+			disableHoverCard,
+			dragPreview,
+			onPrefetch,
+			row.id,
+		]);
 		useEffect(() => cancelPendingPrefetch, [cancelPendingPrefetch]);
 		const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+		const [archiveConfirming, setArchiveConfirming] = useState(false);
+		const resetArchiveConfirm = useCallback(() => {
+			setArchiveConfirming(false);
+		}, []);
+		const startArchiveConfirm = useCallback(() => {
+			setArchiveConfirming(true);
+		}, []);
+		const handleRowPointerLeave = useCallback(() => {
+			cancelPendingPrefetch();
+			resetArchiveConfirm();
+		}, [cancelPendingPrefetch, resetArchiveConfirm]);
 		const actionLabel =
-			row.state === "archived" ? "Restore workspace" : "Archive workspace";
+			row.state === "archived"
+				? "Restore workspace"
+				: archiveConfirming
+					? "Confirm archive workspace"
+					: "Archive workspace";
 		const isArchiving = archivingWorkspaceIds?.has(row.id) ?? false;
 		const isMarkingUnread = markingUnreadWorkspaceId === row.id;
 		const isRestoring = restoringWorkspaceId === row.id;
 		const isRestoreAction = row.state === "archived";
 		const isBusy = isArchiving || isMarkingUnread || isRestoring;
+		useEffect(() => resetArchiveConfirm, [resetArchiveConfirm]);
+		useEffect(() => {
+			resetArchiveConfirm();
+		}, [
+			resetArchiveConfirm,
+			row.id,
+			isRestoreAction,
+			isBusy,
+			workspaceActionsDisabled,
+		]);
 		const hasActionHandler = isRestoreAction
 			? Boolean(onRestoreWorkspace)
 			: Boolean(onArchiveWorkspace);
@@ -171,12 +244,19 @@ export const WorkspaceRowItem = memo(
 		// instead of leaving a visible gap.
 		const hasTwoActions =
 			hasActionHandler && isRestoreAction && Boolean(onDeleteWorkspace);
-		const rowFadeStyle = hasTwoActions
+		const isArchiveConfirmVisible =
+			archiveConfirming && !isRestoreAction && !isBusy;
+		const rowFadeStyle = isArchiveConfirmVisible
 			? ({
-					"--row-fade-transparent": "2.6rem",
-					"--row-fade-solid": "3.4rem",
+					"--row-fade-transparent": "3.9rem",
+					"--row-fade-solid": "4.8rem",
 				} as React.CSSProperties)
-			: undefined;
+			: hasTwoActions
+				? ({
+						"--row-fade-transparent": "2.6rem",
+						"--row-fade-solid": "3.4rem",
+					} as React.CSSProperties)
+				: undefined;
 		const actionIcon = isBusy ? (
 			<LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.1} />
 		) : isRestoreAction ? (
@@ -192,18 +272,22 @@ export const WorkspaceRowItem = memo(
 		});
 		const statusDotLabel = isInteractionRequired
 			? "Interaction required"
-			: row.hasUnread
-				? "Unread"
-				: null;
+			: row.triagePrimingUnconsumed
+				? "AI proposal — open to review"
+				: row.hasUnread
+					? "Unread"
+					: null;
 		const statusDotClassName = isInteractionRequired
 			? "bg-yellow-500"
-			: "bg-chart-2";
+			: row.triagePrimingUnconsumed
+				? "bg-destructive"
+				: "bg-chart-2";
 		const showStatusDot = statusDotLabel !== null;
-		// Local workspaces don't carry a meaningful per-row branch label
-		// (multiple locals share the repo + a single HEAD), so always
-		// fall back to the auto-titled session title (`row.title`).
+		// Local & Chat workspaces don't carry a meaningful per-row branch
+		// label (locals share the repo's HEAD; chats have no branch at
+		// all), so always fall back to the auto-titled session title.
 		const displayTitle =
-			row.mode === "local"
+			row.mode === "local" || row.mode === "chat"
 				? row.title
 				: row.branch
 					? humanizeBranch(row.branch)
@@ -216,11 +300,18 @@ export const WorkspaceRowItem = memo(
 				tabIndex={0}
 				aria-label={displayTitle}
 				data-workspace-row-id={row.id}
+				data-workspace-row-body="true"
 				data-has-unread={row.hasUnread ? "true" : "false"}
 				data-busy={isBusy ? "true" : undefined}
 				style={rowFadeStyle}
 				onPointerEnter={handlePointerEnter}
-				onPointerLeave={cancelPendingPrefetch}
+				onPointerLeave={handleRowPointerLeave}
+				onPointerDown={(event) => {
+					cancelPendingPrefetch();
+					if (onDragPointerDown && groupId) {
+						onDragPointerDown({ event, row, groupId, title: displayTitle });
+					}
+				}}
 				onFocus={() => {
 					onPrefetch?.(row.id);
 				}}
@@ -236,22 +327,13 @@ export const WorkspaceRowItem = memo(
 				className={cn(
 					rowVariants({ active: selected }),
 					"w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50",
+					dragPreview && "bg-accent/70 opacity-80 hover:bg-accent/70",
 					!selected && row.state === "archived" && "opacity-50",
 				)}
 			>
-				<div className="flex min-w-0 flex-1 items-center gap-2">
-					<WorkspaceAvatar
-						repoIconSrc={row.repoIconSrc}
-						repoInitials={row.repoInitials ?? row.avatar ?? null}
-						repoName={row.repoName}
-						title={displayTitle}
-						badgeClassName={showStatusDot ? statusDotClassName : null}
-						badgeAriaLabel={statusDotLabel ?? undefined}
-						isRunning={isRunScriptRunning}
-					/>
-					{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
-					<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
-						{isSending && !isInteractionRequired ? (
+				{(() => {
+					const branchIcon =
+						isSending && !isInteractionRequired ? (
 							<HelmorThinkingIndicator size={13} />
 						) : row.mode === "local" ? (
 							<Laptop
@@ -261,6 +343,24 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
+						) : row.mode === "chat" ? (
+							// Chat rows are bucketed under the dedicated
+							// "Chats" group header (which carries the
+							// MessageCircle glyph) — drawing the same icon on
+							// every row would just be noise. When the row
+							// carries an unread / interaction-required signal,
+							// the leading slot becomes a small status dot
+							// instead — a trailing dot can overlap long titles
+							// since chat titles run flush to the right edge.
+							showStatusDot && !hideRepoAvatar ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"size-1.5 shrink-0 rounded-full",
+										statusDotClassName,
+									)}
+								/>
+							) : null
 						) : (
 							<GitBranch
 								className={cn(
@@ -269,7 +369,42 @@ export const WorkspaceRowItem = memo(
 								)}
 								strokeWidth={1.9}
 							/>
-						)}
+						);
+					// When the repo avatar is suppressed (rows inside a repo
+					// bucket), the branch icon takes over as the carrier for
+					// unread / interaction-required / running indicators —
+					// otherwise those signals would silently vanish in repo
+					// grouping mode.
+					const branchSlot = hideRepoAvatar ? (
+						<span className="relative inline-flex shrink-0">
+							{branchIcon}
+							{showStatusDot ? (
+								<span
+									aria-label={statusDotLabel ?? undefined}
+									className={cn(
+										"pointer-events-none absolute -top-1 -right-1 size-1.5 rounded-full ring-2 ring-sidebar",
+										statusDotClassName,
+									)}
+								/>
+							) : null}
+							{isRunScriptRunning ? (
+								<ShineBorder
+									borderWidth={1}
+									duration={6}
+									shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
+									style={{
+										inset: "-2px",
+										width: "calc(100% + 4px)",
+										height: "calc(100% + 4px)",
+										borderRadius: "6px",
+									}}
+								/>
+							) : null}
+						</span>
+					) : (
+						branchIcon
+					);
+					const titleSlot = (
 						<span
 							className={cn(
 								// leading-tight (1.25) instead of leading-none so descenders
@@ -287,11 +422,45 @@ export const WorkspaceRowItem = memo(
 						>
 							<HyperText text={displayTitle} className="inline" />
 						</span>
-					</div>
-				</div>
+					);
+					// Chat workspaces have no real repo, so skip the avatar
+					// slot entirely — the branch icon (MessageCircle in
+					// chat mode) carries the leading visual identity. Falls
+					// through to the same layout used when an outer repo
+					// bucket already shows the avatar.
+					if (hideRepoAvatar || row.mode === "chat") {
+						return (
+							<div className="flex min-w-0 flex-1 items-center gap-2">
+								{branchSlot}
+								<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+									{titleSlot}
+								</div>
+							</div>
+						);
+					}
+					return (
+						<div className="flex min-w-0 flex-1 items-center gap-2">
+							<WorkspaceAvatar
+								repoIconSrc={row.repoIconSrc}
+								repoInitials={row.repoInitials ?? row.avatar ?? null}
+								repoName={row.repoName}
+								title={displayTitle}
+								badgeClassName={showStatusDot ? statusDotClassName : null}
+								badgeAriaLabel={statusDotLabel ?? undefined}
+								isRunning={isRunScriptRunning}
+							/>
+							{/* Fade is on an inner wrapper so the avatar's overflowing badge isn't clipped by mask-image. */}
+							<div className="row-content-fade flex min-w-0 flex-1 items-center gap-2">
+								{branchSlot}
+								{titleSlot}
+							</div>
+						</div>
+					);
+				})()}
 
 				{hasActionHandler ? (
 					<span
+						data-workspace-row-actions="true"
 						className={cn(
 							"pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-2.5",
 							"opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100",
@@ -308,20 +477,28 @@ export const WorkspaceRowItem = memo(
 										if (workspaceActionsDisabled || isBusy) return;
 										if (isRestoreAction) {
 											onRestoreWorkspace?.(row.id);
-										} else {
+										} else if (archiveConfirming) {
+											resetArchiveConfirm();
 											onArchiveWorkspace?.(row.id);
+										} else {
+											startArchiveConfirm();
 										}
 									}}
-									variant="ghost"
+									variant={isArchiveConfirmVisible ? "destructive" : "ghost"}
 									size="icon-xs"
 									className={cn(
-										"size-5 rounded-md p-0 text-muted-foreground",
+										"size-5 rounded-md p-0",
+										!isArchiveConfirmVisible && "text-muted-foreground",
+										isArchiveConfirmVisible &&
+											"h-5 w-auto min-w-11 px-1.5 text-mini font-medium leading-none transition-colors duration-100 hover:bg-destructive/10 hover:text-destructive active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-destructive/20",
 										workspaceActionsDisabled
 											? "cursor-not-allowed opacity-60"
-											: "cursor-pointer hover:text-foreground",
+											: isArchiveConfirmVisible
+												? "cursor-interactive"
+												: "cursor-interactive hover:text-foreground",
 									)}
 								>
-									{actionIcon}
+									{isArchiveConfirmVisible ? "Confirm" : actionIcon}
 								</Button>
 							);
 							// Archived rows show restore + delete with no tooltips
@@ -329,13 +506,15 @@ export const WorkspaceRowItem = memo(
 							// extra hover layer on a destructive control feels noisy).
 							return isRestoreAction ? (
 								actionButton
+							) : isArchiveConfirmVisible ? (
+								actionButton
 							) : (
 								<Tooltip>
 									<TooltipTrigger asChild>{actionButton}</TooltipTrigger>
 									<TooltipContent
 										side="top"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-[11px] leading-none"
+										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
 									>
 										<span>{actionLabel}</span>
 									</TooltipContent>
@@ -357,7 +536,7 @@ export const WorkspaceRowItem = memo(
 									"size-5 rounded-md p-0 text-muted-foreground",
 									workspaceActionsDisabled
 										? "cursor-not-allowed opacity-60"
-										: "cursor-pointer hover:text-destructive",
+										: "cursor-interactive hover:text-destructive",
 								)}
 							>
 								<Trash2 className="size-3.5" strokeWidth={2.1} />
@@ -368,12 +547,24 @@ export const WorkspaceRowItem = memo(
 			</div>
 		);
 
+		if (dragPreview) {
+			return rowBody;
+		}
+
+		const contextTrigger = (
+			<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
+		);
+
 		return (
 			<>
 				<ContextMenu>
-					<WorkspaceHoverCard row={row} isSending={isSending}>
-						<ContextMenuTrigger className="block">{rowBody}</ContextMenuTrigger>
-					</WorkspaceHoverCard>
+					{disableHoverCard ? (
+						contextTrigger
+					) : (
+						<WorkspaceHoverCard row={row} isSending={isSending}>
+							{contextTrigger}
+						</WorkspaceHoverCard>
+					)}
 					<ContextMenuContent className="min-w-48">
 						<ContextMenuItem onClick={() => onTogglePin?.(row.id, isPinned)}>
 							{isPinned ? (
@@ -483,10 +674,17 @@ export const WorkspaceRowItem = memo(
 			previous.selected === next.selected &&
 			previous.isSending === next.isSending &&
 			previous.isInteractionRequired === next.isInteractionRequired &&
+			previous.hideRepoAvatar === next.hideRepoAvatar &&
 			previous.archivingWorkspaceIds === next.archivingWorkspaceIds &&
 			previous.markingUnreadWorkspaceId === next.markingUnreadWorkspaceId &&
 			previous.restoringWorkspaceId === next.restoringWorkspaceId &&
-			previous.workspaceActionsDisabled === next.workspaceActionsDisabled
+			previous.workspaceActionsDisabled === next.workspaceActionsDisabled &&
+			previous.disableHoverCard === next.disableHoverCard &&
+			previous.dragPreview === next.dragPreview &&
+			// pinned/backlog rows keep their key across grouping flips —
+			// without these two compares they'd hold a stale policy closure.
+			previous.groupId === next.groupId &&
+			previous.onDragPointerDown === next.onDragPointerDown
 		);
 	},
 );

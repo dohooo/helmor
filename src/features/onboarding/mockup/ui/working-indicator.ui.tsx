@@ -7,7 +7,7 @@ import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator"
  */
 export function WorkingIndicatorUI({ label = "Working" }: { label?: string }) {
 	return (
-		<div className="flex items-center gap-1.5 px-5 py-3 text-[12px] tabular-nums text-muted-foreground">
+		<div className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground">
 			<HelmorThinkingIndicator size={14} />
 			{label}
 		</div>

@@ -98,6 +98,12 @@ impl WatchableWorkspace {
                 .as_deref()
                 .map(std::path::PathBuf::from)
                 .with_context(|| format!("Local workspace {} is missing repo root_path", self.id)),
+            // Chat workspaces have no git context; the watcher should
+            // skip them before this resolves (see `is_watchable`).
+            WorkspaceMode::Chat => anyhow::bail!(
+                "Chat workspace {} should never be watched (no git)",
+                self.id
+            ),
         }
     }
 }
@@ -201,14 +207,25 @@ impl GitWatcherManager {
                 }
             });
 
-            // Restart fetchers whose workspace_dir changed (e.g. workspace deleted)
+            // Restart fetchers only when their recorded `-C` working
+            // directory is no longer usable on disk (the workspace it
+            // was bound to got archived / deleted). A `desired` entry
+            // for the same (repo, remote, branch) key that simply
+            // *prefers* a different workspace dir is NOT a reason to
+            // restart — `git fetch` writes to `.git/refs/remotes/...`
+            // and doesn't care which sibling worktree drove it, so
+            // rebinding the dir would just cancel a perfectly good
+            // background fetcher and spawn a new one that immediately
+            // hits the network. Doing that on every archive / restore
+            // / workspace churn (which all flow through this routine)
+            // means each user action effectively triggers one fresh
+            // network fetch per shared target, and a single unreachable
+            // remote freezes the UI for the SSH connect timeout — even
+            // though *another* fetcher for the very same target was
+            // already running fine moments ago.
             let restart_keys: Vec<FetchKey> = fetchers
                 .iter()
-                .filter(|(key, entry)| {
-                    desired
-                        .get(key)
-                        .is_some_and(|dir| *dir != entry.workspace_dir)
-                })
+                .filter(|(_key, entry)| !entry.workspace_dir.exists())
                 .map(|(key, _)| key.clone())
                 .collect();
             for key in &restart_keys {
@@ -345,14 +362,9 @@ fn start_watcher<R: Runtime>(
     let db_branch = ws.branch.clone();
     let app_handle = app.clone();
     let gitdir_for_callback = gitdir.clone();
-    // Local workspaces treat `branch` as a fixed label (set at creation
-    // and never auto-updated). Skip the head-change → DB-write side
-    // effect for them; we still emit refs-changed events for UI
-    // invalidation.
-    let track_branch_changes = ws.mode != WorkspaceMode::Local;
 
     // Shared state for the callback: last-known branch
-    let last_branch = std::sync::Arc::new(Mutex::new(db_branch));
+    let last_branch = std::sync::Arc::new(Mutex::new(db_branch.clone()));
     let last_branch_clone = last_branch.clone();
 
     let mut debouncer = new_debouncer(
@@ -397,7 +409,7 @@ fn start_watcher<R: Runtime>(
                 }
             }
 
-            if head_changed && track_branch_changes {
+            if head_changed {
                 handle_head_change(
                     &app_handle,
                     &workspace_id,
@@ -454,11 +466,12 @@ fn start_watcher<R: Runtime>(
         .watch(&common_dir, RecursiveMode::NonRecursive)
         .with_context(|| format!("Failed to watch {}", common_dir.display()))?;
 
-    // Seed last_branch with the actual current HEAD
+    // Seed last_branch with the actual current HEAD and reconcile stale DB.
     if let Some(current) = read_head_branch(&gitdir) {
         if let Ok(mut lb) = last_branch.lock() {
             *lb = Some(current);
         }
+        reconcile_initial_head_branch(app, &ws.id, db_branch.as_deref(), &gitdir, last_branch);
     }
 
     Ok(WorkspaceWatcher {
@@ -466,6 +479,48 @@ fn start_watcher<R: Runtime>(
         remote: ws.remote.clone(),
         target_branch: ws.target_branch.clone(),
     })
+}
+
+fn reconcile_initial_head_branch<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    db_branch: Option<&str>,
+    gitdir: &Path,
+    last_branch: Arc<Mutex<Option<String>>>,
+) {
+    let current = read_head_branch(gitdir);
+    if current.as_deref() == db_branch {
+        return;
+    }
+    let Some(ref branch) = current else {
+        return;
+    };
+    if let Err(e) = update_branch_in_db(workspace_id, db_branch, branch) {
+        tracing::error!(
+            workspace_id,
+            "Failed to reconcile initial branch in DB: {e:#}"
+        );
+        return;
+    }
+    if let Ok(mut lb) = last_branch.lock() {
+        *lb = current.clone();
+    }
+    ui_sync::publish(
+        app,
+        ui_sync::UiMutationEvent::WorkspaceGitStateChanged {
+            workspace_id: workspace_id.to_string(),
+        },
+    );
+    if let Err(e) = app.emit(
+        GIT_BRANCH_CHANGED_EVENT,
+        GitBranchChangedPayload {
+            workspace_id: workspace_id.to_string(),
+            old_branch: db_branch.map(ToOwned::to_owned),
+            new_branch: current,
+        },
+    ) {
+        tracing::warn!("Failed to emit git-branch-changed: {e}");
+    }
 }
 
 // -- Auto-fetch (one thread per unique target) --
@@ -500,8 +555,17 @@ fn start_auto_fetch(key: &FetchKey, workspace_dir: &Path) -> AutoFetchCancel {
     thread::Builder::new()
         .name(format!("auto-fetch-{repo}/{remote}/{branch}"))
         .spawn(move || {
-            run_fetch(&dir, &remote, &branch, &repo);
-
+            // No upfront fetch: any code path that started this thread
+            // (initial sync, restore, target-branch change, replacement
+            // of a stale dir) would otherwise pay a network round-trip
+            // *synchronously coupled to the UI action that triggered
+            // it*. When the remote is unreachable that round-trip is
+            // the SSH connect timeout — which is exactly the source of
+            // the post-restore UI freeze. Wait for the interval like
+            // every subsequent iteration so fetches stay decoupled from
+            // user input. Code paths that need a fetch right now should
+            // call `trigger_fetch_for_workspace` explicitly (it's
+            // throttled and runs off the main flow).
             loop {
                 if sleep_interruptible(&cancel_flag, AUTO_FETCH_INTERVAL) {
                     break;
@@ -603,6 +667,11 @@ fn lookup_fetch_target(workspace_id: &str) -> Result<(PathBuf, String, String, S
         WorkspaceMode::Local => root_path
             .map(PathBuf::from)
             .context("Local workspace is missing repo root_path")?,
+        // Chat workspaces have no remote, no branch — the watcher
+        // never registers them, so this branch shouldn't fire.
+        WorkspaceMode::Chat => {
+            anyhow::bail!("Chat workspace cannot fetch from remote (no git)")
+        }
     };
     Ok((workspace_dir, remote, branch, repo_id))
 }
@@ -712,12 +781,16 @@ fn update_branch_in_db(
 
 fn load_watchable_workspaces() -> Result<Vec<WatchableWorkspace>> {
     let connection = db::read_conn()?;
+    // Chat-mode workspaces have no git context — exclude them from the
+    // watcher entirely so we never try to fetch, diff, or read HEAD on
+    // a scratch dir that isn't a repo.
     let mut stmt = connection.prepare(
         "SELECT w.id, r.name, w.directory_name, w.branch, w.state,
                 r.remote, COALESCE(w.intended_target_branch, r.default_branch), r.id,
                 COALESCE(w.mode, 'worktree'), r.root_path
          FROM workspaces w
-         JOIN repos r ON r.id = w.repository_id",
+         JOIN repos r ON r.id = w.repository_id
+         WHERE COALESCE(w.mode, 'worktree') != 'chat'",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(WatchableWorkspace {
@@ -953,6 +1026,37 @@ mod tests {
         let json = serde_json::to_value(&payload).unwrap();
         assert!(json["oldBranch"].is_null());
         assert!(json["newBranch"].is_null());
+    }
+
+    #[test]
+    fn update_branch_in_db_syncs_checkout_branch() {
+        let env = crate::testkit::TestEnv::new("git-watcher-checkout-branch");
+        let conn = env.db_connection();
+        crate::testkit::insert_repo(&conn, "repo-1", "Repo", Some("origin"));
+        crate::testkit::insert_workspace(
+            &conn,
+            &crate::testkit::WorkspaceFixture {
+                id: "ws-1",
+                repo_id: "repo-1",
+                directory_name: "alpha",
+                state: WorkspaceState::Ready.as_str(),
+                branch: Some("feature/old"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        drop(conn);
+
+        update_branch_in_db("ws-1", Some("feature/old"), "feature/new").unwrap();
+
+        let branch: String = env
+            .db_connection()
+            .query_row(
+                "SELECT branch FROM workspaces WHERE id = 'ws-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(branch, "feature/new");
     }
 
     // -- FetchKey identity --

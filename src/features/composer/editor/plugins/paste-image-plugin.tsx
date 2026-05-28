@@ -19,7 +19,7 @@ import {
 	COMMAND_PRIORITY_CRITICAL,
 	PASTE_COMMAND,
 } from "lexical";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { savePastedImage } from "@/lib/api";
 import { buildComposerPreviewInsertItem } from "@/lib/composer-insert";
 import { isImagePath } from "@/lib/path-util";
@@ -75,8 +75,20 @@ function getClipboardData(event: unknown) {
 	);
 }
 
-export function PasteImagePlugin() {
+export function PasteImagePlugin({
+	sessionId,
+}: {
+	/**
+	 * Paste-cache bucket id: composer's bound `sessions.id` or its
+	 * provisional UUID. Always non-null — parent resolves
+	 * `bound ?? provisional` before passing. Read via ref so a session
+	 * switch doesn't re-register the paste command.
+	 */
+	sessionId: string;
+}) {
 	const [editor] = useLexicalComposerContext();
+	const sessionIdRef = useRef<string>(sessionId);
+	sessionIdRef.current = sessionId;
 
 	useEffect(() => {
 		return editor.registerCommand(
@@ -98,7 +110,9 @@ export function PasteImagePlugin() {
 
 					for (const file of imageFiles) {
 						readFileAsBase64(file)
-							.then((base64) => savePastedImage(base64, file.type))
+							.then((base64) =>
+								savePastedImage(base64, file.type, sessionIdRef.current),
+							)
 							.then((savedPath) => {
 								editor.update(() => {
 									// Use $appendToEnd instead of selection-based insert,

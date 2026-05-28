@@ -37,7 +37,7 @@ import type {
 } from "./session-manager.js";
 import {
 	buildTitlePrompt,
-	parseTitleAndBranch,
+	parseTitleAndBranchWithDiagnostics,
 	TITLE_GENERATION_TIMEOUT_MS,
 } from "./title.js";
 
@@ -359,6 +359,7 @@ export class ClaudeSessionManager implements SessionManager {
 			permissionMode,
 			effortLevel,
 			fastMode,
+			claudeThinkingDisplay,
 			claudeEnvironment,
 			agentProxy,
 			images,
@@ -398,11 +399,7 @@ export class ClaudeSessionManager implements SessionManager {
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
 		const proxyEnv = buildAgentProxyEnv(agentProxy);
-		const queryEnv = mergeQueryEnv(
-			proxyEnv,
-			claudeEnv,
-			additionalDirectoryEnv,
-		);
+		const queryEnv = mergeQueryEnv(proxyEnv, claudeEnv, additionalDirectoryEnv);
 		const projectMcpServers = loadProjectMcpServers(sourceRepoPath);
 		if (projectMcpServers) {
 			logger.info(`[${requestId}] claude project MCPs injected`, {
@@ -424,7 +421,10 @@ export class ClaudeSessionManager implements SessionManager {
 				permissionMode: parsePermissionMode(permissionMode),
 				allowDangerouslySkipPermissions: true,
 				effort: parseEffort(effortLevel),
-				thinking: { type: "adaptive", display: "summarized" },
+				thinking: {
+					type: "adaptive",
+					display: claudeThinkingDisplay ?? "summarized",
+				},
 				...(effectiveFastMode ? { settings: { fastMode: true } } : {}),
 				...(projectMcpServers ? { mcpServers: projectMcpServers } : {}),
 				onElicitation: async (request, options) => {
@@ -516,6 +516,11 @@ export class ClaudeSessionManager implements SessionManager {
 							!Array.isArray(auqInput.metadata)
 								? (auqInput.metadata as Record<string, unknown>)
 								: undefined;
+						logger.info(`[${requestId}] AUQ canUseTool fired`, {
+							toolUseId,
+							questionCount: rawQuestions.length,
+							hasMetadata: metadata !== undefined,
+						});
 						emitter.userInputRequest(
 							requestId,
 							toolUseId,
@@ -527,6 +532,9 @@ export class ClaudeSessionManager implements SessionManager {
 								...(metadata ? { metadata } : {}),
 							},
 						);
+						logger.info(`[${requestId}] AUQ userInputRequest emitted`, {
+							toolUseId,
+						});
 						const resolution = await new Promise<UserInputResolution>(
 							(resolve) => {
 								this.pendingUserInputs.set(toolUseId, {
@@ -543,6 +551,10 @@ export class ClaudeSessionManager implements SessionManager {
 								);
 							},
 						);
+						logger.info(`[${requestId}] AUQ resolved`, {
+							toolUseId,
+							action: resolution.action,
+						});
 						if (resolution.action === "submit") {
 							// The frontend AUQ renderer produces the full
 							// `updatedInput` shape directly (questions +
@@ -819,12 +831,14 @@ export class ClaudeSessionManager implements SessionManager {
 				}
 			}
 
-			const { title, branchName } = parseTitleAndBranch(raw);
-			logger.info(`[${requestId}] titleGenerated`, {
-				title,
-				branchName: branchName ?? "(empty)",
-				rawPreview: raw.slice(0, 200),
-			});
+			const { title, branchName } = parseTitleAndBranchWithDiagnostics(
+				requestId,
+				raw,
+				{
+					generateBranch,
+					logError: (message, meta) => logger.error(message, meta),
+				},
+			);
 			emitter.titleGenerated(requestId, title, branchName);
 		} finally {
 			clearTimeout(timeout);

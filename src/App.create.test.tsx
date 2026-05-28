@@ -124,7 +124,7 @@ describe("App create workspace flow", () => {
 		apiMocks.loadRepoScripts.mockReset();
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: null,
-			runScript: null,
+			runActions: [],
 			archiveScript: null,
 			setupFromProject: false,
 			runFromProject: false,
@@ -306,7 +306,7 @@ describe("App create workspace flow", () => {
 				state: "initializing",
 				repoScripts: {
 					setupScript: null,
-					runScript: null,
+					runActions: [],
 					archiveScript: null,
 					setupFromProject: false,
 					runFromProject: false,
@@ -402,6 +402,10 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
+				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {
@@ -441,8 +445,8 @@ describe("App create workspace flow", () => {
 		await user.click(screen.getByRole("button", { name: "New workspace" }));
 		expect(await screen.findByLabelText("Workspace input")).toBeInTheDocument();
 		expect(
-			screen.queryByLabelText("Workspace panel drag region"),
-		).not.toBeInTheDocument();
+			screen.getByLabelText("Workspace panel drag region"),
+		).toBeInTheDocument();
 
 		commitComposerText(
 			screen.getByLabelText("Workspace input"),
@@ -458,6 +462,10 @@ describe("App create workspace flow", () => {
 				"repo-1",
 				"main",
 				"worktree",
+				"from_branch",
+				null,
+				// Composer-minted provisional session id; opaque UUID.
+				expect.any(String),
 			);
 		});
 		await waitFor(() => {

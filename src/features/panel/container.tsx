@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { enqueueComposerPrefill } from "@/features/composer/prefill-queue";
 import { getShortcut } from "@/features/shortcuts/registry";
 import type {
 	AgentModelSection,
@@ -18,6 +19,7 @@ import {
 	workspaceSessionsQueryOptions,
 } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import type { ContextCard } from "@/lib/sources/types";
 import { resolveSessionDisplayProvider } from "@/lib/workspace-helpers";
 import {
@@ -445,15 +447,13 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 			return;
 		}
 
+		requestSidebarReconcile(queryClient);
 		await Promise.all([
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(displayedWorkspaceId),
 			}),
 			queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceSessions(displayedWorkspaceId),
-			}),
-			queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
 			}),
 		]);
 	}, [displayedWorkspaceId, queryClient]);
@@ -538,6 +538,12 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		sessions.find((session) => session.id === selectedSessionIdForPanel) ??
 		null;
 	const missingScriptTypes = useMemo<WorkspaceScriptType[]>(() => {
+		// Chat workspaces have no setup / run / archive concept — the
+		// empty state should show only the headline, not pitch scripts
+		// the user can never run from this surface.
+		if (workspace?.mode === "chat") {
+			return [];
+		}
 		if (!selectedSession) {
 			return [];
 		}
@@ -551,14 +557,14 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		if (!scripts.setupScript?.trim()) {
 			missing.push("setup");
 		}
-		if (!scripts.runScript?.trim()) {
+		if (!scripts.runActions.some((a) => a.command.trim())) {
 			missing.push("run");
 		}
 		if (!scripts.archiveScript?.trim()) {
 			missing.push("archive");
 		}
 		return missing;
-	}, [repoScriptsQuery.data, selectedSession]);
+	}, [repoScriptsQuery.data, selectedSession, workspace?.mode]);
 	const handleInitializeScript = useCallback(
 		(scriptType: WorkspaceScriptType) => {
 			if (!selectedSessionIdForPanel || !onQueuePendingPromptForSession) {
@@ -572,6 +578,60 @@ export const WorkspacePanelContainer = memo(function WorkspacePanelContainer({
 		},
 		[onQueuePendingPromptForSession, selectedSessionIdForPanel],
 	);
+
+	// Inspector dropdowns sometimes want to "open a fresh session with a
+	// starter prompt already in the composer" — distinct from the
+	// onboarding `handleInitializeScript` path, which auto-sends into the
+	// currently-selected session. We create a fresh session, queue the
+	// prefill so the next composer mount picks it up, optimistically
+	// switch the workspace's active session pointer, and invalidate the
+	// sessions list. The composer then mounts, consumes the prefill,
+	// drops the caret right at the end of the intro line, and waits for
+	// the user to finish the thought before submitting.
+	const onSelectSessionLatest = useRef(onSelectSession);
+	onSelectSessionLatest.current = onSelectSession;
+	useEffect(() => {
+		const targetWorkspaceId = displayedWorkspaceId;
+		if (!targetWorkspaceId) return;
+		const handler = (event: Event) => {
+			const detail = (event as CustomEvent).detail as
+				| { workspaceId: string; intro: string; body: string }
+				| undefined;
+			if (!detail) return;
+			if (detail.workspaceId !== targetWorkspaceId) return;
+			void createSession(targetWorkspaceId).then(({ sessionId }) => {
+				enqueueComposerPrefill(sessionId, {
+					intro: detail.intro,
+					body: detail.body,
+				});
+				// Mirror the optimistic-update pattern used by the auto-
+				// create-session flow above: bump active_session_id on the
+				// cached workspace detail so the chat panel re-renders
+				// against the new session right away.
+				queryClient.setQueryData(
+					helmorQueryKeys.workspaceDetail(targetWorkspaceId),
+					(current: WorkspaceDetail | null | undefined) => {
+						if (!current) return current;
+						return {
+							...current,
+							activeSessionId: sessionId,
+							activeSessionTitle: "Untitled",
+							activeSessionAgentType: null,
+							activeSessionStatus: "idle",
+							sessionCount: Math.max(current.sessionCount, 1),
+						};
+					},
+				);
+				void queryClient.invalidateQueries({
+					queryKey: workspaceSessionsQueryOptions(targetWorkspaceId).queryKey,
+				});
+				onSelectSessionLatest.current(sessionId);
+			});
+		};
+		window.addEventListener("helmor:create-prefilled-session", handler);
+		return () =>
+			window.removeEventListener("helmor:create-prefilled-session", handler);
+	}, [displayedWorkspaceId, queryClient]);
 
 	return (
 		<WorkspacePanel

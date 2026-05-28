@@ -77,12 +77,21 @@ struct SidecarProcess {
 }
 
 #[derive(Debug, Default)]
-struct BundledAgentPaths {
-    claude_bin: Option<PathBuf>,
-    codex_bin: Option<PathBuf>,
+pub struct BundledAgentPaths {
+    pub claude_bin: Option<PathBuf>,
+    pub codex_bin: Option<PathBuf>,
 }
 
-fn resolve_bundled_agent_paths() -> BundledAgentPaths {
+/// Resolve the bundled Claude/Codex CLI binaries shipped inside the
+/// `.app` (release builds only — returns empty in dev). Used both by
+/// the sidecar boot path (to pass `HELMOR_*_BIN_PATH` env vars) and by
+/// onboarding so login-status checks + login terminals don't depend on
+/// the user having the CLIs on PATH.
+///
+/// Dev intentionally returns empty so callers fall back to PATH — Helmor
+/// should not silently prefer one of the sidecar's `node_modules`
+/// binaries over whatever the developer has installed.
+pub fn resolve_bundled_agent_paths() -> BundledAgentPaths {
     std::env::current_exe()
         .ok()
         .and_then(|exe| resolve_bundled_agent_paths_for_exe(&exe))
@@ -133,6 +142,14 @@ impl SidecarProcess {
         let mut cmd = if is_dev {
             let mut c = Command::new("bun");
             c.arg("run").arg(&sidecar_path);
+            // Anchor cwd to sidecar/ so Bun discovers `bunfig.toml` and
+            // applies the preload that registers our build-time plugins
+            // (sqlite3 shim + cursor SDK chunk) at runtime. Without this
+            // the sidecar inherits Tauri's cwd and the preload never runs,
+            // so loading @cursor/sdk crashes on the native sqlite3 addon.
+            if let Some(sidecar_root) = sidecar_path.parent().and_then(|p| p.parent()) {
+                c.current_dir(sidecar_root);
+            }
             c
         } else {
             Command::new(&sidecar_path)
@@ -310,11 +327,23 @@ impl Drop for SidecarProcess {
 
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<SidecarEvent>>>>;
 
+/// One `hostRequest` envelope routed from the reader thread to the host dispatcher.
+#[derive(Debug)]
+pub struct HostRequestEnvelope {
+    pub callback_id: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+/// `Mutex<Option<Sender>>` (Sender is !Sync); reader looks up per event so install order doesn't matter.
+type HostRequestSenderSlot = Arc<Mutex<Option<mpsc::Sender<HostRequestEnvelope>>>>;
+
 pub struct ManagedSidecar {
     process: Mutex<Option<SidecarProcess>>,
     listeners: Listeners,
     /// Shared flag so the reader thread can signal its own exit.
     reader_running: Arc<Mutex<bool>>,
+    host_request_tx: HostRequestSenderSlot,
 }
 
 impl Default for ManagedSidecar {
@@ -329,7 +358,36 @@ impl ManagedSidecar {
             process: Mutex::new(None),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reader_running: Arc::new(Mutex::new(false)),
+            host_request_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    // Called once from Tauri setup; later calls are no-ops.
+    pub fn install_host_dispatcher(&self) -> mpsc::Receiver<HostRequestEnvelope> {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut slot) = self.host_request_tx.lock() {
+            *slot = Some(tx);
+        }
+        rx
+    }
+
+    // Shares the stdin lock with `send()` so request/response writes can't interleave.
+    pub fn send_host_response(&self, response: &crate::sidecar_host::HostResponse) -> Result<()> {
+        let guard = self
+            .process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar lock poisoned"))?;
+        let Some(process) = guard.as_ref() else {
+            anyhow::bail!("Sidecar not running (hostResponse dropped)");
+        };
+        let mut stdin = process
+            .stdin
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Sidecar stdin lock poisoned"))?;
+        let json = serde_json::to_string(response).context("Failed to serialize hostResponse")?;
+        writeln!(stdin, "{json}").context("Failed to write hostResponse")?;
+        stdin.flush().context("Failed to flush hostResponse")?;
+        Ok(())
     }
 
     /// Register a listener for events matching `request_id`.
@@ -374,8 +432,9 @@ impl ManagedSidecar {
             let (process, reader) = SidecarProcess::start()?;
             *guard = Some(process);
 
-            // Start the reader/dispatcher thread (always spawns fresh)
-            if let Err(error) = self.start_reader_thread(reader) {
+            // Start reader (always fresh). Pass an Arc so install ordering doesn't matter.
+            let host_tx_slot = Arc::clone(&self.host_request_tx);
+            if let Err(error) = self.start_reader_thread(reader, host_tx_slot) {
                 tracing::error!(error = %error, "Failed to start sidecar reader thread");
                 if let Some(mut process) = guard.take() {
                     process.kill();
@@ -505,7 +564,11 @@ impl ManagedSidecar {
         dispatch_event(&self.listeners, event, raw)
     }
 
-    fn start_reader_thread(&self, reader: BufReader<std::process::ChildStdout>) -> Result<()> {
+    fn start_reader_thread(
+        &self,
+        reader: BufReader<std::process::ChildStdout>,
+        host_tx_slot: HostRequestSenderSlot,
+    ) -> Result<()> {
         // Reset flag — previous reader (if any) already exited or we killed its process.
         if let Ok(mut running) = self.reader_running.lock() {
             *running = false;
@@ -544,6 +607,33 @@ impl ManagedSidecar {
                                 tracing::error!(line = trimmed, "Invalid JSON from sidecar");
                                 continue;
                             };
+                            // Reverse channel: route `hostRequest` ahead of normal event dispatch.
+                            if raw.get("type").and_then(Value::as_str) == Some("hostRequest") {
+                                match parse_host_request(&raw) {
+                                    Ok(env) => {
+                                        let sender = host_tx_slot
+                                            .lock()
+                                            .ok()
+                                            .and_then(|g| g.as_ref().cloned());
+                                        if let Some(tx) = sender {
+                                            if let Err(error) = tx.send(env) {
+                                                tracing::warn!(
+                                                    error = %error,
+                                                    "hostRequest forward failed (receiver dropped)"
+                                                );
+                                            }
+                                        } else {
+                                            tracing::warn!(
+                                                "hostRequest received but dispatcher not installed"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "invalid hostRequest");
+                                    }
+                                }
+                                continue;
+                            }
                             let event = SidecarEvent { raw };
                             if dispatch_event(&listeners, event, trimmed) {
                                 event_count += 1;
@@ -597,6 +687,23 @@ impl ManagedSidecar {
                 anyhow::anyhow!("Failed to spawn sidecar reader thread: {error}")
             })
     }
+}
+
+fn parse_host_request(raw: &Value) -> Result<HostRequestEnvelope> {
+    let callback_id = raw
+        .get("callbackId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing callbackId"))?;
+    let method = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("hostRequest missing method"))?;
+    let params = raw.get("params").cloned().unwrap_or(Value::Null);
+    Ok(HostRequestEnvelope {
+        callback_id: callback_id.to_string(),
+        method: method.to_string(),
+        params,
+    })
 }
 
 /// Dispatch one event. `true` when delivered to a listener; no-id

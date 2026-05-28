@@ -9,6 +9,49 @@ import { vi } from "vitest";
 // is unchanged.
 configure({ asyncUtilTimeout: 3000 });
 
+if (typeof window !== "undefined" && !window.localStorage) {
+	const store = new Map<string, string>();
+	const localStorageMock = Object.create(Storage.prototype) as Storage;
+	Object.defineProperties(localStorageMock, {
+		clear: {
+			value: () => store.clear(),
+			configurable: true,
+		},
+		getItem: {
+			value: (key: string) => store.get(key) ?? null,
+			configurable: true,
+		},
+		key: {
+			value: (index: number) => Array.from(store.keys())[index] ?? null,
+			configurable: true,
+		},
+		length: {
+			get: () => store.size,
+			configurable: true,
+		},
+		removeItem: {
+			value: (key: string) => {
+				store.delete(key);
+			},
+			configurable: true,
+		},
+		setItem: {
+			value: (key: string, value: string) => {
+				store.set(key, String(value));
+			},
+			configurable: true,
+		},
+	});
+	Object.defineProperty(window, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+	Object.defineProperty(globalThis, "localStorage", {
+		value: localStorageMock,
+		configurable: true,
+	});
+}
+
 // React 19.2's dev build schedules passive-effect work through
 // `setImmediate`, and its callback reads `window.event` (react-dom's
 // `schedulerEvent = window.event;` at react-dom-client.development.js L17920).
@@ -139,7 +182,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 					claude: false,
 					codex: false,
 					command:
-						"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+						"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 				};
 			case "get_app_update_status":
 				return {
@@ -151,6 +194,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 					lastAttemptAt: null,
 					downloadedAt: null,
 				};
+			case "get_helmor_components_update_check":
+				return {
+					cli: {
+						installed: false,
+						installPath: null,
+						buildMode: "development",
+						installState: "missing",
+					},
+					skills: {
+						installed: false,
+						claude: false,
+						codex: false,
+						command:
+							"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+					},
+					lastCheckedVersion: null,
+					currentVersion: "0.0.0-test",
+					cliError: null,
+					skillsError: null,
+				};
 			case "load_auto_close_action_kinds":
 				return [];
 			case "load_auto_close_opt_in_asked":
@@ -159,8 +222,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				return [];
 			case "list_workspace_files":
 				return [];
-			case "list_workspace_changes_with_content":
-				return { items: [], prefetched: [] };
+			case "list_workspace_changes":
+				return [];
 			case "list_slash_commands":
 				return [];
 			case "list_workspace_linked_directories":
@@ -209,7 +272,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 				};
 			case "list_forge_logins":
 			case "list_forge_accounts":
-			case "list_github_labels":
+			case "list_forge_labels":
+			case "list_inbox_kind_labels":
 				return [];
 			case "spawn_forge_cli_auth_terminal":
 				return undefined;
@@ -270,6 +334,10 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
 if (typeof HTMLCanvasElement !== "undefined") {
 	Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 		configurable: true,
+		// `src/lib/css-color.ts` resolves CSS values via canvas (gradient
+		// sentinel + getImageData). jsdom doesn't ship a canvas backend, so we
+		// stub the methods it touches with shapes that exercise the same code
+		// paths without crashing.
 		value: vi.fn(() => ({
 			measureText: (text: string) => ({
 				width: text.length * 8,
@@ -290,6 +358,14 @@ if (typeof HTMLCanvasElement !== "undefined") {
 			lineTo: () => {},
 			stroke: () => {},
 			fillText: () => {},
+			createLinearGradient: () => ({
+				addColorStop: () => {},
+			}),
+			getImageData: () => ({
+				data: new Uint8ClampedArray([0, 0, 0, 255]),
+			}),
+			fillStyle: "",
+			globalCompositeOperation: "source-over",
 			font: "",
 			textBaseline: "alphabetic",
 		})),

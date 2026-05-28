@@ -3,6 +3,7 @@ import Skeleton from "react-loading-skeleton";
 import { InboxSidebar } from "@/features/inbox";
 import type { RepositoryCreateOption } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { parseForgeRepoFilter } from "@/lib/forge-repo-filter";
 import type { ContextCard } from "@/lib/sources/types";
 
 type WorkspaceStartContextSidebarProps = {
@@ -49,8 +50,8 @@ export function WorkspaceStartContextSidebar({
 			className="flex h-full min-h-0 flex-col bg-sidebar"
 			style={{ contain: "layout paint style" }}
 		>
-			<div className="flex h-8 shrink-0 items-center border-border/60 border-b bg-muted/25 px-3">
-				<h2 className="text-[13px] font-medium leading-8 tracking-[-0.01em] text-muted-foreground">
+			<div className="flex h-8 shrink-0 items-center border-border/60 border-b bg-muted/30 px-3">
+				<h2 className="text-ui font-medium leading-8 tracking-[-0.01em] text-muted-foreground">
 					Contexts
 				</h2>
 			</div>
@@ -59,7 +60,8 @@ export function WorkspaceStartContextSidebar({
 					className="flex min-h-0 flex-1 bg-sidebar"
 					onOpenCard={onOpenCard}
 					selectedCardId={selectedCardId}
-					repoFilter={parseGithubRepoFilter(repository)}
+					repository={repository}
+					repoFilter={parseForgeRepoFilter(repository)}
 					providerTab={
 						inboxProviderTab as Parameters<
 							typeof InboxSidebar
@@ -87,7 +89,7 @@ export function WorkspaceStartContextSidebar({
 function ContextSidebarShell() {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-sidebar px-3 pt-2">
-			<div className="grid w-full grid-cols-3 gap-1 rounded-lg border border-border/60 bg-background/40 p-1">
+			<div className="grid w-full grid-cols-3 gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
 				<Skeleton
 					containerClassName="block h-7"
 					className="h-7 rounded-md"
@@ -170,28 +172,4 @@ function ContextCardSkeleton() {
 			</div>
 		</div>
 	);
-}
-
-function parseGithubRepoFilter(
-	repository: RepositoryCreateOption | null,
-): string | null {
-	if (!repository) return null;
-	if (repository.forgeProvider && repository.forgeProvider !== "github") {
-		return null;
-	}
-	const trimmed = (repository.remoteUrl ?? "").trim();
-	if (!trimmed) return null;
-	const sshMatch = trimmed.match(
-		/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
-	);
-	if (sshMatch) {
-		return `${sshMatch[1]}/${sshMatch[2]}`;
-	}
-	const httpsMatch = trimmed.match(
-		/^(?:https?|git|ssh:\/\/git@)?:?\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
-	);
-	if (httpsMatch) {
-		return `${httpsMatch[1]}/${httpsMatch[2]}`;
-	}
-	return null;
 }

@@ -1,12 +1,12 @@
+import { useQuery } from "@tanstack/react-query";
 import {
 	ChevronDown,
 	Loader2,
 	Pickaxe,
-	Search,
 	SlidersHorizontal,
 	Smartphone,
-	X,
 } from "lucide-react";
+import type { ChangeEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
@@ -18,7 +18,15 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type {
+	ForgeProvider,
+	InboxKindLabels,
+	RepositoryCreateOption,
+} from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { forgeLabelsFor } from "@/lib/forge-labels";
+import { parseForgeRepoHost } from "@/lib/forge-repo-filter";
+import { inboxKindLabelsQueryOptions } from "@/lib/query-client";
 import {
 	DEFAULT_INBOX_ACCOUNT_TOGGLES,
 	type InboxAccountSourceToggles,
@@ -27,28 +35,36 @@ import {
 import type { ContextCard, ContextCardSource } from "@/lib/sources/types";
 import { useForgeAccountsAll } from "@/lib/use-forge-accounts";
 import { cn } from "@/lib/utils";
+import {
+	InboxActionIconButton,
+	InboxActionMenuButton,
+	InboxSearchField,
+} from "./actions";
+import { InboxSourceLayout } from "./layout";
+import { SlackInboxSection } from "./slack-inbox-section";
 import { SourceCard } from "./source-card";
 import { SourceIcon } from "./source-icon";
+import { useDebouncedValue } from "./use-debounced-value";
 import {
 	type InboxItemWithDetailRef,
 	type InboxKind,
 	useInboxItems,
 } from "./use-inbox-items";
 
-/** Map the GitHub sub-tab id to the kind the inbox hook fetches. The
- *  GitHubTypeFilter ids share the same string shape as `ContextCardSource`,
- *  so a single literal table keeps them in sync. */
-const TAB_TO_INBOX_KIND: Record<GitHubTypeFilter["id"], InboxKind> = {
-	github_issue: "issues",
-	github_pr: "prs",
-	github_discussion: "discussions",
-};
+/** Forge providers that have an inbox backend implementation. Used to
+ *  narrow `repository.forgeProvider` (which can also be "unknown"). */
+type ForgeFilterId = "github" | "gitlab";
 
-function isGitHubTypeEnabled(
-	filter: GitHubTypeFilter,
+/** All non-forge providers stay as "Coming Soon" placeholders. */
+type ExternalFilterId = "linear" | "slack" | "mobile";
+
+type SourceFilterId = ForgeFilterId | ExternalFilterId;
+
+function isForgeKindEnabled(
+	kind: InboxKind,
 	toggles: InboxAccountSourceToggles,
 ) {
-	return toggles[TAB_TO_INBOX_KIND[filter.id]];
+	return toggles[kind];
 }
 
 /** Matches the constant in App.tsx — keep these in sync (one of two
@@ -62,47 +78,47 @@ function openInboxSettings() {
 	);
 }
 
-type SourceFilter = {
-	id: "github" | "gitlab" | "linear" | "slack" | "mobile";
-	label: string;
-	sources: ContextCardSource[];
-};
+type ForgeStateFilterId =
+	| "all"
+	| "open"
+	| "closed"
+	| "merged"
+	| "answered"
+	| "unanswered";
 
-type GitHubTypeFilter = {
-	id: "github_issue" | "github_pr" | "github_discussion";
-	label: string;
-	sources: Extract<
-		ContextCardSource,
-		"github_issue" | "github_pr" | "github_discussion"
-	>[];
-};
-
-type GitHubStateFilter = {
-	id: "all" | "open" | "closed" | "merged" | "answered" | "unanswered";
+type ForgeStateFilter = {
+	id: ForgeStateFilterId;
+	/** Generic state-filter copy — same wording across providers, so it
+	 *  can stay in frontend. Provider-differentiated copy (PR vs MR)
+	 *  comes from `inboxKindLabelsQueryOptions` instead. */
 	label: string;
 };
 
-const SOURCE_FILTERS: SourceFilter[] = [
-	{
-		id: "github",
-		label: "GitHub",
-		sources: ["github_issue", "github_pr", "github_discussion"],
-	},
-	{ id: "gitlab", label: "GitLab", sources: [] },
-	{ id: "linear", label: "Linear", sources: ["linear"] },
-	{ id: "slack", label: "Slack", sources: ["slack_thread"] },
-	{ id: "mobile", label: "Mobile", sources: [] },
-];
+const EXTERNAL_FILTER_IDS: ExternalFilterId[] = ["slack", "linear", "mobile"];
 
-const COMING_SOON_COPY: Record<
-	Exclude<SourceFilter["id"], "github">,
-	string[]
-> = {
-	gitlab: [
-		"Link merge requests, issues, and pipeline failures as context.",
-		"Turn review threads into targeted fix prompts.",
-		"Bring CI logs and branch state into the workspace flow.",
-	],
+/** If the user pastes a GitHub or GitLab issue/PR/MR URL into the
+ *  search box, snap the sub-tab to the matching kind so the result
+ *  list narrows immediately. Returns `null` when the query isn't a
+ *  recognised forge URL. */
+function forgeUrlToInboxKind(query: string): InboxKind | null {
+	const trimmed = query.trim();
+	// GitHub: github.com/owner/repo/(issues|pull)/N
+	const gh = trimmed.match(
+		/^(?:https?:\/\/)?github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(?:[/?#].*)?$/i,
+	);
+	if (gh) return gh[1].toLowerCase() === "issues" ? "issues" : "prs";
+	// GitLab: <host>/group/.../project/-/(issues|merge_requests)/N. The
+	// `/-/` segment is GitLab-exclusive routing — it disambiguates from
+	// generic project paths and is the same on gitlab.com and self-
+	// hosted instances.
+	const gl = trimmed.match(
+		/^(?:https?:\/\/)?[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*\/-\/(issues|merge_requests)\/\d+(?:[/?#].*)?$/i,
+	);
+	if (gl) return gl[1].toLowerCase() === "issues" ? "issues" : "prs";
+	return null;
+}
+
+const COMING_SOON_COPY: Record<ExternalFilterId, string[]> = {
 	linear: [
 		"Pull in issues, specs, labels, and priorities.",
 		"Start workspaces directly from planned tasks.",
@@ -120,59 +136,74 @@ const COMING_SOON_COPY: Record<
 	],
 };
 
-const GITHUB_TYPE_FILTERS: GitHubTypeFilter[] = [
-	{ id: "github_issue", label: "Issues", sources: ["github_issue"] },
-	{ id: "github_pr", label: "PRs", sources: ["github_pr"] },
-	{
-		id: "github_discussion",
-		label: "Discussions",
-		sources: ["github_discussion"],
-	},
-];
-
-const GITHUB_STATE_FILTERS: Record<
-	GitHubTypeFilter["id"],
-	GitHubStateFilter[]
-> = {
-	github_issue: [
+/** Generic state filter sets per kind. Not provider-differentiated —
+ *  Open / Closed / Merged / Answered / Unanswered mean the same thing
+ *  on both forges. Provider-specific COPY (e.g. "Merge requests" vs
+ *  "Pull requests" for the kind label itself) comes from the backend
+ *  via `inboxKindLabelsQueryOptions`. */
+const FORGE_STATE_FILTERS: Record<InboxKind, ForgeStateFilter[]> = {
+	issues: [
 		{ id: "all", label: "All" },
 		{ id: "open", label: "Open" },
 		{ id: "closed", label: "Closed" },
 	],
-	github_pr: [
+	prs: [
 		{ id: "all", label: "All" },
 		{ id: "open", label: "Open" },
 		{ id: "closed", label: "Closed" },
 		{ id: "merged", label: "Merged" },
 	],
-	github_discussion: [
+	discussions: [
 		{ id: "all", label: "All" },
 		{ id: "answered", label: "Answered" },
 		{ id: "unanswered", label: "Unanswered" },
 	],
 };
 
-function defaultStateForGitHubType(
-	filterId: GitHubTypeFilter["id"],
+/** Implementation-detail map: which `ContextCardSource` glyph to render
+ *  for a given (provider, kind) pair. Not user-facing copy — these are
+ *  enum identifiers driving the icon picker, so they stay in the
+ *  frontend. The backend's `inboxKindLabels` covers all displayed text. */
+const INBOX_KIND_ICON_SOURCE: Record<
+	ForgeFilterId,
+	Partial<Record<InboxKind, ContextCardSource>>
+> = {
+	github: {
+		issues: "github_issue",
+		prs: "github_pr",
+		discussions: "github_discussion",
+	},
+	gitlab: {
+		issues: "gitlab_issue",
+		prs: "gitlab_mr",
+	},
+};
+
+function defaultStateForKind(
+	kind: InboxKind,
 	toggles: InboxAccountSourceToggles,
-): GitHubStateFilter["id"] {
-	if (filterId === "github_issue") return toggles.issueState;
-	if (filterId === "github_pr") return toggles.prState;
+): ForgeStateFilterId {
+	if (kind === "issues") return toggles.issueState;
+	if (kind === "prs") return toggles.prState;
 	return toggles.discussionState;
 }
-function useDebouncedValue<T>(value: T, delayMs: number) {
-	const [debouncedValue, setDebouncedValue] = useState(value);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setDebouncedValue(value), delayMs);
-		return () => window.clearTimeout(timer);
-	}, [value, delayMs]);
-	return debouncedValue;
+
+/** Pick the forge-tab id that corresponds to the project's forge.
+ *  Falls back to GitHub for unknown / null — preserves legacy behaviour
+ *  on repos whose `forge_provider` column was migrated in late. */
+export function forgeFilterIdForRepo(
+	repository: RepositoryCreateOption | null,
+): ForgeFilterId {
+	const provider: ForgeProvider | null | undefined = repository?.forgeProvider;
+	if (provider === "gitlab") return "gitlab";
+	return "github";
 }
 
 export const InboxSidebar = memo(function InboxSidebar({
 	className,
 	onOpenCard,
 	selectedCardId,
+	repository,
 	repoFilter,
 	providerTab,
 	providerSourceTab,
@@ -188,82 +219,123 @@ export const InboxSidebar = memo(function InboxSidebar({
 	selectedCardId?: string | null;
 	appendContextTarget?: ComposerInsertTarget;
 	showWindowSafeTop?: boolean;
-	/** GitHub `owner/name` to scope the inbox queries to a single repo,
-	 *  driven by the kanban header's repo picker. `null` = unfiltered
-	 *  (the user's global "involves:@me" feed). */
+	/** Repository the inbox is currently scoped to. Used to derive
+	 *  which forge tab (GitHub vs GitLab) is shown — only the project's
+	 *  own forge appears, never both. */
+	repository?: RepositoryCreateOption | null;
+	/** `owner/name` (GitHub) or `group/.../project` (GitLab) — scopes
+	 *  every kind to a single repo on the backend. `null` = unfiltered
+	 *  (the user's global involves-me feed). */
 	repoFilter?: string | null;
-	/** Controlled top-level provider tab (e.g. "github"). When provided,
-	 *  the parent owns the selection so it can be persisted across
-	 *  restarts; otherwise the sidebar manages its own state. */
-	providerTab?: SourceFilter["id"];
-	onProviderTabChange?: (tab: SourceFilter["id"]) => void;
-	/** Controlled GitHub sub-tab id (issue/pr/discussion). Same
+	/** Controlled top-level provider tab id. Includes "github" | "gitlab"
+	 *  (the project's forge) plus the external "Coming Soon" providers.
+	 *  When provided, the parent owns the selection so it can be
+	 *  persisted across restarts; otherwise the sidebar manages its own
+	 *  state. */
+	providerTab?: SourceFilterId;
+	onProviderTabChange?: (tab: SourceFilterId) => void;
+	/** Controlled forge sub-tab id (issues / prs / discussions). Same
 	 *  controlled-vs-internal pattern as `providerTab`. */
-	providerSourceTab?: GitHubTypeFilter["id"];
-	onProviderSourceTabChange?: (tab: GitHubTypeFilter["id"]) => void;
+	providerSourceTab?: InboxKind;
+	onProviderSourceTabChange?: (tab: InboxKind) => void;
 	stateFilterBySource?: Record<string, string>;
 	onStateFilterBySourceChange?: (filters: Record<string, string>) => void;
 }) {
+	const projectForgeId = forgeFilterIdForRepo(repository ?? null);
+	const visibleSourceFilters = useMemo<SourceFilterId[]>(
+		() => [projectForgeId, ...EXTERNAL_FILTER_IDS],
+		[projectForgeId],
+	);
+
 	const [internalSelectedSource, setInternalSelectedSource] =
-		useState<SourceFilter["id"]>("github");
-	const [internalGithubTypeFilter, setInternalGithubTypeFilter] =
-		useState<GitHubTypeFilter["id"]>("github_issue");
+		useState<SourceFilterId>(projectForgeId);
+	const [internalForgeTypeFilter, setInternalForgeTypeFilter] =
+		useState<InboxKind>("issues");
 	const selectedSource = providerTab ?? internalSelectedSource;
-	const githubTypeFilter = providerSourceTab ?? internalGithubTypeFilter;
-	const setSelectedSource = (next: SourceFilter["id"]) => {
+	const forgeTypeFilter = providerSourceTab ?? internalForgeTypeFilter;
+	const setSelectedSource = (next: SourceFilterId) => {
 		setInternalSelectedSource(next);
 		onProviderTabChange?.(next);
 	};
-	const setGithubTypeFilter = (next: GitHubTypeFilter["id"]) => {
-		setInternalGithubTypeFilter(next);
+	const setForgeTypeFilter = (next: InboxKind) => {
+		setInternalForgeTypeFilter(next);
 		onProviderSourceTabChange?.(next);
 	};
+
+	// If the visible set changes (different repo's forge), and the
+	// currently-selected provider is the *other* forge that's no longer
+	// rendered, snap to the project's forge. External providers stay
+	// pinned through repo switches.
+	useEffect(() => {
+		if (selectedSource !== "github" && selectedSource !== "gitlab") {
+			return;
+		}
+		if (selectedSource === projectForgeId) return;
+		setInternalSelectedSource(projectForgeId);
+		onProviderTabChange?.(projectForgeId);
+	}, [projectForgeId, selectedSource, onProviderTabChange]);
+
 	const [searchQuery, setSearchQuery] = useState("");
 	const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
-	const selectedFilter =
-		SOURCE_FILTERS.find((filter) => filter.id === selectedSource) ??
-		SOURCE_FILTERS[0];
-	const selectedGitHubTypeFilter =
-		GITHUB_TYPE_FILTERS.find((filter) => filter.id === githubTypeFilter) ??
-		GITHUB_TYPE_FILTERS[0];
-	const isComingSoonSource = selectedFilter.id !== "github";
+
+	const isForgeSource =
+		selectedSource === "github" || selectedSource === "gitlab";
+	const activeForgeProvider: ForgeFilterId = isForgeSource
+		? (selectedSource as ForgeFilterId)
+		: projectForgeId;
+	const isComingSoonSource = !isForgeSource;
+	const activeForgeLabels = forgeLabelsFor(activeForgeProvider);
+
+	// Backend-authoritative kind labels. Provider-specific copy (PR vs
+	// MR, "Pull requests" vs "Merge requests", GitHub-only Discussions
+	// entry) lives in the Forge layer, never in TypeScript constants.
+	const kindLabelsQuery = useQuery(
+		inboxKindLabelsQueryOptions(activeForgeProvider),
+	);
+	const kindLabels: InboxKindLabels[] = kindLabelsQuery.data ?? [];
+
 	const accountsQuery = useForgeAccountsAll();
 	const { settings } = useSettings();
-	const primaryGithubAccount = useMemo(
-		() => (accountsQuery.data ?? []).find((a) => a.provider === "github"),
-		[accountsQuery.data],
+	const primaryForgeAccount = useMemo(
+		() =>
+			(accountsQuery.data ?? []).find(
+				(a) => a.provider === activeForgeProvider,
+			),
+		[accountsQuery.data, activeForgeProvider],
 	);
-	const hasGithubAccount = useMemo(
-		() => Boolean(primaryGithubAccount),
-		[primaryGithubAccount],
+	const hasForgeAccount = useMemo(
+		() => Boolean(primaryForgeAccount),
+		[primaryForgeAccount],
 	);
 	const currentInboxToggles = useMemo(() => {
-		if (!primaryGithubAccount) return DEFAULT_INBOX_ACCOUNT_TOGGLES;
-		const key = `${primaryGithubAccount.provider}:${primaryGithubAccount.login}`;
+		if (!primaryForgeAccount) return DEFAULT_INBOX_ACCOUNT_TOGGLES;
+		const key = `${primaryForgeAccount.provider}:${primaryForgeAccount.login}`;
 		return (
 			settings.inboxSourceConfig?.accounts?.[key] ??
 			DEFAULT_INBOX_ACCOUNT_TOGGLES
 		);
-	}, [primaryGithubAccount, settings.inboxSourceConfig]);
-	const enabledGitHubTypeFilters = useMemo(
+	}, [primaryForgeAccount, settings.inboxSourceConfig]);
+
+	const enabledKindLabels = useMemo<InboxKindLabels[]>(
 		() =>
-			GITHUB_TYPE_FILTERS.filter((filter) =>
-				isGitHubTypeEnabled(filter, currentInboxToggles),
+			kindLabels.filter((entry) =>
+				isForgeKindEnabled(entry.kind, currentInboxToggles),
 			),
-		[currentInboxToggles],
+		[kindLabels, currentInboxToggles],
 	);
-	const activeGitHubTypeFilter =
-		enabledGitHubTypeFilters.find((filter) => filter.id === githubTypeFilter) ??
-		enabledGitHubTypeFilters[0] ??
-		selectedGitHubTypeFilter;
-	const stateOptions = GITHUB_STATE_FILTERS[activeGitHubTypeFilter.id];
+	const activeKindLabels: InboxKindLabels | null =
+		enabledKindLabels.find((entry) => entry.kind === forgeTypeFilter) ??
+		enabledKindLabels[0] ??
+		null;
+	const inboxKind: InboxKind = activeKindLabels?.kind ?? forgeTypeFilter;
+	const stateOptions = FORGE_STATE_FILTERS[inboxKind];
 	const stateFilter =
-		stateFilterBySource?.[activeGitHubTypeFilter.id] ??
-		defaultStateForGitHubType(activeGitHubTypeFilter.id, currentInboxToggles);
-	const setStateFilter = (next: GitHubStateFilter["id"]) => {
+		stateFilterBySource?.[inboxKind] ??
+		defaultStateForKind(inboxKind, currentInboxToggles);
+	const setStateFilter = (next: ForgeStateFilterId) => {
 		onStateFilterBySourceChange?.({
 			...(stateFilterBySource ?? {}),
-			[activeGitHubTypeFilter.id]: next,
+			[inboxKind]: next,
 		});
 	};
 	const activeStateFilter =
@@ -279,33 +351,55 @@ export const InboxSidebar = memo(function InboxSidebar({
 	);
 
 	useEffect(() => {
-		if (enabledGitHubTypeFilters.length === 0) return;
-		if (
-			enabledGitHubTypeFilters.some((filter) => filter.id === githubTypeFilter)
-		) {
+		if (enabledKindLabels.length === 0) return;
+		if (enabledKindLabels.some((entry) => entry.kind === forgeTypeFilter)) {
 			return;
 		}
-		setGithubTypeFilter(enabledGitHubTypeFilters[0].id);
-	}, [enabledGitHubTypeFilters, githubTypeFilter]);
+		setForgeTypeFilter(enabledKindLabels[0].kind);
+	}, [enabledKindLabels, forgeTypeFilter]);
 
 	useEffect(() => {
 		if (stateOptions.some((filter) => filter.id === stateFilter)) return;
 		setStateFilter("all");
 	}, [stateOptions, stateFilter]);
 
-	const showGitHubTypeSelect =
-		selectedFilter.id === "github" && enabledGitHubTypeFilters.length > 1;
+	const showForgeTypeSelect = isForgeSource && enabledKindLabels.length > 1;
+	const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+		const nextQuery = event.target.value;
+		setSearchQuery(nextQuery);
+		// If the user pasted an issue/PR/MR URL, snap to the matching
+		// kind. Skips when the kind isn't currently in the enabled set
+		// (e.g. discussions disabled in settings, or GitLab where
+		// Discussions don't exist).
+		const targetKind = forgeUrlToInboxKind(nextQuery);
+		if (
+			targetKind &&
+			targetKind !== forgeTypeFilter &&
+			enabledKindLabels.some((entry) => entry.kind === targetKind)
+		) {
+			setForgeTypeFilter(targetKind);
+		}
+	};
 	const horizontalPaddingClass = showWindowSafeTop
 		? "pr-4 pl-3"
 		: "pr-3 pl-2.5";
 	const providerTabsCompact = !showWindowSafeTop;
-	// Each sub-tab drives its own infinite query: the backend's
-	// merge-then-truncate window otherwise crowds out kinds with less
-	// recent activity (issues + discussions get pushed past the visible
-	// page when PRs dominate). Keying the hook on the active tab also
-	// means TanStack reuses each tab's previous pages on switch-back.
-	const inboxKind = TAB_TO_INBOX_KIND[activeGitHubTypeFilter.id];
-	const inbox = useInboxItems(inboxKind, repoFilter ?? null, inboxFilters);
+	// Host comes from the repo's remote URL — NOT from the bound login.
+	// For self-hosted GitLab, the login may live on a different host than
+	// the project (e.g. user has a `gitlab.com` account but the project
+	// is on `gitlab.example.com`). Without this, the inbox query would
+	// 404 every time.
+	const inboxHost = useMemo(
+		() => parseForgeRepoHost(repository ?? null),
+		[repository],
+	);
+	const inbox = useInboxItems(
+		inboxKind,
+		repoFilter ?? null,
+		inboxFilters,
+		activeForgeProvider,
+		inboxHost,
+	);
 	const filteredCards = useMemo<ContextCard[]>(
 		() => inbox.items.map(inboxItemToContextCard),
 		[inbox.items],
@@ -316,7 +410,7 @@ export const InboxSidebar = memo(function InboxSidebar({
 	// bottom of the list — entering the visible area pages forward.
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
-		if (selectedFilter.id !== "github") return;
+		if (!isForgeSource) return;
 		if (!inbox.hasNextPage || inbox.isFetchingNextPage) return;
 		const el = sentinelRef.current;
 		if (!el) return;
@@ -340,9 +434,95 @@ export const InboxSidebar = memo(function InboxSidebar({
 		inbox.hasNextPage,
 		inbox.isFetchingNextPage,
 		inbox.fetchNextPage,
-		selectedFilter.id,
+		isForgeSource,
 		filteredCards.length,
 	]);
+
+	const forgeActions = isForgeSource ? (
+		<>
+			<InboxSearchField
+				value={searchQuery}
+				onChange={handleSearchChange}
+				onClear={() => setSearchQuery("")}
+				ariaLabel={`Search ${activeForgeLabels.providerName} contexts`}
+			/>
+
+			{showForgeTypeSelect && activeKindLabels ? (
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<InboxActionIconButton
+							aria-label={`Filter by ${activeKindLabels.short}`}
+							title={activeKindLabels.short}
+						>
+							{(() => {
+								const source =
+									INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[
+										activeKindLabels.kind
+									];
+								return source ? (
+									<SourceIcon source={source} size={13} className="block" />
+								) : null;
+							})()}
+						</InboxActionIconButton>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end" className="w-40">
+						<DropdownMenuRadioGroup
+							value={activeKindLabels.kind}
+							onValueChange={(value) => setForgeTypeFilter(value as InboxKind)}
+						>
+							{enabledKindLabels.map((entry) => {
+								const source =
+									INBOX_KIND_ICON_SOURCE[activeForgeProvider]?.[entry.kind];
+								return (
+									<DropdownMenuRadioItem
+										key={entry.kind}
+										value={entry.kind}
+										className="gap-2 text-mini"
+									>
+										{source ? (
+											<SourceIcon
+												source={source}
+												size={12}
+												className="shrink-0"
+											/>
+										) : null}
+										<span>{entry.short}</span>
+									</DropdownMenuRadioItem>
+								);
+							})}
+						</DropdownMenuRadioGroup>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			) : null}
+
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<InboxActionMenuButton>
+						<span>{activeStateFilter.label}</span>
+						<ChevronDown className="size-3" strokeWidth={2} />
+					</InboxActionMenuButton>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" className="w-28">
+					<DropdownMenuRadioGroup
+						value={activeStateFilter.id}
+						onValueChange={(value) =>
+							setStateFilter(value as ForgeStateFilterId)
+						}
+					>
+						{stateOptions.map((filter) => (
+							<DropdownMenuRadioItem
+								key={filter.id}
+								value={filter.id}
+								className="text-mini"
+							>
+								{filter.label}
+							</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+				</DropdownMenuContent>
+			</DropdownMenu>
+		</>
+	) : null;
 
 	return (
 		<div className={cn("h-full min-h-0 flex-col overflow-hidden", className)}>
@@ -364,164 +544,84 @@ export const InboxSidebar = memo(function InboxSidebar({
 			>
 				<div
 					className={cn(
-						"grid w-full grid-cols-5 border border-border/60 bg-background/40",
+						"grid w-full border border-border/60 bg-muted/30",
 						providerTabsCompact
 							? "gap-0.5 rounded-md p-0.5"
 							: "gap-1 rounded-lg p-1",
 					)}
+					style={{
+						gridTemplateColumns: `repeat(${visibleSourceFilters.length}, minmax(0, 1fr))`,
+					}}
 				>
-					{SOURCE_FILTERS.map((filter) => (
-						<button
-							key={filter.id}
-							type="button"
-							aria-label={filter.label}
-							aria-pressed={selectedSource === filter.id}
-							title={filter.label}
-							onClick={() => setSelectedSource(filter.id)}
-							className={cn(
-								"relative flex cursor-pointer items-center justify-center text-muted-foreground transition-[background-color,color,box-shadow]",
-								providerTabsCompact ? "h-6 rounded-[5px]" : "h-7 rounded-md",
-								"hover:bg-accent/60 hover:text-foreground",
-								selectedSource === filter.id &&
-									"bg-accent text-foreground shadow-xs",
-							)}
-						>
-							<span className="relative inline-flex">
-								{filter.id === "github" ? (
-									<GithubBrandIcon size={providerTabsCompact ? 13 : 14} />
-								) : filter.id === "gitlab" ? (
-									<GitlabBrandIcon size={providerTabsCompact ? 13 : 14} />
-								) : filter.id === "slack" ? (
-									<SourceIcon
-										source="slack_thread"
-										size={providerTabsCompact ? 13 : 14}
-									/>
-								) : filter.id === "mobile" ? (
-									<Smartphone
-										size={providerTabsCompact ? 13 : 14}
-										strokeWidth={2}
-									/>
-								) : (
-									<SourceIcon
-										source="linear"
-										size={providerTabsCompact ? 13 : 14}
-									/>
+					{visibleSourceFilters.map((filterId) => {
+						// Top-level tab labels (GitHub / GitLab / Linear / Slack /
+						// Mobile) come from the forge-labels mirror for forges and
+						// from a fixed map for the external providers.
+						const tabLabel =
+							filterId === "github" || filterId === "gitlab"
+								? forgeLabelsFor(filterId).providerName
+								: filterId === "linear"
+									? "Linear"
+									: filterId === "slack"
+										? "Slack"
+										: "Mobile";
+						return (
+							<button
+								key={filterId}
+								type="button"
+								aria-label={tabLabel}
+								aria-pressed={selectedSource === filterId}
+								title={tabLabel}
+								onClick={() => setSelectedSource(filterId)}
+								className={cn(
+									"relative flex cursor-interactive items-center justify-center text-muted-foreground transition-[background-color,color,box-shadow]",
+									providerTabsCompact ? "h-6 rounded-[5px]" : "h-7 rounded-md",
+									"hover:bg-accent/60 hover:text-foreground",
+									selectedSource === filterId &&
+										"bg-accent text-foreground shadow-xs",
 								)}
-							</span>
-						</button>
-					))}
+							>
+								<span className="relative inline-flex">
+									{filterId === "github" ? (
+										<GithubBrandIcon size={providerTabsCompact ? 13 : 14} />
+									) : filterId === "gitlab" ? (
+										<GitlabBrandIcon size={providerTabsCompact ? 13 : 14} />
+									) : filterId === "slack" ? (
+										<SourceIcon
+											source="slack_thread"
+											size={providerTabsCompact ? 13 : 14}
+										/>
+									) : filterId === "mobile" ? (
+										<Smartphone
+											size={providerTabsCompact ? 13 : 14}
+											strokeWidth={2}
+										/>
+									) : (
+										<SourceIcon
+											source="linear"
+											size={providerTabsCompact ? 13 : 14}
+										/>
+									)}
+								</span>
+							</button>
+						);
+					})}
 				</div>
 			</div>
 
-			{selectedFilter.id === "github" ? (
-				<div className={cn("mt-1.5", horizontalPaddingClass)}>
-					<div className="flex h-7 min-w-0 items-center gap-1.5">
-						<div className="flex min-w-0 flex-1 items-center rounded-md border border-border/45 bg-background/35 px-1.5 text-muted-foreground transition-colors focus-within:border-border/80 focus-within:bg-background/55">
-							<Search className="size-3 shrink-0" strokeWidth={1.9} />
-							<input
-								type="text"
-								value={searchQuery}
-								onChange={(event) => setSearchQuery(event.target.value)}
-								placeholder="Search"
-								aria-label="Search GitHub contexts"
-								className="h-6 min-w-0 flex-1 bg-transparent px-1.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/70"
-							/>
-							{searchQuery ? (
-								<button
-									type="button"
-									aria-label="Clear search"
-									onClick={() => setSearchQuery("")}
-									className="flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-								>
-									<X className="size-3" strokeWidth={2} />
-								</button>
-							) : null}
-						</div>
-
-						{showGitHubTypeSelect ? (
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
-									<button
-										type="button"
-										aria-label={`Filter by ${activeGitHubTypeFilter.label}`}
-										title={activeGitHubTypeFilter.label}
-										className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/45 bg-background/35 text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
-									>
-										<SourceIcon
-											source={activeGitHubTypeFilter.sources[0]}
-											size={13}
-											className="block"
-										/>
-									</button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end" className="w-40">
-									<DropdownMenuRadioGroup
-										value={activeGitHubTypeFilter.id}
-										onValueChange={(value) =>
-											setGithubTypeFilter(value as GitHubTypeFilter["id"])
-										}
-									>
-										{enabledGitHubTypeFilters.map((filter) => (
-											<DropdownMenuRadioItem
-												key={filter.id}
-												value={filter.id}
-												className="gap-2 text-[11px]"
-											>
-												<SourceIcon
-													source={filter.sources[0]}
-													size={12}
-													className="shrink-0"
-												/>
-												<span>{filter.label}</span>
-											</DropdownMenuRadioItem>
-										))}
-									</DropdownMenuRadioGroup>
-								</DropdownMenuContent>
-							</DropdownMenu>
-						) : null}
-
-						<DropdownMenu>
-							<DropdownMenuTrigger asChild>
-								<button
-									type="button"
-									className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/45 bg-background/35 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
-								>
-									<span>{activeStateFilter.label}</span>
-									<ChevronDown className="size-3" strokeWidth={2} />
-								</button>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end" className="w-28">
-								<DropdownMenuRadioGroup
-									value={activeStateFilter.id}
-									onValueChange={(value) =>
-										setStateFilter(value as GitHubStateFilter["id"])
-									}
-								>
-									{stateOptions.map((filter) => (
-										<DropdownMenuRadioItem
-											key={filter.id}
-											value={filter.id}
-											className="text-[11px]"
-										>
-											{filter.label}
-										</DropdownMenuRadioItem>
-									))}
-								</DropdownMenuRadioGroup>
-							</DropdownMenuContent>
-						</DropdownMenu>
-					</div>
-				</div>
-			) : null}
-
-			<div
-				ref={scrollContainerRef}
-				className={cn(
-					"scrollbar-stable min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-width:thin]",
-					horizontalPaddingClass,
-					selectedFilter.id === "github" ? "mt-1" : "mt-[7px]",
-				)}
-			>
-				<div className="flex w-[calc(100%+12px)] flex-col gap-2 pb-3">
+			{selectedSource === "slack" ? (
+				<SlackInboxSection
+					onOpenCard={onOpenCard}
+					selectedCardId={selectedCardId}
+					appendContextTarget={appendContextTarget}
+					horizontalPaddingClass={horizontalPaddingClass}
+				/>
+			) : (
+				<InboxSourceLayout
+					ref={scrollContainerRef}
+					horizontalPaddingClass={horizontalPaddingClass}
+					actions={forgeActions}
+				>
 					{isComingSoonSource ? (
 						<div className="flex min-h-[calc(100vh-150px)] w-full items-center justify-center px-3">
 							<div className="flex w-full max-w-[250px] flex-col items-stretch text-muted-foreground/65">
@@ -530,32 +630,35 @@ export const InboxSidebar = memo(function InboxSidebar({
 										className="inbox-coming-soon-pickaxe size-3.5 shrink-0"
 										strokeWidth={2}
 									/>
-									<span className="text-[13px] font-medium">Coming Soon</span>
+									<span className="text-ui font-medium">Coming Soon</span>
 								</div>
-								<div className="my-7 flex items-center gap-2 px-2 text-muted-foreground/20">
-									<div className="h-px flex-1 bg-current opacity-60" />
-									<div className="size-0.5 rounded-full bg-current opacity-80" />
-									<div className="h-px flex-1 bg-current opacity-60" />
+								<div className="my-7 flex items-center gap-2 px-2">
+									<div className="h-px flex-1 bg-border" />
+									<div className="size-0.5 rounded-full bg-border" />
+									<div className="h-px flex-1 bg-border" />
 								</div>
-								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-[11px] leading-4 marker:text-muted-foreground/35">
-									{COMING_SOON_COPY[
-										selectedFilter.id as Exclude<SourceFilter["id"], "github">
-									].map((line) => (
-										<li key={line}>{line}</li>
-									))}
+								<ul className="list-disc space-y-3 pl-4 text-left text-pretty text-mini leading-4 marker:text-muted-foreground/35">
+									{COMING_SOON_COPY[selectedSource as ExternalFilterId].map(
+										(line) => (
+											<li key={line}>{line}</li>
+										),
+									)}
 								</ul>
 							</div>
 						</div>
-					) : !hasGithubAccount ? (
-						// State 1: no GitHub account at all → big Connect CTA.
-						<ConnectGithubState onConfigure={openInboxSettings} />
+					) : !hasForgeAccount ? (
+						// State 1: no account at all → big Connect CTA.
+						<ConnectForgeState
+							provider={activeForgeProvider}
+							onConfigure={openInboxSettings}
+						/>
 					) : !inbox.kindEnabled ? (
 						// State 2: account exists but the user has turned this
 						// kind off in Settings → Context. Don't fetch; nudge them
 						// to flip it back on rather than show a misleading
 						// "no items" message.
 						<KindDisabledState
-							kind={inboxKind}
+							labels={activeKindLabels}
 							onConfigure={openInboxSettings}
 						/>
 					) : inbox.error ? (
@@ -601,15 +704,14 @@ export const InboxSidebar = memo(function InboxSidebar({
 							<ConfigureInboxLink onClick={openInboxSettings} />
 						</>
 					) : (
-						// State 6: query returned 0. Distinct copy depending
-						// on whether the user has scoped to a single repo or
-						// is looking at the global involves:@me feed —
-						// neither has a Configure CTA, the configuration is
-						// fine; there's just nothing to triage.
-						<NoItemsState kind={inboxKind} repoFilter={repoFilter ?? null} />
+						// State 6: query resolved with zero items.
+						<NoItemsState
+							labels={activeKindLabels}
+							repoFilter={repoFilter ?? null}
+						/>
 					)}
-				</div>
-			</div>
+				</InboxSourceLayout>
+			)}
 		</div>
 	);
 });
@@ -618,7 +720,7 @@ function InboxLoadingState() {
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-muted-foreground/70">
 			<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-			<div className="text-[12px] leading-5">Loading items…</div>
+			<div className="text-small leading-5">Loading items…</div>
 		</div>
 	);
 }
@@ -634,10 +736,8 @@ function InboxErrorState({
 		error instanceof Error ? error.message : "Couldn't load context items.";
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
-			<div className="text-[13px] font-medium text-foreground">
-				Couldn't load
-			</div>
-			<div className="text-[12px] leading-5 text-muted-foreground">
+			<div className="text-ui font-medium text-foreground">Couldn't load</div>
+			<div className="text-small leading-5 text-muted-foreground">
 				{message}
 			</div>
 			<Button
@@ -645,7 +745,7 @@ function InboxErrorState({
 				variant="ghost"
 				size="sm"
 				onClick={onRetry}
-				className="mt-1 cursor-pointer text-[12px]"
+				className="mt-1 cursor-interactive text-small"
 			>
 				Try again
 			</Button>
@@ -705,11 +805,36 @@ function inboxItemToContextCard(item: InboxItemWithDetailRef): ContextCard {
 					category: { name: "Discussion", emoji: "💬" },
 				},
 			};
+		case "gitlab_issue":
+			return {
+				...baseFields,
+				meta: {
+					type: "gitlab_issue",
+					repo,
+					number,
+					labels: [],
+				},
+			};
+		case "gitlab_mr":
+			return {
+				...baseFields,
+				meta: {
+					type: "gitlab_mr",
+					repo,
+					number,
+					draft: item.state?.tone === "draft",
+				},
+			};
 	}
 }
 
 function parseExternalNumber(externalId: string): number {
-	const idx = externalId.lastIndexOf("#");
+	// GitHub: `owner/name#NN`. GitLab: `group/name#NN` (issue) or
+	// `group/name!NN` (MR). We accept either delimiter.
+	const idx = Math.max(
+		externalId.lastIndexOf("#"),
+		externalId.lastIndexOf("!"),
+	);
 	if (idx === -1) return 0;
 	const tail = externalId.slice(idx + 1);
 	const parsed = Number.parseInt(tail, 10);
@@ -717,7 +842,10 @@ function parseExternalNumber(externalId: string): number {
 }
 
 function parseExternalRepo(externalId: string): string {
-	const idx = externalId.lastIndexOf("#");
+	const idx = Math.max(
+		externalId.lastIndexOf("#"),
+		externalId.lastIndexOf("!"),
+	);
 	return idx === -1 ? externalId : externalId.slice(0, idx);
 }
 
@@ -727,7 +855,7 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"mt-1 flex cursor-pointer items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-[11px] text-muted-foreground/80 transition-colors",
+				"mt-1 flex cursor-interactive items-center justify-center gap-1.5 self-center rounded-md px-2 py-1 text-mini text-muted-foreground/80 transition-colors",
 				"hover:bg-accent/40 hover:text-foreground",
 			)}
 		>
@@ -737,30 +865,35 @@ function ConfigureInboxLink({ onClick }: { onClick: () => void }) {
 	);
 }
 
-/** Singular + plural labels per inbox kind, used by the empty / disabled
- *  states for terse, source-specific copy. */
-const KIND_LABEL: Record<InboxKind, { plural: string; singular: string }> = {
-	issues: { plural: "Issues", singular: "issue" },
-	prs: { plural: "Pull requests", singular: "pull request" },
-	discussions: { plural: "Discussions", singular: "discussion" },
-};
-
-/** State 1: no GitHub account on record. Big CTA — connecting an
- *  account is the only useful action here. */
-function ConnectGithubState({ onConfigure }: { onConfigure: () => void }) {
+/** State 1: no account on record for the active forge. Big CTA —
+ *  connecting an account is the only useful action here. Copy comes
+ *  from the forge labels mirror (which itself mirrors the backend
+ *  `ForgeLabels` so labels stay authored in one place). */
+function ConnectForgeState({
+	provider,
+	onConfigure,
+}: {
+	provider: ForgeFilterId;
+	onConfigure: () => void;
+}) {
+	const labels = forgeLabelsFor(provider);
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
-				<GithubBrandIcon size={16} />
+				{provider === "github" ? (
+					<GithubBrandIcon size={16} />
+				) : (
+					<GitlabBrandIcon size={16} />
+				)}
 			</div>
-			<div className="text-[13px] font-medium text-foreground">
-				Connect GitHub
+			<div className="text-ui font-medium text-foreground">
+				{labels.connectAction}
 			</div>
 			<Button
 				type="button"
 				size="sm"
 				onClick={onConfigure}
-				className="mt-1 cursor-pointer gap-1.5"
+				className="mt-1 cursor-interactive gap-1.5"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure
@@ -770,24 +903,28 @@ function ConnectGithubState({ onConfigure }: { onConfigure: () => void }) {
 }
 
 /** State 2: this kind is turned off in Settings → Context. Surface that
- *  fact directly so an empty result isn't mistaken for "no items". */
+ *  fact directly so an empty result isn't mistaken for "no items".
+ *
+ *  All copy comes from `labels` (backend-authored). No frontend branches
+ *  on PR-vs-MR. */
 function KindDisabledState({
-	kind,
+	labels,
 	onConfigure,
 }: {
-	kind: InboxKind;
+	labels: InboxKindLabels | null;
 	onConfigure: () => void;
 }) {
-	const lower = KIND_LABEL[kind].plural.toLowerCase();
+	const plural = labels?.plural ?? "Items";
+	const lower = plural.toLowerCase();
 	return (
 		<div className="mt-8 flex flex-col items-center gap-2 px-6 text-center">
 			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
 				<SlidersHorizontal className="size-4" strokeWidth={2} />
 			</div>
-			<div className="text-[13px] font-medium text-foreground">
-				{KIND_LABEL[kind].plural} are off
+			<div className="text-ui font-medium text-foreground">
+				{plural} are off
 			</div>
-			<div className="text-[12px] leading-5 text-muted-foreground">
+			<div className="text-small leading-5 text-muted-foreground">
 				Turn {lower} back on in Contexts settings.
 			</div>
 			<Button
@@ -795,7 +932,7 @@ function KindDisabledState({
 				variant="ghost"
 				size="sm"
 				onClick={onConfigure}
-				className="mt-1 cursor-pointer gap-1.5 text-[12px]"
+				className="mt-1 cursor-interactive gap-1.5 text-small"
 			>
 				<SlidersHorizontal className="size-3.5" strokeWidth={2} />
 				Configure
@@ -808,17 +945,17 @@ function KindDisabledState({
  *  there's just nothing to triage. Wording bends on whether the user
  *  scoped to a single repo or is looking at their global feed. */
 function NoItemsState({
-	kind,
+	labels,
 	repoFilter,
 }: {
-	kind: InboxKind;
+	labels: InboxKindLabels | null;
 	repoFilter: string | null;
 }) {
-	const lower = KIND_LABEL[kind].plural.toLowerCase();
+	const lower = (labels?.plural ?? "Items").toLowerCase();
 	const title = repoFilter ? `No ${lower} in ${repoFilter}` : `No ${lower} yet`;
 	return (
 		<div className="mt-8 flex flex-col items-center gap-1 px-6 text-center">
-			<div className="text-[12px] leading-5 text-muted-foreground/80">
+			<div className="text-small leading-5 text-muted-foreground/80">
 				{title}
 			</div>
 		</div>

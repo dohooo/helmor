@@ -1,8 +1,13 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Tabs } from "@/components/ui/tabs";
+import {
+	type AppSettings,
+	DEFAULT_SETTINGS,
+	SettingsContext,
+} from "@/lib/settings";
 import { renderWithProviders } from "@/test/render-with-providers";
 import { TabsZoomContext } from "../layout";
 import { _resetForTesting } from "../script-store";
@@ -40,6 +45,7 @@ const defaults = {
 	repoId: "repo-1",
 	workspaceId: "ws-1" as string | null,
 	setupScript: "echo hello" as string | null,
+	setupCompletedAt: null as string | null,
 	isActive: true,
 	onOpenSettings: vi.fn(),
 };
@@ -58,19 +64,48 @@ function ZoomedProvider({ children }: { children: ReactNode }) {
 	);
 }
 
+function SettingsOverrideProvider({
+	children,
+	overrides,
+}: {
+	children: ReactNode;
+	overrides: Partial<AppSettings>;
+}) {
+	return (
+		<SettingsContext.Provider
+			value={{
+				settings: { ...DEFAULT_SETTINGS, ...overrides },
+				isLoaded: true,
+				updateSettings: async () => {},
+			}}
+		>
+			{children}
+		</SettingsContext.Provider>
+	);
+}
+
 function renderSetup(
 	overrides: Partial<typeof defaults> = {},
-	{ zoomed = false }: { zoomed?: boolean } = {},
+	{
+		zoomed = false,
+		settings,
+	}: { zoomed?: boolean; settings?: Partial<AppSettings> } = {},
 ) {
 	const props = { ...defaults, ...overrides };
-	const tree = (
+	let tree: ReactElement = (
 		<Tabs defaultValue="setup">
 			<SetupTab {...props} />
 		</Tabs>
 	);
-	return renderWithProviders(
-		zoomed ? <ZoomedProvider>{tree}</ZoomedProvider> : tree,
-	);
+	if (zoomed) tree = <ZoomedProvider>{tree}</ZoomedProvider>;
+	if (settings) {
+		tree = (
+			<SettingsOverrideProvider overrides={settings}>
+				{tree}
+			</SettingsOverrideProvider>
+		);
+	}
+	return renderWithProviders(tree);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -121,6 +156,7 @@ describe("SetupTab", () => {
 			"setup",
 			expect.any(Function),
 			"ws-1",
+			null,
 		);
 	});
 
@@ -144,6 +180,7 @@ describe("SetupTab", () => {
 			"repo-1",
 			"setup",
 			"ws-1",
+			null,
 		);
 	});
 
@@ -183,5 +220,37 @@ describe("SetupTab", () => {
 		expect(
 			screen.queryByRole("button", { name: /stop/i }),
 		).not.toBeInTheDocument();
+	});
+
+	it("shows the Stop button without zoom when terminalHoverExpansion is off", async () => {
+		const user = userEvent.setup();
+		renderSetup({}, { settings: { terminalHoverExpansion: false } });
+
+		await user.click(screen.getByRole("button", { name: /run setup/i }));
+
+		expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
+	});
+
+	it("shows the Rerun button without zoom after exit when terminalHoverExpansion is off", async () => {
+		const user = userEvent.setup();
+
+		let onEvent: (e: unknown) => void = () => {};
+		apiMocks.executeRepoScript.mockImplementation(
+			(_r: string, _t: string, cb: (e: unknown) => void) => {
+				onEvent = cb;
+				return Promise.resolve();
+			},
+		);
+
+		renderSetup({}, { settings: { terminalHoverExpansion: false } });
+		await user.click(screen.getByRole("button", { name: /run setup/i }));
+
+		onEvent({ type: "exited", code: 0 });
+
+		await waitFor(() => {
+			expect(
+				screen.getByRole("button", { name: /rerun setup/i }),
+			).toBeInTheDocument();
+		});
 	});
 });

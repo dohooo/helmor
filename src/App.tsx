@@ -3,115 +3,79 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-	Check,
-	ChevronDown,
-	CircleAlertIcon,
-	FolderOpen,
-	PanelLeftClose,
-	PanelLeftOpen,
-	PanelRightClose,
-	PanelRightOpen,
-} from "lucide-react";
+import { CircleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { SplashScreen } from "@/components/splash-screen";
-import { Button } from "@/components/ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
+	GITHUB_RELEASES_URL,
+	ReleaseAnnouncementToastHost,
+} from "@/features/announcements";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import { hydrateDraftCache } from "@/features/composer/draft-storage";
-import type { StartSubmitMode } from "@/features/composer/start-submit-mode";
 import {
 	type ComposerCreateContext,
-	type ComposerCreatePrepareOutcome,
-	type ComposerSubmitPayload,
 	type PendingCreatedWorkspaceSubmit,
 	WorkspaceConversationContainer,
 } from "@/features/conversation";
 import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
-import { WorkspaceInspectorSidebar } from "@/features/inspector";
-import { WorkspacesSidebarContainer } from "@/features/navigation/container";
+import { FeedbackDialog } from "@/features/feedback";
+import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
+import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
+import {
+	applySidebarView,
+	regroupByRepo,
+} from "@/features/navigation/sidebar-projection";
 import { AppOnboarding } from "@/features/onboarding";
-import { ExportSessionImageButton } from "@/features/panel/export-session-image";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import {
-	SettingsButton,
+	QuickSwitchOverlay,
+	type QuickSwitchSnapshot,
+	useQuickSwitch,
+	WorkspaceMruStack,
+} from "@/features/quick-switch";
+import {
+	type ContextProviderTab,
 	SettingsDialog,
 	type SettingsSection,
 } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
-import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
-import { AppUpdateButton } from "@/features/updater/app-update-button";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { WorkspaceStartPage } from "@/features/workspace-start";
-import { WorkspaceStartContextSidebar } from "@/features/workspace-start/context-sidebar";
-import { createWorkspaceFromStartComposer } from "@/features/workspace-start/create-workspace";
-import { EditorIcon } from "@/shell/editor-icon";
 import { useEnsureDefaultModel } from "@/shell/hooks/use-ensure-default-model";
 import { useShellPanels } from "@/shell/hooks/use-panels";
+import { usePullLatest } from "@/shell/hooks/use-pull-latest";
+import { useThemeApplication } from "@/shell/hooks/use-theme-application";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import {
 	findAdjacentSessionId,
 	findAdjacentWorkspaceId,
 	flattenWorkspaceRows,
-	MAX_SIDEBAR_WIDTH,
-	MIN_SIDEBAR_WIDTH,
 	PREFERRED_EDITOR_STORAGE_KEY,
-	SIDEBAR_RESIZE_HIT_AREA,
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
-	createAndCheckoutBranch,
 	createSession,
-	drainPendingCliSends,
-	getRepoCurrentBranch,
-	listBranchesForLocalPicker,
-	listRemoteBranches,
-	markSessionRead,
-	markSessionUnread,
-	moveLocalWorkspaceToWorktree,
+	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
-	openWorkspaceInFinder,
-	prewarmSlashCommandsForWorkspace,
-	type RepositoryCreateOption,
-	syncWorkspaceWithTargetBranch,
-	triggerWorkspaceFetch,
-	unhideSession,
 	type WorkspaceDetail,
-	type WorkspaceGroup,
-	type WorkspaceMode,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
-import {
-	type ComposerInsertRequest,
-	type ResolvedComposerInsertRequest,
-	resolveComposerInsertTarget,
-} from "./lib/composer-insert";
+import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
-import type { DiffOpenOptions, EditorSessionState } from "./lib/editor-session";
-import { isMarkdownPath, isPathWithinRoot } from "./lib/editor-session";
+import { isMarkdownPath } from "./lib/editor-session";
 import {
 	activeStreamsQueryOptions,
 	archivedWorkspacesQueryOptions,
@@ -121,14 +85,12 @@ import {
 	helmorQueryPersister,
 	QUERY_CACHE_BUSTER,
 	repositoriesQueryOptions,
-	sessionThreadMessagesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceForgeActionStatusQueryOptions,
 	workspaceForgeQueryOptions,
 	workspaceGitActionStatusQueryOptions,
 	workspaceGroupsQueryOptions,
-	workspaceSessionsQueryOptions,
 } from "./lib/query-client";
 import {
 	buildSessionRunStates,
@@ -140,55 +102,46 @@ import {
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
 	type AppSettings,
-	type DarkTheme,
 	DEFAULT_SETTINGS,
+	getPreloadedSettings,
 	loadSettings,
 	resolveTheme,
 	SettingsContext,
 	type ShortcutOverrides,
 	saveSettings,
-	THEME_STORAGE_KEY,
-	type ThemeMode,
 	useSettings,
-	type WorkspaceRightSidebarMode,
 } from "./lib/settings";
-import { flushSidebarListsIfIdle } from "./lib/sidebar-mutation-gate";
-import type { ContextCard } from "./lib/sources/types";
+import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { cn } from "./lib/utils";
-import {
-	describeUnknownError,
-	recomputeWorkspaceDetailUnread,
-	recomputeWorkspaceUnreadInGroups,
-	summaryToArchivedRow,
-} from "./lib/workspace-helpers";
+import { summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
 	WorkspaceToastProvider,
 } from "./lib/workspace-toast-context";
-import { StreamingFooterOverlapScenario } from "./test/e2e-scenarios/streaming-footer-overlap";
-import { StreamingReasoningGapScenario } from "./test/e2e-scenarios/streaming-reasoning-gap";
-
-const SETTINGS_RELOAD_EVENT = "helmor:reload-settings";
-const OPEN_SETTINGS_EVENT = "helmor:open-settings";
-type WorkspaceViewMode = "conversation" | "editor" | "start";
-const EMPTY_SESSION_RUN_STATES = new Map<string, SessionRunState>();
-const EMPTY_STRING_LIST: readonly string[] = [];
+import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
+import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
+import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
+import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
+import { WorkspaceHeaderActions } from "./shell/components/workspace-header-actions";
+import { WorkspaceHeaderLeading } from "./shell/components/workspace-header-leading";
+import {
+	EMPTY_ACTIVE_STREAMS,
+	EMPTY_SESSION_RUN_STATES,
+	SPLASH_FADE_MS,
+	SPLASH_MIN_DURATION_MS,
+	SPLASH_POST_ONBOARDING_DELAY_MS,
+} from "./shell/constants";
+import { useContextPanelController } from "./shell/controllers/use-context-panel-controller";
+import { useEditorSessionController } from "./shell/controllers/use-editor-session-controller";
+import { usePendingQueueController } from "./shell/controllers/use-pending-queue-controller";
+import { useReadStateController } from "./shell/controllers/use-read-state-controller";
+import { useSelectionController } from "./shell/controllers/use-selection-controller";
+import { useStartSurfaceController } from "./shell/controllers/use-start-surface-controller";
+import { publishShellEvent, useShellEvent } from "./shell/event-bus";
 
 function App() {
-	const e2eScenario =
-		typeof window === "undefined"
-			? null
-			: new URLSearchParams(window.location.search).get("e2eScenario");
-
-	if (e2eScenario === "streaming-footer-overlap") {
-		return <StreamingFooterOverlapScenario />;
-	}
-
-	if (e2eScenario === "streaming-reasoning-gap") {
-		return <StreamingReasoningGapScenario />;
-	}
-
+	const e2eElement = resolveE2eScenarioElement();
+	if (e2eElement) return e2eElement;
 	return <MainApp />;
 }
 
@@ -203,11 +156,13 @@ function MainApp() {
 	>(null);
 	const [settingsInitialSection, setSettingsInitialSection] =
 		useState<SettingsSection>();
+	const [settingsInitialInboxProvider, setSettingsInitialInboxProvider] =
+		useState<ContextProviderTab | undefined>();
 	const [queryClient] = useState(() => createHelmorQueryClient());
-	const preloadSettings = useMemo<AppSettings>(() => {
-		const t = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
-		return { ...DEFAULT_SETTINGS, theme: t ?? DEFAULT_SETTINGS.theme };
-	}, []);
+	const preloadSettings = useMemo<AppSettings>(
+		() => getPreloadedSettings(),
+		[],
+	);
 
 	const settingsContextValue = useMemo(
 		() => ({
@@ -223,45 +178,36 @@ function MainApp() {
 		}),
 		[appSettings, preloadSettings],
 	);
-	useEffect(() => {
-		const handleOpenSettings = (event: Event) => {
-			const detail =
-				event instanceof CustomEvent &&
-				event.detail &&
-				typeof event.detail === "object"
-					? (event.detail as { section?: unknown })
-					: {};
-			const section =
-				typeof detail.section === "string"
-					? (detail.section as SettingsSection)
-					: undefined;
-			setSettingsInitialSection(section);
-			setSettingsWorkspaceId(null);
-			setSettingsWorkspaceRepoId(null);
-			setSettingsOpen(true);
-		};
-		window.addEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-		return () =>
-			window.removeEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-	}, []);
+	useShellEvent("open-settings", (event) => {
+		setSettingsInitialSection(event.section);
+		setSettingsInitialInboxProvider(event.inboxProvider);
+		setSettingsWorkspaceId(null);
+		setSettingsWorkspaceRepoId(null);
+		setSettingsOpen(true);
+	});
 	const [splashVisible, setSplashVisible] = useState(true);
 	const [splashMounted, setSplashMounted] = useState(true);
 
 	const hideSplashAfterBoot = useCallback(() => {
 		window.setTimeout(() => {
 			setSplashVisible(false);
-			window.setTimeout(() => setSplashMounted(false), 400);
-		}, 1000);
+			window.setTimeout(() => setSplashMounted(false), SPLASH_FADE_MS);
+		}, SPLASH_POST_ONBOARDING_DELAY_MS);
 	}, []);
 
 	const completeOnboarding = useCallback(() => {
 		setSplashMounted(true);
 		setSplashVisible(true);
+		// Land on the start page; even without a repo the user can chat.
 		setAppSettings((previous) => ({
 			...(previous ?? DEFAULT_SETTINGS),
 			onboardingCompleted: true,
+			lastSurface: "workspace-start",
 		}));
-		void saveSettings({ onboardingCompleted: true });
+		void saveSettings({
+			onboardingCompleted: true,
+			lastSurface: "workspace-start",
+		});
 
 		requestAnimationFrame(() => {
 			requestAnimationFrame(hideSplashAfterBoot);
@@ -269,34 +215,36 @@ function MainApp() {
 	}, [hideSplashAfterBoot]);
 
 	useEffect(() => {
-		const minDelay = new Promise<void>((r) => setTimeout(r, 1000));
+		const minDelay = new Promise<void>((r) =>
+			setTimeout(r, SPLASH_MIN_DURATION_MS),
+		);
 		// Pull persisted composer drafts into the in-memory cache before
-		// the splash hides, so the chat composer's synchronous
-		// `loadPersistedDraft` call sees DB content on first mount
-		// instead of returning null and forcing a re-hydration flicker.
+		// the splash hides — the composer's sync `loadPersistedDraft` then
+		// sees DB content on first mount instead of flickering.
 		const draftHydration = hydrateDraftCache();
 		void Promise.all([
 			loadSettings().then(setAppSettings),
 			draftHydration,
 			minDelay,
 		]).then(() => {
-			// Start fade-out
 			setSplashVisible(false);
-			// Remove from DOM after transition
-			setTimeout(() => setSplashMounted(false), 400);
+			setTimeout(() => setSplashMounted(false), SPLASH_FADE_MS);
 		});
 	}, []);
 
 	useEffect(() => {
-		const handleSettingsReload = () => {
-			void loadSettings().then(setAppSettings);
-		};
+		if (appSettings?.onboardingCompleted !== true) {
+			return;
+		}
 
-		window.addEventListener(SETTINGS_RELOAD_EVENT, handleSettingsReload);
-		return () => {
-			window.removeEventListener(SETTINGS_RELOAD_EVENT, handleSettingsReload);
-		};
-	}, []);
+		void exitOnboardingWindowMode().catch((error) => {
+			console.error("[app] failed to restore main window mode", error);
+		});
+	}, [appSettings?.onboardingCompleted]);
+
+	useShellEvent("reload-settings", () => {
+		void loadSettings().then(setAppSettings);
+	});
 
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
@@ -323,8 +271,12 @@ function MainApp() {
 						 *  stuck on "Connect" indefinitely. */}
 						<ForgeAccountsHealthSentinel />
 						<AppShell
-							onOpenSettings={(workspaceId, workspaceRepoId) => {
-								setSettingsInitialSection(undefined);
+							onOpenSettings={(
+								workspaceId,
+								workspaceRepoId,
+								initialSection,
+							) => {
+								setSettingsInitialSection(initialSection);
 								setSettingsWorkspaceId(workspaceId);
 								setSettingsWorkspaceRepoId(workspaceRepoId);
 								setSettingsOpen(true);
@@ -338,6 +290,7 @@ function MainApp() {
 					workspaceId={settingsWorkspaceId}
 					workspaceRepoId={settingsWorkspaceRepoId}
 					initialSection={settingsInitialSection}
+					initialInboxProvider={settingsInitialInboxProvider}
 					onClose={() => {
 						setSettingsOpen(false);
 						void queryClient.invalidateQueries({
@@ -356,32 +309,14 @@ function AppShell({
 	onOpenSettings: (
 		workspaceId: string | null,
 		workspaceRepoId: string | null,
+		initialSection?: SettingsSection,
 	) => void;
 }) {
 	useZoom();
 	const queryClient = useQueryClient();
-	const workspaceSelectionRequestRef = useRef(0);
-	const sessionSelectionRequestRef = useRef(0);
-	const rightSidebarSettingsHydratedRef = useRef(false);
-	const startupPrefetchedWorkspaceRef = useRef<string | null>(null);
-	const warmedWorkspaceIdsRef = useRef<Set<string>>(new Set());
-	const selectedWorkspaceIdRef = useRef<string | null>(null);
-	const selectedSessionIdRef = useRef<string | null>(null);
 	// Tracks which session we last persisted as "read" so the auto-read effect
 	// stays idempotent when interaction-required state churns without the
 	// displayed session changing.
-	const lastMarkedReadSessionIdRef = useRef<string | null>(null);
-	// Bumped whenever the user re-clicks the already-selected workspace. The
-	// mark-session-read effect depends on this tick so a manual "mark as
-	// unread" followed by clicking the same workspace clears the dot, even
-	// though displayedSessionId didn't change.
-	const [workspaceReselectTick, setWorkspaceReselectTick] = useState(0);
-	const lastMarkedReadReselectTickRef = useRef(0);
-
-	const workspaceViewModeRef = useRef<WorkspaceViewMode>("conversation");
-	const sessionSelectionHistoryByWorkspaceRef = useRef<
-		Record<string, string[]>
-	>({});
 	const pushWorkspaceToast = useCallback(
 		(
 			description: string,
@@ -437,6 +372,123 @@ function AppShell({
 		[],
 	);
 	const {
+		settings: appSettings,
+		isLoaded: areSettingsLoaded,
+		updateSettings,
+	} = useSettings();
+	const navigationGroupsQuery = useQuery(workspaceGroupsQueryOptions());
+	const navigationArchivedQuery = useQuery(archivedWorkspacesQueryOptions());
+	const baseWorkspaceGroups = navigationGroupsQuery.data ?? [];
+	const repositoriesQuery = useQuery(repositoriesQueryOptions());
+	const repositories = repositoriesQuery.data ?? [];
+	const [feedbackOpen, setFeedbackOpen] = useState(false);
+	const availableRepoIds = useMemo(
+		() => repositories.map((repository) => repository.id),
+		[repositories],
+	);
+	const rawArchivedRows = useMemo(
+		() => (navigationArchivedQuery.data ?? []).map(summaryToArchivedRow),
+		[navigationArchivedQuery.data],
+	);
+	// Project the raw status-grouped query result through the same
+	// repo-bucketing step the sidebar applies for rendering, so callers
+	// downstream (selection controller's keyboard navigation, workspace
+	// warmup) see groups in the order the user actually sees them on
+	// screen. Without this, repo grouping mode keeps the raw status
+	// buckets and up/down keys jump in seemingly random order.
+	const navigationSidebar = useMemo(() => {
+		const groups =
+			appSettings.sidebarGrouping === "repo"
+				? regroupByRepo(baseWorkspaceGroups)
+				: baseWorkspaceGroups;
+		return applySidebarView(
+			{ groups, archivedRows: rawArchivedRows },
+			{
+				availableRepoIds,
+				repoFilterIds: appSettings.sidebarRepoFilterIds,
+				sort: appSettings.sidebarSort,
+			},
+		);
+	}, [
+		appSettings.sidebarGrouping,
+		appSettings.sidebarRepoFilterIds,
+		appSettings.sidebarSort,
+		availableRepoIds,
+		baseWorkspaceGroups,
+		rawArchivedRows,
+	]);
+	const workspaceGroups = navigationSidebar.groups;
+	const archivedRows = navigationSidebar.archivedRows;
+	// MRU stack of workspace ids — drives Ctrl+Tab quick switch order.
+	// In-memory only; resets on app restart by design.
+	const workspaceMruRef = useRef<WorkspaceMruStack>(new WorkspaceMruStack());
+	const { state: selection, actions: selectionActions } =
+		useSelectionController({
+			queryClient,
+			workspaceGroups,
+			archivedRows,
+			appSettings,
+			areSettingsLoaded,
+			updateSettings,
+			onWorkspaceSwitched: () => {
+				contextPanelActions.clearWorkspacePreview();
+			},
+			onStartOpened: () => {
+				contextPanelActions.clearWorkspacePreview();
+				startSurfaceActions.resetScratchOnReentry();
+				contextPanelActions.syncToStartMode();
+			},
+		});
+	const { state: contextPanel, actions: contextPanelActions } =
+		useContextPanelController({
+			appSettings,
+			areSettingsLoaded,
+			updateSettings,
+			getViewMode: () => selectionActions.getSnapshot().viewMode,
+		});
+	const { state: startSurface, actions: startSurfaceActions } =
+		useStartSurfaceController({
+			queryClient,
+			appSettings,
+			areSettingsLoaded,
+			updateSettings,
+			repositories,
+			pushToast: pushWorkspaceToast,
+			getViewMode: () => selectionActions.getSnapshot().viewMode,
+			viewMode: selection.viewMode,
+			openWorkspaceStart: () => selectionActions.openStart(),
+			setViewMode: (mode) => selectionActions.setViewMode(mode),
+			selectWorkspace: (id) => handleSelectWorkspace(id),
+			selectSession: (id) => handleSelectSession(id),
+			setPendingCreatedWorkspaceSubmit: (updater) =>
+				setPendingCreatedWorkspaceSubmit(updater),
+		});
+	const startRepository = startSurface.startRepository;
+	const startInboxProviderTab = startSurface.startInboxProviderTab;
+	const setStartInboxProviderTab = startSurfaceActions.setInboxProviderTab;
+	const startInboxProviderSourceTab = startSurface.startInboxProviderSourceTab;
+	const setStartInboxProviderSourceTab =
+		startSurfaceActions.setInboxProviderSourceTab;
+	const startInboxStateFilterBySource =
+		startSurface.startInboxStateFilterBySource;
+	const setStartInboxStateFilterBySource =
+		startSurfaceActions.setInboxStateFilterBySource;
+	const startSourceBranch = startSurface.startSourceBranch;
+	const startMode = startSurface.startMode;
+	const startBranchIntent = startSurface.startBranchIntent;
+	const handleStartBranchIntentChange = startSurfaceActions.selectBranchIntent;
+	const handleStartSourceBranchSelect = startSurfaceActions.selectSourceBranch;
+	const handleStartRepositorySelect = startSurfaceActions.selectRepository;
+	const handleAddRepositoryNeedsStart =
+		startSurfaceActions.addRepositoryNeedsStart;
+	const handleMoveLocalToWorktree = startSurfaceActions.moveLocalToWorktree;
+	const handleStartComposerPrepare = startSurfaceActions.prepareComposer;
+	const startComposerContextKey = startSurface.startComposerContextKey;
+	const startComposerInsertTarget = startSurface.startComposerInsertTarget;
+	const startLinkedDirectoriesController =
+		startSurface.startLinkedDirectoriesController;
+	const inspectorCollapsed = contextPanel.inspectorCollapsed;
+	const {
 		handleResizeKeyDown,
 		handleResizeStart,
 		inspectorWidth,
@@ -446,44 +498,35 @@ function AppShell({
 		sidebarWidth,
 		setSidebarCollapsed,
 	} = useShellPanels();
-	const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
-	const [rightSidebarMode, setRightSidebarMode] =
-		useState<WorkspaceRightSidebarMode>("inspector");
-	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
-		null,
-	);
-	const [displayedWorkspaceId, setDisplayedWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-		null,
-	);
-	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
-		null,
-	);
-	const [workspaceViewMode, setWorkspaceViewMode] =
-		useState<WorkspaceViewMode>("conversation");
-	const [startRepositoryId, setStartRepositoryId] = useState<string | null>(
-		null,
-	);
-	const [startInboxProviderTab, setStartInboxProviderTab] =
-		useState<string>("github");
-	const [startInboxProviderSourceTab, setStartInboxProviderSourceTab] =
-		useState<string>("github_issue");
-	const [startInboxStateFilterBySource, setStartInboxStateFilterBySource] =
-		useState<Record<string, string>>({});
-	const [startPreviewCard, setStartPreviewCard] = useState<ContextCard | null>(
-		null,
-	);
-	const [workspacePreviewCard, setWorkspacePreviewCard] =
-		useState<ContextCard | null>(null);
-	const [workspacePreviewActive, setWorkspacePreviewActive] = useState(false);
-	const [editorSession, setEditorSession] = useState<EditorSessionState | null>(
-		null,
-	);
-	const [pendingComposerInserts, setPendingComposerInserts] = useState<
-		ResolvedComposerInsertRequest[]
-	>([]);
+	const rightSidebarMode = contextPanel.rightSidebarMode;
+	const workspacePreviewCard = contextPanel.workspacePreviewCard;
+	const workspacePreviewActive = contextPanel.workspacePreviewActive;
+	const startPreviewCard = contextPanel.startPreviewCard;
+	const rightSidebarAvailable = contextPanel.rightSidebarAvailable;
+	const contextPanelOpen = contextPanel.contextPanelOpen;
+	const setInspectorCollapsed = contextPanelActions.setInspectorCollapsed;
+	const handleToggleContextPanel = contextPanelActions.toggleContextPanel;
+	const handleStartContextCardOpen = contextPanelActions.openStartContextCard;
+	const handleStartContextPreviewClose =
+		contextPanelActions.closeStartContextPreview;
+	const handleWorkspaceContextCardOpen =
+		contextPanelActions.openWorkspaceContextCard;
+	const handleWorkspaceContextPreviewSelect =
+		contextPanelActions.selectWorkspaceContextPreview;
+	const handleWorkspaceContextPreviewClose =
+		contextPanelActions.closeWorkspaceContextPreview;
+	// Mirror selection state under the legacy names used throughout AppShell.
+	// Lets the consumers stay unchanged for now; stage 7 will rename them or
+	// move them into pane components that read the controller directly.
+	const selectedWorkspaceId = selection.selectedWorkspaceId;
+	const displayedWorkspaceId = selection.displayedWorkspaceId;
+	const selectedSessionId = selection.selectedSessionId;
+	const displayedSessionId = selection.displayedSessionId;
+	const workspaceViewMode = selection.viewMode;
+	const workspaceReselectTick = selection.reselectTick;
+	// Optimistic "creating workspace" marker — set by the start composer
+	// once a backend `prepare_workspace_*` returns, cleared once the
+	// composer's auto-submit fires for the first turn.
 	const [pendingCreatedWorkspaceSubmit, setPendingCreatedWorkspaceSubmit] =
 		useState<PendingCreatedWorkspaceSubmit | null>(null);
 	// Source of truth for "which sessions are running": the Rust
@@ -492,12 +535,15 @@ function AppShell({
 	// StartPage's optimistic "creating workspace" marker on top so the
 	// panel can show a busy spinner before the real stream registers.
 	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
+	// Stable empty fallback so referential-equality consumers don't churn
+	// on undefined-data ticks.
+	const activeStreams = activeStreamsQuery.data ?? EMPTY_ACTIVE_STREAMS;
 	const effectiveSessionRunStates = useMemo<
 		ReadonlyMap<string, SessionRunState>
 	>(
 		() =>
 			buildSessionRunStates(
-				activeStreamsQuery.data ?? [],
+				activeStreams,
 				pendingCreatedWorkspaceSubmit
 					? {
 							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
@@ -505,7 +551,7 @@ function AppShell({
 						}
 					: null,
 			),
-		[activeStreamsQuery.data, pendingCreatedWorkspaceSubmit],
+		[activeStreams, pendingCreatedWorkspaceSubmit],
 	);
 	const effectiveBusySessionIds = useMemo(
 		() => deriveBusySessionIds(effectiveSessionRunStates),
@@ -519,170 +565,31 @@ function AppShell({
 		() => deriveBusyWorkspaceIds(effectiveSessionRunStates),
 		[effectiveSessionRunStates],
 	);
-	// Tracks sessions that have reached a terminal "done" event at least once
-	// in this app run. Used by the commit lifecycle to know when to prompt.
-	// Distinct from "unread" — `unreadCount` is the persisted, cross-restart
-	// signal driven entirely from the backend.
-	const [settledSessionIds, setSettledSessionIds] = useState<Set<string>>(
-		() => new Set(),
-	);
-	// Sessions that terminated via abort (stop stream) rather than normal
-	// completion. Used by the commit lifecycle to return the button to idle
-	// when the user aborts an action session (e.g. Create PR).
-	const [abortedSessionIds, setAbortedSessionIds] = useState<Set<string>>(
-		() => new Set(),
-	);
-	const [interactionRequiredSessions, setInteractionRequiredSessions] =
-		useState<Map<string, string>>(() => new Map());
-	const interactionRequiredSessionIds = useMemo(
-		() => new Set(interactionRequiredSessions.keys()),
-		[interactionRequiredSessions],
-	);
-	const interactionRequiredWorkspaceIds = useMemo(
-		() => new Set(interactionRequiredSessions.values()),
-		[interactionRequiredSessions],
-	);
-
-	// Persist "session read" once the user actually views a session AND it is
-	// not waiting on an interaction prompt. Workspace.unread is purely derived
-	// from sessions, so clearing the session naturally drops the workspace red
-	// dot when no other sessions remain unread. Selecting a workspace alone
-	// must NOT clear unread state — only opening a session does.
-	//
-	// Optimistically applies the cleared state to the cache so the sidebar dot
-	// and dock badge react instantly, then commits via IPC + invalidate. If the
-	// IPC fails the optimistic patch is rolled back.
-	useEffect(() => {
-		if (!displayedSessionId) {
-			lastMarkedReadSessionIdRef.current = null;
-			return;
-		}
-		if (interactionRequiredSessionIds.has(displayedSessionId)) {
-			// Reset the dedupe key so once the interaction completes the next
-			// effect run will fire the IPC.
-			lastMarkedReadSessionIdRef.current = null;
-			return;
-		}
-		if (
-			lastMarkedReadSessionIdRef.current === displayedSessionId &&
-			workspaceReselectTick === lastMarkedReadReselectTickRef.current
-		) {
-			return;
-		}
-
-		const sessionId = displayedSessionId;
-		const workspaceId = selectedWorkspaceIdRef.current;
-		lastMarkedReadSessionIdRef.current = sessionId;
-		lastMarkedReadReselectTickRef.current = workspaceReselectTick;
-
-		// Snapshot for rollback on IPC failure.
-		const previousGroups = queryClient.getQueryData(
-			helmorQueryKeys.workspaceGroups,
-		);
-		const previousDetail = workspaceId
-			? queryClient.getQueryData(helmorQueryKeys.workspaceDetail(workspaceId))
-			: undefined;
-		const previousSessions = workspaceId
-			? queryClient.getQueryData(helmorQueryKeys.workspaceSessions(workspaceId))
-			: undefined;
-
-		// Optimistic: clear this session's unread in the sessions cache, then
-		// recompute the owning workspace's hasUnread / unreadSessionCount /
-		// workspaceUnread from the patched session list. Sidebar dot and dock
-		// badge react instantly; the IPC + invalidate afterwards reconciles.
-		let remainingUnread = 0;
-		if (workspaceId) {
-			const currentSessions = queryClient.getQueryData<
-				WorkspaceSessionSummary[] | undefined
-			>(helmorQueryKeys.workspaceSessions(workspaceId));
-			if (Array.isArray(currentSessions)) {
-				const patched = currentSessions.map((session) =>
-					session.id === sessionId ? { ...session, unreadCount: 0 } : session,
-				);
-				remainingUnread = patched.filter((s) => s.unreadCount > 0).length;
-				queryClient.setQueryData<WorkspaceSessionSummary[]>(
-					helmorQueryKeys.workspaceSessions(workspaceId),
-					patched,
-				);
-			}
-			queryClient.setQueryData<WorkspaceGroup[] | undefined>(
-				helmorQueryKeys.workspaceGroups,
-				(current) =>
-					recomputeWorkspaceUnreadInGroups(
-						current,
-						workspaceId,
-						remainingUnread,
-					),
-			);
-			queryClient.setQueryData<WorkspaceDetail | null | undefined>(
-				helmorQueryKeys.workspaceDetail(workspaceId),
-				(current) =>
-					current
-						? recomputeWorkspaceDetailUnread(current, remainingUnread)
-						: current,
-			);
-		}
-
-		void markSessionRead(sessionId)
-			.then(() => {
-				// Skip sidebar-list invalidations while a sidebar mutation
-				// (archive/restore/create/delete/pin) is in flight: the server
-				// state is mid-transition and a refetch here would overwrite
-				// the optimistic cache with a stale snapshot, bouncing the row
-				// back to its pre-mutation position. The mutation owner flushes
-				// these lists in its own `.finally`.
-				flushSidebarListsIfIdle(queryClient);
-				const invalidations: Promise<void>[] = [];
-				if (workspaceId) {
-					invalidations.push(
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-						}),
-						queryClient.invalidateQueries({
-							queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-						}),
-					);
-				}
-				return Promise.all(invalidations);
-			})
-			.catch((error) => {
-				// Roll back the optimistic patch and reset dedupe so a retry can
-				// succeed.
-				queryClient.setQueryData(
-					helmorQueryKeys.workspaceGroups,
-					previousGroups,
-				);
-				if (workspaceId) {
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceDetail(workspaceId),
-						previousDetail,
-					);
-					queryClient.setQueryData(
-						helmorQueryKeys.workspaceSessions(workspaceId),
-						previousSessions,
-					);
-				}
-				if (lastMarkedReadSessionIdRef.current === sessionId) {
-					lastMarkedReadSessionIdRef.current = null;
-				}
-				console.error("[app] mark session read on view:", error);
-			});
-	}, [
-		displayedSessionId,
-		interactionRequiredSessionIds,
-		queryClient,
-		workspaceReselectTick,
-	]);
-
-	const {
-		settings: appSettings,
-		isLoaded: areSettingsLoaded,
-		updateSettings,
-	} = useSettings();
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
 	useEnsureDefaultModel();
 	const notify = useOsNotifications(appSettings);
+	const { state: readState, actions: readStateActions } =
+		useReadStateController({
+			queryClient,
+			notify,
+			pushToast: pushWorkspaceToast,
+			displayedSessionId,
+			reselectTick: workspaceReselectTick,
+			getSelectedWorkspaceId: () => selectionActions.getSnapshot().workspaceId,
+			getSelectedSessionId: () => selectionActions.getSnapshot().sessionId,
+			onReopenSelectWorkspace: (id) => {
+				handleSelectWorkspace(id);
+			},
+			onReopenSelectSession: (id) => {
+				handleSelectSession(id);
+			},
+		});
+	const settledSessionIds = readState.settledSessionIds;
+	const abortedSessionIds = readState.abortedSessionIds;
+	const interactionRequiredSessionIds = readState.interactionRequiredSessionIds;
+	const interactionRequiredWorkspaceIds =
+		readState.interactionRequiredWorkspaceIds;
 	const installedEditorsQuery = useQuery(detectedEditorsQueryOptions());
 	const installedEditors = installedEditorsQuery.data ?? [];
 	const [preferredEditorId, setPreferredEditorId] = useState<string | null>(
@@ -704,6 +611,10 @@ function AppShell({
 		appSettings.shortcuts,
 		"workspace.addRepository",
 	);
+	const sidebarFilterShortcut = getShortcut(
+		appSettings.shortcuts,
+		"workspace.filterSidebar",
+	);
 	const leftSidebarToggleShortcut = getShortcut(
 		appSettings.shortcuts,
 		"sidebar.left.toggle",
@@ -721,32 +632,6 @@ function AppShell({
 		shortcuts: appSettings.shortcuts,
 		updateShortcuts: handleUpdateGlobalHotkeyShortcuts,
 	});
-	useEffect(() => {
-		if (!areSettingsLoaded || rightSidebarSettingsHydratedRef.current) {
-			return;
-		}
-		rightSidebarSettingsHydratedRef.current = true;
-
-		if (appSettings.lastSurface === "workspace-start") {
-			setRightSidebarMode(
-				appSettings.startContextPanelOpen ? "context" : "inspector",
-			);
-			if (appSettings.startContextPanelOpen) {
-				setInspectorCollapsed(false);
-			}
-			return;
-		}
-
-		setRightSidebarMode(appSettings.workspaceRightSidebarMode);
-		if (appSettings.workspaceRightSidebarMode === "context") {
-			setInspectorCollapsed(false);
-		}
-	}, [
-		appSettings.lastSurface,
-		appSettings.startContextPanelOpen,
-		appSettings.workspaceRightSidebarMode,
-		areSettingsLoaded,
-	]);
 	const handleOpenPreferredEditor = useCallback(() => {
 		if (!selectedWorkspaceId || !preferredEditor) return;
 		void openWorkspaceInEditor(selectedWorkspaceId, preferredEditor.id).catch(
@@ -765,70 +650,91 @@ function AppShell({
 		setInspectorCollapsed(!zenActive);
 	}, [inspectorCollapsed, setSidebarCollapsed, sidebarCollapsed]);
 	const handleOpenModelPicker = useCallback(() => {
-		window.dispatchEvent(new Event("helmor:open-model-picker"));
+		publishShellEvent({ type: "open-model-picker" });
 	}, []);
-	const handlePullLatest = useCallback(async () => {
-		if (!selectedWorkspaceId) return;
-		try {
-			const result = await syncWorkspaceWithTargetBranch(selectedWorkspaceId);
-			if (result.outcome === "updated") {
-				toast.success(`Pulled latest from ${result.targetBranch}`);
-			} else if (result.outcome === "alreadyUpToDate") {
-				toast(`Already up to date with ${result.targetBranch}`);
-			} else {
-				toast.error(`Pull from ${result.targetBranch} needs attention`);
-			}
-		} catch (error) {
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Unable to pull target branch updates.",
-			);
-		} finally {
-			await Promise.all([
-				queryClient.invalidateQueries({
-					queryKey:
-						helmorQueryKeys.workspaceGitActionStatus(selectedWorkspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceChangeRequest(selectedWorkspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey:
-						helmorQueryKeys.workspaceForgeActionStatus(selectedWorkspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-				queryClient.invalidateQueries({ queryKey: ["workspaceChanges"] }),
-			]);
-		}
-	}, [queryClient, selectedWorkspaceId]);
+	const handlePullLatest = usePullLatest({ queryClient, selectedWorkspaceId });
 
-	const navigationGroupsQuery = useQuery(workspaceGroupsQueryOptions());
-	const navigationArchivedQuery = useQuery(archivedWorkspacesQueryOptions());
-	const workspaceGroups = navigationGroupsQuery.data ?? [];
-	const archivedRows = useMemo(
-		() => (navigationArchivedQuery.data ?? []).map(summaryToArchivedRow),
-		[navigationArchivedQuery.data],
-	);
+	// Map workspace id -> live row (excluding archived). Used by the
+	// quick-switch overlay to render cards and by buildSnapshot to filter
+	// stale MRU ids.
+	const liveWorkspaceRowMap = useMemo(() => {
+		const map = new Map<
+			string,
+			(typeof workspaceGroups)[number]["rows"][number]
+		>();
+		for (const group of workspaceGroups) {
+			for (const row of group.rows) map.set(row.id, row);
+		}
+		return map;
+	}, [workspaceGroups]);
+
+	// Whenever the selection changes, mark the workspace as most-recently-used.
+	// All entry points (sidebar click, navigation hotkeys, quick-switch itself,
+	// session restore) flow through `selection.selectedWorkspaceId`, so a
+	// single effect here covers them all.
+	useEffect(() => {
+		if (selectedWorkspaceId) workspaceMruRef.current.touch(selectedWorkspaceId);
+	}, [selectedWorkspaceId]);
 	const selectedWorkspaceDetailQuery = useQuery({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	const handleOpenSettings = useCallback((): void => {
-		onOpenSettings(
+	// Optional `initialSection` lets callers jump straight to a panel
+	// (e.g. inspector's "Add run script" → the current repo's Scripts
+	// editor). Bound directly to button onClick is still safe — React
+	// passes the click event as the first arg, which doesn't match the
+	// `SettingsSection` shape, so we coerce non-string args back to
+	// `undefined` to preserve the original zero-arg behavior.
+	const handleOpenSettings = useCallback(
+		(initialSection?: SettingsSection): void => {
+			const section =
+				typeof initialSection === "string" ? initialSection : undefined;
+			onOpenSettings(
+				selectedWorkspaceId,
+				selectedWorkspaceDetailQuery.data?.repoId ?? null,
+				section,
+			);
+		},
+		[
+			onOpenSettings,
+			selectedWorkspaceDetailQuery.data?.repoId,
 			selectedWorkspaceId,
-			selectedWorkspaceDetailQuery.data?.repoId ?? null,
-		);
-	}, [
-		onOpenSettings,
-		selectedWorkspaceDetailQuery.data?.repoId,
-		selectedWorkspaceId,
-	]);
+		],
+	);
+	const handleOpenAnnouncementSettings = useCallback(
+		(initialSection?: SettingsSection): void => {
+			// Sentinel: announcements written before a workspace is
+			// selected can ask for "the current repo's Scripts section"
+			// without knowing the repo id at authoring time. We resolve
+			// it here and replay the same open-then-scroll dance the
+			// inspector empty states use.
+			if (initialSection === ("repo:current" as SettingsSection)) {
+				const currentRepoId = selectedWorkspaceDetailQuery.data?.repoId;
+				if (currentRepoId) {
+					onOpenSettings(null, null, `repo:${currentRepoId}`);
+					requestAnimationFrame(() => {
+						window.dispatchEvent(
+							new CustomEvent("helmor:scroll-to-repo-scripts"),
+						);
+					});
+					return;
+				}
+				// No active repo (chat-only workspace, or none selected) —
+				// fall back to plain settings rather than a broken link.
+				onOpenSettings(null, null);
+				return;
+			}
+			onOpenSettings(null, null, initialSection);
+		},
+		[onOpenSettings, selectedWorkspaceDetailQuery.data?.repoId],
+	);
+	const handleOpenReleaseChangelog = useCallback(() => {
+		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
+			toast.error("Unable to open GitHub changelog", {
+				description: String(error),
+			});
+		});
+	}, []);
 	const selectedWorkspaceDetail =
 		selectedWorkspaceDetailQuery.data ??
 		(selectedWorkspaceId
@@ -841,6 +747,87 @@ function AppShell({
 		selectedWorkspaceDetail?.state === "archived"
 			? null
 			: (selectedWorkspaceDetail?.rootPath ?? null);
+
+	const {
+		state: editorSessionState,
+		actions: editorSessionActions,
+		dialogNode: editorDiscardConfirmDialog,
+	} = useEditorSessionController({
+		pushToast: pushWorkspaceToast,
+		workspaceRootPath,
+		selectedWorkspaceId,
+		enterEditorMode: () => selectionActions.setViewMode("editor"),
+		exitEditorMode: () => selectionActions.setViewMode("conversation"),
+	});
+	const editorSession = editorSessionState.editorSession;
+	// Stable identity so downstream `React.memo` boundaries hold.
+	const activeEditorTarget = useMemo(
+		() =>
+			editorSession
+				? {
+						path: editorSession.path,
+						originalRef: editorSession.originalRef,
+						modifiedRef: editorSession.modifiedRef,
+					}
+				: null,
+		[
+			editorSession?.path,
+			editorSession?.originalRef,
+			editorSession?.modifiedRef,
+			editorSession,
+		],
+	);
+	const handleOpenEditorFile = editorSessionActions.openFile;
+	const handleOpenFileReference = editorSessionActions.openFileReference;
+	const handleEditorSessionChange = editorSessionActions.changeSession;
+	const handleExitEditorMode = editorSessionActions.exit;
+	const handleEditorSurfaceError = editorSessionActions.reportError;
+	const canEditEditorSession =
+		(editorSession?.kind === "diff" && editorSession.fileStatus !== "D") ||
+		(editorSession?.kind === "file" &&
+			editorSession.fileStatus !== undefined &&
+			editorSession.fileStatus !== "D");
+	const handleEnterEditorEditMode = useCallback(() => {
+		if (!editorSession || editorSession.fileStatus === "D") {
+			return;
+		}
+		if (editorSession.kind === "diff") {
+			handleEditorSessionChange({
+				kind: "file",
+				path: editorSession.path,
+				line: editorSession.line,
+				column: editorSession.column,
+				dirty: false,
+				inline: editorSession.inline,
+				fileStatus: editorSession.fileStatus,
+				originalRef: editorSession.originalRef,
+				modifiedRef: editorSession.modifiedRef,
+				diffOriginalText: editorSession.originalText,
+				diffModifiedText: editorSession.modifiedText,
+				viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+			});
+			return;
+		}
+		if (editorSession.fileStatus === undefined) return;
+		handleEditorSessionChange({
+			kind: "diff",
+			path: editorSession.path,
+			line: editorSession.line,
+			column: editorSession.column,
+			dirty: editorSession.dirty,
+			inline: editorSession.inline,
+			fileStatus: editorSession.fileStatus,
+			originalRef: editorSession.originalRef,
+			modifiedRef: editorSession.modifiedRef,
+			originalText: editorSession.diffOriginalText,
+			modifiedText: editorSession.dirty
+				? editorSession.modifiedText
+				: editorSession.diffModifiedText,
+			diffOriginalText: editorSession.diffOriginalText,
+			diffModifiedText: editorSession.diffModifiedText,
+			viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
+		});
+	}, [editorSession, handleEditorSessionChange]);
 
 	const handleCopyWorkspacePath = useCallback(() => {
 		if (!workspaceRootPath) return;
@@ -927,619 +914,49 @@ function AppShell({
 	});
 	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
 
-	useEffect(() => {
-		selectedWorkspaceIdRef.current = selectedWorkspaceId;
-	}, [selectedWorkspaceId]);
+	// Nudge CI-progress refetch on workspace switch — `refetchOnMount: "always"`
+	// doesn't fire on queryKey changes.
+	useRefreshForgeOnWorkspaceSwitch(selectedWorkspaceId);
 
-	useEffect(() => {
-		selectedSessionIdRef.current = selectedSessionId;
-	}, [selectedSessionId]);
-
-	useEffect(() => {
-		workspaceViewModeRef.current = workspaceViewMode;
-	}, [workspaceViewMode]);
-
-	// Persist last session for restore-on-launch. Last workspace is written
-	// synchronously in handleSelectWorkspace so surface restore cannot race it.
-	useEffect(() => {
-		if (selectedSessionId) {
-			void saveSettings({ lastSessionId: selectedSessionId });
-		}
-	}, [selectedSessionId]);
-
-	const rememberSessionSelection = useCallback(
-		(workspaceId: string | null, sessionId: string | null) => {
-			if (!workspaceId || !sessionId) {
-				return;
-			}
-
-			const current =
-				sessionSelectionHistoryByWorkspaceRef.current[workspaceId] ?? [];
-			const next = [...current.filter((id) => id !== sessionId), sessionId];
-			sessionSelectionHistoryByWorkspaceRef.current[workspaceId] =
-				next.slice(-16);
-		},
-		[],
-	);
-
-	useEffect(() => {
-		if (!editorSession) {
-			return;
-		}
-
-		if (isPathWithinRoot(editorSession.path, workspaceRootPath)) {
-			return;
-		}
-
-		setWorkspaceViewMode("conversation");
-		setEditorSession(null);
-	}, [editorSession, workspaceRootPath]);
-
-	useEffect(() => {
-		const apply = () => {
-			const effective = resolveTheme(appSettings.theme);
-			document.documentElement.classList.toggle("dark", effective === "dark");
-			document.documentElement.style.colorScheme = effective;
-			// Monaco's theme is synced via a MutationObserver inside
-			// `monaco-runtime.ts` — avoid importing it here to keep Monaco out
-			// of the critical boot path and out of tests that never open the
-			// editor.
-		};
-
-		apply();
-
-		if (
-			appSettings.theme === "system" &&
-			typeof window.matchMedia === "function"
-		) {
-			const mq = window.matchMedia("(prefers-color-scheme: dark)");
-			mq.addEventListener("change", apply);
-			return () => mq.removeEventListener("change", apply);
-		}
-	}, [appSettings.theme]);
-
-	useEffect(() => {
-		const DARK_THEME_CLASSES: DarkTheme[] = [
-			"midnight",
-			"forest",
-			"ember",
-			"aurora",
-		];
-		for (const t of DARK_THEME_CLASSES) {
-			document.documentElement.classList.remove(`theme-${t}`);
-		}
-		if (appSettings.darkTheme && appSettings.darkTheme !== "default") {
-			document.documentElement.classList.add(`theme-${appSettings.darkTheme}`);
-		}
-	}, [appSettings.darkTheme]);
-
-	const confirmDiscardEditorChanges = useCallback(
-		(action: string) => {
-			if (!editorSession?.dirty) {
-				return true;
-			}
-
-			if (typeof window === "undefined") {
-				return false;
-			}
-
-			return window.confirm(
-				`You have unsaved changes in ${editorSession.path}. Discard them and ${action}?`,
-			);
-		},
-		[editorSession],
-	);
-
-	const handleEditorSurfaceError = useCallback(
-		(description: string, title = "Editor action failed") => {
-			pushWorkspaceToast(description, title);
-		},
-		[pushWorkspaceToast],
-	);
-
-	const handleOpenEditorFile = useCallback(
-		(path: string, options?: DiffOpenOptions) => {
-			if (!workspaceRootPath) {
-				pushWorkspaceToast(
-					"Open a workspace with a resolved root path before using the in-app editor.",
-					"Editor unavailable",
-				);
-				return;
-			}
-
-			if (editorSession?.path === path) {
-				return;
-			}
-
-			if (!confirmDiscardEditorChanges("open another file")) {
-				return;
-			}
-
-			const status = options?.fileStatus ?? "M";
-
-			// Background fetch so the next view reflects latest remote state
-			if (selectedWorkspaceId) {
-				triggerWorkspaceFetch(selectedWorkspaceId);
-			}
-
-			setWorkspaceViewMode("editor");
-			setEditorSession({
-				kind: "diff",
-				path,
-				inline: status !== "M",
-				dirty: false,
-				fileStatus: status,
-				originalRef: options?.originalRef,
-				modifiedRef: options?.modifiedRef,
-				// Diff click is "see what changed" — default to source even for .md.
-				viewMode: isMarkdownPath(path) ? "source" : undefined,
-			});
-		},
-		[
-			confirmDiscardEditorChanges,
-			editorSession?.path,
-			pushWorkspaceToast,
-			selectedWorkspaceId,
-			workspaceRootPath,
-		],
-	);
-
-	const handleOpenFileReference = useCallback(
-		(path: string, line?: number, column?: number) => {
-			if (!workspaceRootPath) {
-				pushWorkspaceToast(
-					"Open a workspace with a resolved root path before using the in-app editor.",
-					"Editor unavailable",
-				);
-				return;
-			}
-
-			if (!isPathWithinRoot(path, workspaceRootPath)) {
-				pushWorkspaceToast(
-					"Only files inside the current workspace can be opened in the in-app editor.",
-					"File unavailable",
-				);
-				return;
-			}
-
-			if (
-				editorSession?.path !== path &&
-				!confirmDiscardEditorChanges("open another file")
-			) {
-				return;
-			}
-
-			if (selectedWorkspaceId) {
-				triggerWorkspaceFetch(selectedWorkspaceId);
-			}
-
-			setWorkspaceViewMode("editor");
-			setEditorSession((current) => {
-				const samePath = current?.path === path;
-				// Chat-link open of a markdown file: default to preview (reading the
-				// rendered output). Preserve user's explicit toggle if reopening the
-				// same file. Non-markdown paths leave viewMode unset.
-				const viewMode = isMarkdownPath(path)
-					? samePath && current?.viewMode
-						? current.viewMode
-						: "preview"
-					: undefined;
-				return {
-					kind: "file",
-					path,
-					line,
-					column,
-					dirty: samePath ? current.dirty : false,
-					originalText: samePath ? current.originalText : undefined,
-					modifiedText: samePath ? current.modifiedText : undefined,
-					mtimeMs: samePath ? current.mtimeMs : undefined,
-					viewMode,
-				};
-			});
-		},
-		[
-			confirmDiscardEditorChanges,
-			editorSession?.path,
-			pushWorkspaceToast,
-			selectedWorkspaceId,
-			workspaceRootPath,
-		],
-	);
-
-	const handleEditorSessionChange = useCallback(
-		(session: EditorSessionState) => {
-			setEditorSession(session);
-		},
-		[],
-	);
-
-	const handleExitEditorMode = useCallback(() => {
-		if (!confirmDiscardEditorChanges("return to chat")) {
-			return;
-		}
-
-		setWorkspaceViewMode("conversation");
-		setEditorSession(null);
-	}, [confirmDiscardEditorChanges]);
-
-	const primeWorkspaceDisplay = useCallback(
-		async (workspaceId: string) => {
-			const [workspaceDetail, workspaceSessions] = await Promise.all([
-				queryClient.ensureQueryData(workspaceDetailQueryOptions(workspaceId)),
-				queryClient.ensureQueryData(workspaceSessionsQueryOptions(workspaceId)),
-			]);
-
-			const resolvedSessionId =
-				workspaceDetail?.activeSessionId ??
-				workspaceSessions.find((session) => session.active)?.id ??
-				workspaceSessions[0]?.id ??
-				null;
-
-			if (resolvedSessionId) {
-				await queryClient.ensureQueryData(
-					sessionThreadMessagesQueryOptions(resolvedSessionId),
-				);
-			}
-
-			return {
-				workspaceId,
-				sessionId: resolvedSessionId,
-			};
-		},
-		[queryClient],
-	);
-
-	const resolveCachedWorkspaceDisplay = useCallback(
-		(workspaceId: string, preferredSessionId?: string | null) => {
-			const workspaceDetail = queryClient.getQueryData<WorkspaceDetail | null>(
-				helmorQueryKeys.workspaceDetail(workspaceId),
-			);
-			const workspaceSessions = queryClient.getQueryData<
-				WorkspaceSessionSummary[] | undefined
-			>(helmorQueryKeys.workspaceSessions(workspaceId));
-
-			if (!workspaceDetail || !Array.isArray(workspaceSessions)) {
-				return null;
-			}
-
-			const sessionId =
-				preferredSessionId ??
-				workspaceDetail.activeSessionId ??
-				workspaceSessions.find((session) => session.active)?.id ??
-				workspaceSessions[0]?.id ??
-				null;
-			const hasSessionMessages =
-				sessionId === null ||
-				queryClient.getQueryData([
-					...helmorQueryKeys.sessionMessages(sessionId),
-					"thread",
-				]) !== undefined;
-
-			if (!hasSessionMessages) {
-				return null;
-			}
-
-			return {
-				workspaceId,
-				sessionId,
-			};
-		},
-		[queryClient],
-	);
-
-	const resolvePreferredSessionId = useCallback(
-		(workspaceId: string) => {
-			const sessionHistory =
-				sessionSelectionHistoryByWorkspaceRef.current[workspaceId] ?? [];
-			const workspaceDetail = queryClient.getQueryData<WorkspaceDetail | null>(
-				helmorQueryKeys.workspaceDetail(workspaceId),
-			);
-			const workspaceSessions =
-				queryClient.getQueryData<WorkspaceSessionSummary[] | undefined>(
-					helmorQueryKeys.workspaceSessions(workspaceId),
-				) ?? [];
-
-			const sessionIds =
-				workspaceSessions.length > 0
-					? new Set(workspaceSessions.map((session) => session.id))
-					: null;
-
-			if (sessionIds) {
-				for (let i = sessionHistory.length - 1; i >= 0; i -= 1) {
-					const sessionId = sessionHistory[i];
-					if (sessionIds.has(sessionId)) {
-						return sessionId;
-					}
-				}
-			}
-
-			if (sessionHistory.length > 0) {
-				return sessionHistory[sessionHistory.length - 1] ?? null;
-			}
-
-			// Restore last session from persisted settings
-			if (
-				appSettings.lastSessionId &&
-				(!sessionIds || sessionIds.has(appSettings.lastSessionId))
-			) {
-				return appSettings.lastSessionId;
-			}
-
-			return (
-				workspaceDetail?.activeSessionId ??
-				workspaceSessions.find((session) => session.active)?.id ??
-				workspaceSessions[0]?.id ??
-				null
-			);
-		},
-		[queryClient, appSettings.lastSessionId],
-	);
-
-	const primeInitialWorkspaceDisplay = useCallback(
-		async (workspaceId: string) => {
-			await primeWorkspaceDisplay(workspaceId);
-		},
-		[primeWorkspaceDisplay],
-	);
-
-	useEffect(() => {
-		if (!selectedWorkspaceId || displayedWorkspaceId !== null) {
-			return;
-		}
-
-		if (startupPrefetchedWorkspaceRef.current === selectedWorkspaceId) {
-			return;
-		}
-
-		startupPrefetchedWorkspaceRef.current = selectedWorkspaceId;
-		void primeInitialWorkspaceDisplay(selectedWorkspaceId).catch(() => {
-			// Keep the first paint path resilient even if prewarm fails.
-		});
-	}, [displayedWorkspaceId, primeInitialWorkspaceDisplay, selectedWorkspaceId]);
-
-	useEffect(() => {
-		const candidateWorkspaceIds = flattenWorkspaceRows(
-			workspaceGroups,
-			archivedRows,
-		)
-			.map((row) => row.id)
-			.filter((workspaceId) => workspaceId !== selectedWorkspaceId)
-			.slice(0, 4);
-
-		if (candidateWorkspaceIds.length === 0) {
-			return;
-		}
-
-		let cancelled = false;
-		let timeoutId: number | null = null;
-
-		const warmNext = async (index: number) => {
-			if (cancelled || index >= candidateWorkspaceIds.length) {
-				return;
-			}
-
-			const workspaceId = candidateWorkspaceIds[index];
-			if (!workspaceId || warmedWorkspaceIdsRef.current.has(workspaceId)) {
-				void warmNext(index + 1);
-				return;
-			}
-
-			warmedWorkspaceIdsRef.current.add(workspaceId);
-			try {
-				await primeWorkspaceDisplay(workspaceId);
-			} catch {
-				// Best-effort background warmup only.
-			}
-
-			if (!cancelled) {
-				timeoutId = window.setTimeout(() => {
-					void warmNext(index + 1);
-				}, 150);
-			}
-		};
-
-		timeoutId = window.setTimeout(() => {
-			void warmNext(0);
-		}, 400);
-
-		return () => {
-			cancelled = true;
-			if (timeoutId !== null) {
-				window.clearTimeout(timeoutId);
-			}
-		};
-	}, [
-		archivedRows,
-		primeWorkspaceDisplay,
-		selectedWorkspaceId,
-		workspaceGroups,
-	]);
+	useThemeApplication({
+		theme: appSettings.theme,
+		lightTheme: appSettings.lightTheme,
+		darkTheme: appSettings.darkTheme,
+		uiFontFamily: appSettings.uiFontFamily,
+		codeFontFamily: appSettings.codeFontFamily,
+		terminalFontFamily: appSettings.terminalFontFamily,
+		chatFontSize: appSettings.chatFontSize,
+		usePointerCursors: appSettings.usePointerCursors,
+	});
 
 	const handleSelectWorkspace = useCallback(
 		(workspaceId: string | null) => {
-			if (workspaceId) {
-				void updateSettings({
-					lastSurface: "workspace",
-					lastWorkspaceId: workspaceId,
-				});
-			}
-			if (workspaceViewModeRef.current === "start") {
-				setWorkspaceViewMode("conversation");
-			}
-			setRightSidebarMode(appSettings.workspaceRightSidebarMode);
-			if (appSettings.workspaceRightSidebarMode === "context") {
-				setInspectorCollapsed(false);
-			}
-
-			if (workspaceId === selectedWorkspaceIdRef.current) {
-				// Re-clicking the currently selected workspace: force the
-				// mark-session-read effect to re-evaluate so a lingering dot
-				// from a manual "mark as unread" clears, without tearing down
-				// the current session view.
-				if (workspaceId !== null) {
-					setWorkspaceReselectTick((tick) => tick + 1);
-				}
-				return;
-			}
-
-			setWorkspacePreviewCard(null);
-			setWorkspacePreviewActive(false);
-			const requestId = workspaceSelectionRequestRef.current + 1;
-			workspaceSelectionRequestRef.current = requestId;
-			sessionSelectionRequestRef.current += 1;
-			selectedWorkspaceIdRef.current = workspaceId;
-			const immediateSessionId = workspaceId
-				? resolvePreferredSessionId(workspaceId)
-				: null;
-			selectedSessionIdRef.current = immediateSessionId;
-			setSelectedWorkspaceId(workspaceId);
-			setSelectedSessionId(immediateSessionId);
-
-			if (workspaceId) {
-				// Skip git fetch while the worktree is still being created —
-				// `state === "initializing"` means Phase 2 hasn't finished
-				// materializing the worktree on disk yet.
-				const cachedDetail = queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-				);
-				if (cachedDetail?.state !== "initializing") {
-					triggerWorkspaceFetch(workspaceId);
-					// Prewarm the slash-command cache for the new workspace so
-					// the next `/` press hits warm data (or at least falls back
-					// to the repo-level cache while this refresh completes).
-					void prewarmSlashCommandsForWorkspace(workspaceId);
-				}
-			}
-
-			// Session-level completed dots are cleared reactively via the
-			// displayedSessionId effect — only the actually-viewed session
-			// loses its dot, not every session in the workspace.
-			if (workspaceId === null) {
-				if (workspaceSelectionRequestRef.current !== requestId) {
-					return;
-				}
-				setDisplayedWorkspaceId(null);
-				setDisplayedSessionId(null);
-				return;
-			}
-
-			setDisplayedWorkspaceId(workspaceId);
-			setDisplayedSessionId(immediateSessionId);
-
-			const cachedWorkspaceDisplay = resolveCachedWorkspaceDisplay(
-				workspaceId,
-				immediateSessionId,
-			);
-			if (cachedWorkspaceDisplay) {
-				selectedSessionIdRef.current = cachedWorkspaceDisplay.sessionId;
-				rememberSessionSelection(workspaceId, cachedWorkspaceDisplay.sessionId);
-				setSelectedSessionId(cachedWorkspaceDisplay.sessionId);
-				if (workspaceSelectionRequestRef.current !== requestId) {
-					return;
-				}
-				setDisplayedWorkspaceId(cachedWorkspaceDisplay.workspaceId);
-				setDisplayedSessionId(cachedWorkspaceDisplay.sessionId);
-				void queryClient.prefetchQuery(
-					workspaceDetailQueryOptions(workspaceId),
-				);
-				void queryClient.prefetchQuery(
-					workspaceSessionsQueryOptions(workspaceId),
-				);
-				if (cachedWorkspaceDisplay.sessionId) {
-					void queryClient.prefetchQuery(
-						sessionThreadMessagesQueryOptions(cachedWorkspaceDisplay.sessionId),
-					);
-				}
-				return;
-			}
-
-			void primeWorkspaceDisplay(workspaceId)
-				.then(({ sessionId }) => {
-					if (workspaceSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					selectedSessionIdRef.current = sessionId;
-					rememberSessionSelection(workspaceId, sessionId);
-					setSelectedSessionId(sessionId);
-					setDisplayedWorkspaceId(workspaceId);
-					setDisplayedSessionId(sessionId);
-				})
-				.catch(() => {
-					if (workspaceSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedWorkspaceId(workspaceId);
-					setDisplayedSessionId(null);
-				});
+			// Align the right sidebar with the user's persisted preference on
+			// every workspace switch (and on reselect too — keeps behaviour
+			// identical to the pre-extraction handler).
+			contextPanelActions.syncToWorkspaceMode();
+			selectionActions.selectWorkspace(workspaceId);
 		},
-		[
-			primeWorkspaceDisplay,
-			queryClient,
-			rememberSessionSelection,
-			resolveCachedWorkspaceDisplay,
-			resolvePreferredSessionId,
-			appSettings.workspaceRightSidebarMode,
-			updateSettings,
-		],
+		[contextPanelActions, selectionActions],
 	);
 
 	const handleSelectSession = useCallback(
 		(sessionId: string | null) => {
-			setWorkspacePreviewActive(false);
-			if (sessionId === selectedSessionIdRef.current) {
-				return;
-			}
-
-			const requestId = sessionSelectionRequestRef.current + 1;
-			sessionSelectionRequestRef.current = requestId;
-			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
-			selectedSessionIdRef.current = sessionId;
-			setSelectedSessionId(sessionId);
-			if (sessionId === null) {
-				if (sessionSelectionRequestRef.current !== requestId) {
-					return;
-				}
-				setDisplayedSessionId(null);
-				return;
-			}
-
-			if (
-				queryClient.getQueryData([
-					...helmorQueryKeys.sessionMessages(sessionId),
-					"thread",
-				]) !== undefined
-			) {
-				if (sessionSelectionRequestRef.current !== requestId) {
-					return;
-				}
-				setDisplayedSessionId(sessionId);
-				void queryClient.prefetchQuery(
-					sessionThreadMessagesQueryOptions(sessionId),
-				);
-				return;
-			}
-
-			void queryClient
-				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
-				.then(() => {
-					if (sessionSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedSessionId(sessionId);
-				})
-				.catch(() => {
-					if (sessionSelectionRequestRef.current !== requestId) {
-						return;
-					}
-
-					setDisplayedSessionId(sessionId);
-				});
+			contextPanelActions.deactivateWorkspaceContextPreview();
+			selectionActions.selectSession(sessionId);
 		},
-		[queryClient, rememberSessionSelection],
+		[selectionActions],
 	);
+
+	const submitFeedbackPrompt = useFeedbackSubmit({
+		queryClient,
+		appSettings,
+		selectWorkspace: handleSelectWorkspace,
+		selectSession: handleSelectSession,
+		setViewMode: selectionActions.setViewMode,
+		setPendingCreatedWorkspaceSubmit,
+		pushToast: pushWorkspaceToast,
+	});
 
 	const {
 		commitButtonMode,
@@ -1547,12 +964,13 @@ function AppShell({
 		handleInspectorCommitAction,
 		handleInspectorReviewAction,
 		handlePendingPromptConsumed,
+		mergeConfirmDialogNode,
 		pendingPromptForSession,
 		queuePendingPromptForSession,
 	} = useWorkspaceCommitLifecycle({
 		queryClient,
 		selectedWorkspaceId,
-		selectedWorkspaceIdRef,
+		getSelectedWorkspaceId: () => selectionActions.getSnapshot().workspaceId,
 		selectedRepoId: selectedWorkspaceDetailQuery.data?.repoId ?? null,
 		selectedWorkspaceTargetBranch:
 			selectedWorkspaceDetailQuery.data?.intendedTargetBranch ??
@@ -1571,12 +989,11 @@ function AppShell({
 		pushToast: pushWorkspaceToast,
 	});
 
-	// Wrapper that injects the configured PR/MR model overrides for the
-	// "create-pr" mode so the action runs on the user's preferred PR model
-	// (with effort + fast-mode falling back to defaults when null).
+	// Action model covers simple, bounded helper sessions. More involved
+	// fix/resolve flows keep following the default model.
 	const handleCommitAction = useCallback(
 		(mode: WorkspaceCommitButtonMode) => {
-			if (mode === "create-pr") {
+			if (usesActionModelOverride(mode)) {
 				return handleInspectorCommitAction(mode, {
 					modelId: appSettings.prModelId ?? appSettings.defaultModelId,
 					effort: appSettings.prEffort ?? appSettings.defaultEffort,
@@ -1596,104 +1013,19 @@ function AppShell({
 		],
 	);
 
-	const handleSessionCompleted = useCallback(
-		(sessionId: string, workspaceId: string) => {
-			setSettledSessionIds((prev) => {
-				if (prev.has(sessionId)) return prev;
-				const next = new Set(prev);
-				next.add(sessionId);
-				return next;
-			});
-
-			const isCurrentSession = sessionId === selectedSessionIdRef.current;
-			// Bump session-level unread for sessions the user isn't viewing.
-			// Workspace.unread is purely derived, so this also drives the
-			// sidebar workspace dot and the dock badge.
-			if (!isCurrentSession) {
-				void markSessionUnread(sessionId)
-					.then(() => {
-						// Same rationale as the mark-read path — defer the
-						// sidebar-list flush when a mutation owns the cache.
-						flushSidebarListsIfIdle(queryClient);
-						return Promise.all([
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-							}),
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-							}),
-						]);
-					})
-					.catch((error) => {
-						console.error("[app] mark session unread on completion:", error);
-					});
-			}
-			// OS notification: skip when user is focused on this session
-			if (document.hasFocus() && isCurrentSession) return;
-			const name =
-				queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-				)?.title ?? "Workspace";
-			notify({ title: "Session completed", body: name });
-		},
-		[notify, queryClient],
-	);
-
-	const handleSessionAborted = useCallback((sessionId: string) => {
-		setAbortedSessionIds((prev) => {
-			if (prev.has(sessionId)) return prev;
-			const next = new Set(prev);
-			next.add(sessionId);
-			return next;
-		});
-	}, []);
-
-	const lastInteractionCountsRef = useRef<Map<string, number>>(new Map());
-	const handleInteractionSessionsChange = useCallback(
-		(nextMap: Map<string, string>, counts: Map<string, number>) => {
-			// Notify for new sessions or sessions with increased interaction count
-			for (const [sessionId, workspaceId] of nextMap) {
-				const count = counts.get(sessionId) ?? 0;
-				const prev = lastInteractionCountsRef.current.get(sessionId) ?? 0;
-				if (count > prev) {
-					const name =
-						queryClient.getQueryData<WorkspaceDetail | null>(
-							helmorQueryKeys.workspaceDetail(workspaceId),
-						)?.title ?? "Workspace";
-					notify({ title: "Input needed", body: name });
-				}
-			}
-			// Track counts (only for sessions still in the map)
-			const nextCounts = new Map<string, number>();
-			for (const [sessionId] of nextMap) {
-				nextCounts.set(sessionId, counts.get(sessionId) ?? 0);
-			}
-			lastInteractionCountsRef.current = nextCounts;
-
-			setInteractionRequiredSessions((current) => {
-				if (current.size === nextMap.size) {
-					let unchanged = true;
-					for (const [sessionId, workspaceId] of nextMap) {
-						if (current.get(sessionId) !== workspaceId) {
-							unchanged = false;
-							break;
-						}
-					}
-					if (unchanged) return current;
-				}
-				return new Map(nextMap);
-			});
-		},
-		[notify, queryClient],
-	);
+	const handleSessionCompleted = readStateActions.onSessionCompleted;
+	const handleSessionAborted = readStateActions.onSessionAborted;
+	const handleInteractionSessionsChange =
+		readStateActions.onInteractionSessionsChange;
 
 	const getCloseableCurrentSession = useCallback(() => {
-		if (workspaceViewModeRef.current !== "conversation") {
+		const snapshot = selectionActions.getSnapshot();
+		if (snapshot.viewMode !== "conversation") {
 			return null;
 		}
 
-		const workspaceId = selectedWorkspaceIdRef.current;
-		const sessionId = selectedSessionIdRef.current;
+		const workspaceId = snapshot.workspaceId;
+		const sessionId = snapshot.sessionId;
 		if (!workspaceId || !sessionId) {
 			return null;
 		}
@@ -1716,68 +1048,18 @@ function AppShell({
 			sessions,
 			session: sessions.find((candidate) => candidate.id === sessionId) ?? null,
 		};
-	}, [queryClient]);
-
-	// Stack of recently hidden sessions for "Reopen closed session". LIFO so
-	// repeated invocations walk back through history. Empty (deleted) sessions
-	// are not tracked because the backend can't restore them.
-	const recentlyClosedSessionsRef = useRef<
-		{ sessionId: string; workspaceId: string }[]
-	>([]);
-	const handleSessionHidden = useCallback(
-		(sessionId: string, workspaceId: string) => {
-			recentlyClosedSessionsRef.current = [
-				{ sessionId, workspaceId },
-				...recentlyClosedSessionsRef.current.filter(
-					(entry) => entry.sessionId !== sessionId,
-				),
-			].slice(0, 20);
-		},
-		[],
-	);
+	}, [queryClient, selectionActions]);
 
 	const { requestClose: requestCloseSession, dialogNode: closeConfirmDialog } =
 		useConfirmSessionClose({
 			busySessionIds: effectiveBusySessionIds,
 			onSelectSession: handleSelectSession,
-			onSessionHidden: handleSessionHidden,
+			onSessionHidden: readStateActions.onSessionHidden,
 			pushToast: pushWorkspaceToast,
 			queryClient,
 		});
 
-	const handleReopenClosedSession = useCallback(async () => {
-		const next = recentlyClosedSessionsRef.current[0];
-		if (!next) return;
-		recentlyClosedSessionsRef.current =
-			recentlyClosedSessionsRef.current.slice(1);
-		try {
-			await unhideSession(next.sessionId);
-			await Promise.all([
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(next.workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceSessions(next.workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
-			]);
-			handleSelectWorkspace(next.workspaceId);
-			handleSelectSession(next.sessionId);
-		} catch (error) {
-			pushWorkspaceToast(
-				error instanceof Error ? error.message : String(error),
-				"Unable to reopen session",
-				"destructive",
-			);
-		}
-	}, [
-		handleSelectSession,
-		handleSelectWorkspace,
-		pushWorkspaceToast,
-		queryClient,
-	]);
+	const handleReopenClosedSession = readStateActions.reopenClosedSession;
 
 	const handleCloseSelectedSession = useCallback(async () => {
 		const currentSession = getCloseableCurrentSession();
@@ -1794,15 +1076,13 @@ function AppShell({
 			session,
 			activateAdjacent: true,
 			onSessionsChanged: () => {
+				requestSidebarReconcile(queryClient);
 				void Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
 					}),
 					queryClient.invalidateQueries({
 						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-					}),
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
 					}),
 					queryClient.invalidateQueries({
 						queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
@@ -1813,7 +1093,7 @@ function AppShell({
 	}, [getCloseableCurrentSession, queryClient, requestCloseSession]);
 
 	const handleCreateSession = useCallback(async () => {
-		const workspaceId = selectedWorkspaceIdRef.current;
+		const workspaceId = selectionActions.getSnapshot().workspaceId;
 		if (!workspaceId) {
 			return;
 		}
@@ -1836,6 +1116,7 @@ function AppShell({
 			});
 			handleSelectSession(sessionId);
 
+			requestSidebarReconcile(queryClient);
 			void Promise.all([
 				...(cachedWorkspace
 					? [
@@ -1853,9 +1134,6 @@ function AppShell({
 				queryClient.invalidateQueries({
 					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
 				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				}),
 			]);
 		} catch (error) {
 			pushWorkspaceToast(
@@ -1867,47 +1145,77 @@ function AppShell({
 
 	const handleNavigateSessions = useCallback(
 		(offset: -1 | 1) => {
-			const workspaceId = selectedWorkspaceIdRef.current;
-			if (!workspaceId) {
-				return;
-			}
-
+			const snapshot = selectionActions.getSnapshot();
+			const workspaceId = snapshot.workspaceId;
+			if (!workspaceId) return;
 			const workspaceSessions =
 				queryClient.getQueryData<WorkspaceSessionSummary[]>(
 					helmorQueryKeys.workspaceSessions(workspaceId),
 				) ?? [];
 			const nextSessionId = findAdjacentSessionId(
 				workspaceSessions,
-				selectedSessionIdRef.current,
+				snapshot.sessionId,
 				offset,
 			);
-
-			if (!nextSessionId) {
-				return;
-			}
-
+			if (!nextSessionId) return;
 			handleSelectSession(nextSessionId);
 		},
-		[handleSelectSession, queryClient],
+		[handleSelectSession, queryClient, selectionActions],
 	);
 
 	const handleNavigateWorkspaces = useCallback(
 		(offset: -1 | 1) => {
+			const snapshot = selectionActions.getSnapshot();
 			const nextWorkspaceId = findAdjacentWorkspaceId(
 				workspaceGroups,
 				archivedRows,
-				selectedWorkspaceIdRef.current,
+				snapshot.workspaceId,
 				offset,
 			);
-
-			if (!nextWorkspaceId) {
-				return;
-			}
-
+			if (!nextWorkspaceId) return;
 			handleSelectWorkspace(nextWorkspaceId);
 		},
-		[archivedRows, handleSelectWorkspace, workspaceGroups],
+		[archivedRows, handleSelectWorkspace, selectionActions, workspaceGroups],
 	);
+
+	// MRU-ordered, archived-filtered, deduped list, capped at 4 cards
+	// (current + 3 most recent). Live workspaces never touched by MRU are
+	// appended in sidebar order so the overlay can still reach them on a
+	// cold MRU.
+	const buildQuickSwitchSnapshot = useCallback(
+		(direction: "next" | "previous"): QuickSwitchSnapshot | null => {
+			const QUICK_SWITCH_MAX_CARDS = 4;
+			const orderedLive = flattenWorkspaceRows(workspaceGroups, []).map(
+				(row) => row.id,
+			);
+			const liveSet = new Set(orderedLive);
+			const mruIds = workspaceMruRef.current
+				.list()
+				.filter((id) => liveSet.has(id));
+			const seen = new Set(mruIds);
+			const tailIds = orderedLive.filter((id) => !seen.has(id));
+			const ids = [...mruIds, ...tailIds].slice(0, QUICK_SWITCH_MAX_CARDS);
+			if (ids.length < 2) return null;
+			// MRU[0] is the current workspace (touched most recently); start
+			// at index 1 for "next" so a single Ctrl+Tab tap commits the
+			// previous workspace, exactly like Cmd+Tab.
+			const initialIndex = direction === "next" ? 1 : ids.length - 1;
+			return { ids, initialIndex };
+		},
+		[workspaceGroups],
+	);
+
+	const handleQuickSwitchCommit = useCallback(
+		(workspaceId: string) => {
+			handleSelectWorkspace(workspaceId);
+		},
+		[handleSelectWorkspace],
+	);
+
+	const quickSwitch = useQuickSwitch({
+		buildSnapshot: buildQuickSwitchSnapshot,
+		onCommit: handleQuickSwitchCommit,
+	});
 
 	const globalShortcutHandlers = useMemo<ShortcutHandler[]>(
 		() => [
@@ -1927,13 +1235,20 @@ function AppShell({
 			},
 			{
 				id: "workspace.new" as const,
+				callback: () => publishShellEvent({ type: "open-new-workspace" }),
+			},
+			{
+				id: "workspace.justChat" as const,
 				callback: () =>
-					window.dispatchEvent(new Event("helmor:open-new-workspace")),
+					publishShellEvent({ type: "open-new-workspace", mode: "chat" }),
 			},
 			{
 				id: "workspace.addRepository" as const,
-				callback: () =>
-					window.dispatchEvent(new Event("helmor:open-add-repository")),
+				callback: () => publishShellEvent({ type: "open-add-repository" }),
+			},
+			{
+				id: "workspace.filterSidebar" as const,
+				callback: () => publishShellEvent({ type: "open-sidebar-filter" }),
 			},
 			{
 				id: "workspace.previous" as const,
@@ -1942,6 +1257,14 @@ function AppShell({
 			{
 				id: "workspace.next" as const,
 				callback: () => handleNavigateWorkspaces(1),
+			},
+			{
+				id: "workspace.quickSwitchNext" as const,
+				callback: () => quickSwitch.open("next"),
+			},
+			{
+				id: "workspace.quickSwitchPrevious" as const,
+				callback: () => quickSwitch.open("previous"),
 			},
 			{
 				id: "session.previous" as const,
@@ -1957,8 +1280,7 @@ function AppShell({
 				id: "session.close" as const,
 				callback: () => {
 					if (workspacePreviewActive && workspacePreviewCard) {
-						setWorkspacePreviewCard(null);
-						setWorkspacePreviewActive(false);
+						contextPanelActions.closeWorkspaceContextPreview();
 						return;
 					}
 					if (!getCloseableCurrentSession()) return;
@@ -1980,7 +1302,7 @@ function AppShell({
 			},
 			{
 				id: "script.run" as const,
-				callback: () => window.dispatchEvent(new Event("helmor:run-script")),
+				callback: () => publishShellEvent({ type: "run-script" }),
 			},
 			{
 				id: "theme.toggle" as const,
@@ -2004,7 +1326,7 @@ function AppShell({
 			},
 			{
 				id: "action.commitAndPush" as const,
-				callback: () => void handleInspectorCommitAction("commit-and-push"),
+				callback: () => void handleCommitAction("commit-and-push"),
 			},
 			{
 				id: "action.pullLatest" as const,
@@ -2026,8 +1348,7 @@ function AppShell({
 			},
 			{
 				id: "composer.focus" as const,
-				callback: () =>
-					window.dispatchEvent(new Event("helmor:focus-composer")),
+				callback: () => publishShellEvent({ type: "focus-composer" }),
 				enabled:
 					workspaceViewMode === "conversation" || workspaceViewMode === "start",
 			},
@@ -2037,9 +1358,13 @@ function AppShell({
 				enabled: workspaceViewMode === "conversation",
 			},
 			{
+				id: "editor.edit" as const,
+				callback: handleEnterEditorEditMode,
+				enabled: workspaceViewMode === "editor" && canEditEditorSession,
+			},
+			{
 				id: "composer.toggleContextPanel" as const,
-				callback: () =>
-					window.dispatchEvent(new Event("helmor:toggle-context-panel")),
+				callback: () => publishShellEvent({ type: "toggle-context-panel" }),
 				enabled:
 					workspaceViewMode === "conversation" || workspaceViewMode === "start",
 			},
@@ -2076,12 +1401,14 @@ function AppShell({
 			handleOpenPreferredEditor,
 			handleOpenPullRequest,
 			handleOpenSettings,
+			handleEnterEditorEditMode,
 			handlePullLatest,
 			handleReopenClosedSession,
 			handleToggleTheme,
 			handleToggleZenMode,
 			preferredEditor,
 			pullRequestUrl,
+			quickSwitch,
 			selectedWorkspaceId,
 			setInspectorCollapsed,
 			setSidebarCollapsed,
@@ -2090,6 +1417,7 @@ function AppShell({
 			workspacePreviewActive,
 			workspacePreviewCard,
 			workspaceViewMode,
+			canEditEditorSession,
 		],
 	);
 	useAppShortcuts({
@@ -2097,93 +1425,41 @@ function AppShell({
 		handlers: globalShortcutHandlers,
 	});
 
-	const handleResolveDisplayedSession = useCallback(
-		(sessionId: string | null) => {
-			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
-			selectedSessionIdRef.current = sessionId;
-			setSelectedSessionId((current) =>
-				current === sessionId ? current : sessionId,
-			);
-			setDisplayedSessionId((current) =>
-				current === sessionId ? current : sessionId,
+	const handleResolveDisplayedSession =
+		selectionActions.resolveDisplayedSession;
+
+	const { state: pendingQueue, actions: pendingQueueActions } =
+		usePendingQueueController({
+			queryClient,
+			pushToast: pushWorkspaceToast,
+			getSelectionTargets: () => ({
+				selectedWorkspaceId: selection.selectedWorkspaceId,
+				displayedWorkspaceId: selection.displayedWorkspaceId,
+				displayedSessionId: selection.displayedSessionId,
+			}),
+			getActiveWorkspaceId: () => selectionActions.getSnapshot().workspaceId,
+			onCliSendSelectWorkspace: (id) => handleSelectWorkspace(id),
+			onCliSendSelectSession: (id) => handleSelectSession(id),
+			queuePendingPromptForSession,
+		});
+	const pendingComposerInserts = pendingQueue.pendingComposerInserts;
+	const handleInsertIntoComposer = pendingQueueActions.insertIntoComposer;
+	const handlePendingComposerInsertsConsumed =
+		pendingQueueActions.consumeComposerInserts;
+	const handlePendingCreatedWorkspaceSubmitConsumed = useCallback(
+		(id: string) => {
+			setPendingCreatedWorkspaceSubmit((current) =>
+				current?.id === id ? null : current,
 			);
 		},
-		[rememberSessionSelection],
+		[],
 	);
-
-	const processPendingCliSends = useCallback(async () => {
-		try {
-			const sends = await drainPendingCliSends();
-			if (sends.length === 0) return;
-
-			const first = sends[0];
-
-			await queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			if (first.workspaceId) {
-				await queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceSessions(first.workspaceId),
-				});
-			}
-
-			handleSelectWorkspace(first.workspaceId);
-
-			setTimeout(() => {
-				// `model` + `permissionMode` are already pinned onto the
-				// session row by the backend's CLI-send path, so the composer
-				// reads them off `currentSession` when it auto-submits.
-				queuePendingPromptForSession({
-					sessionId: first.sessionId,
-					prompt: first.prompt,
-				});
-				handleSelectSession(first.sessionId);
-			}, 100);
-		} catch (error) {
-			console.error("[pendingCliSend] drain failed:", error);
-		}
-	}, [
-		handleSelectSession,
-		handleSelectWorkspace,
-		queryClient,
-		queuePendingPromptForSession,
-	]);
 
 	useUiSyncBridge({
 		queryClient,
-		processPendingCliSends,
-		reloadSettings: () => {
-			window.dispatchEvent(new Event(SETTINGS_RELOAD_EVENT));
-		},
+		processPendingCliSends: pendingQueueActions.processPendingCliSends,
+		reloadSettings: () => publishShellEvent({ type: "reload-settings" }),
 	});
-
-	// ── Pending CLI sends: on window focus, drain queued prompts ────────
-	// When `helmor send` detects the App is running it writes the prompt
-	// into `pending_cli_sends` instead of starting its own sidecar. On
-	// the next focus event we pick those up and replay them through the
-	// normal streaming path (setPendingPromptForSession → auto-submit).
-	useEffect(() => {
-		let unlisten: (() => void) | undefined;
-
-		void import("@tauri-apps/api/event").then(({ listen }) => {
-			void listen("tauri://focus", async () => {
-				// Smart fetch: refresh target branch for the active workspace
-				// so file tree diffs stay current after the user returns.
-				const wsId = selectedWorkspaceIdRef.current;
-				if (wsId) {
-					triggerWorkspaceFetch(wsId);
-				}
-
-				await processPendingCliSends();
-			}).then((fn) => {
-				unlisten = fn;
-			});
-		});
-
-		return () => {
-			unlisten?.();
-		};
-	}, [processPendingCliSends]);
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
 	// its own onCloseRequested listener.  No need for a separate hook here.
@@ -2220,185 +1496,11 @@ function AppShell({
 		workspaceViewMode,
 	]);
 
-	const handleInsertIntoComposer = useCallback(
-		(request: ComposerInsertRequest) => {
-			const resolvedTarget = resolveComposerInsertTarget(request.target, {
-				selectedWorkspaceId,
-				displayedWorkspaceId,
-				displayedSessionId,
-			});
-			const targetContextKey = resolvedTarget.contextKey ?? null;
-			const targetWorkspaceId = resolvedTarget.workspaceId;
-			if (!targetContextKey && !targetWorkspaceId) {
-				pushWorkspaceToast(
-					"Open a workspace before inserting content into the composer.",
-					"Can't insert content",
-				);
-				return;
-			}
-
-			const items = request.items.filter((item) => {
-				if (item.kind === "text") return item.text.length > 0;
-				if (item.kind === "custom-tag") {
-					return (
-						item.label.trim().length > 0 && item.submitText.trim().length > 0
-					);
-				}
-				return item.path.length > 0;
-			});
-			if (items.length === 0) return;
-
-			setPendingComposerInserts((current) => [
-				...current,
-				{
-					id: crypto.randomUUID(),
-					contextKey: targetContextKey,
-					workspaceId: targetWorkspaceId ?? null,
-					sessionId: resolvedTarget.sessionId ?? null,
-					items,
-					behavior: request.behavior ?? "append",
-					createdAt: Date.now(),
-				},
-			]);
-		},
-		[
-			displayedSessionId,
-			displayedWorkspaceId,
-			pushWorkspaceToast,
-			selectedWorkspaceId,
-		],
-	);
-
-	const handlePendingComposerInsertsConsumed = useCallback((ids: string[]) => {
-		if (ids.length === 0) return;
-		const consumed = new Set(ids);
-		setPendingComposerInserts((current) =>
-			current.filter((r) => !consumed.has(r.id)),
-		);
-	}, []);
-	const handlePendingCreatedWorkspaceSubmitConsumed = useCallback(
-		(id: string) => {
-			setPendingCreatedWorkspaceSubmit((current) =>
-				current?.id === id ? null : current,
-			);
-		},
-		[],
-	);
-
-	const repositoriesQuery = useQuery(repositoriesQueryOptions());
-	const repositories = repositoriesQuery.data ?? [];
-	useEffect(() => {
-		if (!areSettingsLoaded || repositories.length === 0) {
-			return;
-		}
-		if (
-			startRepositoryId &&
-			repositories.some((repository) => repository.id === startRepositoryId)
-		) {
-			return;
-		}
-
-		const savedRepository =
-			repositories.find(
-				(repository) => repository.id === appSettings.kanbanViewState.repoId,
-			) ?? null;
-		setStartRepositoryId((savedRepository ?? repositories[0]).id);
-	}, [
-		appSettings.kanbanViewState.repoId,
-		areSettingsLoaded,
-		repositories,
-		startRepositoryId,
-	]);
-	const startRepository =
-		repositories.find((repository) => repository.id === startRepositoryId) ??
-		repositories[0] ??
-		null;
 	const selectedWorkspaceRepository =
 		repositories.find(
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
 		) ?? null;
-	// Session-only override; resets on repo switch and on re-entering start.
-	const [startSourceBranchOverride, setStartSourceBranchOverride] = useState<
-		string | null
-	>(null);
-	// When the user picks "Create and checkout new branch..." in the
-	// picker, we DON'T touch git yet — just remember the name. The
-	// actual `git checkout -b` runs when the user submits the composer
-	// (lazy execution). Cleared whenever they pick an existing branch
-	// or switch repo / re-enter start.
-	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
-		string | null
-	>(null);
-	// Directories the user picked via /add-dir on the start page before any
-	// workspace exists. Applied via `setWorkspaceLinkedDirectories` once the
-	// workspace is created (see `handleStartComposerPrepare`). Cleared on
-	// repo switch — the picks were intent-bound to a specific repo.
-	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
-		useState<readonly string[]>(EMPTY_STRING_LIST);
-	const [startMode, setStartMode] = useState<WorkspaceMode>("worktree");
-	useEffect(() => {
-		setStartSourceBranchOverride(null);
-		setStartPendingNewBranch(null);
-		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
-		setStartMode("worktree");
-	}, [startRepositoryId]);
-	// In local mode the picker should default to whatever branch the
-	// repo's HEAD currently points at — that's the branch the user
-	// will actually be working on. Worktree mode keeps the stored
-	// default branch (= intended target).
-	const startLocalCurrentBranchQuery = useQuery({
-		queryKey: ["repoCurrentBranch", startRepository?.id],
-		queryFn: () => getRepoCurrentBranch(startRepository!.id),
-		enabled: Boolean(startRepository?.id) && startMode === "local",
-	});
-	const startSourceBranch =
-		startSourceBranchOverride ??
-		(startMode === "local"
-			? (startLocalCurrentBranchQuery.data ??
-				startRepository?.defaultBranch ??
-				"main")
-			: (startRepository?.defaultBranch ?? "main"));
-	// Local mode shows local + remote branches (deduped). Worktree mode
-	// only cares about remote refs (workspace branches off `origin/<x>`).
-	const startBranchesQuery = useQuery({
-		queryKey:
-			startMode === "local"
-				? ["localPickerBranches", startRepository?.id]
-				: ["remoteBranches", "start", startRepository?.id],
-		queryFn: () =>
-			startMode === "local"
-				? listBranchesForLocalPicker(startRepository!.id)
-				: listRemoteBranches({ repoId: startRepository!.id }),
-		enabled: Boolean(startRepository?.id),
-	});
-	const handleOpenWorkspaceStart = useCallback(
-		(options?: { persist?: boolean }) => {
-			workspaceSelectionRequestRef.current += 1;
-			sessionSelectionRequestRef.current += 1;
-			selectedWorkspaceIdRef.current = null;
-			selectedSessionIdRef.current = null;
-			setSelectedWorkspaceId(null);
-			setSelectedSessionId(null);
-			setDisplayedWorkspaceId(null);
-			setDisplayedSessionId(null);
-			setWorkspaceViewMode("start");
-			setWorkspacePreviewCard(null);
-			setWorkspacePreviewActive(false);
-			setStartSourceBranchOverride(null);
-			setStartPendingNewBranch(null);
-			setRightSidebarMode(
-				appSettings.startContextPanelOpen ? "context" : "inspector",
-			);
-			if (appSettings.startContextPanelOpen) {
-				setInspectorCollapsed(false);
-			}
-
-			if (options?.persist !== false) {
-				void updateSettings({ lastSurface: "workspace-start" });
-			}
-		},
-		[appSettings.startContextPanelOpen, updateSettings],
-	);
+	const handleOpenWorkspaceStart = selectionActions.openStart;
 	useEffect(() => {
 		if (!areSettingsLoaded || appSettings.lastSurface !== "workspace-start") {
 			return;
@@ -2419,251 +1521,9 @@ function AppShell({
 		selectedWorkspaceId,
 		workspaceViewMode,
 	]);
-	const handleStartSourceBranchSelect = useCallback(
-		(branch: string) => {
-			if (!startRepository) return;
-			setStartSourceBranchOverride(branch);
-			// Picking an existing branch from the dropdown clears any
-			// pending "create new branch" selection so we don't try to
-			// create-and-checkout on submit.
-			setStartPendingNewBranch(null);
-		},
-		[startRepository],
-	);
-	const handleMoveLocalToWorktree = useCallback(
-		(workspaceId: string) => {
-			void moveLocalWorkspaceToWorktree(workspaceId)
-				.then(() => {
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					});
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-					});
-				})
-				.catch((error) => {
-					pushWorkspaceToast(
-						describeUnknownError(
-							error,
-							"Could not move workspace into a new worktree.",
-						),
-						"Move to worktree failed",
-					);
-				});
-		},
-		[pushWorkspaceToast, queryClient],
-	);
-
-	const handleStartRepositorySelect = useCallback(
-		(repository: RepositoryCreateOption) => {
-			setStartRepositoryId(repository.id);
-			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
-					repoId: repository.id,
-				},
-			});
-		},
-		[appSettings.kanbanViewState, updateSettings],
-	);
-	// Add-repo no longer auto-creates a workspace — when the backend
-	// hands back `selectedWorkspaceId: null`, drop into the start page
-	// with the freshly added repo selected.
-	const handleAddRepositoryNeedsStart = useCallback(
-		(repositoryId: string) => {
-			setStartRepositoryId(repositoryId);
-			void updateSettings({
-				kanbanViewState: {
-					...appSettings.kanbanViewState,
-					repoId: repositoryId,
-				},
-			});
-			handleOpenWorkspaceStart();
-		},
-		[appSettings.kanbanViewState, handleOpenWorkspaceStart, updateSettings],
-	);
 	useEffect(() => {
-		setStartPreviewCard(null);
-	}, [startRepository?.id]);
-	const handleStartContextCardOpen = useCallback((card: ContextCard) => {
-		setStartPreviewCard(card);
-	}, []);
-	const handleStartContextPreviewClose = useCallback(() => {
-		setStartPreviewCard(null);
-	}, []);
-	const handleWorkspaceContextCardOpen = useCallback((card: ContextCard) => {
-		setWorkspacePreviewCard(card);
-		setWorkspacePreviewActive(true);
-	}, []);
-	const handleWorkspaceContextPreviewSelect = useCallback(() => {
-		setWorkspacePreviewActive(true);
-	}, []);
-	const handleWorkspaceContextPreviewClose = useCallback(() => {
-		setWorkspacePreviewCard(null);
-		setWorkspacePreviewActive(false);
-	}, []);
-
-	const handleStartComposerPrepare = useCallback(
-		async (
-			payload: ComposerSubmitPayload,
-			options?: { startSubmitMode?: StartSubmitMode },
-		): Promise<ComposerCreatePrepareOutcome> => {
-			if (!startRepository?.id) {
-				pushWorkspaceToast(
-					"Pick a repository before sending.",
-					"Can't create workspace",
-				);
-				return { shouldStream: false };
-			}
-
-			try {
-				// Lazy execution of "Create and checkout new branch":
-				// the dialog only stashes the name. We `git checkout -b`
-				// here, right before the workspace create, so the local
-				// repo isn't mutated until the user actually commits to
-				// running the task.
-				if (startPendingNewBranch) {
-					await createAndCheckoutBranch(
-						startRepository.id,
-						startPendingNewBranch,
-					);
-					setStartPendingNewBranch(null);
-				}
-				const {
-					finalizePromise,
-					outcome,
-					workspaceId,
-					sessionId,
-					preparedWorkingDirectory,
-				} = await createWorkspaceFromStartComposer({
-					repoId: startRepository.id,
-					sourceBranch: startSourceBranch,
-					mode: startMode,
-					submitMode: options?.startSubmitMode ?? "startNow",
-					editorStateSnapshot: payload.editorStateSnapshot,
-					composerConfig: {
-						modelId: payload.model.id,
-						effortLevel: payload.effortLevel,
-						permissionMode: payload.permissionMode,
-						fastMode: payload.fastMode,
-					},
-					linkedDirectories: startPendingLinkedDirectories,
-				});
-				// Picks belonged to the in-flight create; clear regardless of
-				// outcome so the next start-page session begins clean.
-				setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
-
-				void queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceGroups,
-				});
-
-				if (outcome.shouldStream) {
-					// Defer the view-switch state burst to the next animation
-					// frame so the browser can paint the current frame
-					// (start page) before reconciling the heavy conversation
-					// tree. Without this, the synchronous commit pumps the
-					// WKWebView's paint/composite pipeline so hard that RAF
-					// stalls for 5–8 seconds, freezing every CSS / Lottie
-					// animation on screen even though JS itself isn't blocked.
-					const pendingId = crypto.randomUUID();
-					setPendingCreatedWorkspaceSubmit({
-						id: pendingId,
-						workspaceId: outcome.workspaceId,
-						sessionId: outcome.sessionId,
-						// Local mode already has the cwd; worktree mode patches
-						// it onto the payload below once finalize materialises
-						// the worktree dir. Either way the payload is the
-						// single source of truth — the consumer never falls
-						// back to `workspaceRootPath` (which races the
-						// workspaceDetail React Query and was producing a
-						// transient cwd=null on the first turn).
-						payload: {
-							...payload,
-							workingDirectory:
-								preparedWorkingDirectory ?? payload.workingDirectory,
-						},
-						finalized: false,
-					});
-					requestAnimationFrame(() => {
-						handleSelectWorkspace(outcome.workspaceId);
-						handleSelectSession(outcome.sessionId);
-						setWorkspaceViewMode("conversation");
-					});
-
-					let finalizedWorkingDirectory: string | null =
-						preparedWorkingDirectory;
-					if (finalizePromise) {
-						try {
-							const finalized = await finalizePromise;
-							finalizedWorkingDirectory = finalized.workingDirectory;
-						} catch (error) {
-							// Clear the optimistic bubble so the user doesn't
-							// see a message that never actually got sent.
-							setPendingCreatedWorkspaceSubmit((current) =>
-								current?.id === pendingId ? null : current,
-							);
-							pushWorkspaceToast(
-								describeUnknownError(error, "Workspace setup failed."),
-								"Workspace setup failed",
-							);
-							void queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.workspaceGroups,
-							});
-							return { shouldStream: false };
-						}
-					}
-					// Flip the gate: the worktree is materialised + DB row is
-					// now in `ready` / `setup_pending`. The conversation
-					// effect picks this up immediately — no need to wait for
-					// the workspaceDetail React Query refetch round-trip.
-					setPendingCreatedWorkspaceSubmit((current) =>
-						current?.id === pendingId
-							? {
-									...current,
-									payload: {
-										...current.payload,
-										// Worktree path only exists post-finalize;
-										// patch payload right before we let the
-										// effect fire so the first turn never sees
-										// a null cwd.
-										workingDirectory:
-											finalizedWorkingDirectory ??
-											current.payload.workingDirectory,
-									},
-									finalized: true,
-								}
-							: current,
-					);
-					void queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceGroups,
-					});
-					return { shouldStream: false };
-				}
-
-				handleSelectWorkspace(workspaceId);
-				handleSelectSession(sessionId);
-				setWorkspaceViewMode("conversation");
-				return outcome;
-			} catch (error) {
-				pushWorkspaceToast(
-					describeUnknownError(error, "Could not create workspace."),
-					"Can't create workspace",
-				);
-				return { shouldStream: false };
-			}
-		},
-		[
-			handleSelectSession,
-			handleSelectWorkspace,
-			pushWorkspaceToast,
-			queryClient,
-			startRepository?.id,
-			startSourceBranch,
-			startMode,
-			startPendingNewBranch,
-			startPendingLinkedDirectories,
-		],
-	);
+		handleStartContextPreviewClose();
+	}, [startRepository?.id, handleStartContextPreviewClose]);
 
 	const startCreateContext = useMemo<ComposerCreateContext | null>(
 		() =>
@@ -2672,60 +1532,6 @@ function AppShell({
 				: null,
 		[handleStartComposerPrepare, workspaceViewMode],
 	);
-
-	const startComposerContextKey = startRepository
-		? `start:repo:${startRepository.id}`
-		: "start:no-repo";
-	const startComposerInsertTarget = useMemo(
-		() => ({ contextKey: startComposerContextKey }),
-		[startComposerContextKey],
-	);
-	const startLinkedDirectoriesController = useMemo(
-		() => ({
-			directories: startPendingLinkedDirectories,
-			onChange: (next: readonly string[]) => {
-				setStartPendingLinkedDirectories(next);
-			},
-		}),
-		[startPendingLinkedDirectories],
-	);
-	const rightSidebarAvailable =
-		workspaceViewMode !== "start" || rightSidebarMode === "context";
-	const contextPanelOpen =
-		rightSidebarAvailable &&
-		rightSidebarMode === "context" &&
-		!inspectorCollapsed;
-	const handleToggleContextPanel = useCallback(() => {
-		if (rightSidebarMode === "context" && !inspectorCollapsed) {
-			if (workspaceViewModeRef.current === "start") {
-				setInspectorCollapsed(true);
-				void updateSettings({ startContextPanelOpen: false });
-			} else {
-				setRightSidebarMode("inspector");
-				void updateSettings({ workspaceRightSidebarMode: "inspector" });
-			}
-			return;
-		}
-
-		setRightSidebarMode("context");
-		setInspectorCollapsed(false);
-		if (workspaceViewModeRef.current === "start") {
-			void updateSettings({ startContextPanelOpen: true });
-		} else {
-			void updateSettings({ workspaceRightSidebarMode: "context" });
-		}
-	}, [inspectorCollapsed, rightSidebarMode, updateSettings]);
-	useEffect(() => {
-		window.addEventListener(
-			"helmor:toggle-context-panel",
-			handleToggleContextPanel,
-		);
-		return () =>
-			window.removeEventListener(
-				"helmor:toggle-context-panel",
-				handleToggleContextPanel,
-			);
-	}, [handleToggleContextPanel]);
 	const restoreStartSurface =
 		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
 	const workspaceSidebarAutoSelectEnabled =
@@ -2736,6 +1542,22 @@ function AppShell({
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
 				<SessionRunStatesProvider value={effectiveSessionRunStates}>
 					<ComposerInsertProvider value={handleInsertIntoComposer}>
+						{/* Conditionally mount so closing the dialog tears the tree
+						 *  down via React directly instead of waiting on Radix
+						 *  Presence + `animationend`. In WKWebview the workspace
+						 *  switch that fires from "Send to agent" can flip
+						 *  `document.hidden` to true mid-animation, which pauses
+						 *  the exit keyframes indefinitely — `animationend`
+						 *  never fires, Presence never unmounts, and the closed
+						 *  dialog lingers as a ghost over the new conversation. */}
+						{feedbackOpen ? (
+							<FeedbackDialog
+								open={feedbackOpen}
+								onOpenChange={setFeedbackOpen}
+								onOpenSettings={handleOpenSettings}
+								onSubmitPrompt={submitFeedbackPrompt}
+							/>
+						) : null}
 						<main
 							aria-label="Application shell"
 							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
@@ -2743,142 +1565,55 @@ function AppShell({
 							<div className="relative flex h-full min-h-0 bg-background">
 								{workspaceViewMode !== "editor" && (
 									<>
-										<aside
-											aria-hidden={sidebarCollapsed}
-											aria-label="Workspace sidebar"
-											data-helmor-sidebar-root
-											className={cn(
-												"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
-												isSidebarResizing
-													? "transition-none"
-													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-												sidebarCollapsed ? "pointer-events-none" : "",
-											)}
-											style={{
-												width: sidebarCollapsed ? 0 : `${sidebarWidth}px`,
-											}}
-										>
-											<div
-												className={cn(
-													"relative flex h-full shrink-0 flex-col transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-													sidebarCollapsed
-														? "-translate-x-full opacity-0"
-														: "translate-x-0 opacity-100",
-												)}
-												style={{ width: `${sidebarWidth}px` }}
-											>
-												<div className="min-h-0 flex-1">
-													<WorkspacesSidebarContainer
-														selectedWorkspaceId={
-															workspaceViewMode === "start"
-																? null
-																: selectedWorkspaceId
-														}
-														autoSelectEnabled={
-															workspaceSidebarAutoSelectEnabled
-														}
-														busyWorkspaceIds={effectiveBusyWorkspaceIds}
-														interactionRequiredWorkspaceIds={
-															interactionRequiredWorkspaceIds
-														}
-														newWorkspaceShortcut={newWorkspaceShortcut}
-														addRepositoryShortcut={addRepositoryShortcut}
-														onSelectWorkspace={handleSelectWorkspace}
-														onOpenNewWorkspace={handleOpenWorkspaceStart}
-														onAddRepositoryNeedsStart={
-															handleAddRepositoryNeedsStart
-														}
-														onMoveLocalToWorktree={handleMoveLocalToWorktree}
-														pushWorkspaceToast={pushWorkspaceToast}
-													/>
-												</div>
-												<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-													<AppUpdateButton status={appUpdateStatus} />
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<Button
-																aria-label="Collapse left sidebar"
-																onClick={() => setSidebarCollapsed(true)}
-																variant="ghost"
-																size="icon-xs"
-																className="text-muted-foreground hover:text-foreground"
-															>
-																<PanelLeftClose
-																	className="size-4"
-																	strokeWidth={1.8}
-																/>
-															</Button>
-														</TooltipTrigger>
-														<TooltipContent
-															side="bottom"
-															className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-														>
-															<span>Collapse left sidebar</span>
-															{leftSidebarToggleShortcut ? (
-																<InlineShortcutDisplay
-																	hotkey={leftSidebarToggleShortcut}
-																	className="text-background/60"
-																/>
-															) : null}
-														</TooltipContent>
-													</Tooltip>
-												</div>
-												<div className="flex shrink-0 items-center justify-between px-3 pb-3 pt-1">
-													<SettingsButton
-														onClick={handleOpenSettings}
-														shortcut={getShortcut(
-															appSettings.shortcuts,
-															"settings.open",
-														)}
-													/>
-												</div>
-											</div>
-										</aside>
-
-										<div
-											role="separator"
-											tabIndex={sidebarCollapsed ? -1 : 0}
-											aria-hidden={sidebarCollapsed}
-											aria-label="Resize sidebar"
-											aria-orientation="vertical"
-											aria-valuemin={MIN_SIDEBAR_WIDTH}
-											aria-valuemax={MAX_SIDEBAR_WIDTH}
-											aria-valuenow={sidebarWidth}
-											onMouseDown={handleResizeStart("sidebar")}
+										<ShellSidebarPane
+											collapsed={sidebarCollapsed}
+											resizing={isSidebarResizing}
+											width={sidebarWidth}
+											selectedWorkspaceId={
+												workspaceViewMode === "start"
+													? null
+													: selectedWorkspaceId
+											}
+											autoSelectEnabled={workspaceSidebarAutoSelectEnabled}
+											busyWorkspaceIds={effectiveBusyWorkspaceIds}
+											interactionRequiredWorkspaceIds={
+												interactionRequiredWorkspaceIds
+											}
+											newWorkspaceShortcut={newWorkspaceShortcut}
+											addRepositoryShortcut={addRepositoryShortcut}
+											sidebarFilterShortcut={sidebarFilterShortcut}
+											leftSidebarToggleShortcut={leftSidebarToggleShortcut}
+											appUpdateStatus={appUpdateStatus}
+											appSettings={appSettings}
+											onSelectWorkspace={handleSelectWorkspace}
+											onOpenNewWorkspace={handleOpenWorkspaceStart}
+											onAddRepositoryNeedsStart={handleAddRepositoryNeedsStart}
+											onMoveLocalToWorktree={handleMoveLocalToWorktree}
+											onCollapseSidebar={() => setSidebarCollapsed(true)}
+											onOpenFeedback={() => setFeedbackOpen(true)}
+											onOpenSettings={handleOpenSettings}
+											pushWorkspaceToast={pushWorkspaceToast}
+										/>
+										<ShellResizeSeparator
+											side="sidebar"
+											collapsed={sidebarCollapsed}
+											resizing={isSidebarResizing}
+											width={sidebarWidth}
+											onPointerDown={handleResizeStart("sidebar")}
 											onKeyDown={handleResizeKeyDown("sidebar")}
-											className={cn(
-												"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none",
-												isSidebarResizing
-													? "transition-none"
-													: "transition-[left,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-												sidebarCollapsed
-													? "pointer-events-none opacity-0"
-													: "opacity-100",
-											)}
-											style={{
-												left: sidebarCollapsed
-													? `${-SIDEBAR_RESIZE_HIT_AREA / 2}px`
-													: `${sidebarWidth - SIDEBAR_RESIZE_HIT_AREA / 2}px`,
-												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-											}}
-										>
-											<span
-												aria-hidden="true"
-												className={`pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 transition-[width,background-color,box-shadow] ${
-													isSidebarResizing
-														? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
-														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-												}`}
-											/>
-										</div>
+										/>
 									</>
 								)}
 
 								<section
 									aria-label="Workspace panel"
 									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+									// Mirror the inspector's containment: keep style/layout invalidation
+									// from sidebar/inspector resize out of the workspace subtree (which
+									// owns Monaco's ~2900 cached CSS rules after the editor opens once).
+									style={{ contain: "layout style" }}
 								>
-									{workspaceViewMode === "conversation" && (
+									{workspaceViewMode !== "editor" && (
 										<div
 											aria-label="Workspace panel drag region"
 											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
@@ -2893,6 +1628,12 @@ function AppShell({
 										{workspaceViewMode === "editor" && editorSession && (
 											<WorkspaceEditorSurface
 												editorSession={editorSession}
+												editShortcut={getShortcut(
+													appSettings.shortcuts,
+													"editor.edit",
+												)}
+												shortcutOverrides={appSettings.shortcuts}
+												workspaceId={selectedWorkspaceId}
 												workspaceRootPath={workspaceRootPath}
 												onChangeSession={handleEditorSessionChange}
 												onExit={handleExitEditorMode}
@@ -2913,25 +1654,22 @@ function AppShell({
 													selectedRepository={startRepository}
 													onSelectRepository={handleStartRepositorySelect}
 													selectedBranch={startSourceBranch}
-													branches={startBranchesQuery.data ?? []}
-													branchesLoading={startBranchesQuery.isFetching}
-													onOpenBranchPicker={() => {
-														void startBranchesQuery.refetch();
-													}}
+													branches={startSurface.startBranches}
+													branchesLoading={startSurface.startBranchesLoading}
+													onOpenBranchPicker={
+														startSurfaceActions.refetchBranches
+													}
 													onSelectBranch={handleStartSourceBranchSelect}
 													mode={startMode}
-													onModeChange={(next) => {
-														setStartMode(next);
-														setStartSourceBranchOverride(null);
-														setStartPendingNewBranch(null);
-													}}
+													onModeChange={startSurfaceActions.selectMode}
+													branchIntent={startBranchIntent}
+													onBranchIntentChange={handleStartBranchIntentChange}
 													onCreateAndCheckoutBranch={async (branch) => {
 														if (!startRepository) return;
 														// Lazy: just remember the desired name. Actual
 														// `git checkout -b` runs at submit time inside
-														// `handleStartComposerPrepare`.
-														setStartSourceBranchOverride(branch);
-														setStartPendingNewBranch(branch);
+														// `startSurfaceActions.prepareComposer`.
+														startSurfaceActions.stashPendingNewBranch(branch);
 													}}
 													previewCard={startPreviewCard}
 													previewAppendContextTarget={startComposerInsertTarget}
@@ -2952,6 +1690,7 @@ function AppShell({
 														onInteractionSessionsChange={
 															handleInteractionSessionsChange
 														}
+														activeStreams={activeStreams}
 														busySessionIds={effectiveBusySessionIds}
 														stoppableSessionIds={effectiveStoppableSessionIds}
 														interactionRequiredSessionIds={
@@ -2976,10 +1715,13 @@ function AppShell({
 														onOpenFileReference={handleOpenFileReference}
 														composerOnly
 														composerWrapperClassName="w-full"
-														composerForceAvailable={Boolean(startRepository)}
+														composerForceAvailable={
+															Boolean(startRepository) || startMode === "chat"
+														}
 														composerContextKeyOverride={startComposerContextKey}
 														composerPlaceholder="Describe what you want to build"
 														composerCreateContext={startCreateContext}
+														composerFocusScope="start-composer"
 														contextPanelOpen={contextPanelOpen}
 														onToggleContextPanel={handleToggleContextPanel}
 														composerStartSubmitMenu
@@ -2997,13 +1739,11 @@ function AppShell({
 													repoId={
 														selectedWorkspaceDetailQuery.data?.repoId ?? null
 													}
-													sessionSelectionHistory={
-														selectedWorkspaceId
-															? (sessionSelectionHistoryByWorkspaceRef.current[
-																	selectedWorkspaceId
-																] ?? [])
-															: []
-													}
+													sessionSelectionHistory={[
+														...selectionActions.getSessionSelectionHistory(
+															selectedWorkspaceId,
+														),
+													]}
 													onSelectSession={handleSelectSession}
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
@@ -3011,6 +1751,7 @@ function AppShell({
 													onInteractionSessionsChange={
 														handleInteractionSessionsChange
 													}
+													activeStreams={activeStreams}
 													busySessionIds={effectiveBusySessionIds}
 													stoppableSessionIds={effectiveStoppableSessionIds}
 													interactionRequiredSessionIds={
@@ -3049,210 +1790,45 @@ function AppShell({
 													}
 													headerLeading={
 														sidebarCollapsed ? (
-															<>
-																{/* Spacer to avoid macOS traffic lights */}
-																<div className="w-[52px] shrink-0" />
-																<div className="flex items-center gap-[2px]">
-																	<AppUpdateButton status={appUpdateStatus} />
-																	<Tooltip>
-																		<TooltipTrigger asChild>
-																			<Button
-																				aria-label="Expand left sidebar"
-																				onClick={() =>
-																					setSidebarCollapsed(false)
-																				}
-																				variant="ghost"
-																				size="icon-xs"
-																				className="text-muted-foreground hover:text-foreground"
-																			>
-																				<PanelLeftOpen
-																					className="size-4"
-																					strokeWidth={1.8}
-																				/>
-																			</Button>
-																		</TooltipTrigger>
-																		<TooltipContent
-																			side="bottom"
-																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																		>
-																			<span>Expand left sidebar</span>
-																			{leftSidebarToggleShortcut ? (
-																				<InlineShortcutDisplay
-																					hotkey={leftSidebarToggleShortcut}
-																					className="text-background/60"
-																				/>
-																			) : null}
-																		</TooltipContent>
-																	</Tooltip>
-																</div>
-															</>
+															<WorkspaceHeaderLeading
+																appUpdateStatus={appUpdateStatus}
+																leftSidebarToggleShortcut={
+																	leftSidebarToggleShortcut
+																}
+																onExpandSidebar={() =>
+																	setSidebarCollapsed(false)
+																}
+															/>
 														) : undefined
 													}
 													headerActions={
 														selectedWorkspaceId ? (
-															<div className="flex items-center gap-1">
-																{installedEditors.length > 0 &&
-																preferredEditor ? (
-																	<div className="flex -translate-x-1 items-center gap-0">
-																		<Tooltip>
-																			<TooltipTrigger asChild>
-																				<Button
-																					variant="ghost"
-																					size="xs"
-																					aria-label={`Open in ${preferredEditor.name}`}
-																					onClick={handleOpenPreferredEditor}
-																					className="px-0.5 text-muted-foreground hover:text-foreground"
-																				>
-																					<EditorIcon
-																						editorId={preferredEditor.id}
-																						className="size-3.5"
-																					/>
-																					<span>{preferredEditor.name}</span>
-																				</Button>
-																			</TooltipTrigger>
-																			<TooltipContent
-																				side="bottom"
-																				sideOffset={4}
-																				className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																			>
-																				<span>{`Open in ${preferredEditor.name}`}</span>
-																				{openPreferredEditorShortcut ? (
-																					<InlineShortcutDisplay
-																						hotkey={openPreferredEditorShortcut}
-																						className="text-background/60"
-																					/>
-																				) : null}
-																			</TooltipContent>
-																		</Tooltip>
-																		<DropdownMenu>
-																			<DropdownMenuTrigger asChild>
-																				<Button
-																					variant="ghost"
-																					size="xs"
-																					className="h-6 px-0.5 text-muted-foreground hover:text-foreground"
-																				>
-																					<ChevronDown
-																						className="size-2.5"
-																						strokeWidth={2}
-																					/>
-																				</Button>
-																			</DropdownMenuTrigger>
-																			<DropdownMenuContent
-																				side="bottom"
-																				align="end"
-																				sideOffset={4}
-																				className="min-w-[11rem]"
-																			>
-																				<DropdownMenuItem
-																					onClick={() => {
-																						void openWorkspaceInFinder(
-																							selectedWorkspaceId,
-																						).catch((e) =>
-																							pushWorkspaceToast(
-																								String(e),
-																								"Failed to open Finder",
-																							),
-																						);
-																					}}
-																					className="flex items-center gap-2"
-																				>
-																					<FolderOpen
-																						className="shrink-0"
-																						strokeWidth={1.8}
-																					/>
-																					<span className="flex-1">Finder</span>
-																				</DropdownMenuItem>
-																				{installedEditors.map((editor) => (
-																					<DropdownMenuItem
-																						key={editor.id}
-																						onClick={() => {
-																							setPreferredEditorId(editor.id);
-																							localStorage.setItem(
-																								PREFERRED_EDITOR_STORAGE_KEY,
-																								editor.id,
-																							);
-																							void openWorkspaceInEditor(
-																								selectedWorkspaceId,
-																								editor.id,
-																							).catch((e) =>
-																								pushWorkspaceToast(
-																									String(e),
-																									`Failed to open ${editor.name}`,
-																								),
-																							);
-																						}}
-																						className="flex items-center gap-2"
-																					>
-																						<EditorIcon
-																							editorId={editor.id}
-																							className="shrink-0"
-																						/>
-																						<span className="flex-1">
-																							{editor.name}
-																						</span>
-																						{editor.id ===
-																							preferredEditor.id && (
-																							<Check className="ml-auto text-muted-foreground" />
-																						)}
-																					</DropdownMenuItem>
-																				))}
-																			</DropdownMenuContent>
-																		</DropdownMenu>
-																	</div>
-																) : null}
-																<div className="flex -translate-x-px items-center gap-1">
-																	<ExportSessionImageButton
-																		sessionId={selectedSessionId}
-																	/>
-																	<Tooltip>
-																		<TooltipTrigger asChild>
-																			<Button
-																				aria-label={
-																					inspectorCollapsed
-																						? "Expand right sidebar"
-																						: "Collapse right sidebar"
-																				}
-																				onClick={() =>
-																					setInspectorCollapsed(
-																						(collapsed) => !collapsed,
-																					)
-																				}
-																				variant="ghost"
-																				size="icon-xs"
-																				className="text-muted-foreground hover:text-foreground"
-																			>
-																				{inspectorCollapsed ? (
-																					<PanelRightOpen
-																						className="size-4"
-																						strokeWidth={1.8}
-																					/>
-																				) : (
-																					<PanelRightClose
-																						className="size-4"
-																						strokeWidth={1.8}
-																					/>
-																				)}
-																			</Button>
-																		</TooltipTrigger>
-																		<TooltipContent
-																			side="bottom"
-																			className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
-																		>
-																			<span>
-																				{inspectorCollapsed
-																					? "Expand right sidebar"
-																					: "Collapse right sidebar"}
-																			</span>
-																			{rightSidebarToggleShortcut ? (
-																				<InlineShortcutDisplay
-																					hotkey={rightSidebarToggleShortcut}
-																					className="text-background/60"
-																				/>
-																			) : null}
-																		</TooltipContent>
-																	</Tooltip>
-																</div>
-															</div>
+															<WorkspaceHeaderActions
+																workspaceId={selectedWorkspaceId}
+																sessionId={selectedSessionId}
+																installedEditors={installedEditors}
+																preferredEditor={preferredEditor}
+																openPreferredEditorShortcut={
+																	openPreferredEditorShortcut
+																}
+																rightSidebarToggleShortcut={
+																	rightSidebarToggleShortcut
+																}
+																inspectorCollapsed={inspectorCollapsed}
+																isChatMode={
+																	selectedWorkspaceDetail?.mode === "chat"
+																}
+																onOpenPreferredEditor={
+																	handleOpenPreferredEditor
+																}
+																onToggleInspector={() =>
+																	setInspectorCollapsed(
+																		(collapsed) => !collapsed,
+																	)
+																}
+																onPickEditor={setPreferredEditorId}
+																pushWorkspaceToast={pushWorkspaceToast}
+															/>
 														) : undefined
 													}
 												/>
@@ -3261,163 +1837,84 @@ function AppShell({
 									</div>
 								</section>
 
-								{rightSidebarAvailable && (
-									<>
-										<div
-											role="separator"
-											tabIndex={inspectorCollapsed ? -1 : 0}
-											aria-hidden={inspectorCollapsed}
-											aria-label="Resize inspector sidebar"
-											aria-orientation="vertical"
-											aria-valuemin={MIN_SIDEBAR_WIDTH}
-											aria-valuemax={MAX_SIDEBAR_WIDTH}
-											aria-valuenow={inspectorWidth}
-											onMouseDown={handleResizeStart("inspector")}
-											onKeyDown={handleResizeKeyDown("inspector")}
-											className={cn(
-												"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none",
-												isInspectorResizing
-													? "transition-none"
-													: "transition-[right,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-												inspectorCollapsed
-													? "pointer-events-none opacity-0"
-													: "opacity-100",
-											)}
-											style={{
-												right: inspectorCollapsed
-													? `${-SIDEBAR_RESIZE_HIT_AREA}px`
-													: `${Math.max(0, inspectorWidth - SIDEBAR_RESIZE_HIT_AREA)}px`,
-												width: `${SIDEBAR_RESIZE_HIT_AREA}px`,
-											}}
-										>
-											<span
-												aria-hidden="true"
-												className={`pointer-events-none absolute inset-y-0 left-0 transition-[width,background-color,box-shadow] ${
-													isInspectorResizing
-														? "w-[2px] bg-foreground/80 shadow-[0_0_12px_rgba(0,0,0,0.12)] dark:shadow-[0_0_12px_rgba(255,255,255,0.16)]"
-														: "w-px bg-border group-hover:w-[2px] group-hover:bg-muted-foreground/75 group-focus-visible:w-[2px] group-focus-visible:bg-muted-foreground/75"
-												}`}
+								{rightSidebarAvailable &&
+									selectedWorkspaceDetail?.mode !== "chat" && (
+										<>
+											<ShellResizeSeparator
+												side="inspector"
+												collapsed={inspectorCollapsed}
+												resizing={isInspectorResizing}
+												width={inspectorWidth}
+												onPointerDown={handleResizeStart("inspector")}
+												onKeyDown={handleResizeKeyDown("inspector")}
 											/>
-										</div>
-
-										<aside
-											aria-hidden={inspectorCollapsed}
-											aria-label="Inspector sidebar"
-											className={cn(
-												"relative h-full shrink-0 overflow-hidden bg-sidebar has-[[data-tabs-zoomed=true]]:z-50 has-[[data-tabs-zoomed=true]]:overflow-visible",
-												isInspectorResizing
-													? "transition-none"
-													: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-												inspectorCollapsed ? "pointer-events-none" : "",
-											)}
-											style={{
-												width: inspectorCollapsed ? 0 : `${inspectorWidth}px`,
-											}}
-										>
-											<div
-												className={cn(
-													"h-full shrink-0 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-													inspectorCollapsed
-														? "translate-x-full opacity-0"
-														: "translate-x-0 opacity-100",
-												)}
-												style={{ width: `${inspectorWidth}px` }}
-											>
-												{rightSidebarMode === "context" ? (
-													<WorkspaceStartContextSidebar
-														repository={
-															workspaceViewMode === "start"
-																? startRepository
-																: selectedWorkspaceRepository
-														}
-														inboxProviderTab={startInboxProviderTab}
-														onInboxProviderTabChange={setStartInboxProviderTab}
-														inboxProviderSourceTab={startInboxProviderSourceTab}
-														onInboxProviderSourceTabChange={
-															setStartInboxProviderSourceTab
-														}
-														inboxStateFilterBySource={
-															startInboxStateFilterBySource
-														}
-														onInboxStateFilterBySourceChange={
-															setStartInboxStateFilterBySource
-														}
-														composerInsertTarget={
-															workspaceViewMode === "start"
-																? startComposerInsertTarget
-																: undefined
-														}
-														selectedCardId={
-															workspaceViewMode === "start"
-																? (startPreviewCard?.id ?? null)
-																: (workspacePreviewCard?.id ?? null)
-														}
-														onOpenCard={
-															workspaceViewMode === "start"
-																? handleStartContextCardOpen
-																: handleWorkspaceContextCardOpen
-														}
-													/>
-												) : (
-													<WorkspaceInspectorSidebar
-														workspaceId={selectedWorkspaceId}
-														workspaceRootPath={workspaceRootPath}
-														workspaceState={
-															selectedWorkspaceDetailQuery.data?.state ?? null
-														}
-														repoId={
-															selectedWorkspaceDetailQuery.data?.repoId ?? null
-														}
-														workspaceBranch={
-															selectedWorkspaceDetailQuery.data?.branch ?? null
-														}
-														workspaceRemote={
-															selectedWorkspaceDetailQuery.data?.remote ?? null
-														}
-														workspaceRemoteUrl={
-															selectedWorkspaceDetailQuery.data?.remoteUrl ??
-															null
-														}
-														workspaceTargetBranch={(() => {
-															const d = selectedWorkspaceDetailQuery.data;
-															const target =
-																d?.intendedTargetBranch ?? d?.defaultBranch;
-															if (!target) return null;
-															const remote = d?.remote ?? "origin";
-															return `${remote}/${target}`;
-														})()}
-														editorMode={workspaceViewMode === "editor"}
-														activeEditorPath={editorSession?.path ?? null}
-														onOpenEditorFile={handleOpenEditorFile}
-														onCommitAction={handleCommitAction}
-														onReviewAction={() =>
-															handleInspectorReviewAction({
-																modelId:
-																	appSettings.reviewModelId ??
-																	appSettings.defaultModelId,
-																effort:
-																	appSettings.reviewEffort ??
-																	appSettings.defaultEffort,
-																fastMode:
-																	appSettings.reviewFastMode ??
-																	appSettings.defaultFastMode,
-															})
-														}
-														currentSessionId={displayedSessionId}
-														onQueuePendingPromptForSession={
-															queuePendingPromptForSession
-														}
-														commitButtonMode={commitButtonMode}
-														commitButtonState={commitButtonState}
-														changeRequest={workspaceChangeRequest}
-														forgeIsRefreshing={workspaceForgeIsRefreshing}
-														onOpenSettings={handleOpenSettings}
-													/>
-												)}
-											</div>
-										</aside>
-									</>
-								)}
+											<ShellInspectorPane
+												collapsed={inspectorCollapsed}
+												resizing={isInspectorResizing}
+												width={inspectorWidth}
+												rightSidebarMode={rightSidebarMode}
+												viewMode={workspaceViewMode}
+												startRepository={startRepository}
+												selectedWorkspaceRepository={
+													selectedWorkspaceRepository
+												}
+												startInboxProviderTab={startInboxProviderTab}
+												onStartInboxProviderTabChange={setStartInboxProviderTab}
+												startInboxProviderSourceTab={
+													startInboxProviderSourceTab
+												}
+												onStartInboxProviderSourceTabChange={
+													setStartInboxProviderSourceTab
+												}
+												startInboxStateFilterBySource={
+													startInboxStateFilterBySource
+												}
+												onStartInboxStateFilterBySourceChange={
+													setStartInboxStateFilterBySource
+												}
+												startComposerInsertTarget={startComposerInsertTarget}
+												startPreviewCardId={startPreviewCard?.id ?? null}
+												workspacePreviewCardId={
+													workspacePreviewCard?.id ?? null
+												}
+												onOpenStartContextCard={handleStartContextCardOpen}
+												onOpenWorkspaceContextCard={
+													handleWorkspaceContextCardOpen
+												}
+												selectedWorkspaceId={selectedWorkspaceId}
+												workspaceRootPath={workspaceRootPath}
+												selectedWorkspaceDetail={
+													selectedWorkspaceDetailQuery.data ?? null
+												}
+												displayedSessionId={displayedSessionId}
+												activeEditor={activeEditorTarget}
+												preferredEditor={preferredEditor}
+												onOpenEditorFile={handleOpenEditorFile}
+												onCommitAction={handleCommitAction}
+												onReviewAction={() =>
+													handleInspectorReviewAction({
+														modelId:
+															appSettings.reviewModelId ??
+															appSettings.defaultModelId,
+														effort:
+															appSettings.reviewEffort ??
+															appSettings.defaultEffort,
+														fastMode:
+															appSettings.reviewFastMode ??
+															appSettings.defaultFastMode,
+													})
+												}
+												onQueuePendingPromptForSession={
+													queuePendingPromptForSession
+												}
+												commitButtonMode={commitButtonMode}
+												commitButtonState={commitButtonState}
+												workspaceChangeRequest={workspaceChangeRequest}
+												workspaceForgeIsRefreshing={workspaceForgeIsRefreshing}
+												onOpenSettings={handleOpenSettings}
+											/>
+										</>
+									)}
 							</div>
 						</main>
 						<Toaster
@@ -3425,7 +1922,26 @@ function AppShell({
 							position="bottom-right"
 							visibleToasts={6}
 						/>
+						<ReleaseAnnouncementToastHost
+							onOpenChangelog={handleOpenReleaseChangelog}
+							onOpenSettings={handleOpenAnnouncementSettings}
+							onSetRightSidebarMode={contextPanelActions.setMode}
+							onOpenStartPage={() =>
+								handleOpenWorkspaceStart({ persist: false })
+							}
+						/>
+						<QuickSwitchOverlay
+							state={quickSwitch.state}
+							getRow={(id) => liveWorkspaceRowMap.get(id) ?? null}
+							onSelectIndex={quickSwitch.selectIndex}
+							onCommitIndex={(index) => {
+								quickSwitch.selectIndex(index);
+								quickSwitch.commit();
+							}}
+						/>
 						{closeConfirmDialog}
+						{editorDiscardConfirmDialog}
+						{mergeConfirmDialogNode}
 					</ComposerInsertProvider>
 				</SessionRunStatesProvider>
 			</WorkspaceToastProvider>

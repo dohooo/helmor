@@ -38,12 +38,21 @@ describe("SkillsStep", () => {
 		apiMocks.getHelmorSkillsStatus.mockReset();
 		apiMocks.installCli.mockReset();
 		apiMocks.installHelmorSkills.mockReset();
+		// Default: skills not installed yet, default install call succeeds.
+		// Individual tests override these per scenario.
 		apiMocks.getHelmorSkillsStatus.mockResolvedValue({
 			installed: false,
 			claude: false,
 			codex: false,
 			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+				"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
+		});
+		apiMocks.installHelmorSkills.mockResolvedValue({
+			installed: true,
+			claude: true,
+			codex: true,
+			command:
+				"npx --yes skills add dohooo/helmor/.agents/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code -a codex",
 		});
 	});
 
@@ -52,12 +61,20 @@ describe("SkillsStep", () => {
 		vi.clearAllMocks();
 	});
 
-	it("shows Ready when the Helmor CLI is already installed", async () => {
+	// --- already-installed paths --------------------------------------
+
+	it("shows Ready and skips install when the Helmor CLI is already installed", async () => {
 		apiMocks.getCliStatus.mockResolvedValue({
 			installed: true,
 			installPath: "/usr/local/bin/helmor-dev",
 			buildMode: "development",
 			installState: "managed",
+		});
+		apiMocks.getHelmorSkillsStatus.mockResolvedValue({
+			installed: true,
+			claude: true,
+			codex: true,
+			command: "",
 		});
 
 		render(
@@ -74,14 +91,17 @@ describe("SkillsStep", () => {
 		await waitFor(() => {
 			expect(within(cliItem).getByText("Ready")).toBeInTheDocument();
 		});
+		// No retry button surfaces — the install hook never fires for an
+		// already-managed CLI.
 		expect(
-			within(cliItem).queryByRole("button", { name: "Set up" }),
+			within(cliItem).queryByRole("button", { name: "Retry" }),
 		).not.toBeInTheDocument();
 		expect(apiMocks.installCli).not.toHaveBeenCalled();
 	});
 
-	it("installs the Helmor CLI from the setup item", async () => {
-		const user = userEvent.setup();
+	// --- silent-auto-install happy paths ------------------------------
+
+	it("auto-installs the Helmor CLI on mount when missing", async () => {
 		apiMocks.getCliStatus.mockResolvedValue({
 			installed: false,
 			installPath: null,
@@ -106,31 +126,25 @@ describe("SkillsStep", () => {
 
 		const cliItem = screen.getByRole("group", { name: "Helmor CLI" });
 
-		await user.click(within(cliItem).getByRole("button", { name: "Set up" }));
-
+		// Install fires WITHOUT any click — the auto-install effect
+		// kicks in once the status probe resolves.
 		await waitFor(() => {
 			expect(apiMocks.installCli).toHaveBeenCalledTimes(1);
 		});
-		expect(within(cliItem).getByText("Ready")).toBeInTheDocument();
+		await waitFor(() => {
+			expect(within(cliItem).getByText("Ready")).toBeInTheDocument();
+		});
 		expect(
-			within(cliItem).queryByRole("button", { name: "Set up" }),
+			within(cliItem).queryByRole("button", { name: "Retry" }),
 		).not.toBeInTheDocument();
 	});
 
-	it("installs Helmor skills from the setup item", async () => {
-		const user = userEvent.setup();
+	it("auto-installs Helmor Skills on mount when missing", async () => {
 		apiMocks.getCliStatus.mockResolvedValue({
 			installed: true,
 			installPath: "/usr/local/bin/helmor-dev",
 			buildMode: "development",
 			installState: "managed",
-		});
-		apiMocks.installHelmorSkills.mockResolvedValue({
-			installed: true,
-			claude: true,
-			codex: false,
-			command:
-				"npx --yes skills add dohooo/helmor/.codex/skills/helmor-cli -g -s helmor-cli -y --copy -a claude-code",
 		});
 
 		render(
@@ -145,18 +159,18 @@ describe("SkillsStep", () => {
 		const skillsItem = screen.getByRole("group", {
 			name: "Helmor Skills (Beta)",
 		});
-
-		await user.click(
-			within(skillsItem).getByRole("button", { name: "Set up" }),
-		);
 
 		await waitFor(() => {
 			expect(apiMocks.installHelmorSkills).toHaveBeenCalledTimes(1);
 		});
-		expect(within(skillsItem).getByText("Ready")).toBeInTheDocument();
+		await waitFor(() => {
+			expect(within(skillsItem).getByText("Ready")).toBeInTheDocument();
+		});
 	});
 
-	it("shows the unified failure hint when skills setup throws", async () => {
+	// --- failure + retry path ----------------------------------------
+
+	it("surfaces the failure hint and exposes a Retry button when skills install throws", async () => {
 		const user = userEvent.setup();
 		apiMocks.getCliStatus.mockResolvedValue({
 			installed: true,
@@ -164,9 +178,17 @@ describe("SkillsStep", () => {
 			buildMode: "development",
 			installState: "managed",
 		});
-		apiMocks.installHelmorSkills.mockRejectedValue(
-			new Error("Helmor skills setup failed with a long stack trace."),
-		);
+		// First call fails; the retry call succeeds.
+		apiMocks.installHelmorSkills
+			.mockRejectedValueOnce(
+				new Error("Helmor skills setup failed with a long stack trace."),
+			)
+			.mockResolvedValueOnce({
+				installed: true,
+				claude: true,
+				codex: true,
+				command: "",
+			});
 
 		render(
 			<SkillsStep
@@ -181,10 +203,8 @@ describe("SkillsStep", () => {
 			name: "Helmor Skills (Beta)",
 		});
 
-		await user.click(
-			within(skillsItem).getByRole("button", { name: "Set up" }),
-		);
-
+		// The auto-install fires once on mount and fails — the user-
+		// facing error is the unified, sanitised hint (no raw stack).
 		await waitFor(() => {
 			expect(
 				within(skillsItem).getByText(/something went wrong/i),
@@ -194,5 +214,18 @@ describe("SkillsStep", () => {
 		expect(
 			within(skillsItem).queryByText(/long stack trace/i),
 		).not.toBeInTheDocument();
+
+		// Retry button is the recovery path the user can click.
+		const retryBtn = await within(skillsItem).findByRole("button", {
+			name: "Retry",
+		});
+		await user.click(retryBtn);
+
+		await waitFor(() => {
+			expect(apiMocks.installHelmorSkills).toHaveBeenCalledTimes(2);
+		});
+		await waitFor(() => {
+			expect(within(skillsItem).getByText("Ready")).toBeInTheDocument();
+		});
 	});
 });

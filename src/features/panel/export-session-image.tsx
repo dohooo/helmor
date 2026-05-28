@@ -18,8 +18,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ThreadMessageLike } from "@/lib/api";
-import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
+import { loadSessionThreadMessages, type ThreadMessageLike } from "@/lib/api";
+import { helmorQueryKeys } from "@/lib/query-client";
 import { useWorkspaceToast } from "@/lib/workspace-toast-context";
 import { MemoConversationMessage } from "./message-components";
 
@@ -53,7 +53,7 @@ export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 				</TooltipTrigger>
 				<TooltipContent
 					side="bottom"
-					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-[12px] leading-none"
+					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 				>
 					<span>Export session as image</span>
 				</TooltipContent>
@@ -67,9 +67,15 @@ export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 
 function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 	const pushToast = useWorkspaceToast();
+	// The main thread query is paginated (tail-only) for big-session
+	// switching speed, but the image export needs the entire history.
+	// Fetch with `tailLimit: null` here — separate query key so the
+	// trailing snapshot used by the live chat panel isn't blown away.
 	const messagesQuery = useQuery({
-		...sessionThreadMessagesQueryOptions(sessionId),
+		queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread", "full"],
+		queryFn: () => loadSessionThreadMessages(sessionId, { tailLimit: null }),
 		enabled: Boolean(sessionId),
+		staleTime: 60_000,
 	});
 	const messages = useMemo<ThreadMessageLike[]>(
 		() => messagesQuery.data ?? [],
@@ -220,7 +226,7 @@ function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 
 				<div className="min-h-0 overflow-y-auto">
 					{isLoading ? (
-						<div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-[12px] text-muted-foreground">
+						<div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-small text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" strokeWidth={1.8} />
 							<span>Rendering snapshot…</span>
 						</div>
@@ -231,7 +237,7 @@ function ExportSessionImageDialogContent({ sessionId }: { sessionId: string }) {
 							className="block h-auto w-full rounded-md"
 						/>
 					) : status === "error" ? (
-						<div className="flex h-full min-h-[200px] items-center justify-center text-[12px] text-muted-foreground">
+						<div className="flex h-full min-h-[200px] items-center justify-center text-small text-muted-foreground">
 							Failed to render snapshot.
 						</div>
 					) : null}

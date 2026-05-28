@@ -37,7 +37,7 @@ export function WorkspaceSidebarShellUI({
 			</div>
 
 			<div className="flex items-center justify-between px-3">
-				<h2 className="text-[14px] font-medium tracking-[-0.01em] text-muted-foreground">
+				<h2 className="text-body font-medium tracking-[-0.01em] text-muted-foreground">
 					Workspaces
 				</h2>
 				<div className="flex items-center gap-1 text-muted-foreground">

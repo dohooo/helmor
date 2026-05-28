@@ -1,5 +1,6 @@
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Clock3, Copy, ExternalLink } from "lucide-react";
+import { Check, Clock3, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { Suspense, useCallback, useState } from "react";
 import { AppendContextButton } from "@/components/append-context-button";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
@@ -13,9 +14,64 @@ import {
 import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
+import { getInboxItemDetail } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
-import type { ContextCard } from "@/lib/sources/types";
+import { helmorQueryKeys } from "@/lib/query-client";
+import type {
+	ContextCard,
+	ContextCardForgeDetailRef,
+} from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
+
+/** Background revalidation contract shared across detail views. Wiring
+ *  a query's `refetch` + `isFetching` into this is enough to surface
+ *  the toolbar refresh button. */
+export type DetailRefreshControl = {
+	refetch: () => void;
+	isFetching: boolean;
+};
+
+/** Adapt a React Query result into the `RefreshButton` contract. Pure
+ *  glue — kept here so individual detail-view files don't repeat the
+ *  same 3-line inline object. */
+export function toRefreshControl<T>(
+	query: UseQueryResult<T>,
+): DetailRefreshControl {
+	return {
+		refetch: () => void query.refetch(),
+		isFetching: query.isFetching,
+	};
+}
+
+/** Shared React Query setup for the forge (GitHub / GitLab) inbox-item
+ *  detail page. Every `*-view.tsx` in `github/` and `gitlab/` calls
+ *  this — same query key, same staleTime, same focus/mount sync
+ *  contract — so the wrapper view files reduce to type-narrowing the
+ *  result and forwarding to `GitHubDetailPage`. */
+export function useInboxItemDetailQuery(
+	detailRef: ContextCardForgeDetailRef | null,
+	cardId: string,
+) {
+	return useQuery({
+		queryKey: detailRef
+			? helmorQueryKeys.inboxItemDetail(
+					detailRef.provider,
+					detailRef.login,
+					detailRef.source,
+					detailRef.externalId,
+				)
+			: ["inboxItemDetail", "missing", cardId],
+		queryFn: () => getInboxItemDetail(detailRef!),
+		enabled: detailRef !== null,
+		staleTime: 60_000,
+		// Re-fetch every time the panel mounts (user opens a card) or
+		// the window regains focus — Slack/GitHub/GitLab items mutate
+		// quickly and users expect "open / refocus" to be a natural
+		// sync point.
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
+	});
+}
 
 export type SourceDetailProps = {
 	card: ContextCard;
@@ -29,6 +85,7 @@ export function GitHubDetailPage({
 	isLoading,
 	error,
 	kindLabel,
+	refresh,
 }: {
 	card: ContextCard;
 	appendContextTarget?: ComposerInsertTarget;
@@ -36,6 +93,7 @@ export function GitHubDetailPage({
 	isLoading?: boolean;
 	error?: Error | null;
 	kindLabel: string;
+	refresh?: DetailRefreshControl;
 }) {
 	const reference = parseExternalReference(card.externalId);
 	const markdownBody = description?.trim() || "No description provided.";
@@ -44,7 +102,7 @@ export function GitHubDetailPage({
 		<article className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-y-auto px-4 [contain:content] [scrollbar-gutter:stable]">
 			<header className="shrink-0 py-1.5">
 				<div className="flex min-w-0 items-center justify-between gap-4">
-					<div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+					<div className="flex min-w-0 flex-wrap items-center gap-2 text-ui text-muted-foreground">
 						{card.state ? <StatePill state={card.state} /> : null}
 						<span className="font-medium text-foreground/80">
 							{reference.repo}
@@ -63,6 +121,7 @@ export function GitHubDetailPage({
 						appendContextTarget={appendContextTarget}
 						markdownBody={markdownBody}
 						copyDisabled={isLoading || Boolean(error)}
+						refresh={refresh}
 					/>
 				</div>
 			</header>
@@ -90,11 +149,13 @@ function SourceDetailActions({
 	appendContextTarget,
 	markdownBody,
 	copyDisabled,
+	refresh,
 }: {
 	card: ContextCard;
 	appendContextTarget?: ComposerInsertTarget;
 	markdownBody: string;
 	copyDisabled?: boolean;
+	refresh?: DetailRefreshControl;
 }) {
 	const [copied, setCopied] = useState(false);
 	const handleCopy = useCallback(() => {
@@ -107,6 +168,7 @@ function SourceDetailActions({
 
 	return (
 		<div className="flex shrink-0 items-center gap-1">
+			{refresh ? <RefreshButton refresh={refresh} /> : null}
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
@@ -115,7 +177,7 @@ function SourceDetailActions({
 						size="icon-xs"
 						aria-label="Open externally"
 						onClick={() => void openUrl(card.externalUrl)}
-						className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+						className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 					>
 						<ExternalLink className="size-[13px]" strokeWidth={1.8} />
 					</Button>
@@ -132,7 +194,7 @@ function SourceDetailActions({
 								buildCardContextPayload(card, appendContextTarget)
 							}
 							errorTitle="Couldn't insert context card"
-							className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground [&_svg]:size-[13px]"
+							className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground [&_svg]:size-[13px]"
 						/>
 					</span>
 				</TooltipTrigger>
@@ -147,7 +209,7 @@ function SourceDetailActions({
 						aria-label="Copy markdown"
 						disabled={copyDisabled}
 						onClick={handleCopy}
-						className="size-7 cursor-pointer rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+						className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 					>
 						{copied ? (
 							<Check className="size-[13px]" strokeWidth={1.8} />
@@ -164,6 +226,38 @@ function SourceDetailActions({
 	);
 }
 
+/** Toolbar button that triggers a background refetch of the active
+ *  detail query. Spins the icon while the underlying query is fetching,
+ *  and disables the button so back-to-back clicks don't queue duplicate
+ *  refetches. Shared between Slack and Forge (GitHub/GitLab) detail
+ *  views — both wire a React Query `refetch` + `isFetching` pair into
+ *  the `refresh` prop. */
+export function RefreshButton({ refresh }: { refresh: DetailRefreshControl }) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-xs"
+					aria-label="Refresh"
+					disabled={refresh.isFetching}
+					onClick={() => refresh.refetch()}
+					className="size-7 cursor-interactive rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+				>
+					<RefreshCw
+						className={cn("size-[13px]", refresh.isFetching && "animate-spin")}
+						strokeWidth={1.8}
+					/>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="top">
+				{refresh.isFetching ? "Refreshing…" : "Refresh"}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
 function DetailLoadingState() {
 	return (
 		<div className="flex items-center justify-center">
@@ -174,7 +268,7 @@ function DetailLoadingState() {
 
 function DetailErrorState({ error }: { error: Error }) {
 	return (
-		<div className="text-center text-[13px] text-muted-foreground">
+		<div className="text-center text-ui text-muted-foreground">
 			{error.message}
 		</div>
 	);
@@ -182,7 +276,7 @@ function DetailErrorState({ error }: { error: Error }) {
 
 function MarkdownBody({ body }: { body: string }) {
 	return (
-		<div className="conversation-markdown max-w-3xl break-words text-[13px] leading-6 text-foreground after:block after:h-24 after:content-['']">
+		<div className="conversation-markdown max-w-3xl break-words text-ui leading-6 text-foreground after:block after:h-24 after:content-['']">
 			<Suspense fallback={<MarkdownFallback body={body} />}>
 				<LazyStreamdown className="conversation-streamdown" mode="static">
 					{body}
@@ -208,7 +302,7 @@ export function StatePill({
 	return (
 		<span
 			className={cn(
-				"inline-flex h-6 shrink-0 items-center rounded-full border border-current/25 px-2.5 text-[12px] font-semibold leading-none",
+				"inline-flex h-6 shrink-0 items-center rounded-full border border-current/25 px-2.5 text-small font-semibold leading-none",
 				STATE_TONE_CLASS[state.tone],
 			)}
 		>
@@ -218,7 +312,11 @@ export function StatePill({
 }
 
 export function parseExternalReference(externalId: string) {
-	const idx = externalId.lastIndexOf("#");
+	// GitHub uses `repo#NN`. GitLab uses `project#NN` (issues) or
+	// `project!NN` (MRs). Accept either.
+	const hashIdx = externalId.lastIndexOf("#");
+	const bangIdx = externalId.lastIndexOf("!");
+	const idx = Math.max(hashIdx, bangIdx);
 	const number = idx === -1 ? "" : externalId.slice(idx + 1);
 	const repo = idx === -1 ? externalId : externalId.slice(0, idx);
 	return { repo, number };

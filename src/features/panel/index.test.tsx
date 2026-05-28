@@ -360,7 +360,7 @@ describe("WorkspacePanel", () => {
 			screen.getByRole("button", { name: /Create archive script/i }),
 		).toBeInTheDocument();
 		expect(
-			screen.queryByRole("button", { name: /Create run script/i }),
+			screen.queryByRole("button", { name: /Create run actions/i }),
 		).toBeNull();
 	});
 
@@ -393,7 +393,7 @@ describe("WorkspacePanel", () => {
 		);
 
 		await user.click(
-			screen.getByRole("button", { name: /Create run script/i }),
+			screen.getByRole("button", { name: /Create run actions/i }),
 		);
 
 		expect(onInitializeScript).toHaveBeenCalledWith("run");

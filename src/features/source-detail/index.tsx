@@ -4,6 +4,9 @@ import type { ContextCard } from "@/lib/sources/types";
 import { GitHubDiscussionView } from "./github/discussion-view";
 import { GitHubIssueView } from "./github/issue-view";
 import { GitHubPullRequestView } from "./github/pull-request-view";
+import { GitLabIssueView } from "./gitlab/issue-view";
+import { GitLabMergeRequestView } from "./gitlab/merge-request-view";
+import { SlackThreadView } from "./slack/thread-view";
 import { UnsupportedSourceView } from "./unsupported-view";
 
 // `memo` keeps the markdown render in `GitHubDetailPage` from re-running
@@ -39,8 +42,28 @@ export const SourceDetailView = memo(function SourceDetailView({
 					appendContextTarget={appendContextTarget}
 				/>
 			);
-		case "linear":
+		case "gitlab_issue":
+			return (
+				<GitLabIssueView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
+		case "gitlab_mr":
+			return (
+				<GitLabMergeRequestView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
 		case "slack_thread":
+			return (
+				<SlackThreadView
+					card={card}
+					appendContextTarget={appendContextTarget}
+				/>
+			);
+		case "linear":
 			return <UnsupportedSourceView card={card} />;
 	}
 });

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
+import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
 type Options = {
 	queryClient: QueryClient;
@@ -25,21 +26,18 @@ function handleUiMutation(
 ) {
 	switch (event.type) {
 		case "workspaceListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.archivedWorkspaces,
-			});
+			// Gate the sidebar-list invalidate so it skips while archive /
+			// restore / pin etc. is mid-flight (their `holdSidebarMutation`
+			// release will reconcile once they settle). Other queries are
+			// unaffected.
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				predicate: (query) =>
 					query.queryKey[0] === "workspaceCandidateDirectories",
 			});
 			return;
 		case "workspaceChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -48,9 +46,7 @@ function handleUiMutation(
 			});
 			return;
 		case "sessionListChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -85,9 +81,11 @@ function handleUiMutation(
 			invalidateAllWorkspaceChanges(queryClient);
 			return;
 		case "workspaceGitStateChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			// This is the event that fired during restore and clobbered the
+			// optimistic move from archived → active. Gate it so it sits
+			// out while the restore round-trip holds the gate; reconcile
+			// happens when the hold releases.
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -110,9 +108,7 @@ function handleUiMutation(
 			});
 			return;
 		case "workspaceChangeRequestChanged":
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
-			});
+			requestSidebarReconcile(queryClient);
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.workspaceDetail(event.workspaceId),
 			});
@@ -160,8 +156,17 @@ function handleUiMutation(
 			void queryClient.invalidateQueries({
 				predicate: (query) => query.queryKey[0] === "workspaceDetail",
 			});
+			requestSidebarReconcile(queryClient);
+			return;
+		case "repoRunActionsChanged":
+			// Settings UI edits + dropdown reorder + create / delete all
+			// land here. Invalidate every `repoScripts` query for this
+			// repo (one per workspace context — the loader merges DB
+			// + helmor.json + workspace overrides per call).
 			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.workspaceGroups,
+				predicate: (query) =>
+					query.queryKey[0] === "repoScripts" &&
+					query.queryKey[1] === event.repoId,
 			});
 			return;
 		case "settingsChanged":
@@ -191,6 +196,45 @@ function handleUiMutation(
 		case "activeStreamsChanged":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.activeStreams,
+			});
+			return;
+		case "slackWorkspacesChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackWorkspaces,
+			});
+			// New connections also affect the activity feed (now has data)
+			// and disconnections clear the cached items — kill every
+			// `slackInbox` query in one sweep rather than tracking which
+			// team_ids belong to which mutation.
+			void queryClient.invalidateQueries({
+				predicate: (query) => query.queryKey[0] === "slackInbox",
+			});
+			return;
+		case "slackTokenInvalidated":
+			// Token already wiped on the backend; bust the cache so the
+			// inbox UI re-fetches and surfaces the auth error state /
+			// "Reconnect" affordance.
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackInbox(event.teamId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.slackWorkspaces,
+			});
+			return;
+		case "triageConfigChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageConfig,
+			});
+			return;
+		case "triageActiveStatusChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageActiveStatus,
+			});
+			return;
+		case "triageWorkspaceCreated":
+			requestSidebarReconcile(queryClient);
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.triageActiveStatus,
 			});
 			return;
 	}

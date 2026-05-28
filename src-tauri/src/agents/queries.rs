@@ -152,116 +152,170 @@ pub async fn generate_session_title(
         });
     }
 
-    let request_id = Uuid::new_v4().to_string();
-    // Skip the branch slug instruction in the prompt when we already know we
-    // won't apply it (local mode, already-renamed worktree, etc.). Saves a
-    // line of LLM output and the branch-rename instruction block of input.
-    let mut params = serde_json::json!({
-        "userMessage": request.user_message,
-        "branchRenamePrompt": branch_rename_prompt,
-        "generateBranch": should_generate_branch,
-    });
-    if let Some(model) = super::custom_providers::configured_models()
-        .into_iter()
-        .next()
-    {
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert(
-                "claudeModel".to_string(),
-                Value::String(model.cli_model.clone()),
-            );
-            obj.insert(
-                "claudeEnvironment".to_string(),
-                serde_json::json!({
-                    "ANTHROPIC_BASE_URL": model.base_url,
-                    "ANTHROPIC_AUTH_TOKEN": model.api_key,
-                }),
-            );
+    // Cascade head: try the bundled local LLM first. On any failure
+    // (server not running, timeout, parse mismatch) fall through to
+    // the sidecar's cloud cascade (custom-claude → claude → codex →
+    // cursor). `TITLE_TIMEOUT` inside `local_llm::title` caps the
+    // attempt at ~15s so a stuck cold load can't block this path long.
+    let local_result: Option<(String, Option<String>)> = {
+        let user_message = request.user_message.clone();
+        let branch_prompt = branch_rename_prompt.clone();
+        let generate_branch = should_generate_branch;
+        let app_for_local = app.clone();
+        let session_id_for_log = request.session_id.clone();
+        match tauri::async_runtime::spawn_blocking(move || {
+            let manager = app_for_local.state::<crate::local_llm::Manager>();
+            manager
+                .inner()
+                .generate_title(&user_message, branch_prompt.as_deref(), generate_branch)
+        })
+        .await
+        {
+            Ok(Ok((title, branch))) => {
+                tracing::info!(
+                    session_id = %session_id_for_log,
+                    generated_title = %title,
+                    generated_branch = branch.as_deref().unwrap_or(""),
+                    "generate_session_title produced by local LLM (sidecar cascade skipped)"
+                );
+                Some((title, branch))
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(
+                    session_id = %session_id_for_log,
+                    error = %error,
+                    "Local LLM title attempt failed; falling through to sidecar cascade"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session_id_for_log,
+                    error = %error,
+                    "Local LLM title task join failed; falling through to sidecar cascade"
+                );
+                None
+            }
         }
-    }
-    if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
-        if let Some(obj) = params.as_object_mut() {
-            obj.insert("agentProxy".to_string(), agent_proxy);
-        }
-    }
-    let sidecar_req = crate::sidecar::SidecarRequest {
-        id: request_id.clone(),
-        method: "generateTitle".to_string(),
-        params,
     };
 
-    let rx = sidecar.subscribe(&request_id);
-
-    if let Err(e) = sidecar.send(&sidecar_req) {
-        sidecar.unsubscribe(&request_id);
-        return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
-    }
-
     let session_id = request.session_id.clone();
-    let result: (Option<String>, Option<String>) = tauri::async_runtime::spawn_blocking({
-        let rid = request_id;
-        let session_id_for_logs = session_id.clone();
-        move || {
-            let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
-            let mut title: Option<String> = None;
-            let mut branch_name: Option<String> = None;
-
-            loop {
-                match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
-                    Ok(event) => match event.event_type() {
-                        "titleGenerated" => {
-                            title = event
-                                .raw
-                                .get("title")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .filter(|text| !text.is_empty());
-                            branch_name = event
-                                .raw
-                                .get("branchName")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .filter(|branch| !branch.is_empty());
-                            tracing::debug!(
-                                session_id = %session_id_for_logs,
-                                generated_title = title.as_deref().unwrap_or(""),
-                                generated_branch = branch_name.as_deref().unwrap_or(""),
-                                "generate_session_title received titleGenerated"
-                            );
-                            break;
-                        }
-                        "error" => {
-                            let message = event
-                                .raw
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("Unknown error");
-                            tracing::error!("generate_session_title: sidecar error: {message}");
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        tracing::error!(
-                            "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
-                        );
-                        break;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        tracing::error!("generate_session_title: sidecar disconnected");
-                        break;
-                    }
+    let (generated_title, generated_branch): (Option<String>, Option<String>) =
+        if let Some((title, branch)) = local_result {
+            (Some(title), branch)
+        } else {
+            let request_id = Uuid::new_v4().to_string();
+            // Skip the branch slug instruction in the prompt when we already know we
+            // won't apply it (local mode, already-renamed worktree, etc.). Saves a
+            // line of LLM output and the branch-rename instruction block of input.
+            let mut params = serde_json::json!({
+                "userMessage": request.user_message,
+                "branchRenamePrompt": branch_rename_prompt,
+                "generateBranch": should_generate_branch,
+            });
+            if let Some(model) = super::custom_providers::configured_models()
+                .into_iter()
+                .next()
+            {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert(
+                        "claudeModel".to_string(),
+                        Value::String(model.cli_model.clone()),
+                    );
+                    obj.insert(
+                        "claudeEnvironment".to_string(),
+                        serde_json::json!({
+                            "ANTHROPIC_BASE_URL": model.base_url,
+                            "ANTHROPIC_AUTH_TOKEN": model.api_key,
+                        }),
+                    );
                 }
             }
+            if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert("agentProxy".to_string(), agent_proxy);
+                }
+            }
+            let sidecar_req = crate::sidecar::SidecarRequest {
+                id: request_id.clone(),
+                method: "generateTitle".to_string(),
+                params,
+            };
 
-            sidecar_state.unsubscribe(&rid);
-            (title, branch_name)
-        }
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?;
+            let rx = sidecar.subscribe(&request_id);
 
-    let (generated_title, generated_branch) = result;
+            if let Err(e) = sidecar.send(&sidecar_req) {
+                sidecar.unsubscribe(&request_id);
+                return Err(anyhow::anyhow!("Sidecar send failed: {e}").into());
+            }
+
+            let session_id_for_task = session_id.clone();
+            tauri::async_runtime::spawn_blocking({
+                let rid = request_id;
+                let session_id_for_logs = session_id_for_task;
+                move || {
+                    let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> =
+                        app.state();
+                    let mut title: Option<String> = None;
+                    let mut branch_name: Option<String> = None;
+
+                    loop {
+                        match rx.recv_timeout(TITLE_GEN_TIMEOUT) {
+                            Ok(event) => match event.event_type() {
+                                "titleGenerated" => {
+                                    title = event
+                                        .raw
+                                        .get("title")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                        .filter(|text| !text.is_empty());
+                                    branch_name = event
+                                        .raw
+                                        .get("branchName")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                        .filter(|branch| !branch.is_empty());
+                                    tracing::debug!(
+                                        session_id = %session_id_for_logs,
+                                        generated_title = title.as_deref().unwrap_or(""),
+                                        generated_branch = branch_name.as_deref().unwrap_or(""),
+                                        "generate_session_title received titleGenerated"
+                                    );
+                                    break;
+                                }
+                                "error" => {
+                                    let message = event
+                                        .raw
+                                        .get("message")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("Unknown error");
+                                    tracing::error!(
+                                        "generate_session_title: sidecar error: {message}"
+                                    );
+                                    break;
+                                }
+                                _ => {}
+                            },
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                tracing::error!(
+                                    "generate_session_title: timed out after {TITLE_GEN_TIMEOUT:?}"
+                                );
+                                break;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                tracing::error!("generate_session_title: sidecar disconnected");
+                                break;
+                            }
+                        }
+                    }
+
+                    sidecar_state.unsubscribe(&rid);
+                    (title, branch_name)
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Title generation task failed: {e}"))?
+        };
 
     if should_generate_title && generated_title.is_none() {
         tracing::error!(
@@ -510,10 +564,13 @@ pub async fn list_slash_commands(
     cache: tauri::State<'_, super::slash_commands::SlashCommandCache>,
     request: ListSlashCommandsRequest,
 ) -> CmdResult<SlashCommandsResponse> {
+    // Start page has no workspace, so `working_directory` is empty. Fall
+    // back to the repo's `root_path` so Claude CLI can scan the project's
+    // `.claude/commands/` and the cache key aligns with the repo prewarm.
+    let request = resolve_repo_fallback_cwd(request);
     let cwd = request.working_directory.as_deref().unwrap_or("");
     let repo_id = request.repo_id.as_deref().unwrap_or("");
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    let additional_directories = slash_command_scan_directories(&request);
     tracing::debug!(
         provider = %request.provider,
         cwd,
@@ -589,6 +646,36 @@ pub async fn list_slash_commands(
     Ok(SlashCommandsResponse { commands })
 }
 
+/// When the caller (e.g. start page) has a `repo_id` but no `working_directory`,
+/// resolve it to the repo's local `root_path` so the sidecar can scan
+/// project-level `.claude/commands/`. Same key shape as `dispatch_prewarm_for_repo`,
+/// so cache hits line up.
+fn resolve_repo_fallback_cwd(mut request: ListSlashCommandsRequest) -> ListSlashCommandsRequest {
+    if request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
+        return request;
+    }
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return request;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return request;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return request;
+    }
+    request.working_directory = Some(root_path.to_string());
+    request
+}
+
 fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) -> Vec<String> {
     let Some(workspace_id) = workspace_id else {
         return Vec::new();
@@ -603,6 +690,37 @@ fn lookup_workspace_linked_directories_for_commands(workspace_id: Option<&str>) 
             );
             Vec::new()
         }
+    }
+}
+
+fn slash_command_scan_directories(request: &ListSlashCommandsRequest) -> Vec<String> {
+    let mut dirs =
+        lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+    if request.provider == "codex" {
+        append_repo_root_scan_directory(request, &mut dirs);
+    }
+    dirs
+}
+
+fn append_repo_root_scan_directory(request: &ListSlashCommandsRequest, dirs: &mut Vec<String>) {
+    let Some(repo_id) = request.repo_id.as_deref().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Some(record) = crate::models::repos::load_repository_by_id(repo_id)
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let root_path = record.root_path.trim();
+    if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+        return;
+    }
+    if request.working_directory.as_deref() == Some(root_path) {
+        return;
+    }
+    if !dirs.iter().any(|dir| dir == root_path) {
+        dirs.push(root_path.to_string());
     }
 }
 
@@ -650,7 +768,7 @@ pub fn prewarm_slash_command_cache_for_workspace(app: &AppHandle, workspace_id: 
                 );
                 return;
             };
-            dispatch_prewarm_for(&app, &workspace_id, root_path, &record.repo_id);
+            dispatch_prewarm(&app, Some(&workspace_id), root_path, &record.repo_id);
         });
 }
 
@@ -678,15 +796,51 @@ pub fn prewarm_slash_command_cache(app: &AppHandle) {
         });
 }
 
-fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, repo_id: &str) {
+/// Repo-level prewarm — for the start page where no workspace is selected.
+/// Uses the repo's `root_path` as cwd; cache key matches what
+/// `resolve_repo_fallback_cwd` produces, so the next `/` press hits warm.
+pub fn prewarm_slash_command_cache_for_repo(app: &AppHandle, repo_id: &str) {
+    let app = app.clone();
+    let repo_id = repo_id.to_string();
+    let _ = std::thread::Builder::new()
+        .name("slash-cmd-prewarm-repo".into())
+        .spawn(move || {
+            let record = match crate::models::repos::load_repository_by_id(&repo_id) {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    tracing::debug!(repo_id, "Slash-command prewarm: repo not found");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(repo_id, error = %e, "Slash-command prewarm: load failed");
+                    return;
+                }
+            };
+            let root_path = record.root_path.trim();
+            if root_path.is_empty() || !std::path::Path::new(root_path).is_dir() {
+                tracing::debug!(
+                    repo_id,
+                    root_path,
+                    "Slash-command prewarm: repo root_path missing or not a directory"
+                );
+                return;
+            }
+            dispatch_prewarm(&app, None, root_path, &repo_id);
+        });
+}
+
+/// Schedule a background refresh per provider. Workspace-scoped callers pass
+/// `Some(workspace_id)` (which also pulls in any linked-directory commands);
+/// repo-scoped callers (start page) pass `None` and the key shape matches
+/// `resolve_repo_fallback_cwd` so the next `/` press hits warm cache.
+fn dispatch_prewarm(app: &AppHandle, workspace_id: Option<&str>, root_path: &str, repo_id: &str) {
     let cache: tauri::State<'_, super::slash_commands::SlashCommandCache> = app.state();
-    let additional_directories =
-        lookup_workspace_linked_directories_for_commands(Some(workspace_id));
+    let additional_directories = lookup_workspace_linked_directories_for_commands(workspace_id);
     for provider in ["claude", "codex"] {
         let request = ListSlashCommandsRequest {
             provider: provider.to_string(),
             working_directory: Some(root_path.to_string()),
-            workspace_id: Some(workspace_id.to_string()),
+            workspace_id: workspace_id.map(str::to_string),
             repo_id: Some(repo_id.to_string()),
         };
         let ws_key = super::slash_commands::workspace_key(
@@ -696,7 +850,7 @@ fn dispatch_prewarm_for(app: &AppHandle, workspace_id: &str, root_path: &str, re
         );
         tracing::debug!(
             provider,
-            workspace_id,
+            workspace_id = workspace_id.unwrap_or(""),
             cwd = root_path,
             repo_id,
             linked_dir_count = additional_directories.len(),
@@ -850,8 +1004,7 @@ fn spawn_background_refresh(
             let sidecar_state: tauri::State<'_, crate::sidecar::ManagedSidecar> = app.state();
             let cache_state: tauri::State<'_, super::slash_commands::SlashCommandCache> =
                 app.state();
-            let additional_directories =
-                lookup_workspace_linked_directories_for_commands(request.workspace_id.as_deref());
+            let additional_directories = slash_command_scan_directories(&request);
 
             match fetch_from_sidecar(&sidecar_state, &request, &additional_directories) {
                 Ok(commands) => {
@@ -1137,4 +1290,113 @@ pub fn fetch_live_context_usage(
 
     sidecar.unsubscribe(&request_id);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request(cwd: Option<&str>, repo_id: Option<&str>) -> ListSlashCommandsRequest {
+        ListSlashCommandsRequest {
+            provider: "claude".to_string(),
+            working_directory: cwd.map(str::to_string),
+            workspace_id: None,
+            repo_id: repo_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn fallback_noop_when_working_directory_already_set() {
+        let req = make_request(Some("/some/path"), Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory.as_deref(), Some("/some/path"));
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_missing() {
+        let req = make_request(None, None);
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_id_blank() {
+        let req = make_request(None, Some(""));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+    }
+
+    fn setup_test_db(dir: &std::path::Path) {
+        let db_path = dir.join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::schema::ensure_schema(&conn).unwrap();
+        drop(conn);
+        crate::models::db::init_pools().expect("failed to init test DB pools");
+    }
+
+    fn insert_repo(repo_id: &str, root_path: &str) {
+        let db_path = crate::data_dir::data_dir().unwrap().join("helmor.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, name, root_path) VALUES (?1, 'test-repo', ?2)",
+            rusqlite::params![repo_id, root_path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fallback_resolves_to_repo_root_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        let repo_root = dir.path().join("repo-root");
+        std::fs::create_dir(&repo_root).unwrap();
+        insert_repo("r1", repo_root.to_str().unwrap());
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(
+            resolved.working_directory.as_deref(),
+            Some(repo_root.to_str().unwrap())
+        );
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_root_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // Insert a repo whose root_path points at a directory that doesn't
+        // exist — guards the start-page case where the user deleted the
+        // working tree behind Helmor's back.
+        insert_repo("r1", "/nonexistent/path/for/test");
+
+        let req = make_request(None, Some("r1"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
+
+    #[test]
+    fn fallback_noop_when_repo_not_in_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::data_dir::TEST_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HELMOR_DATA_DIR", dir.path());
+
+        setup_test_db(dir.path());
+        // No insert_repo — DB lookup returns Ok(None).
+
+        let req = make_request(None, Some("ghost-repo"));
+        let resolved = resolve_repo_fallback_cwd(req);
+        assert_eq!(resolved.working_directory, None);
+
+        std::env::remove_var("HELMOR_DATA_DIR");
+    }
 }

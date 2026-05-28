@@ -1,6 +1,10 @@
 import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import {
+	SettingsReleaseBadge,
+	type SettingsReleaseMarker,
+} from "./release-marker";
 
 /// Shared layout primitives for settings panels:
 ///   - `SettingsGroup` stacks rows and draws a thin rule between them
@@ -22,12 +26,14 @@ export function SettingsGroup({
 
 export function SettingsRow({
 	title,
+	releaseMarker,
 	description,
 	children,
 	className,
 	align = "center",
 }: {
 	title: ReactNode;
+	releaseMarker?: SettingsReleaseMarker;
 	description?: ReactNode;
 	children?: ReactNode;
 	className?: string;
@@ -42,11 +48,15 @@ export function SettingsRow({
 			)}
 		>
 			<div className="min-w-0 flex-1">
-				<div className="text-[13px] font-medium leading-snug text-foreground">
-					{title}
+				<div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui font-medium leading-snug text-foreground">
+					<span className="min-w-0">{title}</span>
+					<SettingsReleaseBadge
+						marker={releaseMarker}
+						className="self-center"
+					/>
 				</div>
 				{description ? (
-					<div className="mt-1 text-[12px] leading-snug text-muted-foreground">
+					<div className="mt-1 text-small leading-snug text-muted-foreground">
 						{description}
 					</div>
 				) : null}
@@ -77,7 +87,7 @@ export function SettingsNotice({
 	return (
 		<div
 			className={cn(
-				"mt-1.5 flex items-start gap-1 text-[12px] leading-snug",
+				"mt-1.5 flex items-start gap-1 text-small leading-snug",
 				NOTICE_TONE_CLASSES[tone],
 				className,
 			)}

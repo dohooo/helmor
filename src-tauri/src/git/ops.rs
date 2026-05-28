@@ -94,6 +94,32 @@ where
     handle_git_output(output)
 }
 
+/// Like `run_git`, but returns stdout **verbatim** (no trimming). Use this
+/// when stdout *is* the payload — e.g. `git show <ref>:<path>` reading a
+/// file's bytes — where a trailing newline is part of the file, not shell
+/// noise. The standard `run_git` trims, which is right for status/rev-parse
+/// lines but wrong for file content (a trimmed file content makes every
+/// diff editor show a spurious "trailing newline" delta against the
+/// working-tree side).
+pub fn run_git_capture<I, S>(args: I, current_dir: Option<&Path>) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("git");
+
+    for arg in args {
+        command.arg(arg.as_ref());
+    }
+
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+
+    let output = command.output().context("Failed to run git")?;
+    handle_git_output_raw(output)
+}
+
 /// Run `git` with a hard wall-clock timeout and an environment that locks
 /// down every interactive prompt path. Use this for any command that may
 /// contact a remote (`fetch`, `pull`, `push`, `ls-remote`, …) — without it,
@@ -204,7 +230,20 @@ fn handle_git_output(output: Output) -> Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
+    handle_git_failure(output)
+}
 
+/// Same failure handling as `handle_git_output`, but on success returns
+/// stdout **without** trimming. Pair with `run_git_capture` for callers
+/// that need byte-faithful output (e.g. file content from `git show`).
+fn handle_git_output_raw(output: Output) -> Result<String> {
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    handle_git_failure(output)
+}
+
+fn handle_git_failure(output: Output) -> Result<String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if !stderr.is_empty() {
@@ -515,6 +554,102 @@ pub fn create_worktree_from_start_point(
     Ok(output)
 }
 
+/// One row from `git worktree list --porcelain`. `branch` is `None` for
+/// detached HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeEntry>> {
+    let repo_root = repo_root.display().to_string();
+    let output = run_git(
+        ["-C", repo_root.as_str(), "worktree", "list", "--porcelain"],
+        None,
+    )
+    .context("Failed to list git worktrees")?;
+
+    let mut entries = Vec::new();
+    let mut current: Option<WorktreeEntry> = None;
+    for line in output.lines() {
+        if line.is_empty() {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            continue;
+        }
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(path),
+                branch: None,
+                head: None,
+            });
+            continue;
+        }
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+        if let Some(head) = line.strip_prefix("HEAD ") {
+            entry.head = Some(head.to_string());
+        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
+            entry.branch = Some(
+                branch_ref
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch_ref)
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(entry) = current.take() {
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+/// Path of the worktree currently holding `branch`, or `None` if free.
+pub fn worktree_holding_branch(repo_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    Ok(list_worktrees(repo_root)?
+        .into_iter()
+        .find(|entry| entry.branch.as_deref() == Some(branch))
+        .map(|entry| entry.path))
+}
+
+/// Attach a worktree to an existing branch (no `-B`). Git DWIMs
+/// `origin/<branch>` into a local tracking branch when needed.
+pub fn create_worktree_attached(
+    repo_root: &Path,
+    workspace_dir: &Path,
+    branch: &str,
+) -> Result<()> {
+    let repo_root = repo_root.display().to_string();
+    let workspace_dir_arg = workspace_dir.display().to_string();
+    prune_worktrees(&repo_root);
+    run_git(
+        [
+            "-C",
+            repo_root.as_str(),
+            "worktree",
+            "add",
+            workspace_dir_arg.as_str(),
+            branch,
+        ],
+        None,
+    )
+    .map(|_| ())
+    .with_context(|| {
+        format!(
+            "Failed to attach worktree at {} to branch {}",
+            workspace_dir.display(),
+            branch
+        )
+    })
+}
+
 /// Remove worktree dir + prune. Refuses if `workspace_dir == repo_root`
 /// (local-mode mis-routed here would `.trash-` and delete the user's repo).
 pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
@@ -527,18 +662,11 @@ pub fn remove_worktree(repo_root: &Path, workspace_dir: &Path) -> Result<()> {
     let repo_root_str = repo_root.display().to_string();
     if workspace_dir.exists() {
         // Rename to a sibling temp dir (instant O(1) on the same filesystem),
-        // then spawn a background thread for the slow recursive delete so the
-        // archive path returns immediately.
+        // then hand the slow recursive delete to the global serial queue.
+        // Serial — not per-call spawn — so N concurrent archives don't thrash
+        // disk IO deleting node_modules / target in parallel.
         let trash_dir = renamed_to_trash(workspace_dir)?;
-        std::thread::spawn(move || {
-            if let Err(e) = fs::remove_dir_all(&trash_dir) {
-                tracing::warn!(
-                    path = %trash_dir.display(),
-                    error = %e,
-                    "Background worktree cleanup failed"
-                );
-            }
-        });
+        crate::git::trash::queue().enqueue(trash_dir);
     }
     run_git(["-C", repo_root_str.as_str(), "worktree", "prune"], None)
         .map(|_| ())
@@ -1754,5 +1882,133 @@ mod tests {
         let parsed = parse_unmerged_paths(raw);
         assert_eq!(parsed.len(), 1);
         assert!(parsed.contains("valid.txt"));
+    }
+
+    #[test]
+    fn list_worktrees_returns_main_only_for_fresh_repo() {
+        let dir = init_repo();
+        let worktrees = list_worktrees(dir.path()).unwrap();
+        assert_eq!(worktrees.len(), 1);
+        assert_eq!(worktrees[0].branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn list_worktrees_reports_added_branch() {
+        let dir = init_repo();
+        run(dir.path(), &["branch", "feature/foo"]);
+        let wt_path = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("wt-{}", uuid::Uuid::new_v4()));
+        run(
+            dir.path(),
+            &["worktree", "add", wt_path.to_str().unwrap(), "feature/foo"],
+        );
+
+        let worktrees = list_worktrees(dir.path()).unwrap();
+        assert!(worktrees
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some("feature/foo")));
+
+        // Cleanup so the temp parent doesn't leak nested worktree dirs.
+        let _ = remove_worktree(dir.path(), &wt_path);
+    }
+
+    #[test]
+    fn worktree_holding_branch_returns_path_for_checked_out_branch() {
+        let dir = init_repo();
+        run(dir.path(), &["branch", "feature/bar"]);
+        let wt_path = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("wt-{}", uuid::Uuid::new_v4()));
+        run(
+            dir.path(),
+            &["worktree", "add", wt_path.to_str().unwrap(), "feature/bar"],
+        );
+
+        let holder = worktree_holding_branch(dir.path(), "feature/bar").unwrap();
+        assert!(holder.is_some());
+
+        let _ = remove_worktree(dir.path(), &wt_path);
+    }
+
+    #[test]
+    fn worktree_holding_branch_returns_none_for_free_branch() {
+        let dir = init_repo();
+        run(dir.path(), &["branch", "feature/free"]);
+        let holder = worktree_holding_branch(dir.path(), "feature/free").unwrap();
+        assert!(holder.is_none());
+    }
+
+    #[test]
+    fn create_worktree_attached_uses_existing_branch_commit() {
+        let dir = init_repo();
+        run(dir.path(), &["branch", "feature/attach"]);
+        // Add a commit on the branch so we can distinguish it from main.
+        run(dir.path(), &["checkout", "feature/attach"]);
+        std::fs::write(dir.path().join("on-branch.txt"), "x").unwrap();
+        run(dir.path(), &["add", "on-branch.txt"]);
+        run(dir.path(), &["commit", "-m", "on branch"]);
+        let branch_head = run_git(
+            [
+                "-C",
+                dir.path().to_str().unwrap(),
+                "rev-parse",
+                "feature/attach",
+            ],
+            None,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        // Need a clean HEAD that isn't 'feature/attach' for git to allow
+        // creating another worktree on that branch via attach.
+        run(dir.path(), &["checkout", "main"]);
+
+        let wt_path = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("wt-{}", uuid::Uuid::new_v4()));
+        create_worktree_attached(dir.path(), &wt_path, "feature/attach").unwrap();
+
+        let wt_head = run_git(["-C", wt_path.to_str().unwrap(), "rev-parse", "HEAD"], None)
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(
+            wt_head, branch_head,
+            "attached worktree should share the branch's commit"
+        );
+
+        let _ = remove_worktree(dir.path(), &wt_path);
+    }
+
+    #[test]
+    fn create_worktree_attached_fails_when_branch_in_use() {
+        let dir = init_repo();
+        run(dir.path(), &["branch", "feature/used"]);
+        let first = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("wt-{}", uuid::Uuid::new_v4()));
+        create_worktree_attached(dir.path(), &first, "feature/used").unwrap();
+
+        let second = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("wt-{}", uuid::Uuid::new_v4()));
+        let result = create_worktree_attached(dir.path(), &second, "feature/used");
+        assert!(
+            result.is_err(),
+            "second attach to the same branch should fail"
+        );
+
+        let _ = remove_worktree(dir.path(), &first);
     }
 }

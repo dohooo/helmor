@@ -1,6 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ExternalLink, RefreshCcw, X } from "lucide-react";
+import {
+	ChevronDown,
+	RefreshCcw,
+	SquareArrowOutUpRight,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -144,24 +149,20 @@ export function CursorProviderPanel() {
 						onBlur={commitKey}
 						onChange={(event) => setKeyDraft(event.target.value)}
 						placeholder="Cursor API key"
-						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-[13px]"
+						className="h-8 min-w-0 flex-1 border-border/50 bg-muted/20 text-ui"
 					/>
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									type="button"
-									variant="outline"
-									size="icon-sm"
-									aria-label="Get Cursor API key"
-									onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
-								>
-									<ExternalLink className="size-3.5" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>Get API key</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					{!keyDraft && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							aria-label="Get Cursor API key"
+							onClick={() => void openUrl(CURSOR_DASHBOARD_URL)}
+						>
+							Get your API key
+							<SquareArrowOutUpRight className="size-3.5" />
+						</Button>
+					)}
 				</div>
 			</SettingsRow>
 
@@ -240,13 +241,13 @@ function ModelMultiSelect({
 					role="button"
 					tabIndex={0}
 					className={cn(
-						"flex min-h-9 w-[280px] cursor-pointer items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
+						"flex min-h-9 w-[280px] cursor-interactive items-center justify-between gap-2 rounded-lg border border-input bg-muted/20 px-2 py-1 text-left transition-colors",
 						"hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
 					)}
 				>
 					<span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
 						{enabled.length === 0 ? (
-							<span className="px-1 text-[12px] text-muted-foreground">
+							<span className="px-1 text-small text-muted-foreground">
 								{loading ? "Loading…" : "No models picked"}
 							</span>
 						) : (
@@ -254,7 +255,7 @@ function ModelMultiSelect({
 								<Badge
 									key={model.id}
 									variant="outline"
-									className="h-6 gap-1 rounded-md pr-1 text-[11px]"
+									className="h-6 gap-1 rounded-md pr-1 text-mini"
 									onClick={(event) => event.stopPropagation()}
 								>
 									{model.label}
@@ -266,7 +267,7 @@ function ModelMultiSelect({
 											event.stopPropagation();
 											onToggle(model.id);
 										}}
-										className="inline-flex size-4 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+										className="inline-flex size-4 cursor-interactive items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 									>
 										<X className="size-3" strokeWidth={2} />
 									</button>
@@ -303,10 +304,10 @@ function ModelMultiSelect({
 										className="items-start"
 									>
 										<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-											<span className="truncate text-[13px] leading-tight">
+											<span className="truncate text-ui leading-tight">
 												{model.label}
 											</span>
-											<span className="truncate font-mono text-[10px] leading-tight text-muted-foreground">
+											<span className="truncate font-mono text-micro leading-tight text-muted-foreground">
 												{model.id}
 											</span>
 										</div>

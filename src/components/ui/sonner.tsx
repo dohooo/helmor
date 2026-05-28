@@ -10,10 +10,12 @@ import type { CSSProperties } from "react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 const closeButtonClass = [
-	// Position: top-right, flush with the padding.
-	"!absolute !left-auto !right-2 !top-2",
+	// Position: top-right, sitting on the same baseline as the title row.
+	// Toast padding-top is 12px and title line-height ≈ 19.5px (font 13 × 1.5);
+	// `!top-3` (12px) keeps the close glyph centered with the title row.
+	"!absolute !left-auto !right-2 !top-3",
 	// Target size — roomy hit area, small visible glyph.
-	"!size-6 !p-0 !cursor-pointer !rounded-md",
+	"!size-6 !p-0 !cursor-interactive !rounded-md",
 	// Base look: invisible chrome; reveal on hover.
 	"!bg-transparent !border-none !shadow-none !transform-none",
 	"!text-foreground/40 hover:!text-foreground",
@@ -21,6 +23,21 @@ const closeButtonClass = [
 	"transition-colors",
 	// Inner glyph stays compact.
 	"[&>svg]:!size-3.5",
+].join(" ");
+
+const toastClass = [
+	"group",
+	// Sonner ships `align-items: center`, which vertically centers the icon
+	// column against the WHOLE content (title + description), pushing the
+	// icon "below" the title visually. Override to `start` so the icon sits
+	// on the same row as the title's first line — matches how the close
+	// button is positioned and matches every other toast lib.
+	"!items-start",
+	// Tighter top inset (default is 16px), more breathing room between the
+	// title row and the description below it (sonner default content gap is
+	// 2px — bump to 8px for clearer hierarchy).
+	"!pt-3",
+	"[&_[data-content]]:!gap-2",
 ].join(" ");
 
 const errorToastClass = [
@@ -62,7 +79,7 @@ function Toaster({ toastOptions, ...props }: ToasterProps) {
 			toastOptions={{
 				...toastOptions,
 				classNames: {
-					toast: "group",
+					toast: toastClass,
 					closeButton: closeButtonClass,
 					error: errorToastClass,
 					...toastOptions?.classNames,

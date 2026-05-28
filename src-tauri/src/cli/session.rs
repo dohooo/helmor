@@ -10,7 +10,7 @@ use crate::service;
 use crate::sessions;
 use crate::ui_sync::UiMutationEvent;
 
-use super::args::{Cli, ReadState, SessionAction};
+use super::args::{Cli, ReadState, SessionAction, SessionBodyPosition, SessionWindowPosition};
 use super::output;
 use super::refs;
 use super::{notify_ui_event, notify_ui_events};
@@ -52,6 +52,27 @@ pub fn dispatch(action: &SessionAction, cli: &Cli) -> Result<()> {
             permission_mode.as_deref(),
             cli,
         ),
+        SessionAction::Search {
+            query,
+            repo,
+            status,
+            include_archived,
+            limit,
+        } => search(
+            query.as_deref(),
+            repo.as_deref(),
+            status.as_deref(),
+            *include_archived,
+            *limit,
+            cli,
+        ),
+        SessionAction::GetMessages {
+            session,
+            limit,
+            position,
+            body_limit,
+            body_position,
+        } => get_messages(session, *limit, *position, *body_limit, *body_position, cli),
     }
 }
 
@@ -253,4 +274,125 @@ fn update_settings(
     notify_ui_event(UiMutationEvent::SessionListChanged { workspace_id });
     output::print_ok(cli, "Session settings updated");
     Ok(())
+}
+
+fn search(
+    query: Option<&str>,
+    repo_ref: Option<&str>,
+    status: Option<&str>,
+    include_archived: bool,
+    limit: u32,
+    cli: &Cli,
+) -> Result<()> {
+    if query.map(str::trim).filter(|s| !s.is_empty()).is_none()
+        && status.map(str::trim).filter(|s| !s.is_empty()).is_none()
+    {
+        anyhow::bail!("session search: provide --query or --status (or both)");
+    }
+    let repo_name_filter = match repo_ref {
+        Some(reference) => {
+            let repo_id = service::resolve_repo_ref(reference)?;
+            crate::models::repos::list_repositories()?
+                .into_iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.name.to_lowercase())
+        }
+        None => None,
+    };
+
+    let envelope = crate::models::session_inspection::search_sessions(
+        crate::models::session_inspection::SessionSearchOptions {
+            query,
+            repo_name_filter: repo_name_filter.as_deref(),
+            status,
+            include_archived,
+            limit: limit as usize,
+        },
+    )?;
+    output::print(cli, &envelope, |val| {
+        let empty: Vec<Value> = Vec::new();
+        let rows = val
+            .get("sessions")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        if rows.is_empty() {
+            "No matching sessions.".to_string()
+        } else {
+            rows.iter()
+                .map(|r| {
+                    let id = r.get("sessionId").and_then(Value::as_str).unwrap_or("?");
+                    let ws_ref = r.get("workspaceRef").and_then(Value::as_str).unwrap_or("?");
+                    let status = r
+                        .get("sessionStatus")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?");
+                    let title = r
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no title)");
+                    format!("{id}\t{ws_ref}\t{status}\t{title}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    })
+}
+
+fn get_messages(
+    session_id: &str,
+    limit: u32,
+    position: SessionWindowPosition,
+    body_limit: u32,
+    body_position: SessionBodyPosition,
+    cli: &Cli,
+) -> Result<()> {
+    let envelope = crate::models::session_inspection::get_session_messages(
+        session_id,
+        limit as usize,
+        position.into(),
+        body_limit as usize,
+        body_position.into(),
+    )?;
+    output::print(cli, &envelope, |val| {
+        let empty: Vec<Value> = Vec::new();
+        let msgs = val
+            .get("messages")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        if msgs.is_empty() {
+            "No messages.".to_string()
+        } else {
+            msgs.iter()
+                .map(|m| {
+                    let role = m.get("role").and_then(Value::as_str).unwrap_or("?");
+                    let body = m.get("body").and_then(Value::as_str).unwrap_or("");
+                    let has_more = m
+                        .get("bodyHasMore")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let suffix = if has_more { "  …" } else { "" };
+                    format!("[{role}]\n{body}{suffix}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n----\n\n")
+        }
+    })
+}
+
+impl From<SessionWindowPosition> for crate::models::session_inspection::SessionWindowPosition {
+    fn from(value: SessionWindowPosition) -> Self {
+        match value {
+            SessionWindowPosition::Head => Self::Head,
+            SessionWindowPosition::Tail => Self::Tail,
+        }
+    }
+}
+
+impl From<SessionBodyPosition> for crate::models::session_inspection::SessionBodyPosition {
+    fn from(value: SessionBodyPosition) -> Self {
+        match value {
+            SessionBodyPosition::Start => Self::Start,
+            SessionBodyPosition::End => Self::End,
+        }
+    }
 }

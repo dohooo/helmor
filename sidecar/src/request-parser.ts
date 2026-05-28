@@ -60,6 +60,15 @@ function optionalBoolean(
 	return typeof value === "boolean" ? value : undefined;
 }
 
+/** Narrows the raw `claudeThinkingDisplay` field. Anything other than the
+ *  two SDK-recognised values is treated as absent so a stray override
+ *  can't reach the SDK. */
+function parseClaudeThinkingDisplay(
+	value: unknown,
+): "summarized" | "omitted" | undefined {
+	return value === "summarized" || value === "omitted" ? value : undefined;
+}
+
 export function optionalObject(
 	params: Record<string, unknown>,
 	key: string,
@@ -92,6 +101,9 @@ export function parseSendMessageParams(
 		permissionMode: optionalString(params, "permissionMode"),
 		effortLevel: optionalString(params, "effortLevel"),
 		fastMode: optionalBoolean(params, "fastMode"),
+		claudeThinkingDisplay: parseClaudeThinkingDisplay(
+			params.claudeThinkingDisplay,
+		),
 		claudeEnvironment: parseOptionalStringRecord(params, "claudeEnvironment"),
 		agentProxy: parseAgentProxySettings(params, "agentProxy"),
 		additionalDirectories: parseOptionalStringArray(

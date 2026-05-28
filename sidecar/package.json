@@ -5,7 +5,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun run scripts/stage-vendor.ts && bun build --compile src/index.ts --outfile dist/helmor-sidecar",
+		"build": "bun run scripts/stage-vendor.ts && bun run scripts/build.ts",
 		"dev:prepare": "bun run stage-vendor",
 		"stage-vendor": "bun run scripts/stage-vendor.ts",
 		"dev": "bun run src/index.ts",
@@ -13,21 +13,18 @@
 		"typecheck": "bunx tsc --noEmit"
 	},
 	"dependencies": {
-		"@anthropic-ai/claude-agent-sdk": "0.2.126",
-		"@anthropic-ai/claude-code": "2.1.126",
+		"@anthropic-ai/claude-agent-sdk": "0.2.139",
+		"@anthropic-ai/claude-code": "2.1.139",
 		"@cursor/sdk": "^1.0.12",
-		"@openai/codex": "0.128.0"
+		"@earendil-works/pi-agent-core": "^0.75.4",
+		"@earendil-works/pi-ai": "^0.75.4",
+		"@openai/codex": "0.130.0"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3.11",
 		"@types/node": "^25.5.2"
 	},
 	"trustedDependencies": [
-		"@anthropic-ai/claude-code",
-		"sqlite3"
-	],
-	"patchedDependencies": {
-		"sqlite3@5.1.7": "patches/sqlite3@5.1.7.patch",
-		"@cursor/sdk@1.0.12": "patches/@cursor%2Fsdk@1.0.12.patch"
-	}
+		"@anthropic-ai/claude-code"
+	]
 }

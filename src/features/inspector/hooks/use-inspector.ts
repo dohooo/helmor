@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
 	type MouseEvent as ReactMouseEvent,
+	type RefObject,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -8,6 +9,10 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	suspendTerminalFit,
+	suspendTerminalWrites,
+} from "@/components/terminal-output";
 import { loadRepoScripts, type RepoScripts } from "@/lib/api";
 import type { InspectorFileItem } from "@/lib/editor-session";
 import { workspaceChangesQueryOptions } from "@/lib/query-client";
@@ -23,9 +28,11 @@ import {
 	INSPECTOR_SECTION_HEADER_HEIGHT,
 	INSPECTOR_TABS_HEIGHT_STORAGE_KEY,
 	INSPECTOR_TABS_OPEN_STORAGE_KEY,
-	TABS_ANIMATION_MS,
 } from "../layout";
 import { getScriptState, startScript, stopScript } from "../script-store";
+
+// Stable empty-array reference for the `changesQuery.data ?? ...` fallback.
+const EMPTY_CHANGES: InspectorFileItem[] = [];
 
 // Inspector layout model
 // ----------------------
@@ -61,12 +68,53 @@ type ResizeState = {
 	bodyBudget: number;
 	tabsBody: number;
 	actionsOpen: boolean;
+	tabsOpen: boolean;
 };
+
+type SectionRefs = {
+	changes: RefObject<HTMLElement | null>;
+	actions: RefObject<HTMLElement | null>;
+	tabsWrapper: RefObject<HTMLDivElement | null>;
+};
+
+// Inline `style.height` per section instead of CSS variables; CSS-var writes
+// invalidate the whole subtree's computed style under WebKit.
+function writeBodyHeights(
+	refs: SectionRefs,
+	sizes: DerivedSizes,
+	options: { actionsOpen: boolean; tabsOpen: boolean },
+) {
+	const changes = refs.changes.current;
+	if (changes) {
+		changes.style.height = `${INSPECTOR_SECTION_HEADER_HEIGHT + sizes.changesBody}px`;
+	}
+	const actions = refs.actions.current;
+	if (actions) {
+		actions.style.height = options.actionsOpen
+			? `${INSPECTOR_SECTION_HEADER_HEIGHT + sizes.actionsBody}px`
+			: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`;
+	}
+	const tabsWrapper = refs.tabsWrapper.current;
+	if (tabsWrapper) {
+		tabsWrapper.style.height = options.tabsOpen
+			? `${INSPECTOR_SECTION_HEADER_HEIGHT + sizes.tabsBody}px`
+			: `${INSPECTOR_SECTION_HEADER_HEIGHT}px`;
+	}
+}
 
 type UseWorkspaceInspectorSidebarArgs = {
 	workspaceRootPath?: string | null;
 	workspaceId: string | null;
 	repoId: string | null;
+	/** Drives the auto-relocate-to-Run-tab heuristic on workspace switch.
+	 * `null` until the workspace detail query resolves; nothing happens
+	 * while loading. */
+	workspaceState?: string | null;
+	/** Persisted active-run-action id for this workspace (workspace row).
+	 * `null` if the user hasn't picked one yet; the hook falls back to the
+	 * first action returned by `loadRepoScripts`. Cmd+R uses whatever this
+	 * resolves to. */
+	workspaceActiveRunActionId?: string | null;
 };
 
 type DerivedSizes = {
@@ -124,10 +172,32 @@ export function useWorkspaceInspectorSidebar({
 	workspaceRootPath,
 	workspaceId,
 	repoId,
+	workspaceState,
+	workspaceActiveRunActionId,
 }: UseWorkspaceInspectorSidebarArgs) {
 	const [actionsOpen, setActionsOpen] = useState(getInitialActionsOpen);
 	const [tabsOpen, setTabsOpen] = useState(getInitialTabsOpen);
 	const [activeTab, setActiveTab] = useState(getInitialActiveTab);
+
+	// On workspace switch, default the Setup/Run tab to whichever phase the
+	// workspace is currently in: `setup_pending` → "setup" so the user sees
+	// the script auto-running; anything else (`ready`, `archived`) → "run"
+	// because setup is already past. Only overrides when the active tab is
+	// already Setup/Run — leaves Terminal sub-tabs alone. Refs #460.
+	const lastWorkspaceIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!workspaceId) return;
+		if (lastWorkspaceIdRef.current === workspaceId) return;
+		// Wait until the parent has loaded workspaceState so we don't
+		// flip tabs based on a stale `null`.
+		if (workspaceState === null || workspaceState === undefined) return;
+		lastWorkspaceIdRef.current = workspaceId;
+		setActiveTab((current) => {
+			if (current !== "setup" && current !== "run") return current;
+			const target = workspaceState === "setup_pending" ? "setup" : "run";
+			return current === target ? current : target;
+		});
+	}, [workspaceId, workspaceState]);
 
 	const [containerHeight, setContainerHeight] = useState(0);
 	const [storedChangesBody, setStoredChangesBody] = useState(() =>
@@ -137,31 +207,16 @@ export function useWorkspaceInspectorSidebar({
 		getInitialTabsHeight(DEFAULT_TABS_BODY),
 	);
 	const [resizeState, setResizeState] = useState<ResizeState | null>(null);
-	const [isPanelToggleAnimating, setIsPanelToggleAnimating] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement>(null);
-	const tabsWrapperRef = useRef<HTMLDivElement>(null);
+	const changesRef = useRef<HTMLElement>(null);
 	const actionsRef = useRef<HTMLElement>(null);
-	const panelToggleTimerRef = useRef<number | null>(null);
-
-	const beginPanelToggleAnimation = useCallback(() => {
-		if (panelToggleTimerRef.current !== null) {
-			window.clearTimeout(panelToggleTimerRef.current);
-		}
-		setIsPanelToggleAnimating(true);
-		panelToggleTimerRef.current = window.setTimeout(() => {
-			panelToggleTimerRef.current = null;
-			setIsPanelToggleAnimating(false);
-		}, TABS_ANIMATION_MS + 50);
-	}, []);
-
-	useEffect(() => {
-		return () => {
-			if (panelToggleTimerRef.current !== null) {
-				window.clearTimeout(panelToggleTimerRef.current);
-			}
-		};
-	}, []);
+	const tabsWrapperRef = useRef<HTMLDivElement>(null);
+	const sectionRefsRef = useRef<SectionRefs>({
+		changes: changesRef,
+		actions: actionsRef,
+		tabsWrapper: tabsWrapperRef,
+	});
 
 	useLayoutEffect(() => {
 		const element = containerRef.current;
@@ -207,6 +262,18 @@ export function useWorkspaceInspectorSidebar({
 			}),
 		[bodyBudget, actionsOpen, tabsOpen, storedChangesBody, storedTabsBody],
 	);
+
+	// Gate so the non-drag effect doesn't clobber the live ref-written
+	// heights during mousemove.
+	const isResizingRef = useRef(false);
+	useLayoutEffect(() => {
+		if (isResizingRef.current) return;
+		writeBodyHeights(
+			sectionRefsRef.current,
+			{ changesBody, actionsBody, tabsBody },
+			{ actionsOpen, tabsOpen },
+		);
+	}, [changesBody, actionsBody, tabsBody, actionsOpen, tabsOpen]);
 
 	useEffect(() => {
 		try {
@@ -286,30 +353,49 @@ export function useWorkspaceInspectorSidebar({
 
 	// Cmd+R toggle: idle/exited → start; running → stop. Tab visibility
 	// unchanged — the user can open the Run tab later to replay output.
+	//
+	// With multiple run actions, the shortcut always targets the *active*
+	// one (the dropdown's checked entry). Falls back to the first action
+	// when the workspace hasn't pinned an active id yet, or when the pinned
+	// id no longer exists (e.g. user deleted it from settings).
+	const runActions = repoScripts?.runActions ?? [];
+	const resolvedActiveId =
+		runActions.find((a) => a.id === workspaceActiveRunActionId)?.id ??
+		runActions[0]?.id ??
+		null;
 	useEffect(() => {
 		const handler = () => {
 			if (!repoId || !workspaceId) return;
-			if (!repoScripts?.runScript?.trim()) return;
-			const state = getScriptState(workspaceId, "run");
+			if (!resolvedActiveId) return;
+			const state = getScriptState(workspaceId, "run", resolvedActiveId);
 			if (state?.status === "running") {
-				stopScript(repoId, "run", workspaceId);
+				stopScript(repoId, "run", workspaceId, resolvedActiveId);
 			} else {
-				startScript(repoId, "run", workspaceId);
+				startScript(repoId, "run", workspaceId, resolvedActiveId);
 			}
 		};
 		window.addEventListener("helmor:run-script", handler);
 		return () => window.removeEventListener("helmor:run-script", handler);
-	}, [repoId, workspaceId, repoScripts]);
+	}, [repoId, workspaceId, resolvedActiveId]);
 
 	const isResizing = resizeState !== null;
 	const isActionsResizing = resizeState?.target === RESIZE_TARGET_ACTIONS;
 	const isTabsResizing = resizeState?.target === RESIZE_TARGET_TABS;
 
+	// Skip while the worktree isn't fully materialised. During
+	// `Initializing`, `git worktree add` is mid-checkout: `git diff`
+	// against the half-populated tree returns every tracked file as a
+	// phantom delete, and the inspector's auto-expanded tree stalls the
+	// JS thread for seconds. `Archived` has no worktree at all.
+	const changesQueryEnabled =
+		!!workspaceRootPath &&
+		workspaceState !== "initializing" &&
+		workspaceState !== "archived";
 	const changesQuery = useQuery({
-		...workspaceChangesQueryOptions(workspaceRootPath ?? ""),
-		enabled: !!workspaceRootPath,
+		...workspaceChangesQueryOptions(workspaceRootPath ?? "", workspaceId),
+		enabled: changesQueryEnabled,
 	});
-	const changes: InspectorFileItem[] = changesQuery.data?.items ?? [];
+	const changes: InspectorFileItem[] = changesQuery.data ?? EMPTY_CHANGES;
 
 	const prevChangesRef = useRef<Map<string, string> | null>(null);
 	const prevRootPathRef = useRef(workspaceRootPath);
@@ -352,65 +438,76 @@ export function useWorkspaceInspectorSidebar({
 		prevChangesRef.current = nextChangesSnapshot;
 	}, [nextChangesSnapshot]);
 
-	useEffect(() => {
-		const prefetched = changesQuery.data?.prefetched;
-		if (!prefetched?.length) {
-			return;
-		}
-		void import("@/lib/monaco-runtime").then(({ preWarmFileContents }) => {
-			preWarmFileContents(prefetched);
-		});
-	}, [changesQuery.data]);
-
 	const handleToggleTabs = useCallback(() => {
-		beginPanelToggleAnimation();
 		setTabsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	const handleToggleActions = useCallback(() => {
-		beginPanelToggleAnimation();
 		setActionsOpen((open) => !open);
-	}, [beginPanelToggleAnimation]);
+	}, []);
 
 	useEffect(() => {
 		if (!resizeState) {
 			return;
 		}
 
+		isResizingRef.current = true;
+		// Vertical section resize can pause terminal work; horizontal shell
+		// resize stays live so the sidebar never appears frozen.
+		const releaseFitSuspend = suspendTerminalFit();
+		const releaseWriteSuspend = suspendTerminalWrites();
+
+		const captured = resizeState;
+		const refs = sectionRefsRef.current;
+
 		let pendingMove: globalThis.MouseEvent | null = null;
 		let animationFrameId: number | null = null;
+		let lastStoredChanges: number = captured.initialChangesBody;
+		let lastStoredTabs: number = captured.initialTabsBody;
+
 		const flush = () => {
 			animationFrameId = null;
 			const event = pendingMove;
 			pendingMove = null;
 			if (!event) return;
-			const deltaY = event.clientY - resizeState.pointerY;
+			const deltaY = event.clientY - captured.pointerY;
 
-			if (resizeState.target === RESIZE_TARGET_ACTIONS) {
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
 				// Drag down → changes grows, actions auto-shrinks.
 				const max = Math.max(
 					MIN_CHANGES_BODY,
-					resizeState.bodyBudget - resizeState.tabsBody - MIN_ACTIONS_BODY,
+					captured.bodyBudget - captured.tabsBody - MIN_ACTIONS_BODY,
 				);
-				const next = clamp(
-					resizeState.initialChangesBody + deltaY,
+				lastStoredChanges = clamp(
+					captured.initialChangesBody + deltaY,
 					MIN_CHANGES_BODY,
 					max,
 				);
-				setStoredChangesBody(next);
-				return;
+			} else {
+				// Drag down → tabs shrinks, upper region (actions or changes) grows.
+				const upperMin =
+					MIN_CHANGES_BODY + (captured.actionsOpen ? MIN_ACTIONS_BODY : 0);
+				const max = Math.max(MIN_TABS_BODY, captured.bodyBudget - upperMin);
+				lastStoredTabs = clamp(
+					captured.initialTabsBody - deltaY,
+					MIN_TABS_BODY,
+					max,
+				);
 			}
 
-			// Drag down → tabs shrinks, upper region (actions or changes) grows.
-			const upperMin =
-				MIN_CHANGES_BODY + (resizeState.actionsOpen ? MIN_ACTIONS_BODY : 0);
-			const max = Math.max(MIN_TABS_BODY, resizeState.bodyBudget - upperMin);
-			const next = clamp(
-				resizeState.initialTabsBody - deltaY,
-				MIN_TABS_BODY,
-				max,
-			);
-			setStoredTabsBody(next);
+			// Drag-time inline writes — bypass React render + CSS-var
+			// invalidation.
+			const sizes = deriveSizes({
+				bodyBudget: captured.bodyBudget,
+				actionsOpen: captured.actionsOpen,
+				tabsOpen: captured.tabsOpen,
+				storedChangesBody: lastStoredChanges,
+				storedTabsBody: lastStoredTabs,
+			});
+			writeBodyHeights(refs, sizes, {
+				actionsOpen: captured.actionsOpen,
+				tabsOpen: captured.tabsOpen,
+			});
 		};
 
 		const handleMouseMove = (event: globalThis.MouseEvent) => {
@@ -426,6 +523,18 @@ export function useWorkspaceInspectorSidebar({
 				animationFrameId = null;
 			}
 			flush();
+			// Commit the final value back to React state for localStorage
+			// persistence and any external consumers. Same-value setState is a no-op.
+			isResizingRef.current = false;
+			if (captured.target === RESIZE_TARGET_ACTIONS) {
+				if (lastStoredChanges !== captured.initialChangesBody) {
+					setStoredChangesBody(lastStoredChanges);
+				}
+			} else {
+				if (lastStoredTabs !== captured.initialTabsBody) {
+					setStoredTabsBody(lastStoredTabs);
+				}
+			}
 			setResizeState(null);
 		};
 
@@ -434,6 +543,17 @@ export function useWorkspaceInspectorSidebar({
 		document.body.style.cursor = "ns-resize";
 		document.body.style.userSelect = "none";
 
+		// Hit-test absorber so WebKit's `:hover` recompute doesn't cascade
+		// through the Changes subtree on every mousemove.
+		const overlay = document.createElement("div");
+		overlay.style.position = "fixed";
+		overlay.style.inset = "0";
+		overlay.style.zIndex = "2147483647";
+		overlay.style.cursor = "ns-resize";
+		overlay.setAttribute("data-helmor-resize-overlay", "");
+		overlay.setAttribute("aria-hidden", "true");
+		document.body.appendChild(overlay);
+
 		window.addEventListener("mousemove", handleMouseMove);
 		window.addEventListener("mouseup", handleMouseUp);
 
@@ -441,8 +561,12 @@ export function useWorkspaceInspectorSidebar({
 			if (animationFrameId !== null) {
 				window.cancelAnimationFrame(animationFrameId);
 			}
+			isResizingRef.current = false;
+			releaseFitSuspend();
+			releaseWriteSuspend();
 			document.body.style.cursor = previousCursor;
 			document.body.style.userSelect = previousUserSelect;
+			overlay.remove();
 			window.removeEventListener("mousemove", handleMouseMove);
 			window.removeEventListener("mouseup", handleMouseUp);
 		};
@@ -460,31 +584,36 @@ export function useWorkspaceInspectorSidebar({
 				bodyBudget,
 				tabsBody,
 				actionsOpen,
+				tabsOpen,
 			});
 		},
-		[storedChangesBody, storedTabsBody, bodyBudget, tabsBody, actionsOpen],
+		[
+			storedChangesBody,
+			storedTabsBody,
+			bodyBudget,
+			tabsBody,
+			actionsOpen,
+			tabsOpen,
+		],
 	);
 
 	return {
-		actionsHeight: actionsBody,
 		actionsOpen,
 		actionsRef,
 		activeTab,
 		changes,
-		changesHeight: changesBody,
+		changesRef,
 		containerRef,
 		flashingPaths,
 		handleResizeStart,
 		handleToggleActions,
 		handleToggleTabs,
 		isActionsResizing,
-		isPanelToggleAnimating,
 		isResizing,
 		isTabsResizing,
 		repoScripts,
 		scriptsLoaded,
 		setActiveTab,
-		tabsBodyHeight: tabsBody,
 		tabsOpen,
 		tabsWrapperRef,
 	};

@@ -12,16 +12,26 @@ import type { UserInputResponseHandler } from "@/features/composer/user-input";
 import { WorkspacePanelContainer } from "@/features/panel/container";
 import { FileLinkProvider } from "@/features/panel/message-components/file-link-context";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
-import type { ChangeRequestInfo } from "@/lib/api";
+import {
+	type ActiveStreamSummary,
+	type ChangeRequestInfo,
+	updateSessionSettings,
+} from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
 import { insertRequestMatchesComposer } from "@/lib/composer-insert";
 import { hasUnresolvedPlanReview } from "@/lib/plan-review";
 import { sessionThreadMessagesQueryOptions } from "@/lib/query-client";
 import { useSettings } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
-import { EMPTY_QUEUE, useSubmitQueue } from "@/lib/use-submit-queue";
+import {
+	useSubmitQueueApi,
+	useSubmitQueueForSession,
+} from "@/lib/use-submit-queue";
 import { cn } from "@/lib/utils";
-import { getComposerContextKey } from "@/lib/workspace-helpers";
+import {
+	getComposerContextKey,
+	parseSessionIdFromContextKey,
+} from "@/lib/workspace-helpers";
 import {
 	type ComposerSubmitPayload,
 	useConversationStreaming,
@@ -78,6 +88,10 @@ type WorkspaceConversationContainerProps = {
 		sessionWorkspaceMap: Map<string, string>,
 		interactionCounts: Map<string, number>,
 	) => void;
+	/** Backend-truth active-streams snapshot from App's
+	 *  `activeStreamsQuery`. Survives this container's unmount/remount,
+	 *  so follow-up routing/drain stays correct across start ↔ chat. */
+	activeStreams: readonly ActiveStreamSummary[];
 	busySessionIds?: Set<string>;
 	stoppableSessionIds?: Set<string>;
 	interactionRequiredSessionIds?: Set<string>;
@@ -141,6 +155,10 @@ type WorkspaceConversationContainerProps = {
 	contextPanelOpen?: boolean;
 	onToggleContextPanel?: () => void;
 	composerStartSubmitMenu?: boolean;
+	/** Surface-specific focus scope forwarded to the composer. `start-composer`
+	 *  on the workspace-start page, `workspace-composer` everywhere else.
+	 *  See `WorkspaceComposerContainerProps.focusScope`. */
+	composerFocusScope?: "start-composer" | "workspace-composer";
 	/** Pre-workspace linked-directories controller. Forwarded to the
 	 *  composer; see `WorkspaceComposerContainerProps.linkedDirectoriesController`.
 	 *  Used by the start-page composer to collect /add-dir picks before any
@@ -162,6 +180,7 @@ export const WorkspaceConversationContainer = memo(
 		onSelectSession,
 		onResolveDisplayedSession,
 		onInteractionSessionsChange,
+		activeStreams,
 		busySessionIds,
 		stoppableSessionIds,
 		interactionRequiredSessionIds,
@@ -193,6 +212,7 @@ export const WorkspaceConversationContainer = memo(
 		contextPanelOpen = false,
 		onToggleContextPanel,
 		composerStartSubmitMenu = false,
+		composerFocusScope = "workspace-composer",
 		composerLinkedDirectoriesController = null,
 	}: WorkspaceConversationContainerProps) {
 		const [composerModelSelections, setComposerModelSelections] = useState<
@@ -216,11 +236,11 @@ export const WorkspaceConversationContainer = memo(
 			selectedWorkspaceId !== displayedWorkspaceId ||
 			selectedSessionId !== displayedSessionId;
 
-		// App-level follow-up queue. Survives session / workspace
-		// switches because this container is mounted once in the App
-		// tree (not keyed by session id).
+		// Submit queue is a module-level Zustand singleton — survives this
+		// container's unmount (the start-page ↔ workspace toggle renders two
+		// independent React subtrees, and the queue must outlive both).
 		const { settings } = useSettings();
-		const { queuesBySessionId, api: submitQueueApi } = useSubmitQueue();
+		const submitQueueApi = useSubmitQueueApi();
 
 		const {
 			activeSendError,
@@ -230,12 +250,14 @@ export const WorkspaceConversationContainer = memo(
 			handleStopStream,
 			handleSteerQueued,
 			handleRemoveQueued,
+			handleEditQueued,
 			userInputResponsePending,
 			isSending,
 			pendingUserInput,
 			pendingPermissions,
 			restoreCustomTags,
 			restoreDraft,
+			restoreEditorState,
 			restoreFiles,
 			restoreImages,
 			restoreNonce,
@@ -250,14 +272,13 @@ export const WorkspaceConversationContainer = memo(
 			selectionPending,
 			followUpBehavior: settings.followUpBehavior,
 			submitQueue: submitQueueApi,
+			activeStreams,
 			onInteractionSessionsChange,
 			onSessionCompleted,
 			onSessionAborted,
 		});
 
-		const queueItems = displayedSessionId
-			? (queuesBySessionId.get(displayedSessionId) ?? EMPTY_QUEUE)
-			: EMPTY_QUEUE;
+		const queueItems = useSubmitQueueForSession(displayedSessionId);
 
 		// Derived from thread messages — survives refresh / session switch.
 		const threadQuery = useQuery({
@@ -335,14 +356,38 @@ export const WorkspaceConversationContainer = memo(
 			);
 		}, [pendingCreatedWorkspaceSubmit]);
 
+		// Composer picks are persisted to `sessions` immediately so they
+		// survive a conversation-container unmount (e.g. switching to start
+		// page and back). Memory cache is kept for optimistic UI. Only
+		// `session:*` contextKeys map to a session row — start-page /
+		// workspace / global keys are memory-only.
+		const persistSessionSetting = useCallback(
+			(
+				contextKey: string,
+				patch: Parameters<typeof updateSessionSettings>[1],
+			) => {
+				const sessionId = parseSessionIdFromContextKey(contextKey);
+				if (!sessionId) return;
+				void updateSessionSettings(sessionId, patch).catch((error) => {
+					console.error(
+						"Failed to persist composer setting",
+						{ sessionId, patch },
+						error,
+					);
+				});
+			},
+			[],
+		);
+
 		const handleSelectModel = useCallback(
 			(contextKey: string, modelId: string) => {
 				setComposerModelSelections((current) => ({
 					...current,
 					[contextKey]: modelId,
 				}));
+				persistSessionSetting(contextKey, { model: modelId });
 			},
-			[],
+			[persistSessionSetting],
 		);
 
 		const handleSelectEffort = useCallback(
@@ -351,8 +396,9 @@ export const WorkspaceConversationContainer = memo(
 					...current,
 					[contextKey]: level,
 				}));
+				persistSessionSetting(contextKey, { effortLevel: level });
 			},
-			[],
+			[persistSessionSetting],
 		);
 
 		const handleChangePermissionMode = useCallback(
@@ -361,8 +407,9 @@ export const WorkspaceConversationContainer = memo(
 					...current,
 					[contextKey]: mode,
 				}));
+				persistSessionSetting(contextKey, { permissionMode: mode });
 			},
-			[],
+			[persistSessionSetting],
 		);
 
 		const handleChangeFastMode = useCallback(
@@ -371,8 +418,9 @@ export const WorkspaceConversationContainer = memo(
 					...current,
 					[contextKey]: enabled,
 				}));
+				persistSessionSetting(contextKey, { fastMode: enabled });
 			},
-			[],
+			[persistSessionSetting],
 		);
 
 		const handleComposerSubmitWrapper = useCallback(
@@ -536,6 +584,7 @@ export const WorkspaceConversationContainer = memo(
 						restoreImages={restoreImages}
 						restoreFiles={restoreFiles}
 						restoreCustomTags={restoreCustomTags}
+						restoreEditorState={restoreEditorState}
 						restoreNonce={restoreNonce}
 						pendingUserInput={pendingUserInput}
 						onUserInputResponse={userInputResponse}
@@ -562,9 +611,11 @@ export const WorkspaceConversationContainer = memo(
 						queueItems={queueItems}
 						onSteerQueued={handleSteerQueued}
 						onRemoveQueued={handleRemoveQueued}
+						onEditQueued={handleEditQueued}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={composerStartSubmitMenu}
+						focusScope={composerFocusScope}
 						linkedDirectoriesController={composerLinkedDirectoriesController}
 					/>
 				</div>

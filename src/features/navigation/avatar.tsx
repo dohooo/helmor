@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 import { Avatar, AvatarBadge, AvatarImage } from "@/components/ui/avatar";
 import { ShineBorder } from "@/components/ui/shine-border";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,7 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	title,
 	className,
 	fallbackClassName,
+	fallbackIcon,
 	badgeClassName,
 	badgeAriaLabel,
 	isRunning,
@@ -48,6 +49,10 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 	title: string;
 	className?: string;
 	fallbackClassName?: string;
+	/** Optional node rendered in place of the initials fallback. Used by
+	 *  workspace flavors that have no real repo (e.g. chat-mode) where
+	 *  a lucide icon reads better than a synthetic 2-letter monogram. */
+	fallbackIcon?: ReactNode;
 	badgeClassName?: string | null;
 	badgeAriaLabel?: string;
 	isRunning?: boolean;
@@ -93,12 +98,12 @@ export const WorkspaceAvatar = memo(function WorkspaceAvatar({
 				<span
 					data-slot="avatar-fallback"
 					className={cn(
-						"grid size-full place-items-center bg-muted text-center text-[7px] font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
+						"grid size-full place-items-center bg-muted text-center text-nano font-semibold leading-none uppercase tracking-[0.02em] text-muted-foreground",
 						fallbackClassName,
 						"rounded-full",
 					)}
 				>
-					<span className="translate-y-px">{fallback}</span>
+					{fallbackIcon ?? <span className="translate-y-px">{fallback}</span>}
 				</span>
 			) : null}
 			{isRunning ? (

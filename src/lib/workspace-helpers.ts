@@ -71,6 +71,11 @@ export function flattenWorkspaceRowsForNavigation(
 	return [...groups.flatMap((group) => group.rows), ...archivedRows];
 }
 
+/**
+ * Pick a replacement focus after removal. Group-aware: stay in the same
+ * bucket → next-non-empty group → archived. Callers MUST pass current/next
+ * in the same visual layout (`projectVisualSidebar` enforces this).
+ */
 export function findReplacementWorkspaceIdAfterRemoval({
 	currentGroups,
 	currentArchivedRows,
@@ -84,27 +89,65 @@ export function findReplacementWorkspaceIdAfterRemoval({
 	nextArchivedRows: WorkspaceRow[];
 	removedWorkspaceId: string;
 }): string | null {
-	const currentRows = flattenWorkspaceRowsForNavigation(
+	const removed = locateInLayout(
 		currentGroups,
 		currentArchivedRows,
-	);
-	const removedIndex = currentRows.findIndex(
-		(row) => row.id === removedWorkspaceId,
-	);
-	const nextRows = flattenWorkspaceRowsForNavigation(
-		nextGroups,
-		nextArchivedRows,
+		removedWorkspaceId,
 	);
 
-	if (nextRows.length === 0) {
-		return null;
+	// (1) Stay inside the removed workspace's bucket when it still has
+	// siblings.
+	if (removed.kind === "group") {
+		const nextSameGroup = nextGroups.find((g) => g.id === removed.groupId);
+		const rows = nextSameGroup?.rows ?? [];
+		if (rows.length > 0) {
+			return (
+				rows[removed.indexInGroup]?.id ??
+				rows[removed.indexInGroup - 1]?.id ??
+				rows[rows.length - 1]?.id ??
+				null
+			);
+		}
+	} else if (removed.kind === "archived") {
+		if (nextArchivedRows.length > 0) {
+			return (
+				nextArchivedRows[removed.indexInArchived]?.id ??
+				nextArchivedRows[removed.indexInArchived - 1]?.id ??
+				nextArchivedRows[nextArchivedRows.length - 1]?.id ??
+				null
+			);
+		}
 	}
 
-	if (removedIndex === -1) {
-		return nextRows[0]?.id ?? null;
+	// (2) Bucket exhausted — first non-empty group, then archived.
+	for (const group of nextGroups) {
+		const firstId = group.rows[0]?.id;
+		if (firstId) return firstId;
 	}
+	return nextArchivedRows[0]?.id ?? null;
+}
 
-	return nextRows[removedIndex]?.id ?? nextRows[removedIndex - 1]?.id ?? null;
+type WorkspaceLayoutLocation =
+	| { kind: "group"; groupId: string; indexInGroup: number }
+	| { kind: "archived"; indexInArchived: number }
+	| { kind: "none" };
+
+function locateInLayout(
+	groups: WorkspaceGroup[],
+	archivedRows: WorkspaceRow[],
+	id: string,
+): WorkspaceLayoutLocation {
+	for (const group of groups) {
+		const indexInGroup = group.rows.findIndex((r) => r.id === id);
+		if (indexInGroup !== -1) {
+			return { kind: "group", groupId: group.id, indexInGroup };
+		}
+	}
+	const indexInArchived = archivedRows.findIndex((r) => r.id === id);
+	if (indexInArchived !== -1) {
+		return { kind: "archived", indexInArchived };
+	}
+	return { kind: "none" };
 }
 
 export function hasWorkspaceId(
@@ -164,22 +207,39 @@ export function workspaceGroupIdFromStatus(
 	}
 }
 
+export function workspaceStatusFromGroupId(
+	groupId: string,
+): WorkspaceStatus | null {
+	switch (groupId) {
+		case "done":
+			return "done";
+		case "review":
+			return "review";
+		case "progress":
+			return "in-progress";
+		case "backlog":
+			return "backlog";
+		case "canceled":
+			return "canceled";
+		default:
+			return null;
+	}
+}
+
 /**
- * Insert `row` into `rows` preserving `createdAt DESC` order (matching the
- * backend's `ORDER BY datetime(created_at) DESC` for non-archived groups).
- * Used for optimistic insertions — placing the row in its final spot avoids
- * the reorder flicker that happens when the refetch returns and re-sorts.
- *
- * Rows without a `createdAt` are treated as newest (sort to the front), so
- * freshly-created workspaces still land at the top as before.
+ * Insert `row` into `rows` preserving the backend's sidebar order for
+ * non-archived groups: `display_order ASC, created_at DESC`. Mirrors
+ * `load_workspace_records` so optimistic inserts land in their final spot
+ * and the refetch doesn't visibly reshuffle. Missing `displayOrder` is
+ * treated as 0; missing `createdAt` as newest.
  */
-export function insertRowByCreatedAtDesc(
+export function insertRowBySidebarOrder(
 	rows: WorkspaceRow[],
 	row: WorkspaceRow,
 ): WorkspaceRow[] {
-	const key = (r: WorkspaceRow): string => r.createdAt ?? "\uFFFF";
-	const incoming = key(row);
-	const index = rows.findIndex((existing) => key(existing) < incoming);
+	const index = rows.findIndex(
+		(existing) => compareSidebarOrder(existing, row) > 0,
+	);
 	if (index === -1) return [...rows, row];
 	return [...rows.slice(0, index), row, ...rows.slice(index)];
 }
@@ -187,7 +247,7 @@ export function insertRowByCreatedAtDesc(
 /**
  * Move a workspace row from its current sidebar group to the group implied by
  * `nextStatus`. Preserves the row's existing fields (createdAt, pinnedAt, …)
- * and uses `insertRowByCreatedAtDesc` so the optimistic position matches the
+ * and uses `insertRowBySidebarOrder` so the optimistic position matches the
  * spot the server will place the row on refetch — no reorder flicker.
  *
  * Returns `groups` unchanged when the workspace isn't in any live group
@@ -219,9 +279,246 @@ export function moveWorkspaceToGroup(
 
 	return stripped.map((group) =>
 		group.id === targetGroupId
-			? { ...group, rows: insertRowByCreatedAtDesc(group.rows, updatedRow) }
+			? { ...group, rows: insertRowBySidebarOrder(group.rows, updatedRow) }
 			: group,
 	);
+}
+
+const SIDEBAR_ORDER_STEP = 1024;
+
+/**
+ * Optimistic mirror of `move_repository_in_sidebar`. Rewrites each row's
+ * `repoSidebarOrder` so `regroupByRepo` re-orders buckets immediately.
+ *
+ * `repoOrder` must match what the user visually sees — i.e. repos sorted
+ * by `min(repoSidebarOrder)` ASC, same as `regroupByRepo` and the
+ * backend. Walking `groups[].rows[]` directly would yield the workspace
+ * display-order sequence instead, which causes a snap-on-refetch.
+ */
+export function applyRepoReorder(
+	groups: WorkspaceGroup[] | undefined,
+	movingRepoId: string,
+	beforeRepoId: string | null,
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+	if (beforeRepoId === movingRepoId) return groups;
+
+	const firstSeen = new Map<string, number>();
+	const minRepoOrder = new Map<string, number>();
+	let seen = 0;
+	for (const group of groups) {
+		for (const row of group.rows) {
+			const id = row.repoId;
+			if (!id) continue;
+			if (!firstSeen.has(id)) firstSeen.set(id, seen++);
+			const candidate = row.repoSidebarOrder ?? 0;
+			if (candidate <= 0) continue;
+			const current = minRepoOrder.get(id);
+			if (current === undefined || candidate < current) {
+				minRepoOrder.set(id, candidate);
+			}
+		}
+	}
+	if (!firstSeen.has(movingRepoId)) return groups;
+
+	const repoOrder = Array.from(firstSeen.keys()).sort((a, b) => {
+		const left = minRepoOrder.get(a) ?? Number.MAX_SAFE_INTEGER;
+		const right = minRepoOrder.get(b) ?? Number.MAX_SAFE_INTEGER;
+		if (left !== right) return left - right;
+		return (firstSeen.get(a) ?? 0) - (firstSeen.get(b) ?? 0);
+	});
+
+	const withoutMoving = repoOrder.filter((id) => id !== movingRepoId);
+	const insertIndex =
+		beforeRepoId === null
+			? withoutMoving.length
+			: withoutMoving.indexOf(beforeRepoId);
+	if (beforeRepoId !== null && insertIndex === -1) return groups;
+	const boundedInsertIndex =
+		insertIndex === -1 ? withoutMoving.length : insertIndex;
+	withoutMoving.splice(boundedInsertIndex, 0, movingRepoId);
+
+	const nextOrderByRepo = new Map(
+		withoutMoving.map((id, idx) => [id, (idx + 1) * SIDEBAR_ORDER_STEP]),
+	);
+
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const nextOrder = row.repoId
+				? nextOrderByRepo.get(row.repoId)
+				: undefined;
+			return nextOrder === undefined
+				? row
+				: { ...row, repoSidebarOrder: nextOrder };
+		}),
+	}));
+}
+
+/**
+ * Optimistic mirror of `move_workspace_in_sidebar`. Targets:
+ *   - `"pinned"` — sets `pinnedAt`, keeps status
+ *   - status lane — clears `pinnedAt`, sets status
+ *   - `"repo:<id>"` — clears `pinnedAt`, keeps status
+ * Computes a midpoint `displayOrder` so the row lands correctly in
+ * either grouping mode.
+ */
+export function reorderWorkspaceInSidebar(
+	groups: WorkspaceGroup[] | undefined,
+	workspaceId: string,
+	targetGroupId: string,
+	beforeWorkspaceId: string | null,
+): WorkspaceGroup[] | undefined {
+	if (!groups) return groups;
+
+	let original: WorkspaceRow | null = null;
+	const stripped = groups.map((group) => {
+		const idx = group.rows.findIndex((row) => row.id === workspaceId);
+		if (idx === -1) return group;
+		original = group.rows[idx]!;
+		return {
+			...group,
+			rows: group.rows.filter((_, i) => i !== idx),
+		};
+	});
+	if (!original) return groups;
+	const sourceRow: WorkspaceRow = original;
+
+	const mutation = resolveTargetGroup(targetGroupId, sourceRow);
+	if (!mutation) return groups;
+	const updatedRow: WorkspaceRow = {
+		...sourceRow,
+		status: mutation.status ?? sourceRow.status,
+		pinnedAt: mutation.pinnedAt,
+	};
+
+	// Chat workspaces have their own bucket — status/pinned don't apply.
+	// They reorder inside "chats" exclusively.
+	const homeGroupId =
+		sourceRow.mode === "chat"
+			? "chats"
+			: workspaceGroupIdFromStatus(updatedRow.status, updatedRow.pinnedAt);
+
+	// Neighbour scope must match the backend — for a repo target that's
+	// every row of the repo (cross-status), not just the row's own lane.
+	const neighbours = collectNeighboursForTarget(
+		targetGroupId,
+		updatedRow,
+		stripped,
+	);
+	const beforeIndex =
+		beforeWorkspaceId === null
+			? -1
+			: neighbours.findIndex((row) => row.id === beforeWorkspaceId);
+
+	updatedRow.displayOrder = pickInsertionOrder(neighbours, beforeIndex);
+
+	// Insert back into the row's status group; `regroupByRepo` re-buckets
+	// for the repo view using `displayOrder` as the sort key.
+	return stripped.map((group) =>
+		group.id === homeGroupId
+			? {
+					...group,
+					rows: [...group.rows, updatedRow].sort(compareSidebarOrder),
+				}
+			: group,
+	);
+}
+
+/** Mirrors the backend's `MoveTarget` scopes (incl. the chats bucket). */
+function collectNeighboursForTarget(
+	targetGroupId: string,
+	row: WorkspaceRow,
+	groups: WorkspaceGroup[],
+): WorkspaceRow[] {
+	if (targetGroupId === "pinned") {
+		const pinned = groups.find((g) => g.id === "pinned");
+		return [...(pinned?.rows ?? [])].sort(compareSidebarOrder);
+	}
+	if (targetGroupId === "chats") {
+		const chats = groups.find((g) => g.id === "chats");
+		return [...(chats?.rows ?? [])].sort(compareSidebarOrder);
+	}
+	if (targetGroupId.startsWith("repo:")) {
+		const repoId = targetGroupId.slice("repo:".length);
+		return groups
+			.flatMap((g) => g.rows)
+			.filter(
+				(r) => r.repoId === repoId && !r.pinnedAt && r.state !== "archived",
+			)
+			.sort(compareSidebarOrder);
+	}
+	const homeId = workspaceGroupIdFromStatus(row.status, row.pinnedAt);
+	const homeGroup = groups.find((g) => g.id === homeId);
+	return [...(homeGroup?.rows ?? [])].sort(compareSidebarOrder);
+}
+
+function pickInsertionOrder(
+	sorted: WorkspaceRow[],
+	beforeIndex: number,
+): number {
+	if (beforeIndex === -1) {
+		const last = sorted[sorted.length - 1];
+		return (last?.displayOrder ?? 0) + SIDEBAR_ORDER_STEP;
+	}
+	if (beforeIndex === 0) {
+		const first = sorted[0];
+		const firstOrder = first?.displayOrder ?? SIDEBAR_ORDER_STEP;
+		return firstOrder > 1 ? Math.max(1, Math.floor(firstOrder / 2)) : 1;
+	}
+	const prev = sorted[beforeIndex - 1];
+	const next = sorted[beforeIndex];
+	const prevOrder = prev?.displayOrder ?? 0;
+	const nextOrder = next?.displayOrder ?? prevOrder + SIDEBAR_ORDER_STEP;
+	if (nextOrder - prevOrder >= 2) {
+		return prevOrder + Math.floor((nextOrder - prevOrder) / 2);
+	}
+	// Gap exhausted — squeeze in; backend rebalances on commit.
+	return prevOrder + 1;
+}
+
+function compareSidebarOrder(left: WorkspaceRow, right: WorkspaceRow) {
+	const leftOrder = left.displayOrder ?? 0;
+	const rightOrder = right.displayOrder ?? 0;
+	if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+	const leftCreated = Date.parse(left.createdAt ?? "") || 0;
+	const rightCreated = Date.parse(right.createdAt ?? "") || 0;
+	return rightCreated - leftCreated;
+}
+
+type TargetMutation = {
+	status: WorkspaceRow["status"] | null;
+	pinnedAt: string | null;
+};
+
+function resolveTargetGroup(
+	targetGroupId: string,
+	row: WorkspaceRow,
+): TargetMutation | null {
+	if (targetGroupId === "pinned") {
+		return {
+			status: row.status ?? null,
+			pinnedAt: row.pinnedAt ?? new Date().toISOString(),
+		};
+	}
+	if (targetGroupId === "chats") {
+		// Chats bucket holds chat-mode rows only; status/pinned don't
+		// apply. Mutation is "no-op" — just signal acceptance so the
+		// outer reorder proceeds to recompute displayOrder.
+		return { status: null, pinnedAt: null };
+	}
+	if (targetGroupId.startsWith("repo:")) {
+		// A backlog row dragged into its repo bucket needs to leave the
+		// backlog lane, otherwise it stays in the Backlog group regardless
+		// of how we reorder its `displayOrder`. Promote to in-progress so
+		// it surfaces in the bucket.
+		const status =
+			row.status === "backlog" ? "in-progress" : (row.status ?? null);
+		return { status, pinnedAt: null };
+	}
+	const status = workspaceStatusFromGroupId(targetGroupId);
+	if (!status) return null;
+	return { status, pinnedAt: null };
 }
 
 export type WorkspaceBranchTone =
@@ -358,6 +655,7 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		id: summary.id,
 		title: summary.title,
 		directoryName: summary.directoryName,
+		repoId: summary.repoId,
 		repoName: summary.repoName,
 		repoIconSrc: summary.repoIconSrc ?? null,
 		repoInitials: summary.repoInitials ?? null,
@@ -377,6 +675,7 @@ export function summaryToArchivedRow(summary: WorkspaceSummary): WorkspaceRow {
 		primarySessionAgentType: summary.primarySessionAgentType ?? null,
 		prTitle: summary.prTitle ?? null,
 		pinnedAt: summary.pinnedAt ?? null,
+		displayOrder: summary.displayOrder,
 		sessionCount: summary.sessionCount,
 		messageCount: summary.messageCount,
 		createdAt: summary.createdAt,
@@ -465,6 +764,7 @@ export function rowToWorkspaceSummary(
 		id: row.id,
 		title: row.title,
 		directoryName: row.directoryName ?? "",
+		repoId: row.repoId ?? "",
 		repoName: row.repoName ?? "",
 		repoIconSrc: row.repoIconSrc ?? null,
 		repoInitials: row.repoInitials ?? null,
@@ -484,6 +784,7 @@ export function rowToWorkspaceSummary(
 		primarySessionAgentType: row.primarySessionAgentType ?? null,
 		prTitle: row.prTitle ?? null,
 		pinnedAt: row.pinnedAt ?? null,
+		displayOrder: row.displayOrder,
 		sessionCount: row.sessionCount,
 		messageCount: row.messageCount,
 		createdAt: row.createdAt ?? new Date().toISOString(),
@@ -517,6 +818,16 @@ export function getComposerContextKey(
 	}
 
 	return "global";
+}
+
+/** Reverse of `getComposerContextKey` for the `session:*` form. Returns null
+ *  for `workspace:*` / `start:*` / `global` — those have no session row to
+ *  persist composer picks against. */
+export function parseSessionIdFromContextKey(
+	contextKey: string,
+): string | null {
+	const prefix = "session:";
+	return contextKey.startsWith(prefix) ? contextKey.slice(prefix.length) : null;
 }
 
 export function inferDefaultModelId(

@@ -1,5 +1,5 @@
-//! Workspace status enum — drives the kanban lanes (Done / In Review /
-//! In Progress / Backlog / Canceled) in the sidebar. Stored in
+//! Workspace status enum — drives the sidebar status lanes (Done /
+//! In Review / In Progress / Backlog / Canceled). Stored in
 //! `workspaces.status`.
 //!
 //! Historical data may carry `"in-review"` or `"cancelled"` (British) — the
@@ -34,7 +34,7 @@ impl WorkspaceStatus {
         }
     }
 
-    /// Sidebar kanban lane. Note: `InProgress` maps to `"progress"` — the
+    /// Sidebar status lane. Note: `InProgress` maps to `"progress"` — the
     /// stored value has a hyphen, the lane id does not.
     pub const fn group_id(&self) -> &'static str {
         match self {

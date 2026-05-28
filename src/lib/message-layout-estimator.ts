@@ -195,14 +195,21 @@ function estimateReasoningHeight(
 	part: ReasoningPart,
 	options: { fontSize: number; contentWidth: number },
 ) {
-	if (reasoningLifecycle(part) !== "streaming") {
+	// Empty body (e.g. Claude Thinking Display = Omitted) renders flat.
+	if (
+		reasoningLifecycle(part) !== "streaming" ||
+		part.text.trim().length === 0
+	) {
 		return REASONING_SUMMARY_HEIGHT;
 	}
 	const bodyWidth = Math.max(
 		MIN_TEXT_WIDTH,
 		options.contentWidth - REASONING_EXPANDED_CONTENT_HORIZONTAL_PADDING,
 	);
-	const textHeight = measureTextHeight(part.text, {
+	// Streaming row is mounted, so ResizeObserver feeds the real height back.
+	// Skip the per-tick `prepare()` + `layout()` cost (cache miss every frame
+	// since the text grows) and use the cheap fallback estimate as a placeholder.
+	const textHeight = fallbackTextHeight(part.text, {
 		fontSize: options.fontSize,
 		lineHeight: ASSISTANT_LINE_HEIGHT,
 		maxWidth: bodyWidth,

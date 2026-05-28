@@ -73,7 +73,7 @@ export function InspectorActionRowUI({
 				<button
 					type="button"
 					onClick={onActionClick}
-					className="ml-auto shrink-0 cursor-pointer text-[10.5px] text-primary transition-colors hover:text-primary/80"
+					className="ml-auto shrink-0 cursor-interactive text-micro text-primary transition-colors hover:text-primary/80"
 				>
 					{actionLabel}
 				</button>
@@ -90,7 +90,7 @@ export function InspectorActionGroupTitleUI({
 }) {
 	return (
 		<div className="px-2.5 pb-1 pt-2.5">
-			<span className="text-[10.5px] font-medium tracking-wide text-muted-foreground">
+			<span className="text-micro font-medium tracking-wide text-muted-foreground">
 				{children}
 			</span>
 		</div>

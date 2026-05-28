@@ -1,7 +1,10 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
+import { resolveCssColor } from "@/lib/css-color";
+import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
 type TerminalOutputProps = {
@@ -9,6 +12,7 @@ type TerminalOutputProps = {
 	className?: string;
 	detectLinks?: boolean;
 	fontSize?: number;
+	fontFamily?: string;
 	lineHeight?: number;
 	padding?: string;
 	/**
@@ -49,6 +53,8 @@ export type TerminalHandle = {
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const TRAILING_URL_PUNCTUATION = /[),.;:!?]+$/;
+const DEFAULT_TERMINAL_FONT_FAMILY =
+	"'GeistMono', 'SF Mono', Monaco, Menlo, monospace";
 
 function sanitizeHttpUrl(value: string): string | null {
 	const trimmed = value.replace(TRAILING_URL_PUNCTUATION, "");
@@ -181,16 +187,31 @@ export function suspendTerminalFit(): () => void {
 	};
 }
 
-/** Read --terminal-* and --foreground CSS variables and build an xterm ITheme. */
-function resolveTerminalTheme(): ITheme {
-	const s = getComputedStyle(document.documentElement);
-	const v = (suffix: string) =>
-		s.getPropertyValue(`--terminal-${suffix}`).trim();
+// Buffer xterm writes during heavy animations — each chunk's render RAF
+// otherwise competes with the drag's RAF.
+let terminalWriteSuspendCount = 0;
+const terminalWriteFlushListeners = new Set<() => void>();
 
-	// Match the app's global scrollbar colors (foreground @ 18%/30%/40%).
-	const fg = s.getPropertyValue("--foreground").trim();
+/** Buffer xterm writes across every mounted TerminalOutput. Idempotent release. */
+export function suspendTerminalWrites(): () => void {
+	terminalWriteSuspendCount++;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		terminalWriteSuspendCount--;
+		if (terminalWriteSuspendCount === 0) {
+			for (const listener of terminalWriteFlushListeners) listener();
+		}
+	};
+}
+
+function resolveTerminalTheme(): ITheme {
+	const v = (suffix: string) => resolveCssColor(`var(--terminal-${suffix})`);
 	const mix = (pct: number) =>
-		`color-mix(in oklch, ${fg} ${pct}%, transparent)`;
+		resolveCssColor(
+			`color-mix(in oklch, var(--foreground) ${pct}%, transparent)`,
+		);
 
 	return {
 		background: v("background"),
@@ -219,6 +240,14 @@ function resolveTerminalTheme(): ITheme {
 	};
 }
 
+function resolveTerminalFontFamily(
+	fontFamily: string | null | undefined,
+): string {
+	return fontFamily && fontFamily.length > 0
+		? `${fontFamily}, ${DEFAULT_TERMINAL_FONT_FAMILY}`
+		: DEFAULT_TERMINAL_FONT_FAMILY;
+}
+
 // Memoized so parent re-renders (e.g. inspector width drag) don't push a
 // fresh render through the heavy xterm wrapper.
 function TerminalOutputImpl({
@@ -226,14 +255,18 @@ function TerminalOutputImpl({
 	className,
 	detectLinks = false,
 	fontSize = 12,
+	fontFamily,
 	lineHeight = 1.3,
 	padding = "12px 2px 12px 12px",
 	onData,
 	onResize,
 }: TerminalOutputProps) {
+	const { settings } = useSettings();
+	const terminalFontFamily = fontFamily ?? settings.terminalFontFamily;
 	const containerRef = useRef<HTMLDivElement>(null);
 	const xtermRef = useRef<Terminal | null>(null);
 	const fitRef = useRef<FitAddon | null>(null);
+	const runFitRef = useRef<(() => void) | null>(null);
 	// Refs so xterm effect doesn't recreate on parent rerender.
 	const onDataRef = useRef<typeof onData>(onData);
 	const onResizeRef = useRef<typeof onResize>(onResize);
@@ -251,7 +284,7 @@ function TerminalOutputImpl({
 			disableStdin: false,
 			scrollback: 5000,
 			fontSize,
-			fontFamily: "'GeistMono', 'SF Mono', Monaco, Menlo, monospace",
+			fontFamily: resolveTerminalFontFamily(terminalFontFamily),
 			lineHeight,
 			theme: resolveTerminalTheme(),
 			cursorBlink: false,
@@ -272,6 +305,25 @@ function TerminalOutputImpl({
 
 		terminal.loadAddon(fit);
 		terminal.open(container);
+
+		// GPU renderer — drops per-frame cost on low-spec laptops. DOM
+		// renderer does an O(visible_cells) layout/paint per write; WebGL
+		// blits from a glyph atlas. `contextlost` fires on GPU reset /
+		// long sleep / driver crash; we dispose and let xterm fall back
+		// to the built-in DOM renderer automatically.
+		let webgl: WebglAddon | null = null;
+		try {
+			const addon = new WebglAddon();
+			addon.onContextLoss(() => {
+				addon.dispose();
+				webgl = null;
+			});
+			terminal.loadAddon(addon);
+			webgl = addon;
+		} catch {
+			// WebGL unavailable (headless / very old GPU). DOM renderer stays.
+			webgl = null;
+		}
 
 		// Translate macOS Cmd combos to readline control codes.
 		terminal.attachCustomKeyEventHandler((event) => {
@@ -337,6 +389,7 @@ function TerminalOutputImpl({
 				}, FIT_THROTTLE_MS - elapsed);
 			}
 		};
+		runFitRef.current = runFit;
 
 		runFit();
 
@@ -377,9 +430,25 @@ function TerminalOutputImpl({
 		const refitListener = () => runFit();
 		terminalRefitListeners.add(refitListener);
 
-		// Re-resolve CSS variables when app light/dark mode changes.
+		// Per-instance buffer for writes deferred via `suspendTerminalWrites`.
+		// Flushed in one xterm.write so ANSI escapes stay contiguous.
+		const suspendedWrites: string[] = [];
+		const flushSuspendedWrites = () => {
+			if (suspendedWrites.length === 0) return;
+			const joined = suspendedWrites.join("");
+			suspendedWrites.length = 0;
+			terminal.write(joined);
+		};
+		terminalWriteFlushListeners.add(flushSuspendedWrites);
+
+		// Resync xterm theme on `<html>` class changes; rAF-coalesced.
+		let themeScheduled = 0;
 		const themeObserver = new MutationObserver(() => {
-			terminal.options.theme = resolveTerminalTheme();
+			if (themeScheduled) return;
+			themeScheduled = requestAnimationFrame(() => {
+				themeScheduled = 0;
+				terminal.options.theme = resolveTerminalTheme();
+			});
 		});
 		themeObserver.observe(document.documentElement, {
 			attributes: true,
@@ -391,9 +460,18 @@ function TerminalOutputImpl({
 
 		if (terminalRef) {
 			(terminalRef as React.MutableRefObject<TerminalHandle | null>).current = {
-				write: (data: string) => terminal.write(data),
+				write: (data: string) => {
+					if (terminalWriteSuspendCount > 0) {
+						suspendedWrites.push(data);
+						return;
+					}
+					terminal.write(data);
+				},
 				// Scrollback wipe only — `reset()` here would race with replay.
-				clear: () => terminal.clear(),
+				clear: () => {
+					suspendedWrites.length = 0;
+					terminal.clear();
+				},
 				dispose: () => terminal.dispose(),
 				refit: () => runFit(),
 				focus: () => terminal.focus(),
@@ -405,21 +483,38 @@ function TerminalOutputImpl({
 				window.clearTimeout(fitTimer);
 				fitTimer = null;
 			}
+			if (themeScheduled) {
+				cancelAnimationFrame(themeScheduled);
+				themeScheduled = 0;
+			}
 			dataSub.dispose();
 			resizeSub.dispose();
 			linkProviderDisposable?.dispose();
 			themeObserver.disconnect();
 			resizeObserver.disconnect();
 			terminalRefitListeners.delete(refitListener);
+			terminalWriteFlushListeners.delete(flushSuspendedWrites);
+			webgl?.dispose();
 			terminal.dispose();
 			xtermRef.current = null;
 			fitRef.current = null;
+			runFitRef.current = null;
 			if (terminalRef) {
 				(terminalRef as React.MutableRefObject<TerminalHandle | null>).current =
 					null;
 			}
 		};
-	}, [detectLinks, fontSize, lineHeight, terminalRef]);
+	}, [detectLinks, terminalRef]);
+
+	useEffect(() => {
+		const terminal = xtermRef.current;
+		if (!terminal) return;
+		terminal.options.fontSize = fontSize;
+		terminal.options.fontFamily = resolveTerminalFontFamily(terminalFontFamily);
+		terminal.options.lineHeight = lineHeight;
+		runFitRef.current?.();
+		terminal.refresh(0, terminal.rows - 1);
+	}, [fontSize, lineHeight, terminalFontFamily]);
 
 	return (
 		<div

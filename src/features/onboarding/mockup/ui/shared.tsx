@@ -64,9 +64,9 @@ export const branchToneClasses: Record<WorkspaceBranchTone, string> = {
 };
 
 export const INSPECTOR_SECTION_HEADER_CLASS =
-	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/25 px-3";
+	"flex h-8 min-w-0 shrink-0 items-center justify-between border-b border-border/60 bg-muted/30 px-3";
 export const INSPECTOR_SECTION_TITLE_CLASS =
-	"text-[13px] leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
+	"text-ui leading-8 font-medium tracking-[-0.01em] text-muted-foreground";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -197,7 +197,7 @@ export function WorkspaceAvatarUI({
 			<AvatarFallback
 				delayMs={0}
 				className={cn(
-					"bg-muted text-[7px] font-semibold uppercase tracking-[0.02em] text-muted-foreground",
+					"bg-muted text-nano font-semibold uppercase tracking-[0.02em] text-muted-foreground",
 					fallbackClassName,
 				)}
 			>

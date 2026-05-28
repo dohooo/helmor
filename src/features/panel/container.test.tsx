@@ -247,12 +247,20 @@ describe("WorkspacePanelContainer loading semantics", () => {
 		});
 		apiMocks.loadRepoScripts.mockResolvedValue({
 			setupScript: "bun install",
-			runScript: "bun run dev",
 			archiveScript: "true",
 			setupFromProject: false,
 			runFromProject: false,
 			archiveFromProject: false,
 			autoRunSetup: true,
+			runActions: [
+				{
+					id: "run:default",
+					name: "Default",
+					command: "bun run dev",
+					mode: "concurrent",
+					fromProject: false,
+				},
+			],
 		});
 		apiMocks.loadWorkspaceDetail.mockImplementation((workspaceId?: string) =>
 			Promise.resolve(createWorkspaceDetail(workspaceId)),
