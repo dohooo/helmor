@@ -16,6 +16,19 @@ import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
 
 process.env.HELMOR_LOG_DIR = resolve(tmpdir(), "helmor-sidecar-test-logs");
 
+async function withPlatform<T>(
+	platform: NodeJS.Platform,
+	fn: () => Promise<T>,
+): Promise<T> {
+	const original = process.platform;
+	Object.defineProperty(process, "platform", { value: platform });
+	try {
+		return await fn();
+	} finally {
+		Object.defineProperty(process, "platform", { value: original });
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Mock the Claude Agent SDK BEFORE importing anything that uses it.
 // A closure variable lets each test supply its own async iterator.
@@ -722,6 +735,42 @@ describe("ClaudeSessionManager.sendMessage", () => {
 				additionalDirectories: [userDirA, userDirA, userDirB],
 				env: {
 					CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1",
+				},
+			},
+		});
+	});
+
+	test("applies custom agent proxy env to Claude query options", async () => {
+		mockQueryImpl = () => asyncIterableFrom([{ type: "result", result: "ok" }]);
+
+		await withPlatform("darwin", async () => {
+			await manager.sendMessage(
+				"REQ-AGENT-PROXY",
+				{
+					sessionId: "s-agent-proxy",
+					prompt: "ok",
+					model: "opus-1m",
+					cwd: undefined,
+					resume: undefined,
+					permissionMode: "bypassPermissions",
+					effortLevel: undefined,
+					fastMode: undefined,
+					images: [],
+					agentProxy: {
+						mode: "custom",
+						customUrl: "http://127.0.0.1:7890",
+					},
+				},
+				emitter,
+			);
+		});
+
+		expect(lastQueryArgs).toMatchObject({
+			options: {
+				env: {
+					HTTP_PROXY: "http://127.0.0.1:7890",
+					HTTPS_PROXY: "http://127.0.0.1:7890",
+					ALL_PROXY: "http://127.0.0.1:7890",
 				},
 			},
 		});

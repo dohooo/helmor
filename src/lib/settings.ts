@@ -135,6 +135,11 @@ export type CursorProviderSettings = {
 	cachedModels: CursorCachedModel[] | null;
 };
 
+export type AgentProxySettings = {
+	mode: "none" | "system" | "custom";
+	customUrl: string;
+};
+
 export type LocalLlmSettings = {
 	enabled: boolean;
 	model: string;
@@ -289,6 +294,7 @@ export type AppSettings = {
 	shortcuts: ShortcutOverrides;
 	claudeCustomProviders: ClaudeCustomProviderSettings;
 	cursorProvider: CursorProviderSettings;
+	agentProxy: AgentProxySettings;
 	localLlm: LocalLlmSettings;
 	inboxSourceConfig: InboxSourceConfig;
 	startSurfacePreferences: StartSurfacePreferences;
@@ -387,6 +393,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		apiKey: "",
 		enabledModelIds: null,
 		cachedModels: null,
+	},
+	agentProxy: {
+		mode: "none",
+		customUrl: "",
 	},
 	localLlm: {
 		enabled: false,
@@ -547,6 +557,7 @@ const SETTINGS_KEY_MAP: Record<
 	shortcuts: "app.shortcuts",
 	claudeCustomProviders: "app.claude_custom_providers",
 	cursorProvider: "app.cursor_provider",
+	agentProxy: "app.agent_proxy",
 	localLlm: "app.local_llm",
 	inboxSourceConfig: "app.inbox_source_config",
 	startSurfacePreferences: "app.start_surface_preferences",
@@ -1001,6 +1012,23 @@ function parseClaudeCustomProviderSettings(
 	}
 }
 
+function parseAgentProxySettings(raw: string | undefined): AgentProxySettings {
+	if (!raw) return DEFAULT_SETTINGS.agentProxy;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		const mode =
+			parsed.mode === "system" || parsed.mode === "custom"
+				? parsed.mode
+				: DEFAULT_SETTINGS.agentProxy.mode;
+		return {
+			mode,
+			customUrl: typeof parsed.customUrl === "string" ? parsed.customUrl : "",
+		};
+	} catch {
+		return DEFAULT_SETTINGS.agentProxy;
+	}
+}
+
 function parseLocalLlmSettings(raw: string | undefined): LocalLlmSettings {
 	if (!raw) return DEFAULT_SETTINGS.localLlm;
 	try {
@@ -1203,6 +1231,7 @@ export async function loadSettings(): Promise<AppSettings> {
 			cursorProvider: parseCursorProviderSettings(
 				raw[SETTINGS_KEY_MAP.cursorProvider],
 			),
+			agentProxy: parseAgentProxySettings(raw[SETTINGS_KEY_MAP.agentProxy]),
 			localLlm: parseLocalLlmSettings(raw[SETTINGS_KEY_MAP.localLlm]),
 			inboxSourceConfig: parseInboxSourceConfig(
 				raw[SETTINGS_KEY_MAP.inboxSourceConfig],
@@ -1249,6 +1278,7 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
 				key === "shortcuts" ||
 				key === "claudeCustomProviders" ||
 				key === "cursorProvider" ||
+				key === "agentProxy" ||
 				key === "localLlm" ||
 				key === "inboxSourceConfig" ||
 				key === "startSurfacePreferences"

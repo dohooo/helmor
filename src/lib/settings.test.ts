@@ -211,6 +211,42 @@ describe("settings", () => {
 		);
 	});
 
+	it("hydrates and saves agent proxy settings", async () => {
+		invokeMock.mockResolvedValue({
+			"app.agent_proxy": JSON.stringify({
+				mode: "custom",
+				customUrl: "http://127.0.0.1:7890",
+			}),
+		});
+
+		const settings = await loadSettings();
+
+		expect(settings.agentProxy).toEqual({
+			mode: "custom",
+			customUrl: "http://127.0.0.1:7890",
+		});
+
+		invokeMock.mockResolvedValue(undefined);
+		await saveSettings({
+			agentProxy: {
+				mode: "system",
+				customUrl: "",
+			},
+		});
+
+		expect(invokeMock).toHaveBeenLastCalledWith(
+			"update_app_settings",
+			expect.objectContaining({
+				settingsMap: expect.objectContaining({
+					"app.agent_proxy": JSON.stringify({
+						mode: "system",
+						customUrl: "",
+					}),
+				}),
+			}),
+		);
+	});
+
 	it("readRepoPreference returns record entry, falls back, and tolerates missing repoId", () => {
 		const record = { "repo-1": "local" as const };
 		expect(readRepoPreference(record, "repo-1", "worktree")).toBe("local");

@@ -72,7 +72,10 @@ import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
-import { ClaudeCustomProvidersPanel } from "./panels/model-providers";
+import {
+	AgentProxyPanel,
+	ClaudeCustomProvidersPanel,
+} from "./panels/model-providers";
 import { RepositorySettingsPanel } from "./panels/repository-settings";
 import { TriagePanel } from "./panels/triage";
 
@@ -587,6 +590,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 									/>
 									<ClaudeCustomProvidersPanel />
 									<CursorProviderPanel />
+									<AgentProxyPanel />
 								</SettingsGroup>
 							)}
 

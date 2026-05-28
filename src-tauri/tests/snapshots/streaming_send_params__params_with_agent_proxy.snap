@@ -1,0 +1,16 @@
+---
+source: tests/streaming_send_params.rs
+expression: "&params"
+---
+agentProxy:
+  customUrl: "http://127.0.0.1:7890"
+  mode: custom
+cwd: /abs/workspace
+effortLevel: high
+fastMode: false
+model: claude-opus-4
+permissionMode: bypassPermissions
+prompt: hello
+provider: claude
+resume: ~
+sessionId: sidecar-sess-1

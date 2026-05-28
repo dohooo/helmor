@@ -141,6 +141,7 @@ pub(super) fn stream_via_sidecar(
     };
 
     let images_for_wire = request.images.clone().unwrap_or_default();
+    let agent_proxy = load_agent_proxy_setting();
     // Read the user's `Claude Code Thinking Display` preference. The setting
     // is global (not per-message), so we resolve it here on every send rather
     // than threading it through `AgentSendRequest`. Anything other than the
@@ -164,6 +165,7 @@ pub(super) fn stream_via_sidecar(
         helmor_session_id: request.helmor_session_id.as_deref(),
         claude_base_url: model.claude_base_url.as_deref(),
         claude_auth_token: model.claude_auth_token.as_deref(),
+        agent_proxy: agent_proxy.as_ref(),
         claude_thinking_display: claude_thinking_display.as_deref(),
         images: &images_for_wire,
     });
@@ -1178,6 +1180,35 @@ pub(super) fn stream_via_sidecar(
     });
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn load_agent_proxy_setting() -> Option<Value> {
+    let raw = crate::models::settings::load_setting_value("app.agent_proxy")
+        .ok()
+        .flatten()?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    let obj = parsed.as_object()?;
+    match obj.get("mode").and_then(Value::as_str) {
+        Some("system") => Some(serde_json::json!({ "mode": "system" })),
+        Some("custom") => {
+            let custom_url = obj
+                .get("customUrl")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            Some(serde_json::json!({
+                "mode": "custom",
+                "customUrl": custom_url,
+            }))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn load_agent_proxy_setting() -> Option<Value> {
+    None
 }
 
 fn build_exit_plan_review_message(

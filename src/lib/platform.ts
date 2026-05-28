@@ -1,11 +1,8 @@
-/**
- * Platform helper. Helmor ships macOS-only; retained as a single-source
- * helper so UI code can read "is this mac?" in one place instead of
- * hardcoding `true` everywhere. If Windows/Linux support is ever added
- * back, only this file changes.
- */
-
-/** Always `true` — Helmor only runs on macOS. */
 export function isMac(): boolean {
-	return true;
+	if (typeof navigator === "undefined") return true;
+	const nav = navigator as Navigator & {
+		userAgentData?: { platform?: string };
+	};
+	const platform = nav.userAgentData?.platform || navigator.platform || "";
+	return /mac/i.test(platform);
 }

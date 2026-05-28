@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.27.0
+
+### Minor Changes
+
+- [#409](https://github.com/dohooo/helmor/pull/409) [`920e57a`](https://github.com/dohooo/helmor/commit/920e57af8bac8da360b5df0fade7f224911f3237) Thanks [@aidxun](https://github.com/aidxun)! - Add a macOS proxy setting for Claude Code and Codex connections, with system and custom proxy options while leaving non-macOS behavior unchanged.
+
+### Patch Changes
+
+- [#674](https://github.com/dohooo/helmor/pull/674) [`2577d43`](https://github.com/dohooo/helmor/commit/2577d4301cb449c1aa533a9257d1203bdd50e17c) Thanks [@natllian](https://github.com/natllian)! - Fix the Clone from URL dialog rejecting destinations that don't exist yet — Helmor now creates the folder for you instead of forcing a manual mkdir.
+
+- [#675](https://github.com/dohooo/helmor/pull/675) [`43112e3`](https://github.com/dohooo/helmor/commit/43112e3c3b874812a562ff6cf6609006e5dc7ca8) Thanks [@natllian](https://github.com/natllian)! - Add an Edit button on queued messages so you can pull a single queued message back into the composer to revise without touching the other queued items.
+
+- [#666](https://github.com/dohooo/helmor/pull/666) [`b7607d9`](https://github.com/dohooo/helmor/commit/b7607d9b59d914ebc9bfd64658b21cc2032cf3f3) Thanks [@dohooo](https://github.com/dohooo)! - Three fixes for sending prompts from the CLI and chatting outside a workspace:
+
+  - Fix `helmor send` failing with `Failed to borrow write connection: timed out waiting for connection` when an agent dispatches prompts to running workspaces.
+  - Fix concurrent CLI sends silently dropping every prompt past the first one — the App now picks up each queued prompt in turn instead of discarding the rest while only dispatching the oldest.
+  - Fix "Just Chat" sessions being told they were bound to a workspace with a working directory and a target branch, which previously led the agent into nonsensical `git` and PR commands.
+
+- [#658](https://github.com/dohooo/helmor/pull/658) [`edb8d5b`](https://github.com/dohooo/helmor/commit/edb8d5b0b030c56c40ed117e30ac3909660b417e) Thanks [@natllian](https://github.com/natllian)! - Add Smart Triage — an opt-in Local LLM feature under Experimental that periodically scans Slack / Lark / GitLab / GitHub for actionable items and spins up AI-prepared workspaces with referenced images attached.
+
+- [#666](https://github.com/dohooo/helmor/pull/666) [`b7607d9`](https://github.com/dohooo/helmor/commit/b7607d9b59d914ebc9bfd64658b21cc2032cf3f3) Thanks [@dohooo](https://github.com/dohooo)! - Add a Cleanup button next to Rerun in the Run tab that runs the action's configured `stopCommand` standalone — lets you tear down lingering side effects (docker containers, daemons) left by `supabase start` / `docker compose up` style commands after they exit, so the next Rerun isn't sabotaged by "already running" state.
+
 ## 0.26.0
 
 ### Minor Changes

@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import type { AgentProxySettings } from "./agent-proxy.js";
 import {
 	CodexAppServer,
 	type JsonRpcNotification,
@@ -365,6 +366,8 @@ interface AppServerContext {
 	notificationGate: Promise<void> | null;
 	/** Last send's model id; Codex usage notifications omit it. */
 	lastSentModel: string;
+	/** Stable key for the proxy env used to spawn this app-server. */
+	agentProxyKey: string;
 	/** Wall-clock ms of the most recent "Reconnecting…" line on the
 	 *  Codex child process's stderr. Used to suppress the transient
 	 *  {method:"error"} notifications that Codex emits during its own
@@ -535,6 +538,7 @@ export class CodexAppServerManager implements SessionManager {
 			effortLevel,
 			permissionMode,
 			fastMode,
+			agentProxy,
 			additionalDirectories,
 			images,
 		} = params;
@@ -577,6 +581,7 @@ export class CodexAppServerManager implements SessionManager {
 			model,
 			permissionMode,
 			effectiveFastMode,
+			agentProxy,
 		);
 		// Codex usage notifications do not include a model id.
 		if (model) ctx.lastSentModel = model;
@@ -1092,6 +1097,7 @@ export class CodexAppServerManager implements SessionManager {
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
+			agentProxy: options?.agentProxy,
 			onNotification: () => {},
 			onRequest: (req) => {
 				if (APPROVAL_METHODS.has(req.method)) {
@@ -1638,9 +1644,17 @@ export class CodexAppServerManager implements SessionManager {
 		model?: string,
 		permissionMode?: string,
 		fastMode?: boolean,
+		agentProxy?: AgentProxySettings,
 	): Promise<AppServerContext> {
+		const agentProxyKey = buildAgentProxyKey(agentProxy);
 		const existing = this.sessions.get(sessionId);
-		if (existing && !existing.server.killed) return existing;
+		if (existing && !existing.server.killed) {
+			if (existing.agentProxyKey === agentProxyKey || existing.activeTurnId) {
+				return existing;
+			}
+			existing.server.kill();
+			this.sessions.delete(sessionId);
+		}
 
 		// Forward-reference holder so the `onRetry` closure can reach the
 		// context that's constructed below — the callback only fires once
@@ -1651,6 +1665,7 @@ export class CodexAppServerManager implements SessionManager {
 		const server = new CodexAppServer({
 			binaryPath: CODEX_BIN_PATH,
 			cwd,
+			agentProxy,
 			onNotification: () => {},
 			onRequest: () => {},
 			onExit: (code, signal) => {
@@ -1750,6 +1765,7 @@ export class CodexAppServerManager implements SessionManager {
 			activeEmitter: null,
 			notificationGate: null,
 			lastSentModel: model ?? "",
+			agentProxyKey,
 			lastRetryAt: null,
 			lastRetryNotice: null,
 			subAgentTracker: new SubAgentTracker(server),
@@ -1975,6 +1991,12 @@ function parseSkillsResponse(
 		if (!byName.has(command.name)) byName.set(command.name, command);
 	}
 	return Array.from(byName.values());
+}
+
+function buildAgentProxyKey(agentProxy?: AgentProxySettings): string {
+	if (!agentProxy) return "none";
+	if (agentProxy.mode === "system") return "system";
+	return `custom:${agentProxy.customUrl}`;
 }
 
 /**

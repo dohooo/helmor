@@ -231,6 +231,11 @@ pub async fn generate_session_title(
                     );
                 }
             }
+            if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert("agentProxy".to_string(), agent_proxy);
+                }
+            }
             let sidecar_req = crate::sidecar::SidecarRequest {
                 id: request_id.clone(),
                 method: "generateTitle".to_string(),
@@ -1228,6 +1233,9 @@ pub fn fetch_live_context_usage(
     params.insert("model".into(), Value::String(request.model.clone()));
     if let Some(cwd) = request.cwd.as_deref() {
         params.insert("cwd".into(), Value::String(cwd.to_string()));
+    }
+    if let Some(agent_proxy) = super::streaming::load_agent_proxy_setting() {
+        params.insert("agentProxy".into(), agent_proxy);
     }
 
     let sidecar_req = crate::sidecar::SidecarRequest {
