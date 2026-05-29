@@ -160,8 +160,10 @@ export function WorkflowProgressPanel({
 }) {
 	const workflows = useSessionWorkflows(sessionId);
 	const panelRef = useRef<HTMLDivElement>(null);
-	const headerRef = useRef<HTMLDivElement>(null);
-	const contentRef = useRef<HTMLDivElement>(null);
+	// The natural-height content of the current level's scroll region (the list
+	// at L0/L1, the markdown inside the gray box at L2). Observed so the card
+	// re-sizes when content changes (incl. the lazy markdown's first render).
+	const scrollContentRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef<HTMLButtonElement>(null);
 	const [level, setLevel] = useState<0 | 1 | 2>(0);
 	const [runIndex, setRunIndex] = useState(0);
@@ -218,10 +220,12 @@ export function WorkflowProgressPanel({
 	}, [hi, level]);
 
 	// Drive the card's explicit height from its natural content height, capped
-	// at 55vh. A ResizeObserver re-measures on every content change — level
-	// switches AND the lazy markdown finishing its first render — so the height
-	// always eases to the right size and the body scrolls past the cap.
-	// Signature forces a synchronous re-measure the instant the level changes.
+	// at 55vh, so the SAME element animates smoothly between levels and the
+	// inner scroll region (the gray markdown box at L2) takes over past the cap.
+	// We measure by briefly letting the card size to content (`height: auto`),
+	// which is structure-agnostic; a ResizeObserver on the current scroll
+	// content re-measures on changes (incl. the lazy markdown's first render).
+	// `heightSig` forces a synchronous re-measure the instant the level changes.
 	const heightSig =
 		level === 0
 			? `0:${workflows.length}`
@@ -230,21 +234,23 @@ export function WorkflowProgressPanel({
 				: `2:${agentIndex}:${detailAgent?.resultPreview?.length ?? 0}`;
 	useLayoutEffect(() => {
 		if (!open) return;
-		const header = headerRef.current;
-		const content = contentRef.current;
-		if (!header || !content) return;
+		const panel = panelRef.current;
+		if (!panel) return;
 		const measure = () => {
-			// 28 ≈ panel padding (20) + header→body gap (6) + border (2).
-			const natural = header.offsetHeight + content.offsetHeight + 28;
+			const prev = panel.style.height;
+			panel.style.height = "auto";
+			const natural = panel.scrollHeight;
+			panel.style.height = prev;
 			const cap = Math.round(window.innerHeight * 0.55);
 			setHeight(Math.min(natural, cap));
 		};
 		measure();
-		const ro = new ResizeObserver(measure);
-		ro.observe(content);
+		const target = scrollContentRef.current;
+		const ro = target ? new ResizeObserver(measure) : null;
+		if (target && ro) ro.observe(target);
 		window.addEventListener("resize", measure);
 		return () => {
-			ro.disconnect();
+			ro?.disconnect();
 			window.removeEventListener("resize", measure);
 		};
 	}, [open, heightSig]);
@@ -322,7 +328,7 @@ export function WorkflowProgressPanel({
 			}}
 			className="pointer-events-auto mb-3 flex w-full flex-col overflow-hidden rounded-xl border border-border/40 bg-popover p-2.5 shadow-sm outline-none"
 		>
-			<div ref={headerRef} className="mb-1.5 flex items-center gap-1.5 px-0.5">
+			<div className="mb-1.5 flex items-center gap-1.5 px-0.5">
 				{level === 0 ? (
 					<>
 						<Workflow
@@ -361,53 +367,59 @@ export function WorkflowProgressPanel({
 				</div>
 			</div>
 
-			<div className="min-h-0 flex-1 overflow-y-auto">
-				<div ref={contentRef}>
-					{level === 0 ? (
-						workflows.length === 0 ? (
-							<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-								No workflows in this conversation yet. They appear here when the
-								agent runs a dynamic workflow.
-							</p>
-						) : (
-							<div className="flex flex-col gap-0.5">
-								{workflows.map((part, index) => (
-									<button
-										key={part.id}
-										type="button"
-										ref={index === hi ? activeRef : undefined}
-										onMouseEnter={() => setHighlight(index)}
-										onClick={() => {
-											setRunIndex(index);
-											setLevel(1);
-											setHighlight(0);
-											refocus();
-										}}
-										className={cn(ROW, "text-ui", index === hi && "bg-muted")}
-									>
-										<Workflow
-											className="size-3 shrink-0 text-muted-foreground"
-											strokeWidth={1.8}
-										/>
-										<span className="shrink-0 truncate font-medium text-foreground">
-											{part.name}
-										</span>
-										<span className={cn("text-mini", statusTone(part.status))}>
-											{WORKFLOW_STATUS_LABEL[part.status]}
-										</span>
-										<span className="ml-auto shrink-0 truncate text-mini text-muted-foreground/60">
-											{runMeta(part)}
-										</span>
-										<ChevronRight
-											className="size-3.5 shrink-0 text-muted-foreground/40"
-											strokeWidth={1.8}
-										/>
-									</button>
-								))}
-							</div>
-						)
-					) : level === 1 ? (
-						<div className="flex flex-col gap-0.5">
+			<div className="flex min-h-0 flex-1 flex-col">
+				{level === 0 ? (
+					<div className="min-h-0 flex-1 overflow-y-auto">
+						<div ref={scrollContentRef}>
+							{workflows.length === 0 ? (
+								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
+									No workflows in this conversation yet. They appear here when
+									the agent runs a dynamic workflow.
+								</p>
+							) : (
+								<div className="flex flex-col gap-0.5">
+									{workflows.map((part, index) => (
+										<button
+											key={part.id}
+											type="button"
+											ref={index === hi ? activeRef : undefined}
+											onMouseEnter={() => setHighlight(index)}
+											onClick={() => {
+												setRunIndex(index);
+												setLevel(1);
+												setHighlight(0);
+												refocus();
+											}}
+											className={cn(ROW, "text-ui", index === hi && "bg-muted")}
+										>
+											<Workflow
+												className="size-3 shrink-0 text-muted-foreground"
+												strokeWidth={1.8}
+											/>
+											<span className="shrink-0 truncate font-medium text-foreground">
+												{part.name}
+											</span>
+											<span
+												className={cn("text-mini", statusTone(part.status))}
+											>
+												{WORKFLOW_STATUS_LABEL[part.status]}
+											</span>
+											<span className="ml-auto shrink-0 truncate text-mini text-muted-foreground/60">
+												{runMeta(part)}
+											</span>
+											<ChevronRight
+												className="size-3.5 shrink-0 text-muted-foreground/40"
+												strokeWidth={1.8}
+											/>
+										</button>
+									))}
+								</div>
+							)}
+						</div>
+					</div>
+				) : level === 1 ? (
+					<div className="min-h-0 flex-1 overflow-y-auto">
+						<div ref={scrollContentRef} className="flex flex-col gap-0.5">
 							{flat.length === 0 ? (
 								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
 									No agents reported yet.
@@ -471,21 +483,25 @@ export function WorkflowProgressPanel({
 								</div>
 							) : null}
 						</div>
-					) : (
-						(() => {
-							const agent =
-								flat[Math.min(agentIndex, Math.max(0, flat.length - 1))];
-							if (!agent) {
-								return (
-									<p className="px-1 py-2 text-ui text-muted-foreground">
-										Agent unavailable.
-									</p>
-								);
-							}
-							const done = agent.status === "done";
-							const meta = agentMeta(agent);
+					</div>
+				) : (
+					(() => {
+						const agent =
+							flat[Math.min(agentIndex, Math.max(0, flat.length - 1))];
+						if (!agent) {
 							return (
-								<div className="flex flex-col gap-1.5 px-1 py-0.5">
+								<p className="px-1 py-2 text-ui text-muted-foreground">
+									Agent unavailable.
+								</p>
+							);
+						}
+						const done = agent.status === "done";
+						const meta = agentMeta(agent);
+						return (
+							<div className="flex min-h-0 flex-1 flex-col gap-1.5 px-1 py-0.5">
+								{/* Fixed: agent identity + metrics. The result body below
+									    gets its own scroll region (scrollbar inside the box). */}
+								<div className="flex flex-col gap-1.5">
 									<div className="flex items-center gap-1.5">
 										{done ? (
 											<Check
@@ -510,33 +526,35 @@ export function WorkflowProgressPanel({
 											{meta}
 										</div>
 									) : null}
-									{agent.resultPreview ? (
-										<Suspense
-											fallback={
-												<pre className="mt-0.5 whitespace-pre-wrap break-words rounded-md bg-muted/50 px-2.5 py-2 text-ui leading-6 text-foreground">
-													{agent.resultPreview}
-												</pre>
-											}
-										>
-											<div className="mt-0.5 rounded-md bg-muted/50 px-2.5 py-2 text-foreground">
+								</div>
+								{agent.resultPreview ? (
+									<div className="min-h-0 flex-1 overflow-y-auto rounded-md bg-muted/50 px-2.5 py-2 text-foreground">
+										<div ref={scrollContentRef}>
+											<Suspense
+												fallback={
+													<pre className="whitespace-pre-wrap break-words text-ui leading-6 text-foreground">
+														{agent.resultPreview}
+													</pre>
+												}
+											>
 												<LazyStreamdown
 													className="conversation-streamdown"
 													mode="static"
 												>
 													{agent.resultPreview}
 												</LazyStreamdown>
-											</div>
-										</Suspense>
-									) : (
-										<div className="text-ui text-muted-foreground/60">
-											No result preview.
+											</Suspense>
 										</div>
-									)}
-								</div>
-							);
-						})()
-					)}
-				</div>
+									</div>
+								) : (
+									<div className="text-ui text-muted-foreground/60">
+										No result preview.
+									</div>
+								)}
+							</div>
+						);
+					})()
+				)}
 			</div>
 		</div>
 	);

@@ -76,11 +76,11 @@ import { FileMentionPlugin } from "./editor/plugins/file-mention-plugin";
 import { HasContentPlugin } from "./editor/plugins/has-content-plugin";
 import { HistoryRecallPlugin } from "./editor/plugins/history-recall-plugin";
 import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
+import { ShimmerKeywordPlugin } from "./editor/plugins/shimmer-keyword-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
-import { WorkflowKeywordPlugin } from "./editor/plugins/workflow-keyword-plugin";
+import { ShimmerKeywordNode } from "./editor/shimmer-keyword-node";
 import { $extractComposerContent } from "./editor/utils";
-import { WorkflowKeywordNode } from "./editor/workflow-keyword-node";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
@@ -217,6 +217,13 @@ type WorkspaceComposerProps = {
 	 *  composer doesn't have to re-render when the thread cache changes. */
 	getInputHistory?: () => readonly InputHistoryEntry[];
 };
+
+/**
+ * Composer keywords that get the inline shimmer cue (see `ShimmerKeywordPlugin`
+ * + the `composer-shimmer-keyword` CSS). Whole-word regex fragments, matched
+ * case-insensitively at word boundaries.
+ */
+const SHIMMER_KEYWORDS = ["workflows?", "ultrathink"] as const;
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommandEntry[] = [];
 const EMPTY_LINKED_DIRECTORIES: readonly string[] = [];
@@ -478,7 +485,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			FileBadgeNode,
 			CustomTagBadgeNode,
 			AddDirTriggerNode,
-			WorkflowKeywordNode,
+			ShimmerKeywordNode,
 		],
 		onError: onEditorError,
 	}).current;
@@ -871,7 +878,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						) : null}
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
-						<WorkflowKeywordPlugin />
+						<ShimmerKeywordPlugin keywords={SHIMMER_KEYWORDS} />
 					</LexicalComposer>
 
 					{sendError ? (

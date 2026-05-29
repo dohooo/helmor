@@ -1,0 +1,13 @@
+{
+	"items": [
+		{
+			"text": "Claude's dynamic workflows now appear as a live card, and the new /workflows command opens a keyboard-navigable drill-down into each run's phases, agents, and results."
+		},
+		{
+			"text": "Typing \"workflow\" or \"ultrathink\" in the composer now highlights the word to cue the matching mode."
+		},
+		{
+			"text": "Claude Opus 4.8 (1M context) is now the default model, listed above 4.7 and 4.6 in the picker."
+		}
+	]
+}
