@@ -63,6 +63,7 @@
 //!   surprising side effect of a "what's on the remote?" RPC.
 
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -268,110 +269,193 @@ fn remote_install_filename(bundle_path: &str) -> &str {
     }
 }
 
-/// Push one file via scp → verify sha256 on the remote → atomic `mv`
-/// onto the final path. Idempotent; safe to retry. Files known to be
-/// executable (the sidecar, claude, the wrapper) are chmod-ed to 0755
-/// after the move; the manifest itself stays 0644.
-fn push_file<R: SshRunner>(
-    runner: &R,
+/// Push a set of bundle files via a single `tar | ssh tar -x` pipeline,
+/// verify each file's SHA on the remote in one batched call, then
+/// atomically `mv` them onto their install paths.
+///
+/// Replaces the previous per-file scp loop because:
+///   - Default SSH negotiates the chacha20-poly1305 cipher, which isn't
+///     hardware-accelerated on most CPUs. Forcing `aes128-gcm@openssh.com`
+///     (HW-accelerated everywhere from ARMv8 to x86 with AES-NI) gives a
+///     ~5–20× throughput win in the wire layer. We list AES-GCM first
+///     and keep chacha20 as a fallback, so SSH negotiates the fastest
+///     option both ends support.
+///   - Each scp/ssh roundtrip on a non-multiplexed host pays a ~500 ms
+///     handshake. The old flow was 5 handshakes × N files; this one is
+///     three handshakes total (`prep`, `tar | ssh tar -xf -`, `verify +
+///     commit`), regardless of file count.
+///   - A single tar stream is also one cohesive transfer to abort. A
+///     Ctrl-C leaves a `.staging/` we wipe at the top of the next run;
+///     the install dir itself is never half-written because the
+///     atomic-mv step doesn't run until everything sha-matches.
+fn push_bundle_via_tarstream(
     host: &str,
     bundle_dir: &Path,
-    entry: &ManifestEntry,
+    entries: &[&ManifestEntry],
 ) -> Result<()> {
-    let local_path = bundle_dir.join(&entry.path);
-    if !local_path.is_file() {
+    // 1) Prepare staging: one ssh round-trip wipes any prior `.staging/`
+    //    (e.g. from a crashed earlier run) and recreates it empty.
+    let prep_cmd = format!("rm -rf {REMOTE_STAGING_DIR_SH} && mkdir -p {REMOTE_STAGING_DIR_SH}");
+    let prep = ssh_command(host)
+        .arg(&prep_cmd)
+        .output()
+        .context("ssh prep staging")?;
+    if !prep.status.success() {
         bail!(
-            "bundle file {} listed in MANIFEST but missing on disk at {}",
-            entry.path,
-            local_path.display(),
-        );
-    }
-    // Staging name keeps the source filename so a `ls .staging/` is
-    // legible during debugging; the post-verify rename lands at the
-    // bundle's *install* path, which may differ (see `remote_install_filename`).
-    // scp uses paths relative to `$HOME` (its default working dir) so
-    // we don't have to rely on shell expansion at the scp layer; ssh
-    // commands use the $HOME-rooted form because they DO get the
-    // remote login shell to expand them.
-    let scp_dest = format!("{REMOTE_STAGING_DIR_REL}/{}", entry.path);
-    let staging_path = format!("{REMOTE_STAGING_DIR_SH}/{}", entry.path);
-    let final_name = remote_install_filename(&entry.path);
-    let final_path = format!("{REMOTE_INSTALL_DIR_SH}/{final_name}");
-
-    // `mkdir -p` first — staging dir might not exist on a fresh host.
-    let mkdir = runner.run_ssh(host, &format!("mkdir -p {REMOTE_STAGING_DIR_SH}"))?;
-    if !mkdir.status.success() {
-        bail!(
-            "mkdir -p {REMOTE_STAGING_DIR_SH} failed on `{host}`: {}",
-            String::from_utf8_lossy(&mkdir.stderr).trim(),
+            "prepare staging dir failed on `{host}`: {}",
+            String::from_utf8_lossy(&prep.stderr).trim(),
         );
     }
 
-    // scp local → staging. We can't scp directly to the final path
-    // because a half-written file would survive a Ctrl-C and pretend
-    // to be valid.
-    let scp_out = runner.run_scp(&local_path, host, &scp_dest)?;
-    if !scp_out.status.success() {
+    // 2) tar(files in bundle_dir) | ssh 'cd staging && tar -xf -'.
+    //    Explicit file list (rather than `.`) so we don't sweep in
+    //    stray cache files an operator might have placed in the
+    //    bundle dir.
+    let bundle_dir_str = bundle_dir.to_str().context("bundle dir path is non-UTF8")?;
+    let mut tar_args: Vec<String> =
+        vec!["-cf".into(), "-".into(), "-C".into(), bundle_dir_str.into()];
+    for entry in entries {
+        tar_args.push(entry.path.clone());
+    }
+    let mut tar = Command::new("tar")
+        .args(&tar_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawn tar -cf - in {bundle_dir_str}"))?;
+    let tar_stdout = tar.stdout.take().expect("tar piped stdout");
+
+    let extract_cmd = format!("cd {REMOTE_STAGING_DIR_SH} && tar -xf -");
+    let ssh_pipe = ssh_command(host)
+        .arg(&extract_cmd)
+        .stdin(Stdio::from(tar_stdout))
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn ssh tar -xf -")?;
+
+    let ssh_out = ssh_pipe
+        .wait_with_output()
+        .context("wait for ssh tar -xf - to finish")?;
+    let tar_status = tar.wait().context("wait for tar -cf -")?;
+
+    if !tar_status.success() {
+        let mut tar_stderr = String::new();
+        if let Some(mut s) = tar.stderr {
+            use std::io::Read;
+            let _ = s.read_to_string(&mut tar_stderr);
+        }
+        bail!("tar -cf - exited {tar_status}: {}", tar_stderr.trim());
+    }
+    if !ssh_out.status.success() {
         bail!(
-            "scp {} → {host}:{scp_dest} failed: {}",
-            local_path.display(),
-            String::from_utf8_lossy(&scp_out.stderr).trim(),
+            "ssh tar -xf - on `{host}` failed: {}",
+            String::from_utf8_lossy(&ssh_out.stderr).trim(),
         );
     }
 
-    // Verify the SHA on the remote — defends against truncated copies
-    // *and* a transport tampering with the bytes mid-flight (cheap, and
-    // it's the only way to be sure the on-disk file matches what the
-    // local manifest said it should).
-    let verify_cmd = format!("sha256sum {staging_path} | cut -d ' ' -f 1",);
-    let verify_out = runner.run_ssh(host, &verify_cmd)?;
-    if !verify_out.status.success() {
+    // 3) sha256 verify all staged files in one ssh round-trip.
+    //    `sha256sum -- a b c` emits one line per file with the hash +
+    //    path; cheap to parse, no per-file ssh overhead.
+    let mut sha_cmd = format!("cd {REMOTE_STAGING_DIR_SH} && sha256sum --");
+    for entry in entries {
+        sha_cmd.push(' ');
+        sha_cmd.push_str(&entry.path);
+    }
+    let sha_out = ssh_command(host)
+        .arg(&sha_cmd)
+        .output()
+        .context("ssh sha256sum of staged files")?;
+    if !sha_out.status.success() {
         bail!(
-            "remote sha256sum on {staging_path} failed: {}",
-            String::from_utf8_lossy(&verify_out.stderr).trim(),
+            "remote sha256sum of staged bundle failed on `{host}`: {}",
+            String::from_utf8_lossy(&sha_out.stderr).trim(),
         );
     }
-    let observed_sha = String::from_utf8_lossy(&verify_out.stdout)
-        .trim()
-        .to_string();
-    if observed_sha != entry.sha256 {
-        // Clean up the bad staged file so it doesn't poison a retry.
-        let _ = runner.run_ssh(host, &format!("rm -f {staging_path}"));
-        bail!(
-            "sha256 mismatch for {} after upload:\n  expected: {}\n  observed: {}",
-            entry.path,
-            entry.sha256,
-            observed_sha,
-        );
-    }
-
-    // Atomic mv onto the final path. `mv` is atomic within a single
-    // filesystem (POSIX `rename(2)`), so a crash either leaves the
-    // OLD file at `final_path` or the NEW file — never a half-written
-    // hybrid. The daemon's process is unaffected by the rename
-    // because it's already memory-mapped its current binary.
-    let mv_cmd = format!("mv -f {staging_path} {final_path}");
-    let mv_out = runner.run_ssh(host, &mv_cmd)?;
-    if !mv_out.status.success() {
-        bail!(
-            "atomic mv `{staging_path}` → `{final_path}` failed on `{host}`: {}",
-            String::from_utf8_lossy(&mv_out.stderr).trim(),
-        );
-    }
-
-    // chmod +x for the executable members. The manifest itself is
-    // data, so it stays whatever umask the user has set.
-    if is_executable_bundle_entry(&entry.path) {
-        let chmod_out = runner.run_ssh(host, &format!("chmod 0755 {final_path}"))?;
-        if !chmod_out.status.success() {
+    let sha_output = String::from_utf8_lossy(&sha_out.stdout);
+    for entry in entries {
+        let line = sha_output
+            .lines()
+            .find(|l| {
+                // sha256sum line format: "<hash>  <path>" — two spaces
+                // between hash and path, path identical to what we
+                // passed.
+                l.split_whitespace().nth(1) == Some(entry.path.as_str())
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "sha256sum output is missing `{}`; output was:\n{}",
+                    entry.path,
+                    sha_output,
+                )
+            })?;
+        let observed = line
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("sha256sum line missing hash field: `{line}`"))?;
+        if observed != entry.sha256 {
+            let _ = ssh_command(host)
+                .arg(format!("rm -rf {REMOTE_STAGING_DIR_SH}"))
+                .output();
             bail!(
-                "chmod 0755 {final_path} failed: {}",
-                String::from_utf8_lossy(&chmod_out.stderr).trim(),
+                "sha256 mismatch for staged `{}`:\n  expected: {}\n  observed: {}",
+                entry.path,
+                entry.sha256,
+                observed,
             );
         }
     }
 
+    // 4) Atomic per-file mv into the install dir + chmod, in one
+    //    ssh round-trip. Each `mv -f` is `rename(2)`; chmod is a
+    //    no-op cost.
+    let mut commit_cmd = String::new();
+    for entry in entries {
+        let final_name = remote_install_filename(&entry.path);
+        let staging_path = format!("{REMOTE_STAGING_DIR_SH}/{}", entry.path);
+        let final_path = format!("{REMOTE_INSTALL_DIR_SH}/{final_name}");
+        commit_cmd.push_str(&format!("mv -f {staging_path} {final_path}; "));
+        if is_executable_bundle_entry(&entry.path) {
+            commit_cmd.push_str(&format!("chmod 0755 {final_path}; "));
+        }
+    }
+    let commit_out = ssh_command(host)
+        .arg(&commit_cmd)
+        .output()
+        .context("ssh commit (mv + chmod)")?;
+    if !commit_out.status.success() {
+        bail!(
+            "atomic commit of staged files failed on `{host}`: {}",
+            String::from_utf8_lossy(&commit_out.stderr).trim(),
+        );
+    }
+
+    // Tidy: empty the staging dir. Best-effort.
+    let _ = ssh_command(host)
+        .arg(format!("rm -rf {REMOTE_STAGING_DIR_SH}"))
+        .output();
+
     Ok(())
+}
+
+/// SSH cipher preference for the bundle install. AES-GCM first because
+/// it's hardware-accelerated everywhere from ARMv8 (Apple Silicon) to
+/// modern x86 with AES-NI; chacha20 last as a fallback for hosts that
+/// don't advertise AES-GCM. The persistent JSON-RPC transport that
+/// carries normal Helmor traffic honors whatever the user's
+/// `~/.ssh/config` declares — we only force the cipher here, where the
+/// throughput dominates user-perceived install time.
+const FAST_CIPHER_ARG: &str =
+    "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com";
+
+/// Build the `ssh` Command we use for install-time RPCs (prep, tar
+/// pipe, verify, commit, cleanup). The host is the LAST argument so
+/// callers can append `arg(remote_command)` after.
+fn ssh_command(host: &str) -> Command {
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o").arg("BatchMode=yes");
+    cmd.arg("-o").arg(FAST_CIPHER_ARG);
+    cmd.arg(host);
+    cmd
 }
 
 /// Names of bundle files that should be `chmod 0755` after install.
@@ -481,30 +565,55 @@ pub fn ensure_remote_bundle<R: SshRunner>(
         );
     }
 
+    // Resolve the manifest entries we need to push, plus build a
+    // synthetic MANIFEST.json entry. The manifest is the COMMIT
+    // MARKER — staged in the same tar stream as the rest, but the
+    // ssh-side commit script `mv`s the data files BEFORE the
+    // manifest. If a Ctrl-C lands mid-commit, the manifest still
+    // describes the *previous* state, so the next install sees a
+    // mismatch on the half-installed files and finishes the job.
+    let mut entries: Vec<ManifestEntry> = Vec::with_capacity(plan.len() + 1);
     for path in &plan {
         let entry = local
             .find(path)
             .ok_or_else(|| anyhow::anyhow!("planned file `{path}` missing from local manifest"))?;
-        push_file(runner, host, bundle_dir, entry)
-            .with_context(|| format!("push bundle file `{path}` to `{host}`"))?;
-        tracing::info!(host = %host, file = %path, "remote bundle: pushed");
+        entries.push(entry.clone());
     }
-
-    // MANIFEST.json is the commit marker — push it last so a partial
-    // run leaves the *prior* manifest in place; the next attempt will
-    // notice the mismatch and only push what's still missing.
     let manifest_path = bundle_dir.join("MANIFEST.json");
-    let manifest_entry = ManifestEntry {
+    entries.push(ManifestEntry {
         path: "MANIFEST.json".into(),
         sha256: sha256_of_path(&manifest_path)?,
         bytes: std::fs::metadata(&manifest_path)?.len(),
-    };
-    push_file(runner, host, bundle_dir, &manifest_entry)
-        .with_context(|| "push MANIFEST.json (commit marker)")?;
+    });
 
-    // Tidy: empty out the staging dir. Best-effort — leaving leftovers
-    // is correctness-safe, only wastes disk on the remote.
-    let _ = runner.run_ssh(host, &format!("rm -rf {REMOTE_STAGING_DIR_SH}"));
+    let entries_refs: Vec<&ManifestEntry> = entries.iter().collect();
+    push_bundle_via_tarstream(host, bundle_dir, &entries_refs)
+        .with_context(|| format!("push remote bundle to `{host}`"))?;
+
+    // Bounce any daemon that's still running. Process env is set at
+    // exec time and never refreshed, so a daemon started BEFORE the
+    // wrapper script existed has no `HELMOR_SIDECAR_PATH` /
+    // `HELMOR_CLAUDE_CODE_BIN_PATH` and `agent.send` to it will report
+    // "agent bridge disabled". Killing it here is safe because it's
+    // OUR process (we installed it via `super::install`), the kill is
+    // a graceful SIGTERM that lets the journal finish flushing, and
+    // the next `connect_remote_runtime` re-forks a fresh daemon
+    // through the wrapper we just installed — which inherits the
+    // right env.
+    //
+    // Scoped narrowly to OUR managed daemon path: `pkill -f` matches
+    // on the full cmdline, and our daemon's cmdline contains the
+    // full `$HOME/.helmor/server/helmor-server.real --daemon` we
+    // know exactly. We don't touch any other process.
+    let bounce_cmd =
+        format!("pkill -TERM -f '{REMOTE_DAEMON_BINARY_SH} --daemon' 2>/dev/null || true",);
+    let _ = ssh_command(host).arg(&bounce_cmd).output();
+    tracing::info!(
+        host = %host,
+        target = %local.target.as_str(),
+        files = ?plan,
+        "remote bundle: install complete (daemon bounced so it re-reads wrapper env)",
+    );
 
     Ok(EnsureRemoteBundleOutcome {
         manifest: local,
