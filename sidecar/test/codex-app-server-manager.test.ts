@@ -10,6 +10,11 @@ type RequestRecord = {
 	params: unknown;
 };
 
+const goalTurnState = new WeakMap<
+	Record<string, unknown>,
+	{ count: number; beforeComplete: number }
+>();
+
 const serverState = {
 	requests: [] as RequestRecord[],
 	onNotification: null as
@@ -29,16 +34,19 @@ const serverState = {
 	exitAfterTurnStarted: false,
 	instances: [] as MockCodexAppServer[],
 	responses: [] as Array<{ id: string | number; result: unknown }>,
+	goal: {
+		threadId: "thread-1",
+		objective: "review the diff",
+		status: "active",
+		tokenBudget: null,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		createdAt: 0,
+		updatedAt: 0,
+	} as Record<string, unknown> | null,
 };
 const gitAccessState = {
 	directories: [] as string[],
-};
-const codexConfigState = {
-	result: {
-		kind: "alreadyEnabled" as "alreadyEnabled" | "modified",
-		path: "/fake/.codex/config.toml",
-	},
-	calls: 0,
 };
 
 class MockCodexAppServer {
@@ -65,14 +73,80 @@ class MockCodexAppServer {
 			return { thread: { id: threadId } };
 		}
 		if (method === "thread/goal/set") {
+			const goalParams = params as
+				| { objective?: string; status?: string; threadId?: string }
+				| undefined;
+			if (goalParams?.objective) {
+				const goal = {
+					threadId: goalParams.threadId ?? "thread-1",
+					objective: goalParams.objective,
+					status: "active",
+					tokenBudget: null,
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					createdAt: 0,
+					updatedAt: 0,
+				};
+				serverState.goal = goal;
+				goalTurnState.set(goal, {
+					count: 0,
+					beforeComplete: goalParams.objective.includes(
+						"keep going until complete",
+					)
+						? 1
+						: 0,
+				});
+			} else if (serverState.goal && goalParams?.status) {
+				const prev = serverState.goal;
+				const goal = { ...prev, status: goalParams.status };
+				serverState.goal = goal;
+				const state = goalTurnState.get(prev);
+				if (state) goalTurnState.set(goal, state);
+			}
+			const startsTurn =
+				Boolean(goalParams?.objective) || goalParams?.status === "active";
 			queueMicrotask(() => {
+				serverState.onNotification?.({
+					method: "thread/goal/updated",
+					params: { goal: serverState.goal },
+				});
+				if (!startsTurn) return;
 				serverState.onNotification?.({
 					method: "turn/started",
 					params: { turn: { id: "turn-goal-1" } },
 				});
+				const state = serverState.goal
+					? goalTurnState.get(serverState.goal)
+					: undefined;
+				if (
+					serverState.goal?.status === "active" &&
+					(state?.count ?? 0) >= (state?.beforeComplete ?? 0)
+				) {
+					const prev = serverState.goal;
+					serverState.goal = { ...prev, status: "complete" };
+					if (state) goalTurnState.set(serverState.goal, state);
+					serverState.onNotification?.({
+						method: "thread/goal/updated",
+						params: { goal: serverState.goal },
+					});
+				}
+				if (state) state.count += 1;
 				serverState.onNotification?.({
 					method: "turn/completed",
 					params: { turn: { id: "turn-goal-1" } },
+				});
+			});
+			return { goal: serverState.goal };
+		}
+		if (method === "thread/goal/get") {
+			return { goal: serverState.goal };
+		}
+		if (method === "thread/goal/clear") {
+			serverState.goal = null;
+			queueMicrotask(() => {
+				serverState.onNotification?.({
+					method: "thread/goal/cleared",
+					params: {},
 				});
 			});
 			return {};
@@ -151,14 +225,6 @@ mock.module("../src/git-access.js", () => ({
 	resolveGitAccessDirectories: async () => [...gitAccessState.directories],
 }));
 
-mock.module("../src/codex-config.js", () => ({
-	ensureCodexGoalsFeatureEnabled: async () => {
-		codexConfigState.calls += 1;
-		return { ...codexConfigState.result };
-	},
-	codexConfigPath: () => codexConfigState.result.path,
-}));
-
 const { CodexAppServerManager } = await import(
 	"../src/codex-app-server-manager.js"
 );
@@ -175,12 +241,8 @@ describe("CodexAppServerManager", () => {
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
+		serverState.goal = null;
 		gitAccessState.directories = [];
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
-		codexConfigState.calls = 0;
 		emitter = createSidecarEmitter(() => {});
 	});
 
@@ -261,6 +323,68 @@ describe("CodexAppServerManager", () => {
 		expect(turnStart?.params).toEqual(
 			expect.objectContaining({ serviceTier: "fast" }),
 		);
+	});
+
+	test("starts Codex threads with native goal tool instructions", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-tool-instructions",
+			{
+				sessionId: "session-goal-tools",
+				prompt: "create a goal to finish this task",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const threadStart = serverState.requests.find(
+			(request) => request.method === "thread/start",
+		);
+
+		expect(threadStart?.params).toEqual(
+			expect.objectContaining({
+				developerInstructions: expect.stringContaining("create_goal"),
+			}),
+		);
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("get_goal");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("update_goal");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("durable objective");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("Do not call update_goal to mark a goal complete");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("completion audit");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("longer-running workflow");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("remaining state clear");
+		expect(
+			(threadStart?.params as { developerInstructions?: string })
+				.developerInstructions,
+		).toContain("missing or blocked proof");
 	});
 
 	test("forwards effort through codex collaboration mode settings", async () => {
@@ -880,14 +1004,16 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("hello world")).toBeNull();
 		expect(parseGoalCommand("/compact")).toBeNull();
 		expect(parseGoalCommand("/goalish trick")).toBeNull();
+		expect(parseGoalCommand("please run /goal improve coverage")).toBeNull();
 	});
 
-	test("returns null for bare /goal so the agent handles it", async () => {
+	test("recognises bare /goal and /goal status as status", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
 		);
-		expect(parseGoalCommand("/goal")).toBeNull();
-		expect(parseGoalCommand("  /goal  ")).toBeNull();
+		expect(parseGoalCommand("/goal")).toEqual({ kind: "status" });
+		expect(parseGoalCommand("  /goal  ")).toEqual({ kind: "status" });
+		expect(parseGoalCommand("/goal status")).toEqual({ kind: "status" });
 	});
 
 	test("treats free-form text as the objective", async () => {
@@ -900,6 +1026,35 @@ describe("parseGoalCommand", () => {
 		});
 	});
 
+	test("recognises /goal commands inside Helmor's wrapped user request", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		const wrapped =
+			"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal improve benchmark coverage";
+		expect(parseGoalCommand(wrapped)).toEqual({
+			kind: "set",
+			objective: "improve benchmark coverage",
+		});
+		expect(
+			parseGoalCommand(`${wrapped}\n\nMore detail in the objective.`),
+		).toEqual({
+			kind: "set",
+			objective: "improve benchmark coverage\n\nMore detail in the objective.",
+		});
+	});
+
+	test("recognises wrapped /goal status", async () => {
+		const { parseGoalCommand } = await import(
+			"../src/codex-app-server-manager.js"
+		);
+		expect(
+			parseGoalCommand(
+				"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal status",
+			),
+		).toEqual({ kind: "status" });
+	});
+
 	test("recognises /goal resume as the resume kind", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
@@ -907,30 +1062,17 @@ describe("parseGoalCommand", () => {
 		expect(parseGoalCommand("/goal resume")).toEqual({ kind: "resume" });
 	});
 
-	// Contract: pause/clear are NOT recognised by the sidecar parser. The
-	// container-level intercept catches them BEFORE the prompt ever reaches
-	// the sidecar — they're routed through `mutateCodexGoal` so they don't
-	// pollute chat history. If this changes (e.g. parser starts returning
-	// pause/clear variants), the container intercept must lose its short-
-	// circuit too, or `/goal pause` will be both lifecycle-mutated AND
-	// echoed as a chat user prompt.
-	test("does NOT recognise /goal pause or /goal clear (handled by container intercept)", async () => {
+	test("recognises /goal pause, /goal clear, and /goal edit as commands", async () => {
 		const { parseGoalCommand } = await import(
 			"../src/codex-app-server-manager.js"
 		);
-		// Sidecar treats them as plain objectives if they ever arrive here.
-		expect(parseGoalCommand("/goal pause")).toEqual({
-			kind: "set",
-			objective: "pause",
-		});
-		expect(parseGoalCommand("/goal clear")).toEqual({
-			kind: "set",
-			objective: "clear",
-		});
+		expect(parseGoalCommand("/goal pause")).toEqual({ kind: "pause" });
+		expect(parseGoalCommand("/goal clear")).toEqual({ kind: "clear" });
+		expect(parseGoalCommand("/goal edit")).toEqual({ kind: "status" });
 	});
 });
 
-describe("CodexAppServerManager goal pre-flight", () => {
+describe.serial("CodexAppServerManager goal app-server integration", () => {
 	let emitter: SidecarEmitter;
 
 	beforeEach(() => {
@@ -942,21 +1084,22 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
-		gitAccessState.directories = [];
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
+		serverState.goal = {
+			threadId: "thread-1",
+			objective: "review the diff",
+			status: "active",
+			tokenBudget: null,
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: 0,
+			updatedAt: 0,
 		};
-		codexConfigState.calls = 0;
+		gitAccessState.directories = [];
 		emitter = createSidecarEmitter(() => {});
 	});
 
-	test("/goal pre-flight: no-op when codex config already enables goals", async () => {
+	test("/goal uses native Codex goal RPC without global config mutation", async () => {
 		const manager = new CodexAppServerManager();
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 
 		await manager.sendMessage(
 			"REQ-goal-noop",
@@ -974,7 +1117,6 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		expect(codexConfigState.calls).toBe(1);
 		expect(serverState.instances).toHaveLength(1);
 		expect(serverState.instances[0]?.killed).toBe(false);
 		const goalSet = serverState.requests.find(
@@ -984,6 +1126,148 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			threadId: "thread-1",
 			objective: "review the diff",
 		});
+	});
+
+	test("wrapped /goal uses Codex goal RPC instead of starting a normal turn", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-wrapped",
+			{
+				sessionId: "s-goal-wrapped",
+				prompt:
+					"<helmor_context>\nUse Helmor.\n</helmor_context>\n\nUser request:\n/goal review the wrapped diff",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			false,
+		);
+		const goalSet = serverState.requests.find(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSet?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "review the wrapped diff",
+		});
+	});
+
+	test("/goal auto-resumes while Codex reports the goal is still active", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-auto-resume",
+			{
+				sessionId: "s-goal-auto-resume",
+				prompt: "/goal keep going until complete",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		const goalSets = serverState.requests.filter(
+			(r) => r.method === "thread/goal/set",
+		);
+		expect(goalSets.map((r) => r.params)).toHaveLength(2);
+		expect(goalSets[0]?.params).toMatchObject({
+			threadId: "thread-1",
+			objective: "keep going until complete",
+		});
+		expect(goalSets[1]?.params).toMatchObject({
+			threadId: "thread-1",
+			status: "active",
+		});
+		expect(
+			serverState.requests.some((r) => r.method === "thread/goal/get"),
+		).toBe(true);
+	});
+
+	test("resumed active native goal keeps a normal prompt subscribed across continuation", async () => {
+		const manager = new CodexAppServerManager();
+
+		await manager.sendMessage(
+			"REQ-goal-resume-normal-prompt",
+			{
+				sessionId: "s-goal-resume-normal-prompt",
+				prompt: "continue from here",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: "thread-1",
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			emitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "thread/resume")).toBe(
+			true,
+		);
+		expect(
+			serverState.requests.some((r) => r.method === "thread/goal/get"),
+		).toBe(true);
+		expect(
+			serverState.requests.some(
+				(r) =>
+					r.method === "thread/goal/set" &&
+					(r.params as { status?: string }).status === "active",
+			),
+		).toBe(true);
+	});
+
+	test("/goal status reads the goal without starting a turn", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		await manager.sendMessage(
+			"REQ-goal-status",
+			{
+				sessionId: "s-goal-status",
+				prompt: "/goal status",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			false,
+		);
+		const goalGet = serverState.requests.find(
+			(r) => r.method === "thread/goal/get",
+		);
+		expect(goalGet?.params).toMatchObject({ threadId: "thread-1" });
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				id: "REQ-goal-status",
+				type: "codexGoalUpdated",
+				sessionId: "s-goal-status",
+				goal: JSON.stringify(serverState.goal),
+			}),
+		);
 	});
 
 	test("/goal recycles idle context so continuation inherits full access", async () => {
@@ -1053,14 +1337,10 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		});
 	});
 
-	test("/goal pre-flight: recycles stale codex and resumes its thread when toml had to be modified", async () => {
+	test("/goal recycles stale codex and resumes its thread before setting the goal", async () => {
 		const manager = new CodexAppServerManager();
 
 		// Seed a session so a stale ctx exists for the recycle.
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 		await manager.sendMessage(
 			"REQ-seed",
 			{
@@ -1079,11 +1359,6 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		expect(serverState.instances).toHaveLength(1);
 		const stale = serverState.instances[0];
 
-		// Pretend the helper had to flip the flag.
-		codexConfigState.result = {
-			kind: "modified",
-			path: "/fake/.codex/config.toml",
-		};
 		serverState.requests = [];
 
 		await manager.sendMessage(
@@ -1110,7 +1385,10 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		const resume = serverState.requests.find(
 			(r) => r.method === "thread/resume",
 		);
-		expect(resume?.params).toMatchObject({ threadId: "thread-1" });
+		expect(resume?.params).toMatchObject({
+			threadId: "thread-1",
+			developerInstructions: expect.stringContaining("create_goal"),
+		});
 
 		const goalSet = serverState.requests.find(
 			(r) => r.method === "thread/goal/set",
@@ -1121,13 +1399,9 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		});
 	});
 
-	test("/goal pre-flight: caller-provided resume wins over stale providerThreadId", async () => {
+	test("/goal caller-provided resume wins over stale providerThreadId", async () => {
 		const manager = new CodexAppServerManager();
 
-		codexConfigState.result = {
-			kind: "alreadyEnabled",
-			path: "/fake/.codex/config.toml",
-		};
 		await manager.sendMessage(
 			"REQ-seed-2",
 			{
@@ -1144,10 +1418,6 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		codexConfigState.result = {
-			kind: "modified",
-			path: "/fake/.codex/config.toml",
-		};
 		serverState.requests = [];
 
 		// Caller's resume wins over the in-memory stale id.
@@ -1173,7 +1443,7 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		expect(resume?.params).toMatchObject({ threadId: "thread-from-rust" });
 	});
 
-	test("/goal pre-flight: skipped for non-/goal prompts", async () => {
+	test("/goal context recycle is skipped for non-/goal prompts", async () => {
 		const manager = new CodexAppServerManager();
 
 		await manager.sendMessage(
@@ -1192,6 +1462,8 @@ describe("CodexAppServerManager goal pre-flight", () => {
 			emitter,
 		);
 
-		expect(codexConfigState.calls).toBe(0);
+		expect(serverState.requests.some((r) => r.method === "turn/start")).toBe(
+			true,
+		);
 	});
 });

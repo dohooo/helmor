@@ -17,7 +17,6 @@ import {
 	type JsonRpcNotification,
 	type JsonRpcRequest,
 } from "./codex-app-server.js";
-import { ensureCodexGoalsFeatureEnabled } from "./codex-config.js";
 import { SubAgentTracker } from "./codex-subagent-tracker.js";
 import { buildCodexStoredMeta } from "./context-usage.js";
 import type { SidecarEmitter } from "./emitter.js";
@@ -114,27 +113,34 @@ function codexTargetTriple(): string | null {
 const CODEX_BIN_PATH = resolveCodexBinPath();
 
 /**
- * Recognised `/goal` slash-command shapes. `set` carries the objective;
- * `resume` exists so the user can recover an active goal after a pause
- * by typing `/goal resume`. We deliberately route `resume` through the
- * sendMessage path (rather than `mutateCodexGoal`) — the resulting
- * stream subscription is what catches the goal-continuation turn that
- * codex auto-spawns, otherwise those events fire into a dead handler.
- *
- * Pause / Clear are NOT here on purpose: they live on banner / Composer
- * Stop and go through `mutateCodexGoal` so they don't show up as user
- * messages in the chat.
+ * Recognised `/goal` slash-command shapes. `set` carries the objective.
+ * `resume` deliberately stays on the sendMessage path because Codex may
+ * spawn a continuation turn after the goal becomes active again, and the
+ * stream subscription is what captures that turn.
  */
 export type GoalCommand =
 	| { kind: "set"; objective: string }
-	| { kind: "resume" };
+	| { kind: "resume" }
+	| { kind: "pause" }
+	| { kind: "clear" }
+	| { kind: "status" };
+
+export function extractUserCommandText(prompt: string): string {
+	const trimmed = prompt.trim();
+	const match = trimmed.match(/(?:^|\n)User request:\n([\s\S]*)$/);
+	return (match?.[1] ?? trimmed).trim();
+}
 
 export function parseGoalCommand(prompt: string): GoalCommand | null {
-	const m = prompt.trim().match(/^\/goal(?:\s+([\s\S]+))?$/);
+	const commandText = extractUserCommandText(prompt);
+	const m = commandText.match(/^\/goal(?:\s+([\s\S]+))?$/);
 	if (!m) return null;
 	const arg = (m[1] ?? "").trim();
-	if (arg === "") return null;
+	if (arg === "" || arg === "status") return { kind: "status" };
 	if (arg === "resume") return { kind: "resume" };
+	if (arg === "pause") return { kind: "pause" };
+	if (arg === "clear") return { kind: "clear" };
+	if (arg === "edit") return { kind: "status" };
 	return { kind: "set", objective: arg };
 }
 
@@ -142,7 +148,7 @@ function dispatchGoalCommand(
 	server: CodexAppServer,
 	threadId: string,
 	cmd: GoalCommand,
-): { method: string; promise: Promise<unknown> } {
+): { method: string; promise: Promise<unknown>; resolvesWithoutTurn: boolean } {
 	if (cmd.kind === "resume") {
 		return {
 			method: "thread/goal/set",
@@ -151,6 +157,32 @@ function dispatchGoalCommand(
 				{ threadId, status: "active" },
 				20_000,
 			),
+			resolvesWithoutTurn: false,
+		};
+	}
+	if (cmd.kind === "pause") {
+		return {
+			method: "thread/goal/set",
+			promise: server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "paused" },
+				20_000,
+			),
+			resolvesWithoutTurn: true,
+		};
+	}
+	if (cmd.kind === "clear") {
+		return {
+			method: "thread/goal/clear",
+			promise: server.sendRequest("thread/goal/clear", { threadId }, 20_000),
+			resolvesWithoutTurn: true,
+		};
+	}
+	if (cmd.kind === "status") {
+		return {
+			method: "thread/goal/get",
+			promise: server.sendRequest("thread/goal/get", { threadId }, 20_000),
+			resolvesWithoutTurn: true,
 		};
 	}
 	return {
@@ -160,6 +192,7 @@ function dispatchGoalCommand(
 			{ threadId, objective: cmd.objective },
 			20_000,
 		),
+		resolvesWithoutTurn: false,
 	};
 }
 
@@ -176,6 +209,20 @@ const HELMOR_CLIENT_INFO = {
 	},
 	capabilities: { experimentalApi: true },
 } as const;
+
+const HELMOR_CODEX_GOAL_INSTRUCTIONS = [
+	"Helmor runs Codex app-server with the native goals feature enabled.",
+	"When the user asks you to set, create, define, start, or pursue a goal, use Codex's native goal tools directly rather than describing a goal command in prose.",
+	"Create goals with create_goal and inspect them with get_goal.",
+	"Treat an active goal as a durable objective that can span multiple turns. Do not shrink, reinterpret, or replace it with a smaller one-turn task.",
+	"For active goals, treat each turn as one step in a longer-running workflow. Focus on the next concrete subtask, use tools to make real progress, and only update the goal to complete after the full objective has been verified and no required work remains. If work remains, keep the goal active and make the remaining state clear.",
+	"Do not call update_goal to mark a goal complete just because the current turn ended, you made partial progress, or no obvious next step is immediately visible.",
+	"Before marking complete, perform a completion audit: derive the concrete requirements from the goal, verify each requirement against current files, command output, tests, runtime behavior, or other authoritative evidence, and continue working if any evidence is missing, weak, or contradictory.",
+	"Treat missing or blocked proof as remaining work, not completion. If a requirement cannot currently be verified, name the concrete gap or blocker and keep the goal active unless the blocked-status threshold is genuinely met.",
+	"Only call update_goal with complete after the audit proves every requirement is satisfied and no required work remains.",
+	"Only call update_goal with blocked when you are genuinely at an impasse and can state the blocker; otherwise keep the goal active and continue making progress.",
+	"Pause, resume, and clear goal lifecycle controls are handled by the user or Helmor host UI; do not emulate those with normal chat text.",
+].join("\n");
 
 // Recoverable thread resume errors — fall back to thread/start.
 const RECOVERABLE_RESUME_SNIPPETS = [
@@ -342,10 +389,22 @@ function buildCodexAnswers(
 	return answers;
 }
 
+function shouldContinueGoalAfterTurn(
+	goalCommand: GoalCommand | null,
+	ctx: AppServerContext,
+): boolean {
+	return (
+		goalCommand?.kind === "set" ||
+		goalCommand?.kind === "resume" ||
+		ctx.goalStatus === "active"
+	);
+}
+
 interface AppServerContext {
 	server: CodexAppServer;
 	providerThreadId: string | null;
 	activeTurnId: string | null;
+	goalStatus: string | null;
 	turnResolve: (() => void) | null;
 	turnReject: ((err: Error) => void) | null;
 	/** Request id for the currently streaming sendMessage invocation —
@@ -380,10 +439,6 @@ interface AppServerContext {
 	/** Tracks sub-agent thread metadata (nickname, role) so we can enrich
 	 *  `collabAgentToolCall(spawnAgent)` items before forwarding them. */
 	subAgentTracker: SubAgentTracker;
-	/** Latest Codex goal status seen on this app-server stream. Used to
-	 *  keep Helmor's request-scoped stream alive across Codex's automatic
-	 *  goal-continuation turns. */
-	latestGoalStatus: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -558,21 +613,14 @@ export class CodexAppServerManager implements SessionManager {
 			promptLen: prompt.length,
 		});
 
-		// `/goal` needs `[features] goals = true` in `~/.codex/config.toml`.
-		// Codex reads its config once at startup, so the pre-flight runs
-		// before `ensureContext` and recycles any stale process.
+		// `codex app-server` is spawned with `--enable goals`, so `/goal`
+		// commands can use the native thread/goal RPCs without mutating
+		// the user's global ~/.codex/config.toml.
+		const commandText = extractUserCommandText(prompt);
 		const goalCommand = parseGoalCommand(prompt);
-		let effectiveResume = resume;
-		if (goalCommand) {
-			effectiveResume = await this.ensureCodexGoalsReady(
-				sessionId,
-				effectiveResume,
-			);
-			effectiveResume = this.recycleIdleContextForGoal(
-				sessionId,
-				effectiveResume,
-			);
-		}
+		const effectiveResume = goalCommand
+			? this.recycleIdleContextForGoal(sessionId, resume)
+			: resume;
 
 		const ctx = await this.ensureContext(
 			sessionId,
@@ -598,7 +646,7 @@ export class CodexAppServerManager implements SessionManager {
 			prompt,
 			resolvedAdditionalDirectories,
 		);
-		const isCompactCommand = !goalCommand && prompt.trim() === "/compact";
+		const isCompactCommand = !goalCommand && commandText === "/compact";
 		const input = buildTurnInput(promptWithContext, images);
 		const turnStartParams: Record<string, unknown> = {
 			threadId: ctx.providerThreadId,
@@ -763,9 +811,8 @@ export class CodexAppServerManager implements SessionManager {
 				if (n.method === "thread/goal/updated") {
 					const goal = deepGet(n.params, "goal");
 					if (goal && typeof goal === "object") {
-						const status = (goal as Record<string, unknown>).status;
-						ctx.latestGoalStatus =
-							typeof status === "string" ? status : ctx.latestGoalStatus;
+						const status = deepGet(goal, "status");
+						ctx.goalStatus = typeof status === "string" ? status : null;
 						emitter.codexGoalUpdated(
 							requestId,
 							sessionId,
@@ -774,7 +821,7 @@ export class CodexAppServerManager implements SessionManager {
 						if (
 							ctx.turnResolve &&
 							ctx.activeTurnId === null &&
-							!isActiveGoalStatus(ctx.latestGoalStatus)
+							!isActiveGoalStatus(ctx.goalStatus)
 						) {
 							ctx.turnResolve();
 							ctx.turnResolve = null;
@@ -783,7 +830,7 @@ export class CodexAppServerManager implements SessionManager {
 					}
 				}
 				if (n.method === "thread/goal/cleared") {
-					ctx.latestGoalStatus = null;
+					ctx.goalStatus = null;
 					emitter.codexGoalUpdated(requestId, sessionId, null);
 					if (ctx.turnResolve && ctx.activeTurnId === null) {
 						ctx.turnResolve();
@@ -827,12 +874,17 @@ export class CodexAppServerManager implements SessionManager {
 						for (const [id, p] of this.pendingApprovals) {
 							if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
 						}
-						if (isActiveGoalStatus(ctx.latestGoalStatus)) {
-							logger.info("Keeping Codex stream open for active goal", {
-								sessionId,
+						if (
+							!isCompactCommand &&
+							ctx.providerThreadId &&
+							shouldContinueGoalAfterTurn(goalCommand, ctx)
+						) {
+							void this.maybeContinueActiveGoal(
 								requestId,
-								completedTurnId,
-							});
+								sessionId,
+								ctx,
+								emitter,
+							);
 							return;
 						}
 						ctx.turnResolve?.();
@@ -1029,6 +1081,7 @@ export class CodexAppServerManager implements SessionManager {
 			const dispatchPrompt = (): {
 				method: string;
 				promise: Promise<unknown>;
+				resolvesWithoutTurn?: boolean;
 			} => {
 				if (isCompactCommand) {
 					return {
@@ -1053,13 +1106,31 @@ export class CodexAppServerManager implements SessionManager {
 				};
 			};
 
-			const { method, promise: requestPromise } = dispatchPrompt();
+			const {
+				method,
+				promise: requestPromise,
+				resolvesWithoutTurn = false,
+			} = dispatchPrompt();
 
 			requestPromise
 				.then((response) => {
+					if (goalCommand?.kind === "status") {
+						const goal = deepGet(response, "goal");
+						emitter.codexGoalUpdated(
+							requestId,
+							sessionId,
+							goal && typeof goal === "object" ? JSON.stringify(goal) : null,
+						);
+					}
 					const turnId = deepGet(response, "turn", "id");
 					if (typeof turnId === "string") {
 						ctx.activeTurnId = turnId;
+					}
+					if (resolvesWithoutTurn) {
+						ctx.activeTurnId = null;
+						ctx.turnResolve?.();
+						ctx.turnResolve = null;
+						ctx.turnReject = null;
 					}
 				})
 				.catch((err) => {
@@ -1078,6 +1149,58 @@ export class CodexAppServerManager implements SessionManager {
 				ctx.lastRetryNotice = null;
 			}
 		});
+	}
+
+	private async maybeContinueActiveGoal(
+		requestId: string,
+		sessionId: string,
+		ctx: AppServerContext,
+		emitter: SidecarEmitter,
+	): Promise<void> {
+		try {
+			const threadId = ctx.providerThreadId;
+			if (!threadId) {
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+				return;
+			}
+
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			if (goal && typeof goal === "object") {
+				const status = deepGet(goal, "status");
+				ctx.goalStatus = typeof status === "string" ? status : null;
+				emitter.codexGoalUpdated(requestId, sessionId, JSON.stringify(goal));
+			} else {
+				ctx.goalStatus = null;
+			}
+			if (
+				!goal ||
+				typeof goal !== "object" ||
+				deepGet(goal, "status") !== "active"
+			) {
+				ctx.turnResolve?.();
+				ctx.turnResolve = null;
+				ctx.turnReject = null;
+				return;
+			}
+
+			await ctx.server.sendRequest(
+				"thread/goal/set",
+				{ threadId, status: "active" },
+				20_000,
+			);
+		} catch (err) {
+			logger.error("goal auto-resume failed", errorDetails(err));
+			ctx.turnReject?.(err instanceof Error ? err : new Error(String(err)));
+			ctx.turnResolve = null;
+			ctx.turnReject = null;
+		}
 	}
 
 	// ── generateTitle ────────────────────────────────────────────────────
@@ -1255,13 +1378,14 @@ export class CodexAppServerManager implements SessionManager {
 
 	/**
 	 * Out-of-band Codex `/goal` lifecycle control. Called when the user
-	 * clicks Pause / Resume / Clear on the goal banner — these operations
-	 * shouldn't appear in chat history, so they bypass the prompt-parsing
-	 * path entirely and go straight to the right `thread/goal/*` RPC.
+	 * clicks goal banner buttons or types a goal command that should not
+	 * appear in chat history, so it bypasses prompt parsing and goes
+	 * straight to the right `thread/goal/*` RPC.
 	 */
 	async mutateGoal(
 		sessionId: string,
-		action: "pause" | "clear",
+		action: "pause" | "clear" | "status",
+		onStatus?: (goal: string | null) => void,
 	): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
 		logger.info("mutateGoal request", {
@@ -1286,6 +1410,19 @@ export class CodexAppServerManager implements SessionManager {
 			return;
 		}
 		const threadId = ctx.providerThreadId;
+
+		if (action === "status") {
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			onStatus?.(
+				goal && typeof goal === "object" ? JSON.stringify(goal) : null,
+			);
+			return;
+		}
 
 		// Pause-only: codex's `thread/goal/set { paused }` stops the
 		// continuation loop but doesn't abort the in-flight turn, leaving
@@ -1342,51 +1479,6 @@ export class CodexAppServerManager implements SessionManager {
 				...errorDetails(err),
 			});
 		}
-	}
-
-	// ── ensureCodexGoalsReady ────────────────────────────────────────────
-
-	// Writes `[features] goals = true` if missing, then recycles any stale
-	// codex process so the new config takes effect. Returns a resume thread
-	// id (caller's wins; otherwise the stale ctx's). Best-effort — IO
-	// failures are logged and the caller falls through to codex's own error.
-	private async ensureCodexGoalsReady(
-		sessionId: string,
-		callerResume: string | undefined,
-	): Promise<string | undefined> {
-		let result: Awaited<ReturnType<typeof ensureCodexGoalsFeatureEnabled>>;
-		try {
-			result = await ensureCodexGoalsFeatureEnabled();
-		} catch (err) {
-			logger.error("ensureCodexGoalsFeatureEnabled failed", errorDetails(err));
-			return callerResume;
-		}
-		if (result.kind !== "modified") return callerResume;
-
-		const stale = this.sessions.get(sessionId);
-		if (!stale) {
-			logger.info("Enabled codex goals feature", {
-				sessionId,
-				path: result.path,
-			});
-			return callerResume;
-		}
-
-		logger.info("Enabled codex goals feature; recycling stale session", {
-			sessionId,
-			path: result.path,
-			providerThreadId: stale.providerThreadId ?? "(none)",
-		});
-		const reuseThread = stale.providerThreadId ?? undefined;
-		stale.server.kill();
-		this.sessions.delete(sessionId);
-		for (const [id, p] of this.pendingApprovals) {
-			if (p.sessionId === sessionId) this.pendingApprovals.delete(id);
-		}
-		for (const [id, p] of this.pendingUserInputs) {
-			if (p.sessionId === sessionId) this.pendingUserInputs.delete(id);
-		}
-		return callerResume ?? reuseThread;
 	}
 
 	// ── stopSession / shutdown ───────────────────────────────────────────
@@ -1712,6 +1804,7 @@ export class CodexAppServerManager implements SessionManager {
 						permissionMode === "plan"
 							? "workspace-write"
 							: "danger-full-access",
+					developerInstructions: HELMOR_CODEX_GOAL_INSTRUCTIONS,
 				};
 				if (model) resumeParams.model = model;
 				if (fastMode) resumeParams.serviceTier = "fast";
@@ -1744,6 +1837,7 @@ export class CodexAppServerManager implements SessionManager {
 					toCodexApprovalPolicy(permissionMode) ?? BYPASS_GRANULAR_POLICY,
 				sandbox:
 					permissionMode === "plan" ? "workspace-write" : "danger-full-access",
+				developerInstructions: HELMOR_CODEX_GOAL_INSTRUCTIONS,
 			};
 			if (model) threadStartParams.model = model;
 			if (fastMode) threadStartParams.serviceTier = "fast";
@@ -1759,6 +1853,7 @@ export class CodexAppServerManager implements SessionManager {
 			server,
 			providerThreadId: threadId,
 			activeTurnId: null,
+			goalStatus: null,
 			turnResolve: null,
 			turnReject: null,
 			activeRequestId: null,
@@ -1769,12 +1864,34 @@ export class CodexAppServerManager implements SessionManager {
 			lastRetryAt: null,
 			lastRetryNotice: null,
 			subAgentTracker: new SubAgentTracker(server),
-			latestGoalStatus: null,
 		};
 
 		this.sessions.set(sessionId, ctx);
 		ctxRef.current = ctx;
+		await this.refreshContextGoalStatus(ctx);
 		return ctx;
+	}
+
+	private async refreshContextGoalStatus(ctx: AppServerContext): Promise<void> {
+		const threadId = ctx.providerThreadId;
+		if (!threadId) return;
+		try {
+			const response = await ctx.server.sendRequest(
+				"thread/goal/get",
+				{ threadId },
+				20_000,
+			);
+			const goal = deepGet(response, "goal");
+			if (goal && typeof goal === "object") {
+				const status = deepGet(goal, "status");
+				ctx.goalStatus = typeof status === "string" ? status : null;
+			} else {
+				ctx.goalStatus = null;
+			}
+		} catch (err) {
+			logger.debug("initial goal status refresh failed", errorDetails(err));
+			ctx.goalStatus = null;
+		}
 	}
 }
 

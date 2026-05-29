@@ -108,6 +108,15 @@ describe("CodexGoalBanner", () => {
 		).toBeInTheDocument();
 	});
 
+	it("renders Codex terminal statuses beyond active/paused", async () => {
+		renderWithGoal({ ...activeGoal(), status: "blocked" });
+
+		await waitFor(() => {
+			expect(screen.getByTestId("codex-goal-banner")).toBeInTheDocument();
+		});
+		expect(screen.getByText("Goal blocked (/goal resume)")).toBeInTheDocument();
+	});
+
 	it("Clear button fires mutateCodexGoal with action=clear", async () => {
 		renderWithGoal(activeGoal());
 

@@ -2,6 +2,7 @@
 //!
 //! - Debug builds: `~/helmor-dev/`
 //! - Release builds: `~/helmor/`
+//! - `HELMOR_DEFAULT_DATA_DIR_NAME` at compile time overrides the profile default
 //! - `HELMOR_DATA_DIR` env var overrides both
 //!
 //! The SQLite database lives at `{data_dir}/helmor.db`.
@@ -16,9 +17,16 @@ pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Name of the database file inside the data directory.
 const DB_FILENAME: &str = "helmor.db";
+const COMPILED_DATA_DIR_NAME: Option<&str> = option_env!("HELMOR_DEFAULT_DATA_DIR_NAME");
 
 /// Default top-level directory name for Helmor app data.
-const fn default_data_dir_name() -> &'static str {
+fn default_data_dir_name() -> &'static str {
+    if let Some(name) = COMPILED_DATA_DIR_NAME {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
     if cfg!(debug_assertions) {
         "helmor-dev"
     } else {
@@ -226,7 +234,12 @@ pub fn workspace_dir(repo_name: &str, directory_name: &str) -> Result<PathBuf> {
 
 /// Returns a human-readable description of the data mode.
 pub fn data_mode_label() -> &'static str {
-    if cfg!(debug_assertions) {
+    if COMPILED_DATA_DIR_NAME
+        .map(str::trim)
+        .is_some_and(|name| !name.is_empty())
+    {
+        "custom"
+    } else if cfg!(debug_assertions) {
         "development"
     } else {
         "production"

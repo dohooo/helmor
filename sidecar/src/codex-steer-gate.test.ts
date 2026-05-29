@@ -120,6 +120,7 @@ async function driveToSendMessage(sessionId: string) {
 		server: fake.server,
 		providerThreadId: "thread-xyz",
 		activeTurnId: null, // `sendMessage` populates on turn/start reply
+		goalStatus: null,
 		turnResolve: null,
 		turnReject: null,
 		activeRequestId: null,
@@ -130,7 +131,6 @@ async function driveToSendMessage(sessionId: string) {
 		lastRetryAt: null,
 		lastRetryNotice: null,
 		subAgentTracker: new SubAgentTracker(fake.server as never),
-		latestGoalStatus: null,
 	});
 
 	const sendMessagePromise = manager.sendMessage(

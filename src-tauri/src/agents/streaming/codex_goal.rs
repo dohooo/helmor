@@ -244,7 +244,7 @@ fn project_action_on_prev(
     Ok(Some(value.to_string()))
 }
 
-pub(super) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
+pub(crate) fn persist_codex_goal_event(app: &AppHandle, raw: &Value) {
     let outcome = match crate::models::db::write_conn() {
         Ok(conn) => match write_codex_goal_meta(&conn, raw) {
             Ok(outcome) => outcome,

@@ -734,6 +734,9 @@ export const WorkspaceComposerContainer = memo(
 		};
 		const [goalReplaceConfirm, setGoalReplaceConfirm] =
 			useState<PendingGoalReplace | null>(null);
+		const [goalEdit, setGoalEdit] = useState<{
+			currentObjective: string;
+		} | null>(null);
 
 		const handleComposerSubmitInner = useCallback(
 			(
@@ -800,33 +803,56 @@ export const WorkspaceComposerContainer = memo(
 					oppositeFollowUp?: boolean;
 				},
 			) => {
-				// `/goal …` interception for codex sessions. Three flavors:
-				//   - `/goal pause` / `/goal clear`  → out-of-band mutate IPC,
-				//     no chat bubble (matches the banner-button behaviour).
-				//   - `/goal resume`                 → falls through to send-
-				//     Message so the resulting stream subscription catches
-				//     the goal-continuation turn codex auto-spawns.
-				//   - `/goal <new objective>` while a goal already exists
-				//                                    → confirm-replace panel.
+				// `/goal …` interception for codex sessions. UI-only commands
+				// stay out of chat history and go straight to Codex app-server
+				// goal RPCs; `/goal resume` still falls through to sendMessage
+				// so Helmor subscribes to the continuation turn Codex may spawn.
 				if (provider === "codex" && displayedSessionId) {
-					const match = prompt.trim().match(/^\/goal\s+([\s\S]+)$/);
+					const trimmedPrompt = prompt.trim();
+					const match = trimmedPrompt.match(/^\/goal(?:\s+([\s\S]+))?$/);
 					const arg = match ? (match[1]?.trim() ?? "") : "";
-					if (arg === "pause" || arg === "clear") {
-						if (activeGoal) {
-							void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+					if (match && (arg === "" || arg === "status")) {
+						void mutateCodexGoal(displayedSessionId, "status")
+							.then(() =>
+								queryClient.invalidateQueries({
+									queryKey:
+										helmorQueryKeys.sessionCodexGoal(displayedSessionId),
+								}),
+							)
+							.catch((err) => {
 								toast.error(
-									err instanceof Error ? err.message : `Failed to ${arg} goal`,
+									err instanceof Error
+										? err.message
+										: "Failed to refresh goal status",
 								);
 							});
-						}
 						return;
 					}
-					if (
-						arg &&
-						arg !== "resume" &&
+					if (arg === "edit") {
+						if (!activeGoal) {
+							toast.info("No goal is currently set");
+							return;
+						}
+						setGoalEdit({ currentObjective: activeGoal.objective });
+						return;
+					}
+					if (arg === "pause" || arg === "clear") {
+						if (!activeGoal) {
+							toast.info("No goal is currently set");
+							return;
+						}
+						void mutateCodexGoal(displayedSessionId, arg).catch((err) => {
+							toast.error(
+								err instanceof Error ? err.message : `Failed to ${arg} goal`,
+							);
+						});
+						return;
+					}
+					const shouldConfirmGoalReplace =
 						activeGoal &&
-						arg !== activeGoal.objective
-					) {
+						activeGoal.status !== "complete" &&
+						arg !== activeGoal.objective;
+					if (arg && arg !== "resume" && shouldConfirmGoalReplace) {
 						setGoalReplaceConfirm({
 							newObjective: arg,
 							args: [prompt, imagePaths, filePaths, customTags, options],
@@ -842,7 +868,13 @@ export const WorkspaceComposerContainer = memo(
 					options,
 				);
 			},
-			[provider, displayedSessionId, activeGoal, handleComposerSubmitInner],
+			[
+				provider,
+				displayedSessionId,
+				activeGoal,
+				handleComposerSubmitInner,
+				queryClient,
+			],
 		);
 
 		const handleGoalReplaceConfirm = useCallback(() => {
@@ -854,6 +886,19 @@ export const WorkspaceComposerContainer = memo(
 
 		const handleGoalReplaceCancel = useCallback(() => {
 			setGoalReplaceConfirm(null);
+		}, []);
+
+		const handleGoalEditSave = useCallback(
+			(objective: string) => {
+				setGoalEdit(null);
+				if (objective === activeGoal?.objective) return;
+				handleComposerSubmitInner(`/goal ${objective}`, [], [], []);
+			},
+			[activeGoal?.objective, handleComposerSubmitInner],
+		);
+
+		const handleGoalEditCancel = useCallback(() => {
+			setGoalEdit(null);
 		}, []);
 
 		// Resume button on the goal banner — synthesises a `/goal resume`
@@ -1130,6 +1175,15 @@ export const WorkspaceComposerContainer = memo(
 										newObjective: goalReplaceConfirm.newObjective,
 										onReplace: handleGoalReplaceConfirm,
 										onCancel: handleGoalReplaceCancel,
+									}
+								: null
+						}
+						goalEdit={
+							goalEdit
+								? {
+										currentObjective: goalEdit.currentObjective,
+										onSave: handleGoalEditSave,
+										onCancel: handleGoalEditCancel,
 									}
 								: null
 						}

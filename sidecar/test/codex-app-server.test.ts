@@ -16,9 +16,11 @@ function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
 }
 
 describe("buildCodexAppServerArgs", () => {
-	test("disables native notify hooks for embedded app-server sessions", () => {
+	test("enables goals and disables native notify hooks for embedded app-server sessions", () => {
 		expect(buildCodexAppServerArgs()).toEqual([
 			"app-server",
+			"--enable",
+			"goals",
 			"-c",
 			"notify=[]",
 		]);
