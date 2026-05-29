@@ -2,6 +2,20 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.28.0",
+			"items": [
+				{
+					"text": "Claude's dynamic workflows now appear as a live card, and the new /workflows command opens a keyboard-navigable drill-down into each run's phases, agents, and results."
+				},
+				{
+					"text": "Typing \"workflow\" or \"ultrathink\" in the composer now highlights the word to cue the matching mode."
+				},
+				{
+					"text": "Claude Opus 4.8 (1M context) is now the default model, listed above 4.7 and 4.6 in the picker."
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.27.0",
 			"items": [
 				{

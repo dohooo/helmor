@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.28.0
+
+### Minor Changes
+
+- [#685](https://github.com/dohooo/helmor/pull/685) [`a0a7f5c`](https://github.com/dohooo/helmor/commit/a0a7f5c1304ada858ed69fb1c090c69e6163e2a3) Thanks [@dohooo](https://github.com/dohooo)! - Upgrade the bundled agent CLIs and add Claude Opus 4.8.
+
+  - Claude Opus 4.8 (1M context) is now the default Claude model, listed above Opus 4.7 and 4.6 in the model picker.
+  - Bundled Claude Code 2.1.139 → 2.1.154, Claude Agent SDK 0.2.139 → 0.3.154, and Codex 0.130.0 → 0.134.0.
+  - Claude task lists now arrive as the incremental Task tools (TaskCreate/TaskUpdate) instead of TodoWrite; they render as the same single evolving plan widget as before.
+  - Codex 0.134 drops support for legacy `[profiles]` config sections. If you hand-edited `~/.codex/config.toml` with a `[profiles]` block, migrate it to the profile v2 format.
+
+- [#685](https://github.com/dohooo/helmor/pull/685) [`a0a7f5c`](https://github.com/dohooo/helmor/commit/a0a7f5c1304ada858ed69fb1c090c69e6163e2a3) Thanks [@dohooo](https://github.com/dohooo)! - Add GUI support for Claude Code Dynamic Workflows.
+
+  - Workflow runs render as an evolving in-thread card (phases, agents, token/duration footer).
+  - A new `/workflows` command opens an independent, keyboard-navigable drill-down above the composer — runs → phase-grouped agents → per-agent detail (model, tokens, tools, duration, and the agent's markdown-rendered result) — without sending a message; arrow keys navigate and Esc closes it.
+  - Typing a magic keyword like "workflow" or "ultrathink" in the composer highlights it with an animated gradient as a mode cue.
+  - The model picker now marks the active model with a checkmark.
+  - Workflow task lifecycle is persisted, so reopening a past conversation keeps the full workflow tree instead of a bare placeholder.
+
+### Patch Changes
+
+- [#692](https://github.com/dohooo/helmor/pull/692) [`605c4e3`](https://github.com/dohooo/helmor/commit/605c4e39ae28cdd5ab41409c7a20a2bac9f7a3fa) Thanks [@natllian](https://github.com/natllian)! - Fix the Codex Stop button so aborting takes effect immediately instead of lagging several seconds, and so it works even while the turn is still starting up.
+
+- [#694](https://github.com/dohooo/helmor/pull/694) [`36c9e6c`](https://github.com/dohooo/helmor/commit/36c9e6cc39373b6917c87d654bb96e3e97e1f0e4) Thanks [@natllian](https://github.com/natllian)! - Fix dismissing or archiving a workspace jumping to the start page instead of advancing to the next workspace in the same group.
+
+- [#687](https://github.com/dohooo/helmor/pull/687) [`6efe814`](https://github.com/dohooo/helmor/commit/6efe814fff11fafc5ff0916632a6d40ff0206c14) Thanks [@natllian](https://github.com/natllian)! - Tell you right away when Claude fast mode can't run on your account.
+
+- [#690](https://github.com/dohooo/helmor/pull/690) [`0099c7e`](https://github.com/dohooo/helmor/commit/0099c7eddca9017b7994ffd548b54285570f6c6e) Thanks [@natllian](https://github.com/natllian)! - Fix the start page's "Work locally" branch picker so it shows your working directory's current branch instead of defaulting to `main`.
+
 ## 0.27.0
 
 ### Minor Changes
