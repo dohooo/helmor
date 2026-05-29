@@ -1,5 +1,5 @@
 //! AI-triage. Fetcher (`fetcher::spawn_scheduler`) runs every 5 min and
-//! auto-fires a Layer-2 tick when triage + auto_run + local-LLM are on;
+//! auto-fires a Layer-2 tick when triage + auto_run are on;
 //! manual fires via `trigger_tick_now`.
 
 pub mod active_status;

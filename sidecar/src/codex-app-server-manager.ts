@@ -56,7 +56,7 @@ import {
  *   3. Fall back to `"codex"` so the OS resolves it from PATH — last-resort
  *      for unusual setups; surfaces as ENOENT if not installed.
  */
-function resolveCodexBinPath(): string {
+export function resolveCodexBinPath(): string {
 	const override = process.env.HELMOR_CODEX_BIN_PATH;
 	if (override) {
 		return override;
@@ -110,7 +110,7 @@ function codexTargetTriple(): string | null {
 	return null;
 }
 
-const CODEX_BIN_PATH = resolveCodexBinPath();
+export const CODEX_BIN_PATH = resolveCodexBinPath();
 
 /**
  * Recognised `/goal` slash-command shapes. `set` carries the objective.
@@ -201,7 +201,7 @@ function dispatchGoalCommand(
 const RETRY_SUPPRESSION_MS = 30_000;
 const RETRY_NOTICE_DEDUPE_MS = 1_000;
 
-const HELMOR_CLIENT_INFO = {
+export const HELMOR_CLIENT_INFO = {
 	clientInfo: {
 		name: "helmor_desktop",
 		title: "Helmor Desktop",

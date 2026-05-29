@@ -42,12 +42,13 @@ import {
 import {
 	cancelTriageTick,
 	countOpenTriageCandidates,
-	getLocalLlmStatus,
+	getAgentLoginStatus,
 	getTriageActiveStatus,
 	getTriageConfig,
 	getTriageSourceHealth,
 	type LarkAuthAction,
 	type LastTickOutcome,
+	openAgentLoginTerminal,
 	type TriageActiveStatus,
 	type TriageConfig,
 	type TriageSourceHealth,
@@ -60,7 +61,7 @@ import { cn } from "@/lib/utils";
 import { publishShellEvent } from "@/shell/event-bus";
 import { SettingsReleaseBadge } from "../components/release-marker";
 
-const LOCAL_LLM_STATUS_KEY = ["localLlmStatus"] as const;
+const AGENT_LOGIN_STATUS_KEY = ["agentLoginStatus"] as const;
 const PENDING_CANDIDATES_KEY = ["triagePendingCandidates"] as const;
 const SOURCE_HEALTH_KEY = ["triageSourceHealth"] as const;
 
@@ -114,10 +115,10 @@ function useTickingNow(): number {
 export function TriagePanel() {
 	const queryClient = useQueryClient();
 	const now = useTickingNow();
-	const llmStatus = useQuery({
-		queryKey: LOCAL_LLM_STATUS_KEY,
-		queryFn: getLocalLlmStatus,
-		refetchInterval: 2000,
+	const agentLogin = useQuery({
+		queryKey: AGENT_LOGIN_STATUS_KEY,
+		queryFn: getAgentLoginStatus,
+		refetchInterval: 5000,
 	});
 	const config = useQuery({
 		queryKey: helmorQueryKeys.triageConfig,
@@ -173,6 +174,12 @@ export function TriagePanel() {
 			});
 		},
 	});
+	const openCodexLogin = useMutation({
+		mutationFn: () => openAgentLoginTerminal("codex"),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: AGENT_LOGIN_STATUS_KEY });
+		},
+	});
 
 	if (!draft) {
 		return (
@@ -182,11 +189,10 @@ export function TriagePanel() {
 		);
 	}
 
-	const isLlmRunning = !!llmStatus.data?.running;
 	const active = status.data?.active ?? null;
 	const lastOutcome = status.data?.lastOutcome ?? null;
 	const isRunning = active != null;
-	const canEnable = isLlmRunning;
+	const canEnable = agentLogin.data?.codex === true;
 	const triageOn = draft.enabled && canEnable;
 
 	const commit = (patch: Partial<TriageConfig>) => {
@@ -202,6 +208,25 @@ export function TriagePanel() {
 				disabled={!canEnable}
 				onChange={(v) => commit({ enabled: v })}
 			/>
+
+			{!canEnable ? (
+				<div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+					<div className="min-w-0 text-mini text-muted-foreground">
+						Smart triage uses your Codex subscription. Sign in to Codex to
+						enable it.
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={openCodexLogin.isPending}
+						onClick={() => openCodexLogin.mutate()}
+					>
+						<KeyRound className="size-3.5" />
+						{openCodexLogin.isPending ? "Opening…" : "Sign in"}
+					</Button>
+				</div>
+			) : null}
 
 			{triageOn ? (
 				<div className="flex w-full flex-col gap-3">
@@ -333,8 +358,8 @@ function HeaderBar({
 					<SettingsReleaseBadge marker={{ kind: "feature" }} />
 				</div>
 				<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-					The local LLM scans your enabled sources and creates AI-prepared
-					workspaces for actionable items.
+					Codex scans your enabled sources and creates AI-prepared workspaces
+					for actionable items.
 				</p>
 			</div>
 			<Switch

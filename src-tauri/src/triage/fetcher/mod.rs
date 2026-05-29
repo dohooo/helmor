@@ -102,7 +102,7 @@ fn scheduler_loop<R: TauriRuntime>(app: AppHandle<R>) {
     }
 }
 
-/// Fire a Layer-2 tick post-fetch when enabled + auto_run + LLM on. Logs
+/// Fire a Layer-2 tick post-fetch when enabled + auto_run. Logs
 /// failures (swallows the noisy `in flight` case).
 fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
     let cfg = match crate::triage::load_config() {
@@ -115,12 +115,9 @@ fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
     if !cfg.enabled || !cfg.auto_run {
         return;
     }
-    if !crate::local_llm::load_settings().enabled {
-        return;
-    }
     if let Err(error) = crate::triage::trigger_tick_now(app) {
         let msg = format!("{error:#}");
-        if !msg.contains("in flight") && !msg.contains("disabled") && !msg.contains("not enabled") {
+        if !msg.contains("in flight") && !msg.contains("disabled") {
             tracing::warn!(error = %msg, "triage: auto-fire after fetch failed");
         }
     }

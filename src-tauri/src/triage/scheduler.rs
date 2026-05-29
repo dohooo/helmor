@@ -42,9 +42,6 @@ pub fn trigger_tick_now<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     if !cfg.enabled {
         anyhow::bail!("Triage is disabled");
     }
-    if !crate::local_llm::load_settings().enabled {
-        anyhow::bail!("Local LLM is not enabled");
-    }
     run_tick(app, &cfg)
 }
 
@@ -146,10 +143,6 @@ fn execute_tick<R: Runtime>(
     tick_id: &str,
 ) -> Result<ExecuteOk> {
     let repos = list_repos_payload()?;
-    let endpoint = app
-        .state::<crate::local_llm::Manager>()
-        .endpoint()
-        .ok_or_else(|| anyhow!("Local LLM is not running"))?;
     let store = app.state::<ActiveStatusStore>();
 
     let mut total = ExecuteOk {
@@ -179,16 +172,7 @@ fn execute_tick<R: Runtime>(
             candidate_count = candidates.len(),
             "triage: batch dispatching",
         );
-        let batch = run_one_batch(
-            app,
-            cfg,
-            tick_id,
-            &candidates,
-            &repos,
-            &endpoint.url,
-            &endpoint.token,
-            &endpoint.api_model,
-        )?;
+        let batch = run_one_batch(app, cfg, tick_id, &candidates, &repos)?;
         total.created += batch.created;
         total.workspace_failures += batch.workspace_failures;
         // Last non-empty batch summary wins.
@@ -214,9 +198,6 @@ fn run_one_batch<R: Runtime>(
     tick_id: &str,
     candidates: &[candidate_storage::CandidateRow],
     repos: &Value,
-    endpoint_url: &str,
-    endpoint_token: &str,
-    endpoint_model: &str,
 ) -> Result<ExecuteOk> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar = app.state::<ManagedSidecar>();
@@ -228,15 +209,11 @@ fn run_one_batch<R: Runtime>(
         method: "runTriageTick".into(),
         params: json!({
             "tickId": tick_id,
+            "provider": "codex",
             "systemPrompt": cfg.system_prompt,
             "maxPerTick": cfg.max_per_tick,
             "candidates": enriched_candidates,
             "repos": repos,
-            "localModel": {
-                "baseUrl": endpoint_url,
-                "token": endpoint_token,
-                "model": endpoint_model,
-            },
         }),
     };
     sidecar.send(&request).context("send runTriageTick")?;

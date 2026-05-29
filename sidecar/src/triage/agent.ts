@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-ai";
 
 import { logger } from "../logger";
+import { startCodexTriageTick } from "./codex";
 import { buildSystemPrompt, buildTickUserMessage } from "./prompts";
 import {
 	buildListReposTool,
@@ -17,7 +18,11 @@ import {
 	ProposalAccumulator,
 } from "./tools/helmor";
 import { buildThinkTool } from "./tools/reasoning";
-import type { TriageProposal, TriageTickParams } from "./types";
+import type {
+	TriageLocalModel,
+	TriageProposal,
+	TriageTickParams,
+} from "./types";
 
 registerBuiltInApiProviders();
 
@@ -25,7 +30,7 @@ const PROVIDER_ID = "helmor-local";
 const PREVIEW_CHARS = 240;
 
 function buildLocalModel(
-	params: TriageTickParams["localModel"],
+	params: TriageLocalModel,
 ): Model<"openai-completions"> {
 	return {
 		id: params.model,
@@ -105,6 +110,29 @@ export async function runTriageTick(
 		return { proposals: [], finalMessage: null, cancelled: false };
 	}
 
+	if (params.provider === "codex") {
+		const run = startCodexTriageTick(params, hooks);
+		activeTick = {
+			tickId,
+			abort: run.abort,
+		};
+		try {
+			const outcome = await run.promise;
+			return {
+				proposals: outcome.proposals,
+				finalMessage: outcome.summary,
+				cancelled: outcome.cancelled,
+			};
+		} finally {
+			activeTick = null;
+		}
+	}
+
+	if (!params.localModel) {
+		throw new Error("Local model settings missing");
+	}
+	const localModel = params.localModel;
+
 	const accumulator = new ProposalAccumulator();
 	const tools: unknown[] = [
 		buildListReposTool(params.repos),
@@ -115,7 +143,7 @@ export async function runTriageTick(
 		buildThinkTool(),
 	];
 
-	const model = buildLocalModel(params.localModel);
+	const model = buildLocalModel(localModel);
 	const systemPrompt = buildSystemPrompt({
 		userPromptSuffix: params.systemPrompt,
 		maxPerTick: params.maxPerTick,
@@ -148,7 +176,7 @@ export async function runTriageTick(
 			) as never,
 		streamFn: (m, ctx, opts) => streamSimple(m, ctx, opts),
 		getApiKey: (provider) =>
-			provider === PROVIDER_ID ? params.localModel.token : undefined,
+			provider === PROVIDER_ID ? localModel.token : undefined,
 	});
 
 	// Cap is runaway protection; ~1 turn per candidate + a few read_candidate calls.

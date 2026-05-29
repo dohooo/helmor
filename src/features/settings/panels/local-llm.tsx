@@ -383,8 +383,8 @@ export function LocalLlmPanel({
 						<SettingsReleaseBadge marker={{ kind: "feature" }} />
 					</div>
 					<p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-						Powers session title / branch name generation and Smart Triage —
-						both run entirely on your device.
+						Powers session title and branch name generation entirely on your
+						device.
 					</p>
 				</div>
 				<Switch

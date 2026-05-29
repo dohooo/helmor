@@ -600,7 +600,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										settings={settings}
 										updateSettings={updateSettings}
 									/>
-									{settings.localLlm.enabled ? <TriagePanel /> : null}
+									<TriagePanel />
 								</SettingsGroup>
 							)}
 

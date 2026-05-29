@@ -12,6 +12,8 @@ export interface TriageLocalModel {
 	readonly model: string;
 }
 
+export type TriageInferenceProvider = "codex" | "local";
+
 export interface TriageCandidate {
 	readonly id: string;
 	readonly source: string;
@@ -45,11 +47,12 @@ export interface TriageAttachment {
 
 export interface TriageTickParams {
 	readonly tickId: string;
+	readonly provider: TriageInferenceProvider;
 	readonly systemPrompt: string;
 	readonly maxPerTick: number;
 	readonly candidates: readonly TriageCandidate[];
 	readonly repos: readonly TriageRepo[];
-	readonly localModel: TriageLocalModel;
+	readonly localModel?: TriageLocalModel;
 }
 
 export interface TriageProposal {

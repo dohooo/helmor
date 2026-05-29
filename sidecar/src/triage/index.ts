@@ -29,15 +29,19 @@ function coerceParams(raw: Record<string, unknown>): TriageTickParams {
 		: [];
 	return {
 		tickId: String(raw.tickId ?? ""),
+		provider: raw.provider === "local" ? "local" : "codex",
 		systemPrompt: typeof raw.systemPrompt === "string" ? raw.systemPrompt : "",
 		maxPerTick: Math.max(1, Math.min(50, Number(raw.maxPerTick ?? 5))),
 		candidates,
 		repos,
-		localModel: {
-			baseUrl: String(local.baseUrl ?? ""),
-			token: String(local.token ?? ""),
-			model: String(local.model ?? "local"),
-		},
+		localModel:
+			raw.provider === "local"
+				? {
+						baseUrl: String(local.baseUrl ?? ""),
+						token: String(local.token ?? ""),
+						model: String(local.model ?? "local"),
+					}
+				: undefined,
 	};
 }
 
@@ -53,7 +57,7 @@ export async function handleRunTriageTick(
 		candidateCount: params.candidates.length,
 	});
 
-	if (!params.localModel.baseUrl) {
+	if (params.provider === "local" && !params.localModel?.baseUrl) {
 		emitter.error(
 			requestId,
 			"Local model endpoint missing — is local LLM running?",
