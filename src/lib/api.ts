@@ -1213,6 +1213,43 @@ export async function reinstallRemoteDaemon(
 	return invoke<RuntimeHealth>("reinstall_remote_daemon", { name });
 }
 
+/**
+ * Install (or update) the agent-runtime bundle on a connected SSH
+ * runtime. Idempotent: a current install is a sub-second no-op (the
+ * manifest matches → empty plan → early return). On a fresh host the
+ * full bundle (sidecar + claude + wrapper, ~330 MB) goes via a single
+ * sha256-verified tar-pipe through SSH with hardware-accelerated AES-
+ * GCM and lands in ~5 s on a fast LAN.
+ *
+ * Already called automatically by `connect_remote_runtime` on first
+ * connect; the manual entry point exists so the Remote Servers panel
+ * can offer a "Reinstall bundle" affordance, and so headless probes
+ * (helmor-taper / e2e tests) can trigger it deterministically.
+ *
+ * The install emits `RemoteBundleInstall{Progress,Complete,Failed}`
+ * UI mutation events the panel subscribes to via
+ * [`useBundleStatus`](../features/settings/panels/use-bundle-status.ts).
+ */
+export type InstallRemoteBundleResult = {
+	manifest: BundleManifest;
+	installedFiles: string[];
+	alreadyCurrent: boolean;
+};
+
+export type BundleManifest = {
+	schemaVersion: number;
+	target: "linux-arm64" | "linux-x64";
+	stagedAt: string;
+	claudeCodeVersion: string;
+	files: Array<{ path: string; sha256: string; bytes: number }>;
+};
+
+export async function installRemoteBundle(
+	name: string,
+): Promise<InstallRemoteBundleResult> {
+	return invoke<InstallRemoteBundleResult>("install_remote_bundle", { name });
+}
+
 export async function reconnectRemoteRuntime(
 	name: string,
 ): Promise<RuntimeHealth> {

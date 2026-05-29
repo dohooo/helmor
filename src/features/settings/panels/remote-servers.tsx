@@ -24,7 +24,16 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { ClipboardList, KeyRound, Plug, Plug2, ServerCog } from "lucide-react";
+import {
+	AlertTriangle,
+	ClipboardList,
+	Download,
+	KeyRound,
+	Loader2,
+	Plug,
+	Plug2,
+	ServerCog,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AddRemoteServerWizard } from "@/components/add-remote-server-wizard";
@@ -35,6 +44,7 @@ import {
 	getRemoteRuntimeAuthStatus,
 	getRemoteRuntimeDiagnostics,
 	getRemoteRuntimeMetrics,
+	installRemoteBundle,
 	listRemoteRuntimes,
 	type RuntimeAuthStatus,
 	type RuntimeEntry,
@@ -43,6 +53,7 @@ import {
 	tailRemoteDaemonLog,
 } from "@/lib/api";
 import { buildDiagnosticsPayload } from "@/lib/diagnostics-payload";
+import { type BundleStatus, useBundleStatus } from "./use-bundle-status";
 
 export function RemoteServersPanel() {
 	const queryClient = useQueryClient();
@@ -255,6 +266,27 @@ function RemoteServerRow({
 }) {
 	const stateLabel = formatStateLabel(entry.state);
 	const reconnectable = entry.state.type !== "connected";
+	// Bundle status drives the install chip and the Reinstall button's
+	// loading state. Subscribed lazily via a shared UI-mutation channel
+	// so N rows open one subscription, not N.
+	const bundleStatus = useBundleStatus(entry.name);
+	const reinstallMutation = useMutation({
+		mutationFn: () => installRemoteBundle(entry.name),
+		onSuccess: (result) => {
+			if (result.alreadyCurrent) {
+				toast.success("Agent runtime already up to date");
+			} else {
+				toast.success(
+					`Agent runtime reinstalled (${result.installedFiles.length} file${
+						result.installedFiles.length === 1 ? "" : "s"
+					})`,
+				);
+			}
+		},
+		onError: (err: unknown) => {
+			toast.error(`Reinstall failed: ${formatError(err)}`);
+		},
+	});
 	// Track G2 read side: collect the providers with a key so we can
 	// surface them as a chip next to the runtime name. Surfacing the
 	// list (`cursor`) gives the operator a one-glance answer to "is
@@ -286,8 +318,33 @@ function RemoteServerRow({
 				<span className="truncate text-[10px] text-muted-foreground">
 					{stateLabel}
 				</span>
+				<BundleStatusChip
+					runtimeName={entry.name}
+					status={bundleStatus}
+					reinstallPending={reinstallMutation.isPending}
+				/>
 			</div>
 			<div className="flex items-center gap-1">
+				<Button
+					size="sm"
+					variant="ghost"
+					disabled={
+						pending ||
+						reinstallMutation.isPending ||
+						bundleStatus.kind === "installing" ||
+						entry.state.type !== "connected"
+					}
+					onClick={() => reinstallMutation.mutate()}
+					data-testid={`remote-server-reinstall-bundle-${entry.name}`}
+					title="Reinstall the agent-runtime bundle (sidecar + claude binary + wrapper). Idempotent; safe to retry if a previous install was interrupted."
+				>
+					{reinstallMutation.isPending ? (
+						<Loader2 className="mr-1.5 size-3 animate-spin" />
+					) : (
+						<Download className="mr-1.5 size-3" />
+					)}
+					Reinstall
+				</Button>
 				<Button
 					size="sm"
 					variant="ghost"
@@ -336,6 +393,77 @@ function RemoteServerRow({
 			</div>
 		</li>
 	);
+}
+
+/// Inline status chip the row renders below the state label. Three
+/// visual modes:
+///   - `installing` (any phase): muted blue, spinner + the human-
+///     readable phase message ("Uploading agent runtime (3 files,
+///     325.9 MB)"). This is the only one the user sees on a fresh
+///     first-connect.
+///   - `failed`: amber warning chip with the chained error in a
+///     title-tooltip; the row's Reinstall button is the recovery
+///     affordance.
+///   - `complete` after a fresh install: a brief "Installed in X.Xs"
+///     line for ~5 s, then nothing (the "happy path" — quiet by
+///     default).
+///   - `complete{alreadyCurrent:true}` or `idle`: nothing — a no-op
+///     install or a runtime with no observed install activity
+///     shouldn't add chrome to the row.
+function BundleStatusChip({
+	runtimeName,
+	status,
+	reinstallPending,
+}: {
+	runtimeName: string;
+	status: BundleStatus;
+	reinstallPending: boolean;
+}) {
+	if (status.kind === "installing" || reinstallPending) {
+		const label =
+			status.kind === "installing" ? status.message : "Reinstalling…";
+		return (
+			<span
+				className="mt-1 inline-flex items-center gap-1 truncate text-[11px] text-status-info"
+				data-testid={`remote-server-bundle-installing-${runtimeName}`}
+				title={label}
+			>
+				<Loader2 className="size-3 animate-spin" />
+				<span className="truncate">{label}</span>
+			</span>
+		);
+	}
+	if (status.kind === "failed") {
+		return (
+			<span
+				className="mt-1 inline-flex items-center gap-1 truncate text-[11px] text-status-warning"
+				data-testid={`remote-server-bundle-failed-${runtimeName}`}
+				title={status.error}
+			>
+				<AlertTriangle className="size-3" />
+				<span className="truncate">
+					Agent runtime install failed — Reinstall to retry
+				</span>
+			</span>
+		);
+	}
+	if (
+		status.kind === "complete" &&
+		!status.alreadyCurrent &&
+		Date.now() - status.at < 8000
+	) {
+		const secs = (status.durationMs / 1000).toFixed(1);
+		return (
+			<span
+				className="mt-1 inline-flex items-center gap-1 truncate text-[11px] text-status-success"
+				data-testid={`remote-server-bundle-installed-${runtimeName}`}
+				title={`Files: ${status.installedFiles.join(", ")}`}
+			>
+				Agent runtime installed in {secs}s
+			</span>
+		);
+	}
+	return null;
 }
 
 function formatStateLabel(state: RuntimeState): string {
