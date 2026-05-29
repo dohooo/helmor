@@ -99,6 +99,12 @@ type WorkspacePanelHeaderProps = {
 	newSessionShortcut?: string | null;
 };
 
+const SESSION_TITLE_TOOLTIP_MAX_CHARS = 240;
+const SESSION_TITLE_TOOLTIP_CLASS =
+	"pointer-events-none max-w-[22rem] whitespace-normal rounded-md px-2 py-1.5 text-left text-mini leading-snug";
+const SESSION_TITLE_TOOLTIP_TEXT_CLASS =
+	"block max-w-full whitespace-normal break-words [overflow-wrap:anywhere]";
+
 export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 	workspace,
 	changeRequest = null,
@@ -539,9 +545,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 											<TooltipContent
 												side="bottom"
 												sideOffset={4}
-												className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
+												className={SESSION_TITLE_TOOLTIP_CLASS}
 											>
-												<span>{contextPreviewCard.title}</span>
+												<span className={SESSION_TITLE_TOOLTIP_TEXT_CLASS}>
+													{displayTooltipTitle(contextPreviewCard.title)}
+												</span>
 											</TooltipContent>
 										</Tooltip>
 									) : null}
@@ -636,7 +644,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 															) : null}
 														</span>
 														{!isEditing ? (
-															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible">
+															<span className="pointer-events-none invisible absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1 group-hover/tab:pointer-events-auto group-hover/tab:visible group-focus-within/tab:pointer-events-auto group-focus-within/tab:visible">
 																<span
 																	role="button"
 																	aria-label="Rename session"
@@ -666,13 +674,19 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 														) : null}
 													</TabsTrigger>
 												</TooltipTrigger>
-												<TooltipContent
-													side="bottom"
-													sideOffset={4}
-													className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
-												>
-													<span>{displaySessionTitle(session)}</span>
-												</TooltipContent>
+												{!isEditing ? (
+													<TooltipContent
+														side="bottom"
+														sideOffset={4}
+														className={SESSION_TITLE_TOOLTIP_CLASS}
+													>
+														<span className={SESSION_TITLE_TOOLTIP_TEXT_CLASS}>
+															{displayTooltipTitle(
+																displaySessionTitle(session),
+															)}
+														</span>
+													</TooltipContent>
+												) : null}
 											</Tooltip>
 										);
 									})}
@@ -776,9 +790,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 									<TooltipContent
 										side="left"
 										sideOffset={4}
-										className="flex h-[22px] items-center rounded-md px-1.5 text-mini leading-none"
+										className={SESSION_TITLE_TOOLTIP_CLASS}
 									>
-										<span>{displaySessionTitle(session)}</span>
+										<span className={SESSION_TITLE_TOOLTIP_TEXT_CLASS}>
+											{displayTooltipTitle(displaySessionTitle(session))}
+										</span>
 									</TooltipContent>
 								</Tooltip>
 							))
@@ -833,6 +849,18 @@ function displaySessionTitle(session: WorkspaceSessionSummary): string {
 		return session.title;
 	}
 	return "Untitled";
+}
+
+function displayTooltipTitle(title: string): string {
+	const normalized = title.trim().replace(/\s+/g, " ");
+	const chars = Array.from(normalized);
+	if (chars.length <= SESSION_TITLE_TOOLTIP_MAX_CHARS) {
+		return normalized;
+	}
+	return `${chars
+		.slice(0, SESSION_TITLE_TOOLTIP_MAX_CHARS - 3)
+		.join("")
+		.trimEnd()}...`;
 }
 
 // BranchPicker: thin wrapper around shared BranchPickerPopover with header trigger styling.

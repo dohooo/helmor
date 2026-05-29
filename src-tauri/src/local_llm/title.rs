@@ -14,6 +14,8 @@ use anyhow::Result;
 use super::Manager;
 
 const TITLE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_GENERATED_TITLE_CHARS: usize = 80;
+const TITLE_ELLIPSIS: &str = "...";
 
 const DEFAULT_BRANCH_RENAME_PROMPT: &str =
     "When you generate the branch name segment for a new chat:
@@ -119,18 +121,18 @@ fn parse_title_response(raw: &str) -> (String, Option<String>) {
         let trimmed = line.trim();
         let lower = trimmed.to_ascii_lowercase();
         if lower.starts_with("title:") {
-            title = strip_quotes(trimmed[6..].trim()).to_string();
+            title = normalize_generated_title(&trimmed[6..]);
         } else if lower.starts_with("branch:") {
             branch = sanitize_branch(trimmed[7..].trim());
         }
     }
     // Same fallback as the sidecar's `parseTitleAndBranch`: if structured
-    // parsing failed but the model returned something, use the whole raw
-    // body as the title.
+    // parsing failed but the model returned something, use a bounded
+    // normalized preview as the title.
     if title.is_empty() {
         let r = raw.trim();
         if !r.is_empty() {
-            title = strip_quotes(r).to_string();
+            title = normalize_generated_title(r);
         }
     }
     let branch_opt = if branch.is_empty() {
@@ -139,6 +141,34 @@ fn parse_title_response(raw: &str) -> (String, Option<String>) {
         Some(branch)
     };
     (title, branch_opt)
+}
+
+fn normalize_generated_title(raw: &str) -> String {
+    let stripped = strip_quotes(raw.trim());
+    let mut normalized = String::new();
+    for part in stripped.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(part);
+    }
+    truncate_generated_title(&normalized)
+}
+
+fn truncate_generated_title(title: &str) -> String {
+    if title.chars().count() <= MAX_GENERATED_TITLE_CHARS {
+        return title.to_string();
+    }
+
+    let mut truncated = title
+        .chars()
+        .take(MAX_GENERATED_TITLE_CHARS - TITLE_ELLIPSIS.len())
+        .collect::<String>();
+    while truncated.ends_with(char::is_whitespace) {
+        truncated.pop();
+    }
+    truncated.push_str(TITLE_ELLIPSIS);
+    truncated
 }
 
 fn strip_quotes(s: &str) -> &str {
@@ -220,6 +250,29 @@ mod tests {
         let raw = "Just a free-form title without label";
         let (title, _) = parse_title_response(raw);
         assert_eq!(title, "Just a free-form title without label");
+    }
+
+    #[test]
+    fn bounds_unstructured_title_fallback() {
+        let raw = format!(
+            "{}\nthat keeps going after a newline",
+            "This is a very long unstructured title ".repeat(8)
+        );
+        let (title, _) = parse_title_response(&raw);
+        assert!(title.chars().count() <= MAX_GENERATED_TITLE_CHARS);
+        assert!(title.ends_with(TITLE_ELLIPSIS));
+    }
+
+    #[test]
+    fn bounds_long_structured_title() {
+        let raw = format!(
+            "title: {}\nbranch: tooltip-overflow",
+            "Repair tooltip overflow for extremely long session tab names ".repeat(4)
+        );
+        let (title, branch) = parse_title_response(&raw);
+        assert!(title.chars().count() <= MAX_GENERATED_TITLE_CHARS);
+        assert!(title.ends_with(TITLE_ELLIPSIS));
+        assert_eq!(branch.as_deref(), Some("tooltip-overflow"));
     }
 
     #[test]

@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "helmor",
@@ -60,6 +59,7 @@
         "react": "19.2.0",
         "react-dom": "19.2.0",
         "react-loading-skeleton": "^3.5.0",
+        "rehype-sanitize": "^6.0.0",
         "shadcn": "^4.1.2",
         "shiki": "^4.0.2",
         "simple-icons": "^16.17.0",

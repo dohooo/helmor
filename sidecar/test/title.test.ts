@@ -108,6 +108,23 @@ describe("parseTitleAndBranch", () => {
 		expect(parseTitleAndBranch(raw).title).toBe("Some unstructured reply");
 	});
 
+	test("bounds unstructured title fallback", () => {
+		const raw = `${"This is a very long unstructured title ".repeat(8)}
+that keeps going after a newline`;
+		const title = parseTitleAndBranch(raw).title;
+		expect(title.length).toBeLessThanOrEqual(80);
+		expect(title.endsWith("...")).toBe(true);
+	});
+
+	test("bounds long structured title", () => {
+		const raw = `title: ${"Repair tooltip overflow for extremely long session tab names ".repeat(4)}
+branch: tooltip-overflow`;
+		const result = parseTitleAndBranch(raw);
+		expect(result.title.length).toBeLessThanOrEqual(80);
+		expect(result.title.endsWith("...")).toBe(true);
+		expect(result.branchName).toBe("tooltip-overflow");
+	});
+
 	test("empty raw gives empty title and undefined branch", () => {
 		const result = parseTitleAndBranch("");
 		expect(result.title).toBe("");

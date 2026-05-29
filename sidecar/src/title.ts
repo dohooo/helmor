@@ -6,6 +6,8 @@
 
 export const TITLE_GENERATION_TIMEOUT_MS = 30_000;
 export const TITLE_GENERATION_FALLBACK_TIMEOUT_MS = 30_000;
+const MAX_GENERATED_TITLE_CHARS = 80;
+const TITLE_ELLIPSIS = "...";
 
 const DEFAULT_BRANCH_RENAME_PROMPT = `When you generate the branch name segment for a new chat:
 
@@ -83,6 +85,28 @@ export interface TitleGenerationDiagnosticsOptions {
 	readonly logError: TitleGenerationErrorLogger;
 }
 
+function truncateGeneratedTitle(title: string): string {
+	const chars = Array.from(title);
+	if (chars.length <= MAX_GENERATED_TITLE_CHARS) {
+		return title;
+	}
+	return `${chars
+		.slice(0, MAX_GENERATED_TITLE_CHARS - TITLE_ELLIPSIS.length)
+		.join("")
+		.trimEnd()}${TITLE_ELLIPSIS}`;
+}
+
+function normalizeGeneratedTitle(title: string): string {
+	const normalized = title
+		.trim()
+		.replace(QUOTE_STRIP_RE, "")
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean)
+		.join(" ");
+	return truncateGeneratedTitle(normalized);
+}
+
 export function parseTitleAndBranch(raw: string): ParsedTitle {
 	let title = "";
 	let branch = "";
@@ -90,7 +114,7 @@ export function parseTitleAndBranch(raw: string): ParsedTitle {
 		const trimmed = line.trim();
 		const lower = trimmed.toLowerCase();
 		if (lower.startsWith("title:")) {
-			title = trimmed.slice(6).trim().replace(QUOTE_STRIP_RE, "").trim();
+			title = normalizeGeneratedTitle(trimmed.slice(6));
 		} else if (lower.startsWith("branch:")) {
 			branch = trimmed
 				.slice(7)
@@ -102,9 +126,9 @@ export function parseTitleAndBranch(raw: string): ParsedTitle {
 	}
 
 	// If structured parsing failed but the model returned *something*, fall
-	// back to using the raw text as the title (still better than empty).
+	// back to using a bounded normalized preview as the title.
 	if (!title && raw.trim()) {
-		title = raw.trim().replace(QUOTE_STRIP_RE, "").trim();
+		title = normalizeGeneratedTitle(raw);
 	}
 
 	return { title, branchName: branch || undefined };
