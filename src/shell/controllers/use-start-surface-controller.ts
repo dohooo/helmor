@@ -138,6 +138,11 @@ export function useStartSurfaceController(
 	const [startPendingNewBranch, setStartPendingNewBranch] = useState<
 		string | null
 	>(null);
+	// Local-mode branch pick — transient (a pending checkout), kept out of the
+	// persisted worktree `sourceBranchByRepoId` so it can't shadow live HEAD.
+	const [startLocalBranchSelection, setStartLocalBranchSelection] = useState<
+		string | null
+	>(null);
 	const [startPendingLinkedDirectories, setStartPendingLinkedDirectories] =
 		useState<readonly string[]>(EMPTY_STRING_LIST);
 	// One-shot mode override set by the `Cmd+N` / `Cmd+Shift+N` shortcuts
@@ -232,6 +237,7 @@ export function useStartSurfaceController(
 	// are re-read from the new repo's slot automatically.
 	useEffect(() => {
 		setStartPendingNewBranch(null);
+		setStartLocalBranchSelection(null);
 		setStartPendingLinkedDirectories(EMPTY_STRING_LIST);
 	}, [startRepositoryId]);
 
@@ -250,24 +256,29 @@ export function useStartSurfaceController(
 		setTransientModeOverride(event.mode ?? null);
 	});
 
-	// In local mode default to repo HEAD; worktree mode keeps stored default.
+	// Live HEAD = local-mode default. Fetched eagerly (not gated on local mode)
+	// so switching to local shows the real branch without flashing "main".
 	const startLocalCurrentBranchQuery = useQuery({
 		queryKey: ["repoCurrentBranch", startRepository?.id],
 		queryFn: () => {
 			if (!startRepository) throw new Error("no repo");
 			return getRepoCurrentBranch(startRepository.id);
 		},
-		enabled: Boolean(startRepository?.id) && startMode === "local",
+		enabled: Boolean(startRepository?.id),
 	});
-	// pendingNewBranch (transient) > per-repo override > mode default.
+	// Local: live HEAD wins (the worktree's persisted override must not leak in).
+	// Worktree: pendingNewBranch > per-repo override > default.
 	const startSourceBranch =
-		startPendingNewBranch ??
-		startSourceBranchOverride ??
-		(startMode === "local"
-			? (startLocalCurrentBranchQuery.data ??
+		startMode === "local"
+			? (startPendingNewBranch ??
+				startLocalBranchSelection ??
+				startLocalCurrentBranchQuery.data ??
 				startRepository?.defaultBranch ??
 				"main")
-			: (startRepository?.defaultBranch ?? "main"));
+			: (startPendingNewBranch ??
+				startSourceBranchOverride ??
+				startRepository?.defaultBranch ??
+				"main");
 
 	// Combined local + remote source — both modes use it. Each entry carries
 	// `hasLocal` / `hasRemote` so the picker can render a single icon by
@@ -299,6 +310,12 @@ export function useStartSurfaceController(
 			if (!startRepository) return;
 			// Picking an existing branch drops any in-flight create-new stash.
 			setStartPendingNewBranch(null);
+			// Local mode: keep the pick transient so it can't shadow live HEAD
+			// via the shared worktree `sourceBranchByRepoId`.
+			if (startMode === "local") {
+				setStartLocalBranchSelection(branch);
+				return;
+			}
 			void updateSettings({
 				startSurfacePreferences: {
 					...appSettings.startSurfacePreferences,
@@ -310,7 +327,12 @@ export function useStartSurfaceController(
 				},
 			});
 		},
-		[appSettings.startSurfacePreferences, startRepository, updateSettings],
+		[
+			appSettings.startSurfacePreferences,
+			startMode,
+			startRepository,
+			updateSettings,
+		],
 	);
 
 	const selectMode = useCallback(
@@ -318,8 +340,9 @@ export function useStartSurfaceController(
 			// Manual pick supersedes any shortcut-driven override and gets
 			// persisted via the normal `updateSettings` path below.
 			setTransientModeOverride(null);
-			// pendingNewBranch is local-mode-only; clear it on any mode flip.
+			// pendingNewBranch + local branch pick are local-only; clear on flip.
 			setStartPendingNewBranch(null);
+			setStartLocalBranchSelection(null);
 
 			// Chat is the top-level toggle — flip just the boolean, don't
 			// touch any repo-bound state. Works even with no repo selected
@@ -653,6 +676,7 @@ export function useStartSurfaceController(
 	const resetScratchOnReentry = useCallback(() => {
 		// Transient only — persisted picker selections survive re-entry.
 		setStartPendingNewBranch(null);
+		setStartLocalBranchSelection(null);
 	}, []);
 
 	const actions = useStableActions<StartSurfaceActions>({
