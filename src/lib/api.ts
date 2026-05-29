@@ -2202,7 +2202,6 @@ export async function listenGitRefsChanged(
 export async function subscribeUiMutations(
 	callback: (event: UiMutationEvent) => void,
 ): Promise<UnlistenFn> {
-	const { Channel } = await import("@tauri-apps/api/core");
 	const subscriptionId = crypto.randomUUID();
 	const onEvent = new Channel<UiMutationEvent>();
 	onEvent.onmessage = callback;
@@ -3539,7 +3538,6 @@ export async function startAgentMessageStream(
 	request: AgentSendRequest,
 	callback: (event: AgentStreamEvent) => void,
 ): Promise<void> {
-	const { Channel } = await import("@tauri-apps/api/core");
 	const onEvent = new Channel<AgentStreamEvent>();
 	onEvent.onmessage = (event) => callback(event);
 	await invoke("send_agent_message_stream", { request, onEvent });
