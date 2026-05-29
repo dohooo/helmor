@@ -741,6 +741,34 @@ pub async fn connect_remote_runtime(
             &remote_binary,
             &local_binary,
         )?;
+
+        // Install (or update) the agent-runtime bundle while we're
+        // still inside the blocking pool. Two reasons this lives
+        // BEFORE `connect_ssh_with_options`:
+        //   1. The wrapper script the bundle installs needs to be in
+        //      place when the SSH transport runs its
+        //      `--ensure-daemon && exec --proxy` chain, so the spawned
+        //      daemon picks up `HELMOR_SIDECAR_PATH` from the wrapper's
+        //      env. Going AFTER the connect would have the chicken-
+        //      and-egg problem where the daemon is already running
+        //      without the env.
+        //   2. The install also bounces any stale daemon — if we
+        //      connect first, we'd just be tearing down our own SSH
+        //      session moments later.
+        //
+        // Graceful failure: the bundle install may fail because no
+        // local bundle was staged (operator built without
+        // HELMOR_REMOTE_BUNDLES), because the remote's arch isn't in
+        // our supported list, or because the network blipped. In any
+        // of those cases the user-visible workspace (file ops,
+        // terminals, watchers) still works on the remote — only
+        // `agent.send` will report "agent bridge disabled" until the
+        // bundle is in place. So we log + emit a failure event but
+        // DO NOT propagate the error; the connect succeeds and the
+        // user can retry the bundle install from the Remote Servers
+        // panel.
+        ensure_remote_bundle_during_connect(&app, &name, &host);
+
         let runtime =
             RemoteSshRuntime::connect_ssh_with_options(&host, &resolved_binary, forward_agent)?;
         let health = runtime.runtime_health()?;
@@ -755,6 +783,118 @@ pub async fn connect_remote_runtime(
         Ok(health)
     })
     .await
+}
+
+/// Try to install (or update) the agent-runtime bundle on a host
+/// we've just finished daemon-installing. Errors are logged + surfaced
+/// as a `RemoteBundleInstallFailed` UI event, but never propagated:
+/// the connect succeeds either way. The agent will be disabled on a
+/// runtime whose bundle install failed, but file ops, terminals, and
+/// watchers all keep working — and the operator can retry from the
+/// Remote Servers panel.
+///
+/// Why "try" and not "must": three real-world cases where the install
+/// can't proceed and we shouldn't block the connect on them:
+///   1. The desktop wasn't built with `HELMOR_REMOTE_BUNDLES=...`, so
+///      no local bundle is staged. The operator can still file-edit
+///      remotely; they need a release build (or a `stage-vendor` run)
+///      to enable agents on this host.
+///   2. The remote's `uname -m` doesn't match a bundle we ship (e.g.
+///      a Linux ppc64le host). Same situation — no agents, but
+///      everything else works.
+///   3. Network blip during the upload. Idempotent, so retrying is
+///      cheap; the Remote Servers panel surfaces the failure with a
+///      Reinstall button.
+fn ensure_remote_bundle_during_connect<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime_name: &str,
+    host: &str,
+) {
+    use crate::remote::install_bundle;
+    let runner = crate::remote::install::ProcessSshRunner;
+    let target = match install_bundle::detect_remote_target(&runner, host) {
+        Ok(t) => t,
+        Err(err) => {
+            tracing::warn!(
+                host = %host,
+                error = %format!("{err:#}"),
+                "remote bundle install skipped: could not detect target — agents will be disabled on this runtime until install succeeds",
+            );
+            crate::ui_sync::publish(
+                app,
+                crate::ui_sync::UiMutationEvent::RemoteBundleInstallFailed {
+                    name: runtime_name.to_string(),
+                    error: format!("could not detect remote target: {err:#}"),
+                },
+            );
+            return;
+        }
+    };
+    let bundle_dir = match install_bundle::resolve_local_bundle_dir(target) {
+        Ok(p) => p,
+        Err(err) => {
+            tracing::warn!(
+                host = %host,
+                target = %target.as_str(),
+                error = %format!("{err:#}"),
+                "remote bundle install skipped: no local bundle staged for {} — agents will be disabled until you stage one with `HELMOR_REMOTE_BUNDLES={} bun run scripts/stage-vendor.ts` in sidecar/",
+                target.as_str(),
+                target.as_str(),
+            );
+            crate::ui_sync::publish(
+                app,
+                crate::ui_sync::UiMutationEvent::RemoteBundleInstallFailed {
+                    name: runtime_name.to_string(),
+                    error: format!("{err:#}"),
+                },
+            );
+            return;
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let name_for_progress = runtime_name.to_string();
+    let app_for_progress = app.clone();
+    let progress = move |step: &str, message: &str| {
+        crate::ui_sync::publish(
+            &app_for_progress,
+            crate::ui_sync::UiMutationEvent::RemoteBundleInstallProgress {
+                name: name_for_progress.clone(),
+                step: step.to_string(),
+                message: message.to_string(),
+            },
+        );
+    };
+
+    match install_bundle::ensure_remote_bundle_with_progress(&runner, host, &bundle_dir, &progress)
+    {
+        Ok(outcome) => {
+            crate::ui_sync::publish(
+                app,
+                crate::ui_sync::UiMutationEvent::RemoteBundleInstallComplete {
+                    name: runtime_name.to_string(),
+                    already_current: outcome.already_current,
+                    installed_files: outcome.installed_files,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                },
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                host = %host,
+                target = %target.as_str(),
+                error = %format!("{err:#}"),
+                "remote bundle install failed — connect succeeded but agents are disabled until you reinstall via Remote Servers",
+            );
+            crate::ui_sync::publish(
+                app,
+                crate::ui_sync::UiMutationEvent::RemoteBundleInstallFailed {
+                    name: runtime_name.to_string(),
+                    error: format!("{err:#}"),
+                },
+            );
+        }
+    }
 }
 
 /// Compare the daemon's reported version against this desktop's
@@ -938,6 +1078,7 @@ pub async fn reinstall_remote_daemon(
 /// against a locally-pinned manifest before it goes live.
 #[tauri::command]
 pub async fn install_remote_bundle(
+    app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<RuntimeRegistry>>,
     name: String,
 ) -> CmdResult<crate::remote::install_bundle::EnsureRemoteBundleOutcome> {
@@ -971,7 +1112,53 @@ pub async fn install_remote_bundle(
         let runner = crate::remote::install::ProcessSshRunner;
         let target = crate::remote::install_bundle::detect_remote_target(&runner, &host)?;
         let bundle_dir = crate::remote::install_bundle::resolve_local_bundle_dir(target)?;
-        crate::remote::install_bundle::ensure_remote_bundle(&runner, &host, &bundle_dir)
+
+        // Forward each install phase to the UI via the same broadcast
+        // channel that drives the runtime-list / banner refreshes; the
+        // wizard + Remote Servers row both listen for these.
+        let started = std::time::Instant::now();
+        let name_for_progress = name.clone();
+        let app_for_progress = app.clone();
+        let progress = move |step: &str, message: &str| {
+            crate::ui_sync::publish(
+                &app_for_progress,
+                crate::ui_sync::UiMutationEvent::RemoteBundleInstallProgress {
+                    name: name_for_progress.clone(),
+                    step: step.to_string(),
+                    message: message.to_string(),
+                },
+            );
+        };
+        let outcome_result = crate::remote::install_bundle::ensure_remote_bundle_with_progress(
+            &runner,
+            &host,
+            &bundle_dir,
+            &progress,
+        );
+        match outcome_result {
+            Ok(outcome) => {
+                crate::ui_sync::publish(
+                    &app,
+                    crate::ui_sync::UiMutationEvent::RemoteBundleInstallComplete {
+                        name: name.clone(),
+                        already_current: outcome.already_current,
+                        installed_files: outcome.installed_files.clone(),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    },
+                );
+                Ok(outcome)
+            }
+            Err(err) => {
+                crate::ui_sync::publish(
+                    &app,
+                    crate::ui_sync::UiMutationEvent::RemoteBundleInstallFailed {
+                        name: name.clone(),
+                        error: format!("{err:#}"),
+                    },
+                );
+                Err(err)
+            }
+        }
     })
     .await
 }

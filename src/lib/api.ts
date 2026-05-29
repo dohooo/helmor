@@ -3065,6 +3065,38 @@ export type UiMutationEvent =
 			daemonVersion: string;
 			desktopVersion: string;
 	  }
+	| {
+			/** Agent-runtime bundle install on a connected remote is
+			 * happening. `step` is one of `detecting` /
+			 * `probing-manifest` / `uploading` / `verifying` /
+			 * `committing` / `bouncing-daemon`. `message` is a
+			 * human-readable label safe to render in a chip. */
+			type: "remoteBundleInstallProgress";
+			name: string;
+			step: string;
+			message: string;
+	  }
+	| {
+			/** Bundle install settled. `alreadyCurrent: true` means
+			 * the manifest matched (no files transferred) — UIs should
+			 * skip a "Done in 5.2s" toast on those. `installedFiles`
+			 * is the list of paths actually re-pushed. */
+			type: "remoteBundleInstallComplete";
+			name: string;
+			alreadyCurrent: boolean;
+			installedFiles: string[];
+			durationMs: number;
+	  }
+	| {
+			/** Bundle install failed. The connect itself still
+			 * succeeded — file ops + terminals work — but `agent.send`
+			 * will be disabled until the operator reinstalls via the
+			 * Remote Servers panel. `error` is the chained anyhow
+			 * message including all `with_context` frames. */
+			type: "remoteBundleInstallFailed";
+			name: string;
+			error: string;
+	  }
 	| { type: "slackWorkspacesChanged" }
 	| { type: "slackTokenInvalidated"; teamId: string };
 

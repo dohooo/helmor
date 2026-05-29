@@ -170,6 +170,19 @@ pub struct EnsureRemoteBundleOutcome {
     pub already_current: bool,
 }
 
+/// Progress callback the install routine fires at each phase so the
+/// caller can surface a "Setting up agent runtime…" UI. The callback
+/// is called on whatever thread the install runs on (today: the Tauri
+/// blocking pool), so implementations should be cheap + thread-safe —
+/// the `connect_remote_runtime` adapter just forwards the call to
+/// `crate::ui_sync::publish`.
+///
+/// `step` is a stable enum-style string the UI can switch on; `message`
+/// is the human-readable label.
+pub type ProgressCb<'a> = &'a (dyn Fn(&str, &str) + Send + Sync);
+
+fn noop_progress(_step: &str, _message: &str) {}
+
 /// Read the local bundle manifest the desktop will push. `bundle_dir`
 /// is `<sidecar-root>/dist/remote-bundles/<target>/`; the manifest lives
 /// at `<bundle_dir>/MANIFEST.json`.
@@ -486,6 +499,20 @@ pub fn ensure_remote_bundle<R: SshRunner>(
     host: &str,
     bundle_dir: &Path,
 ) -> Result<EnsureRemoteBundleOutcome> {
+    ensure_remote_bundle_with_progress(runner, host, bundle_dir, &noop_progress)
+}
+
+/// Like [`ensure_remote_bundle`] but emits a `(step, message)` callback
+/// at every observable phase so a UI can render progress. Used by
+/// `connect_remote_runtime` to wire the install into
+/// `UiMutationEvent::RemoteBundleInstall{Progress,Complete,Failed}`.
+pub fn ensure_remote_bundle_with_progress<R: SshRunner>(
+    runner: &R,
+    host: &str,
+    bundle_dir: &Path,
+    progress: ProgressCb<'_>,
+) -> Result<EnsureRemoteBundleOutcome> {
+    progress("detecting", "Detecting remote architecture");
     let local = read_local_manifest(bundle_dir)?;
     let remote_target =
         detect_remote_target(runner, host).with_context(|| format!("detect target of `{host}`"))?;
@@ -499,6 +526,10 @@ pub fn ensure_remote_bundle<R: SshRunner>(
         );
     }
 
+    progress(
+        "probing-manifest",
+        "Checking what's already installed on the remote",
+    );
     let remote = probe_remote_manifest(runner, host).unwrap_or_else(|err| {
         // A malformed remote manifest is logged loudly but treated as
         // "no manifest" — we'll overwrite it with the local one and
@@ -587,8 +618,25 @@ pub fn ensure_remote_bundle<R: SshRunner>(
     });
 
     let entries_refs: Vec<&ManifestEntry> = entries.iter().collect();
+    // The progress UI splits a tar-pipe push into "uploading" + "verifying"
+    // + "committing" phases. The push function itself doesn't surface
+    // sub-byte progress (tar's stdin is a single stream — we'd need to
+    // interpose a counting Read to surface "57 of 330 MB" and that's a
+    // follow-up). The phase boundaries are the strongest signal a user
+    // gets that things are moving.
+    let total_mb: f64 = entries.iter().map(|e| e.bytes as f64).sum::<f64>() / (1024.0 * 1024.0);
+    progress(
+        "uploading",
+        &format!(
+            "Uploading agent runtime ({} file{}, {:.1} MB)",
+            plan.len(),
+            if plan.len() == 1 { "" } else { "s" },
+            total_mb,
+        ),
+    );
     push_bundle_via_tarstream(host, bundle_dir, &entries_refs)
         .with_context(|| format!("push remote bundle to `{host}`"))?;
+    progress("verifying", "Verified checksums and committed bundle files");
 
     // Bounce any daemon that's still running. Process env is set at
     // exec time and never refreshed, so a daemon started BEFORE the
@@ -605,6 +653,10 @@ pub fn ensure_remote_bundle<R: SshRunner>(
     // on the full cmdline, and our daemon's cmdline contains the
     // full `$HOME/.helmor/server/helmor-server.real --daemon` we
     // know exactly. We don't touch any other process.
+    progress(
+        "bouncing-daemon",
+        "Restarting the remote daemon so it picks up the new wrapper",
+    );
     let bounce_cmd =
         format!("pkill -TERM -f '{REMOTE_DAEMON_BINARY_SH} --daemon' 2>/dev/null || true",);
     let _ = ssh_command(host).arg(&bounce_cmd).output();

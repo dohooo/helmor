@@ -130,6 +130,39 @@ pub enum UiMutationEvent {
         /// the version the operator's daemon should ideally match.
         desktop_version: String,
     },
+    /// Track D2: agent-runtime bundle install on a connected remote
+    /// is happening or has finished. Drives the "Setting up agent
+    /// runtime…" indicator in the Add-remote-server wizard + the
+    /// "Bundle: installing 1.2 / 330 MB" chip on the Remote Servers
+    /// row. Fired in three discriminated arms (camelCase tag) so the
+    /// UI can pick the right rendering:
+    ///
+    /// - `progress`: install is in flight; `step` is one of `detecting`,
+    ///   `probing-manifest`, `uploading`, `verifying`, `committing`,
+    ///   `bouncing-daemon`. `message` is a human-readable label for
+    ///   the chip.
+    /// - `complete`: install settled successfully. `alreadyCurrent` is
+    ///   `true` when the manifest matched and no scp ran; the UI uses
+    ///   this to skip the "Done — installed in 5.2s" toast on a no-op.
+    /// - `failed`: install errored. The connect path swallows the
+    ///   error (the daemon still works, file ops still work), but
+    ///   the UI surfaces a chip explaining `agent.send` will be
+    ///   disabled until the operator reinstalls via Remote Servers.
+    RemoteBundleInstallProgress {
+        name: String,
+        step: String,
+        message: String,
+    },
+    RemoteBundleInstallComplete {
+        name: String,
+        already_current: bool,
+        installed_files: Vec<String>,
+        duration_ms: u64,
+    },
+    RemoteBundleInstallFailed {
+        name: String,
+        error: String,
+    },
     /// Connected-Slack-workspace set changed (Connect / Disconnect).
     /// Frontends invalidate the workspace list query and the inbox
     /// queries for any affected team.
