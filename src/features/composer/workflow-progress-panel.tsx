@@ -7,7 +7,15 @@ import {
 	Workflow,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	Suspense,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { LazyStreamdown } from "@/components/streamdown-loader";
 import { formatTokens } from "@/features/composer/context-usage-ring/parse";
 import { formatWorkflowDuration } from "@/features/panel/message-components/content-parts";
 import { ShortcutDisplay } from "@/features/shortcuts/shortcut-display";
@@ -152,11 +160,17 @@ export function WorkflowProgressPanel({
 }) {
 	const workflows = useSessionWorkflows(sessionId);
 	const panelRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLDivElement>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef<HTMLButtonElement>(null);
 	const [level, setLevel] = useState<0 | 1 | 2>(0);
 	const [runIndex, setRunIndex] = useState(0);
 	const [agentIndex, setAgentIndex] = useState(0);
 	const [highlight, setHighlight] = useState(0);
+	// Explicit pixel height so the SAME card element animates smoothly between
+	// levels (a content-driven `auto`/`max-height` can't transition). Capped so
+	// a long result never makes the card overrun the viewport — it scrolls.
+	const [height, setHeight] = useState<number | null>(null);
 
 	const run =
 		workflows[Math.min(runIndex, Math.max(0, workflows.length - 1))] ?? null;
@@ -168,6 +182,11 @@ export function WorkflowProgressPanel({
 	const listLen =
 		level === 0 ? workflows.length : level === 1 ? flat.length : 0;
 	const hi = Math.min(highlight, Math.max(0, listLen - 1));
+
+	const detailAgent =
+		level === 2
+			? flat[Math.min(agentIndex, Math.max(0, flat.length - 1))]
+			: undefined;
 
 	// Reset to the run list + take focus whenever the panel opens.
 	useEffect(() => {
@@ -197,6 +216,38 @@ export function WorkflowProgressPanel({
 	useEffect(() => {
 		activeRef.current?.scrollIntoView({ block: "nearest" });
 	}, [hi, level]);
+
+	// Drive the card's explicit height from its natural content height, capped
+	// at 55vh. A ResizeObserver re-measures on every content change — level
+	// switches AND the lazy markdown finishing its first render — so the height
+	// always eases to the right size and the body scrolls past the cap.
+	// Signature forces a synchronous re-measure the instant the level changes.
+	const heightSig =
+		level === 0
+			? `0:${workflows.length}`
+			: level === 1
+				? `1:${runIndex}:${flat.length}`
+				: `2:${agentIndex}:${detailAgent?.resultPreview?.length ?? 0}`;
+	useLayoutEffect(() => {
+		if (!open) return;
+		const header = headerRef.current;
+		const content = contentRef.current;
+		if (!header || !content) return;
+		const measure = () => {
+			// 28 ≈ panel padding (20) + header→body gap (6) + border (2).
+			const natural = header.offsetHeight + content.offsetHeight + 28;
+			const cap = Math.round(window.innerHeight * 0.55);
+			setHeight(Math.min(natural, cap));
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(content);
+		window.addEventListener("resize", measure);
+		return () => {
+			ro.disconnect();
+			window.removeEventListener("resize", measure);
+		};
+	}, [open, heightSig]);
 
 	if (!open) return null;
 
@@ -264,9 +315,14 @@ export function WorkflowProgressPanel({
 			ref={panelRef}
 			tabIndex={-1}
 			onKeyDown={onKeyDown}
-			className="pointer-events-auto mb-3 flex max-h-[50vh] w-full flex-col overflow-hidden rounded-xl border border-border/40 bg-popover p-2.5 shadow-sm outline-none"
+			style={{
+				height: height != null ? `${height}px` : undefined,
+				// Ease-out (fast → slow) so the resize feels like it settles.
+				transition: "height 360ms cubic-bezier(0.22, 1, 0.36, 1)",
+			}}
+			className="pointer-events-auto mb-3 flex w-full flex-col overflow-hidden rounded-xl border border-border/40 bg-popover p-2.5 shadow-sm outline-none"
 		>
-			<div className="mb-1.5 flex items-center gap-1.5 px-0.5">
+			<div ref={headerRef} className="mb-1.5 flex items-center gap-1.5 px-0.5">
 				{level === 0 ? (
 					<>
 						<Workflow
@@ -306,171 +362,181 @@ export function WorkflowProgressPanel({
 			</div>
 
 			<div className="min-h-0 flex-1 overflow-y-auto">
-				{level === 0 ? (
-					workflows.length === 0 ? (
-						<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-							No workflows in this conversation yet. They appear here when the
-							agent runs a dynamic workflow.
-						</p>
-					) : (
-						<div className="flex flex-col gap-0.5">
-							{workflows.map((part, index) => (
-								<button
-									key={part.id}
-									type="button"
-									ref={index === hi ? activeRef : undefined}
-									onMouseEnter={() => setHighlight(index)}
-									onClick={() => {
-										setRunIndex(index);
-										setLevel(1);
-										setHighlight(0);
-										refocus();
-									}}
-									className={cn(ROW, "text-ui", index === hi && "bg-muted")}
-								>
-									<Workflow
-										className="size-3 shrink-0 text-muted-foreground"
-										strokeWidth={1.8}
-									/>
-									<span className="shrink-0 truncate font-medium text-foreground">
-										{part.name}
-									</span>
-									<span className={cn("text-mini", statusTone(part.status))}>
-										{WORKFLOW_STATUS_LABEL[part.status]}
-									</span>
-									<span className="ml-auto shrink-0 truncate text-mini text-muted-foreground/60">
-										{runMeta(part)}
-									</span>
-									<ChevronRight
-										className="size-3.5 shrink-0 text-muted-foreground/40"
-										strokeWidth={1.8}
-									/>
-								</button>
-							))}
-						</div>
-					)
-				) : level === 1 ? (
-					<div className="flex flex-col gap-0.5">
-						{flat.length === 0 ? (
+				<div ref={contentRef}>
+					{level === 0 ? (
+						workflows.length === 0 ? (
 							<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
-								No agents reported yet.
+								No workflows in this conversation yet. They appear here when the
+								agent runs a dynamic workflow.
 							</p>
 						) : (
-							rows.map((row) =>
-								row.kind === "phase" ? (
-									<div
-										key={`phase-${row.title}`}
-										className="mt-1 px-2 pt-0.5 text-nano font-medium uppercase tracking-[0.06em] text-muted-foreground/60"
-									>
-										{row.title}
-									</div>
-								) : (
+							<div className="flex flex-col gap-0.5">
+								{workflows.map((part, index) => (
 									<button
-										key={`agent-${row.index}`}
+										key={part.id}
 										type="button"
-										ref={row.index === hi ? activeRef : undefined}
-										onMouseEnter={() => setHighlight(row.index)}
+										ref={index === hi ? activeRef : undefined}
+										onMouseEnter={() => setHighlight(index)}
 										onClick={() => {
-											setAgentIndex(row.index);
-											setLevel(2);
+											setRunIndex(index);
+											setLevel(1);
+											setHighlight(0);
 											refocus();
 										}}
-										className={cn(
-											ROW,
-											"text-ui",
-											row.index === hi && "bg-muted",
-										)}
+										className={cn(ROW, "text-ui", index === hi && "bg-muted")}
 									>
-										{row.agent.status === "done" ? (
+										<Workflow
+											className="size-3 shrink-0 text-muted-foreground"
+											strokeWidth={1.8}
+										/>
+										<span className="shrink-0 truncate font-medium text-foreground">
+											{part.name}
+										</span>
+										<span className={cn("text-mini", statusTone(part.status))}>
+											{WORKFLOW_STATUS_LABEL[part.status]}
+										</span>
+										<span className="ml-auto shrink-0 truncate text-mini text-muted-foreground/60">
+											{runMeta(part)}
+										</span>
+										<ChevronRight
+											className="size-3.5 shrink-0 text-muted-foreground/40"
+											strokeWidth={1.8}
+										/>
+									</button>
+								))}
+							</div>
+						)
+					) : level === 1 ? (
+						<div className="flex flex-col gap-0.5">
+							{flat.length === 0 ? (
+								<p className="px-1 py-2 text-ui leading-6 text-muted-foreground">
+									No agents reported yet.
+								</p>
+							) : (
+								rows.map((row) =>
+									row.kind === "phase" ? (
+										<div
+											key={`phase-${row.title}`}
+											className="mt-1 px-2 pt-0.5 text-nano font-medium uppercase tracking-[0.06em] text-muted-foreground/60"
+										>
+											{row.title}
+										</div>
+									) : (
+										<button
+											key={`agent-${row.index}`}
+											type="button"
+											ref={row.index === hi ? activeRef : undefined}
+											onMouseEnter={() => setHighlight(row.index)}
+											onClick={() => {
+												setAgentIndex(row.index);
+												setLevel(2);
+												refocus();
+											}}
+											className={cn(
+												ROW,
+												"text-ui",
+												row.index === hi && "bg-muted",
+											)}
+										>
+											{row.agent.status === "done" ? (
+												<Check
+													className="size-3 shrink-0 text-chart-2"
+													strokeWidth={1.8}
+												/>
+											) : (
+												<CircleDot
+													className="size-3 shrink-0 text-muted-foreground/60"
+													strokeWidth={1.8}
+												/>
+											)}
+											<span className="shrink-0 truncate text-foreground">
+												{row.agent.label}
+											</span>
+											{row.agent.resultPreview ? (
+												<span className="truncate text-muted-foreground/60">
+													— {row.agent.resultPreview}
+												</span>
+											) : null}
+											<ChevronRight
+												className="ml-auto size-3.5 shrink-0 text-muted-foreground/40"
+												strokeWidth={1.8}
+											/>
+										</button>
+									),
+								)
+							)}
+							{run ? (
+								<div className="mt-1.5 px-2 text-mini text-muted-foreground/60">
+									{runMeta(run)}
+								</div>
+							) : null}
+						</div>
+					) : (
+						(() => {
+							const agent =
+								flat[Math.min(agentIndex, Math.max(0, flat.length - 1))];
+							if (!agent) {
+								return (
+									<p className="px-1 py-2 text-ui text-muted-foreground">
+										Agent unavailable.
+									</p>
+								);
+							}
+							const done = agent.status === "done";
+							const meta = agentMeta(agent);
+							return (
+								<div className="flex flex-col gap-1.5 px-1 py-0.5">
+									<div className="flex items-center gap-1.5">
+										{done ? (
 											<Check
-												className="size-3 shrink-0 text-chart-2"
+												className="size-3.5 shrink-0 text-chart-2"
 												strokeWidth={1.8}
 											/>
 										) : (
 											<CircleDot
-												className="size-3 shrink-0 text-muted-foreground/60"
+												className="size-3.5 shrink-0 text-muted-foreground/60"
 												strokeWidth={1.8}
 											/>
 										)}
-										<span className="shrink-0 truncate text-foreground">
-											{row.agent.label}
+										<span className="truncate font-medium text-foreground">
+											{agent.label}
 										</span>
-										{row.agent.resultPreview ? (
-											<span className="truncate text-muted-foreground/60">
-												— {row.agent.resultPreview}
-											</span>
-										) : null}
-										<ChevronRight
-											className="ml-auto size-3.5 shrink-0 text-muted-foreground/40"
-											strokeWidth={1.8}
-										/>
-									</button>
-								),
-							)
-						)}
-						{run ? (
-							<div className="mt-1.5 px-2 text-mini text-muted-foreground/60">
-								{runMeta(run)}
-							</div>
-						) : null}
-					</div>
-				) : (
-					(() => {
-						const agent =
-							flat[Math.min(agentIndex, Math.max(0, flat.length - 1))];
-						if (!agent) {
-							return (
-								<p className="px-1 py-2 text-ui text-muted-foreground">
-									Agent unavailable.
-								</p>
-							);
-						}
-						const done = agent.status === "done";
-						const meta = agentMeta(agent);
-						return (
-							<div className="flex flex-col gap-1.5 px-1 py-0.5">
-								<div className="flex items-center gap-1.5">
-									{done ? (
-										<Check
-											className="size-3.5 shrink-0 text-chart-2"
-											strokeWidth={1.8}
-										/>
+										<span className="ml-auto shrink-0 text-mini text-muted-foreground/60">
+											{done ? "done" : "running"}
+										</span>
+									</div>
+									{meta ? (
+										<div className="text-mini text-muted-foreground/60">
+											{meta}
+										</div>
+									) : null}
+									{agent.resultPreview ? (
+										<Suspense
+											fallback={
+												<pre className="mt-0.5 whitespace-pre-wrap break-words rounded-md bg-muted/50 px-2.5 py-2 text-ui leading-6 text-foreground">
+													{agent.resultPreview}
+												</pre>
+											}
+										>
+											<div className="mt-0.5 rounded-md bg-muted/50 px-2.5 py-2 text-foreground">
+												<LazyStreamdown
+													className="conversation-streamdown"
+													mode="static"
+												>
+													{agent.resultPreview}
+												</LazyStreamdown>
+											</div>
+										</Suspense>
 									) : (
-										<CircleDot
-											className="size-3.5 shrink-0 text-muted-foreground/60"
-											strokeWidth={1.8}
-										/>
+										<div className="text-ui text-muted-foreground/60">
+											No result preview.
+										</div>
 									)}
-									<span className="truncate font-medium text-foreground">
-										{agent.label}
-									</span>
-									<span className="ml-auto shrink-0 text-mini text-muted-foreground/60">
-										{done ? "done" : "running"}
-									</span>
 								</div>
-								{agent.phaseTitle ? (
-									<div className="text-mini text-muted-foreground/60">
-										Phase · {agent.phaseTitle}
-									</div>
-								) : null}
-								{meta ? (
-									<div className="text-mini text-muted-foreground/60">
-										{meta}
-									</div>
-								) : null}
-								{agent.resultPreview ? (
-									<div className="mt-0.5 whitespace-pre-wrap break-words rounded-md bg-muted/50 px-2.5 py-2 text-ui leading-6 text-foreground">
-										{agent.resultPreview}
-									</div>
-								) : (
-									<div className="text-ui text-muted-foreground/60">
-										No result preview.
-									</div>
-								)}
-							</div>
-						);
-					})()
-				)}
+							);
+						})()
+					)}
+				</div>
 			</div>
 		</div>
 	);

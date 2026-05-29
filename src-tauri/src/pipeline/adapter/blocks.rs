@@ -224,12 +224,17 @@ fn map_workflow_status(s: &str) -> WorkflowStatus {
     }
 }
 
+/// Cap on a stored agent result preview. Generous so the drill-down detail
+/// view renders a meaningful, scrollable chunk of markdown; the in-thread card
+/// and the L1 agent row still show only a single CSS-truncated line.
+const PREVIEW_CAP: usize = 4000;
+
 fn truncate_preview(s: &str) -> String {
     let s = s.trim();
-    if s.chars().count() <= 120 {
+    if s.chars().count() <= PREVIEW_CAP {
         s.to_string()
     } else {
-        let cut: String = s.chars().take(119).collect();
+        let cut: String = s.chars().take(PREVIEW_CAP - 1).collect();
         format!("{cut}…")
     }
 }
