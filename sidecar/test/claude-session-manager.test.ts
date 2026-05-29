@@ -1158,6 +1158,126 @@ describe("ClaudeSessionManager.stopSession", () => {
 		await manager.stopSession("never-existed");
 	});
 
+	test("emits aborted immediately without waiting for the SDK iterator to unwind", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		// Iterator yields one message then hangs — mimics the SDK deferring its
+		// child teardown (~2s SIGTERM grace), so the for-await does NOT throw
+		// promptly on abort. The fix must surface `aborted` anyway.
+		let release: () => void = () => {};
+		mockQueryImpl = async function* hanging() {
+			yield { type: "system", subtype: "init", session_id: "sdk-1", uuid: "u" };
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const err = new Error("The operation was aborted") as Error & {
+				name: string;
+			};
+			err.name = "AbortError";
+			throw err;
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-STOP-FAST",
+			{
+				sessionId: "s-stop-fast",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((e) => e.type === "system"),
+			"init passthrough",
+		);
+
+		await manager.stopSession("s-stop-fast");
+
+		// aborted is already out, even though the iterator is still hanging.
+		expect(
+			captured.some((e) => e.type === "aborted" && e.id === "REQ-STOP-FAST"),
+		).toBe(true);
+
+		// Now let the iterator unwind with AbortError; the catch must NOT
+		// emit a second aborted.
+		release();
+		await sendPromise;
+		expect(captured.filter((e) => e.type === "aborted")).toHaveLength(1);
+		expect(captured.some((e) => e.type === "end")).toBe(false);
+	});
+
+	test("after stopSession, a late buffered result does not emit a second terminal", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const emitter = createSidecarEmitter((event) => {
+			captured.push(event as Record<string, unknown>);
+		});
+		const manager = new ClaudeSessionManager();
+
+		// The turn finishes NATURALLY during the SDK's post-abort grace window:
+		// after stopSession, the iterator drains a buffered terminal `result`
+		// instead of throwing AbortError. The loop must drop it — no passthrough,
+		// no `end` — so `aborted` stays the one and only terminal event.
+		let release: () => void = () => {};
+		mockQueryImpl = async function* lateResult() {
+			yield { type: "system", subtype: "init", session_id: "sdk-1", uuid: "u" };
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield {
+				type: "result",
+				session_id: "sdk-1",
+				subtype: "success",
+				is_error: false,
+				result: "done",
+			};
+		};
+
+		const sendPromise = manager.sendMessage(
+			"REQ-LATE-RESULT",
+			{
+				sessionId: "s-late-result",
+				prompt: "x",
+				model: undefined,
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		await waitForCondition(
+			() => captured.some((e) => e.type === "system"),
+			"init passthrough",
+		);
+
+		await manager.stopSession("s-late-result");
+		release();
+		await sendPromise;
+
+		// Exactly one terminal, and it's `aborted` (not `end`).
+		const terminals = captured.filter(
+			(e) => e.type === "aborted" || e.type === "end",
+		);
+		expect(terminals).toHaveLength(1);
+		expect(terminals[0]?.type).toBe("aborted");
+		// The post-abort buffered result was dropped, not passed through.
+		expect(captured.some((e) => e.type === "result")).toBe(false);
+	});
+
 	test("emits elicitationRequest and resumes when the elicitation is resolved", async () => {
 		const captured: Array<Record<string, unknown>> = [];
 		const emitter = createSidecarEmitter((event) => {
@@ -1271,7 +1391,7 @@ describe("ClaudeSessionManager.stopSession", () => {
 		});
 	});
 
-	test("cancels pending elicitation when the session is stopped", async () => {
+	test("stopping during a pending elicitation cancels it and emits one aborted terminal", async () => {
 		const captured: Array<Record<string, unknown>> = [];
 		const emitter = createSidecarEmitter((event) => {
 			captured.push(event as Record<string, unknown>);
@@ -1329,18 +1449,19 @@ describe("ClaudeSessionManager.stopSession", () => {
 		await manager.stopSession("elicitation-stop-session");
 		await sendPromise;
 
-		expect(captured).toContainEqual({
-			id: "REQ-ELICIT-STOP",
-			type: "assistant",
-			session_id: "sdk-session-stop",
-			uuid: "assistant-stop-1",
-			message: {
-				content: [{ type: "text", text: '{"action":"cancel"}' }],
-			},
-		});
+		// Stopping fires the elicitation's abort signal so the SDK doesn't hang
+		// (sendPromise resolving proves it), and emits a single `aborted`
+		// terminal. The assistant message the SDK drains afterward (the cancelled
+		// elicitation's result) is dropped — exactly one terminal event.
+		expect(captured.some((e) => e.type === "assistant")).toBe(false);
+		const terminals = captured.filter(
+			(e) => e.type === "aborted" || e.type === "end",
+		);
+		expect(terminals).toHaveLength(1);
 		expect(captured[captured.length - 1]).toEqual({
 			id: "REQ-ELICIT-STOP",
-			type: "end",
+			type: "aborted",
+			reason: "user_requested",
 		});
 	});
 });

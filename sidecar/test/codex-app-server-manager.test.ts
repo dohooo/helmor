@@ -26,6 +26,9 @@ const serverState = {
 	/** Optional hook tests use to inject extra notifications between
 	 *  `turn/started` and `turn/completed` (e.g. `thread/tokenUsage/updated`). */
 	beforeTurnCompleted: null as null | (() => void),
+	/** Optional hook fired inside `thread/start` (before it resolves) so tests
+	 *  can simulate a stop arriving while the thread is still starting up. */
+	onThreadStart: null as null | (() => void),
 	exitAfterTurnStarted: false,
 	instances: [] as MockCodexAppServer[],
 	responses: [] as Array<{ id: string | number; result: unknown }>,
@@ -56,7 +59,13 @@ class MockCodexAppServer {
 
 		if (method === "initialize") return {};
 		if (method === "thread/start") {
+			serverState.onThreadStart?.();
 			return { thread: { id: "thread-1" } };
+		}
+		if (method === "turn/interrupt") {
+			// Mimic codex 0.134 stalling on interrupt — never resolves. The
+			// abort path must fire this best-effort and NOT await it.
+			return new Promise(() => {});
 		}
 		if (method === "thread/resume") {
 			const threadId =
@@ -172,6 +181,7 @@ describe("CodexAppServerManager", () => {
 		serverState.onRequest = null;
 		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.onThreadStart = null;
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
@@ -744,6 +754,92 @@ describe("CodexAppServerManager", () => {
 		expect(events.find((e) => e.type === "aborted")).toBeUndefined();
 	});
 
+	test("stopSession aborts immediately without awaiting turn/interrupt", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		// Abort mid-turn (activeTurnId set). turn/interrupt is mocked to hang
+		// forever — if the abort awaited it, this test would time out. It
+		// completing proves kill + aborted fire without waiting on the ACK.
+		serverState.beforeTurnCompleted = () => {
+			void manager.stopSession("session-stop-fast");
+		};
+
+		await expect(
+			manager.sendMessage(
+				"REQ-stop-fast",
+				{
+					sessionId: "session-stop-fast",
+					prompt: "hi",
+					model: "gpt-5.4",
+					cwd: "/tmp",
+					resume: undefined,
+					permissionMode: undefined,
+					effortLevel: "medium",
+					fastMode: false,
+					images: [],
+				},
+				capturingEmitter,
+			),
+		).rejects.toThrow(/stopped/i);
+
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "REQ-stop-fast", type: "aborted" }),
+			]),
+		);
+		// Best-effort graceful interrupt is still attempted (just not awaited).
+		expect(
+			serverState.requests.find((r) => r.method === "turn/interrupt"),
+		).toBeDefined();
+		expect(serverState.instances[0]?.killed).toBe(true);
+	});
+
+	test("stopSession during thread startup still aborts (no silent no-op)", async () => {
+		const manager = new CodexAppServerManager();
+		const events: Array<Record<string, unknown>> = [];
+		const capturingEmitter = createSidecarEmitter((event) => {
+			events.push(event as Record<string, unknown>);
+		});
+
+		// User hits Stop while the codex thread is still starting up: the stop
+		// lands before ensureContext registers a context, so it can only record
+		// intent. sendMessage must honor it and never start the turn.
+		serverState.onThreadStart = () => {
+			void manager.stopSession("session-stop-startup");
+		};
+
+		await manager.sendMessage(
+			"REQ-stop-startup",
+			{
+				sessionId: "session-stop-startup",
+				prompt: "hi",
+				model: "gpt-5.4",
+				cwd: "/tmp",
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: "medium",
+				fastMode: false,
+				images: [],
+			},
+			capturingEmitter,
+		);
+
+		// The turn never started, but the abort was reported (not dropped).
+		expect(
+			serverState.requests.find((r) => r.method === "turn/start"),
+		).toBeUndefined();
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "REQ-stop-startup", type: "aborted" }),
+			]),
+		);
+		expect(serverState.instances[0]?.killed).toBe(true);
+	});
+
 	test("forwards Codex MCP tool-call approval _meta to the frontend and round-trips persist back to Codex", async () => {
 		// Repro for #639.
 		const manager = new CodexAppServerManager();
@@ -939,6 +1035,7 @@ describe("CodexAppServerManager goal pre-flight", () => {
 		serverState.onRequest = null;
 		serverState.onExit = null;
 		serverState.beforeTurnCompleted = null;
+		serverState.onThreadStart = null;
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];

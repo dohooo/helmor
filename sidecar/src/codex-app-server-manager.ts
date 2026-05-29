@@ -445,6 +445,10 @@ export class CodexAppServerManager implements SessionManager {
 	private sessions = new Map<string, AppServerContext>();
 	private pendingApprovals = new Map<string, PendingApproval>();
 	private pendingUserInputs = new Map<string, PendingUserInput>();
+	// Sessions the user hit Stop on while the codex thread was still starting
+	// up (before `ensureContext` registers a context). `sendMessage` consumes
+	// the intent after startup and tears the turn down instead of running it.
+	private abortRequested = new Set<string>();
 
 	/** Called by index.ts when frontend responds to a permission prompt. */
 	resolvePermission(permissionId: string, behavior: "allow" | "deny"): void {
@@ -539,6 +543,10 @@ export class CodexAppServerManager implements SessionManager {
 			additionalDirectories,
 			images,
 		} = params;
+		// Drop any stale abort intent from a prior stop that landed with no
+		// live context. A genuine mid-startup stop for THIS turn is recorded
+		// again during the awaits below and caught right after ensureContext.
+		this.abortRequested.delete(sessionId);
 		const workDir = cwd ?? process.cwd();
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("codex", model);
@@ -580,6 +588,15 @@ export class CodexAppServerManager implements SessionManager {
 			effectiveFastMode,
 			agentProxy,
 		);
+		// User hit Stop while the thread was still starting up. stopSession
+		// couldn't find a context to kill and only recorded the intent — honor
+		// it now: tear down and report the abort instead of running the turn.
+		if (this.abortRequested.delete(sessionId)) {
+			ctx.server.kill();
+			this.sessions.delete(sessionId);
+			emitter.aborted(requestId, "user_requested");
+			return;
+		}
 		// Codex usage notifications do not include a model id.
 		if (model) ctx.lastSentModel = model;
 
@@ -1280,19 +1297,23 @@ export class CodexAppServerManager implements SessionManager {
 		// pause without that backup, this branch may silently no-op on
 		// the untracked turn.
 		if (action === "pause" && ctx.activeTurnId) {
-			try {
-				await ctx.server.sendRequest(
+			// Fire-and-forget: codex can take the full 5s to ACK turn/interrupt,
+			// and the Composer Stop path kills the child via stopSession right
+			// after this returns — so don't block the abort on the interrupt
+			// round-trip. The goal/set below (which actually persists the pause)
+			// is still awaited so the paused state lands before the kill.
+			ctx.server
+				.sendRequest(
 					"turn/interrupt",
 					{ threadId, turnId: ctx.activeTurnId },
 					5_000,
-				);
-			} catch (err) {
-				// Best-effort — don't let an interrupt failure block the
-				// goal state change. Codex may have just finished naturally.
-				logger.debug("mutateGoal interrupt failed (best-effort)", {
-					...errorDetails(err),
+				)
+				.catch((err) => {
+					// Best-effort — codex may have just finished naturally.
+					logger.debug("mutateGoal interrupt failed (best-effort)", {
+						...errorDetails(err),
+					});
 				});
-			}
 		}
 
 		try {
@@ -1364,7 +1385,15 @@ export class CodexAppServerManager implements SessionManager {
 
 	async stopSession(sessionId: string): Promise<void> {
 		const ctx = this.sessions.get(sessionId);
-		if (!ctx) return;
+		if (!ctx) {
+			// Mid-startup: `ensureContext` (process spawn + initialize +
+			// thread/start) hasn't registered a context yet, so there's
+			// nothing to kill. Record the intent — `sendMessage` honors it
+			// the moment startup lands instead of dropping the abort and
+			// running the turn to completion.
+			this.abortRequested.add(sessionId);
+			return;
+		}
 		logger.info(`stopSession ${sessionId}`, {
 			threadId: ctx.providerThreadId ?? "(none)",
 		});
@@ -1382,16 +1411,21 @@ export class CodexAppServerManager implements SessionManager {
 		ctx.turnReject = null;
 		ctx.activeTurnId = null;
 
+		// Killing the app-server IS the abort. Fire `turn/interrupt`
+		// best-effort so codex can cancel the upstream turn, but DON'T await
+		// it — codex 0.134 can take the full 5s timeout to ACK, and gating
+		// the user-facing `aborted` on that round-trip is what made the Stop
+		// button lag. `kill()` clears this request's pending timeout.
 		if (ctx.providerThreadId && turnToInterrupt) {
-			try {
-				await ctx.server.sendRequest(
+			ctx.server
+				.sendRequest(
 					"turn/interrupt",
 					{ threadId: ctx.providerThreadId, turnId: turnToInterrupt },
 					5_000,
-				);
-			} catch {
-				// best-effort
-			}
+				)
+				.catch(() => {
+					// best-effort
+				});
 		}
 
 		ctx.server.kill();

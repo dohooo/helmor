@@ -148,6 +148,10 @@ interface LiveSession {
 	 *  synthetic user event to the pipeline so the UI renders the mid-turn
 	 *  bubble at the correct position instead of tacking it onto the end. */
 	readonly emitter: SidecarEmitter;
+	/** Set by `stopSession` once it has emitted `aborted` up front, so the
+	 *  for-await catch doesn't emit a duplicate when the SDK iterator finally
+	 *  unwinds (its child teardown defers SIGTERM by ~2s). */
+	abortEmitted?: boolean;
 }
 
 const VALID_PERMISSION_MODES = [
@@ -646,16 +650,23 @@ export class ClaudeSessionManager implements SessionManager {
 			},
 		});
 
-		this.sessions.set(sessionId, {
+		const live: LiveSession = {
 			query: q,
 			abortController,
 			promptSource,
 			requestId,
 			emitter,
-		});
+		};
+		this.sessions.set(sessionId, live);
 
 		try {
 			for await (const message of q) {
+				// stopSession already emitted the terminal `aborted` and tore the
+				// session down. The new SDK keeps the child alive ~2s after abort,
+				// so the iterator can still drain buffered events — even a natural
+				// `result`. Drop them and return: passing them through or emitting
+				// `end` here would violate the "exactly one terminal event" contract.
+				if (live.abortEmitted) return;
 				logger.sdkEvent(requestId, message);
 				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
 				if (passthroughMessage) {
@@ -679,10 +690,12 @@ export class ClaudeSessionManager implements SessionManager {
 					return;
 				}
 			}
-			emitter.end(requestId);
+			if (!live.abortEmitted) emitter.end(requestId);
 		} catch (err) {
 			if (isAbortError(err)) {
-				emitter.aborted(requestId, "user_requested");
+				// stopSession already emitted `aborted` up front (see below) —
+				// don't double-emit when the iterator finally unwinds.
+				if (!live.abortEmitted) emitter.aborted(requestId, "user_requested");
 				return;
 			}
 			throw err;
@@ -1154,7 +1167,14 @@ export class ClaudeSessionManager implements SessionManager {
 	async stopSession(sessionId: string): Promise<void> {
 		const session = this.sessions.get(sessionId);
 		if (session) {
+			// Emit `aborted` now instead of waiting for the SDK's async iterator
+			// to unwind — its child teardown defers SIGTERM by ~2s, which is what
+			// made Claude's Stop button feel laggy (1–2s at any point in a turn).
+			// The abort controller still tears the query down in the background;
+			// the for-await catch skips the duplicate emit via `abortEmitted`.
+			session.abortEmitted = true;
 			session.abortController.abort();
+			session.emitter.aborted(session.requestId, "user_requested");
 			this.sessions.delete(sessionId);
 		}
 	}
