@@ -3,8 +3,10 @@ import type { CodexGoalState } from "@/lib/api";
 import {
 	formatGoalElapsedSeconds,
 	formatGoalTokens,
+	goalElapsedText,
 	goalStatusIndicatorText,
 	goalStatusLabel,
+	goalTokensText,
 } from "./codex-goal-display";
 
 function goal(overrides: Partial<CodexGoalState> = {}): CodexGoalState {
@@ -45,13 +47,12 @@ describe("codex goal display helpers", () => {
 		expect(goalStatusLabel("usageLimited")).toBe("usage limited");
 	});
 
-	it("formats active status indicator text like Codex", () => {
+	it("formats active status metadata for the two-line banner", () => {
 		expect(goalStatusIndicatorText(goal({ tokenBudget: 50_000 }))).toBe(
-			"Pursuing goal (12.5K / 50K)",
+			"Pursuing goal",
 		);
-		expect(goalStatusIndicatorText(goal({ tokenBudget: null }))).toBe(
-			"Pursuing goal (1m)",
-		);
+		expect(goalElapsedText(goal({ timeUsedSeconds: 60 }))).toBe("1m");
+		expect(goalTokensText(goal({ tokensUsed: 12_500 }))).toBe("12.5K tokens");
 	});
 
 	it("formats stopped and terminal status indicator text like Codex", () => {

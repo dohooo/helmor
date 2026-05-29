@@ -103,6 +103,7 @@ describe("CodexGoalBanner", () => {
 			expect(screen.getByTestId("codex-goal-banner")).toBeInTheDocument();
 		});
 		expect(screen.getByText("Pursuing goal (1m)")).toBeInTheDocument();
+		expect(screen.getByText("1.23K tokens")).toBeInTheDocument();
 		expect(
 			screen.getByText("Objective: improve test coverage"),
 		).toBeInTheDocument();
@@ -114,7 +115,9 @@ describe("CodexGoalBanner", () => {
 		await waitFor(() => {
 			expect(screen.getByTestId("codex-goal-banner")).toBeInTheDocument();
 		});
-		expect(screen.getByText("Goal blocked (/goal resume)")).toBeInTheDocument();
+		expect(
+			screen.getByText("Goal blocked (/goal resume) (1m)"),
+		).toBeInTheDocument();
 	});
 
 	it("Clear button fires mutateCodexGoal with action=clear", async () => {

@@ -68,7 +68,7 @@ export function goalStatusLabel(status: CodexGoalState["status"]): string {
 export function goalStatusIndicatorText(goal: CodexGoalState): string {
 	switch (goal.status) {
 		case "active":
-			return `Pursuing goal (${activeGoalUsage(goal)})`;
+			return "Pursuing goal";
 		case "paused":
 			return "Goal paused (/goal resume)";
 		case "blocked":
@@ -82,13 +82,12 @@ export function goalStatusIndicatorText(goal: CodexGoalState): string {
 	}
 }
 
-function activeGoalUsage(goal: CodexGoalState): string {
-	if (goal.tokenBudget != null) {
-		return `${formatGoalTokens(goal.tokensUsed)} / ${formatGoalTokens(
-			goal.tokenBudget,
-		)}`;
-	}
+export function goalElapsedText(goal: CodexGoalState): string {
 	return formatGoalElapsedSeconds(goal.timeUsedSeconds);
+}
+
+export function goalTokensText(goal: CodexGoalState): string {
+	return `${formatGoalTokens(goal.tokensUsed)} tokens`;
 }
 
 function budgetLimitedGoalText(goal: CodexGoalState): string {

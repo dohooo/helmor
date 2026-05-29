@@ -26,7 +26,11 @@ import {
 	sessionCodexGoalQueryOptions,
 } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
-import { goalStatusIndicatorText } from "./codex-goal-display";
+import {
+	goalElapsedText,
+	goalStatusIndicatorText,
+	goalTokensText,
+} from "./codex-goal-display";
 
 export function CodexGoalBanner({
 	sessionId,
@@ -74,6 +78,8 @@ export function CodexGoalBanner({
 	if (!goal) return null;
 
 	const indicator = goalStatusIndicatorText(goal);
+	const elapsed = goalElapsedText(goal);
+	const tokens = goalTokensText(goal);
 	const canResume =
 		goal.status === "paused" ||
 		goal.status === "blocked" ||
@@ -84,29 +90,31 @@ export function CodexGoalBanner({
 		<div
 			data-testid="codex-goal-banner"
 			className={cn(
-				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1 text-small",
+				"pointer-events-auto flex items-center gap-2 border border-secondary/80 bg-background px-3 py-1.5 text-small",
 				hasQueueBelow
 					? "mx-auto w-fit max-w-[90%] rounded-md shadow-sm"
-					: "mx-auto w-[90%] rounded-t-2xl border-b-0 py-1.5",
+					: "mx-auto w-[90%] rounded-t-2xl border-b-0",
 			)}
 		>
 			<Goal
-				className="size-3.5 shrink-0 text-muted-foreground/70"
+				className="size-3.5 shrink-0 self-start text-muted-foreground/70"
 				strokeWidth={1.8}
 				aria-hidden
 			/>
-			<div className="flex min-w-0 flex-1 items-center gap-2">
-				<span className="min-w-0 truncate text-small font-medium tracking-[0.01em] text-foreground">
-					{indicator}
-				</span>
-				<span className="hidden shrink-0 text-mini text-muted-foreground/45 sm:inline">
-					•
-				</span>
-				<span className="hidden min-w-0 truncate text-small text-muted-foreground/80 sm:inline">
+			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<div className="flex min-w-0 items-center justify-between gap-3">
+					<span className="min-w-0 truncate text-small font-medium tracking-[0.01em] text-foreground">
+						{indicator} ({elapsed})
+					</span>
+					<span className="shrink-0 text-mini text-muted-foreground/70">
+						{tokens}
+					</span>
+				</div>
+				<div className="min-w-0 truncate text-small text-muted-foreground/80">
 					Objective: {goal.objective}
-				</span>
+				</div>
 			</div>
-			<div className="ml-auto flex shrink-0 items-center gap-1">
+			<div className="ml-auto flex shrink-0 items-center gap-1 self-start">
 				{canResume && onResume ? (
 					<Button
 						type="button"
