@@ -74,6 +74,12 @@ pub enum NormPart {
         item_count: usize,
         statuses: Vec<String>,
     },
+    Workflow {
+        name: String,
+        status: String,
+        agent_count: usize,
+        agent_statuses: Vec<String>,
+    },
     Image {
         kind: String,
         media_type: Option<String>,
@@ -212,6 +218,20 @@ fn normalize_basic(part: &MessagePart) -> NormPart {
             statuses: items
                 .iter()
                 .map(|i| format!("{:?}", i.status).to_lowercase())
+                .collect(),
+        },
+        MessagePart::Workflow {
+            name,
+            status,
+            agents,
+            ..
+        } => NormPart::Workflow {
+            name: name.clone(),
+            status: format!("{status:?}").to_lowercase(),
+            agent_count: agents.len(),
+            agent_statuses: agents
+                .iter()
+                .map(|a| format!("{:?}", a.status).to_lowercase())
                 .collect(),
         },
         MessagePart::Image {

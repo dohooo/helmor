@@ -506,6 +506,33 @@ body {
 	animation: helmor-shimmer-sweep 2.4s ease-in-out infinite;
 }
 
+/* The word "workflow" in the composer — a brand-accent shimmer signalling
+   workflow mode will engage. Reuses the shimmer sweep but keeps `caret-color`
+   solid so the cursor stays visible despite the clipped transparent text.
+   Only color animates (no layout), so there is no editing jitter. */
+.composer-workflow-keyword {
+	font-weight: 500;
+	caret-color: var(--accent-default);
+	/* Animated gradient text (MagicUI-style): orange → purple → orange clipped
+	   to the glyphs and gently swept. Mirrors the `.effort-max-text` recipe
+	   already used in this codebase (same `effort-shimmer` keyframe), so the
+	   "workflow" keyword reads as a colorful planning-mode cue. */
+	background-image: linear-gradient(to right, #ffaa40, #9c40ff, #ffaa40);
+	background-size: 300% 100%;
+	background-clip: text;
+	-webkit-background-clip: text;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
+	animation: effort-shimmer 4s ease-in-out infinite;
+}
+
+/* Motion-sensitive users: keep the colorful gradient, just stop the sweep. */
+@media (prefers-reduced-motion: reduce) {
+	.composer-workflow-keyword {
+		animation: none;
+	}
+}
+
 .assistant-markdown-scale {
 	--assistant-paragraph-line-height: 1.82;
 	line-height: 1.5;

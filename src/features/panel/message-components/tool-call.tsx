@@ -22,12 +22,13 @@ import {
 } from "@/lib/api";
 import { childrenStructurallyEqual } from "@/lib/structural-equality";
 import { cn } from "@/lib/utils";
-import { TodoList } from "./content-parts";
+import { TodoList, WorkflowCard } from "./content-parts";
 import { EditDiffTrigger } from "./edit-diff";
 import {
 	isLiveStreamingStatus,
 	isTodoListPart,
 	isToolCallPart,
+	isWorkflowPart,
 } from "./shared";
 import { getToolInfo } from "./tool-info";
 
@@ -587,6 +588,9 @@ const AgentChildrenBlock = memo(function AgentChildrenBlock({
 						}
 						if (isTodoListPart(part)) {
 							return <TodoList key={key} part={part} />;
+						}
+						if (isWorkflowPart(part)) {
+							return <WorkflowCard key={key} part={part} />;
 						}
 						return null;
 					})}

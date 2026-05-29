@@ -967,6 +967,7 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"goal",
+					"workflows",
 					"compact",
 					"clear",
 				]);
@@ -1032,6 +1033,7 @@ describe("WorkspaceComposerContainer", () => {
 				expect(composerMockState.lastSlashCommands.map((c) => c.name)).toEqual([
 					"add-dir",
 					"goal",
+					"workflows",
 					"clear",
 				]);
 			});

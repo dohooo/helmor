@@ -19,6 +19,7 @@ pub(crate) mod context_usage;
 mod params;
 mod session_id;
 mod state;
+mod workflow_persist;
 
 #[cfg(test)]
 mod event_loop_tests;
@@ -290,6 +291,13 @@ pub(super) fn stream_via_sidecar(
         // `accumulator.turn_at()`. Once the persist loop migrates
         // behind `Action::PersistTurnRange`, this can move into ctx.
         let mut persisted_turn_count: usize = 0;
+
+        // Tees Claude "Dynamic Workflow" task_* lifecycle events into `system`
+        // session_message rows so a historical reload can rebuild the workflow
+        // tree (otherwise it reloads as a bare shell). Lives across the loop so
+        // task_updated (task_id only) can resolve its run from an earlier
+        // task_started.
+        let mut workflow_persist = workflow_persist::WorkflowPersistTracker::default();
 
         // Short-borrow only. The single-writer pool (max_size=1) is shared
         // with every other write in the app; a long-held handle here would
@@ -1144,6 +1152,10 @@ pub(super) fn stream_via_sidecar(
                                         }
                                     }
                                 }
+
+                                // Tee workflow task_* events into durable
+                                // snapshot rows (see workflow_persist).
+                                workflow_persist.observe(conn, &ctx.helmor_session_id, &event.raw);
                             }
 
                             match turn_session.handle_stream_event(emit) {

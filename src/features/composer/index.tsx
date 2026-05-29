@@ -78,7 +78,9 @@ import { HistoryRecallPlugin } from "./editor/plugins/history-recall-plugin";
 import { PasteImagePlugin } from "./editor/plugins/paste-image-plugin";
 import { SlashCommandPlugin } from "./editor/plugins/slash-command-plugin";
 import { SubmitPlugin } from "./editor/plugins/submit-plugin";
+import { WorkflowKeywordPlugin } from "./editor/plugins/workflow-keyword-plugin";
 import { $extractComposerContent } from "./editor/utils";
+import { WorkflowKeywordNode } from "./editor/workflow-keyword-node";
 import { $appendComposerInsertItems } from "./editor-ops";
 import { FastModeLottieIcon } from "./fast-mode-lottie-icon";
 import { GoalReplaceConfirm } from "./goal-replace-confirm";
@@ -159,6 +161,8 @@ type WorkspaceComposerProps = {
 	addDirCandidates?: readonly CandidateDirectory[];
 	/** Called when the user selects an entry from the /add-dir popup. */
 	onPickAddDir?: (entry: AddDirPickerEntry) => void;
+	/** Open the independent workflow-progress panel (the `/workflows` command). */
+	onOpenWorkflows?: () => void;
 	pendingUserInput?: PendingUserInput | null;
 	onUserInputResponse?: UserInputResponseHandler;
 	userInputResponsePending?: boolean;
@@ -274,6 +278,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	linkedDirectoriesDisabled = false,
 	addDirCandidates = EMPTY_CANDIDATE_DIRECTORIES,
 	onPickAddDir = noopPickAddDir,
+	onOpenWorkflows,
 	pendingUserInput = null,
 	onUserInputResponse = noopUserInputResponse,
 	userInputResponsePending = false,
@@ -473,6 +478,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 			FileBadgeNode,
 			CustomTagBadgeNode,
 			AddDirTriggerNode,
+			WorkflowKeywordNode,
 		],
 		onError: onEditorError,
 	}).current;
@@ -813,6 +819,17 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 								if (name === "add-dir" && editorRef.current) {
 									$insertAddDirTrigger(editorRef.current, nodeToReplace);
 								}
+								// `/workflows` opens the independent progress panel and
+								// is NEVER sent — drop the typed token so the composer
+								// returns to empty.
+								if (name === "workflows") {
+									if (nodeToReplace) {
+										editorRef.current?.update(() => {
+											nodeToReplace.remove();
+										});
+									}
+									onOpenWorkflows?.();
+								}
 							}}
 							popupAnchorRef={composerRootRef}
 						/>
@@ -854,6 +871,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						) : null}
 						<EditablePlugin disabled={inputDisabled} />
 						<HasContentPlugin onChange={setHasContent} />
+						<WorkflowKeywordPlugin />
 					</LexicalComposer>
 
 					{sendError ? (
@@ -927,6 +945,11 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 																	{option.label}
 																</span>
 															</div>
+															{option.id === selectedModel?.id ? (
+																<span className="text-mini text-foreground">
+																	✓
+																</span>
+															) : null}
 														</DropdownMenuItem>
 													))}
 													{section.id === "claude" &&

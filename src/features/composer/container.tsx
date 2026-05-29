@@ -66,6 +66,7 @@ import type { StartSubmitMode } from "./start-submit-mode";
 import { SubmitQueueList } from "./submit-queue-list";
 import { TriageQuickActions } from "./triage-quick-actions";
 import type { UserInputResponseHandler } from "./user-input";
+import { WorkflowProgressPanel } from "./workflow-progress-panel";
 
 const EMPTY_MODEL_SECTIONS: AgentModelSection[] = [];
 const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
@@ -107,11 +108,19 @@ const CLAUDE_GOAL_COMMAND: SlashCommandEntry = {
 	providers: ["claude"],
 };
 
+const CLAUDE_WORKFLOWS_COMMAND: SlashCommandEntry = {
+	name: "workflows",
+	description: "View this conversation's workflow runs",
+	source: "client-action",
+	providers: ["claude"],
+};
+
 const BUILTIN_CLIENT_COMMANDS: readonly SlashCommandEntry[] = [
 	ADD_DIR_COMMAND,
 	CODEX_COMPACT_COMMAND,
 	CODEX_GOAL_COMMAND,
 	CLAUDE_GOAL_COMMAND,
+	CLAUDE_WORKFLOWS_COMMAND,
 ];
 
 type WorkspaceComposerContainerProps = {
@@ -954,6 +963,7 @@ export const WorkspaceComposerContainer = memo(
 		// Start/Dismiss quick actions for un-engaged triage workspaces. Dismiss reuses the sidebar controller's archive path.
 		const [triageGraduating, setTriageGraduating] = useState(false);
 		const [triageDismissing, setTriageDismissing] = useState(false);
+		const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(false);
 		useEffect(() => {
 			setTriageGraduating(false);
 			setTriageDismissing(false);
@@ -1057,6 +1067,11 @@ export const WorkspaceComposerContainer = memo(
 
 				<div className="relative z-10">
 					<div className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-1px)] z-20 flex flex-col items-center gap-1.5">
+						<WorkflowProgressPanel
+							sessionId={displayedSessionId}
+							open={workflowsPanelOpen}
+							onClose={() => setWorkflowsPanelOpen(false)}
+						/>
 						{displayedSessionId ? (
 							<CodexGoalBanner
 								sessionId={displayedSessionId}
@@ -1150,6 +1165,7 @@ export const WorkspaceComposerContainer = memo(
 						}
 						addDirCandidates={candidateDirectories}
 						onPickAddDir={handlePickAddDir}
+						onOpenWorkflows={() => setWorkflowsPanelOpen(true)}
 						contextPanelOpen={contextPanelOpen}
 						onToggleContextPanel={onToggleContextPanel}
 						startSubmitMenu={startSubmitMenu}

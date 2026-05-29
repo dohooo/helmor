@@ -5,7 +5,7 @@
 use super::blocks::parse_assistant_parts;
 use super::labels::{build_result_label, format_count};
 use super::*;
-use crate::pipeline::types::{NoticeSeverity, TodoStatus};
+use crate::pipeline::types::{NoticeSeverity, TodoStatus, WorkflowAgentStatus, WorkflowStatus};
 use serde_json::json;
 
 fn im(id: &str, role: &str, content: Value) -> IntermediateMessage {
@@ -1284,6 +1284,293 @@ fn claude_task_partial_fresh_state_bare_update_is_toolcall() {
         matches!(&parts[0], MessagePart::ToolCall { tool_name, .. } if tool_name == "TaskUpdate"),
         "bare TaskUpdate in a fresh-state partial render is a ToolCall"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Workflow widget: the Workflow tool call + its task_* lifecycle
+// events (task_type="local_workflow") aggregate into one MessagePart::Workflow.
+// Shapes mirror a real claude-code 2.1.154 capture.
+// ---------------------------------------------------------------------------
+
+fn sys(id: &str, content: Value) -> IntermediateMessage {
+    im(id, "system", content)
+}
+
+#[test]
+fn claude_workflow_aggregates_into_single_widget() {
+    let messages = vec![
+        // The Workflow tool call anchors the widget.
+        im(
+            "a1",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "wf_tc", "name": "Workflow",
+                    "input": {"script": "export const meta = { name: 'demo' }"}
+                }]}
+            }),
+        ),
+        // task_started links task_id ↔ tool_use_id and carries the name.
+        sys(
+            "s1",
+            json!({
+                "type": "system", "subtype": "task_started",
+                "task_id": "w1", "tool_use_id": "wf_tc",
+                "task_type": "local_workflow", "workflow_name": "demo-two-agents",
+                "description": "Minimal demo"
+            }),
+        ),
+        // task_progress carries the agent tree + cumulative usage.
+        sys(
+            "s2",
+            json!({
+                "type": "system", "subtype": "task_progress",
+                "task_id": "w1", "tool_use_id": "wf_tc",
+                "usage": {"total_tokens": 61609, "tool_uses": 0, "duration_ms": 1655},
+                "workflow_progress": [
+                    {"type": "workflow_phase", "index": 1, "title": "Demo"},
+                    {"type": "workflow_agent", "index": 1, "label": "agent-alpha",
+                     "phaseIndex": 1, "phaseTitle": "Demo", "model": "claude-opus-4-8[1m]",
+                     "state": "done", "tokens": 30805, "toolCalls": 0, "durationMs": 1645,
+                     "resultPreview": "alpha"},
+                    {"type": "workflow_agent", "index": 2, "label": "agent-beta",
+                     "state": "done", "resultPreview": "beta"}
+                ]
+            }),
+        ),
+        // task_updated (only task_id) flips status via the task→tool link.
+        sys(
+            "s3",
+            json!({
+                "type": "system", "subtype": "task_updated",
+                "task_id": "w1", "patch": {"status": "completed"}
+            }),
+        ),
+        // task_notification is terminal.
+        sys(
+            "s4",
+            json!({
+                "type": "system", "subtype": "task_notification",
+                "task_id": "w1", "tool_use_id": "wf_tc", "status": "completed",
+                "summary": "Dynamic workflow completed",
+                "usage": {"total_tokens": 61609, "tool_uses": 0, "duration_ms": 1655}
+            }),
+        ),
+    ];
+    let result = convert(&messages);
+
+    // Exactly one Workflow widget; the raw task_* events do NOT render as
+    // standalone subagent notices.
+    let workflows: Vec<_> = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::Workflow {
+                name,
+                status,
+                agents,
+                total_tokens,
+                ..
+            }) => Some((name, status, agents, total_tokens)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(workflows.len(), 1, "one workflow widget, got {result:?}");
+    let (name, status, agents, total_tokens) = workflows[0];
+    assert_eq!(name, "demo-two-agents");
+    assert_eq!(*status, WorkflowStatus::Completed);
+    assert_eq!(*total_tokens, Some(61609));
+    assert_eq!(agents.len(), 2);
+    assert_eq!(agents[0].label, "agent-alpha");
+    assert_eq!(agents[0].status, WorkflowAgentStatus::Done);
+    assert_eq!(agents[0].result_preview.as_deref(), Some("alpha"));
+    // Phase grouping + per-agent metrics are captured from the workflow_progress
+    // entry (these drive the drill-down detail view).
+    assert_eq!(agents[0].phase_index, Some(1));
+    assert_eq!(agents[0].phase_title.as_deref(), Some("Demo"));
+    assert_eq!(agents[0].model.as_deref(), Some("claude-opus-4-8[1m]"));
+    assert_eq!(agents[0].tokens, Some(30805));
+    assert_eq!(agents[0].tool_calls, Some(0));
+    assert_eq!(agents[0].duration_ms, Some(1645));
+    assert_eq!(agents[1].label, "agent-beta");
+    // Agents whose entry omits the metric fields keep them None.
+    assert_eq!(agents[1].model, None);
+    assert_eq!(agents[1].tokens, None);
+
+    // No leftover "Subagent started/progress/completed" notices for the
+    // workflow's task_* events.
+    let notice_count = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter(|p| {
+            matches!(
+                p,
+                ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. })
+            )
+        })
+        .count();
+    assert_eq!(
+        notice_count, 0,
+        "workflow task_* events must not render as notices"
+    );
+}
+
+#[test]
+fn non_workflow_subagent_task_still_renders_notice() {
+    // A task_* event WITHOUT task_type=local_workflow (a plain subagent) must
+    // keep rendering through the existing subagent-notice path — the workflow
+    // aggregation must not swallow it.
+    let messages = vec![sys(
+        "s1",
+        json!({
+            "type": "system", "subtype": "task_started",
+            "task_id": "t1", "tool_use_id": "task_abc",
+            "description": "review the code"
+        }),
+    )];
+    let result = convert(&messages);
+    let has_notice = result.iter().flat_map(|m| m.content.iter()).any(|p| {
+        matches!(
+            p,
+            ExtendedMessagePart::Basic(MessagePart::SystemNotice { label, .. }) if label == "Subagent started"
+        )
+    });
+    assert!(
+        has_notice,
+        "plain subagent task_started should still be a notice"
+    );
+}
+
+fn workflow_tool_use(msg_id: &str, tool_use_id: &str) -> IntermediateMessage {
+    im(
+        msg_id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": tool_use_id, "name": "Workflow",
+                "input": {"script": "export const meta = { name: 'demo' }"}
+            }]}
+        }),
+    )
+}
+
+fn first_workflow(result: &[ThreadMessageLike]) -> Option<&MessagePart> {
+    result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(part @ MessagePart::Workflow { .. }) => Some(part),
+            _ => None,
+        })
+}
+
+#[test]
+fn claude_workflow_agent_done_not_downgraded_by_stale_delta() {
+    let messages = vec![
+        workflow_tool_use("a1", "wf_tc"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"w1","tool_use_id":"wf_tc","task_type":"local_workflow","workflow_name":"demo"}),
+        ),
+        // Agent 1 reaches done with a result preview…
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_progress","task_id":"w1","tool_use_id":"wf_tc","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"a","state":"done","resultPreview":"ok"}]}),
+        ),
+        // …then a stale delta says "progress" again — must NOT downgrade.
+        sys(
+            "s3",
+            json!({"type":"system","subtype":"task_progress","task_id":"w1","tool_use_id":"wf_tc","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"a","state":"progress"}]}),
+        ),
+    ];
+    let result = convert(&messages);
+    match first_workflow(&result).expect("workflow widget") {
+        MessagePart::Workflow { agents, .. } => {
+            assert_eq!(agents.len(), 1);
+            assert_eq!(
+                agents[0].status,
+                WorkflowAgentStatus::Done,
+                "a done agent must not be downgraded by a stale delta"
+            );
+            assert_eq!(agents[0].result_preview.as_deref(), Some("ok"));
+        }
+        other => panic!("expected Workflow, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_workflow_multiple_runs_render_separately() {
+    let messages = vec![
+        workflow_tool_use("a1", "wf_a"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"wa","tool_use_id":"wf_a","task_type":"local_workflow","workflow_name":"alpha-flow"}),
+        ),
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_notification","task_id":"wa","tool_use_id":"wf_a","status":"completed"}),
+        ),
+        workflow_tool_use("a2", "wf_b"),
+        sys(
+            "s3",
+            json!({"type":"system","subtype":"task_started","task_id":"wb","tool_use_id":"wf_b","task_type":"local_workflow","workflow_name":"beta-flow"}),
+        ),
+        sys(
+            "s4",
+            json!({"type":"system","subtype":"task_progress","task_id":"wb","tool_use_id":"wf_b","workflow_progress":[
+                {"type":"workflow_agent","index":1,"label":"b","state":"progress"}]}),
+        ),
+    ];
+    let result = convert(&messages);
+    let flows: Vec<(&str, &WorkflowStatus)> = result
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::Workflow { name, status, .. }) => {
+                Some((name.as_str(), status))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flows.len(), 2, "two independent workflow widgets");
+    assert_eq!(flows[0].0, "alpha-flow");
+    assert_eq!(*flows[0].1, WorkflowStatus::Completed);
+    assert_eq!(flows[1].0, "beta-flow");
+    assert_eq!(*flows[1].1, WorkflowStatus::Running);
+}
+
+#[test]
+fn claude_workflow_completes_via_notification_without_task_updated() {
+    // task_notification is the terminal authority: even with no task_updated,
+    // the run settles to completed. (The event stream is ordered, so
+    // task_started always anchors the run before later events.)
+    let messages = vec![
+        workflow_tool_use("a1", "wf_tc"),
+        sys(
+            "s1",
+            json!({"type":"system","subtype":"task_started","task_id":"w1","tool_use_id":"wf_tc","task_type":"local_workflow","workflow_name":"demo"}),
+        ),
+        sys(
+            "s2",
+            json!({"type":"system","subtype":"task_notification","task_id":"w1","tool_use_id":"wf_tc","status":"completed","usage":{"total_tokens":1000,"duration_ms":500}}),
+        ),
+    ];
+    let result = convert(&messages);
+    match first_workflow(&result).expect("workflow widget") {
+        MessagePart::Workflow {
+            status,
+            total_tokens,
+            ..
+        } => {
+            assert_eq!(*status, WorkflowStatus::Completed);
+            assert_eq!(*total_tokens, Some(1000));
+        }
+        other => panic!("expected Workflow, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

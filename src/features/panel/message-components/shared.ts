@@ -8,6 +8,7 @@ import type {
 	SystemNoticePart,
 	ThreadMessageLike,
 	TodoListPart,
+	WorkflowPart,
 } from "@/lib/api";
 
 export type RenderedMessage = ThreadMessageLike;
@@ -87,6 +88,12 @@ export function isSystemNoticePart(part: unknown): part is SystemNoticePart {
 
 export function isTodoListPart(part: unknown): part is TodoListPart {
 	return isObj(part) && part.type === "todo-list" && Array.isArray(part.items);
+}
+
+export function isWorkflowPart(part: unknown): part is WorkflowPart {
+	return (
+		isObj(part) && part.type === "workflow" && typeof part.name === "string"
+	);
 }
 
 export function isImagePart(part: unknown): part is ImagePart {

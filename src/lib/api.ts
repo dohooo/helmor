@@ -3111,6 +3111,32 @@ export type TodoListPart = {
 	id: string;
 	items: TodoItem[];
 };
+export type WorkflowAgentStatus = "running" | "done";
+export type WorkflowAgentRow = {
+	label: string;
+	status: WorkflowAgentStatus;
+	resultPreview?: string;
+	/** Phase grouping back-refs, for the `workflow -> phase -> agent` drill-down. */
+	phaseIndex?: number;
+	phaseTitle?: string;
+	/** Per-agent metrics surfaced in the agent detail view. */
+	model?: string;
+	tokens?: number;
+	toolCalls?: number;
+	durationMs?: number;
+};
+export type WorkflowStatus = "running" | "completed" | "failed" | "stopped";
+/** A Claude Code "Dynamic Workflow" run — the `Workflow` tool call plus its
+ *  aggregated `task_*` lifecycle, rendered as one evolving card. */
+export type WorkflowPart = {
+	type: "workflow";
+	id: string;
+	name: string;
+	status: WorkflowStatus;
+	agents?: WorkflowAgentRow[];
+	totalTokens?: number;
+	durationMs?: number;
+};
 export type ImageSource =
 	| { kind: "base64"; data: string }
 	| { kind: "url"; url: string }
@@ -3149,6 +3175,7 @@ export type MessagePart =
 	| ToolCallPart
 	| SystemNoticePart
 	| TodoListPart
+	| WorkflowPart
 	| ImagePart
 	| PromptSuggestionPart
 	| FileMentionPart

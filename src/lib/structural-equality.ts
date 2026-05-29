@@ -34,6 +34,7 @@ import type {
 	ThreadMessageLike,
 	TodoListPart,
 	ToolCallPart,
+	WorkflowPart,
 } from "./api";
 
 export function partsStructurallyEqual(
@@ -115,6 +116,35 @@ export function partStructurallyEqual(
 				if (
 					a.items[i]!.text !== tb.items[i]!.text ||
 					a.items[i]!.status !== tb.items[i]!.status
+				)
+					return false;
+			}
+			return true;
+		}
+		case "workflow": {
+			const wb = b as WorkflowPart;
+			if (
+				a.id !== wb.id ||
+				a.name !== wb.name ||
+				a.status !== wb.status ||
+				a.totalTokens !== wb.totalTokens ||
+				a.durationMs !== wb.durationMs
+			)
+				return false;
+			const aa = a.agents ?? [];
+			const ba = wb.agents ?? [];
+			if (aa.length !== ba.length) return false;
+			for (let i = 0; i < aa.length; i += 1) {
+				if (
+					aa[i]!.label !== ba[i]!.label ||
+					aa[i]!.status !== ba[i]!.status ||
+					aa[i]!.resultPreview !== ba[i]!.resultPreview ||
+					aa[i]!.phaseIndex !== ba[i]!.phaseIndex ||
+					aa[i]!.phaseTitle !== ba[i]!.phaseTitle ||
+					aa[i]!.model !== ba[i]!.model ||
+					aa[i]!.tokens !== ba[i]!.tokens ||
+					aa[i]!.toolCalls !== ba[i]!.toolCalls ||
+					aa[i]!.durationMs !== ba[i]!.durationMs
 				)
 					return false;
 			}

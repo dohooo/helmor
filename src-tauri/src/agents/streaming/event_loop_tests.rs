@@ -103,6 +103,7 @@ fn fingerprint_message(msg: &ThreadMessageLike) -> MessageFingerprint {
             ExtendedMessagePart::Basic(MessagePart::SystemNotice { .. }) => "system-notice".into(),
             ExtendedMessagePart::Basic(MessagePart::PlanReview { .. }) => "plan-review".into(),
             ExtendedMessagePart::Basic(MessagePart::TodoList { .. }) => "todo-list".into(),
+            ExtendedMessagePart::Basic(MessagePart::Workflow { .. }) => "workflow".into(),
             ExtendedMessagePart::Basic(MessagePart::Image { .. }) => "image".into(),
             ExtendedMessagePart::Basic(MessagePart::FileMention { .. }) => "file-mention".into(),
             ExtendedMessagePart::Basic(MessagePart::PromptSuggestion { .. }) => {

@@ -14,7 +14,12 @@ import {
 } from "@/lib/api";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import { ImageBlock, PlanReviewCard, TodoList } from "./content-parts";
+import {
+	ImageBlock,
+	PlanReviewCard,
+	TodoList,
+	WorkflowCard,
+} from "./content-parts";
 import {
 	CursorSubagentToolCall,
 	isCursorSubagentToolName,
@@ -28,6 +33,7 @@ import {
 	isTextPart,
 	isTodoListPart,
 	isToolCallPart,
+	isWorkflowPart,
 	reasoningLifecycle,
 } from "./shared";
 import {
@@ -275,6 +281,9 @@ export function ChatAssistantMessage({
 				}
 				if (isTodoListPart(part)) {
 					return <TodoList key={key} part={part} />;
+				}
+				if (isWorkflowPart(part)) {
+					return <WorkflowCard key={key} part={part} />;
 				}
 				if (isImagePart(part)) {
 					return <ImageBlock key={key} part={part} />;
