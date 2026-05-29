@@ -30,7 +30,8 @@ pub(crate) const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 use blocks::{
     assistant_has_recognized_blocks, late_merge_unresolved_tool_results, merge_tool_results,
-    merge_tool_results_extended, parse_assistant_parts,
+    merge_tool_results_extended, parse_assistant_parts_stateful, TaskListState,
+    CLAUDE_TASK_LIST_ID_PREFIX,
 };
 use grouping::{
     convert_user_message, group_child_messages, merge_adjacent_assistants,
@@ -54,13 +55,89 @@ use super::types::{
 /// Convert intermediate messages into rendered thread messages.
 pub fn convert(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     let flat = convert_flat(messages);
-    if flat.len() <= 1 {
-        return flat;
+    let mut result = if flat.len() <= 1 {
+        flat
+    } else {
+        let grouped = group_child_messages(flat);
+        let mut merged = merge_adjacent_assistants(grouped);
+        settle_aborted_tool_calls(messages, &mut merged);
+        merged
+    };
+    // The Claude Task family is a SINGLE session-wide list (the CLI assigns
+    // global sequential ids 1,2,3…), so fold every synthesized snapshot into
+    // one evolving widget — anchored where the plan first appeared, carrying
+    // the final cumulative state — just like the Codex plan render. Scoped
+    // by id prefix so TodoWrite/Codex lists are never touched.
+    collapse_task_todo_lists(&mut result);
+    result
+}
+
+/// Fold all Claude-Task-sourced `TodoList` parts (id prefix
+/// `CLAUDE_TASK_LIST_ID_PREFIX`) into a single widget: keep the FIRST
+/// occurrence (stable anchor position + React key) but rewrite its items to
+/// the LAST occurrence's items (the final cumulative state), and drop every
+/// other Task list. Assistant messages emptied by the drop are removed so no
+/// ghost bubble is left behind. No-op when fewer than two Task lists exist,
+/// so the single-`TaskCreate` and TodoWrite/Codex paths are untouched.
+fn collapse_task_todo_lists(messages: &mut Vec<ThreadMessageLike>) {
+    fn is_task_list(part: &ExtendedMessagePart) -> bool {
+        matches!(
+            part,
+            ExtendedMessagePart::Basic(MessagePart::TodoList { id, .. })
+                if id.starts_with(CLAUDE_TASK_LIST_ID_PREFIX)
+        )
     }
-    let grouped = group_child_messages(flat);
-    let mut merged = merge_adjacent_assistants(grouped);
-    settle_aborted_tool_calls(messages, &mut merged);
-    merged
+
+    let mut final_items: Option<Vec<crate::pipeline::types::TodoItem>> = None;
+    let mut count = 0usize;
+    for msg in messages.iter() {
+        for part in &msg.content {
+            if let ExtendedMessagePart::Basic(MessagePart::TodoList { id, items }) = part {
+                if id.starts_with(CLAUDE_TASK_LIST_ID_PREFIX) {
+                    final_items = Some(items.clone());
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count < 2 {
+        return;
+    }
+    let final_items = final_items.expect("count >= 2 implies a last list exists");
+
+    let mut kept_first = false;
+    // Indices of messages we emptied BY removing their Task list(s) — only
+    // these get dropped, so a pre-existing empty assistant message (e.g. an
+    // mcp_tool_result that attached elsewhere) elsewhere in the thread is
+    // never collateral.
+    let mut emptied: Vec<usize> = Vec::new();
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if !msg.content.iter().any(is_task_list) {
+            continue;
+        }
+        msg.content.retain_mut(|part| {
+            if is_task_list(part) {
+                if !kept_first {
+                    kept_first = true;
+                    if let ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) = part {
+                        *items = final_items.clone();
+                    }
+                    return true;
+                }
+                return false;
+            }
+            true
+        });
+        if msg.content.is_empty() && msg.role == MessageRole::Assistant {
+            emptied.push(i);
+        }
+    }
+
+    // Drop (in reverse, to keep indices valid) the assistant messages whose
+    // only content was a folded-away Task list.
+    for &i in emptied.iter().rev() {
+        messages.remove(i);
+    }
 }
 
 /// Convert historical DB records into rendered thread messages.
@@ -86,6 +163,10 @@ pub fn convert_historical(records: &[HistoricalRecord]) -> Vec<ThreadMessageLike
 fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
     let mut result: Vec<ThreadMessageLike> = Vec::new();
     let mut i = 0;
+    // Shared across every assistant message so the Claude Task family
+    // (TaskCreate/TaskUpdate, which patches tasks by an id assigned in an
+    // earlier message) accumulates into one running plan.
+    let mut task_state = TaskListState::default();
 
     while i < messages.len() {
         let msg = &messages[i];
@@ -180,7 +261,7 @@ fn convert_flat(messages: &[IntermediateMessage]) -> Vec<ThreadMessageLike> {
         // assistant (by JSON type or by role for plain-text live messages)
         if msg_type == Some("assistant") || (parsed.is_none() && msg.role == MessageRole::Assistant)
         {
-            let mut parts = parse_assistant_parts(parsed, &msg.id);
+            let mut parts = parse_assistant_parts_stateful(parsed, &msg.id, &mut task_state);
             // Pull the parent_tool_use_id (if any) so we can encode it in
             // the message id below — the grouping pass uses it to attach
             // the child to the EXACT parent Task tool, not whichever

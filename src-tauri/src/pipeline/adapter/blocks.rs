@@ -69,7 +69,128 @@ fn resolve_part_id(obj: &serde_json::Map<String, Value>, msg_id: &str, idx: usiz
         .unwrap_or_else(|| format!("{msg_id}:blk:{idx}"))
 }
 
+/// Id prefix stamped onto every `TodoList` part synthesized from the Claude
+/// Task family. `collapse_task_todo_lists` keys off this so it folds the
+/// whole Task sequence into one evolving widget while leaving TodoWrite- and
+/// Codex-sourced lists untouched.
+pub(super) const CLAUDE_TASK_LIST_ID_PREFIX: &str = "claude-task:";
+
+/// Cross-message accumulator for the Claude Task tool family
+/// (`TaskCreate` / `TaskUpdate`), which replaced `TodoWrite` for SDK and
+/// headless sessions in claude-agent-sdk v0.3.142.
+///
+/// Unlike `TodoWrite` (a full snapshot per call), the Task family is
+/// incremental: `TaskCreate` adds a task and the CLI assigns it a
+/// sequential id (`"1"`, `"2"`, `"3"`…) by creation order; `TaskUpdate`
+/// patches a task by that id. To present the same single evolving plan
+/// widget the user saw with `TodoWrite`, the adapter threads one of these
+/// across the whole message list, emitting a cumulative `TodoList` on each
+/// state-changing call. `convert` then folds consecutive `TodoList` parts
+/// into one (see `collapse_consecutive_todo_lists`).
+#[derive(Default)]
+pub(super) struct TaskListState {
+    /// Task ids in creation order — drives the rendered row order.
+    order: Vec<String>,
+    /// id → (text, status). Text is the task `subject`.
+    tasks: std::collections::HashMap<String, (String, TodoStatus)>,
+    /// Count of `TaskCreate` seen → the next sequential id.
+    created: usize,
+}
+
+fn parse_task_status(s: &str) -> TodoStatus {
+    match s {
+        "completed" => TodoStatus::Completed,
+        "in_progress" => TodoStatus::InProgress,
+        _ => TodoStatus::Pending,
+    }
+}
+
+impl TaskListState {
+    /// Apply a Task-family `tool_use` and return the cumulative TodoList
+    /// items if the block was a recognized, complete state mutation.
+    /// Returns `None` when the caller should fall back to a plain ToolCall:
+    /// a `TaskCreate` still streaming its input (no `subject`), or a
+    /// `TaskUpdate` referencing a task we never saw created.
+    fn apply(&mut self, name: &str, input: &Value) -> Option<Vec<TodoItem>> {
+        match name {
+            "TaskCreate" => {
+                let subject = input.get("subject").and_then(Value::as_str)?;
+                self.created += 1;
+                let id = self.created.to_string();
+                let status = input
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(parse_task_status)
+                    .unwrap_or(TodoStatus::Pending);
+                self.order.push(id.clone());
+                self.tasks.insert(id, (subject.to_string(), status));
+                Some(self.snapshot())
+            }
+            "TaskUpdate" => {
+                let id = input.get("taskId").and_then(Value::as_str)?;
+                if !self.tasks.contains_key(id) {
+                    return None;
+                }
+                let new_status = input.get("status").and_then(Value::as_str);
+                let new_subject = input.get("subject").and_then(Value::as_str);
+                // A TaskUpdate that touches neither a field we render (status,
+                // subject) — e.g. an owner-only or addBlocks-only update —
+                // doesn't change the list. Fall back to a plain ToolCall
+                // rather than re-emit an identical snapshot.
+                if new_status.is_none() && new_subject.is_none() {
+                    return None;
+                }
+                // A `deleted` status drops the task from the list entirely.
+                if new_status == Some("deleted") {
+                    self.tasks.remove(id);
+                    self.order.retain(|x| x != id);
+                    return Some(self.snapshot());
+                }
+                if let Some((text, status)) = self.tasks.get_mut(id) {
+                    if let Some(s) = new_status {
+                        *status = parse_task_status(s);
+                    }
+                    if let Some(subj) = new_subject {
+                        *text = subj.to_string();
+                    }
+                }
+                Some(self.snapshot())
+            }
+            _ => None,
+        }
+    }
+
+    fn snapshot(&self) -> Vec<TodoItem> {
+        self.order
+            .iter()
+            .filter_map(|id| {
+                self.tasks.get(id).map(|(text, status)| TodoItem {
+                    text: text.clone(),
+                    status: status.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Stateless convenience wrapper for unit tests that exercise a single
+/// message in isolation. Production code (and the streaming-partial path via
+/// `convert`) always goes through `parse_assistant_parts_stateful` with a
+/// `TaskListState` shared across the whole message list — Task-family
+/// accumulation is inherently cross-message. With a fresh state here an
+/// isolated `TaskCreate` still collapses, but a bare `TaskUpdate` falls back
+/// to a ToolCall (no prior task to patch).
+#[cfg(test)]
 pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec<MessagePart> {
+    let mut task_state = TaskListState::default();
+    parse_assistant_parts_stateful(parsed, msg_id, &mut task_state)
+}
+
+pub(super) fn parse_assistant_parts_stateful(
+    parsed: Option<&Value>,
+    msg_id: &str,
+    task_state: &mut TaskListState,
+) -> Vec<MessagePart> {
     let parsed = match parsed {
         Some(p) => p,
         None => return Vec::new(),
@@ -171,7 +292,7 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                 let server_name = obj.get("server_name").and_then(Value::as_str).unwrap_or("");
                 let mcp_tool_short = obj.get("name").and_then(Value::as_str).unwrap_or("");
                 let synthesized = format!("mcp__{server_name}__{mcp_tool_short}");
-                push_tool_use(&mut parts, obj, idx, Some(synthesized), msg_id);
+                push_tool_use(&mut parts, obj, idx, Some(synthesized), msg_id, task_state);
             }
             // BetaContainerUploadBlock { file_id }. The user explicitly
             // asked us NOT to render these — model-side container file
@@ -200,7 +321,7 @@ pub(super) fn parse_assistant_parts(parsed: Option<&Value>, msg_id: &str) -> Vec
                 });
             }
             "tool_use" | "server_tool_use" => {
-                push_tool_use(&mut parts, obj, idx, None, msg_id);
+                push_tool_use(&mut parts, obj, idx, None, msg_id, task_state);
             }
             _ => {}
         }
@@ -221,6 +342,7 @@ fn push_tool_use(
     idx: usize,
     name_override: Option<String>,
     msg_id: &str,
+    task_state: &mut TaskListState,
 ) {
     let args = obj
         .get("input")
@@ -255,6 +377,31 @@ fn push_tool_use(
         if let Some(items) = parse_claude_todowrite_items(&args) {
             parts.push(MessagePart::TodoList {
                 id: resolve_part_id(obj, msg_id, idx),
+                items,
+            });
+            return;
+        }
+    }
+
+    // claude-agent-sdk v0.3.142 replaced TodoWrite with the incremental
+    // Task family (TaskCreate / TaskUpdate) for SDK/headless sessions.
+    // Fold each state-changing call into a cumulative TodoList so the user
+    // still sees the same single evolving plan widget. `TaskListState`
+    // carries the running list across messages; a still-streaming
+    // TaskCreate (no `subject`) or a TaskUpdate for an unknown id returns
+    // None and falls through to a regular ToolCall. TaskGet / TaskList are
+    // read-only and intentionally NOT handled here — they render as plain
+    // ToolCalls.
+    if tool_name == "TaskCreate" || tool_name == "TaskUpdate" {
+        if let Some(items) = task_state.apply(&tool_name, &args) {
+            // Prefix the part id so `collapse_task_todo_lists` can fold the
+            // whole Task sequence into one evolving widget without ever
+            // touching TodoWrite/Codex-sourced lists.
+            parts.push(MessagePart::TodoList {
+                id: format!(
+                    "{CLAUDE_TASK_LIST_ID_PREFIX}{}",
+                    resolve_part_id(obj, msg_id, idx)
+                ),
                 items,
             });
             return;

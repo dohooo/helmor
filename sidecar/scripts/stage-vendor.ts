@@ -60,6 +60,10 @@ const CODEX_SHA256: Readonly<Record<string, { arm64: string; x64: string }>> = {
 		arm64: "f6fef2ceee8977079ad3b3296b4c14c2707934e6b4ec1aa1a32d6e512196b12d",
 		x64: "21f161ffd79fab88c5bd91e40d14c894fe6d4ad61ea4ebc80d4fcf20130960c2",
 	},
+	"0.134.0": {
+		arm64: "82c8bd152cdfb8175fd03d1d18ac0f8cddce22a7e68164572c107f628b0d8b7c",
+		x64: "fd518e72bb6f77d2183799b0be00e77d8cc1b465c06e7e129f69028218259a64",
+	},
 };
 
 // Same versioning rule as Codex: must match whatever sidecar/package.json
@@ -71,6 +75,10 @@ const CLAUDE_CODE_SHA256: Readonly<
 	"2.1.139": {
 		arm64: "ed9a4c64c8b5374da8389ff6aa4b58fce7a792f90ef2261a14445d9082a80799",
 		x64: "71d18ce1d457f37b427bdcb5933424c83bf22b39b2b7628415028585b832fe6c",
+	},
+	"2.1.154": {
+		arm64: "2394afa765253caaac8cb030c7954650c4052b537aacc664c634d6397bed064a",
+		x64: "95643be424f07808e7b67195695191b05d0edc6ad7c3c274424dfb062c875fb5",
 	},
 };
 
@@ -446,10 +454,13 @@ function readCodexVersion(): string {
 /**
  * Stage codex out of `<vendorRoot>/<triple>/`.
  *
- * Source layout (npm tarball or installed package):
- *   <triple>/codex/codex      — the binary
- *   <triple>/path/rg          — ripgrep, expected on PATH at runtime
- *                                (codex spawns it for /search)
+ * Source layout (npm tarball or installed package) — read from the
+ * `codex-package.json` descriptor when present (see below):
+ *   0.134+ (self-describing):  <triple>/bin/codex     — the binary (`entrypoint`)
+ *                              <triple>/codex-path/rg  — ripgrep (`pathDir`)
+ *   pre-0.134 (legacy):        <triple>/codex/codex    — the binary
+ *                              <triple>/path/rg        — ripgrep
+ *   (ripgrep is expected on PATH at runtime — codex spawns it for /search)
  *
  * Output:
  *   dist/vendor/codex/codex
@@ -459,7 +470,24 @@ function readCodexVersion(): string {
  * env when spawning, so codex finds `rg` without it being globally installed.
  */
 function stageCodexFromVendorRoot(archRoot: string): void {
-	const binSrc = join(archRoot, "codex", "codex");
+	// codex >= 0.134 ships a self-describing layout descriptor
+	// (`codex-package.json` with `entrypoint` + `pathDir`): the binary moved
+	// from `codex/codex` to `bin/codex` and ripgrep's dir from `path` to
+	// `codex-path`. Read the descriptor when present (forward-compatible) and
+	// fall back to the pre-0.134 fixed layout otherwise.
+	let entrypoint = "codex/codex";
+	let pathDir = "path";
+	const descriptor = join(archRoot, "codex-package.json");
+	if (existsSync(descriptor)) {
+		const meta = JSON.parse(readFileSync(descriptor, "utf8")) as {
+			entrypoint?: string;
+			pathDir?: string;
+		};
+		if (meta.entrypoint) entrypoint = meta.entrypoint;
+		if (meta.pathDir) pathDir = meta.pathDir;
+	}
+
+	const binSrc = join(archRoot, entrypoint);
 	if (!existsSync(binSrc)) {
 		throw new Error(`[stage-vendor] codex binary missing at ${binSrc}`);
 	}
@@ -468,7 +496,7 @@ function stageCodexFromVendorRoot(archRoot: string): void {
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
 
-	const pathSrc = join(archRoot, "path");
+	const pathSrc = join(archRoot, pathDir);
 	if (existsSync(pathSrc)) {
 		const pathDest = join(DIST_VENDOR, "codex", "path");
 		cpSync(pathSrc, pathDest, { recursive: true });
@@ -489,7 +517,14 @@ function stageCodexBinary(target: TargetInfo): void {
 		"vendor",
 		target.codexTriple,
 	);
-	if (existsSync(join(installedRoot, "codex", "codex"))) {
+	// New layout (>=0.134): a `codex-package.json` descriptor sits in the
+	// vendor root. Legacy layout: a fixed `codex/codex` binary. Either means
+	// the platform sub-package is installed for the host arch — use it
+	// directly instead of re-downloading the tarball.
+	if (
+		existsSync(join(installedRoot, "codex-package.json")) ||
+		existsSync(join(installedRoot, "codex", "codex"))
+	) {
 		stageCodexFromVendorRoot(installedRoot);
 		return;
 	}

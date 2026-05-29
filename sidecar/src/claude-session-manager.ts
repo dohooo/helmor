@@ -117,6 +117,17 @@ function mergeQueryEnv(
 	return Object.assign({}, process.env, ...present);
 }
 
+// claude-agent-sdk v0.3.142 changed MCP servers to connect in the
+// BACKGROUND by default: the session starts immediately and a slow server
+// reports `status: "pending"` in the `init` event, so a turn-1 tool call can
+// race a not-yet-connected MCP. Helmor doesn't surface a "MCP loading" state,
+// and the pre-0.3 behavior was to block until MCP servers were ready — so we
+// pin the env flag back to blocking to keep behavior identical across the
+// upgrade. Revisit if/when the UI renders pending-MCP status.
+const MCP_BLOCKING_ENV: Record<string, string> = {
+	MCP_CONNECTION_NONBLOCKING: "0",
+};
+
 interface LiveSession {
 	readonly query: Query;
 	readonly abortController: AbortController;
@@ -399,7 +410,12 @@ export class ClaudeSessionManager implements SessionManager {
 				? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" }
 				: undefined;
 		const proxyEnv = buildAgentProxyEnv(agentProxy);
-		const queryEnv = mergeQueryEnv(proxyEnv, claudeEnv, additionalDirectoryEnv);
+		const queryEnv = mergeQueryEnv(
+			proxyEnv,
+			claudeEnv,
+			additionalDirectoryEnv,
+			MCP_BLOCKING_ENV,
+		);
 		const projectMcpServers = loadProjectMcpServers(sourceRepoPath);
 		if (projectMcpServers) {
 			logger.info(`[${requestId}] claude project MCPs injected`, {

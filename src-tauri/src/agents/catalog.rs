@@ -67,8 +67,23 @@ fn official_claude_section() -> AgentModelSection {
         label: "Claude Code".to_string(),
         status: AgentModelSectionStatus::Ready,
         options: vec![
+            // `default` resolves to the newest Opus the bundled claude-code
+            // knows about — 2.1.154 maps it to Opus 4.8 (1M context, adaptive
+            // thinking, default high effort, fast mode at 2x rate / 2.5x
+            // speed). Kept as `default` so it stays the auto-latest pick and
+            // remains the first entry (the app's default selection). MUST stay
+            // in sync with `sidecar/src/model-catalog.ts`.
             claude_model(
                 "default",
+                "Opus 4.8 1M",
+                &["low", "medium", "high", "xhigh", "max"],
+                true,
+            ),
+            // Explicit 4.7 pin — this slot used to BE `default`; now that
+            // `default` advanced to 4.8 we surface 4.7 as its own selectable
+            // entry, above 4.6.
+            claude_model(
+                "claude-opus-4-7[1m]",
                 "Opus 4.7 1M",
                 &["low", "medium", "high", "xhigh", "max"],
                 false,
@@ -439,7 +454,13 @@ mod tests {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["default", "claude-opus-4-6[1m]", "sonnet", "haiku"]
+            vec![
+                "default",
+                "claude-opus-4-7[1m]",
+                "claude-opus-4-6[1m]",
+                "sonnet",
+                "haiku"
+            ]
         );
         assert!(sections[0]
             .options
@@ -506,6 +527,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "default",
+                "claude-opus-4-7[1m]",
                 "claude-opus-4-6[1m]",
                 "sonnet",
                 "haiku",
@@ -513,14 +535,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections[0].options[4].provider_key.as_deref(),
+            sections[0].options[5].provider_key.as_deref(),
             Some("minimax")
         );
         assert_eq!(
-            sections[0].options[4].effort_levels,
+            sections[0].options[5].effort_levels,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert!(!sections[0].options[4].supports_context_usage);
+        assert!(!sections[0].options[5].supports_context_usage);
         assert_eq!(sections[1].id, "codex");
     }
 
@@ -600,8 +622,47 @@ mod tests {
     }
 
     #[test]
+    fn official_claude_section_surfaces_opus_4_8_default_above_4_7_and_4_6() {
+        let sections = model_sections_for_inputs(Vec::new(), None);
+        let claude = sections.iter().find(|s| s.id == "claude").unwrap();
+        let ids: Vec<&str> = claude.options.iter().map(|o| o.id.as_str()).collect();
+        // User-facing ordering: 4.8 (default) on top, then 4.7, then 4.6.
+        assert_eq!(
+            &ids[..3],
+            &["default", "claude-opus-4-7[1m]", "claude-opus-4-6[1m]"],
+            "Opus 4.8 must lead, with explicit 4.7 / 4.6 beneath it"
+        );
+
+        // `default` → Opus 4.8: leads the list (so `useEnsureDefaultModel`
+        // picks it), supports fast mode, and keeps the xhigh effort tier.
+        let default = &claude.options[0];
+        assert_eq!(default.label, "Opus 4.8 1M");
+        assert_eq!(default.cli_model, "default");
+        assert!(default.supports_fast_mode, "Opus 4.8 supports fast mode");
+        assert_eq!(
+            default.effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+
+        // Explicit 4.7 pin: same effort tiers as before, still no fast mode.
+        let opus47 = &claude.options[1];
+        assert_eq!(opus47.label, "Opus 4.7 1M");
+        assert_eq!(opus47.cli_model, "claude-opus-4-7[1m]");
+        assert!(!opus47.supports_fast_mode);
+        assert_eq!(
+            opus47.effort_levels,
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+
+        // 4.6 unchanged.
+        let opus46 = &claude.options[2];
+        assert_eq!(opus46.label, "Opus 4.6 1M");
+        assert!(opus46.supports_fast_mode);
+    }
+
+    #[test]
     fn claude_default_no_longer_collides_with_cursor_auto() {
-        // `default` belongs to Claude (Opus 4.7 1M). Cursor's Auto is
+        // `default` belongs to Claude (Opus 4.8 1M). Cursor's Auto is
         // `cursor-default`. They MUST resolve to different providers
         // even when the picker / persistence flow doesn't pass a hint —
         // this is the regression the namespace prefix exists to prevent.

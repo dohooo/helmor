@@ -947,6 +947,346 @@ fn parse_assistant_parts_collapses_todowrite() {
 }
 
 // ---------------------------------------------------------------------------
+// R6b: Task family (TaskCreate / TaskUpdate) → TodoList collapse.
+//
+// claude-agent-sdk v0.3.142 retired `TodoWrite` for SDK/headless sessions in
+// favor of the incremental Task family. The adapter accumulates these by
+// creation order (the CLI assigns sequential ids "1","2","3"…), renders a
+// cumulative TodoList per state-changing call, then collapses consecutive
+// TodoList parts so the user still sees a SINGLE evolving plan widget —
+// identical in shape to the old single-TodoWrite render.
+// ---------------------------------------------------------------------------
+
+fn task_create(id: &str, subject: &str) -> IntermediateMessage {
+    im(
+        id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": format!("tc_{id}"),
+                    "name": "TaskCreate",
+                    "input": {"subject": subject, "description": subject},
+                }]
+            }
+        }),
+    )
+}
+
+fn task_update(id: &str, task_id: &str, status: &str) -> IntermediateMessage {
+    im(
+        id,
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": format!("tu_{id}"),
+                    "name": "TaskUpdate",
+                    "input": {"taskId": task_id, "status": status},
+                }]
+            }
+        }),
+    )
+}
+
+#[test]
+fn claude_task_family_collapses_to_single_todolist() {
+    // Mirror the real 2.1.154 stream: 3 TaskCreate + 2 TaskUpdate across
+    // separate assistant messages. After merge + collapse the user must
+    // see ONE TodoList reflecting the final cumulative state.
+    let messages = vec![
+        task_create("1", "Read the target file"),
+        task_create("2", "Rename the function"),
+        task_create("3", "Update all call sites"),
+        task_update("4", "1", "in_progress"),
+        task_update("5", "1", "completed"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(
+        result.len(),
+        1,
+        "all Task calls merge into one assistant message"
+    );
+
+    let todo_lists: Vec<_> = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .collect();
+    assert_eq!(
+        todo_lists.len(),
+        1,
+        "consecutive Task TodoLists collapse to a single evolving list, got {} parts: {:?}",
+        result[0].content.len(),
+        result[0].content,
+    );
+
+    match todo_lists[0] {
+        ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => {
+            assert_eq!(items.len(), 3, "three tasks created");
+            assert_eq!(items[0].text, "Read the target file");
+            assert_eq!(
+                items[0].status,
+                TodoStatus::Completed,
+                "task 1 ends completed"
+            );
+            assert_eq!(items[1].text, "Rename the function");
+            assert_eq!(items[1].status, TodoStatus::Pending);
+            assert_eq!(items[2].text, "Update all call sites");
+            assert_eq!(items[2].status, TodoStatus::Pending);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_create_streaming_falls_back_to_toolcall() {
+    // Mid-stream TaskCreate with no `subject` yet → render a plain ToolCall,
+    // mirroring the TodoWrite streaming-fallback contract.
+    let parsed = json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tc_stream",
+                "name": "TaskCreate",
+                "input": {},
+                "__streaming_status": "streaming_input"
+            }]
+        }
+    });
+    let parts = parse_assistant_parts(Some(&parsed), "test-msg");
+    assert_eq!(parts.len(), 1);
+    match &parts[0] {
+        MessagePart::ToolCall { tool_name, .. } => assert_eq!(tool_name, "TaskCreate"),
+        other => panic!("streaming TaskCreate must fall back to ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_update_unknown_id_falls_back_to_toolcall() {
+    // A TaskUpdate referencing a task we never saw created cannot fold into
+    // a list → render it as a plain ToolCall rather than inventing a row.
+    let messages = vec![task_update("1", "99", "completed")];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) => {
+            assert_eq!(tool_name, "TaskUpdate");
+        }
+        other => panic!("unknown-id TaskUpdate must be a ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_get_and_list_render_as_toolcall() {
+    // TaskGet / TaskList are read-only — they don't mutate the plan, so
+    // they render as ordinary ToolCalls (with their own summary label),
+    // never as a TodoList.
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tg", "name": "TaskGet", "input": {"taskId": "1"}},
+                    {"type": "tool_use", "id": "tl", "name": "TaskList", "input": {}},
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let names: Vec<&str> = result[0]
+        .content
+        .iter()
+        .filter_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::ToolCall { tool_name, .. }) => {
+                Some(tool_name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["TaskGet", "TaskList"]);
+    assert!(
+        !result[0]
+            .content
+            .iter()
+            .any(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. }))),
+        "read-only Task tools must not synthesize a TodoList"
+    );
+}
+
+#[test]
+fn claude_task_create_then_update_in_one_message_collapses() {
+    // Two Task calls inside a single assistant message still collapse to a
+    // single TodoList (covers the `flat.len() <= 1` convert branch).
+    let messages = vec![im(
+        "1",
+        "assistant",
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "c1", "name": "TaskCreate",
+                     "input": {"subject": "Step A", "description": "do A"}},
+                    {"type": "tool_use", "id": "u1", "name": "TaskUpdate",
+                     "input": {"taskId": "1", "status": "in_progress"}},
+                ]
+            }
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let todo_lists: Vec<_> = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .collect();
+    assert_eq!(todo_lists.len(), 1, "single evolving TodoList");
+    match todo_lists[0] {
+        ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].text, "Step A");
+            assert_eq!(items[0].status, TodoStatus::InProgress);
+        }
+        other => panic!("expected TodoList, got {other:?}"),
+    }
+}
+
+#[test]
+fn claude_task_update_deleted_removes_row_from_list() {
+    let messages = vec![
+        task_create("1", "Keep me"),
+        task_create("2", "Delete me"),
+        task_update("3", "2", "deleted"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let items = result[0]
+        .content
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => Some(items),
+            _ => None,
+        })
+        .expect("a single TodoList");
+    assert_eq!(items.len(), 1, "the deleted task is gone");
+    assert_eq!(items[0].text, "Keep me");
+}
+
+#[test]
+fn claude_task_update_without_rendered_fields_is_toolcall() {
+    // A TaskUpdate that changes only owner/blocks (no status, no subject)
+    // doesn't alter the rendered list → it must render as a plain ToolCall,
+    // not a redundant duplicate TodoList.
+    let messages = vec![
+        task_create("1", "Step one"),
+        im(
+            "2",
+            "assistant",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "u2", "name": "TaskUpdate",
+                    "input": {"taskId": "1", "owner": "alice"}
+                }]}
+            }),
+        ),
+    ];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    let todos = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::TodoList { .. })))
+        .count();
+    let toolcalls = result[0]
+        .content
+        .iter()
+        .filter(|p| matches!(p, ExtendedMessagePart::Basic(MessagePart::ToolCall { .. })))
+        .count();
+    assert_eq!(todos, 1, "the create still renders its list");
+    assert_eq!(
+        toolcalls, 1,
+        "the no-op TaskUpdate falls back to a ToolCall"
+    );
+}
+
+#[test]
+fn claude_task_collapse_drops_emptied_task_only_message() {
+    // Two Task-only assistant messages split by a user prompt (so they don't
+    // merge). The second (TaskUpdate-only) message is emptied when its list is
+    // folded into the anchor — it must be dropped, leaving no ghost bubble.
+    let messages = vec![
+        task_create("a1", "Step one"),
+        im(
+            "u1",
+            "user",
+            json!({"type": "user_prompt", "text": "keep going"}),
+        ),
+        task_update("a2", "1", "completed"),
+    ];
+    let result = convert(&messages);
+    assert_eq!(
+        result.len(),
+        2,
+        "emptied Task-only assistant message is dropped, got {result:?}"
+    );
+    assert!(
+        !result
+            .iter()
+            .any(|m| m.role == MessageRole::Assistant && m.content.is_empty()),
+        "no empty assistant ghost bubble remains"
+    );
+    let items = result[0]
+        .content
+        .iter()
+        .find_map(|p| match p {
+            ExtendedMessagePart::Basic(MessagePart::TodoList { items, .. }) => Some(items),
+            _ => None,
+        })
+        .expect("anchor message keeps the single TodoList");
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].status,
+        TodoStatus::Completed,
+        "anchor carries the final cumulative state"
+    );
+}
+
+#[test]
+fn claude_task_partial_fresh_state_bare_update_is_toolcall() {
+    // The streaming-partial render path calls parse_assistant_parts with a
+    // FRESH TaskListState (only the trailing message). A TaskUpdate whose
+    // TaskCreate lived in an earlier, not-included message has no prior task
+    // to patch → ToolCall, never a single-item phantom list.
+    let parsed = json!({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "u", "name": "TaskUpdate",
+            "input": {"taskId": "1", "status": "completed"}
+        }]}
+    });
+    let parts = parse_assistant_parts(Some(&parsed), "partial-msg");
+    assert_eq!(parts.len(), 1);
+    assert!(
+        matches!(&parts[0], MessagePart::ToolCall { tool_name, .. } if tool_name == "TaskUpdate"),
+        "bare TaskUpdate in a fresh-state partial render is a ToolCall"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // R6: SystemNotice for subagent task_started — verify the child:* id
 // encoding so the grouping pass can attach it to the parent Task tool.
 // ---------------------------------------------------------------------------

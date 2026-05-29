@@ -493,8 +493,10 @@ describe("ClaudeSessionManager.sendMessage", () => {
 			models.map((m) => [m.id, m.supportsFastMode]),
 		);
 
-		expect(bySupports.default).toBeUndefined();
+		// `default` now resolves to Opus 4.8, which supports fast mode.
+		expect(bySupports.default).toBe(true);
 		expect(bySupports.sonnet).toBeUndefined();
+		expect(bySupports["claude-opus-4-7[1m]"]).toBeUndefined();
 		expect(bySupports["claude-opus-4-6[1m]"]).toBe(true);
 	});
 
@@ -573,6 +575,33 @@ describe("ClaudeSessionManager.sendMessage", () => {
 
 		const args = lastQueryArgs as { options?: { effort?: string } };
 		expect(args.options?.effort).toBeUndefined();
+	});
+
+	test("forces MCP_CONNECTION_NONBLOCKING=0 so MCP servers stay blocking (claude-agent-sdk v0.3.142 default change)", async () => {
+		mockQueryImpl = () => makeMockQuery();
+
+		await manager.sendMessage(
+			"REQ-mcp-blocking",
+			{
+				sessionId: "helmor-sess-mcp-blocking",
+				prompt: "test",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: undefined,
+				images: [],
+			},
+			emitter,
+		);
+
+		const args = lastQueryArgs as {
+			options?: { env?: Record<string, string> };
+		};
+		expect(args.options?.env?.MCP_CONNECTION_NONBLOCKING).toBe("0");
+		// process.env is still spread in — we add the flag, we don't replace.
+		expect(args.options?.env?.PATH).toBeDefined();
 	});
 
 	test("every forwarded event carries our requestId, never an SDK-supplied id", async () => {
@@ -1421,6 +1450,41 @@ describe("Claude fixture diversity guards", () => {
 		expect(inv.topLevelTypes).toContain("rate_limit_event");
 	});
 
+	test("task-plan.jsonl exercises the Task tool family (TaskCreate + TaskUpdate)", () => {
+		// claude-agent-sdk v0.3.142 retired TodoWrite for SDK/headless
+		// sessions in favor of TaskCreate/TaskUpdate. This fixture is a real
+		// 2.1.154 capture; pin that it carries those tool calls so a future
+		// minimal-fixture replacement can't silently drop the coverage that
+		// the pipeline's Task→TodoList collapse depends on.
+		const inv = inventoryClaudeFixture("task-plan.jsonl");
+		expect(inv.contentBlockTypes).toContain("tool_use");
+		expect(inv.contentBlockTypes).toContain("tool_result");
+		expect(inv.streamEventDeltaTypes).toContain("input_json_delta");
+
+		const events = loadClaudeFixture("task-plan.jsonl");
+		const toolNames = new Set<string>();
+		for (const e of events) {
+			if (e.type !== "assistant") continue;
+			const message = e.message as { content?: unknown } | undefined;
+			const content = message?.content;
+			if (!Array.isArray(content)) continue;
+			for (const b of content) {
+				if (
+					b &&
+					typeof b === "object" &&
+					"type" in b &&
+					(b as { type?: unknown }).type === "tool_use" &&
+					"name" in b &&
+					typeof (b as { name?: unknown }).name === "string"
+				) {
+					toolNames.add((b as { name: string }).name);
+				}
+			}
+		}
+		expect(toolNames).toContain("TaskCreate");
+		expect(toolNames).toContain("TaskUpdate");
+	});
+
 	test("bash-and-edit.jsonl exercises multi-tool sequence (Bash + Read + Edit)", () => {
 		const inv = inventoryClaudeFixture("bash-and-edit.jsonl");
 		expect(inv.contentBlockTypes).toContain("tool_use");
@@ -1454,8 +1518,15 @@ describe("ClaudeSessionManager.listModels", () => {
 		expect(models).toEqual([
 			{
 				id: "default",
-				label: "Opus 4.7 1M",
+				label: "Opus 4.8 1M",
 				cliModel: "default",
+				effortLevels: ["low", "medium", "high", "xhigh", "max"],
+				supportsFastMode: true,
+			},
+			{
+				id: "claude-opus-4-7[1m]",
+				label: "Opus 4.7 1M",
+				cliModel: "claude-opus-4-7[1m]",
 				effortLevels: ["low", "medium", "high", "xhigh", "max"],
 			},
 			{
@@ -1486,6 +1557,7 @@ const CLAUDE_FIXTURES = [
 	"thinking-text.jsonl",
 	"tool-use.jsonl",
 	"todo-plan.jsonl",
+	"task-plan.jsonl",
 	"bash-and-edit.jsonl",
 ] as const;
 

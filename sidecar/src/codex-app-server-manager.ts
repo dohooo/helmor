@@ -68,15 +68,16 @@ function resolveCodexBinPath(): string {
 		try {
 			const require = createRequire(import.meta.url);
 			const pkgJson = require.resolve(`${platformPkg}/package.json`);
-			const candidate = join(
-				dirname(pkgJson),
-				"vendor",
-				triple,
-				"codex",
-				process.platform === "win32" ? "codex.exe" : "codex",
-			);
-			if (existsSync(candidate)) {
-				return candidate;
+			const vendorRoot = join(dirname(pkgJson), "vendor", triple);
+			const binName = process.platform === "win32" ? "codex.exe" : "codex";
+			// codex >=0.134 nests the binary under `bin/`; older builds used
+			// `codex/`. Probe both so a version bump can't silently drop us
+			// to the bare-PATH fallback. Mirrors `stage-vendor.ts`.
+			for (const sub of ["bin", "codex"]) {
+				const candidate = join(vendorRoot, sub, binName);
+				if (existsSync(candidate)) {
+					return candidate;
+				}
 			}
 		} catch {
 			// Platform sub-package missing (e.g. --omit=optional) — fall through.

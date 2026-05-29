@@ -3,12 +3,32 @@ import type { Provider, ProviderModelInfo } from "./session-manager.js";
 const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 const CURSOR_REASONING_LEVELS = ["low", "medium", "high"] as const;
 
+// NOTE: the Claude/Codex sections here MUST stay in sync with the Rust
+// catalog in `src-tauri/src/agents/catalog.rs` (`official_claude_section` /
+// `codex_section`) — that Rust list is what drives the model picker via the
+// `list_agent_model_sections` command; this one feeds `listModels`.
 const MODEL_CATALOG: Record<Provider, readonly ProviderModelInfo[]> = {
 	claude: [
+		// `default` resolves to the newest Opus the bundled claude-code knows
+		// about — in 2.1.154 that is Opus 4.8 (1M context, adaptive thinking,
+		// default high effort, fast mode at 2x rate / 2.5x speed). Kept as
+		// `default` (rather than pinned `claude-opus-4-8`) so it stays the
+		// auto-latest pick AND remains the catalog's first entry, which
+		// `useEnsureDefaultModel` selects as the app default.
 		{
 			id: "default",
-			label: "Opus 4.7 1M",
+			label: "Opus 4.8 1M",
 			cliModel: "default",
+			effortLevels: ["low", "medium", "high", "xhigh", "max"],
+			supportsFastMode: true,
+		},
+		// Explicit 4.7 pin — previously this slot WAS `default`; now that
+		// `default` advanced to 4.8 we surface 4.7 as its own entry so users
+		// can still select it.
+		{
+			id: "claude-opus-4-7[1m]",
+			label: "Opus 4.7 1M",
+			cliModel: "claude-opus-4-7[1m]",
 			effortLevels: ["low", "medium", "high", "xhigh", "max"],
 		},
 		{

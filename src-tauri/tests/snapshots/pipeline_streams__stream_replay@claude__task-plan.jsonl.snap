@@ -1,0 +1,421 @@
+---
+source: tests/pipeline_streams.rs
+assertion_line: 340
+expression: snapshot
+input_file: tests/fixtures/streams/claude/task-plan.jsonl
+---
+line_count: 113
+checkpoint_count: 31
+checkpoints:
+  - line_index: 0
+    event_type: system
+    roles: []
+    last_part_types: []
+  - line_index: 1
+    event_type: system
+    roles: []
+    last_part_types: []
+  - line_index: 2
+    event_type: rate_limit_event
+    roles: []
+    last_part_types: []
+  - line_index: 5
+    event_type: system
+    roles:
+      - system
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 8
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 15
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 17
+    event_type: user
+    roles:
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 20
+    event_type: system
+    roles:
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - tool-call
+  - line_index: 23
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - assistant
+    last_part_types:
+      - text
+  - line_index: 25
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 28
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+  - line_index: 32
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+  - line_index: 39
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+  - line_index: 42
+    event_type: user
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+  - line_index: 44
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+  - line_index: 48
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 56
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 59
+    event_type: user
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 61
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 69
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 72
+    event_type: user
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 74
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+  - line_index: 79
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 86
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 89
+    event_type: user
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 91
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 98
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 101
+    event_type: user
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 103
+    event_type: system
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+  - line_index: 108
+    event_type: assistant
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+    last_part_types:
+      - reasoning
+      - text
+      - todo-list
+      - reasoning
+      - text
+      - text
+  - line_index: 112
+    event_type: result
+    roles:
+      - system
+      - assistant
+      - system
+      - system
+      - assistant
+      - system
+    last_part_types:
+      - text
+final_state:
+  message_count: 6
+  roles:
+    - system
+    - assistant
+    - system
+    - system
+    - assistant
+    - system
+  total_parts: 12
+persisted_turns:
+  turn_count: 13
+  total_blocks: 18
+  turns:
+    - role: assistant
+      block_types:
+        - thinking
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - thinking
+        - text
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - thinking
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - text
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - tool_use
+    - role: user
+      block_types:
+        - tool_result
+    - role: assistant
+      block_types:
+        - text
+historical_render:
+  message_count: 1
+  messages:
+    - role: assistant
+      part_types:
+        - reasoning
+        - reasoning
+        - tool-call
+        - text
+        - todo-list
+        - reasoning
+        - text
+        - text
