@@ -46,6 +46,7 @@ vi.mock("./hooks/use-streaming", () => ({
 		restoreImages: [],
 		restoreNonce: 0,
 		activeFastPreludes: {},
+		clearFastPrelude: vi.fn(),
 		busySessionIds: new Set(),
 	}),
 }));

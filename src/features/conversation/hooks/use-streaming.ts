@@ -1151,6 +1151,7 @@ export function useConversationStreaming({
 	return {
 		activeSendError,
 		activeFastPreludes,
+		clearFastPrelude,
 		userInputResponsePending,
 		handleComposerSubmit,
 		handleUserInputResponse,

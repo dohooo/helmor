@@ -786,6 +786,39 @@ fn prompt_suggestion_empty_is_silent() {
     assert!(result.is_empty(), "empty suggestion must produce nothing");
 }
 
+#[test]
+fn fast_mode_unavailable_renders_as_warning_notice() {
+    let messages = vec![im(
+        "fmu1",
+        "assistant",
+        json!({
+            "type": "system",
+            "subtype": "fast_mode_unavailable",
+            "reason": "Fast mode runs on extra usage, which isn't enabled.",
+            "fastModeState": "off",
+        }),
+    )];
+    let result = convert(&messages);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, MessageRole::System);
+    match &result[0].content[0] {
+        ExtendedMessagePart::Basic(MessagePart::SystemNotice {
+            severity,
+            label,
+            body,
+            ..
+        }) => {
+            assert_eq!(*severity, NoticeSeverity::Warning);
+            assert_eq!(label, "Fast mode unavailable");
+            assert_eq!(
+                body.as_deref(),
+                Some("Fast mode runs on extra usage, which isn't enabled.")
+            );
+        }
+        other => panic!("expected SystemNotice, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // R6: rate_limit_event
 // ---------------------------------------------------------------------------

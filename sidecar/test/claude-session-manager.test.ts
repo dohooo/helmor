@@ -604,6 +604,133 @@ describe("ClaudeSessionManager.sendMessage", () => {
 		expect(args.options?.env?.PATH).toBeDefined();
 	});
 
+	test("emits fast_mode_unavailable when fast mode was requested but the result reports it off", async () => {
+		const sdkMessages = [
+			{
+				type: "rate_limit_event",
+				rate_limit_info: {
+					status: "allowed",
+					overageStatus: "rejected",
+					overageDisabledReason: "overage_not_provisioned",
+					isUsingOverage: false,
+				},
+				session_id: "sdk-sess-fm",
+			},
+			{
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				session_id: "sdk-sess-fm",
+				fast_mode_state: "off",
+				usage: { input_tokens: 1, output_tokens: 1 },
+				modelUsage: {},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-off",
+			{
+				sessionId: "helmor-sess-fm",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notice = captured.find(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		) as Record<string, unknown> | undefined;
+		expect(notice).toBeDefined();
+		expect(notice?.type).toBe("system");
+		expect(notice?.id).toBe("REQ-fm-off");
+		expect(notice?.session_id).toBe("helmor-sess-fm");
+		expect(notice?.fastModeState).toBe("off");
+		expect(String(notice?.reason)).toContain("extra usage");
+	});
+
+	test("emits fast_mode_unavailable from the init event, before (and without) a terminal result", async () => {
+		// `fast_mode_state` rides the `system` init event right after send, so
+		// the notice must fire immediately — even when the turn is aborted and
+		// never reaches a terminal `result` (the only event here is init).
+		const sdkMessages = [
+			{
+				type: "system",
+				subtype: "init",
+				session_id: "sdk-sess-fm-init",
+				model: "claude-opus-4-8[1m]",
+				fast_mode_state: "off",
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-init",
+			{
+				sessionId: "helmor-sess-fm-init",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notices = captured.filter(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		) as Record<string, unknown>[];
+		// Exactly one notice, emitted off the init event (no result needed).
+		expect(notices).toHaveLength(1);
+		expect(notices[0]?.fastModeState).toBe("off");
+		expect(String(notices[0]?.reason)).toContain("extra usage");
+	});
+
+	test("stays silent when fast mode actually engaged (fast_mode_state on)", async () => {
+		const sdkMessages = [
+			{
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				session_id: "sdk-sess-fm-on",
+				fast_mode_state: "on",
+				usage: { input_tokens: 1, output_tokens: 1 },
+				modelUsage: {},
+			},
+		];
+		mockQueryImpl = () => asyncIterableFrom(sdkMessages);
+
+		await manager.sendMessage(
+			"REQ-fm-on",
+			{
+				sessionId: "helmor-sess-fm-on",
+				prompt: "hi",
+				model: "default",
+				cwd: undefined,
+				resume: undefined,
+				permissionMode: undefined,
+				effortLevel: undefined,
+				fastMode: true,
+				images: [],
+			},
+			emitter,
+		);
+
+		const notice = captured.find(
+			(e) => (e as { subtype?: string }).subtype === "fast_mode_unavailable",
+		);
+		expect(notice).toBeUndefined();
+	});
+
 	test("every forwarded event carries our requestId, never an SDK-supplied id", async () => {
 		const sdkMessages = loadClaudeFixture("thinking-text.jsonl");
 		mockQueryImpl = () => asyncIterableFrom(sdkMessages);

@@ -81,6 +81,12 @@ pub enum UiMutationEvent {
     TriageWorkspaceCreated {
         workspace_id: String,
     },
+    /// Fast mode was requested but didn't engage; the composer flips its
+    /// fast-mode toggle off for this session.
+    FastModeUnavailable {
+        session_id: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +171,10 @@ mod tests {
             UiMutationEvent::TriageActiveStatusChanged,
             UiMutationEvent::TriageWorkspaceCreated {
                 workspace_id: "w".into(),
+            },
+            UiMutationEvent::FastModeUnavailable {
+                session_id: "s".into(),
+                reason: "extra usage not enabled".into(),
             },
         ];
         for event in cases {

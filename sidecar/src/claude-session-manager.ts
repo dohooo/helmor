@@ -401,6 +401,13 @@ export class ClaudeSessionManager implements SessionManager {
 
 		const effectiveFastMode =
 			fastMode === true && modelSupportsFastMode("claude", model);
+		if (fastMode === true) {
+			logger.info(`[${requestId}] fast-mode requested`, {
+				model: model ?? "(none)",
+				supportsFastMode: modelSupportsFastMode("claude", model),
+				effectiveFastMode,
+			});
+		}
 		const claudeEnv =
 			claudeEnvironment && Object.keys(claudeEnvironment).length > 0
 				? claudeEnvironment
@@ -655,8 +662,40 @@ export class ClaudeSessionManager implements SessionManager {
 		});
 
 		try {
+			let lastRateLimitInfo: RateLimitOverageInfo | undefined;
+			let fastModeNoticeEmitted = false;
 			for await (const message of q) {
 				logger.sdkEvent(requestId, message);
+				if (message.type === "rate_limit_event") {
+					lastRateLimitInfo = (
+						message as { rate_limit_info?: RateLimitOverageInfo }
+					).rate_limit_info;
+				}
+				// Surface fast-mode-not-active off the init event (carries
+				// `fast_mode_state` right after send), once — not the terminal
+				// result, which never arrives on an aborted turn.
+				const fms = (message as { fast_mode_state?: FastModeState })
+					.fast_mode_state;
+				if (
+					effectiveFastMode &&
+					!fastModeNoticeEmitted &&
+					fms &&
+					fms !== "on"
+				) {
+					fastModeNoticeEmitted = true;
+					logger.info(`[${requestId}] fast-mode unavailable`, {
+						fastModeState: fms,
+						overageDisabledReason: lastRateLimitInfo?.overageDisabledReason,
+					});
+					emitter.passthrough(requestId, {
+						type: "system",
+						subtype: "fast_mode_unavailable",
+						reason: describeFastModeUnavailable(fms, lastRateLimitInfo),
+						fastModeState: fms,
+						session_id: sessionId,
+						uuid: randomUUID(),
+					});
+				}
 				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
 				if (passthroughMessage) {
 					emitter.passthrough(requestId, passthroughMessage);
@@ -1197,6 +1236,30 @@ function isResultMessage(
  *  so any `result` we see here is genuinely terminal for this turn. */
 function isTerminalResult(message: SDKMessage): boolean {
 	return message.type === "result";
+}
+
+type FastModeState = "off" | "cooldown" | "on";
+
+interface RateLimitOverageInfo {
+	overageStatus?: string;
+	overageDisabledReason?: string;
+	isUsingOverage?: boolean;
+}
+
+// User-facing reason for a non-`on` fast-mode state.
+function describeFastModeUnavailable(
+	state: FastModeState,
+	rateLimit: RateLimitOverageInfo | undefined,
+): string {
+	if (state === "cooldown") {
+		return "Rate limited — fast mode is cooling down and will re-enable automatically.";
+	}
+	if (rateLimit?.overageDisabledReason === "out_of_credits") {
+		return "Fast mode is unavailable — your account is out of extra-usage credits.";
+	}
+	// `off`: extra usage (overage) isn't enabled. Default reason — the init
+	// event reports `off` before the rate-limit event arrives.
+	return "Fast mode isn't active — it runs on extra usage, which isn't enabled for your account.";
 }
 
 function stripUserInputToolUseFromAssistant(

@@ -1934,7 +1934,8 @@ export type UiMutationEvent =
 	| { type: "slackTokenInvalidated"; teamId: string }
 	| { type: "triageConfigChanged" }
 	| { type: "triageActiveStatusChanged" }
-	| { type: "triageWorkspaceCreated"; workspaceId: string };
+	| { type: "triageWorkspaceCreated"; workspaceId: string }
+	| { type: "fastModeUnavailable"; sessionId: string; reason: string };
 
 export type TriageConfig = {
 	enabled: boolean;

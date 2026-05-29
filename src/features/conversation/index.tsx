@@ -15,6 +15,7 @@ import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-c
 import {
 	type ActiveStreamSummary,
 	type ChangeRequestInfo,
+	subscribeUiMutations,
 	updateSessionSettings,
 } from "@/lib/api";
 import type { ResolvedComposerInsertRequest } from "@/lib/composer-insert";
@@ -262,6 +263,7 @@ export const WorkspaceConversationContainer = memo(
 			restoreImages,
 			restoreNonce,
 			activeFastPreludes,
+			clearFastPrelude,
 			busySessionIds: localBusySessionIds,
 		} = useConversationStreaming({
 			composerContextKey,
@@ -422,6 +424,34 @@ export const WorkspaceConversationContainer = memo(
 			},
 			[persistSessionSetting],
 		);
+
+		// Fast mode didn't engage: flip the toggle off and clear the prelude
+		// animation (this turn never ran fast — unlike a mid-stream manual
+		// toggle, which keeps the cue).
+		useEffect(() => {
+			let disposed = false;
+			let unlisten: (() => void) | null = null;
+			subscribeUiMutations((event) => {
+				if (disposed || event.type !== "fastModeUnavailable") return;
+				const contextKey = `session:${event.sessionId}`;
+				handleChangeFastMode(contextKey, false);
+				clearFastPrelude(contextKey);
+			})
+				.then((cleanup) => {
+					if (disposed) cleanup();
+					else unlisten = cleanup;
+				})
+				.catch((error) => {
+					console.error(
+						"[conversation] fast-mode sync subscribe failed",
+						error,
+					);
+				});
+			return () => {
+				disposed = true;
+				unlisten?.();
+			};
+		}, [handleChangeFastMode, clearFastPrelude]);
 
 		const handleComposerSubmitWrapper = useCallback(
 			(payload: Parameters<typeof handleComposerSubmit>[0]) => {

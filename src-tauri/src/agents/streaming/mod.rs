@@ -1122,6 +1122,29 @@ pub(super) fn stream_via_sidecar(
                     // `result`, `system`, etc. The pipeline accumulator
                     // owns the dispatch by event type; the state machine
                     // takes its `PipelineEmit` and decides what to send.
+
+                    // Fast mode didn't engage — flip the composer toggle off
+                    // (the notice itself renders via the pipeline below).
+                    if event.event_type() == "system"
+                        && event.raw.get("subtype").and_then(Value::as_str)
+                            == Some("fast_mode_unavailable")
+                    {
+                        if let Some(ctx) = exchange_ctx.as_ref() {
+                            crate::ui_sync::publish(
+                                &app,
+                                crate::ui_sync::UiMutationEvent::FastModeUnavailable {
+                                    session_id: ctx.helmor_session_id.clone(),
+                                    reason: event
+                                        .raw
+                                        .get("reason")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                },
+                            );
+                        }
+                    }
+
                     let line = serde_json::to_string(&event.raw).unwrap_or_default();
                     if !line.is_empty() && line != "{}" {
                         if let Some(pipeline_state) = pipeline.as_mut() {
