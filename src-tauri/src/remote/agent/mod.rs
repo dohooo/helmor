@@ -907,14 +907,18 @@ fn reader_loop(
                 .lock()
                 .expect("session notifier mutex poisoned")
                 .clone();
-            // Terminal events (the sidecar's `result` / `end` /
-            // `error` events) end the session. Detect a coarse
-            // "completed" signal here so the session map doesn't
-            // grow unboundedly; lifecycle correctness is locked in
-            // by the matching reader tests.
+            // Terminal lifecycle events end the session. Only the
+            // sidecar's own control events (`end` / `aborted`) close
+            // the lifecycle — the SDK's `result` event is *data*
+            // (the final turn payload). The sidecar emits `result`
+            // first and `end` AFTER it; if we treated `result` as
+            // terminal here, we'd drop the session before the `end`
+            // arrives, the desktop's stream loop (which only matches
+            // `end`/`aborted`) never sees its terminator, and the
+            // 45s heartbeat watchdog fires instead of a clean close.
             let completed = matches!(
                 value.get("type").and_then(Value::as_str),
-                Some("result") | Some("end")
+                Some("end") | Some("aborted")
             );
             (notifier, completed, seq)
         };

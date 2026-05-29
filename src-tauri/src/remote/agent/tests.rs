@@ -222,11 +222,18 @@ fn attach_swaps_notifier_so_subsequent_events_flow_to_new_client() {
 }
 
 #[test]
-fn session_is_removed_on_terminal_result_event() {
-    // The reader loop drops sessions on `type: "result"` or
-    // `type: "end"` so the map doesn't grow unboundedly. The
-    // mock emits a result event → next list call should be
-    // empty.
+fn session_is_removed_on_terminal_end_event() {
+    // The reader loop drops sessions on `type: "end"` /
+    // `type: "aborted"` so the map doesn't grow unboundedly.
+    // Crucially, the SDK's `result` event is *not* terminal at
+    // this layer — the sidecar emits `result` (data) followed by
+    // `end` (lifecycle close), and the desktop's stream loop only
+    // matches `end`/`aborted`. If the daemon removed the session
+    // on `result`, the trailing `end` would be dropped silently
+    // (session lookup misses) and the desktop would hang until
+    // the 45s heartbeat watchdog fires. So this test wires the
+    // realistic three-event sequence and asserts the session
+    // sticks around through `result` and only goes away on `end`.
     let spawner = MockAgentSpawner::new().respond(
         "sendMessage",
         vec![
@@ -237,6 +244,7 @@ fn session_is_removed_on_terminal_result_event() {
                 "subtype": "success",
                 "result": "all done",
             }),
+            json!({ "id": "req-4", "type": "end" }),
         ],
     );
     let state = RemoteAgentState::new(Arc::new(spawner));
@@ -252,13 +260,31 @@ fn session_is_removed_on_terminal_result_event() {
         )
         .unwrap();
 
-    // Wait until both events have been notified out.
-    let _ = wait_for(&notifier, |c| c.len() >= 2);
+    // Wait until all three events have been notified out — proves
+    // the `end` arrived at the desktop even though `result` came
+    // first. (Before the fix only the first two would reach the
+    // notifier because the session was already gone by then.)
+    let captured = wait_for(&notifier, |c| c.len() >= 3);
+    let types: Vec<String> = captured
+        .iter()
+        .filter_map(|(_, params)| {
+            params
+                .get("event")
+                .and_then(|e| e.get("type"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(
+        types,
+        vec!["assistant", "result", "end"],
+        "all three events must reach the desktop in order",
+    );
     // Session should be gone now.
     let listing = state.list();
     assert!(
         listing.sessions.is_empty(),
-        "result event must terminate the session: {listing:?}",
+        "end event must terminate the session: {listing:?}",
     );
 }
 
@@ -974,9 +1000,12 @@ fn attach_with_caught_up_since_seq_replays_nothing() {
 
 #[test]
 fn terminal_event_moves_session_into_ended_replay_only_with_journal_on_disk() {
-    // The reader thread sees a `result` terminal, transitions the
-    // session from `sessions` → `ended_sessions`, and the on-disk
-    // file remains so `agent.attach` can later replay from it.
+    // The reader thread sees the sidecar's `end` control event,
+    // transitions the session from `sessions` → `ended_sessions`,
+    // and the on-disk file remains so `agent.attach` can later
+    // replay from it. The realistic sidecar wire sequence puts
+    // the SDK's `result` (data) *before* the lifecycle `end` —
+    // both must reach the journal; only `end` closes the session.
     let dir = tempfile::tempdir().unwrap();
     let spawner = MockAgentSpawner::new().respond(
         "sendMessage",
@@ -997,6 +1026,10 @@ fn terminal_event_moves_session_into_ended_replay_only_with_journal_on_disk() {
                 "id": "req-end-1",
                 "type": "result",
             }),
+            json!({
+                "id": "req-end-1",
+                "type": "end",
+            }),
         ],
     );
     let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
@@ -1011,10 +1044,10 @@ fn terminal_event_moves_session_into_ended_replay_only_with_journal_on_disk() {
             Arc::clone(&notifier) as Arc<dyn Notifier>,
         )
         .unwrap();
-    // Wait for the terminal event to drain so the reader has
+    // Wait for the `end` event to drain so the reader has
     // moved the session into the ended map.
     let _ = wait_for(&notifier, |events| {
-        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+        events.iter().any(|(_, p)| p["event"]["type"] == "end")
     });
     // agent.list now reports the session as ended-replay-only.
     let listed = state.list();
@@ -1062,6 +1095,10 @@ fn attach_to_ended_replay_only_flushes_on_disk_journal_to_notifier() {
                 "id": "req-replay-1",
                 "type": "result",
             }),
+            json!({
+                "id": "req-replay-1",
+                "type": "end",
+            }),
         ],
     );
     let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
@@ -1077,7 +1114,7 @@ fn attach_to_ended_replay_only_flushes_on_disk_journal_to_notifier() {
         )
         .unwrap();
     let _ = wait_for(&original, |events| {
-        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+        events.iter().any(|(_, p)| p["event"]["type"] == "end")
     });
 
     // Now attach with a fresh notifier — the session is in the
@@ -1093,15 +1130,16 @@ fn attach_to_ended_replay_only_flushes_on_disk_journal_to_notifier() {
         )
         .unwrap();
     assert!(result.found);
-    assert_eq!(result.replayed_count, 3, "all 3 events should replay");
-    assert_eq!(result.last_seq, 3);
+    assert_eq!(result.replayed_count, 4, "all 4 events should replay");
+    assert_eq!(result.last_seq, 4);
     assert_eq!(result.replay_gap, None);
 
     let captured = replay.captured.lock().unwrap();
-    assert_eq!(captured.len(), 3);
+    assert_eq!(captured.len(), 4);
     assert_eq!(captured[0].1["event"]["delta"], "snapshot-1");
     assert_eq!(captured[1].1["event"]["delta"], "snapshot-2");
     assert_eq!(captured[2].1["event"]["type"], "result");
+    assert_eq!(captured[3].1["event"]["type"], "end");
 }
 
 #[test]
@@ -1114,6 +1152,7 @@ fn attach_to_ended_replay_only_honors_since_seq_cursor() {
             json!({ "id": "req-since-1", "type": "assistant", "delta": "one" }),
             json!({ "id": "req-since-1", "type": "assistant", "delta": "two" }),
             json!({ "id": "req-since-1", "type": "result" }),
+            json!({ "id": "req-since-1", "type": "end" }),
         ],
     );
     let state = RemoteAgentState::new(Arc::new(spawner)).with_journal_dir(dir.path().to_path_buf());
@@ -1129,7 +1168,7 @@ fn attach_to_ended_replay_only_honors_since_seq_cursor() {
         )
         .unwrap();
     let _ = wait_for(&original, |events| {
-        events.iter().any(|(_, p)| p["event"]["type"] == "result")
+        events.iter().any(|(_, p)| p["event"]["type"] == "end")
     });
 
     let replay = Arc::new(CapturingNotifier::default());
@@ -1143,11 +1182,13 @@ fn attach_to_ended_replay_only_honors_since_seq_cursor() {
         )
         .unwrap();
     assert!(result.found);
-    assert_eq!(result.replayed_count, 1);
+    assert_eq!(result.replayed_count, 2);
     let captured = replay.captured.lock().unwrap();
-    assert_eq!(captured.len(), 1);
+    assert_eq!(captured.len(), 2);
     assert_eq!(captured[0].1["event"]["type"], "result");
     assert_eq!(captured[0].1["seq"], 3);
+    assert_eq!(captured[1].1["event"]["type"], "end");
+    assert_eq!(captured[1].1["seq"], 4);
 }
 
 #[test]

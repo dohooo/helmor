@@ -914,6 +914,53 @@ export const WorkspaceComposerContainer = memo(
 			workingDirectory,
 		]);
 
+		// Debug-only test hook: exposes the currently-mounted composer's
+		// submit handler on `window.__helmorTest` so an external driver
+		// (helmor-taper's recorder, e2e tests, the dev-tools console)
+		// can fire a chat send through the EXACT code path the Send
+		// button uses — including the codex `/goal` interception, the
+		// model/permission/effort/fast-mode capture, and the streaming
+		// hook subscription.
+		//
+		// Why we need this: Lexical's input pipeline doesn't accept
+		// synthetic DOM events (no keystroke replay, no paste-event
+		// shim) and `setEditorState` doesn't update the React send-
+		// value. The choice is either solve that (hostile) or hand a
+		// surface like this to the driver. This is what every other
+		// frontend with an end-to-end recorder does — and we gate it on
+		// `import.meta.env.DEV` so the production bundle never even
+		// mentions `__helmorTest`.
+		useEffect(() => {
+			if (!import.meta.env.DEV) return;
+			if (!displayedSessionId) return;
+			const handler = (prompt: string): Promise<void> => {
+				if (typeof prompt !== "string" || !prompt.trim()) {
+					return Promise.reject(
+						new Error(
+							"__helmorTest.sendPrompt: prompt must be a non-empty string",
+						),
+					);
+				}
+				handleComposerSubmit(prompt, [], [], []);
+				return Promise.resolve();
+			};
+			type TestHook = {
+				sendPrompt?: (p: string) => Promise<void>;
+				sessionId?: string;
+			};
+			const w = globalThis as unknown as { __helmorTest?: TestHook };
+			const bag: TestHook = w.__helmorTest ?? {};
+			w.__helmorTest = bag;
+			bag.sendPrompt = handler;
+			bag.sessionId = displayedSessionId;
+			return () => {
+				if (bag.sendPrompt === handler) {
+					bag.sendPrompt = undefined;
+					bag.sessionId = undefined;
+				}
+			};
+		}, [displayedSessionId, handleComposerSubmit]);
+
 		const handleSelectModelInner = useCallback(
 			(modelId: string) => {
 				void handleModelSelect(modelId);

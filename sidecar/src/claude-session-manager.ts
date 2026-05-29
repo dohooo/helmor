@@ -636,13 +636,69 @@ export class ClaudeSessionManager implements SessionManager {
 		});
 
 		try {
+			// Custom-provider rescue path: the upstream Claude SDK only
+			// closes its iterator when it sees a `type: "result"` message.
+			// Some Anthropic-compatible shims (LM Studio, llama.cpp's
+			// `--api-server`, several hosted gateways) emit the final
+			// assistant message correctly but skip the SDK's terminal
+			// `result` event. The SDK's iterator then hangs forever, the
+			// desktop's 45 s heartbeat watchdog fires, and the assistant
+			// message never persists — even though the model said exactly
+			// what was requested.
+			//
+			// The rescue: after the first assistant message lands, arm
+			// an idle-timeout. Every subsequent event (any type) RE-ARMS
+			// the timer — so a tool-use round-trip or a slow follow-up
+			// chunk keeps the loop alive. When the stream truly goes
+			// silent past the timeout, we synthesise `emitter.end` and
+			// close the iterator. The desktop sees the same observable
+			// end-of-turn it gets from a real Anthropic backend.
+			//
+			// 8 s is conservative: long enough that an Anthropic endpoint
+			// mid-think pause never trips it, short enough to recover
+			// well before the 45 s heartbeat watchdog.
+			const RESCUE_IDLE_MS = 8000;
+			let rescueTimer: ReturnType<typeof setTimeout> | null = null;
+			let rescueArmed = false;
+			let rescueFired = false;
+			const armOrRearmRescue = () => {
+				if (rescueFired) return;
+				if (rescueTimer) clearTimeout(rescueTimer);
+				rescueTimer = setTimeout(() => {
+					rescueTimer = null;
+					rescueFired = true;
+					logger.info(
+						`[${requestId}] terminal-result rescue: SDK iterator idle for ${RESCUE_IDLE_MS} ms after assistant message; synthesising end (backend likely skipped the 'result' event)`,
+					);
+					emitter.end(requestId);
+					try {
+						q.close();
+					} catch {
+						// `q.close()` errors are surfaced by the finally
+						// block — don't double-log here.
+					}
+				}, RESCUE_IDLE_MS);
+			};
+			const clearRescue = () => {
+				if (rescueTimer) {
+					clearTimeout(rescueTimer);
+					rescueTimer = null;
+				}
+			};
 			for await (const message of q) {
 				logger.sdkEvent(requestId, message);
 				const passthroughMessage = stripUserInputToolUseFromAssistant(message);
 				if (passthroughMessage) {
 					emitter.passthrough(requestId, passthroughMessage);
 				}
+				if (rescueFired) {
+					// Loop is being torn down by the rescue — drop any
+					// trailing events the SDK queued before `q.close()`
+					// took effect, don't double-emit.
+					continue;
+				}
 				if (isTerminalResult(message)) {
+					clearRescue();
 					// Terminal result (success OR error) — both shapes carry
 					// `usage`/`modelUsage`, so both should update the ring.
 					// Bail on the first one we see; any steer() still in its
@@ -659,7 +715,17 @@ export class ClaudeSessionManager implements SessionManager {
 					emitter.end(requestId);
 					return;
 				}
+				// Arm the rescue once we've seen at least one assistant
+				// message, then re-arm it on every subsequent event so a
+				// tool-use round-trip extends the idle window.
+				if (!rescueArmed && message.type === "assistant") {
+					rescueArmed = true;
+				}
+				if (rescueArmed) {
+					armOrRearmRescue();
+				}
 			}
+			clearRescue();
 			emitter.end(requestId);
 		} catch (err) {
 			if (isAbortError(err)) {
