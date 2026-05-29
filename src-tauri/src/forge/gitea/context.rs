@@ -9,7 +9,7 @@ pub(super) struct GiteaContext {
     pub(super) remote: ParsedRemote,
     pub(super) branch: String,
     pub(super) published: bool,
-    pub(super) login: String,
+    pub(super) login_name: String,
 }
 
 pub(super) enum GiteaResolution {
@@ -54,12 +54,15 @@ pub(super) fn load_gitea_context(workspace_id: &str) -> Result<GiteaResolution> 
     else {
         return Ok(GiteaResolution::Unauthenticated);
     };
+    let Some(login_name) = super::accounts::resolve_login_name(Some(&remote.host), &login)? else {
+        return Ok(GiteaResolution::Unauthenticated);
+    };
 
     let (branch, published) = forge_head_branch_for(&record, &branch);
     Ok(GiteaResolution::Ready(GiteaContext {
         remote,
         branch,
         published,
-        login,
+        login_name,
     }))
 }

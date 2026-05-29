@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
+use super::accounts::resolve_login_name;
 use super::api::{command_detail, encode_query_value, looks_like_auth_error, tea_api};
 use super::types::{GiteaIssue, GiteaLabel, GiteaPullRequest};
 use crate::forge::inbox::{
@@ -21,20 +22,21 @@ struct GiteaCursor {
 
 pub fn list_inbox_items(
     login: &str,
-    _host: Option<&str>,
+    host: Option<&str>,
     toggles: InboxToggles,
     cursor: Option<&str>,
     limit: usize,
     repo_filter: Option<&str>,
     filters: Option<InboxFilters>,
 ) -> Result<InboxPage> {
+    let login_name = gitea_login_name(host, login)?;
     let state = decode_cursor(cursor)?;
     let page = state.page.max(1);
     if toggles.issues {
-        return fetch_issues(login, page, limit, repo_filter, filters);
+        return fetch_issues(&login_name, page, limit, repo_filter, filters);
     }
     if toggles.prs {
-        return fetch_prs(login, page, limit, repo_filter, filters);
+        return fetch_prs(&login_name, page, limit, repo_filter, filters);
     }
     Ok(InboxPage {
         items: Vec::new(),
@@ -44,16 +46,17 @@ pub fn list_inbox_items(
 
 pub fn get_inbox_item_detail(
     login: &str,
-    _host: Option<&str>,
+    host: Option<&str>,
     source: InboxSource,
     external_id: &str,
 ) -> Result<Option<InboxItemDetail>> {
+    let login_name = gitea_login_name(host, login)?;
     let (repo, number) = parse_repo_number(external_id)?;
     let (owner, name) = split_repo(&repo)?;
     match source {
         InboxSource::GiteaIssue => {
             let path = format!("/repos/{owner}/{name}/issues/{number}");
-            let output = tea_api(login, [path.as_str()])?;
+            let output = tea_api(&login_name, [path.as_str()])?;
             if !output.success {
                 return Ok(None);
             }
@@ -75,7 +78,7 @@ pub fn get_inbox_item_detail(
         }
         InboxSource::GiteaPr => {
             let path = format!("/repos/{owner}/{name}/pulls/{number}");
-            let output = tea_api(login, [path.as_str()])?;
+            let output = tea_api(&login_name, [path.as_str()])?;
             if !output.success {
                 return Ok(None);
             }
@@ -107,7 +110,7 @@ pub fn list_repo_labels(
     login: &str,
     repos: &[String],
 ) -> Result<Vec<ForgeLabelOption>> {
-    let _ = host;
+    let login_name = gitea_login_name(Some(host), login)?;
     let mut out = std::collections::BTreeMap::<String, ForgeLabelOption>::new();
     for repo in repos {
         let (owner, name) = match split_repo(repo) {
@@ -115,7 +118,7 @@ pub fn list_repo_labels(
             Err(_) => continue,
         };
         let path = format!("/repos/{owner}/{name}/labels");
-        let output = tea_api(login, [path.as_str()])?;
+        let output = tea_api(&login_name, [path.as_str()])?;
         if !output.success {
             continue;
         }
@@ -353,6 +356,15 @@ fn split_repo(repo: &str) -> Result<(String, String)> {
         .split_once('/')
         .ok_or_else(|| anyhow!("Invalid Gitea repo slug: {repo}"))?;
     Ok((owner.to_string(), name.to_string()))
+}
+
+fn gitea_login_name(host: Option<&str>, login: &str) -> Result<String> {
+    resolve_login_name(host, login)?.ok_or_else(|| {
+        anyhow!(
+            "No Gitea login found for {}",
+            host.unwrap_or("configured host")
+        )
+    })
 }
 
 fn parse_repo_number(external_id: &str) -> Result<(String, i64)> {

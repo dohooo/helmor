@@ -100,8 +100,11 @@ impl ForgeAccountBackend for GiteaAccountBackend {
         })
     }
 
-    fn run_cli(&self, _host: &str, login: &str, args: &[&str]) -> Result<CommandOutput> {
-        let mut full_args = vec!["--login", login];
+    fn run_cli(&self, host: &str, login: &str, args: &[&str]) -> Result<CommandOutput> {
+        let Some(login_name) = resolve_login_name(Some(host), login)? else {
+            return Err(anyhow!("No Gitea login for {host} / {login}"));
+        };
+        let mut full_args = vec!["--login", login_name.as_str()];
         full_args.extend_from_slice(args);
         run_tea(full_args)
     }
@@ -138,13 +141,23 @@ fn host_from_url(url: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Missing host in Gitea login URL: {url}"))
 }
 
-fn find_login_name(host: &str, login: &str) -> Result<Option<String>> {
+pub(super) fn resolve_login_name(host: Option<&str>, login: &str) -> Result<Option<String>> {
     for row in list_gitea_logins_full()? {
-        if host_from_url(&row.url).ok().as_deref() == Some(host) && row.user == login {
+        let host_matches = match host {
+            Some(host) => host_from_url(&row.url)
+                .ok()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(host)),
+            None => true,
+        };
+        if host_matches && row.user == login {
             return Ok(Some(row.name));
         }
     }
     Ok(None)
+}
+
+fn find_login_name(host: &str, login: &str) -> Result<Option<String>> {
+    resolve_login_name(Some(host), login)
 }
 
 pub(crate) fn invalidate_caches_for_host(_host: &str) {}

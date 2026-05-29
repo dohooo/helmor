@@ -104,7 +104,7 @@ pub(super) fn merge_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequ
         context.remote.namespace, context.remote.repo, pr.number
     );
     let output = tea_api(
-        &context.login,
+        &context.login_name,
         ["-X", "POST", "-f", "do=merge", path.as_str()],
     )?;
     if !output.success {
@@ -125,7 +125,7 @@ pub(super) fn close_workspace_pr(workspace_id: &str) -> Result<Option<ChangeRequ
         context.remote.namespace, context.remote.repo, pr.number
     );
     let output = tea_api(
-        &context.login,
+        &context.login_name,
         ["-X", "PATCH", "-f", "state=closed", path.as_str()],
     )?;
     if !output.success {
@@ -146,7 +146,7 @@ fn find_workspace_pr(context: &GiteaContext) -> Result<Option<GiteaPullRequest>>
         "/repos/{}/{}/pulls?state=all&limit=50",
         context.remote.namespace, context.remote.repo
     );
-    let output = tea_api(&context.login, [path.as_str()])?;
+    let output = tea_api(&context.login_name, [path.as_str()])?;
     if !output.success {
         let detail = command_detail(&output);
         if looks_like_auth_error(&detail) {
@@ -170,7 +170,7 @@ fn fetch_pr_mergeability(
         "/repos/{}/{}/pulls/{}",
         context.remote.namespace, context.remote.repo, number
     );
-    let output = tea_api(&context.login, [path.as_str()])?;
+    let output = tea_api(&context.login_name, [path.as_str()])?;
     if !output.success {
         bail!("Gitea PR detail lookup failed: {}", command_detail(&output));
     }
@@ -185,7 +185,7 @@ fn load_checks(context: &GiteaContext, pr: &GiteaPullRequest) -> Result<Vec<Forg
             "/repos/{}/{}/actions/runs?head_sha={}&limit=20",
             context.remote.namespace, context.remote.repo, sha
         );
-        let runs_output = tea_api(&context.login, [runs_path.as_str()])?;
+        let runs_output = tea_api(&context.login_name, [runs_path.as_str()])?;
         if runs_output.success {
             let runs = serde_json::from_str::<GiteaWorkflowRunsResponse>(&runs_output.stdout)
                 .context("Failed to decode Gitea workflow runs")?;
@@ -210,7 +210,7 @@ fn load_checks(context: &GiteaContext, pr: &GiteaPullRequest) -> Result<Vec<Forg
             "/repos/{}/{}/commits/{}/status",
             context.remote.namespace, context.remote.repo, sha
         );
-        let status_output = tea_api(&context.login, [status_path.as_str()])?;
+        let status_output = tea_api(&context.login_name, [status_path.as_str()])?;
         if status_output.success {
             let combined = serde_json::from_str::<GiteaCombinedStatus>(&status_output.stdout)
                 .context("Failed to decode Gitea combined status")?;

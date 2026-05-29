@@ -22,29 +22,39 @@ pub(crate) fn forge_cli_auth_command(
     Ok(match provider {
         ForgeProvider::Github => format!("{} auth login", bundled_program_token("gh")?),
         ForgeProvider::Gitlab => {
-            let host = host.unwrap_or("gitlab.com");
-            // Reject obviously broken hostnames before they reach AppleScript:
-            // a newline would let the user inject extra `do script` commands.
-            if host.contains(['\n', '\r']) {
-                bail!("Invalid hostname (contains newline): {host:?}");
-            }
+            let host = validate_shell_host(host.unwrap_or("gitlab.com"))?;
             format!(
-                "{} auth login --hostname {host}",
-                bundled_program_token("glab")?
+                "{} auth login --hostname {}",
+                bundled_program_token("glab")?,
+                shell_single_quote(host)
             )
         }
         ForgeProvider::Gitea => {
-            let host = host.unwrap_or("gitea.com");
-            if host.contains(['\n', '\r']) {
-                bail!("Invalid hostname (contains newline): {host:?}");
-            }
+            let host = validate_shell_host(host.unwrap_or("gitea.com"))?;
+            let login_name = format!("helmor-{host}");
             format!(
-                "{} login add --name helmor-{host} --url https://{host}",
-                bundled_program_token("tea")?
+                "{} login add --name {} --url {}",
+                bundled_program_token("tea")?,
+                shell_single_quote(&login_name),
+                shell_single_quote(&format!("https://{host}"))
             )
         }
         ForgeProvider::Unknown => bail!("Unknown forge provider."),
     })
+}
+
+fn validate_shell_host(host: &str) -> Result<&str> {
+    let host = host.trim();
+    if host.is_empty() {
+        bail!("Invalid hostname (empty)");
+    }
+    if !host
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':'))
+    {
+        bail!("Invalid hostname: {host:?}");
+    }
+    Ok(host)
 }
 
 /// Absolute bundled path (shell-quoted). In release builds, missing the
@@ -122,5 +132,14 @@ mod tests {
             "'/Apps/Tom'\\''s Stuff/Helmor.app/Contents/Resources/vendor/gh/gh'"
         );
         assert_eq!(shell_single_quote("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn validate_shell_host_rejects_shell_metacharacters() {
+        assert!(validate_shell_host("gitea.example.com").is_ok());
+        assert!(validate_shell_host("gitea.example.com:3000").is_ok());
+        assert!(validate_shell_host("gitea.example.com;open -a Calculator").is_err());
+        assert!(validate_shell_host("gitea.example.com && whoami").is_err());
+        assert!(validate_shell_host("").is_err());
     }
 }
