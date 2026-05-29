@@ -339,6 +339,42 @@ describe("useWorkspacesSidebarController archive flow", () => {
 		expect(pushWorkspaceToast).not.toHaveBeenCalled();
 	});
 
+	it("advances to the neighbour even when onOpenNewWorkspace is provided", async () => {
+		// Regression guard: production always passes onOpenNewWorkspace, so an
+		// archive that has a sibling must still advance to it rather than jump
+		// to the start page.
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const onSelectWorkspace = vi.fn();
+		const onOpenNewWorkspace = vi.fn();
+		const pushWorkspaceToast = vi.fn();
+
+		const { result } = renderHook(
+			() =>
+				useWorkspacesSidebarController({
+					selectedWorkspaceId: "ws-1",
+					onSelectWorkspace,
+					onOpenNewWorkspace,
+					pushWorkspaceToast,
+				}),
+			{ wrapper: createWrapper(queryClient) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.groups[0]?.rows).toHaveLength(2);
+		});
+
+		act(() => {
+			result.current.handleArchiveWorkspace("ws-1");
+		});
+
+		await waitFor(() => {
+			expect(onSelectWorkspace).toHaveBeenCalledWith("ws-2");
+		});
+		expect(onOpenNewWorkspace).not.toHaveBeenCalled();
+	});
+
 	it("consecutive archives advance to the next sidebar row instead of jumping to archived", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

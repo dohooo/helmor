@@ -1514,20 +1514,23 @@ export function useWorkspacesSidebarController({
 				const shouldNavigate =
 					!selectedWorkspaceId || selectedWorkspaceId === workspaceId;
 				if (shouldNavigate) {
-					if (onOpenNewWorkspace) {
+					// Advance to the neighbour in the same group (then next group,
+					// then archived) — same as delete. Only fall back to the start
+					// page when nothing is left to select.
+					const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
+						currentGroups: groups,
+						currentArchivedRows: archivedRows,
+						nextGroups: optimisticVisual.groups,
+						nextArchivedRows: optimisticVisual.archivedRows,
+						removedWorkspaceId: workspaceId,
+					});
+					if (nextWorkspaceId) {
+						prefetchWorkspace(nextWorkspaceId);
+						onSelectWorkspace(nextWorkspaceId);
+					} else if (onOpenNewWorkspace) {
 						onOpenNewWorkspace();
 					} else {
-						const nextWorkspaceId = findReplacementWorkspaceIdAfterRemoval({
-							currentGroups: groups,
-							currentArchivedRows: archivedRows,
-							nextGroups: optimisticVisual.groups,
-							nextArchivedRows: optimisticVisual.archivedRows,
-							removedWorkspaceId: workspaceId,
-						});
-						if (nextWorkspaceId) {
-							prefetchWorkspace(nextWorkspaceId);
-						}
-						onSelectWorkspace(nextWorkspaceId);
+						onSelectWorkspace(null);
 					}
 				}
 
