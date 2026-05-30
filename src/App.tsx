@@ -67,6 +67,7 @@ import {
 } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
+	closeMainWindow,
 	createSession,
 	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
@@ -113,7 +114,7 @@ import {
 } from "./lib/settings";
 import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { summaryToArchivedRow } from "./lib/workspace-helpers";
+import { isNewSession, summaryToArchivedRow } from "./lib/workspace-helpers";
 import {
 	type WorkspaceToastOptions,
 	WorkspaceToastProvider,
@@ -1070,6 +1071,14 @@ function AppShell({
 		const { workspaceId, sessionId, workspace, sessions, session } =
 			currentSession;
 
+		// Closing the last tab: if it's already an empty/untitled session,
+		// close (hide) the window. Otherwise fall through to the normal close,
+		// which hides this session and spawns a fresh untitled one in its place.
+		if (sessions.length === 1 && isNewSession(session)) {
+			await closeMainWindow();
+			return;
+		}
+
 		await requestCloseSession({
 			workspace,
 			sessions,
@@ -1299,6 +1308,10 @@ function AppShell({
 			{
 				id: "session.reopenClosed" as const,
 				callback: () => void handleReopenClosedSession(),
+			},
+			{
+				id: "window.close" as const,
+				callback: () => void closeMainWindow(),
 			},
 			{
 				id: "script.run" as const,

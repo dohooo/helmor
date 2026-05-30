@@ -137,6 +137,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: vi.fn(() => ({
 		onCloseRequested: vi.fn(async () => () => {}),
 		setBadgeCount: vi.fn(async () => {}),
+		close: vi.fn(async () => {}),
 	})),
 }));
 
