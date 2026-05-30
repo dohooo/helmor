@@ -81,6 +81,25 @@ function repoFilterLabel(
 	return `${selectedRepoIds.length} selected`;
 }
 
+function repoCommandValue(repo: RepositoryCreateOption) {
+	return [repo.name, repo.rootPath, repo.id].filter(Boolean).join(" ");
+}
+
+function hasDuplicateRepoName(
+	repositories: RepositoryCreateOption[],
+	repo: RepositoryCreateOption,
+) {
+	const repoName = repo.name.trim().toLocaleLowerCase();
+	return (
+		repoName.length > 0 &&
+		repositories.some(
+			(other) =>
+				other.id !== repo.id &&
+				other.name.trim().toLocaleLowerCase() === repoName,
+		)
+	);
+}
+
 function SidebarRepoFilterPicker({
 	repositories,
 	selectedRepoIds,
@@ -88,9 +107,19 @@ function SidebarRepoFilterPicker({
 }: SidebarRepoFilterPickerProps) {
 	const sortedRepositories = useMemo(
 		() =>
-			[...repositories].sort((left, right) =>
-				left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
-			),
+			[...repositories].sort((left, right) => {
+				const byName = left.name.localeCompare(right.name, undefined, {
+					sensitivity: "base",
+				});
+				if (byName !== 0) return byName;
+				const byRootPath = (left.rootPath ?? "").localeCompare(
+					right.rootPath ?? "",
+					undefined,
+					{ sensitivity: "base" },
+				);
+				if (byRootPath !== 0) return byRootPath;
+				return left.id.localeCompare(right.id);
+			}),
 		[repositories],
 	);
 	const selectedRepoIdSet = useMemo(
@@ -143,10 +172,13 @@ function SidebarRepoFilterPicker({
 					</CommandItem>
 					{sortedRepositories.map((repo) => {
 						const checked = selectedRepoIdSet.has(repo.id);
+						const showRootPath = Boolean(
+							repo.rootPath && hasDuplicateRepoName(sortedRepositories, repo),
+						);
 						return (
 							<CommandItem
 								key={repo.id}
-								value={repo.name}
+								value={repoCommandValue(repo)}
 								data-checked={checked}
 								onSelect={() => toggleRepository(repo.id)}
 							>
@@ -156,7 +188,14 @@ function SidebarRepoFilterPicker({
 									repoName={repo.name}
 									title={repo.name}
 								/>
-								<span className="truncate">{repo.name}</span>
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate">{repo.name}</span>
+									{showRootPath ? (
+										<span className="break-all text-[11px] leading-4 text-muted-foreground">
+											{repo.rootPath}
+										</span>
+									) : null}
+								</span>
 							</CommandItem>
 						);
 					})}
