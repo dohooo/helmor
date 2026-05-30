@@ -127,8 +127,30 @@ fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
     }
 }
 
+/// The triage fetch path is opt-in. Pure predicate so it is unit-testable
+/// without standing up the scheduler thread.
+pub(crate) fn should_fetch(cfg: &crate::triage::TriageConfig) -> bool {
+    cfg.enabled
+}
+
 /// Run every registered fetcher once. Logs per-provider summary.
+///
+/// Opt-in gate: when Smart triage is disabled, skip the ENTIRE fetch path
+/// (all of GitHub/GitLab/Slack/Lark) so users who never enabled triage incur
+/// zero background fetch traffic. Gated on `enabled` (not `auto_run`) so a
+/// manual "Run now" still finds a warm queue.
 pub fn run_once() {
+    match crate::triage::load_config() {
+        Ok(cfg) if should_fetch(&cfg) => {}
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "triage fetcher: load_config failed, skipping tick",
+            );
+            return;
+        }
+    }
     for fetcher in registered_fetchers() {
         let source = fetcher.source();
         health::record_attempt(source);
@@ -166,4 +188,18 @@ fn registered_fetchers() -> Vec<Box<dyn Fetcher>> {
         Box::new(im::ImFetcher(im::slack::SlackBackend)),
         Box::new(im::ImFetcher(im::lark::LarkBackend)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_fetch;
+    use crate::triage::TriageConfig;
+
+    #[test]
+    fn fetch_is_gated_on_enabled() {
+        let mut cfg = TriageConfig::default();
+        assert!(!should_fetch(&cfg), "default (disabled) must not fetch");
+        cfg.enabled = true;
+        assert!(should_fetch(&cfg), "enabled must fetch");
+    }
 }
