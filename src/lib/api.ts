@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
@@ -903,6 +904,14 @@ export type DevResetResult = {
 
 export async function requestQuit(force: boolean): Promise<void> {
 	return await invoke("request_quit", { force });
+}
+
+// Close (hide) the main window. Routes through the Rust `CloseRequested`
+// interceptor, which on macOS hides the window and keeps the app running in
+// the Dock (reopened by clicking the Dock icon). Used by Cmd+W on the last
+// tab and by Cmd+Shift+W.
+export async function closeMainWindow(): Promise<void> {
+	await getCurrentWindow().close();
 }
 
 export async function devResetAllData(): Promise<DevResetResult> {

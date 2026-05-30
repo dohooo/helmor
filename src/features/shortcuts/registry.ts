@@ -79,6 +79,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "window.close",
+		title: "Close window",
+		group: "System",
+		defaultHotkey: "Mod+Shift+W",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "workspace.copyPath",
 		title: "Copy workspace path",
 		group: "Workspace",
