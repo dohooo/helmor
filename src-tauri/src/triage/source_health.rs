@@ -9,6 +9,7 @@ use tokio::time::timeout;
 
 use crate::models::repos;
 use crate::models::slack_workspaces;
+use crate::triage::fetcher::health::FetchHealth;
 
 const LARK_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -22,6 +23,8 @@ pub enum SourceHealthState {
     NotAuthed,
     /// Auth OK but no repos/workspaces to fetch from.
     NotConfigured,
+    /// Auth OK but the most recent fetch failed or returned partial data.
+    Degraded,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +108,17 @@ async fn detect_lark() -> SourceHealth {
 
 fn detect_slack() -> SourceHealth {
     let workspaces = slack_workspaces::list_workspaces().unwrap_or_default();
-    if workspaces.is_empty() {
+    resolve_slack_health(
+        workspaces.len(),
+        crate::triage::fetcher::health::get("slack"),
+    )
+}
+
+/// Pure core: combine the static "is a workspace connected" signal with
+/// the runtime fetch-health overlay. Split out so it's unit-testable
+/// without touching the process-global health store.
+fn resolve_slack_health(n_workspaces: usize, health: Option<FetchHealth>) -> SourceHealth {
+    if n_workspaces == 0 {
         return SourceHealth {
             source: "slack",
             display_name: "Slack",
@@ -113,12 +126,47 @@ fn detect_slack() -> SourceHealth {
             detail: "No workspace connected".into(),
         };
     }
-    let n = workspaces.len();
+    // A hard failure on the most recent tick, or a partial degradation,
+    // overrides the otherwise-green "watching" status so the user sees it
+    // instead of the panel silently claiming everything is fine.
+    if let Some(h) = health {
+        if let Some(error) = h.last_error.as_deref() {
+            return SourceHealth {
+                source: "slack",
+                display_name: "Slack",
+                state: SourceHealthState::Degraded,
+                detail: format!("Last fetch failed: {}", short_reason(error)),
+            };
+        }
+        if let Some(degraded) = h.last_degraded.as_deref() {
+            return SourceHealth {
+                source: "slack",
+                display_name: "Slack",
+                state: SourceHealthState::Degraded,
+                detail: short_reason(degraded),
+            };
+        }
+    }
+    let n = n_workspaces;
     SourceHealth {
         source: "slack",
         display_name: "Slack",
         state: SourceHealthState::Ok,
         detail: format!("Watching {n} workspace{}", if n == 1 { "" } else { "s" }),
+    }
+}
+
+/// First line, trimmed and capped, so a multi-line anyhow chain stays a
+/// single readable row in the panel.
+fn short_reason(reason: &str) -> String {
+    let line = reason.lines().next().unwrap_or(reason).trim();
+    const MAX: usize = 140;
+    if line.chars().count() <= MAX {
+        line.to_string()
+    } else {
+        let mut out: String = line.chars().take(MAX).collect();
+        out.push('…');
+        out
     }
 }
 
@@ -161,5 +209,58 @@ fn detect_forge(source: &'static str, display_name: &'static str, auth_hint: &st
         display_name,
         state: SourceHealthState::Ok,
         detail: format!("Watching {n} repo{}", if n == 1 { "" } else { "s" }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_workspace_is_not_authed() {
+        let h = resolve_slack_health(0, None);
+        assert_eq!(h.state, SourceHealthState::NotAuthed);
+    }
+
+    #[test]
+    fn healthy_workspace_is_ok() {
+        let h = resolve_slack_health(2, None);
+        assert_eq!(h.state, SourceHealthState::Ok);
+        assert!(h.detail.contains("2 workspaces"));
+    }
+
+    #[test]
+    fn last_error_surfaces_as_degraded_single_line() {
+        let health = FetchHealth {
+            last_error: Some(
+                "users.conversations failed: connection refused\ntrailing noise".into(),
+            ),
+            ..Default::default()
+        };
+        let h = resolve_slack_health(1, Some(health));
+        assert_eq!(h.state, SourceHealthState::Degraded);
+        assert!(h.detail.starts_with("Last fetch failed:"));
+        assert!(!h.detail.contains('\n'));
+    }
+
+    #[test]
+    fn partial_degradation_surfaces_as_degraded() {
+        let health = FetchHealth {
+            last_degraded: Some("channel discovery degraded (mention: 503)".into()),
+            ..Default::default()
+        };
+        let h = resolve_slack_health(1, Some(health));
+        assert_eq!(h.state, SourceHealthState::Degraded);
+    }
+
+    #[test]
+    fn hard_error_takes_precedence_over_partial_degradation() {
+        let health = FetchHealth {
+            last_error: Some("boom".into()),
+            last_degraded: Some("partial".into()),
+            ..Default::default()
+        };
+        let h = resolve_slack_health(1, Some(health));
+        assert!(h.detail.starts_with("Last fetch failed:"));
     }
 }

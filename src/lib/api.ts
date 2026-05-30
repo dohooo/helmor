@@ -2023,7 +2023,8 @@ export type TriageSourceHealthState =
 	| "ok"
 	| "notInstalled"
 	| "notAuthed"
-	| "notConfigured";
+	| "notConfigured"
+	| "degraded";
 
 export type TriageSourceHealth = {
 	source: string;

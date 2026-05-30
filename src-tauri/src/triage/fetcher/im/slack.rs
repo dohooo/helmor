@@ -1,16 +1,15 @@
 //! Slack ImBackend. DMs/MPIMs unconditional; channels only when the user
 //! posted (`from:<@me>`) or was @ed (`<@me>`) within `COLD_START_DAYS`.
 
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
 
 use crate::models::slack_workspaces;
 use crate::slack::api::{self, ConversationRow, RawFile, RawMessage};
 use crate::slack::credentials::{self, SlackCreds};
 use crate::slack::files as slack_files;
+use crate::slack::relevance;
 use crate::slack::types::SlackWorkspace;
 use crate::triage::attachments;
 
@@ -43,29 +42,75 @@ impl ImBackend for SlackBackend {
                 None => continue,
             };
 
-            // Channel involvement signal (sent or @ed). Search failures degrade silently; DMs still flow.
-            let involved_channels = collect_involved_channels(ws, &creds);
-
-            let mut rows = match api::users_conversations(
+            // Channels I was @ed in or posted in. Auth failure → skip this
+            // workspace (token is invalid). A transient search failure →
+            // degraded (DMs below still flow), never silently swallowed.
+            let involved = match relevance::involved_channels(
                 &creds,
-                "im,mpim,public_channel,private_channel",
-                500,
+                &ws.my_user_id,
+                super::COLD_START_DAYS,
             ) {
-                Ok(r) => r,
+                Ok(outcome) => outcome,
                 Err(error) => {
                     tracing::warn!(
                         team_id = %ws.team_id,
                         error = %format!("{error:#}"),
-                        "slack backend: users.conversations failed",
+                        "slack backend: auth failure, skipping workspace",
+                    );
+                    crate::triage::fetcher::health::record_degraded(
+                        SOURCE,
+                        format!("auth failure: {error:#}"),
                     );
                     continue;
                 }
             };
+            if let Some(reason) = &involved.degraded {
+                tracing::warn!(
+                    team_id = %ws.team_id,
+                    reason = %reason,
+                    "slack backend: channel discovery degraded",
+                );
+                crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
+            }
+
+            // Every conversation I'm a member of. A transient failure here
+            // used to skip the whole workspace silently; now it surfaces as
+            // degraded health and the tick processes whatever came back.
+            // Auth failure → skip this workspace.
+            let members = match relevance::member_conversations(
+                &creds,
+                "im,mpim,public_channel,private_channel",
+                500,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    tracing::warn!(
+                        team_id = %ws.team_id,
+                        error = %format!("{error:#}"),
+                        "slack backend: auth failure, skipping workspace",
+                    );
+                    crate::triage::fetcher::health::record_degraded(
+                        SOURCE,
+                        format!("auth failure: {error:#}"),
+                    );
+                    continue;
+                }
+            };
+            if let Some(reason) = &members.degraded {
+                tracing::warn!(
+                    team_id = %ws.team_id,
+                    reason = %reason,
+                    "slack backend: conversation listing degraded",
+                );
+                crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
+            }
+
+            let mut rows = members.value;
             rows.retain(|c| {
                 if c.is_im || c.is_mpim {
                     true // DMs / group-DMs unconditional
                 } else {
-                    involved_channels.contains(&c.id)
+                    involved.value.contains(&c.id)
                 }
             });
             // DMs first; among channels the order doesn't really
@@ -178,38 +223,6 @@ fn stage_one(
         bytes,
         alt: file.title.clone().or_else(|| file.name.clone()),
     })
-}
-
-/// Two search.messages queries (mentions + from-me) → distinct channel ids.
-fn collect_involved_channels(ws: &SlackWorkspace, creds: &SlackCreds) -> BTreeSet<String> {
-    let after = (Utc::now() - Duration::days(super::COLD_START_DAYS))
-        .format("%Y-%m-%d")
-        .to_string();
-    let mention_query = format!("<@{my}> after:{after}", my = ws.my_user_id);
-    let sent_query = format!("from:<@{my}> after:{after}", my = ws.my_user_id);
-    let mut channels = BTreeSet::new();
-    for (label, q) in [("mention", mention_query), ("from-me", sent_query)] {
-        match api::search_messages(creds, &q, 1, api::SearchSort::Timestamp) {
-            Ok(page) => {
-                for hit in &page.matches {
-                    if let Some(ch) = hit.channel.as_ref() {
-                        if !ch.id.is_empty() {
-                            channels.insert(ch.id.clone());
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    team_id = %ws.team_id,
-                    kind = label,
-                    error = %format!("{error:#}"),
-                    "slack backend: search.messages failed; channels may be under-discovered",
-                );
-            }
-        }
-    }
-    channels
 }
 
 /// `ImConversation.id = <team_id>:<channel_id>`.

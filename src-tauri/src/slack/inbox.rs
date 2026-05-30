@@ -14,6 +14,7 @@ use anyhow::{bail, Result};
 
 use super::api::{self, ConversationRow, RawMessage, SearchMessagesPage, SearchSort, UserInfo};
 use super::credentials::{self, SlackCreds};
+use super::relevance;
 use super::types::{SlackInboxItem, SlackInboxItemKind, SlackInboxPage};
 
 const MAX_SNIPPET_CHARS: usize = 280;
@@ -38,15 +39,19 @@ pub fn list_inbox_items(
         .unwrap_or(1)
         .max(1);
 
-    // Mentions feed: `@<my_user_id>` is Slack's documented "mentions of
-    // me" query token. `from:me` would invert it. We deliberately don't
-    // request `has:reaction` etc. — keep the query minimal so Slack's
-    // search index responds fast.
-    let query = format!("<@{my_user_id}>");
+    // Mentions feed via the shared relevance layer (`@<my_user_id>` is
+    // Slack's documented "mentions of me" token). Auth failure propagates
+    // so the IPC layer can wipe the keychain + re-auth; a transient failure
+    // surfaces as an error here too, preserving the feed's "show an error,
+    // don't silently blank" behaviour.
+    let mentions = relevance::mentions(&creds, my_user_id, page, SearchSort::Timestamp)?;
+    if let Some(reason) = mentions.degraded {
+        bail!("{reason}");
+    }
     let SearchMessagesPage {
         matches,
         total_pages,
-    } = api::search_messages(&creds, &query, page, SearchSort::Timestamp)?;
+    } = mentions.value;
     let next_cursor = if page < total_pages {
         Some((page + 1).to_string())
     } else {
@@ -175,12 +180,12 @@ fn convert_search_match(
 /// is one connection, so this naturally stays under Slack's
 /// per-token burst threshold.
 fn unread_dm_snippets(team_id: &str, creds: &SlackCreds) -> Result<Vec<SlackInboxItem>> {
-    let dms = api::users_conversations_dms(creds)?;
+    // relevance::unread_dms already filters to unread_count_display > 0.
+    // Auth failure propagates; a transient failure degrades to an empty
+    // list (DM snippets are best-effort in the feed).
+    let dms = relevance::unread_dms(creds)?;
     let mut items = Vec::new();
-    for dm in dms {
-        if dm.unread_count_display == 0 {
-            continue;
-        }
+    for dm in dms.value {
         match snippet_for_dm(team_id, creds, &dm) {
             Ok(Some(item)) => items.push(item),
             Ok(None) => {}

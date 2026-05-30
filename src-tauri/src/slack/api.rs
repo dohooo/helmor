@@ -163,6 +163,49 @@ fn cookie_header(creds: &SlackCreds) -> String {
 /// `http_runtime()` above — see that function's doc for why we don't
 /// reuse Tauri's runtime.
 fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+    // Bounded retry for transient failures only: transport errors (DNS,
+    // connection-refused/reset, timeout) and HTTP 5xx. Auth errors, other
+    // 4xx, bad JSON and Slack `{ok:false}` codes are permanent and returned
+    // immediately. We don't yet honour Retry-After, so 429/`ratelimited`
+    // is treated as permanent rather than hammered.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match call_once(creds, method, params) {
+            Ok(value) => return Ok(value),
+            Err(CallError::Retryable(error)) if attempt < MAX_ATTEMPTS => {
+                let delay = Duration::from_millis(200 * 2u64.pow(attempt - 1));
+                tracing::debug!(
+                    method = %method,
+                    attempt,
+                    delay_ms = delay.as_millis() as u64,
+                    error = %format!("{error:#}"),
+                    "slack api: transient error, retrying",
+                );
+                std::thread::sleep(delay);
+            }
+            Err(CallError::Retryable(error) | CallError::Fatal(error)) => return Err(error),
+        }
+    }
+}
+
+/// Retry classification for [`call_once`]. The inner `anyhow::Error` is
+/// returned to the caller unchanged (so `SlackApiError` downcasts such as
+/// [`is_invalid_auth`] still work); the variant only decides whether
+/// [`call`] retries.
+enum CallError {
+    Retryable(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+/// One HTTP attempt. Urlencoded body + browser-shaped headers — see the
+/// module docs for why.
+fn call_once(
+    creds: &SlackCreds,
+    method: &str,
+    params: &[(&str, &str)],
+) -> std::result::Result<Value, CallError> {
     let url = format!("{SLACK_API_BASE}/{method}");
     let mut form: Vec<(&str, &str)> = Vec::with_capacity(params.len() + 1);
     form.push(("token", creds.xoxc.as_str()));
@@ -174,7 +217,7 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
     let client = client();
 
     let body: Value = http_runtime().block_on(async move {
-        let response = client
+        let response = match client
             .post(&url)
             .header("Cookie", cookie)
             // Origin pins the request to Slack's own SPA; without it
@@ -185,21 +228,32 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
             .form(&form)
             .send()
             .await
-            .with_context(|| format!("Failed to POST {method}"))?;
+        {
+            Ok(response) => response,
+            // Transport failure: exactly the transient class worth retrying.
+            Err(error) => {
+                return Err(CallError::Retryable(
+                    anyhow::Error::new(error).context(format!("Failed to POST {method}")),
+                ));
+            }
+        };
 
-        if !response.status().is_success() {
-            bail!(
-                "Slack API {} returned HTTP {}",
-                method,
-                response.status().as_u16()
-            );
+        let status = response.status();
+        if !status.is_success() {
+            let error = anyhow!("Slack API {method} returned HTTP {}", status.as_u16());
+            return if status.is_server_error() {
+                Err(CallError::Retryable(error))
+            } else {
+                Err(CallError::Fatal(error))
+            };
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .with_context(|| format!("Failed to decode JSON from {method}"))?;
-        Ok::<Value, anyhow::Error>(body)
+        match response.json::<Value>().await {
+            Ok(body) => Ok(body),
+            Err(error) => Err(CallError::Fatal(
+                anyhow::Error::new(error).context(format!("Failed to decode JSON from {method}")),
+            )),
+        }
     })?;
 
     let ok = body.get("ok").and_then(Value::as_bool).unwrap_or(false);
@@ -210,11 +264,13 @@ fn call(creds: &SlackCreds, method: &str, params: &[(&str, &str)]) -> Result<Val
             .unwrap_or("unknown")
             .to_string();
         tracing::warn!(method = %method, error = %error, "Slack API call failed");
-        return Err(SlackApiError {
-            method: method.to_string(),
-            error,
-        }
-        .into());
+        return Err(CallError::Fatal(
+            SlackApiError {
+                method: method.to_string(),
+                error,
+            }
+            .into(),
+        ));
     }
 
     Ok(body)

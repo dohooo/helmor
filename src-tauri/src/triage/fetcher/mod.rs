@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod github;
 pub mod gitlab;
+pub mod health;
 pub mod im;
 pub mod storage;
 
@@ -130,9 +131,11 @@ fn maybe_fire_triage_tick<R: TauriRuntime>(app: &AppHandle<R>) {
 pub fn run_once() {
     for fetcher in registered_fetchers() {
         let source = fetcher.source();
+        health::record_attempt(source);
         let started = Instant::now();
         match fetcher.fetch_once() {
             Ok(summary) => {
+                health::record_success(source, summary.source_parents_scanned);
                 tracing::info!(
                     source,
                     inserted = summary.inserted,
@@ -144,6 +147,7 @@ pub fn run_once() {
                 );
             }
             Err(error) => {
+                health::record_failure(source, format!("{error:#}"));
                 tracing::warn!(
                     source,
                     elapsed_ms = started.elapsed().as_millis() as u64,

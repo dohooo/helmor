@@ -29,4 +29,5 @@ pub mod desktop_scrape;
 pub mod detail;
 pub mod files;
 pub mod inbox;
+pub mod relevance;
 pub mod types;

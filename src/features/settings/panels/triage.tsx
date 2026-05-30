@@ -572,6 +572,12 @@ function stateBadge(state: TriageSourceHealthState): {
 				tone: "text-muted-foreground",
 				Icon: SettingsIcon,
 			};
+		case "degraded":
+			return {
+				label: "Attention",
+				tone: "text-amber-600 dark:text-amber-400",
+				Icon: AlertTriangle,
+			};
 		default:
 			return {
 				label: "Unknown",
