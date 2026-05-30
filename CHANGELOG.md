@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.28.1
+
+### Patch Changes
+
+- [#697](https://github.com/dohooo/helmor/pull/697) [`f3329ec`](https://github.com/dohooo/helmor/commit/f3329eceae1d2f56c7b108e9956bdd0a18d726a0) Thanks [@dohooo](https://github.com/dohooo)! - Make Smart triage reliably pick up Slack messages:
+  - Triage now retries transient Slack failures (DNS, connection, and 5xx errors) instead of dropping the whole fetch, so Slack channel mentions and DMs stop being silently missed.
+  - The Triage settings panel now flags a Slack source as needing attention (with the failure reason) when its background fetch is failing, instead of always showing it as connected.
+
 ## 0.28.0
 
 ### Minor Changes
