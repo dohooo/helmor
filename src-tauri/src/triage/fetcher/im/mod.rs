@@ -63,6 +63,14 @@ pub trait ImBackend: Send + Sync {
     fn render_message_block(&self, conv: &ImConversation, msg: &ImMessage) -> String {
         default_message_block(conv, msg)
     }
+
+    /// Trim the merged window to the byte/message/time budget. Default is
+    /// oldest-first (time floor → message cap → byte cap). Backends that must
+    /// protect specific messages (e.g. Slack mention threads, which may be
+    /// older than the time floor) override this.
+    fn trim_window(&self, conv: &ImConversation, messages: &mut Vec<ImMessage>) {
+        default_trim_window(messages, self, conv);
+    }
 }
 
 /// Generic fetcher wrapping a single [`ImBackend`]. One per platform.
@@ -153,7 +161,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     // Chronological order (oldest first) + window trimming.
     let mut ordered: Vec<ImMessage> = merged_index.into_values().collect();
     ordered.sort_by_key(|m| m.timestamp);
-    trim_window(&mut ordered, backend, conv);
+    backend.trim_window(conv, &mut ordered);
 
     if ordered.is_empty() {
         // Cold start with empty chat — skip cursor write too.
@@ -233,8 +241,10 @@ fn load_existing_messages(existing: Option<&storage::CandidateRow>) -> BTreeMap<
     parse_chat_payload(&raw)
 }
 
-/// Trim window: time floor → message cap → byte cap.
-fn trim_window<B: ImBackend + ?Sized>(
+/// Default window trim: time floor → message cap → byte cap, oldest-first.
+/// Backs `ImBackend::trim_window`'s default; backends may override to protect
+/// specific messages.
+pub(super) fn default_trim_window<B: ImBackend + ?Sized>(
     messages: &mut Vec<ImMessage>,
     backend: &B,
     conv: &ImConversation,
@@ -664,7 +674,7 @@ mod tests {
                 raw: Value::Null,
             },
         ];
-        trim_window(&mut messages, &B, &conv);
+        default_trim_window(&mut messages, &B, &conv);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, "fresh");
     }
