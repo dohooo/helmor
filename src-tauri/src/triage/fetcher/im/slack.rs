@@ -280,11 +280,21 @@ impl ImBackend for SlackBackend {
         }
         // Force-inject any mention the replies page truncated away or that
         // lives in an inaccessible channel — guarantees the mention is present.
+        let mut forced = 0usize;
         for hit in &ch_hits.hits {
             if hit.is_mention && seen.insert(hit.ts.clone()) {
                 messages.push(force_inject_message(hit));
+                forced += 1;
             }
         }
+        tracing::info!(
+            conv_id = %conv.id,
+            threads_expanded = ch_hits.thread_seeds.len(),
+            mentions = ch_hits.hits.iter().filter(|h| h.is_mention).count(),
+            force_injected = forced,
+            messages = messages.len(),
+            "slack triage: channel indexed",
+        );
         Ok(messages)
     }
 
