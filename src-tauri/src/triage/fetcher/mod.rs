@@ -185,7 +185,7 @@ fn registered_fetchers() -> Vec<Box<dyn Fetcher>> {
     vec![
         Box::new(github::GithubFetcher),
         Box::new(gitlab::GitlabFetcher),
-        Box::new(im::ImFetcher(im::slack::SlackBackend)),
+        Box::new(im::ImFetcher(im::slack::SlackBackend::default())),
         Box::new(im::ImFetcher(im::lark::LarkBackend)),
     ]
 }

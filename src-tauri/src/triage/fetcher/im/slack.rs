@@ -1,24 +1,101 @@
-//! Slack ImBackend. DMs/MPIMs unconditional; channels only when the user
-//! posted (`from:<@me>`) or was @ed (`<@me>`) within `COLD_START_DAYS`.
+//! Slack ImBackend. DMs/MPIMs unconditional; channels where the user was
+//! @ed or posted within `COLD_START_DAYS`.
+//!
+//! Channels are **surface-aware**: instead of discarding the search hits and
+//! re-fetching the channel timeline (which omits thread replies — the bug
+//! this replaces), we keep the hits, expand the exact @-ed thread via
+//! `conversations.replies`, and always surface the mention message. The DM
+//! path is unchanged (a plain `conversations.history` window).
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;
 
 use crate::models::slack_workspaces;
 use crate::slack::api::{self, ConversationRow, RawFile, RawMessage};
 use crate::slack::credentials::{self, SlackCreds};
 use crate::slack::files as slack_files;
-use crate::slack::relevance;
+use crate::slack::relevance::{self, MentionHit};
 use crate::slack::types::SlackWorkspace;
 use crate::triage::attachments;
 
 use super::types::{ImAttachment, ImConversation, ImConversationKind, ImMessage};
-use super::ImBackend;
+use super::{
+    default_message_block, default_trim_window, render_chat_payload, ImBackend, WINDOW_DAYS,
+    WINDOW_MAX_BYTES, WINDOW_MAX_MESSAGES,
+};
 
 const SOURCE: &str = "slack";
 
-pub struct SlackBackend;
+/// Per-tick discovery output for one involved channel. Populated by
+/// `discover_conversations`, consumed by `fetch_messages` / `render_payload` /
+/// `trim_window` within the SAME tick (same `&self`).
+#[derive(Default, Clone)]
+struct ChannelHits {
+    /// `thread_ts` values to expand fully via `conversations.replies`.
+    thread_seeds: BTreeSet<String>,
+    /// The matched hits — used to force-inject a mention the replies page
+    /// truncated away (or an inaccessible channel), and to mark anchors.
+    hits: Vec<MentionHit>,
+}
+
+/// Slack triage backend. Holds the current tick's per-channel discovery hits
+/// so the channel fetch/render/trim path can expand the right threads and
+/// protect the mention. `Mutex` (not `RefCell`) because `ImBackend: Send+Sync`.
+#[derive(Default)]
+pub struct SlackBackend {
+    hits: Mutex<HashMap<String, ChannelHits>>,
+}
+
+impl SlackBackend {
+    /// Mention anchors for a channel = `is_mention` hit ts that are actually
+    /// present in `messages` (so every anchor is a real `ImMessage.id`).
+    fn channel_anchors(&self, conv_id: &str, messages: &[ImMessage]) -> Vec<String> {
+        let present: BTreeSet<&str> = messages.iter().map(|m| m.id.as_str()).collect();
+        let map = self.hits.lock().expect("slack hits poisoned");
+        let Some(ch) = map.get(conv_id) else {
+            return Vec::new();
+        };
+        let mut anchors: Vec<String> = ch
+            .hits
+            .iter()
+            .filter(|h| h.is_mention && present.contains(h.ts.as_str()))
+            .map(|h| h.ts.clone())
+            .collect();
+        anchors.sort();
+        anchors.dedup();
+        anchors
+    }
+
+    /// Protected ts = mention anchors ∪ every message belonging to a seeded
+    /// thread, so the whole @-ed thread survives trimming even if older than
+    /// the time floor.
+    fn channel_protected(&self, conv_id: &str, messages: &[ImMessage]) -> BTreeSet<String> {
+        let map = self.hits.lock().expect("slack hits poisoned");
+        let Some(ch) = map.get(conv_id) else {
+            return BTreeSet::new();
+        };
+        let mut protected: BTreeSet<String> = ch
+            .hits
+            .iter()
+            .filter(|h| h.is_mention)
+            .map(|h| h.ts.clone())
+            .collect();
+        for m in messages {
+            let in_seeded_thread = message_thread_ts(m)
+                .map(|t| ch.thread_seeds.contains(&t))
+                .unwrap_or(false)
+                || ch.thread_seeds.contains(&m.id);
+            if in_seeded_thread {
+                protected.insert(m.id.clone());
+            }
+        }
+        protected
+    }
+}
 
 impl ImBackend for SlackBackend {
     fn source(&self) -> &'static str {
@@ -36,16 +113,16 @@ impl ImBackend for SlackBackend {
     fn discover_conversations(&self, _limit: usize) -> Result<Vec<ImConversation>> {
         let workspaces = slack_workspaces::list_workspaces()?;
         let mut out: Vec<ImConversation> = Vec::new();
+        self.hits.lock().expect("slack hits poisoned").clear();
         for ws in &workspaces {
             let creds = match credentials::load_credentials(&ws.team_id)? {
                 Some(c) => c,
                 None => continue,
             };
 
-            // Channels I was @ed in or posted in. Auth failure → skip this
-            // workspace (token is invalid). A transient search failure →
-            // degraded (DMs below still flow), never silently swallowed.
-            let involved = match relevance::involved_channels(
+            // Which channels mentioned me / I posted in, WITH the messages.
+            // Auth failure → skip this workspace; transient → degraded.
+            let involved = match relevance::involved_channel_hits(
                 &creds,
                 &ws.my_user_id,
                 super::COLD_START_DAYS,
@@ -73,10 +150,18 @@ impl ImBackend for SlackBackend {
                 crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
             }
 
-            // Every conversation I'm a member of. A transient failure here
-            // used to skip the whole workspace silently; now it surfaces as
-            // degraded health and the tick processes whatever came back.
-            // Auth failure → skip this workspace.
+            // Group hits by channel id.
+            let mut by_channel: BTreeMap<String, ChannelHits> = BTreeMap::new();
+            for hit in involved.value {
+                let entry = by_channel.entry(hit.channel_id.clone()).or_default();
+                if let Some(t) = &hit.thread_ts {
+                    entry.thread_seeds.insert(t.clone());
+                }
+                entry.hits.push(hit);
+            }
+
+            // Every conversation I'm a member of (DMs/MPIMs + channels). A
+            // transient failure surfaces as degraded health; auth → skip ws.
             let members = match relevance::member_conversations(
                 &creds,
                 "im,mpim,public_channel,private_channel",
@@ -105,23 +190,32 @@ impl ImBackend for SlackBackend {
                 crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
             }
 
-            let mut rows = members.value;
-            rows.retain(|c| {
-                if c.is_im || c.is_mpim {
-                    true // DMs / group-DMs unconditional
-                } else {
-                    involved.value.contains(&c.id)
+            let member_by_id: HashMap<&str, &ConversationRow> =
+                members.value.iter().map(|c| (c.id.as_str(), c)).collect();
+
+            // DMs / group-DMs: unconditional, verbatim history path.
+            for row in &members.value {
+                if row.is_im || row.is_mpim {
+                    out.push(to_im_conversation(ws, row));
                 }
-            });
-            // DMs first; among channels the order doesn't really
-            // matter (the generic layer truncates to a cap anyway).
-            rows.sort_by(|a, b| {
-                let dm_a = (a.is_im || a.is_mpim) as u8;
-                let dm_b = (b.is_im || b.is_mpim) as u8;
-                dm_b.cmp(&dm_a)
-            });
-            for row in rows {
-                out.push(to_im_conversation(ws, &row));
+            }
+
+            // Involved channels (incl. ones I'm not a member of — Q1). Store
+            // the hits keyed by conv.id for the surface-aware fetch/render/trim.
+            let mut map = self.hits.lock().expect("slack hits poisoned");
+            for (channel_id, ch_hits) in by_channel {
+                // A `<@me>` in a DM shows up here too — already covered above.
+                if let Some(row) = member_by_id.get(channel_id.as_str()) {
+                    if row.is_im || row.is_mpim {
+                        continue;
+                    }
+                }
+                let conv = match member_by_id.get(channel_id.as_str()) {
+                    Some(row) => to_im_conversation(ws, row),
+                    None => synthesize_channel_conv(ws, &channel_id, &creds),
+                };
+                map.insert(conv.id.clone(), ch_hits);
+                out.push(conv);
             }
         }
         Ok(out)
@@ -139,22 +233,259 @@ impl ImBackend for SlackBackend {
             None => return Ok(Vec::new()),
         };
         let channel_id = parse_channel_id(&conv.id);
-        let oldest = since.map(|dt| format!("{}.000000", dt.timestamp()));
-        let raws = api::conversations_history(
-            &creds,
-            channel_id,
-            oldest.as_deref(),
-            limit.min(u32::MAX as usize) as u32,
-        )
-        .with_context(|| format!("slack conversations.history {channel_id}"))?;
-        let mut messages = Vec::with_capacity(raws.len());
-        for raw in raws {
-            if let Some(mut m) = to_im_message(team_id, &creds, &raw) {
-                m.attachments = download_image_attachments(&conv.id, &raw);
-                messages.push(m);
+        let mut messages = fetch_history(&creds, team_id, channel_id, &conv.id, since, limit)?;
+
+        // DM / group-DM: the history window is the whole story.
+        if matches!(
+            conv.kind,
+            ImConversationKind::Dm | ImConversationKind::GroupDm
+        ) {
+            return Ok(messages);
+        }
+
+        // Channel: expand each @-ed thread fully, then guarantee the mention.
+        let ch_hits = self
+            .hits
+            .lock()
+            .expect("slack hits poisoned")
+            .get(&conv.id)
+            .cloned()
+            .unwrap_or_default();
+        let mut seen: BTreeSet<String> = messages.iter().map(|m| m.id.clone()).collect();
+        for thread_ts in &ch_hits.thread_seeds {
+            match api::conversations_replies(&creds, channel_id, thread_ts) {
+                Ok(raws) => {
+                    for raw in raws {
+                        if raw.ts.is_empty() || !seen.insert(raw.ts.clone()) {
+                            continue;
+                        }
+                        if let Some(mut m) = to_im_message(team_id, &creds, &raw) {
+                            m.attachments = download_image_attachments(&conv.id, &raw);
+                            messages.push(m);
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        conv_id = %conv.id,
+                        error = %format!("{error:#}"),
+                        "slack backend: thread replies fetch failed",
+                    );
+                    crate::triage::fetcher::health::record_degraded(
+                        SOURCE,
+                        format!("thread replies failed: {error:#}"),
+                    );
+                }
+            }
+        }
+        // Force-inject any mention the replies page truncated away or that
+        // lives in an inaccessible channel — guarantees the mention is present.
+        for hit in &ch_hits.hits {
+            if hit.is_mention && seen.insert(hit.ts.clone()) {
+                messages.push(force_inject_message(hit));
             }
         }
         Ok(messages)
+    }
+
+    fn render_payload(
+        &self,
+        conv: &ImConversation,
+        messages: &[ImMessage],
+        proposed_anchors: &[String],
+    ) -> String {
+        if matches!(
+            conv.kind,
+            ImConversationKind::Dm | ImConversationKind::GroupDm
+        ) {
+            return render_chat_payload(self, conv, messages, proposed_anchors);
+        }
+        let anchors = self.channel_anchors(&conv.id, messages);
+        build_channel_payload(conv, messages, &anchors, proposed_anchors)
+    }
+
+    fn trim_window(&self, conv: &ImConversation, messages: &mut Vec<ImMessage>) {
+        if matches!(
+            conv.kind,
+            ImConversationKind::Dm | ImConversationKind::GroupDm
+        ) {
+            default_trim_window(messages, self, conv);
+            return;
+        }
+        let protected = self.channel_protected(&conv.id, messages);
+        protected_trim(messages, self, conv, &protected);
+    }
+}
+
+/// `conversations.history` window → resolved [`ImMessage`]s with attachments.
+/// Shared by the DM path and the channel base window.
+fn fetch_history(
+    creds: &SlackCreds,
+    team_id: &str,
+    channel_id: &str,
+    conv_id: &str,
+    since: Option<DateTime<Utc>>,
+    limit: usize,
+) -> Result<Vec<ImMessage>> {
+    let oldest = since.map(|dt| format!("{}.000000", dt.timestamp()));
+    let raws = api::conversations_history(
+        creds,
+        channel_id,
+        oldest.as_deref(),
+        limit.min(u32::MAX as usize) as u32,
+    )
+    .with_context(|| format!("slack conversations.history {channel_id}"))?;
+    let mut messages = Vec::with_capacity(raws.len());
+    for raw in raws {
+        if let Some(mut m) = to_im_message(team_id, creds, &raw) {
+            m.attachments = download_image_attachments(conv_id, &raw);
+            messages.push(m);
+        }
+    }
+    Ok(messages)
+}
+
+/// Minimal [`ImMessage`] built from a retained search hit, for when a thread
+/// truncated the mention past the replies page or the channel is inaccessible.
+fn force_inject_message(hit: &MentionHit) -> ImMessage {
+    let timestamp = ts_string_to_utc(&hit.ts).unwrap_or_else(Utc::now);
+    ImMessage {
+        id: hit.ts.clone(),
+        timestamp,
+        sender: None,
+        text: hit.text.clone(),
+        external_url: None,
+        deleted: false,
+        attachments: Vec::new(),
+        raw: json!({ "thread_ts": hit.thread_ts }),
+    }
+}
+
+/// Read the `thread_ts` stashed on an [`ImMessage`] by [`to_im_message`].
+fn message_thread_ts(m: &ImMessage) -> Option<String> {
+    m.raw
+        .get("thread_ts")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Non-member channel (e.g. @-ed then removed, or a public channel not
+/// joined). Best-effort name resolution; defaults to a public-channel kind.
+fn synthesize_channel_conv(
+    ws: &SlackWorkspace,
+    channel_id: &str,
+    creds: &SlackCreds,
+) -> ImConversation {
+    let label = api::conversations_info(creds, channel_id)
+        .ok()
+        .unwrap_or_else(|| format!("#{channel_id}"));
+    ImConversation {
+        id: format!("{}:{}", ws.team_id, channel_id),
+        label: Some(label),
+        kind: ImConversationKind::Channel,
+        raw: json!({ "team_id": ws.team_id, "channel_id": channel_id }),
+    }
+}
+
+/// Pure channel payload: the flat chat stream (per-message blocks stay
+/// byte-compatible with [`default_message_block`] so the reload parser still
+/// recovers them) + a `your_mentions` header + a parser-ignored `- ↳ mention`
+/// marker on each anchor. No `## ` banners — the `read_candidate` `tail`
+/// consumer splits on `\n## ` and would miscount them.
+fn build_channel_payload(
+    conv: &ImConversation,
+    messages: &[ImMessage],
+    your_mentions: &[String],
+    proposed_anchors: &[String],
+) -> String {
+    let mut out = String::new();
+    let label = conv.label.as_deref().unwrap_or(&conv.id);
+    out.push_str(&format!("# slack chat — {label}\n\n"));
+    out.push_str(&format!("- conversation_id: {}\n", conv.id));
+    out.push_str(&format!("- kind: {}\n", conv.kind.as_source_kind()));
+    out.push_str(&format!(
+        "- window: last {WINDOW_DAYS} days, {} messages\n",
+        messages.len()
+    ));
+    if !your_mentions.is_empty() {
+        out.push_str(&format!(
+            "- your_mentions: {}  (messages that @-mention you — anchor a task on one)\n",
+            your_mentions.join(", ")
+        ));
+    }
+    if !proposed_anchors.is_empty() {
+        out.push_str("- last_proposed_anchors: ");
+        out.push_str(&proposed_anchors.join(", "));
+        out.push('\n');
+        out.push_str("  (the LLM has already created workspaces for these anchors — skip them)\n");
+    }
+    out.push_str("\n---\n\n");
+    let mention_set: BTreeSet<&str> = your_mentions.iter().map(String::as_str).collect();
+    for m in messages {
+        let block = default_message_block(conv, m);
+        if mention_set.contains(m.id.as_str()) {
+            // Inject the marker after the `## …` header line; the parser skips
+            // the bulleted-meta region, so the block stays round-trippable.
+            match block.split_once('\n') {
+                Some((head, rest)) => {
+                    out.push_str(head);
+                    out.push_str("\n- ↳ mention\n");
+                    out.push_str(rest);
+                }
+                None => out.push_str(&block),
+            }
+        } else {
+            out.push_str(&block);
+        }
+        for att in &m.attachments {
+            let alt = att.alt.as_deref().unwrap_or(&att.filename);
+            let mime = att
+                .mime_type
+                .as_deref()
+                .unwrap_or("application/octet-stream");
+            out.push_str(&format!(
+                "📎 attachment: {alt} ({mime}, {} bytes) — {}\n",
+                att.bytes,
+                att.local_path.display(),
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Like the default trim but never evicts a protected message (a mention or a
+/// message in an @-ed thread), even when older than the time floor.
+fn protected_trim<B: ImBackend + ?Sized>(
+    messages: &mut Vec<ImMessage>,
+    backend: &B,
+    conv: &ImConversation,
+    protected: &BTreeSet<String>,
+) {
+    let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
+    messages.retain(|m| protected.contains(&m.id) || m.timestamp >= cutoff);
+    while messages.len() > WINDOW_MAX_MESSAGES {
+        match messages.iter().position(|m| !protected.contains(&m.id)) {
+            Some(pos) => {
+                messages.remove(pos);
+            }
+            None => break,
+        }
+    }
+    loop {
+        let bytes: usize = messages
+            .iter()
+            .map(|m| backend.render_message_block(conv, m).len() + 1)
+            .sum();
+        if bytes <= WINDOW_MAX_BYTES {
+            break;
+        }
+        match messages.iter().position(|m| !protected.contains(&m.id)) {
+            Some(pos) => {
+                messages.remove(pos);
+            }
+            None => break,
+        }
     }
 }
 
@@ -346,26 +677,35 @@ mod tests {
         }
     }
 
+    fn msg(id: &str, ts_offset: i64, text: &str, thread_ts: Option<&str>) -> ImMessage {
+        ImMessage {
+            id: id.into(),
+            timestamp: Utc.with_ymd_and_hms(2026, 5, 26, 10, 0, 0).unwrap()
+                + Duration::seconds(ts_offset),
+            sender: Some("Alice".into()),
+            text: text.into(),
+            external_url: None,
+            deleted: false,
+            attachments: Vec::new(),
+            raw: json!({ "thread_ts": thread_ts }),
+        }
+    }
+
+    fn channel_conv() -> ImConversation {
+        ImConversation {
+            id: "T0:C1".into(),
+            label: Some("#eng".into()),
+            kind: ImConversationKind::Channel,
+            raw: json!({}),
+        }
+    }
+
     #[test]
     fn maps_dm_to_kind_dm_with_label() {
         let conv = to_im_conversation(&ws(), &row("D1", "alice", true, false, false, 0));
         assert_eq!(conv.kind, ImConversationKind::Dm);
         assert_eq!(conv.label.as_deref(), Some("DM · alice"));
         assert_eq!(conv.id, "T0:D1");
-    }
-
-    #[test]
-    fn maps_private_channel_to_kind_private_channel() {
-        let conv = to_im_conversation(&ws(), &row("C1", "leads", false, false, true, 1));
-        assert_eq!(conv.kind, ImConversationKind::PrivateChannel);
-        assert_eq!(conv.label.as_deref(), Some("#leads"));
-    }
-
-    #[test]
-    fn maps_mpim_to_kind_group_dm() {
-        let conv = to_im_conversation(&ws(), &row("MP1", "trio", false, true, false, 0));
-        assert_eq!(conv.kind, ImConversationKind::GroupDm);
-        assert_eq!(conv.label.as_deref(), Some("DM · trio"));
     }
 
     #[test]
@@ -380,5 +720,80 @@ mod tests {
     fn ts_round_trip() {
         let dt = ts_string_to_utc("1735000000.123456").unwrap();
         assert_eq!(dt.timestamp(), 1735000000);
+    }
+
+    #[test]
+    fn channel_payload_marks_mentions_and_lists_them_in_header() {
+        let conv = channel_conv();
+        let messages = vec![
+            msg("100.1", 0, "morning all", None),
+            msg("100.2", 60, "hey <@U_me> can you own SOC II?", None),
+        ];
+        let payload = build_channel_payload(&conv, &messages, &["100.2".into()], &[]);
+        assert!(payload.contains("- your_mentions: 100.2"));
+        // The mention block carries the marker; the other does not.
+        assert!(payload.contains("· id:100.2\n- ↳ mention\n"));
+        assert!(payload.contains("· id:100.1\n```"));
+        // No decorative `## ` banner — only real message blocks start with `## `.
+        for line in payload.lines().filter(|l| l.starts_with("## ")) {
+            assert!(line.contains("· id:"), "stray ## banner: {line}");
+        }
+    }
+
+    #[test]
+    fn protected_trim_keeps_old_mention_thread_over_time_floor() {
+        struct B;
+        impl ImBackend for B {
+            fn source(&self) -> &'static str {
+                SOURCE
+            }
+            fn preflight(&self) -> Result<()> {
+                Ok(())
+            }
+            fn discover_conversations(&self, _: usize) -> Result<Vec<ImConversation>> {
+                Ok(vec![])
+            }
+            fn fetch_messages(
+                &self,
+                _: &ImConversation,
+                _: Option<DateTime<Utc>>,
+                _: usize,
+            ) -> Result<Vec<ImMessage>> {
+                Ok(vec![])
+            }
+        }
+        let conv = channel_conv();
+        // An old protected thread root + a recent unprotected message.
+        let old_root = ImMessage {
+            timestamp: Utc::now() - Duration::days(WINDOW_DAYS + 5),
+            ..msg("root", 0, "old @-ed thread root", None)
+        };
+        let recent = ImMessage {
+            timestamp: Utc::now() - Duration::hours(1),
+            ..msg("recent", 0, "fresh chatter", None)
+        };
+        let mut messages = vec![old_root, recent];
+        let protected: BTreeSet<String> = ["root".to_string()].into_iter().collect();
+        protected_trim(&mut messages, &B, &conv, &protected);
+        assert!(
+            messages.iter().any(|m| m.id == "root"),
+            "old protected root must survive the time floor",
+        );
+        assert!(messages.iter().any(|m| m.id == "recent"));
+    }
+
+    #[test]
+    fn force_inject_builds_message_from_hit() {
+        let hit = MentionHit {
+            channel_id: "C1".into(),
+            ts: "1735000000.000900".into(),
+            thread_ts: Some("1735000000.000100".into()),
+            text: "<@U_me> ping".into(),
+            is_mention: true,
+        };
+        let m = force_inject_message(&hit);
+        assert_eq!(m.id, "1735000000.000900");
+        assert_eq!(m.text, "<@U_me> ping");
+        assert_eq!(message_thread_ts(&m).as_deref(), Some("1735000000.000100"));
     }
 }
