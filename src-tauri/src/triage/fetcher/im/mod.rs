@@ -71,6 +71,18 @@ pub trait ImBackend: Send + Sync {
     fn trim_window(&self, conv: &ImConversation, messages: &mut Vec<ImMessage>) {
         default_trim_window(messages, self, conv);
     }
+
+    /// Render the full candidate payload. Default = the flat chronological
+    /// chat stream. Slack overrides for channels to add the `your_mentions`
+    /// header + per-mention markers without changing the per-message format.
+    fn render_payload(
+        &self,
+        conv: &ImConversation,
+        messages: &[ImMessage],
+        proposed_anchors: &[String],
+    ) -> String {
+        render_chat_payload(self, conv, messages, proposed_anchors)
+    }
 }
 
 /// Generic fetcher wrapping a single [`ImBackend`]. One per platform.
@@ -92,9 +104,16 @@ impl<B: ImBackend + 'static> Fetcher for ImFetcher<B> {
             return Ok(FetchSummary::default());
         }
         let conversations = match self.0.discover_conversations(MAX_CONVERSATIONS_PER_TICK) {
-            Ok(mut conv) => {
-                conv.truncate(MAX_CONVERSATIONS_PER_TICK);
-                conv
+            Ok(conv) => {
+                // Cap the DM/MPIM firehose only; involved channels (few,
+                // high-signal) are processed in full so a large DM list can
+                // never crowd out a channel @-mention.
+                let (mut dms, channels): (Vec<_>, Vec<_>) = conv.into_iter().partition(|c| {
+                    matches!(c.kind, ImConversationKind::Dm | ImConversationKind::GroupDm)
+                });
+                dms.truncate(MAX_CONVERSATIONS_PER_TICK);
+                dms.extend(channels);
+                dms
             }
             Err(error) => {
                 tracing::warn!(
@@ -170,7 +189,7 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
 
     let newest_ts = ordered.last().expect("non-empty").timestamp;
     let proposed_anchors = storage::proposed_anchors_for_chat(source, &conv.id)?;
-    let payload = render_chat_payload(backend, conv, &ordered, &proposed_anchors);
+    let payload = backend.render_payload(conv, &ordered, &proposed_anchors);
     let payload_path = build_payload_path(source, &conv.id);
     let payload_bytes = cache::write_payload(&payload_path, &payload)?;
     write_attachments_sidecar(source, &conv.id, &ordered)?;
