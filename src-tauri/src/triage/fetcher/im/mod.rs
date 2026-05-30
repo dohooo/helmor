@@ -86,6 +86,21 @@ impl<B: ImBackend + 'static> Fetcher for ImFetcher<B> {
         let conversations = match self.0.discover_conversations(MAX_CONVERSATIONS_PER_TICK) {
             Ok(mut conv) => {
                 conv.truncate(MAX_CONVERSATIONS_PER_TICK);
+                // DIAGNOSTIC (temporary): how many of each kind survived the cap.
+                let channels_after = conv
+                    .iter()
+                    .filter(|c| {
+                        !matches!(c.kind, ImConversationKind::Dm | ImConversationKind::GroupDm)
+                    })
+                    .count();
+                tracing::info!(
+                    source,
+                    after_truncate = conv.len(),
+                    channels_after_truncate = channels_after,
+                    dms_after_truncate = conv.len() - channels_after,
+                    cap = MAX_CONVERSATIONS_PER_TICK,
+                    "im fetcher diag: post-truncation breakdown",
+                );
                 conv
             }
             Err(error) => {
@@ -154,6 +169,23 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
     let mut ordered: Vec<ImMessage> = merged_index.into_values().collect();
     ordered.sort_by_key(|m| m.timestamp);
     trim_window(&mut ordered, backend, conv);
+
+    // DIAGNOSTIC (temporary): for channels, show how much the timeline fetch
+    // yielded — distinguishes "cap dropped it" from "scanned but window empty
+    // because activity is thread-only" (conversations.history excludes thread
+    // replies).
+    if !matches!(
+        conv.kind,
+        ImConversationKind::Dm | ImConversationKind::GroupDm
+    ) {
+        tracing::info!(
+            source,
+            conv_id = %conv.id,
+            fetched = new_message_ids.len(),
+            window_after_trim = ordered.len(),
+            "im fetcher diag: channel ingest",
+        );
+    }
 
     if ordered.is_empty() {
         // Cold start with empty chat — skip cursor write too.

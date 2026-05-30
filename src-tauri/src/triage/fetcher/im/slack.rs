@@ -105,6 +105,7 @@ impl ImBackend for SlackBackend {
                 crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
             }
 
+            let members_total = members.value.len();
             let mut rows = members.value;
             rows.retain(|c| {
                 if c.is_im || c.is_mpim {
@@ -113,6 +114,18 @@ impl ImBackend for SlackBackend {
                     involved.value.contains(&c.id)
                 }
             });
+            // DIAGNOSTIC (temporary): pin down whether channel mentions are
+            // discovered by search and whether they survive the per-tick cap.
+            let dms_kept = rows.iter().filter(|c| c.is_im || c.is_mpim).count();
+            tracing::info!(
+                team_id = %ws.team_id,
+                members_total,
+                dms_kept,
+                involved_channels_found = involved.value.len(),
+                channels_kept = rows.len() - dms_kept,
+                involved_ids = ?involved.value,
+                "slack triage diag: discovery breakdown",
+            );
             // DMs first; among channels the order doesn't really
             // matter (the generic layer truncates to a cap anyway).
             rows.sort_by(|a, b| {
