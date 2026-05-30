@@ -31,14 +31,24 @@ pub fn get_thread_detail(
             true,
         )
     } else {
-        // Single-message preview: grab the last ~20 of channel history
-        // and flip newest-first → oldest-first for rendering. v1 takes
-        // the simple "last 20" slice — perfect-anchor centering can
-        // wait until we hear the UX demand it.
-        let mut messages = api::conversations_history(&creds, channel_id, None, 20)
-            .context("Failed to fetch channel history for detail view")?;
-        messages.reverse();
-        (messages, false)
+        // The client always sends thread_ts=None and lets us decide (it
+        // can't know it). A root @-mention frequently grows a thread that
+        // search.messages never re-surfaces (the replies don't mention
+        // you), so probe the anchor's own thread first: conversations.replies
+        // returns the root + every reply when one exists, or just the single
+        // message otherwise. `len > 1` ⇒ it IS a thread → show the whole
+        // conversation that grew under the mention.
+        match api::conversations_replies(&creds, channel_id, anchor_ts) {
+            Ok(replies) if replies.len() > 1 => (replies, true),
+            _ => {
+                // Standalone message (or an unreachable thread): a small
+                // channel-history context window, newest-first → oldest-first.
+                let mut messages = api::conversations_history(&creds, channel_id, None, 20)
+                    .context("Failed to fetch channel history for detail view")?;
+                messages.reverse();
+                (messages, false)
+            }
+        }
     };
 
     let channel_label =
