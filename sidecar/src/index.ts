@@ -185,6 +185,12 @@ function collectErrorChainCodes(err: Error): string[] {
 	return codes;
 }
 
+function buildTitleProviderOrder(provider: Provider | null): Provider[] {
+	if (provider === "codex") return ["codex", "claude", "cursor"];
+	if (provider === "cursor") return ["cursor", "claude", "codex"];
+	return ["claude", "codex", "cursor"];
+}
+
 logger.info("Sidecar starting", { pid: process.pid });
 emitter.ready(1);
 
@@ -239,6 +245,14 @@ async function handleGenerateTitle(
 				? params.branchRenamePrompt
 				: null;
 		const claudeModel = optionalString(params, "claudeModel");
+		const provider =
+			typeof params.provider === "string" &&
+			(params.provider === "claude" ||
+				params.provider === "codex" ||
+				params.provider === "cursor")
+				? params.provider
+				: null;
+		const model = optionalString(params, "model");
 		const claudeEnvironment = parseOptionalStringRecord(
 			params,
 			"claudeEnvironment",
@@ -250,67 +264,63 @@ async function handleGenerateTitle(
 			typeof params.generateBranch === "boolean" ? params.generateBranch : true;
 		logger.debug(`[${id}] generateTitle`, {
 			userMessage: userMessage.slice(0, 100),
+			provider: provider ?? "default",
+			model: model ?? "(default)",
 			claudeModel: claudeModel ?? "haiku",
 			customClaudeEnvironment: Boolean(claudeEnvironment),
 			generateBranch,
 		});
 
-		// Try the configured Claude-compatible model first when available;
-		// otherwise use official Claude, then fall back to Codex, then
-		// fall back to Cursor. The chain order is by ascending cost-of-
-		// last-resort: Claude/Codex pay nothing per-call (their CLI
-		// auth covers it), Cursor inference is metered against the
-		// user's plan, so it stays at the end.
-		try {
-			await managers.claude.generateTitle(
-				id,
-				userMessage,
-				branchRenamePrompt,
-				emitter,
-				TITLE_GENERATION_TIMEOUT_MS,
-				{ model: claudeModel, claudeEnvironment, agentProxy, generateBranch },
-			);
-			logger.debug(`[${id}] generateTitle completed (claude)`);
-		} catch (claudeErr) {
-			if (claudeModel || claudeEnvironment) {
-				logger.debug(
-					`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
-				);
-				try {
-					await managers.claude.generateTitle(
+		const order = buildTitleProviderOrder(provider);
+		let lastError: unknown = null;
+
+		for (const titleProvider of order) {
+			try {
+				if (titleProvider === "claude") {
+					try {
+						await managers.claude.generateTitle(
+							id,
+							userMessage,
+							branchRenamePrompt,
+							emitter,
+							TITLE_GENERATION_TIMEOUT_MS,
+							{
+								model: claudeModel,
+								claudeEnvironment,
+								agentProxy,
+								generateBranch,
+							},
+						);
+						logger.debug(`[${id}] generateTitle completed (claude)`);
+					} catch (claudeErr) {
+						if (!claudeModel && !claudeEnvironment) throw claudeErr;
+						logger.debug(
+							`[${id}] generateTitle custom claude failed, trying official claude: ${errorMessage(claudeErr)}`,
+						);
+						await managers.claude.generateTitle(
+							id,
+							userMessage,
+							branchRenamePrompt,
+							emitter,
+							TITLE_GENERATION_TIMEOUT_MS,
+							{ agentProxy, generateBranch },
+						);
+						logger.debug(`[${id}] generateTitle completed (official claude)`);
+					}
+					return;
+				}
+				if (titleProvider === "codex") {
+					await managers.codex.generateTitle(
 						id,
 						userMessage,
 						branchRenamePrompt,
 						emitter,
-						TITLE_GENERATION_TIMEOUT_MS,
-						{ agentProxy, generateBranch },
+						TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
+						{ model, agentProxy, generateBranch },
 					);
-					logger.debug(`[${id}] generateTitle completed (official claude)`);
+					logger.debug(`[${id}] generateTitle completed (codex)`);
 					return;
-				} catch (officialClaudeErr) {
-					logger.debug(
-						`[${id}] generateTitle official claude failed, trying codex: ${errorMessage(officialClaudeErr)}`,
-					);
 				}
-			} else {
-				logger.debug(
-					`[${id}] generateTitle claude failed, trying codex: ${errorMessage(claudeErr)}`,
-				);
-			}
-			try {
-				await managers.codex.generateTitle(
-					id,
-					userMessage,
-					branchRenamePrompt,
-					emitter,
-					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
-					{ agentProxy, generateBranch },
-				);
-				logger.debug(`[${id}] generateTitle completed (codex fallback)`);
-			} catch (codexErr) {
-				logger.debug(
-					`[${id}] generateTitle codex failed, trying cursor: ${errorMessage(codexErr)}`,
-				);
 				await managers.cursor.generateTitle(
 					id,
 					userMessage,
@@ -319,9 +329,20 @@ async function handleGenerateTitle(
 					TITLE_GENERATION_FALLBACK_TIMEOUT_MS,
 					{ generateBranch },
 				);
-				logger.debug(`[${id}] generateTitle completed (cursor fallback)`);
+				logger.debug(`[${id}] generateTitle completed (cursor)`);
+				return;
+			} catch (err) {
+				lastError = err;
+				const nextProvider = order[order.indexOf(titleProvider) + 1];
+				if (nextProvider) {
+					logger.debug(
+						`[${id}] generateTitle ${titleProvider} failed, trying ${nextProvider}: ${errorMessage(err)}`,
+					);
+				}
 			}
 		}
+
+		throw lastError ?? new Error("No title generation provider was available");
 	} catch (err) {
 		const msg = errorMessage(err);
 		logger.error(`[${id}] generateTitle FAILED: ${msg}`, errorDetails(err));

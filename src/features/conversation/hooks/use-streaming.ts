@@ -891,6 +891,8 @@ export function useConversationStreaming({
 						targetSessionId,
 						trimmedPrompt,
 						titleSeed,
+						model.provider,
+						model.cliModel,
 					).then((result) => {
 						if (result?.title || result?.branchRenamed) {
 							requestSidebarReconcile(queryClient);

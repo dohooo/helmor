@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createSidecarEmitter, type SidecarEmitter } from "../src/emitter.js";
@@ -43,13 +44,58 @@ const codexConfigState = {
 	},
 	calls: 0,
 };
+const spawnState = {
+	calls: [] as Array<{ command: string; args: string[] }>,
+	stdout: "title: 查看 Linear 团队\nbranch: list-linear-teams\n",
+	stderr: "",
+	exitCode: 0 as number | null,
+};
+
+class MockChildProcess extends EventEmitter {
+	stdout = new EventEmitter();
+	stderr = new EventEmitter();
+	stdin = {
+		end: (_input: string) => {
+			queueMicrotask(() => {
+				if (spawnState.stdout) {
+					this.stdout.emit("data", Buffer.from(spawnState.stdout));
+				}
+				if (spawnState.stderr) {
+					this.stderr.emit("data", Buffer.from(spawnState.stderr));
+				}
+				this.emit("exit", spawnState.exitCode, null);
+			});
+		},
+	};
+	kill(): void {
+		this.emit("exit", null, "SIGTERM");
+	}
+}
+
+mock.module("node:child_process", () => ({
+	spawn: (command: string, args: string[]) => {
+		spawnState.calls.push({ command, args });
+		return new MockChildProcess();
+	},
+}));
 
 class MockCodexAppServer {
 	killed = false;
 
 	constructor(opts: {
+		onNotification: (notification: {
+			method: string;
+			params?: unknown;
+		}) => void;
+		onRequest: (request: {
+			id: string | number;
+			method: string;
+			params?: unknown;
+		}) => void;
 		onExit: (code: number | null, signal: string | null) => void;
 	}) {
+		serverState.onNotification = opts.onNotification;
+		serverState.onRequest = opts.onRequest;
 		serverState.onExit = opts.onExit;
 		serverState.instances.push(this);
 	}
@@ -185,6 +231,10 @@ describe("CodexAppServerManager", () => {
 		serverState.exitAfterTurnStarted = false;
 		serverState.instances = [];
 		serverState.responses = [];
+		spawnState.calls = [];
+		spawnState.stdout = "title: 查看 Linear 团队\nbranch: list-linear-teams\n";
+		spawnState.stderr = "";
+		spawnState.exitCode = 0;
 		gitAccessState.directories = [];
 		codexConfigState.result = {
 			kind: "alreadyEnabled",
@@ -270,6 +320,49 @@ describe("CodexAppServerManager", () => {
 		);
 		expect(turnStart?.params).toEqual(
 			expect.objectContaining({ serviceTier: "fast" }),
+		);
+	});
+
+	test("generateTitle uses codex exec without starting an app-server", async () => {
+		const events: unknown[] = [];
+		const manager = new CodexAppServerManager();
+		const titleEmitter = createSidecarEmitter((event) => events.push(event));
+
+		await manager.generateTitle(
+			"REQ-title-codex-exec",
+			"看看linear里有哪些team",
+			null,
+			titleEmitter,
+			30_000,
+			{ model: "gpt-5.5" },
+		);
+
+		expect(serverState.instances).toHaveLength(0);
+		expect(spawnState.calls).toHaveLength(1);
+		expect(spawnState.calls[0]?.args).toEqual(
+			expect.arrayContaining([
+				"exec",
+				"--ignore-rules",
+				"--ephemeral",
+				"--skip-git-repo-check",
+				"--sandbox",
+				"read-only",
+				"--config",
+				"mcp_servers={}",
+				"--config",
+				'model_reasoning_effort="low"',
+				"--model",
+				"gpt-5.2",
+			]),
+		);
+		expect(spawnState.calls[0]?.args).not.toContain("--ignore-user-config");
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				id: "REQ-title-codex-exec",
+				type: "titleGenerated",
+				title: "查看 Linear 团队",
+				branchName: "list-linear-teams",
+			}),
 		);
 	});
 
