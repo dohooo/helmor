@@ -144,7 +144,7 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
     }
 
     out.push_str(
-        "\nIf you need a scratch directory to leave files for other agents in this workspace (or for your own future sessions), use `<workspace_root>/.agent-contexts/`. It is gitignored at the worktree level, so anything you write there stays out of every diff.\n",
+        "\nIf you need a scratch directory to leave files for other agents in this workspace (or for your own future sessions), use `<workspace_root>/.agent-contexts/`. It is gitignored via the repo-local exclude file, so anything you write there stays out of every diff.\n",
     );
 
     let _ = write!(
