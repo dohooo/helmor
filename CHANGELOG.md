@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.2
+
+### Patch Changes
+
+- [#703](https://github.com/dohooo/helmor/pull/703) [`b73db63`](https://github.com/dohooo/helmor/commit/b73db63544098ae7b7a6a10accc4ef9e8b5c4823) Thanks [@dohooo](https://github.com/dohooo)! - Fix the agent scratch directory so `.agent-contexts/` stays out of workspace Changes in new and existing worktree workspaces.
+
+- [#701](https://github.com/dohooo/helmor/pull/701) [`421a5df`](https://github.com/dohooo/helmor/commit/421a5df6b6cca5859542f663c2145a878f5358bc) Thanks [@dohooo](https://github.com/dohooo)! - Make Smart triage reliably pick up Slack channel @-mentions, and stop background fetching entirely for users who haven't enabled it:
+  - Triage now indexes the channels you were @-mentioned in — including mentions inside threads (the full thread is pulled in for context) and channels you aren't a member of. Previously thread mentions were silently dropped and channels were crowded out by your DMs, so those tasks never surfaced.
+  - When Smart triage is turned off, Helmor no longer runs any background Slack/GitHub/GitLab/Lark fetches, so people who don't use the feature incur zero background activity.
+  - In the Context Slack inbox, opening an @-mention that was posted inside a thread now shows the full thread (tagged with a `Thread` badge), instead of only the surrounding channel messages.
+
 ## 0.28.1
 
 ### Patch Changes
