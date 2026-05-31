@@ -146,8 +146,24 @@ fn execute_tick<R: Runtime>(
     tick_id: &str,
 ) -> Result<ExecuteOk> {
     let repos = list_repos_payload()?;
-    let endpoint = app
-        .state::<crate::local_llm::Manager>()
+    let manager = app.state::<crate::local_llm::Manager>();
+    // The local LLM can die mid-session (a crash, or a transient connect
+    // blip that trips the healthcheck — it then exits and nothing restarts
+    // the server until the next app launch). That silently wedges triage:
+    // every tick fails the endpoint check below forever. If the model is
+    // enabled but not currently serving, (re)start it here so the next tick
+    // can classify instead of failing indefinitely. `start()` early-returns
+    // when a healthy server is already tracked, so this is a no-op on the
+    // happy path.
+    if manager.endpoint().is_none() && crate::local_llm::load_settings().enabled {
+        if let Err(error) = manager.start() {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "triage: local LLM not serving and restart attempt failed",
+            );
+        }
+    }
+    let endpoint = manager
         .endpoint()
         .ok_or_else(|| anyhow!("Local LLM is not running"))?;
     let store = app.state::<ActiveStatusStore>();
