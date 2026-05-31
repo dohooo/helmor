@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.3
+
+### Patch Changes
+
+- [#705](https://github.com/dohooo/helmor/pull/705) [`c339da5`](https://github.com/dohooo/helmor/commit/c339da5f7c0c4ee34fdc884559621429676ffd90) Thanks [@dohooo](https://github.com/dohooo)! - Smart triage now restarts the local model if it stopped mid-session, instead of silently producing no tasks until you relaunch the app. Previously, when the bundled local LLM crashed or its health-check gave up, every triage tick failed with "Local LLM is not running" — so freshly-indexed Slack/GitHub/etc. activity never got turned into tasks until the app was restarted.
+
 ## 0.28.2
 
 ### Patch Changes
