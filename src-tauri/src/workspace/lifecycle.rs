@@ -621,20 +621,7 @@ pub fn finalize_workspace_from_repo_impl(workspace_id: &str) -> Result<FinalizeW
             }
         }
 
-        // Scratch space for agents to share files across sessions. The
-        // directory lives at `<workspace>/.agent-contexts/` and the
-        // worktree-local git exclude entry keeps it out of every diff.
-        // Best-effort — a failure here doesn't block workspace creation
-        // (agents just lose cross-session file sharing for this WS).
-        if let Err(err) =
-            crate::workspace::agent_contexts::ensure_agent_contexts_in_worktree(&workspace_dir)
-        {
-            tracing::warn!(
-                workspace_id = %workspace_id,
-                error = %format!("{err:#}"),
-                "Failed to provision .agent-contexts/ — workspace still usable",
-            );
-        }
+        ensure_agent_contexts_best_effort(workspace_id, &workspace_dir);
 
         // Defer setup to the frontend inspector: if a script is configured AND
         // the user opted into auto-run, the workspace starts in "setup_pending"
@@ -772,6 +759,7 @@ pub fn move_local_workspace_to_worktree_impl(
             &head_commit,
         )?;
         created_worktree = true;
+        ensure_agent_contexts_best_effort(workspace_id, &workspace_dir);
 
         // 4. Apply tracked + index changes (if any).
         if let Some(sha) = stash_sha.as_deref() {
@@ -863,6 +851,23 @@ pub fn move_local_workspace_to_worktree_impl(
         branch: new_branch,
         state: record.state,
     })
+}
+
+fn ensure_agent_contexts_best_effort(workspace_id: &str, workspace_dir: &Path) {
+    // Scratch space for agents to share files across sessions. The
+    // directory lives at `<workspace>/.agent-contexts/`, and Git's
+    // local exclude file keeps it out of every diff. Best-effort — a
+    // failure here doesn't block workspace creation (agents just lose
+    // cross-session file sharing for this WS).
+    if let Err(error) =
+        crate::workspace::agent_contexts::ensure_agent_contexts_in_worktree(workspace_dir)
+    {
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            error = %format!("{error:#}"),
+            "Failed to provision .agent-contexts/ — workspace still usable",
+        );
+    }
 }
 
 /// Legacy combined flow. Runs Phase 1 + Phase 2 back-to-back and returns

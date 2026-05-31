@@ -265,6 +265,14 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to reconcile orphaned workspaces: {e:#}"),
             }
 
+            // Repair `.agent-contexts/` provisioning for existing worktree
+            // workspaces. This is best-effort because a missing scratch dir
+            // should never block the app from starting.
+            match workspace::agent_contexts::ensure_existing_worktree_contexts() {
+                Ok(_) => {}
+                Err(e) => tracing::warn!("Failed to repair .agent-contexts/ excludes: {e:#}"),
+            }
+
             // Clear rows stuck in `initializing` state past the cutoff —
             // happens when the app is force-quit mid-create (Phase 2 never
             // gets to flip the state to ready/setup_pending). Five minutes

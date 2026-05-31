@@ -1,4 +1,8 @@
-use super::support::GitRepoHarness;
+use std::{fs, path::Path};
+
+use crate::{git_ops, workspace::agent_contexts::ensure_agent_contexts_in_worktree};
+
+use super::{list_workspace_changes, support::GitRepoHarness};
 
 #[test]
 fn classification_unstaged_modification() {
@@ -59,6 +63,67 @@ fn classification_untracked_file() {
     assert!(
         item.committed_status.is_none(),
         "untracked should NOT have committed_status: {item:?}"
+    );
+}
+
+#[test]
+fn agent_contexts_is_ignored_in_real_git_worktree_changes() {
+    let repo = GitRepoHarness::new();
+    let worktree_parent = tempfile::tempdir().unwrap();
+    let worktree_dir = worktree_parent.path().join("workspace");
+    let worktree_arg = worktree_dir.display().to_string();
+
+    git_ops::run_git(
+        [
+            "worktree",
+            "add",
+            "-b",
+            "feature/agent-contexts-ignore",
+            worktree_arg.as_str(),
+            "main",
+        ],
+        Some(Path::new(repo.path_str())),
+    )
+    .unwrap();
+    assert!(
+        worktree_dir.join(".git").is_file(),
+        "test must cover a real linked worktree"
+    );
+
+    ensure_agent_contexts_in_worktree(&worktree_dir).unwrap();
+    fs::write(worktree_dir.join(".agent-contexts/note.md"), "note\n").unwrap();
+    fs::write(worktree_dir.join("visible.txt"), "visible\n").unwrap();
+
+    let ignored = git_ops::run_git(
+        ["check-ignore", ".agent-contexts/note.md"],
+        Some(&worktree_dir),
+    );
+    assert!(ignored.is_ok(), "Git itself should ignore .agent-contexts");
+
+    let untracked = git_ops::run_git(
+        ["ls-files", "--others", "--exclude-standard"],
+        Some(&worktree_dir),
+    )
+    .unwrap();
+    assert!(
+        untracked.contains("visible.txt"),
+        "positive control should be untracked: {untracked:?}"
+    );
+    assert!(
+        !untracked.contains(".agent-contexts/"),
+        ".agent-contexts should be excluded by git: {untracked:?}"
+    );
+
+    let items = list_workspace_changes(worktree_dir.to_str().unwrap()).unwrap();
+    assert!(
+        items.iter().any(|item| item.path == "visible.txt"),
+        "positive control should appear in Changes: {items:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| !item.path.starts_with(".agent-contexts/")),
+        ".agent-contexts files must not appear in Changes: {items:?}"
     );
 }
 
