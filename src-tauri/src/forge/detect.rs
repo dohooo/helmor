@@ -2,17 +2,17 @@
 //!
 //! Runs a chain of progressively more expensive checks against a git
 //! remote URL (and optionally the repo root) to classify it as GitHub /
-//! GitLab / Unknown. Each layer that fires contributes a human-readable
+//! GitLab / Gitea / Unknown. Each layer that fires contributes a human-readable
 //! `DetectionSignal` so the UI can explain *why* we picked a provider.
 //!
 //! Layer order (cheapest → strongest, short-circuits on first confident
 //! hit):
 //!
-//! 1. Well-known hosts (`github.com`, `gitlab.com`, …).
-//! 2. Host prefix/suffix heuristics (`gitlab.*`, `*.ghe.com`, …).
+//! 1. Well-known hosts (`github.com`, `gitlab.com`, `gitea.com`, …).
+//! 2. Host prefix/suffix heuristics (`gitlab.*`, `gitea.*`, `*.ghe.com`, …).
 //! 3. URL path heuristics (`/-/` is GitLab-exclusive).
-//! 4. Repo-root filesystem signals (`.gitlab-ci.yml`, `.github/workflows/`).
-//! 5. HTTPS probe (`/api/v4/version` for GitLab, `/api/v3/` for GH Enterprise).
+//! 4. Repo-root filesystem signals (`.gitlab-ci.yml`, `.github/workflows/`, `.gitea/`).
+//! 5. HTTPS probe (`/api/v4/version` for GitLab, `/api/v3/` for GH Enterprise, `/api/v1/version` for Gitea).
 //! 6. CLI probe (`glab repo view` / `gh repo view`) when the CLI is present.
 
 use std::path::Path;
@@ -71,6 +71,13 @@ fn detect_provider_for_repo_impl(
             });
             return (ForgeProvider::Gitlab, signals);
         }
+        if matches_wellknown_gitea(host) {
+            signals.push(DetectionSignal {
+                layer: "wellKnownHost",
+                detail: format!("Host `{host}` is a well-known Gitea host"),
+            });
+            return (ForgeProvider::Gitea, signals);
+        }
     }
 
     // Layer 2 — host prefix/suffix heuristics.
@@ -87,6 +94,11 @@ fn detect_provider_for_repo_impl(
             signals.push(DetectionSignal {
                 layer: "hostPattern",
                 detail: format!("Host `{host}` matches a GitLab naming pattern"),
+            });
+        } else if host_looks_like_gitea(host) {
+            signals.push(DetectionSignal {
+                layer: "hostPattern",
+                detail: format!("Host `{host}` matches a Gitea naming pattern"),
             });
         }
     }
@@ -116,6 +128,12 @@ fn detect_provider_for_repo_impl(
                 detail: "`.github/workflows/` present at repo root".to_string(),
             });
         }
+        if root.join(".gitea").is_dir() {
+            signals.push(DetectionSignal {
+                layer: "repoFile",
+                detail: "`.gitea/` present at repo root".to_string(),
+            });
+        }
     }
 
     // If Layer 2 + Layer 4 combined give us a consistent read, trust it
@@ -133,6 +151,10 @@ fn detect_provider_for_repo_impl(
         if let Some(signal) = probe_gitlab_api(&remote.host) {
             signals.push(signal);
             return (ForgeProvider::Gitlab, signals);
+        }
+        if let Some(signal) = probe_gitea_api(&remote.host) {
+            signals.push(signal);
+            return (ForgeProvider::Gitea, signals);
         }
         if let Some(signal) = probe_github_api(&remote.host) {
             signals.push(signal);
@@ -174,9 +196,13 @@ fn resolve_from_signals(signals: &[DetectionSignal]) -> Option<ForgeProvider> {
     let mentions_github = signals
         .iter()
         .any(|s| s.detail.to_ascii_lowercase().contains("github"));
-    match (mentions_gitlab, mentions_github) {
-        (true, false) => Some(ForgeProvider::Gitlab),
-        (false, true) => Some(ForgeProvider::Github),
+    let mentions_gitea = signals
+        .iter()
+        .any(|s| s.detail.to_ascii_lowercase().contains("gitea"));
+    match (mentions_gitlab, mentions_github, mentions_gitea) {
+        (true, false, false) => Some(ForgeProvider::Gitlab),
+        (false, true, false) => Some(ForgeProvider::Github),
+        (false, false, true) => Some(ForgeProvider::Gitea),
         _ => None,
     }
 }
@@ -220,6 +246,13 @@ fn matches_wellknown_gitlab(host: &str) -> bool {
     )
 }
 
+fn matches_wellknown_gitea(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "gitea.com" | "www.gitea.com" | "try.gitea.io"
+    )
+}
+
 fn host_looks_like_github(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     host.starts_with("github.")
@@ -234,6 +267,13 @@ fn host_looks_like_gitlab(host: &str) -> bool {
         || host.ends_with(".gitlab.com")
         || host.ends_with(".gitlab.io")
         || host.split('.').any(|segment| segment == "gitlab")
+}
+
+fn host_looks_like_gitea(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host.starts_with("gitea.")
+        || host.ends_with(".gitea.com")
+        || host.split('.').any(|segment| segment == "gitea")
 }
 
 /// Short-timeout GET against GitLab's `/api/v4/version`. A 200/401 with a
@@ -283,6 +323,19 @@ fn probe_github_api(host: &str) -> Option<DetectionSignal> {
         return Some(DetectionSignal {
             layer: "httpProbe",
             detail: format!("`{url}` responded with X-GitHub-* headers"),
+        });
+    }
+    None
+}
+
+fn probe_gitea_api(host: &str) -> Option<DetectionSignal> {
+    let client = build_probe_client()?;
+    let url = format!("https://{host}/api/v1/version");
+    let response = client.get(&url).send().ok()?;
+    if response.status().is_success() || response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Some(DetectionSignal {
+            layer: "httpProbe",
+            detail: format!("`{url}` returned a Gitea API response"),
         });
     }
     None
@@ -385,6 +438,14 @@ mod tests {
         let (provider, signals) =
             detect_provider_for_repo(Some("git@gitlab.mycorp.com:team/svc.git"), None);
         assert_eq!(provider, ForgeProvider::Gitlab);
+        assert!(signals.iter().any(|s| s.layer == "hostPattern"));
+    }
+
+    #[test]
+    fn self_hosted_gitea_detected_via_host_pattern_without_network() {
+        let (provider, signals) =
+            detect_provider_for_repo_offline(Some("git@gitea.internal.example:team/svc.git"), None);
+        assert_eq!(provider, ForgeProvider::Gitea);
         assert!(signals.iter().any(|s| s.layer == "hostPattern"));
     }
 

@@ -488,6 +488,7 @@ fn action_provider_label(provider: ActionProvider) -> &'static str {
     match provider {
         ActionProvider::Github => "GitHub",
         ActionProvider::Gitlab => "GitLab",
+        ActionProvider::Gitea => "Gitea",
         ActionProvider::Vercel => "Vercel",
         ActionProvider::Unknown => "Unknown",
     }

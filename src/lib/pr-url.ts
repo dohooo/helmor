@@ -2,7 +2,7 @@
 // Backend persists only the URL on the workspace row (pr_url); the number
 // is recovered here to avoid an extra DB column.
 
-export type ForgeProvider = "github" | "gitlab";
+export type ForgeProvider = "github" | "gitlab" | "gitea";
 
 export type ParsedPrUrl = {
 	number: number;
@@ -16,6 +16,9 @@ const GITHUB_PR_PATH = /\/pull\/(\d+)(?:\/|$|\?|#)/;
 // GitLab:  https://gitlab.com/{group}/{repo}/-/merge_requests/{n}
 // Self-hosted GitLab uses the same `/-/merge_requests/N` shape.
 const GITLAB_MR_PATH = /\/-\/merge_requests\/(\d+)(?:\/|$|\?|#)/;
+
+// Gitea: https://gitea.example.com/{owner}/{repo}/pulls/{n}
+const GITEA_PR_PATH = /\/pulls\/(\d+)(?:\/|$|\?|#)/;
 
 export function parsePrUrl(url: string | null | undefined): ParsedPrUrl | null {
 	if (!url) return null;
@@ -40,6 +43,14 @@ export function parsePrUrl(url: string | null | undefined): ParsedPrUrl | null {
 		const n = Number.parseInt(gitlabMatch[1], 10);
 		if (Number.isFinite(n) && n > 0) {
 			return { number: n, provider: "gitlab" };
+		}
+	}
+
+	const giteaMatch = pathname.match(GITEA_PR_PATH);
+	if (giteaMatch) {
+		const n = Number.parseInt(giteaMatch[1], 10);
+		if (Number.isFinite(n) && n > 0) {
+			return { number: n, provider: "gitea" };
 		}
 	}
 

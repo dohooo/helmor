@@ -5,6 +5,8 @@ export type ContextCardSource =
 	| "github_discussion"
 	| "gitlab_issue"
 	| "gitlab_mr"
+	| "gitea_issue"
+	| "gitea_pr"
 	| "slack_thread";
 
 export type ContextCardForgeSource = Extract<
@@ -14,6 +16,8 @@ export type ContextCardForgeSource = Extract<
 	| "github_discussion"
 	| "gitlab_issue"
 	| "gitlab_mr"
+	| "gitea_issue"
+	| "gitea_pr"
 >;
 
 export type ContextCardStateTone =
@@ -27,7 +31,7 @@ export type ContextCardStateTone =
 	| "neutral";
 
 export type ContextCardForgeDetailRef = {
-	provider: "github" | "gitlab";
+	provider: "github" | "gitlab" | "gitea";
 	login: string;
 	source: ContextCardForgeSource;
 	externalId: string;
@@ -101,6 +105,20 @@ export type SlackThreadMeta = {
 	rootAuthor: { name: string };
 };
 
+export type GiteaIssueMeta = {
+	type: "gitea_issue";
+	repo: string;
+	number: number;
+	labels: { name: string; color: string }[];
+};
+
+export type GiteaPRMeta = {
+	type: "gitea_pr";
+	repo: string;
+	number: number;
+	draft: boolean;
+};
+
 export type ContextCardMeta =
 	| LinearIssueMeta
 	| GitHubIssueMeta
@@ -108,4 +126,6 @@ export type ContextCardMeta =
 	| GitHubDiscussionMeta
 	| GitLabIssueMeta
 	| GitLabMRMeta
+	| GiteaIssueMeta
+	| GiteaPRMeta
 	| SlackThreadMeta;

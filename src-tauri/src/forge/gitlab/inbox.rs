@@ -182,7 +182,11 @@ pub fn get_inbox_item_detail(
         // Reaching here means the router (`backend_for(provider)`) sent
         // a GitHub source to the GitLab backend — that's a logic bug.
         // Loud crash beats silent `Ok(None)` for diagnosing it.
-        InboxSource::GithubIssue | InboxSource::GithubPr | InboxSource::GithubDiscussion => {
+        InboxSource::GithubIssue
+        | InboxSource::GithubPr
+        | InboxSource::GithubDiscussion
+        | InboxSource::GiteaIssue
+        | InboxSource::GiteaPr => {
             unreachable!(
                 "GitLab inbox backend received GitHub source: {source:?}. \
                  This is a router bug — `provider` and the item's `source` got out of sync."

@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::gitea::inbox::detail::{GiteaIssueDetail, GiteaPullRequestDetail};
 use super::github::inbox::detail::{
     GithubDiscussionDetail, GithubIssueDetail, GithubPullRequestDetail,
 };
@@ -111,6 +112,8 @@ pub enum InboxSource {
     GithubDiscussion,
     GitlabIssue,
     GitlabMr,
+    GiteaIssue,
+    GiteaPr,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,4 +187,6 @@ pub enum InboxItemDetail {
     GithubDiscussion(Box<GithubDiscussionDetail>),
     GitlabIssue(Box<GitlabIssueDetail>),
     GitlabMr(Box<GitlabMergeRequestDetail>),
+    GiteaIssue(Box<GiteaIssueDetail>),
+    GiteaPr(Box<GiteaPullRequestDetail>),
 }

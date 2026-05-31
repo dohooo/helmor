@@ -1,4 +1,4 @@
-//! Terminal-side helpers for the gh / glab auth-login flow:
+//! Terminal-side helpers for the gh / glab / tea auth-login flow:
 //!   - [`forge_cli_auth_command`] — produces the shell command we hand
 //!     off to the embedded Helmor terminal session.
 //!   - [`labels_for`] — provider-name / cli-name / connect-action
@@ -22,19 +22,39 @@ pub(crate) fn forge_cli_auth_command(
     Ok(match provider {
         ForgeProvider::Github => format!("{} auth login", bundled_program_token("gh")?),
         ForgeProvider::Gitlab => {
-            let host = host.unwrap_or("gitlab.com");
-            // Reject obviously broken hostnames before they reach AppleScript:
-            // a newline would let the user inject extra `do script` commands.
-            if host.contains(['\n', '\r']) {
-                bail!("Invalid hostname (contains newline): {host:?}");
-            }
+            let host = validate_shell_host(host.unwrap_or("gitlab.com"))?;
             format!(
-                "{} auth login --hostname {host}",
-                bundled_program_token("glab")?
+                "{} auth login --hostname {}",
+                bundled_program_token("glab")?,
+                shell_single_quote(host)
+            )
+        }
+        ForgeProvider::Gitea => {
+            let host = validate_shell_host(host.unwrap_or("gitea.com"))?;
+            let login_name = format!("helmor-{host}");
+            format!(
+                "{} login add --name {} --url {}",
+                bundled_program_token("tea")?,
+                shell_single_quote(&login_name),
+                shell_single_quote(&format!("https://{host}"))
             )
         }
         ForgeProvider::Unknown => bail!("Unknown forge provider."),
     })
+}
+
+fn validate_shell_host(host: &str) -> Result<&str> {
+    let host = host.trim();
+    if host.is_empty() {
+        bail!("Invalid hostname (empty)");
+    }
+    if !host
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':'))
+    {
+        bail!("Invalid hostname: {host:?}");
+    }
+    Ok(host)
 }
 
 /// Absolute bundled path (shell-quoted). In release builds, missing the
@@ -83,6 +103,13 @@ pub(crate) fn labels_for(provider: ForgeProvider) -> ForgeLabels {
             change_request_full_name: "merge request".to_string(),
             connect_action: "Connect GitLab".to_string(),
         },
+        ForgeProvider::Gitea => ForgeLabels {
+            provider_name: "Gitea".to_string(),
+            cli_name: "tea".to_string(),
+            change_request_name: "PR".to_string(),
+            change_request_full_name: "pull request".to_string(),
+            connect_action: "Connect Gitea".to_string(),
+        },
         ForgeProvider::Unknown => ForgeLabels {
             provider_name: "Git".to_string(),
             cli_name: String::new(),
@@ -105,5 +132,14 @@ mod tests {
             "'/Apps/Tom'\\''s Stuff/Helmor.app/Contents/Resources/vendor/gh/gh'"
         );
         assert_eq!(shell_single_quote("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn validate_shell_host_rejects_shell_metacharacters() {
+        assert!(validate_shell_host("gitea.example.com").is_ok());
+        assert!(validate_shell_host("gitea.example.com:3000").is_ok());
+        assert!(validate_shell_host("gitea.example.com;open -a Calculator").is_err());
+        assert!(validate_shell_host("gitea.example.com && whoami").is_err());
+        assert!(validate_shell_host("").is_err());
     }
 }

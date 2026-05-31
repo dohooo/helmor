@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum ForgeProvider {
     Github,
     Gitlab,
+    Gitea,
     Unknown,
 }
 
@@ -17,6 +18,7 @@ impl ForgeProvider {
         match self {
             ForgeProvider::Github => "github",
             ForgeProvider::Gitlab => "gitlab",
+            ForgeProvider::Gitea => "gitea",
             ForgeProvider::Unknown => "unknown",
         }
     }
@@ -29,6 +31,7 @@ impl FromStr for ForgeProvider {
         match value.trim().to_ascii_lowercase().as_str() {
             "github" => Ok(ForgeProvider::Github),
             "gitlab" => Ok(ForgeProvider::Gitlab),
+            "gitea" => Ok(ForgeProvider::Gitea),
             "unknown" | "" => Ok(ForgeProvider::Unknown),
             _ => Err(()),
         }
@@ -93,6 +96,7 @@ pub enum ActionStatusKind {
 pub enum ActionProvider {
     Github,
     Gitlab,
+    Gitea,
     Vercel,
     Unknown,
 }
@@ -194,6 +198,7 @@ mod tests {
         for provider in [
             ForgeProvider::Github,
             ForgeProvider::Gitlab,
+            ForgeProvider::Gitea,
             ForgeProvider::Unknown,
         ] {
             let encoded = provider.as_storage_str();

@@ -25,8 +25,10 @@ export function SourceIcon({
 				<MessagesSquare className={className} size={size} strokeWidth={2} />
 			);
 		case "gitlab_issue":
+		case "gitea_issue":
 			return <CircleDot className={className} size={size} strokeWidth={2} />;
 		case "gitlab_mr":
+		case "gitea_pr":
 			return (
 				<GitPullRequest className={className} size={size} strokeWidth={2} />
 			);
