@@ -31,6 +31,7 @@ const apiMocks = vi.hoisted(() => ({
 	loadWorkspaceForgeActionStatus: vi.fn(),
 	stopAgentStream: vi.fn(),
 	requestQuit: vi.fn(),
+	closeMainWindow: vi.fn(),
 }));
 
 const eventApiMocks = vi.hoisted(() => ({
@@ -65,6 +66,7 @@ vi.mock("./lib/platform", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: () => ({
 		setBadgeCount: vi.fn(async () => {}),
+		close: vi.fn(async () => {}),
 	}),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -97,6 +99,7 @@ vi.mock("./lib/api", async (importOriginal) => {
 		loadWorkspaceForgeActionStatus: apiMocks.loadWorkspaceForgeActionStatus,
 		requestQuit: apiMocks.requestQuit,
 		stopAgentStream: apiMocks.stopAgentStream,
+		closeMainWindow: apiMocks.closeMainWindow,
 	};
 });
 
@@ -119,6 +122,9 @@ type SessionFixture = {
 	unreadCount?: number;
 	updatedAt?: string;
 	actionKind?: string | null;
+	// When true, the session is rendered as an empty/untitled session (no
+	// agentType, no last message) so `isNewSession` returns true.
+	isNew?: boolean;
 };
 
 const SESSION_FIXTURES: Record<WorkspaceFixtureId, readonly SessionFixture[]> =
@@ -275,7 +281,7 @@ function createWorkspaceSessions(workspaceId: WorkspaceFixtureId) {
 		id: session.id,
 		workspaceId,
 		title: session.title,
-		agentType: "claude",
+		agentType: session.isNew ? null : "claude",
 		status: session.status ?? "idle",
 		model: "opus-1m",
 		permissionMode: "default",
@@ -443,6 +449,7 @@ describe("App global navigation shortcuts", () => {
 		apiMocks.refreshWorkspaceChangeRequest.mockReset();
 		apiMocks.loadWorkspaceForgeActionStatus.mockReset();
 		apiMocks.stopAgentStream.mockReset();
+		apiMocks.closeMainWindow.mockReset();
 		eventApiMocks.listen.mockClear();
 		eventApiMocks.handlers.clear();
 		apiMocks.createSession.mockImplementation(async (workspaceId: string) => {
@@ -907,6 +914,72 @@ describe("App global navigation shortcuts", () => {
 		});
 		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
 		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("closes the window on Command+W when the only session is already empty", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+				isNew: true,
+			},
+		];
+
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.closeMainWindow).toHaveBeenCalled();
+		});
+		// The empty session is preserved (not hidden/deleted) and no new
+		// replacement session is spawned.
+		expect(apiMocks.hideSession).not.toHaveBeenCalled();
+		expect(apiMocks.deleteSession).not.toHaveBeenCalled();
+		expect(apiMocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("spawns a fresh untitled session on Command+W when the only session has content", async () => {
+		runtimeSessionFixtures[WORKSPACE_IDS.done] = [
+			{
+				id: "session-done-1",
+				title: "Done session 1",
+				active: true,
+			},
+		];
+
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.createSession).toHaveBeenCalled();
+		});
+		// The window stays open; the non-empty session is hidden and replaced
+		// by a new untitled session.
+		expect(apiMocks.closeMainWindow).not.toHaveBeenCalled();
+		expect(apiMocks.hideSession).toHaveBeenCalledWith("session-done-1");
+	});
+
+	it("closes the window on Command+Shift+W", async () => {
+		await renderAppReady();
+
+		fireEvent.keyDown(window, {
+			key: "w",
+			metaKey: true,
+			shiftKey: true,
+		});
+
+		await waitFor(() => {
+			expect(apiMocks.closeMainWindow).toHaveBeenCalled();
+		});
 	});
 
 	it("selects the right session after closing a middle session", async () => {

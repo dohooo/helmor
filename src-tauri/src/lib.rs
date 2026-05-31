@@ -677,16 +677,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Every user-initiated app-exit path is intercepted here and routed
-    // through a single `helmor://quit-requested` event. The frontend's
-    // QuitConfirmDialog listens for that event, checks for in-flight
-    // tasks, and calls back into the `request_quit` IPC command — which
-    // cleans up (stops git watchers, SIGTERM's the sidecar) and then
-    // invokes `app.exit(0)`.
+    // App-exit paths are intercepted here. On macOS, closing the window
+    // (red button, Cmd+W on the last tab, Cmd+Shift+W) does NOT quit the
+    // app — it hides the window and the app keeps running in the Dock.
+    // Clicking the Dock icon (RunEvent::Reopen) shows it again. Only true
+    // quit paths (Cmd+Q, Dock Quit) route through the single
+    // `helmor://quit-requested` event, which the frontend's
+    // QuitConfirmDialog listens for, checks for in-flight tasks, and calls
+    // back into the `request_quit` IPC command — which cleans up (stops
+    // git watchers, SIGTERM's the sidecar) and then invokes `app.exit(0)`.
     //
     //   Source                                  | Rust branch
     //   ----------------------------------------|-------------------------
-    //   Red close button / Cmd+W (main window)  | WindowEvent::CloseRequested
+    //   Red close button / close-window (macOS) | WindowEvent::CloseRequested -> hide
+    //   Red close button / close (other OS)     | WindowEvent::CloseRequested -> quit
+    //   Dock icon click (macOS)                 | RunEvent::Reopen -> show
     //   Cmd+Q, app-menu Quit (macOS)            | on_menu_event helmor-quit
     //   Dock Quit / system shutdown / SIGINT    | RunEvent::ExitRequested { code: None }
     //   Our own request_quit -> app.exit(0)     | ExitRequested { code: Some(_) }  (passthrough)
@@ -713,7 +718,26 @@ pub fn run() {
             ..
         } if label == "main" => {
             api.prevent_close();
+            // macOS: closing the window just hides it; the app stays alive
+            // in the Dock and re-shows on Dock-icon click (RunEvent::Reopen).
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            // Other platforms keep the legacy behavior: closing the main
+            // window quits the app.
+            #[cfg(not(target_os = "macos"))]
             emit_quit_requested(app_handle);
+        }
+        // macOS Dock-icon click while the window is hidden: show it again.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::ExitRequested {

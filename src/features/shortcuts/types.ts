@@ -14,6 +14,7 @@ export type ShortcutId =
 	| "session.new"
 	| "session.close"
 	| "session.reopenClosed"
+	| "window.close"
 	| "script.run"
 	| "settings.open"
 	| "theme.toggle"
