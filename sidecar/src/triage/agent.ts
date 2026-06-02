@@ -146,7 +146,12 @@ export async function runTriageTick(
 					m.role === "assistant" ||
 					m.role === "toolResult",
 			) as never,
-		streamFn: (m, ctx, opts) => streamSimple(m, ctx, opts),
+		// Triage is classification, not generation: one correct owed/not-owed
+		// verdict per candidate. Greedy decoding (temp 0) keeps the
+		// precision-first decision stable across ticks (matches the other
+		// local-LLM call sites in local_llm chat.rs / manager.rs).
+		streamFn: (m, ctx, opts) =>
+			streamSimple(m, ctx, { ...opts, temperature: 0 }),
 		getApiKey: (provider) =>
 			provider === PROVIDER_ID ? params.localModel.token : undefined,
 	});

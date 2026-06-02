@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 
 use crate::forge::inbox::{
-    InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxSource, InboxStateFilter,
-    InboxToggles,
+    InboxDraftFilter, InboxFilters, InboxItem, InboxItemDetail, InboxScopeFilter, InboxSource,
+    InboxStateFilter, InboxToggles,
 };
 use crate::forge::remote::parse_remote;
 use crate::forge::{github::inbox as gh, ForgeProvider};
@@ -82,38 +82,62 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
 }
 
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
-    // Open + non-draft. Draft→ready bumps `updated_at`, so flipping resurfaces automatically.
-    let filters = InboxFilters {
-        state: Some(InboxStateFilter::Open),
-        draft: Some(InboxDraftFilter::Exclude),
-        ..Default::default()
-    };
-    let toggles = InboxToggles {
-        issues: true,
-        prs: true,
-        discussions: false,
-    };
-    let page = match gh::list_inbox_items(
-        &target.login,
-        toggles,
-        None,
-        PER_REPO_LIMIT,
-        Some(&target.owner_path),
-        Some(filters),
-    ) {
-        Ok(page) => page,
-        Err(error) => {
-            tracing::warn!(
-                login = %target.login,
-                repo = %target.owner_path,
-                error = %format!("{error:#}"),
-                "github fetcher: list_inbox_items failed",
-            );
-            return Ok(());
-        }
-    };
+    // Relevance scoping. Was a maintainer-wide `is:open` scan, which flooded
+    // triage with teammates' routine PRs the user has no tie to (offline eval
+    // on real data: 58 of 65 proposed tasks did not involve Caspian).
+    //
+    // - Team repos (owner != the gh login): fetch only the involvement union
+    //   `involves:@me` (author / assignee / commenter / mentioned) ∪
+    //   `review-requested:@me` — GitHub's `involves` omits review-requests, so
+    //   both are needed. PRs and issues both go through this gate.
+    // - Solo-owned repos (owner == the gh login, e.g. his OSS project): the
+    //   open ISSUE tracker IS his triage inbox, so surface ALL open issues
+    //   (community bugs/FRs he hasn't touched yet won't match `involves:@me`);
+    //   but keep PRs on the involvement gate so contributor/automation PRs
+    //   don't flood back in.
+    //
+    // Draft→ready bumps `updated_at`, so a PR leaving draft resurfaces.
+    let involvement = vec![
+        InboxScopeFilter::Involves,
+        InboxScopeFilter::ReviewRequested,
+    ];
+    let owner = target.owner_path.split('/').next().unwrap_or("");
+    let solo = owner.eq_ignore_ascii_case(&target.login);
+
+    let mut items: Vec<InboxItem> = Vec::new();
+    if solo {
+        items.extend(list_scoped(
+            target,
+            InboxToggles {
+                issues: true,
+                prs: false,
+                discussions: false,
+            },
+            None, // maintainer issue triage: all open issues
+        ));
+        items.extend(list_scoped(
+            target,
+            InboxToggles {
+                issues: false,
+                prs: true,
+                discussions: false,
+            },
+            Some(involvement),
+        ));
+    } else {
+        items.extend(list_scoped(
+            target,
+            InboxToggles {
+                issues: true,
+                prs: true,
+                discussions: false,
+            },
+            Some(involvement),
+        ));
+    }
+
     let cutoff_ms = super::cold_start_cutoff_ms();
-    for item in page.items {
+    for item in items {
         // Tail-only past cutoff, but skip rather than break for safety.
         if item.last_activity_at < cutoff_ms {
             continue;
@@ -128,6 +152,40 @@ fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// One `list_inbox_items` call with the given toggles + optional involvement
+/// scope. A failed call logs and yields no items (per-repo isolation).
+fn list_scoped(
+    target: &RepoTarget,
+    toggles: InboxToggles,
+    scope: Option<Vec<InboxScopeFilter>>,
+) -> Vec<InboxItem> {
+    let filters = InboxFilters {
+        state: Some(InboxStateFilter::Open),
+        draft: Some(InboxDraftFilter::Exclude),
+        scope,
+        ..Default::default()
+    };
+    match gh::list_inbox_items(
+        &target.login,
+        toggles,
+        None,
+        PER_REPO_LIMIT,
+        Some(&target.owner_path),
+        Some(filters),
+    ) {
+        Ok(page) => page.items,
+        Err(error) => {
+            tracing::warn!(
+                login = %target.login,
+                repo = %target.owner_path,
+                error = %format!("{error:#}"),
+                "github fetcher: list_inbox_items failed",
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn ingest_item(login: &str, item: &InboxItem, summary: &mut FetchSummary) -> Result<()> {

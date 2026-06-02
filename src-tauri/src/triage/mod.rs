@@ -7,6 +7,7 @@ pub mod attachments;
 pub mod config;
 pub mod fetcher;
 pub mod priming;
+pub mod reaper;
 pub mod scheduler;
 pub mod source_health;
 pub mod workspace_factory;

@@ -165,14 +165,21 @@ describe("buildSystemPrompt: source-family gating", () => {
 				candidates: [makeCandidate(src)],
 			});
 			expect(prompt).toMatch(/<skip-policy>/);
-			expect(prompt).toMatch(/LAST\s+RESORT/);
-			// Logic-driven, not pattern-driven: must articulate the
+			// Precision-first: SKIP/DEFER is the default and propose is the
+			// justified exception. (Replaces the old LAST RESORT / propose-by-
+			// default policy.)
+			expect(prompt).toMatch(/SKIP|skip/);
+			expect(prompt).toMatch(
+				/Only `propose_workspace`|when unsure, DO NOT propose/i,
+			);
+			// Logic-driven, not pattern-driven: must still articulate the
 			// INTENT-vs-COMPLETION distinction without listing phrases to match.
 			expect(prompt).toMatch(/Intent|INTENT/);
 			expect(prompt).toMatch(/completion|COMPLETION|shipped/);
-			// And must explicitly call out the cap escape hatch so the
-			// model doesn't read the cap rule as contradicting skip-policy.
-			expect(prompt).toMatch(/CAP\s+REACHED/);
+			// The cap is enforced in code (tools/helmor.ts), so the prompt must
+			// NOT couple skip-policy to a CAP REACHED / LAST RESORT escape hatch.
+			expect(prompt).not.toMatch(/LAST\s+RESORT/);
+			expect(prompt).not.toMatch(/CAP\s+REACHED/);
 		}
 	});
 

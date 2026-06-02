@@ -97,6 +97,9 @@ fn scheduler_loop<R: TauriRuntime>(app: AppHandle<R>) {
         let start = Instant::now();
         run_once();
         maybe_fire_triage_tick(&app);
+        // Review existing proposals: archive ones whose upstream PR/issue is now
+        // merged/closed. Throttled to hourly internally; safe to call each tick.
+        crate::triage::reaper::maybe_run(&app);
         let elapsed = start.elapsed();
         let next = Duration::from_secs(TICK_INTERVAL_SEC).saturating_sub(elapsed);
         thread::sleep(next);

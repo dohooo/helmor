@@ -8,6 +8,18 @@ export interface PropositionBudget {
 	readonly max: number;
 }
 
+/// Repair a model-supplied branch slug to Helmor's `[a-z0-9-]` rule. Returns
+/// "" when nothing usable survives, so the caller can fall back.
+export function slugifyBranch(input: string | undefined | null): string {
+	return (input ?? "")
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 40)
+		.replace(/-+$/g, "");
+}
+
 export class ProposalAccumulator {
 	private readonly proposals: TriageProposal[] = [];
 	private readonly decided: Set<string> = new Set();
@@ -95,7 +107,36 @@ export function buildProposeWorkspaceTool(
 				plan_message: string;
 			},
 		) => {
-			const anchorKey = `${params.candidate_id}::${params.task_anchor}`;
+			// Validate-and-repair. The relevance-scoped feed asks finer judgement
+			// of the small local model, which occasionally emits malformed args.
+			// Reject the unrecoverable (so the model can retry instead of silently
+			// dropping a workspace at resolve time), repair the rest.
+			const candidateId = params.candidate_id?.trim() ?? "";
+			const taskAnchor = params.task_anchor?.trim() ?? "";
+			const repoId = params.repo_id?.trim() ?? "";
+			if (!candidateId || !taskAnchor || !repoId) {
+				const missing = !candidateId
+					? "candidate_id"
+					: !taskAnchor
+						? "task_anchor"
+						: "repo_id";
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Rejected: ${missing} is empty. Re-call propose_workspace with every id filled, or mark_not_actionable instead.`,
+						},
+					],
+					details: { skipped: true, reason: "invalid_proposal" },
+				};
+			}
+			const title = params.title?.trim() || taskAnchor;
+			const branchName =
+				slugifyBranch(params.branch_name) ||
+				slugifyBranch(title) ||
+				"triage-task";
+
+			const anchorKey = `${candidateId}::${taskAnchor}`;
 			if (accumulator.hasDecided(anchorKey)) {
 				return {
 					content: [
@@ -119,11 +160,11 @@ export function buildProposeWorkspaceTool(
 				};
 			}
 			accumulator.push({
-				candidateId: params.candidate_id,
-				taskAnchor: params.task_anchor,
-				repoId: params.repo_id,
-				title: params.title,
-				branchName: params.branch_name,
+				candidateId,
+				taskAnchor,
+				repoId,
+				title,
+				branchName,
 				planMessage: params.plan_message,
 			});
 			// Track per-anchor so multiple tasks from the same chat each
@@ -133,7 +174,7 @@ export function buildProposeWorkspaceTool(
 				content: [
 					{
 						type: "text" as const,
-						text: `Recorded proposal "${params.title}" for ${anchorKey}.`,
+						text: `Recorded proposal "${title}" for ${anchorKey}.`,
 					},
 				],
 				details: { skipped: false },
