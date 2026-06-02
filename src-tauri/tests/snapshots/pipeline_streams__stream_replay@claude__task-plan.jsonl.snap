@@ -23,7 +23,7 @@ checkpoints:
     roles:
       - assistant
     last_part_types:
-      - text
+      - reasoning
   - line_index: 8
     event_type: assistant
     roles:
@@ -57,8 +57,8 @@ checkpoints:
       - assistant
     last_part_types:
       - reasoning
+      - reasoning
       - tool-call
-      - text
   - line_index: 25
     event_type: system
     roles:

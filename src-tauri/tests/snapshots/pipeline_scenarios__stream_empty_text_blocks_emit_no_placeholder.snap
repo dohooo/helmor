@@ -1,0 +1,42 @@
+---
+source: tests/pipeline_scenarios.rs
+expression: normalize_stream_fingerprint(&fingerprint)
+---
+emissions:
+  - kind: partial
+    line_index: 2
+    event_type: stream_event
+    message:
+      role: assistant
+      id: msg-1
+      content:
+        - type: text
+          text: Hello.
+      streaming: true
+  - kind: full
+    line_index: 3
+    event_type: assistant
+    messages:
+      - role: assistant
+        id: msg-1
+        content:
+          - type: text
+            text: Hello.
+        streaming: ~
+final_render:
+  - role: assistant
+    id: msg-1
+    content:
+      - type: text
+        text: Hello.
+    streaming: ~
+persisted_turn_blocks:
+  - - type: text
+      has_duration_ms: false
+historical_render:
+  - role: assistant
+    id: msg-2
+    content:
+      - type: text
+        text: Hello.
+    streaming: ~

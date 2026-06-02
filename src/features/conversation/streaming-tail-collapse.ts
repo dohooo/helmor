@@ -192,6 +192,14 @@ function collapseAssistantParts(
 ): ExtendedMessagePart[] {
 	const result: ExtendedMessagePart[] = [];
 	const currentGroup: ToolCallPart[] = [];
+	// A streaming turn's thinking block surfaces in BOTH the stable base
+	// snapshot and the pending partial when this run is merged — every
+	// `system thinking_tokens` event triggers a full render that races the
+	// streaming partial, so the same reasoning lands twice. Both copies share
+	// the same `__part_id`, so dedupe by id (the same block index is never two
+	// different thoughts). Without this, omitted-thinking turns — where the
+	// reasoning text stays empty the whole time — render two "Thinking…" rows.
+	const reasoningIndexById = new Map<string, number>();
 
 	const flushGroup = () => {
 		if (currentGroup.length === 0) {
@@ -218,7 +226,15 @@ function collapseAssistantParts(
 			continue;
 		}
 		if (part.type === "reasoning") {
-			result.push(part);
+			const seenIdx = reasoningIndexById.get(part.id);
+			if (seenIdx !== undefined) {
+				// Same logical block already shown — keep the latest copy so
+				// newer duration / content wins.
+				result[seenIdx] = part;
+			} else {
+				reasoningIndexById.set(part.id, result.length);
+				result.push(part);
+			}
 			continue;
 		}
 		flushGroup();

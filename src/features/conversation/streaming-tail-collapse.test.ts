@@ -142,4 +142,58 @@ describe("stabilizeStreamingMessages", () => {
 		expect(messages[0]?.content[0]?.type).toBe("tool-call");
 		expect(messages[0]?.content[1]?.type).toBe("tool-call");
 	});
+
+	it("dedupes one thinking block that surfaces in both the base snapshot and the pending partial", () => {
+		// Omitted-thinking reproduction: a `system thinking_tokens` full render
+		// (base) and the next streaming partial each carry the same reasoning
+		// block (same `__part_id`, empty text). Must render ONE "Thinking…" chip.
+		const reasoning = {
+			type: "reasoning" as const,
+			id: "turn-1:blk:0",
+			text: "",
+			streaming: true,
+		};
+		const messages = stabilizeStreamingMessages([
+			assistant("a1", [{ ...reasoning }], true),
+			assistant("a2", [{ ...reasoning }], true),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(1);
+		expect(messages[0]?.content[0]?.type).toBe("reasoning");
+	});
+
+	it("keeps distinct thinking blocks with different ids", () => {
+		const messages = stabilizeStreamingMessages([
+			assistant(
+				"a1",
+				[
+					{
+						type: "reasoning",
+						id: "turn-1:blk:0",
+						text: "First.",
+						streaming: false,
+					},
+				],
+				true,
+			),
+			assistant(
+				"a2",
+				[
+					{
+						type: "reasoning",
+						id: "turn-1:blk:2",
+						text: "Second.",
+						streaming: true,
+					},
+				],
+				true,
+			),
+		]);
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.content).toHaveLength(2);
+		expect(messages[0]?.content[0]?.type).toBe("reasoning");
+		expect(messages[0]?.content[1]?.type).toBe("reasoning");
+	});
 });

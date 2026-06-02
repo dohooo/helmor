@@ -685,6 +685,154 @@ fn stream_thinking_lifecycle_end_to_end() {
 }
 
 #[test]
+fn stream_empty_text_blocks_emit_no_placeholder() {
+    // Newer Claude SDKs can open more than one text content block before
+    // any `text_delta` (or finalized `assistant` event) arrives, so two
+    // empty `StreamingBlock::Text` entries coexist in `acc.blocks`. The
+    // partial builder must NOT render a "..." placeholder per empty block
+    // (which produced the duplicate "..." rows users saw) — empty blocks
+    // emit nothing, and only real text ever reaches the thread.
+    let events = vec![
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+            "session_id": "session-1",
+        }),
+        // Second empty text block opens — both are now live with no deltas.
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+            "session_id": "session-1",
+        }),
+        // First real text lands in block 1. Block 0 is still empty and must
+        // stay invisible — no leading "..." above the answer.
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "Hello."},
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello."}],
+            },
+            "session_id": "session-1",
+        }),
+    ];
+
+    let fingerprint = replay_stream_events("claude", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
+fn stream_omitted_thinking_shows_thinking_chip() {
+    // Thinking Display = omitted: the SDK opens a `thinking` block and
+    // streams `thinking_delta`s whose text is ALWAYS empty (the content is
+    // redacted server-side), often for 60s+, before any answer text. The
+    // partial builder must surface the empty thinking block as a streaming
+    // reasoning part so the frontend shows its content-less "Thinking…" chip
+    // for the whole phase — NOT skip it (blank bubble) and NOT a "..."
+    // placeholder. Mirrors the real stream captured from Claude.
+    let events = vec![
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+            "session_id": "session-1",
+        }),
+        // Redacted thinking: delta text is empty but the block is live.
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": ""},
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "sig"},
+            },
+            "session_id": "session-1",
+        }),
+        // Finalized thinking block — still empty text, carries the signature.
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig"}],
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 0},
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "Answer."},
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": "sig"},
+                    {"type": "text", "text": "Answer."},
+                ],
+            },
+            "session_id": "session-1",
+        }),
+        json!({
+            "type": "stream_event",
+            "event": {"type": "content_block_stop", "index": 1},
+            "session_id": "session-1",
+        }),
+    ];
+
+    let fingerprint = replay_stream_events("claude", &events);
+    assert_yaml_snapshot!(normalize_stream_fingerprint(&fingerprint));
+}
+
+#[test]
 fn asst_server_tool_use() {
     let msgs = vec![assistant_json(
         "a1",

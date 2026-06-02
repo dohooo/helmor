@@ -23,7 +23,7 @@ emissions:
       id: msg-1
       content:
         - type: reasoning
-          text_preview: Quick thought.
+          text_preview: ""
           streaming: true
           has_duration: false
       streaming: true
@@ -35,7 +35,7 @@ emissions:
       id: msg-1
       content:
         - type: reasoning
-          text_preview: Quick thought.
+          text_preview: ""
           streaming: true
           has_duration: false
       streaming: true
@@ -47,7 +47,7 @@ emissions:
         id: msg-1
         content:
           - type: reasoning
-            text_preview: Quick thought.
+            text_preview: ""
             streaming: false
             has_duration: true
         streaming: ~
@@ -59,7 +59,7 @@ emissions:
       id: msg-1
       content:
         - type: text
-          text: Done.
+          text: Answer.
       streaming: true
   - kind: full
     line_index: 7
@@ -69,22 +69,22 @@ emissions:
         id: msg-1
         content:
           - type: reasoning
-            text_preview: Quick thought.
+            text_preview: ""
             streaming: false
             has_duration: true
           - type: text
-            text: Done.
+            text: Answer.
         streaming: ~
 final_render:
   - role: assistant
     id: msg-1
     content:
       - type: reasoning
-        text_preview: Quick thought.
+        text_preview: ""
         streaming: false
         has_duration: true
       - type: text
-        text: Done.
+        text: Answer.
     streaming: ~
 persisted_turn_blocks:
   - - type: thinking
@@ -96,9 +96,9 @@ historical_render:
     id: msg-2
     content:
       - type: reasoning
-        text_preview: Quick thought.
+        text_preview: ""
         streaming: ~
         has_duration: true
       - type: text
-        text: Done.
+        text: Answer.
     streaming: ~

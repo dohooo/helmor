@@ -551,9 +551,7 @@ impl StreamAccumulator {
     ) -> Option<IntermediateMessage> {
         if !self.blocks.is_empty() {
             let (partial_id, created_at) = self.get_or_create_turn_identity();
-            Some(streaming::build_partial_from_blocks(
-                self, session_id, partial_id, created_at,
-            ))
+            streaming::build_partial_from_blocks(self, session_id, partial_id, created_at)
         } else {
             let text = self.fallback_text.trim();
             let thinking = self.fallback_thinking.trim();
