@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.1
+
+### Patch Changes
+
+- [#711](https://github.com/dohooo/helmor/pull/711) [`1dcd063`](https://github.com/dohooo/helmor/commit/1dcd06349fb73792cc9659dc49837a3785ab36d9) Thanks [@natllian](https://github.com/natllian)! - Fix Just chat so your first message bubble shows immediately instead of the session flashing empty.
+
 ## 0.29.0
 
 ### Minor Changes
