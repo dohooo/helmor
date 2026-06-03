@@ -6,6 +6,7 @@ import {
 	type ActionKind,
 	type AgentProvider,
 	type ChangeRequestInfo,
+	DEFAULT_PROVIDER_CAPABILITIES,
 	DEFAULT_WORKSPACE_GROUPS,
 	type DetectedEditor,
 	detectInstalledEditors,
@@ -35,6 +36,7 @@ import {
 	loadArchivedWorkspaces,
 	loadAutoCloseActionKinds,
 	loadAutoCloseOptInAsked,
+	loadProviderCapabilities,
 	loadSessionThreadMessages,
 	loadWorkspaceDetail,
 	loadWorkspaceForgeActionStatus,
@@ -63,6 +65,7 @@ export const helmorQueryKeys = {
 	archivedWorkspaces: ["archivedWorkspaces"] as const,
 	repositories: ["repositories"] as const,
 	agentModelSections: ["agentModelSections"] as const,
+	providerCapabilities: ["providerCapabilities"] as const,
 	workspaceDetail: (workspaceId: string) =>
 		["workspaceDetail", workspaceId] as const,
 	workspaceSessions: (workspaceId: string) =>
@@ -414,6 +417,33 @@ export function agentModelSectionsQueryOptions() {
 		// previously stuck users on a pre-upgrade shape until they
 		// happened to invalidate the query manually.
 		staleTime: 0,
+		refetchOnWindowFocus: false,
+		retry: false,
+		meta: PERSIST_META,
+	});
+}
+
+/** Provider-capability table. The shape is intentionally static across
+ *  the app's lifetime (no per-session inputs), persisted to disk like the
+ *  model catalog so first paint on cold start has the data ready.
+ *
+ *  `initialData` mirrors the Rust default table so consumers read the
+ *  correct flags synchronously — BEFORE the persisted cache or the
+ *  `list_provider_capabilities` IPC has hydrated. Without it (or with an
+ *  empty `[]`), Codex would read `supportsActiveGoal === false` during the
+ *  cold-start window, silently disabling `/goal` interception and the
+ *  stop-stream goal pause. `initialDataUpdatedAt: 0` + `staleTime: 0`
+ *  keeps the same "synchronous default, background-reconcile" contract the
+ *  model-catalog / workspace-groups queries use, so any drift between this
+ *  mirror and the live Rust table is corrected on the next mount. */
+export function providerCapabilitiesQueryOptions() {
+	return queryOptions({
+		queryKey: helmorQueryKeys.providerCapabilities,
+		queryFn: loadProviderCapabilities,
+		initialData: DEFAULT_PROVIDER_CAPABILITIES,
+		initialDataUpdatedAt: 0,
+		staleTime: 0,
+		gcTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: false,
 		retry: false,
 		meta: PERSIST_META,
