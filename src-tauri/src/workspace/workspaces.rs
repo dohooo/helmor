@@ -1545,6 +1545,12 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
         .context("Failed to delete workspace session messages")?;
     transaction
         .execute(
+            "DELETE FROM session_plan_state WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace session plan state")?;
+    transaction
+        .execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",
             [workspace_id],
         )

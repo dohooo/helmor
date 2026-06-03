@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.29.0
+
+### Minor Changes
+
+- [#709](https://github.com/dohooo/helmor/pull/709) [`3ec4b0c`](https://github.com/dohooo/helmor/commit/3ec4b0ca2fe1f9cd04ac53f0e58ccedc12c74194) Thanks [@dohooo](https://github.com/dohooo)! - Smart triage now surfaces only items that actually involve you and keeps the proposed-task list clean automatically.
+
+  - Triage scans GitHub for items that involve you (assigned / review-requested / @-mentioned / authored) instead of every open issue and PR in your repos, so teammates' routine PRs no longer pile up as tasks. Repos you solely own still surface their open issues so you can triage them.
+  - The triage judge is now precision-first: it proposes a task only when work is genuinely owed to you and skips by default, rather than proposing whenever it is unsure.
+  - Proposed-task workspaces whose pull request or issue has since been merged or closed are now archived automatically (and reversibly), so the list no longer fills up with already-finished work.
+
+### Patch Changes
+
+- [#529](https://github.com/dohooo/helmor/pull/529) [`fba0763`](https://github.com/dohooo/helmor/commit/fba07637632f46ea75d40ab5aa6ebfaa5d059eb3) Thanks [@david-engelmann](https://github.com/david-engelmann)! - Replace scattered `provider === "codex"` / `provider === "cursor"` checks with a data-driven provider-capability table exposed through a new `list_provider_capabilities` command, so adding a new provider becomes a single matrix edit instead of a codebase-wide grep.
+
+- [#557](https://github.com/dohooo/helmor/pull/557) [`86aa5d0`](https://github.com/dohooo/helmor/commit/86aa5d01747209b47a0a7f5cf8769b42cfe0c237) Thanks [@david-engelmann](https://github.com/david-engelmann)! - Track every PTY-backed script and embedded-terminal process in a new `runtime_processes` table so a crash-recovery sweep on launch can identify stale processes from a prior run. Probes PIDs via `kill(pid, 0)`, marks dead rows ended automatically, and logs "maybe alive" rows — no auto-kill on startup since PIDs can be reused.
+
+- [#528](https://github.com/dohooo/helmor/pull/528) [`07a4e18`](https://github.com/dohooo/helmor/commit/07a4e1893de68b31471b3f94a61ae6c3e8400ea4) Thanks [@david-engelmann](https://github.com/david-engelmann)! - Persist the latest agent plan per session in a new `session_plan_state` table so a future pinned-plan UI can survive reloads. The pipeline projects Codex `turn/plan/updated` events and Claude `ExitPlanMode` tool calls into a normalised plan shape and exposes it through a new `getSessionPlanState` command and `sessionPlanChanged` UI sync event; the chat transcript's existing plan rendering is unchanged.
+
+- [#708](https://github.com/dohooo/helmor/pull/708) [`3c782a6`](https://github.com/dohooo/helmor/commit/3c782a6d1ce71a43e94aef17e1c265327a53e8fe) Thanks [@natllian](https://github.com/natllian)! - Before Claude starts replying, show a single "Thinking…" indicator instead of placeholder dots ("...") — collapsing the duplicate rows that appeared after the recent SDK update and filling the blank pause while Claude thinks when Thinking Display is set to Omitted.
+
+- [#705](https://github.com/dohooo/helmor/pull/705) [`c339da5`](https://github.com/dohooo/helmor/commit/c339da5f7c0c4ee34fdc884559621429676ffd90) Thanks [@dohooo](https://github.com/dohooo)! - Smart triage now restarts the local model if it stopped mid-session, instead of silently producing no tasks until you relaunch the app. Previously, when the bundled local LLM crashed or its health-check gave up, every triage tick failed with "Local LLM is not running" — so freshly-indexed Slack/GitHub/etc. activity never got turned into tasks until the app was restarted.
+
 ## 0.28.2
 
 ### Patch Changes

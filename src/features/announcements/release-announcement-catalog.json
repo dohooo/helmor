@@ -2,6 +2,21 @@
 	"_readme": "AUTO-GENERATED from .announcements during `bun run release:version`. Each item is one released version's in-app announcement. Do not edit released entries by hand.",
 	"items": [
 		{
+			"releaseVersion": "0.29.0",
+			"items": [
+				{
+					"text": "Smart triage now surfaces only items that actually involve you (assigned, review-requested, @-mentioned, or your own work) and automatically archives proposed tasks once their pull request or issue is merged or closed — so the list stays relevant and cleans itself up.",
+					"action": {
+						"label": "Open Experimental",
+						"value": {
+							"type": "openSettings",
+							"section": "experimental"
+						}
+					}
+				}
+			]
+		},
+		{
 			"releaseVersion": "0.28.0",
 			"items": [
 				{

@@ -245,6 +245,12 @@ fn cleanup_orphan_workspace(workspace_id: &str) -> Result<()> {
     )
     .ok();
     conn.execute(
+        "DELETE FROM session_plan_state
+         WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+        rusqlite::params![workspace_id],
+    )
+    .ok();
+    conn.execute(
         "DELETE FROM sessions WHERE workspace_id = ?1",
         rusqlite::params![workspace_id],
     )

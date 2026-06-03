@@ -15,6 +15,7 @@ mod custom_providers;
 mod persistence;
 pub mod provider_capabilities;
 mod queries;
+pub mod session_plan;
 mod slash_commands;
 pub(crate) mod streaming;
 mod support;

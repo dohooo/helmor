@@ -801,6 +801,12 @@ pub fn delete_session(session_id: &str) -> Result<()> {
         )
         .context("Failed to delete messages")?;
     transaction
+        .execute(
+            "DELETE FROM session_plan_state WHERE session_id = ?1",
+            [session_id],
+        )
+        .context("Failed to delete session plan state")?;
+    transaction
         .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
         .context("Failed to delete session")?;
 
