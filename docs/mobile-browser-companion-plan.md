@@ -245,5 +245,16 @@ SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 ### 13.3 紧接着的下一刀
 
 - **Slice 1 — 全量 RPC + live 同步 + 鉴权**:`/rpc` 覆盖更多命令(写/变更,按需带 `AppHandle`/`State`);`/rpc-stream` + `/v1/stream` 接 `ui_sync` 广播,让 `subscribe_ui_mutations`/`listen` 真正推送;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。
-- **Slice 2 — 公网可达**:cloudflared 出向隧道 + `apps/registry`(CF Worker)写 `*.remote.helmor.ai` CNAME;Settings → Experimental 配对面板(QR)。
+- **Slice 2 — 公网可达**:cloudflared 出向隧道 + `apps/registry`(CF Worker,**已实现**见 §13.4)写 `remote-<random>.helmor.ai` CNAME;Settings → Experimental 配对面板(QR)。
 - **流式生产化**:`send_agent_message_stream` 接 `/rpc-stream` SSE,验证 Channel→SSE 核心假设(本容器跑不了 sidecar,需在你机器上验)。
+
+### 13.4 `apps/registry` — CF Worker(已实现并验证)
+
+只写 CNAME 的最小信任后端,monorepo `apps/registry/`,部署到 `registry.helmor.ai`。
+
+- 路由:`GET /api/health`、`POST /api/devices/register {tunnelUuid} → {deviceId, hostname, secret}`(per-IP 限流)、`DELETE /api/devices/:id`(Bearer secret,timing-safe)。
+- 生成 `remote-<8 base32>.helmor.ai`,在 parent zone `helmor.ai` 建 proxied CNAME 指向 `<uuid>.cfargotunnel.com`;device 记录入 KV(secret 仅存 SHA-256,无任何身份字段)。
+- **纵深防御**:只操作匹配 `^remote-…\.helmor\.ai$` 的记录;revoke 只删自己 KV 记录过的 record id。
+- 真实 Account/Zone/KV ID **不入仓库**(占位 + env/Worker secret 注入);token 永远只在 Worker secret。
+- 验证:`bun test` **5/5**(注入 mock fetch + fake KV,验证创建/撤销/错误 secret/未知设备)。
+- 部署 runbook 见 `apps/registry/README.md`(你填 KV id + zone id,`wrangler secret put CF_API_TOKEN`,`bun run deploy`)。

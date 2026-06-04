@@ -1,0 +1,3 @@
+# Copy to `.dev.vars` (gitignored) for local `wrangler dev`.
+# In production set this with: wrangler secret put CF_API_TOKEN
+CF_API_TOKEN=your-cloudflare-dns-edit-token

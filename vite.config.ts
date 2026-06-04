@@ -97,6 +97,7 @@ export default defineConfig(async () => ({
 			"**/node_modules/**",
 			"**/dist/**",
 			"sidecar/**",
+			"apps/**",
 			"src-tauri/**",
 			"fixtures/**",
 			"e2e/**",
