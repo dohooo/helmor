@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.30.0
+
+### Minor Changes
+
+- [#713](https://github.com/dohooo/helmor/pull/713) [`de9612a`](https://github.com/dohooo/helmor/commit/de9612ac94155d00955c78068265d9da05a9a07b) Thanks [@dohooo](https://github.com/dohooo)! - Add Gemma 4 12B to the Local LLM installer so it can be downloaded and used by Helmor's local model features.
+
+- [#716](https://github.com/dohooo/helmor/pull/716) [`f3bc084`](https://github.com/dohooo/helmor/commit/f3bc08454229cdd07c8b724fdcee0cacce60ca7f) Thanks [@dohooo](https://github.com/dohooo)! - Add a mini window layout for narrow workflows:
+
+  - Add a resize control and Command+Control+M shortcut for switching between desktop and mini window sizes.
+  - Turn the sidebars into responsive edge drawers on narrow windows so the main workspace stays full width.
+  - Move compact header actions into a More menu when the window is close to mobile size.
+
+- [#715](https://github.com/dohooo/helmor/pull/715) [`1bc14d6`](https://github.com/dohooo/helmor/commit/1bc14d648690d6d5029219e778a75f7ed4c2670a) Thanks [@dohooo](https://github.com/dohooo)! - Smart triage now keys off whether something actually involves you, across every source:
+
+  - Slack/IM triage surfaces only direct messages to you and threads that @-mention you — group chats you're merely a member of, and channels where you only posted, no longer become tasks.
+  - Each proposed task records why it reached you (assigned, review-requested, @-mentioned, your own work, or a repo you solely own) and restates that reason in its plan.
+  - Auto-cleanup now also retires proposed tasks that no longer involve you — a teammate's open PR you were never asked about, or a Slack thread that no longer @-mentions you — on top of ones whose PR/issue has merged or closed. Archiving stays reversible.
+
+- [#715](https://github.com/dohooo/helmor/pull/715) [`1bc14d6`](https://github.com/dohooo/helmor/commit/1bc14d648690d6d5029219e778a75f7ed4c2670a) Thanks [@dohooo](https://github.com/dohooo)! - Proposed tasks in the sidebar now show their source platform (GitHub, GitLab, Slack, or Lark) as a small badge on the workspace avatar instead of a plain proposal dot, so you can tell at a glance where each one came from.
+
+### Patch Changes
+
+- [#713](https://github.com/dohooo/helmor/pull/713) [`de9612a`](https://github.com/dohooo/helmor/commit/de9612ac94155d00955c78068265d9da05a9a07b) Thanks [@dohooo](https://github.com/dohooo)! - Tell agents to keep research notes and other scratch artifacts under `.agent-contexts/` so temporary files stay out of workspace Changes.
+
+- [#700](https://github.com/dohooo/helmor/pull/700) [`43f429e`](https://github.com/dohooo/helmor/commit/43f429e5bbd7b0e5a224b026e5021ffa89890ad2) Thanks [@passion729](https://github.com/passion729)! - On macOS, closing the window — red button, Cmd+W on an empty last tab, or the new Cmd+Shift+W shortcut — now hides Helmor in the Dock instead of quitting (Cmd+Q still quits).
+
+- [#715](https://github.com/dohooo/helmor/pull/715) [`1bc14d6`](https://github.com/dohooo/helmor/commit/1bc14d648690d6d5029219e778a75f7ed4c2670a) Thanks [@dohooo](https://github.com/dohooo)! - Smart Triage now reasons more deeply before proposing or skipping each item, so the tasks it suggests in the background are more accurate.
+
+- [#717](https://github.com/dohooo/helmor/pull/717) [`0f20501`](https://github.com/dohooo/helmor/commit/0f2050193c50a9113f714bad3848ad7ba7f940a8) Thanks [@natllian](https://github.com/natllian)! - Add an Always on Top toggle in the Window menu to keep Helmor floating above other apps.
+
 ## 0.29.1
 
 ### Patch Changes
