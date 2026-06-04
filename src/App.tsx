@@ -1,13 +1,10 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
-import { SplashScreen } from "@/components/splash-screen";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -16,7 +13,6 @@ import {
 } from "@/features/announcements";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
-import { hydrateDraftCache } from "@/features/composer/draft-storage";
 import {
 	type ComposerCreateContext,
 	type PendingCreatedWorkspaceSubmit,
@@ -27,7 +23,6 @@ import { WorkspaceEditorSurface } from "@/features/editor";
 import { FeedbackDialog } from "@/features/feedback";
 import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
 import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
-import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import {
@@ -36,11 +31,7 @@ import {
 	useQuickSwitch,
 	WorkspaceMruStack,
 } from "@/features/quick-switch";
-import {
-	type ContextProviderTab,
-	SettingsDialog,
-	type SettingsSection,
-} from "@/features/settings";
+import type { SettingsSection } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
 import {
 	type ShortcutHandler,
@@ -63,7 +54,6 @@ import {
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
 import {
 	createSession,
-	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
@@ -72,11 +62,8 @@ import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import { isMarkdownPath } from "./lib/editor-session";
 import {
-	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
-	helmorQueryPersister,
-	QUERY_CACHE_BUSTER,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceForgeActionStatusQueryOptions,
@@ -85,32 +72,21 @@ import {
 } from "./lib/query-client";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
-	type AppSettings,
-	DEFAULT_SETTINGS,
-	getPreloadedSettings,
-	loadSettings,
 	resolveTheme,
-	SettingsContext,
 	type ShortcutOverrides,
-	saveSettings,
 	useSettings,
 } from "./lib/settings";
 import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
 import { WorkspaceToastProvider } from "./lib/workspace-toast-context";
 import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
+import { AppProviders } from "./shell/components/app-providers";
 import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
 import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
 import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
 import { ShellWorkspaceConversation } from "./shell/components/shell-workspace-conversation";
 import { WorkspaceHeaderActions } from "./shell/components/workspace-header-actions";
 import { WorkspaceHeaderLeading } from "./shell/components/workspace-header-leading";
-import {
-	EMPTY_SESSION_RUN_STATES,
-	SPLASH_FADE_MS,
-	SPLASH_MIN_DURATION_MS,
-	SPLASH_POST_ONBOARDING_DELAY_MS,
-} from "./shell/constants";
 import { SelectionStoreProvider } from "./shell/controllers/selection-store-context";
 import { useContextPanelController } from "./shell/controllers/use-context-panel-controller";
 import { useEditorSessionController } from "./shell/controllers/use-editor-session-controller";
@@ -118,7 +94,8 @@ import { usePendingQueueController } from "./shell/controllers/use-pending-queue
 import { useReadStateController } from "./shell/controllers/use-read-state-controller";
 import { useSelectionController } from "./shell/controllers/use-selection-controller";
 import { useStartSurfaceController } from "./shell/controllers/use-start-surface-controller";
-import { publishShellEvent, useShellEvent } from "./shell/event-bus";
+import { publishShellEvent } from "./shell/event-bus";
+import { useAppBootstrap } from "./shell/hooks/use-app-bootstrap";
 import { useNavigationSidebar } from "./shell/hooks/use-navigation-sidebar";
 import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
 import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
@@ -132,161 +109,8 @@ function App() {
 }
 
 function MainApp() {
-	const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
-	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(
-		null,
-	);
-	const [settingsWorkspaceRepoId, setSettingsWorkspaceRepoId] = useState<
-		string | null
-	>(null);
-	const [settingsInitialSection, setSettingsInitialSection] =
-		useState<SettingsSection>();
-	const [settingsInitialInboxProvider, setSettingsInitialInboxProvider] =
-		useState<ContextProviderTab | undefined>();
-	const [queryClient] = useState(() => createHelmorQueryClient());
-	const preloadSettings = useMemo<AppSettings>(
-		() => getPreloadedSettings(),
-		[],
-	);
-
-	const settingsContextValue = useMemo(
-		() => ({
-			settings: appSettings ?? preloadSettings,
-			isLoaded: appSettings !== null,
-			updateSettings: (patch: Partial<AppSettings>) => {
-				setAppSettings((previous) => {
-					const next = { ...(previous ?? DEFAULT_SETTINGS), ...patch };
-					return next;
-				});
-				return saveSettings(patch);
-			},
-		}),
-		[appSettings, preloadSettings],
-	);
-	useShellEvent("open-settings", (event) => {
-		setSettingsInitialSection(event.section);
-		setSettingsInitialInboxProvider(event.inboxProvider);
-		setSettingsWorkspaceId(null);
-		setSettingsWorkspaceRepoId(null);
-		setSettingsOpen(true);
-	});
-	const [splashVisible, setSplashVisible] = useState(true);
-	const [splashMounted, setSplashMounted] = useState(true);
-
-	const hideSplashAfterBoot = useCallback(() => {
-		window.setTimeout(() => {
-			setSplashVisible(false);
-			window.setTimeout(() => setSplashMounted(false), SPLASH_FADE_MS);
-		}, SPLASH_POST_ONBOARDING_DELAY_MS);
-	}, []);
-
-	const completeOnboarding = useCallback(() => {
-		setSplashMounted(true);
-		setSplashVisible(true);
-		// Land on the start page; even without a repo the user can chat.
-		setAppSettings((previous) => ({
-			...(previous ?? DEFAULT_SETTINGS),
-			onboardingCompleted: true,
-			lastSurface: "workspace-start",
-		}));
-		void saveSettings({
-			onboardingCompleted: true,
-			lastSurface: "workspace-start",
-		});
-
-		requestAnimationFrame(() => {
-			requestAnimationFrame(hideSplashAfterBoot);
-		});
-	}, [hideSplashAfterBoot]);
-
-	useEffect(() => {
-		const minDelay = new Promise<void>((r) =>
-			setTimeout(r, SPLASH_MIN_DURATION_MS),
-		);
-		// Pull persisted composer drafts into the in-memory cache before
-		// the splash hides — the composer's sync `loadPersistedDraft` then
-		// sees DB content on first mount instead of flickering.
-		const draftHydration = hydrateDraftCache();
-		void Promise.all([
-			loadSettings().then(setAppSettings),
-			draftHydration,
-			minDelay,
-		]).then(() => {
-			setSplashVisible(false);
-			setTimeout(() => setSplashMounted(false), SPLASH_FADE_MS);
-		});
-	}, []);
-
-	useEffect(() => {
-		if (appSettings?.onboardingCompleted !== true) {
-			return;
-		}
-
-		void exitOnboardingWindowMode().catch((error) => {
-			console.error("[app] failed to restore main window mode", error);
-		});
-	}, [appSettings?.onboardingCompleted]);
-
-	useShellEvent("reload-settings", () => {
-		void loadSettings().then(setAppSettings);
-	});
-
-	return (
-		<SettingsContext.Provider value={settingsContextValue}>
-			<PersistQueryClientProvider
-				client={queryClient}
-				persistOptions={{
-					persister: helmorQueryPersister,
-					buster: QUERY_CACHE_BUSTER,
-				}}
-			>
-				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
-					<>
-						<AppOnboarding onComplete={completeOnboarding} />
-						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
-					</>
-				) : (
-					<>
-						{/* Renderless: focus-driven health probes for every
-						 *  (provider, host) we know about. Without this the
-						 *  reconciliation only ran while Settings → Accounts
-						 *  was open, so a `gh auth login` outside Helmor
-						 *  wouldn't trigger a re-bind until the user opened
-						 *  that panel — leaving every workspace's chip
-						 *  stuck on "Connect" indefinitely. */}
-						<ForgeAccountsHealthSentinel />
-						<AppShell
-							onOpenSettings={(
-								workspaceId,
-								workspaceRepoId,
-								initialSection,
-							) => {
-								setSettingsInitialSection(initialSection);
-								setSettingsWorkspaceId(workspaceId);
-								setSettingsWorkspaceRepoId(workspaceRepoId);
-								setSettingsOpen(true);
-							}}
-						/>
-					</>
-				)}
-				{splashMounted && <SplashScreen visible={splashVisible} />}
-				<SettingsDialog
-					open={settingsOpen}
-					workspaceId={settingsWorkspaceId}
-					workspaceRepoId={settingsWorkspaceRepoId}
-					initialSection={settingsInitialSection}
-					initialInboxProvider={settingsInitialInboxProvider}
-					onClose={() => {
-						setSettingsOpen(false);
-						void queryClient.invalidateQueries({
-							queryKey: ["repoScripts"],
-						});
-					}}
-				/>
-			</PersistQueryClientProvider>
-		</SettingsContext.Provider>
-	);
+	const bootstrap = useAppBootstrap();
+	return <AppProviders {...bootstrap} AppShell={AppShell} />;
 }
 
 function AppShell({
