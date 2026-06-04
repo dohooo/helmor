@@ -1,133 +1,242 @@
-// Assembly shell for the whole app surface. Holds the static DOM frame (the
-// <main> + the sidebar / workspace-pane / inspector three-column grid) and the
-// provider stack + overlays around it. All data/handlers arrive pre-computed
-// from AppShell's orchestration layer as grouped child-prop bags — this file
-// is pure structure + wiring, no state of its own. Lifted verbatim out of
-// AppShell's return; the header memo nodes stay computed in AppShell and ride
-// in via `workspacePane`.
-import type { ComponentProps, KeyboardEvent, PointerEvent } from "react";
-import { FeedbackDialog } from "@/features/feedback";
-import type { WorkspaceDetail } from "@/lib/api";
-import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
-import { AppOverlays } from "./app-overlays";
-import { AppShellProviderStack } from "./app-shell-provider-stack";
-import { ShellInspectorPane } from "./shell-inspector-pane";
-import { ShellResizeSeparator } from "./shell-resize-separator";
-import { ShellSidebarPane } from "./shell-sidebar-pane";
-import { WorkspacePaneSurface } from "./workspace-pane-surface";
+// The whole app surface. A thin component that pulls the entire orchestration
+// graph from `useAppShellState` and shapes it into the grouped child-prop bags
+// `AppShellLayout` consumes. The two perf-critical header memo nodes are
+// computed here at the orchestration boundary (NOT inside a memoized JSX child)
+// so their element identity stays stable across AppShell re-renders — see the
+// P1-A note below. Lifted verbatim out of App.tsx; the bag assembly reads off
+// the `useAppShellState` result (`s` + its `sel` / `data` / `chrome` / `panels`
+// groups).
+import { useMemo } from "react";
+import type { SettingsSection } from "@/features/settings";
+import { useAppShellState } from "@/shell/hooks/use-app-shell-state";
+import { AppShellLayout } from "./app-shell-layout";
+import { WorkspaceHeaderActions } from "./workspace-header-actions";
+import { WorkspaceHeaderLeading } from "./workspace-header-leading";
 
-type ResizeTarget = "sidebar" | "inspector";
-
-type Props = {
-	providerStack: Omit<ComponentProps<typeof AppShellProviderStack>, "children">;
-	feedbackOpen: boolean;
-	onFeedbackOpenChange: (open: boolean) => void;
-	onOpenSettings: ComponentProps<typeof FeedbackDialog>["onOpenSettings"];
-	onSubmitFeedbackPrompt: ComponentProps<
-		typeof FeedbackDialog
-	>["onSubmitPrompt"];
-	workspaceViewMode: ShellViewMode;
-	// Left sidebar + its resize separator.
-	sidebar: ComponentProps<typeof ShellSidebarPane>;
-	sidebarCollapsed: boolean;
-	isSidebarResizing: boolean;
-	sidebarWidth: number;
-	// Center pane.
-	workspacePane: ComponentProps<typeof WorkspacePaneSurface>;
-	// Right inspector + its resize separator + visibility gate.
-	rightSidebarAvailable: boolean;
-	selectedWorkspaceDetail: WorkspaceDetail | null;
-	inspector: ComponentProps<typeof ShellInspectorPane>;
-	inspectorCollapsed: boolean;
-	isInspectorResizing: boolean;
-	inspectorWidth: number;
-	handleResizeStart: (
-		target: ResizeTarget,
-	) => (event: PointerEvent<HTMLDivElement>) => void;
-	handleResizeKeyDown: (
-		target: ResizeTarget,
-	) => (event: KeyboardEvent<HTMLDivElement>) => void;
-	overlays: ComponentProps<typeof AppOverlays>;
-};
-
-export function AppShellLayout({
-	providerStack,
-	feedbackOpen,
-	onFeedbackOpenChange,
+export function AppShell({
 	onOpenSettings,
-	onSubmitFeedbackPrompt,
-	workspaceViewMode,
-	sidebar,
-	sidebarCollapsed,
-	isSidebarResizing,
-	sidebarWidth,
-	workspacePane,
-	rightSidebarAvailable,
-	selectedWorkspaceDetail,
-	inspector,
-	inspectorCollapsed,
-	isInspectorResizing,
-	inspectorWidth,
-	handleResizeStart,
-	handleResizeKeyDown,
-	overlays,
-}: Props) {
-	return (
-		<AppShellProviderStack {...providerStack}>
-			{/* Conditionally mount so closing the dialog tears the tree
-			 *  down via React directly instead of waiting on Radix
-			 *  Presence + `animationend`. In WKWebview the workspace
-			 *  switch that fires from "Send to agent" can flip
-			 *  `document.hidden` to true mid-animation, which pauses
-			 *  the exit keyframes indefinitely — `animationend`
-			 *  never fires, Presence never unmounts, and the closed
-			 *  dialog lingers as a ghost over the new conversation. */}
-			{feedbackOpen ? (
-				<FeedbackDialog
-					open={feedbackOpen}
-					onOpenChange={onFeedbackOpenChange}
-					onOpenSettings={onOpenSettings}
-					onSubmitPrompt={onSubmitFeedbackPrompt}
+}: {
+	onOpenSettings: (
+		workspaceId: string | null,
+		workspaceRepoId: string | null,
+		initialSection?: SettingsSection,
+	) => void;
+}) {
+	const s = useAppShellState({ onOpenSettings });
+	const { sel, data, chrome, panels } = s;
+	const selectedWorkspaceId = sel.selection.selectedWorkspaceId;
+	const selectedSessionId = sel.selection.selectedSessionId;
+	const inspectorCollapsed = sel.contextPanel.inspectorCollapsed;
+	const setInspectorCollapsed = sel.contextPanelActions.setInspectorCollapsed;
+
+	// P1-A: React Compiler bailed out on this ~1650-line AppShell, so it does
+	// NOT memoize these inline header JSX nodes — they get a fresh element
+	// identity on every AppShell render (sidebar/inspector resize ticks, etc.),
+	// busting WorkspaceConversationContainer's memo and cascading the whole
+	// conversation subtree. Verified via React Profiler: ConversationContainer
+	// re-rendered 11× on a single sidebar toggle. Hoist to useMemo so identity
+	// is stable except when the inputs actually change.
+	const headerLeadingNode = useMemo(
+		() =>
+			panels.sidebarCollapsed ? (
+				<WorkspaceHeaderLeading
+					appUpdateStatus={s.appUpdateStatus}
+					leftSidebarToggleShortcut={chrome.leftSidebarToggleShortcut}
+					onExpandSidebar={() => panels.setSidebarCollapsed(false)}
 				/>
-			) : null}
-			<main
-				aria-label="Application shell"
-				className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
-			>
-				<div className="relative flex h-full min-h-0 bg-background">
-					{workspaceViewMode !== "editor" && (
-						<>
-							<ShellSidebarPane {...sidebar} />
-							<ShellResizeSeparator
-								side="sidebar"
-								collapsed={sidebarCollapsed}
-								resizing={isSidebarResizing}
-								width={sidebarWidth}
-								onPointerDown={handleResizeStart("sidebar")}
-								onKeyDown={handleResizeKeyDown("sidebar")}
-							/>
-						</>
-					)}
+			) : undefined,
+		[
+			panels.sidebarCollapsed,
+			s.appUpdateStatus,
+			chrome.leftSidebarToggleShortcut,
+		],
+	);
+	const headerActionsNode = useMemo(
+		() =>
+			selectedWorkspaceId ? (
+				<WorkspaceHeaderActions
+					workspaceId={selectedWorkspaceId}
+					sessionId={selectedSessionId}
+					installedEditors={chrome.installedEditors}
+					preferredEditor={chrome.preferredEditor}
+					openPreferredEditorShortcut={chrome.openPreferredEditorShortcut}
+					rightSidebarToggleShortcut={chrome.rightSidebarToggleShortcut}
+					inspectorCollapsed={inspectorCollapsed}
+					isChatMode={data.selectedWorkspaceDetail?.mode === "chat"}
+					onOpenPreferredEditor={chrome.handleOpenPreferredEditor}
+					onToggleInspector={() =>
+						setInspectorCollapsed((collapsed) => !collapsed)
+					}
+					onPickEditor={chrome.setPreferredEditorId}
+					pushWorkspaceToast={s.pushWorkspaceToast}
+				/>
+			) : undefined,
+		[
+			selectedWorkspaceId,
+			selectedSessionId,
+			chrome.installedEditors,
+			chrome.preferredEditor,
+			chrome.openPreferredEditorShortcut,
+			chrome.rightSidebarToggleShortcut,
+			chrome.handleOpenPreferredEditor,
+			inspectorCollapsed,
+			data.selectedWorkspaceDetail?.mode,
+			s.pushWorkspaceToast,
+		],
+	);
 
-					<WorkspacePaneSurface {...workspacePane} />
-
-					{rightSidebarAvailable &&
-						selectedWorkspaceDetail?.mode !== "chat" && (
-							<>
-								<ShellResizeSeparator
-									side="inspector"
-									collapsed={inspectorCollapsed}
-									resizing={isInspectorResizing}
-									width={inspectorWidth}
-									onPointerDown={handleResizeStart("inspector")}
-									onKeyDown={handleResizeKeyDown("inspector")}
-								/>
-								<ShellInspectorPane {...inspector} />
-							</>
-						)}
-				</div>
-			</main>
-			<AppOverlays {...overlays} />
-		</AppShellProviderStack>
+	return (
+		<AppShellLayout
+			providerStack={{
+				selectionStore: sel.selectionStore,
+				pushWorkspaceToast: s.pushWorkspaceToast,
+				sessionRunStates: data.effectiveSessionRunStates,
+				insertIntoComposer: data.pendingQueueActions.insertIntoComposer,
+			}}
+			feedbackOpen={s.feedbackOpen}
+			onFeedbackOpenChange={s.setFeedbackOpen}
+			onOpenSettings={data.handleOpenSettings}
+			onSubmitFeedbackPrompt={data.submitFeedbackPrompt}
+			workspaceViewMode={sel.selection.viewMode}
+			sidebar={{
+				collapsed: panels.sidebarCollapsed,
+				resizing: panels.isSidebarResizing,
+				width: panels.sidebarWidth,
+				autoSelectSettingsGate: s.workspaceSidebarAutoSelectSettingsGate,
+				busyWorkspaceIds: data.effectiveBusyWorkspaceIds,
+				interactionRequiredWorkspaceIds: data.interactionRequiredWorkspaceIds,
+				newWorkspaceShortcut: chrome.newWorkspaceShortcut,
+				addRepositoryShortcut: chrome.addRepositoryShortcut,
+				sidebarFilterShortcut: chrome.sidebarFilterShortcut,
+				leftSidebarToggleShortcut: chrome.leftSidebarToggleShortcut,
+				appUpdateStatus: s.appUpdateStatus,
+				appSettings: s.appSettings,
+				onSelectWorkspace: sel.handleSelectWorkspace,
+				onOpenNewWorkspace: s.handleOpenWorkspaceStart,
+				onAddRepositoryNeedsStart:
+					sel.startSurfaceActions.addRepositoryNeedsStart,
+				onMoveLocalToWorktree: sel.startSurfaceActions.moveLocalToWorktree,
+				onCollapseSidebar: () => panels.setSidebarCollapsed(true),
+				onOpenFeedback: () => s.setFeedbackOpen(true),
+				onOpenSettings: data.handleOpenSettings,
+				pushWorkspaceToast: s.pushWorkspaceToast,
+			}}
+			sidebarCollapsed={panels.sidebarCollapsed}
+			isSidebarResizing={panels.isSidebarResizing}
+			sidebarWidth={panels.sidebarWidth}
+			workspacePane={{
+				workspaceViewMode: sel.selection.viewMode,
+				editorSession: data.editorSession,
+				workspaceRootPath: data.workspaceRootPath,
+				appShortcuts: s.appSettings.shortcuts,
+				sidebarCollapsed: panels.sidebarCollapsed,
+				contextPanelOpen: sel.contextPanel.contextPanelOpen,
+				handleEditorSessionChange: data.handleEditorSessionChange,
+				editorSessionActions: data.editorSessionActions,
+				repositories: s.repositories,
+				selectionActions: sel.selectionActions,
+				readStateActions: data.readStateActions,
+				pendingQueueActions: data.pendingQueueActions,
+				contextPanelActions: sel.contextPanelActions,
+				startSurfaceActions: sel.startSurfaceActions,
+				activeStreams: data.activeStreams,
+				effectiveBusySessionIds: data.effectiveBusySessionIds,
+				effectiveStoppableSessionIds: data.effectiveStoppableSessionIds,
+				interactionRequiredSessionIds: data.interactionRequiredSessionIds,
+				pendingComposerInserts: data.pendingComposerInserts,
+				onSelectSession: sel.handleSelectSession,
+				onRequestCloseSession: data.requestCloseSession,
+				handlePendingPromptConsumed: data.handlePendingPromptConsumed,
+				queuePendingPromptForSession: data.queuePendingPromptForSession,
+				startRepository: sel.startSurface.startRepository,
+				startSourceBranch: sel.startSurface.startSourceBranch,
+				startBranches: sel.startSurface.startBranches,
+				startBranchesLoading: sel.startSurface.startBranchesLoading,
+				startMode: sel.startSurface.startMode,
+				startBranchIntent: sel.startSurface.startBranchIntent,
+				startPreviewCard: sel.contextPanel.startPreviewCard,
+				startComposerInsertTarget: sel.startSurface.startComposerInsertTarget,
+				startComposerContextKey: sel.startSurface.startComposerContextKey,
+				startCreateContext: s.startCreateContext,
+				startLinkedDirectoriesController:
+					sel.startSurface.startLinkedDirectoriesController,
+				repoId: data.selectedWorkspaceDetailQuery.data?.repoId ?? null,
+				sessionSelectionHistory: s.sessionSelectionHistory,
+				workspaceChangeRequest: data.workspaceChangeRequest,
+				pendingPromptForSession: data.pendingPromptForSession,
+				pendingCreatedWorkspaceSubmit: sel.pendingCreatedWorkspaceSubmit,
+				handlePendingCreatedWorkspaceSubmitConsumed:
+					data.handlePendingCreatedWorkspaceSubmitConsumed,
+				contextPreviewCard: sel.contextPanel.workspacePreviewCard,
+				contextPreviewActive: sel.contextPanel.workspacePreviewActive,
+				headerLeadingNode,
+				headerActionsNode,
+			}}
+			rightSidebarAvailable={sel.contextPanel.rightSidebarAvailable}
+			selectedWorkspaceDetail={data.selectedWorkspaceDetailQuery.data ?? null}
+			inspector={{
+				collapsed: inspectorCollapsed,
+				resizing: panels.isInspectorResizing,
+				width: panels.inspectorWidth,
+				rightSidebarMode: sel.contextPanel.rightSidebarMode,
+				startRepository: sel.startSurface.startRepository,
+				selectedWorkspaceRepository: s.selectedWorkspaceRepository,
+				startInboxProviderTab: sel.startSurface.startInboxProviderTab,
+				onStartInboxProviderTabChange:
+					sel.startSurfaceActions.setInboxProviderTab,
+				startInboxProviderSourceTab:
+					sel.startSurface.startInboxProviderSourceTab,
+				onStartInboxProviderSourceTabChange:
+					sel.startSurfaceActions.setInboxProviderSourceTab,
+				startInboxStateFilterBySource:
+					sel.startSurface.startInboxStateFilterBySource,
+				onStartInboxStateFilterBySourceChange:
+					sel.startSurfaceActions.setInboxStateFilterBySource,
+				startComposerInsertTarget: sel.startSurface.startComposerInsertTarget,
+				startPreviewCardId: sel.contextPanel.startPreviewCard?.id ?? null,
+				workspacePreviewCardId:
+					sel.contextPanel.workspacePreviewCard?.id ?? null,
+				onOpenStartContextCard: sel.contextPanelActions.openStartContextCard,
+				onOpenWorkspaceContextCard:
+					sel.contextPanelActions.openWorkspaceContextCard,
+				workspaceRootPath: data.workspaceRootPath,
+				selectedWorkspaceDetail: data.selectedWorkspaceDetailQuery.data ?? null,
+				activeEditor: data.activeEditorTarget,
+				preferredEditor: chrome.preferredEditor,
+				onOpenEditorFile: data.editorSessionActions.openFile,
+				onCommitAction: data.handleCommitAction,
+				onReviewAction: () =>
+					data.handleInspectorReviewAction({
+						modelId:
+							s.appSettings.reviewModelId ?? s.appSettings.defaultModelId,
+						effort: s.appSettings.reviewEffort ?? s.appSettings.defaultEffort,
+						fastMode:
+							s.appSettings.reviewFastMode ?? s.appSettings.defaultFastMode,
+					}),
+				onQueuePendingPromptForSession: data.queuePendingPromptForSession,
+				commitButtonMode: data.commitButtonMode,
+				commitButtonState: data.commitButtonState,
+				workspaceChangeRequest: data.workspaceChangeRequest,
+				workspaceForgeIsRefreshing: data.workspaceForgeIsRefreshing,
+				onOpenSettings: data.handleOpenSettings,
+			}}
+			inspectorCollapsed={inspectorCollapsed}
+			isInspectorResizing={panels.isInspectorResizing}
+			inspectorWidth={panels.inspectorWidth}
+			handleResizeStart={panels.handleResizeStart}
+			handleResizeKeyDown={panels.handleResizeKeyDown}
+			overlays={{
+				theme: s.appSettings.theme,
+				onOpenChangelog: chrome.handleOpenReleaseChangelog,
+				onOpenAnnouncementSettings: data.handleOpenAnnouncementSettings,
+				onSetRightSidebarMode: sel.contextPanelActions.setMode,
+				onOpenStartPage: () => s.handleOpenWorkspaceStart({ persist: false }),
+				quickSwitch: data.quickSwitch,
+				liveWorkspaceRowMap: data.liveWorkspaceRowMap,
+				closeConfirmDialog: data.closeConfirmDialog,
+				editorDiscardConfirmDialog: data.editorDiscardConfirmDialog,
+				mergeConfirmDialogNode: data.mergeConfirmDialogNode,
+			}}
+		/>
 	);
 }
