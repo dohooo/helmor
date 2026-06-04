@@ -69,6 +69,11 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.sessionCodexGoal(event.sessionId),
 			});
 			return;
+		case "sessionPlanChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.sessionPlanState(event.sessionId),
+			});
+			return;
 		case "sessionMessagesAppended":
 			void queryClient.invalidateQueries({
 				queryKey: helmorQueryKeys.sessionMessages(event.sessionId),

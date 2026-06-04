@@ -81,6 +81,10 @@ pub struct WorkspaceSidebarRow {
     pub kind: String,
     /// True while an ai_triage row still needs the user's first send.
     pub triage_priming_unconsumed: bool,
+    /// Originating triage platform for ai_triage rows ("github", "gitlab",
+    /// "slack", "lark"). `None` for manual workspaces. Drives the sidebar
+    /// source-logo badge on AI-proposed rows.
+    pub triage_source_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1299,6 +1303,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         updated_at: record.updated_at,
         last_user_message_at: record.last_user_message_at,
         triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
+        triage_source_type: record.triage_source_type,
         kind: record.kind,
     }
 }
@@ -1543,6 +1548,12 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
             [workspace_id],
         )
         .context("Failed to delete workspace session messages")?;
+    transaction
+        .execute(
+            "DELETE FROM session_plan_state WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete workspace session plan state")?;
     transaction
         .execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",

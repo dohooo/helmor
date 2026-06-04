@@ -114,6 +114,10 @@ export type WorkspaceRow = {
 	kind?: string;
 	/** True for an ai_triage row still awaiting the user's first send. */
 	triagePrimingUnconsumed?: boolean;
+	/** Originating triage platform for ai_triage rows: "github" | "gitlab" |
+	 *  "slack" | "lark". Absent/null for manual workspaces. Drives the
+	 *  source-logo badge shown on AI-proposed sidebar rows. */
+	triageSourceType?: string | null;
 };
 
 export type WorkspaceGroup = {
@@ -165,6 +169,31 @@ export type AgentModelSection = {
 	label: string;
 	status?: AgentModelSectionStatus;
 	options: AgentModelOption[];
+};
+
+/** Wire strings the sidecars accept for permission mode. The composer's
+ *  permission-mode dropdown reads {@link ProviderCapabilities.permissionModes}
+ *  to decide which entries to render — every provider supports `default`. */
+export type PermissionModeLiteral =
+	| "default"
+	| "acceptEdits"
+	| "plan"
+	| "bypassPermissions";
+
+/** Static capability table for a single provider. Mirrors the Rust
+ *  `agents::provider_capabilities::ProviderCapabilities` shape so a
+ *  cross-stack provider check is data-driven instead of a scattered
+ *  `provider === "codex"` string compare. */
+export type ProviderCapabilities = {
+	provider: string;
+	displayName: string;
+	supportsPlanMode: boolean;
+	supportsActiveGoal: boolean;
+	supportsContextUsage: boolean;
+	supportsSteer: boolean;
+	supportsSlashCommands: boolean;
+	requiresApiKey: boolean;
+	permissionModes: PermissionModeLiteral[];
 };
 
 export type AgentSendRequest = {
@@ -824,6 +853,18 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
+export async function enterMiniWindowMode(): Promise<void> {
+	await invoke("enter_mini_window_mode");
+}
+
+export async function exitMiniWindowMode(): Promise<void> {
+	await invoke("exit_mini_window_mode");
+}
+
+export async function toggleMiniWindowMode(): Promise<boolean> {
+	return await invoke("toggle_mini_window_mode");
+}
+
 export type AgentLoginProvider = "claude" | "codex" | "cursor";
 
 export type AgentLoginStatusResult = {
@@ -998,6 +1039,72 @@ export async function loadAgentModelSections(): Promise<AgentModelSection[]> {
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to load agent models."));
 	}
+}
+
+/** Static provider-capability table. Backed by the Rust source of truth
+ *  in `agents::provider_capabilities`; callers cache the result for the
+ *  lifetime of the app and look up rows by `provider`. */
+export async function loadProviderCapabilities(): Promise<
+	ProviderCapabilities[]
+> {
+	return invoke<ProviderCapabilities[]>("list_provider_capabilities");
+}
+
+/** Local mirror of the Rust default table
+ *  (`agents::provider_capabilities::capabilities_for_provider` over
+ *  `KNOWN_PROVIDERS`). Used as `initialData` for the provider-capability
+ *  query so that on a cold start — before the persisted cache or the
+ *  `list_provider_capabilities` IPC has hydrated — consumers already read
+ *  the correct flags (e.g. Codex `supportsActiveGoal === true`). An empty
+ *  `[]` initialData would instead make Codex read `supportsActiveGoal ===
+ *  false` and silently disable `/goal` interception + the stop-stream goal
+ *  pause during that window. Keep this in lock-step with the Rust table;
+ *  the live query reconciles any drift via a background refetch. */
+export const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities[] = [
+	{
+		provider: "claude",
+		displayName: "Claude",
+		supportsPlanMode: true,
+		supportsActiveGoal: false,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+		permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
+	},
+	{
+		provider: "codex",
+		displayName: "Codex",
+		supportsPlanMode: true,
+		supportsActiveGoal: true,
+		supportsContextUsage: true,
+		supportsSteer: true,
+		supportsSlashCommands: true,
+		requiresApiKey: false,
+		permissionModes: ["default", "bypassPermissions"],
+	},
+	{
+		provider: "cursor",
+		displayName: "Cursor",
+		supportsPlanMode: false,
+		supportsActiveGoal: false,
+		supportsContextUsage: false,
+		supportsSteer: false,
+		supportsSlashCommands: true,
+		requiresApiKey: true,
+		permissionModes: ["default"],
+	},
+];
+
+/** Look up a single provider's capabilities from a previously-fetched
+ *  table. Returns `null` when the provider id isn't represented — the
+ *  composer treats that as "use Claude's safe defaults", matching the
+ *  Rust helper's fallback. */
+export function findProviderCapabilities(
+	table: readonly ProviderCapabilities[],
+	provider: string,
+): ProviderCapabilities | null {
+	return table.find((caps) => caps.provider === provider) ?? null;
 }
 
 export type CursorModelParameterValue = {
@@ -1921,6 +2028,7 @@ export type UiMutationEvent =
 	| { type: "sessionListChanged"; workspaceId: string }
 	| { type: "contextUsageChanged"; sessionId: string }
 	| { type: "codexGoalChanged"; sessionId: string }
+	| { type: "sessionPlanChanged"; sessionId: string }
 	| { type: "sessionMessagesAppended"; sessionId: string }
 	| { type: "workspaceFilesChanged"; workspaceId: string }
 	| { type: "workspaceGitStateChanged"; workspaceId: string }
@@ -3835,6 +3943,54 @@ export type CodexGoalState = {
 	createdAt: number;
 	updatedAt: number;
 };
+
+/** Provenance of the latest normalised plan projection. */
+export type SessionPlanSource = "codex" | "exit_plan_mode";
+
+/** Status of a single plan item, normalised away from provider quirks. */
+export type SessionPlanItemStatus = "pending" | "inProgress" | "completed";
+
+/** Status of the plan as a whole. Only `active` ships today; the union
+ *  exists so future "completed" / "cancelled" states don't break callers. */
+export type SessionPlanStatus = "active";
+
+export type SessionPlanItem = {
+	id: string;
+	text: string;
+	status: SessionPlanItemStatus;
+};
+
+export type SessionPlan = {
+	items: SessionPlanItem[];
+	currentItemId: string | null;
+	allowedPrompts: string[];
+	/** Markdown fallback present when the provider ships free-text plans
+	 *  (currently Claude `ExitPlanMode`). `null` when the original
+	 *  payload was already structured (Codex `turn/plan/updated`). */
+	rawText: string | null;
+	rawSource: string;
+};
+
+export type SessionPlanState = {
+	sessionId: string;
+	source: SessionPlanSource;
+	sourceMessageId: string | null;
+	plan: SessionPlan;
+	status: SessionPlanStatus;
+	updatedAt: string;
+};
+
+/** Latest persisted plan projection for a session. `null` means the
+ *  session has never carried a plan (or the stored row failed
+ *  validation — the loader degrades gracefully so the pinned-plan UI
+ *  doesn't need to handle a hard error path). */
+export async function getSessionPlanState(
+	sessionId: string,
+): Promise<SessionPlanState | null> {
+	return invoke<SessionPlanState | null>("get_session_plan_state", {
+		sessionId,
+	});
+}
 
 /** Read the active Codex `/goal` for one session. Null when no goal. */
 export async function getSessionCodexGoal(

@@ -216,6 +216,15 @@ fn ingest_conversation<B: ImBackend + ?Sized>(
             Some(preview)
         },
         external_url: None,
+        // Person-centric signal: a 1:1 DM is a direct message to me; every
+        // other IM candidate now only exists because it @-mentioned me.
+        involvement_reason: Some(
+            match conv.kind {
+                ImConversationKind::Dm => "direct_message",
+                _ => "mentioned",
+            }
+            .to_string(),
+        ),
         payload_path,
         payload_bytes,
     };

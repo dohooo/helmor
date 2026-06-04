@@ -286,6 +286,19 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
             }
 
+            // Runtime registry crash-recovery sweep. Probes every
+            // still-open row from a prior launch via `kill(pid, 0)`,
+            // stamps dead rows ended, and logs the "maybe alive"
+            // ones. Strictly diagnostic — we never auto-kill on this
+            // path because PIDs can be reused and a free port is not
+            // proof of process identity.
+            if let Err(error) = workspace::runtime_registry::run_startup_classification() {
+                tracing::warn!(
+                    %error,
+                    "Runtime registry: startup classification sweep failed"
+                );
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, bun, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —
@@ -461,6 +474,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::list_cursor_models,
+            agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
@@ -512,6 +526,9 @@ pub fn run() {
             commands::system_commands::recheck_helmor_components,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
+            commands::system_commands::enter_mini_window_mode,
+            commands::system_commands::exit_mini_window_mode,
+            commands::system_commands::toggle_mini_window_mode,
             commands::system_commands::open_agent_login_terminal,
             commands::system_commands::spawn_agent_login_terminal,
             commands::system_commands::stop_agent_login_terminal,
@@ -594,6 +611,7 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
+            commands::session_commands::get_session_plan_state,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,
             commands::session_commands::set_session_draft,

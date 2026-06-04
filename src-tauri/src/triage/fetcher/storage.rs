@@ -18,6 +18,10 @@ pub struct NewCandidate {
     pub title: Option<String>,
     pub preview: Option<String>,
     pub external_url: Option<String>,
+    /// Why this item surfaced for the user, when a concrete relation exists
+    /// (e.g. `review_requested` / `assigned` / `mentioned` / `author` /
+    /// `owned_issue` for GitHub). `None` for sources that don't stamp one.
+    pub involvement_reason: Option<String>,
     pub payload_path: String,
     pub payload_bytes: u64,
 }
@@ -64,9 +68,10 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
                     title = ?4,
                     preview = ?5,
                     external_url = ?6,
-                    payload_path = ?7,
-                    payload_bytes = ?8
-                 WHERE source = ?9 AND source_ref = ?10",
+                    involvement_reason = ?7,
+                    payload_path = ?8,
+                    payload_bytes = ?9
+                 WHERE source = ?10 AND source_ref = ?11",
                 params![
                     &candidate.source_kind,
                     &source_time,
@@ -74,6 +79,7 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
                     &candidate.title,
                     &candidate.preview,
                     &candidate.external_url,
+                    &candidate.involvement_reason,
                     &candidate.payload_path,
                     candidate.payload_bytes as i64,
                     &candidate.source,
@@ -88,11 +94,13 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
                 "INSERT INTO triage_candidate (
                     id, source, source_kind, source_ref,
                     source_time, sender,
-                    title, preview, external_url, payload_path, payload_bytes
+                    title, preview, external_url, involvement_reason,
+                    payload_path, payload_bytes
                 ) VALUES (
                     ?1, ?2, ?3, ?4,
                     ?5, ?6,
-                    ?7, ?8, ?9, ?10, ?11
+                    ?7, ?8, ?9, ?10,
+                    ?11, ?12
                 )",
                 params![
                     &candidate.id,
@@ -104,6 +112,7 @@ pub fn upsert_candidate(candidate: &NewCandidate) -> Result<UpsertOutcome> {
                     &candidate.title,
                     &candidate.preview,
                     &candidate.external_url,
+                    &candidate.involvement_reason,
                     &candidate.payload_path,
                     candidate.payload_bytes as i64,
                 ],
@@ -177,6 +186,7 @@ pub struct CandidateRow {
     pub title: Option<String>,
     pub preview: Option<String>,
     pub external_url: Option<String>,
+    pub involvement_reason: Option<String>,
     pub payload_path: String,
     pub payload_bytes: i64,
     pub decision: Option<String>,
@@ -189,7 +199,7 @@ pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
         .prepare(
             "SELECT id, source, source_kind, source_ref,
                     source_time, sender, title, preview, external_url,
-                    payload_path, payload_bytes, decision
+                    involvement_reason, payload_path, payload_bytes, decision
              FROM triage_candidate
              WHERE decision IS NULL
              ORDER BY source_time DESC
@@ -208,9 +218,10 @@ pub fn list_open_candidates(limit: i64) -> Result<Vec<CandidateRow>> {
                 title: row.get(6)?,
                 preview: row.get(7)?,
                 external_url: row.get(8)?,
-                payload_path: row.get(9)?,
-                payload_bytes: row.get(10)?,
-                decision: row.get(11)?,
+                involvement_reason: row.get(9)?,
+                payload_path: row.get(10)?,
+                payload_bytes: row.get(11)?,
+                decision: row.get(12)?,
             })
         })
         .context("query list_open_candidates")?;
@@ -265,7 +276,7 @@ pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
         .query_row(
             "SELECT id, source, source_kind, source_ref,
                     source_time, sender, title, preview, external_url,
-                    payload_path, payload_bytes, decision
+                    involvement_reason, payload_path, payload_bytes, decision
              FROM triage_candidate WHERE id = ?1",
             params![id],
             |row| {
@@ -279,9 +290,10 @@ pub fn get_candidate(id: &str) -> Result<Option<CandidateRow>> {
                     title: row.get(6)?,
                     preview: row.get(7)?,
                     external_url: row.get(8)?,
-                    payload_path: row.get(9)?,
-                    payload_bytes: row.get(10)?,
-                    decision: row.get(11)?,
+                    involvement_reason: row.get(9)?,
+                    payload_path: row.get(10)?,
+                    payload_bytes: row.get(11)?,
+                    decision: row.get(12)?,
                 })
             },
         )
@@ -334,6 +346,7 @@ mod tests {
             title: Some("Bug: pipeline drops deltas".into()),
             preview: Some("repro: ...".into()),
             external_url: Some("https://example.com/issue/1".into()),
+            involvement_reason: Some("assigned".into()),
             payload_path: format!("github/{id}.md"),
             payload_bytes: 100,
         }
@@ -357,6 +370,24 @@ mod tests {
             open[0].title.as_deref(),
             Some("Bug: pipeline drops deltas (updated)")
         );
+    }
+
+    #[test]
+    fn involvement_reason_round_trips() {
+        let _e = env();
+        let mut c = make("gh:1", "1");
+        c.involvement_reason = Some("review_requested".into());
+        upsert_candidate(&c).unwrap();
+
+        let open = list_open_candidates(10).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(
+            open[0].involvement_reason.as_deref(),
+            Some("review_requested")
+        );
+
+        let got = get_candidate("gh:1").unwrap().unwrap();
+        assert_eq!(got.involvement_reason.as_deref(), Some("review_requested"));
     }
 
     #[test]

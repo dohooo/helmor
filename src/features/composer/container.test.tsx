@@ -1079,7 +1079,11 @@ describe("WorkspaceComposerContainer", () => {
 			updatedAt: 0,
 		};
 
-		function setupCodexSessionWithGoal(): {
+		function setupCodexSessionWithGoal({
+			seedCapabilities = true,
+		}: {
+			seedCapabilities?: boolean;
+		} = {}): {
 			queryClient: ReturnType<typeof createHelmorQueryClient>;
 		} {
 			const queryClient = createHelmorQueryClient();
@@ -1087,6 +1091,26 @@ describe("WorkspaceComposerContainer", () => {
 				helmorQueryKeys.agentModelSections,
 				MODEL_SECTIONS,
 			);
+			// Explicitly seed the provider-capability table for the steady-
+			// state tests. When omitted (`seedCapabilities: false`) the
+			// query falls back to `providerCapabilitiesQueryOptions`'
+			// `initialData`, which mirrors the Rust default table — that is
+			// the cold-start path the dedicated test below exercises.
+			if (seedCapabilities) {
+				queryClient.setQueryData(helmorQueryKeys.providerCapabilities, [
+					{
+						provider: "codex",
+						displayName: "Codex",
+						supportsPlanMode: true,
+						supportsActiveGoal: true,
+						supportsContextUsage: true,
+						supportsSteer: true,
+						supportsSlashCommands: true,
+						requiresApiKey: false,
+						permissionModes: ["default", "bypassPermissions"],
+					},
+				]);
+			}
 			queryClient.setQueryData(
 				helmorQueryKeys.workspaceDetail("workspace-1"),
 				WORKSPACE_DETAIL,
@@ -1200,6 +1224,32 @@ describe("WorkspaceComposerContainer", () => {
 			expect(onSubmit).toHaveBeenCalledWith(
 				expect.objectContaining({ prompt: "/goal resume" }),
 			);
+		});
+
+		// Cold-start regression: before the capability table hydrates from
+		// the persisted cache / IPC, the composer must still treat Codex as
+		// an active-goal provider via the query's `initialData`. With an
+		// empty/unhydrated table this `/goal pause` would have leaked to the
+		// agent stream (mis-parsed as `{kind: "set", objective: "pause"}`).
+		it("intercepts /goal pause via initialData before the capability table hydrates", async () => {
+			const { queryClient } = setupCodexSessionWithGoal({
+				seedCapabilities: false,
+			});
+			const onSubmit = vi.fn<ContainerOnSubmit>();
+			renderCodexComposer(queryClient, onSubmit);
+
+			await waitFor(() =>
+				expect(composerMockState.lastOnSubmit).not.toBeNull(),
+			);
+
+			composerMockState.lastOnSubmit?.("/goal pause", [], [], []);
+
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledTimes(1);
+			expect(apiMockState.mutateCodexGoal).toHaveBeenCalledWith(
+				"session-2",
+				"pause",
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
 		});
 	});
 });

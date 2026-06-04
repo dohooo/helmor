@@ -185,6 +185,7 @@ fn ingest_item(login: &str, item: &InboxItem, summary: &mut FetchSummary) -> Res
         title: Some(item.title.clone()),
         preview: item.subtitle.clone(),
         external_url: Some(item.external_url.clone()),
+        involvement_reason: None,
         payload_path,
         payload_bytes,
     };

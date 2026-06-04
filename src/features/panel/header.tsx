@@ -24,6 +24,7 @@ import {
 } from "@/components/account-hover-card-content";
 import { BranchPickerPopover } from "@/components/branch-picker";
 import { CachedAvatar } from "@/components/cached-avatar";
+import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { HelmorThinkingIndicator } from "@/components/helmor-thinking-indicator";
 import { ClaudeIcon, CursorIcon, OpenAIIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -228,6 +229,11 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 					data-tauri-drag-region
 					className="relative z-0 flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-small"
 				>
+					<TrafficLightSpacer
+						side="left"
+						width={60}
+						className="hidden max-[960px]:block"
+					/>
 					{headerLeading}
 					{workspace?.mode === "chat" ? (
 						<span className="inline-flex items-center gap-1.5 overflow-hidden px-1 py-0.5 font-medium text-foreground">

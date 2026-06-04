@@ -50,6 +50,7 @@ import { cn } from "@/lib/utils";
 import { publishShellEvent } from "@/shell/event-bus";
 import { CreateBranchDialog } from "./create-branch-dialog";
 
+const COMPACT_TRAFFIC_LIGHT_SPACER_WIDTH = 60;
 const PREVIEW_TRAFFIC_LIGHT_SPACER_WIDTH = 52;
 
 function defaultBranchPrefix(repo: RepositoryCreateOption | null): string {
@@ -85,6 +86,7 @@ type WorkspaceStartPageProps = {
 	onCreateAndCheckoutBranch?: (branch: string) => Promise<void>;
 	previewCard?: ContextCard | null;
 	previewAppendContextTarget?: ComposerInsertTarget;
+	headerLeading?: React.ReactNode;
 	showWindowSafeTop?: boolean;
 	onClosePreview?: () => void;
 	children: React.ReactNode;
@@ -106,6 +108,7 @@ export function WorkspaceStartPage({
 	onCreateAndCheckoutBranch,
 	previewCard = null,
 	previewAppendContextTarget,
+	headerLeading,
 	showWindowSafeTop = false,
 	onClosePreview,
 	children,
@@ -183,8 +186,18 @@ export function WorkspaceStartPage({
 	return (
 		<div
 			data-focus-scope="start-composer"
-			className="flex min-h-0 flex-1 justify-center"
+			className="relative flex min-h-0 flex-1 justify-center"
 		>
+			{headerLeading ? (
+				<div className="absolute left-0 top-0 z-30 flex h-9 items-center">
+					<TrafficLightSpacer
+						side="left"
+						width={COMPACT_TRAFFIC_LIGHT_SPACER_WIDTH}
+						className="hidden max-[960px]:block"
+					/>
+					{headerLeading}
+				</div>
+			) : null}
 			<div className="relative h-full min-h-0 w-full max-w-5xl">
 				<div
 					className={cn(

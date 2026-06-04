@@ -62,6 +62,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 // shortcut suite's dependency on that assumption.
 vi.mock("./lib/platform", () => ({
 	isMac: () => true,
+	isTauriRuntime: () => true,
 }));
 vi.mock("@tauri-apps/api/window", () => ({
 	getCurrentWindow: () => ({
@@ -756,6 +757,36 @@ describe("App global navigation shortcuts", () => {
 		});
 
 		await screen.findByRole("heading", { name: "Contexts" });
+	});
+
+	it("resizes the window on Command+M", async () => {
+		const invokeMock = vi.mocked(invoke);
+		await renderAppReady();
+		invokeMock.mockClear();
+
+		fireEvent.keyDown(window, {
+			key: "m",
+			code: "KeyM",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(invokeMock).toHaveBeenCalledWith("toggle_mini_window_mode");
+		});
+
+		fireEvent.keyDown(window, {
+			key: "m",
+			code: "KeyM",
+			metaKey: true,
+		});
+
+		await waitFor(() => {
+			expect(
+				invokeMock.mock.calls.filter(
+					([command]) => command === "toggle_mini_window_mode",
+				),
+			).toHaveLength(2);
+		});
 	});
 
 	it("does not wrap session navigation on Option+Command+Left from the first session", async () => {

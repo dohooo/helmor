@@ -1690,6 +1690,55 @@ fn load_repo_scripts_priority_3_falls_through_to_db_when_no_helmor_json_anywhere
 // ---------------------------------------------------------------------------
 
 #[test]
+fn delete_session_removes_session_plan_state() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    let workspace = workspaces::prepare_workspace_from_repo_impl(
+        &harness.repo_id,
+        None,
+        WorkspaceBranchIntent::FromBranch,
+        WorkspaceStatus::InProgress,
+        None,
+    )
+    .unwrap();
+    workspaces::finalize_workspace_from_repo_impl(&workspace.workspace_id).unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO session_plan_state (session_id, source, plan_json)
+             VALUES (?1, 'codex', ?2)",
+            [
+                workspace.initial_session_id.as_str(),
+                r#"{"items":[],"currentItemId":null,"allowedPrompts":[],"rawText":null,"rawSource":"codex"}"#,
+            ],
+        )
+        .unwrap();
+
+    sessions::delete_session(&workspace.initial_session_id).unwrap();
+
+    let (sessions_count, plan_count, active_session_id): (i64, i64, Option<String>) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM sessions WHERE id = ?1),
+                    (SELECT COUNT(*) FROM session_plan_state WHERE session_id = ?1),
+                    (SELECT active_session_id FROM workspaces WHERE id = ?2)",
+            [
+                workspace.initial_session_id.as_str(),
+                workspace.workspace_id.as_str(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(sessions_count, 0);
+    assert_eq!(plan_count, 0);
+    assert_eq!(active_session_id, None);
+}
+
+#[test]
 fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
     let _guard = TEST_LOCK
         .lock()
@@ -1716,8 +1765,8 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
     .unwrap();
     workspaces::finalize_workspace_from_repo_impl(&drop.workspace_id).unwrap();
 
-    // Plant a session_message on each so the cascade is observable across
-    // every dependent table.
+    // Plant dependent rows on each so the cascade is observable across every
+    // table owned by sessions.
     let connection = Connection::open(harness.db_path()).unwrap();
     let now = crate::models::db::current_timestamp().unwrap();
     for (session_id, workspace_id) in [
@@ -1735,40 +1784,53 @@ fn delete_workspace_and_session_rows_leaves_other_workspaces_intact() {
                 ),
             )
             .unwrap();
+        connection
+            .execute(
+                "INSERT INTO session_plan_state (session_id, source, plan_json)
+                 VALUES (?1, 'codex', ?2)",
+                [
+                    session_id.as_str(),
+                    r#"{"items":[],"currentItemId":null,"allowedPrompts":[],"rawText":null,"rawSource":"codex"}"#,
+                ],
+            )
+            .unwrap();
     }
 
     crate::models::workspaces::delete_workspace_and_session_rows(&drop.workspace_id).unwrap();
 
     // Dropped workspace + everything under it is gone.
-    let (dropped_ws, dropped_sessions, dropped_msgs): (i64, i64, i64) = connection
-        .query_row(
-            "SELECT
-                    (SELECT COUNT(*) FROM workspaces WHERE id = ?1),
-                    (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1),
-                    (SELECT COUNT(*) FROM session_messages WHERE session_id = ?2)",
-            [&drop.workspace_id, &drop.initial_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
+    let (dropped_ws, dropped_sessions, dropped_msgs, dropped_plan): (i64, i64, i64, i64) =
+        connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM workspaces WHERE id = ?1),
+                        (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1),
+                        (SELECT COUNT(*) FROM session_messages WHERE session_id = ?2),
+                        (SELECT COUNT(*) FROM session_plan_state WHERE session_id = ?2)",
+                [&drop.workspace_id, &drop.initial_session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
     assert_eq!(dropped_ws, 0);
     assert_eq!(dropped_sessions, 0);
     assert_eq!(dropped_msgs, 0);
+    assert_eq!(dropped_plan, 0);
 
     // Sibling workspace is fully intact — cascade must not leak across
     // workspace_id.
-    let (kept_ws, kept_sessions, kept_msgs): (i64, i64, i64) = connection
+    let (kept_ws, kept_sessions, kept_msgs, kept_plan): (i64, i64, i64, i64) = connection
         .query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM workspaces WHERE id = ?1),
-                (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1),
-                (SELECT COUNT(*) FROM session_messages WHERE session_id = ?2)",
+            "SELECT (SELECT COUNT(*) FROM workspaces WHERE id = ?1),
+                    (SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1),
+                    (SELECT COUNT(*) FROM session_messages WHERE session_id = ?2),
+                    (SELECT COUNT(*) FROM session_plan_state WHERE session_id = ?2)",
             [&keep.workspace_id, &keep.initial_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
     assert_eq!(kept_ws, 1);
     assert_eq!(kept_sessions, 1);
     assert_eq!(kept_msgs, 1);
+    assert_eq!(kept_plan, 1);
 }
 
 #[test]
