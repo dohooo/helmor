@@ -10,6 +10,11 @@ export interface TriageLocalModel {
 	readonly baseUrl: string;
 	readonly token: string;
 	readonly model: string;
+	/** Active model's real llama.cpp `-c` context window (tokens), reported by
+	 *  Rust per tick. Drives the triage maxTokens budget so deep thinking has
+	 *  room without starving input. Optional / 0 when unknown → buildLocalModel
+	 *  falls back to a safe 32K default. */
+	readonly contextWindow?: number;
 }
 
 export interface TriageCandidate {

@@ -16,7 +16,6 @@ import {
 	buildReadCandidateTool,
 	ProposalAccumulator,
 } from "./tools/helmor";
-import { buildThinkTool } from "./tools/reasoning";
 import type { TriageProposal, TriageTickParams } from "./types";
 
 registerBuiltInApiProviders();
@@ -27,19 +26,51 @@ const PREVIEW_CHARS = 240;
 function buildLocalModel(
 	params: TriageTickParams["localModel"],
 ): Model<"openai-completions"> {
+	// Real server `-c` for the active model (Rust reports it per tick); falls back
+	// to 32K when unknown. Drives the maxTokens budget below.
+	const ctx =
+		params.contextWindow && params.contextWindow > 0
+			? params.contextWindow
+			: 32_768;
 	return {
 		id: params.model,
 		name: params.model,
 		api: "openai-completions",
 		provider: PROVIDER_ID,
 		baseUrl: params.baseUrl.replace(/\/$/, ""),
-		reasoning: false,
+		// Proposed-task generation is a background, accuracy-critical job with no
+		// latency pressure (slow is fine, it just has to be right). Turn ON native
+		// thinking so the model deliberates before each owed / not-owed verdict —
+		// empirically this kills the cross-source hallucinations + brittle tool use
+		// we saw with thinking off. llama-server launches with `--reasoning off`, but
+		// a per-request `chat_template_kwargs.enable_thinking=true` re-enables it at
+		// the generation layer (verified live). "qwen-chat-template" emits exactly
+		// that kwarg, which is GENERIC: Qwen3 AND Gemma 4 both read `enable_thinking`,
+		// while templates that don't (Gemma 3, Llama) silently ignore it (llama.cpp's
+		// minja treats undefined as null) — so this survives a model switch. The
+		// OpenAI `reasoning_effort` knob does nothing here (llama.cpp ignores it for
+		// these models); the real depth lever is maxTokens below.
+		reasoning: true,
+		// `maxTokensField: "max_tokens"` forces the classic OpenAI field that
+		// llama.cpp reliably honours — the SDK would otherwise default localhost to
+		// `max_completion_tokens`, which older llama.cpp builds ignore (→ our budget
+		// would be silently dropped).
+		compat: {
+			thinkingFormat: "qwen-chat-template",
+			maxTokensField: "max_tokens",
+		},
 		// Multimodal — IM candidates may carry image attachments the
 		// fetcher inlined as base64.
 		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 32_768,
-		maxTokens: 4_096,
+		// Match the SDK's context view to the server's real `-c` so its overflow
+		// detection is accurate (the agent loop does no contextWindow trimming).
+		contextWindow: ctx,
+		// Depth lever: since reasoning_effort is ignored, the only way to let the
+		// model think harder is a bigger budget for the shared <think> + answer span
+		// (Qwen recommends ~32K output for thinking). Scale to the real context so
+		// we never starve input on a small-ctx machine.
+		maxTokens: Math.min(32_768, Math.max(4_096, Math.floor(ctx / 4))),
 	};
 }
 
@@ -111,8 +142,6 @@ export async function runTriageTick(
 		buildProposeWorkspaceTool(accumulator, { max: params.maxPerTick }),
 		buildMarkNotActionableTool(accumulator),
 		buildReadCandidateTool(),
-		// Scratchpad — no side effect. Stabilises small-model multi-step decisions.
-		buildThinkTool(),
 	];
 
 	const model = buildLocalModel(params.localModel);
@@ -146,12 +175,23 @@ export async function runTriageTick(
 					m.role === "assistant" ||
 					m.role === "toolResult",
 			) as never,
-		// Triage is classification, not generation: one correct owed/not-owed
-		// verdict per candidate. Greedy decoding (temp 0) keeps the
-		// precision-first decision stable across ticks (matches the other
-		// local-LLM call sites in local_llm chat.rs / manager.rs).
+		// Background generation trades latency for accuracy. Qwen3 thinking mode
+		// wants temperature ~0.6 (greedy temp 0 degrades / loops once thinking is
+		// on), and `reasoning: "high"` is what flips enable_thinking=true through
+		// the qwen-chat-template compat set on the model above. We MUST also forward
+		// `maxTokens` here: pi-agent-core's loop config does not propagate the
+		// model's maxTokens to the request, and the wire `max_tokens` is only set
+		// from the per-call option — so without this the server falls back to its own
+		// default and our depth budget is silently ignored. The lightweight local-LLM
+		// call sites (title / commit in local_llm/manager.rs) keep their own separate
+		// temp-0, no-think path — they are untouched.
 		streamFn: (m, ctx, opts) =>
-			streamSimple(m, ctx, { ...opts, temperature: 0 }),
+			streamSimple(m, ctx, {
+				...opts,
+				reasoning: "high",
+				temperature: 0.6,
+				maxTokens: m.maxTokens,
+			}),
 		getApiKey: (provider) =>
 			provider === PROVIDER_ID ? params.localModel.token : undefined,
 	});
