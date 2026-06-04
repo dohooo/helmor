@@ -1261,11 +1261,18 @@ function AppShell({
 		usePendingQueueController({
 			queryClient,
 			pushToast: pushWorkspaceToast,
-			getSelectionTargets: () => ({
-				selectedWorkspaceId: selection.selectedWorkspaceId,
-				displayedWorkspaceId: selection.displayedWorkspaceId,
-				displayedSessionId: selection.displayedSessionId,
-			}),
+			getSelectionTargets: () => {
+				// Read straight from the store (latest, lazy, non-subscribing) so a
+				// queued insert sees the current selection even between renders.
+				// MUST use getState() — it returns the full SelectionState including
+				// the displayed* track that getSnapshot()/selected-only reads omit.
+				const snap = selectionStore.getState();
+				return {
+					selectedWorkspaceId: snap.selectedWorkspaceId,
+					displayedWorkspaceId: snap.displayedWorkspaceId,
+					displayedSessionId: snap.displayedSessionId,
+				};
+			},
 			getActiveWorkspaceId: () => selectionActions.getSnapshot().workspaceId,
 			onCliSendSelectWorkspace: (id) => handleSelectWorkspace(id),
 			onCliSendSelectSession: (id) => handleSelectSession(id),
