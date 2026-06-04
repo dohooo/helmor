@@ -70,6 +70,7 @@ import {
 	createSession,
 	exitOnboardingWindowMode,
 	openWorkspaceInEditor,
+	toggleMiniWindowMode,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "./lib/api";
@@ -314,6 +315,7 @@ function AppShell({
 }) {
 	useZoom();
 	const queryClient = useQueryClient();
+	const [miniModePending, setMiniModePending] = useState(false);
 	// Tracks which session we last persisted as "read" so the auto-read effect
 	// stays idempotent when interaction-required state churns without the
 	// displayed session changing.
@@ -505,6 +507,21 @@ function AppShell({
 	const rightSidebarAvailable = contextPanel.rightSidebarAvailable;
 	const contextPanelOpen = contextPanel.contextPanelOpen;
 	const setInspectorCollapsed = contextPanelActions.setInspectorCollapsed;
+	const handleToggleMiniMode = useCallback(() => {
+		if (miniModePending) {
+			return;
+		}
+
+		setMiniModePending(true);
+		void toggleMiniWindowMode()
+			.catch((error: unknown) => {
+				console.error("[app] failed to resize window", error);
+				toast.error("Unable to resize window", {
+					description: String(error),
+				});
+			})
+			.finally(() => setMiniModePending(false));
+	}, [miniModePending]);
 	const handleToggleContextPanel = contextPanelActions.toggleContextPanel;
 	const handleStartContextCardOpen = contextPanelActions.openStartContextCard;
 	const handleStartContextPreviewClose =
@@ -622,6 +639,10 @@ function AppShell({
 	const rightSidebarToggleShortcut = getShortcut(
 		appSettings.shortcuts,
 		"sidebar.right.toggle",
+	);
+	const miniModeToggleShortcut = getShortcut(
+		appSettings.shortcuts,
+		"window.miniMode.toggle",
 	);
 	const handleUpdateGlobalHotkeyShortcuts = useCallback(
 		(shortcuts: ShortcutOverrides) => updateSettings({ shortcuts }),
@@ -1309,6 +1330,10 @@ function AppShell({
 				callback: handleToggleTheme,
 			},
 			{
+				id: "window.miniMode.toggle" as const,
+				callback: handleToggleMiniMode,
+			},
+			{
 				id: "sidebar.left.toggle" as const,
 				callback: () => setSidebarCollapsed((collapsed) => !collapsed),
 			},
@@ -1404,6 +1429,7 @@ function AppShell({
 			handleEnterEditorEditMode,
 			handlePullLatest,
 			handleReopenClosedSession,
+			handleToggleMiniMode,
 			handleToggleTheme,
 			handleToggleZenMode,
 			preferredEditor,
@@ -1536,6 +1562,17 @@ function AppShell({
 		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
 	const workspaceSidebarAutoSelectEnabled =
 		areSettingsLoaded && workspaceViewMode !== "start" && !restoreStartSurface;
+	const workspaceHeaderLeading = (
+		<WorkspaceHeaderLeading
+			appUpdateStatus={appUpdateStatus}
+			leftSidebarToggleShortcut={leftSidebarToggleShortcut}
+			miniModePending={miniModePending}
+			miniModeToggleShortcut={miniModeToggleShortcut}
+			showOnDesktop={sidebarCollapsed}
+			onToggleMiniMode={handleToggleMiniMode}
+			onExpandSidebar={() => setSidebarCollapsed(false)}
+		/>
+	);
 
 	return (
 		<TooltipProvider delayDuration={0}>
@@ -1585,10 +1622,13 @@ function AppShell({
 											leftSidebarToggleShortcut={leftSidebarToggleShortcut}
 											appUpdateStatus={appUpdateStatus}
 											appSettings={appSettings}
+											miniModePending={miniModePending}
+											miniModeToggleShortcut={miniModeToggleShortcut}
 											onSelectWorkspace={handleSelectWorkspace}
 											onOpenNewWorkspace={handleOpenWorkspaceStart}
 											onAddRepositoryNeedsStart={handleAddRepositoryNeedsStart}
 											onMoveLocalToWorktree={handleMoveLocalToWorktree}
+											onToggleMiniMode={handleToggleMiniMode}
 											onCollapseSidebar={() => setSidebarCollapsed(true)}
 											onOpenFeedback={() => setFeedbackOpen(true)}
 											onOpenSettings={handleOpenSettings}
@@ -1673,6 +1713,7 @@ function AppShell({
 													}}
 													previewCard={startPreviewCard}
 													previewAppendContextTarget={startComposerInsertTarget}
+													headerLeading={workspaceHeaderLeading}
 													showWindowSafeTop={sidebarCollapsed}
 													onClosePreview={handleStartContextPreviewClose}
 												>
@@ -1788,19 +1829,7 @@ function AppShell({
 													onCloseContextPreview={
 														handleWorkspaceContextPreviewClose
 													}
-													headerLeading={
-														sidebarCollapsed ? (
-															<WorkspaceHeaderLeading
-																appUpdateStatus={appUpdateStatus}
-																leftSidebarToggleShortcut={
-																	leftSidebarToggleShortcut
-																}
-																onExpandSidebar={() =>
-																	setSidebarCollapsed(false)
-																}
-															/>
-														) : undefined
-													}
+													headerLeading={workspaceHeaderLeading}
 													headerActions={
 														selectedWorkspaceId ? (
 															<WorkspaceHeaderActions

@@ -17,6 +17,7 @@ export type ShortcutId =
 	| "script.run"
 	| "settings.open"
 	| "theme.toggle"
+	| "window.miniMode.toggle"
 	| "sidebar.left.toggle"
 	| "sidebar.right.toggle"
 	| "zen.toggle"

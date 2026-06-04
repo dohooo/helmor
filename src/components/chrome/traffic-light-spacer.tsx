@@ -1,4 +1,4 @@
-import { isMac } from "@/lib/platform";
+import { isMac, isTauriRuntime } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,6 +23,9 @@ export function TrafficLightSpacer({
 	width?: number;
 	className?: string;
 }) {
+	if (!isTauriRuntime()) {
+		return null;
+	}
 	const mac = isMac();
 	const shouldRender = (side === "left" && mac) || (side === "right" && !mac);
 	if (!shouldRender) {

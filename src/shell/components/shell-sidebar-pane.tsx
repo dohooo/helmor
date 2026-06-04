@@ -18,6 +18,8 @@ import type { AppUpdateStatus } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
+import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	collapsed: boolean;
@@ -33,10 +35,13 @@ type Props = {
 	leftSidebarToggleShortcut: string | null;
 	appUpdateStatus: AppUpdateStatus | null;
 	appSettings: AppSettings;
+	miniModePending: boolean;
+	miniModeToggleShortcut: string | null;
 	onSelectWorkspace: (workspaceId: string | null) => void;
 	onOpenNewWorkspace: () => void;
 	onAddRepositoryNeedsStart: (repositoryId: string) => void;
 	onMoveLocalToWorktree: (workspaceId: string) => void;
+	onToggleMiniMode: () => void;
 	onCollapseSidebar: () => void;
 	onOpenFeedback: () => void;
 	onOpenSettings: () => void;
@@ -57,10 +62,13 @@ export function ShellSidebarPane({
 	leftSidebarToggleShortcut,
 	appUpdateStatus,
 	appSettings,
+	miniModePending,
+	miniModeToggleShortcut,
 	onSelectWorkspace,
 	onOpenNewWorkspace,
 	onAddRepositoryNeedsStart,
 	onMoveLocalToWorktree,
+	onToggleMiniMode,
 	onCollapseSidebar,
 	onOpenFeedback,
 	onOpenSettings,
@@ -69,6 +77,7 @@ export function ShellSidebarPane({
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);
+	const { open: peekOpen, peekHandlers } = useEdgePeek();
 	useLayoutEffect(() => {
 		if (asideRef.current) {
 			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
@@ -86,73 +95,92 @@ export function ShellSidebarPane({
 			data-helmor-sidebar-root
 			data-shell-pane="sidebar"
 			className={cn(
-				"relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar",
+				"group/sidebar relative flex h-full shrink-0 flex-col overflow-hidden bg-sidebar max-[960px]:absolute max-[960px]:bottom-[18px] max-[960px]:left-0 max-[960px]:top-9 max-[960px]:z-50 max-[960px]:h-auto max-[960px]:!w-6 max-[960px]:!max-w-[calc(100vw-12px)] max-[960px]:overflow-visible max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-transparent max-[960px]:bg-transparent max-[960px]:shadow-none max-[960px]:ring-0",
 				resizing
 					? "transition-none"
-					: "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-				collapsed ? "pointer-events-none" : "",
+					: "transition-[width] duration-[220ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none",
+				collapsed ? "pointer-events-none max-[960px]:pointer-events-auto" : "",
 			)}
 		>
 			<div
-				ref={innerRef}
-				data-shell-pane-inner="sidebar"
+				data-shell-pane-hover="sidebar"
+				{...peekHandlers}
 				className={cn(
-					"relative flex h-full shrink-0 flex-col transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-					collapsed
-						? "-translate-x-full opacity-0"
-						: "translate-x-0 opacity-100",
+					"contents max-[960px]:absolute max-[960px]:inset-y-0 max-[960px]:left-0 max-[960px]:block max-[960px]:overflow-visible max-[960px]:pointer-events-auto",
+					peekOpen ? "max-[960px]:!w-[332px]" : "max-[960px]:!w-6",
 				)}
 			>
-				<div className="min-h-0 flex-1">
-					<WorkspacesSidebarContainer
-						selectedWorkspaceId={selectedWorkspaceId}
-						autoSelectEnabled={autoSelectEnabled}
-						busyWorkspaceIds={busyWorkspaceIds}
-						interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
-						newWorkspaceShortcut={newWorkspaceShortcut}
-						addRepositoryShortcut={addRepositoryShortcut}
-						sidebarFilterShortcut={sidebarFilterShortcut}
-						onSelectWorkspace={onSelectWorkspace}
-						onOpenNewWorkspace={onOpenNewWorkspace}
-						onAddRepositoryNeedsStart={onAddRepositoryNeedsStart}
-						onMoveLocalToWorktree={onMoveLocalToWorktree}
-						pushWorkspaceToast={pushWorkspaceToast}
-					/>
-				</div>
-				<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
-					<AppUpdateButton status={appUpdateStatus} />
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label="Collapse left sidebar"
-								onClick={onCollapseSidebar}
-								variant="ghost"
-								size="icon-xs"
-								className="text-muted-foreground hover:text-foreground"
+				<div
+					ref={innerRef}
+					data-shell-pane-inner="sidebar"
+					className={cn(
+						"relative flex h-full shrink-0 flex-col transition-[opacity,translate] duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none max-[960px]:ml-3 max-[960px]:!w-[320px] max-[960px]:!max-w-[calc(100vw-24px)] max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-border/70 max-[960px]:bg-sidebar max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.22)] max-[960px]:ring-1 max-[960px]:ring-background/55 max-[960px]:will-change-transform dark:max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
+						peekOpen
+							? "max-[960px]:translate-x-0 max-[960px]:opacity-100"
+							: "max-[960px]:-translate-x-full max-[960px]:opacity-0",
+						collapsed
+							? "-translate-x-full opacity-0"
+							: "translate-x-0 opacity-100",
+					)}
+				>
+					<div className="min-h-0 flex-1">
+						<WorkspacesSidebarContainer
+							selectedWorkspaceId={selectedWorkspaceId}
+							autoSelectEnabled={autoSelectEnabled}
+							busyWorkspaceIds={busyWorkspaceIds}
+							interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}
+							newWorkspaceShortcut={newWorkspaceShortcut}
+							addRepositoryShortcut={addRepositoryShortcut}
+							sidebarFilterShortcut={sidebarFilterShortcut}
+							onSelectWorkspace={onSelectWorkspace}
+							onOpenNewWorkspace={onOpenNewWorkspace}
+							onAddRepositoryNeedsStart={onAddRepositoryNeedsStart}
+							onMoveLocalToWorktree={onMoveLocalToWorktree}
+							pushWorkspaceToast={pushWorkspaceToast}
+						/>
+					</div>
+					<div className="absolute right-[12px] top-[6px] z-20 flex items-center gap-[2px]">
+						<AppUpdateButton status={appUpdateStatus} />
+						<div className="flex items-center max-[960px]:hidden">
+							<MiniModeToggleButton
+								pending={miniModePending}
+								shortcut={miniModeToggleShortcut}
+								onToggle={onToggleMiniMode}
+							/>
+						</div>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									aria-label="Collapse left sidebar"
+									onClick={onCollapseSidebar}
+									variant="ghost"
+									size="icon-xs"
+									className="text-muted-foreground hover:text-foreground max-[960px]:hidden"
+								>
+									<PanelLeftClose className="size-4" strokeWidth={1.8} />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent
+								side="bottom"
+								className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
 							>
-								<PanelLeftClose className="size-4" strokeWidth={1.8} />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent
-							side="bottom"
-							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-						>
-							<span>Collapse left sidebar</span>
-							{leftSidebarToggleShortcut ? (
-								<InlineShortcutDisplay
-									hotkey={leftSidebarToggleShortcut}
-									className="text-background/60"
-								/>
-							) : null}
-						</TooltipContent>
-					</Tooltip>
-				</div>
-				<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
-					<SettingsButton
-						onClick={onOpenSettings}
-						shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
-					/>
-					<FeedbackButton onClick={onOpenFeedback} />
+								<span>Collapse left sidebar</span>
+								{leftSidebarToggleShortcut ? (
+									<InlineShortcutDisplay
+										hotkey={leftSidebarToggleShortcut}
+										className="text-background/60"
+									/>
+								) : null}
+							</TooltipContent>
+						</Tooltip>
+					</div>
+					<div className="flex shrink-0 items-center px-3 pb-3 pt-1">
+						<SettingsButton
+							onClick={onOpenSettings}
+							shortcut={getShortcut(appSettings.shortcuts, "settings.open")}
+						/>
+						<FeedbackButton onClick={onOpenFeedback} />
+					</div>
 				</div>
 			</div>
 		</aside>

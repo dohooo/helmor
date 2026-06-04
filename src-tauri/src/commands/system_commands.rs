@@ -7,7 +7,8 @@ use anyhow::Context;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{
-    LogicalSize, LogicalUnit, Manager, PixelUnit, Size, State, Window, WindowSizeConstraints,
+    LogicalSize, LogicalUnit, Manager, PhysicalPosition, PhysicalSize, PixelUnit, Position, Size,
+    State, Window, WindowSizeConstraints,
 };
 
 use crate::workspace::scripts::{ScriptContext, ScriptEvent, ScriptProcessManager};
@@ -19,6 +20,8 @@ use super::common::{run_blocking, CmdResult};
 // Resizing is restored when onboarding exits.
 const ONBOARDING_WINDOW_WIDTH: f64 = 1300.0;
 const ONBOARDING_WINDOW_HEIGHT: f64 = 810.0;
+const MINI_WINDOW_WIDTH: f64 = 430.0;
+const MINI_WINDOW_HEIGHT: f64 = 760.0;
 const HELMOR_SKILL_NAME: &str = "helmor-cli";
 const HELMOR_SKILL_SOURCE: &str = "dohooo/helmor/.agents/skills/helmor-cli";
 
@@ -46,6 +49,14 @@ const ONBOARDING_COMPLETED_KEY: &str = "app.onboarding_completed";
 
 static ONBOARDING_WINDOW_STATE: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static MINI_WINDOW_STATE: LazyLock<Mutex<HashMap<String, MiniWindowRestoreState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Copy)]
+struct MiniWindowRestoreState {
+    size: PhysicalSize<u32>,
+    resizable: bool,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -968,6 +979,96 @@ pub fn exit_onboarding_window_mode(window: Window) -> CmdResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn enter_mini_window_mode(window: Window) -> CmdResult<()> {
+    let label = window.label().to_string();
+    let restore_state = MiniWindowRestoreState {
+        size: window
+            .outer_size()
+            .context("Failed to read current window size")?,
+        resizable: window
+            .is_resizable()
+            .context("Failed to read window resizable state")?,
+    };
+    MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .entry(label)
+        .or_insert(restore_state);
+
+    let size = mini_window_size();
+    window
+        .set_size(size)
+        .context("Failed to set mini window size")?;
+    window.center().context("Failed to center mini window")?;
+    window
+        .set_min_size(Some(size))
+        .context("Failed to set mini minimum window size")?;
+    window
+        .set_max_size(Some(size))
+        .context("Failed to set mini maximum window size")?;
+    window
+        .set_size_constraints(mini_window_constraints())
+        .context("Failed to set mini window size constraints")?;
+    window
+        .set_resizable(false)
+        .context("Failed to disable mini window resizing")?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn exit_mini_window_mode(window: Window) -> CmdResult<()> {
+    let label = window.label().to_string();
+    let restore_state = MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .remove(&label);
+
+    window
+        .set_size_constraints(WindowSizeConstraints::default())
+        .context("Failed to clear mini window size constraints")?;
+    window
+        .set_min_size(None::<Size>)
+        .context("Failed to clear mini minimum window size")?;
+    window
+        .set_max_size(None::<Size>)
+        .context("Failed to clear mini maximum window size")?;
+
+    if let Some(state) = restore_state {
+        window
+            .set_size(Size::Physical(state.size))
+            .context("Failed to restore window size")?;
+        center_window_for_size(&window, state.size).context("Failed to center restored window")?;
+        window
+            .set_resizable(state.resizable)
+            .context("Failed to restore window resizing")?;
+    } else {
+        window
+            .set_resizable(true)
+            .context("Failed to restore window resizing")?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_mini_window_mode(window: Window) -> CmdResult<bool> {
+    let label = window.label().to_string();
+    let is_mini = MINI_WINDOW_STATE
+        .lock()
+        .expect("mini window state mutex poisoned")
+        .contains_key(&label);
+
+    if is_mini {
+        exit_mini_window_mode(window)?;
+        Ok(false)
+    } else {
+        enter_mini_window_mode(window)?;
+        Ok(true)
+    }
+}
+
 fn onboarding_window_size() -> Size {
     Size::Logical(LogicalSize {
         width: ONBOARDING_WINDOW_WIDTH,
@@ -990,6 +1091,43 @@ fn onboarding_window_constraints() -> WindowSizeConstraints {
             ONBOARDING_WINDOW_HEIGHT,
         ))),
     }
+}
+
+fn mini_window_size() -> Size {
+    Size::Logical(LogicalSize {
+        width: MINI_WINDOW_WIDTH,
+        height: MINI_WINDOW_HEIGHT,
+    })
+}
+
+fn mini_window_constraints() -> WindowSizeConstraints {
+    WindowSizeConstraints {
+        min_width: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_WIDTH))),
+        min_height: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_HEIGHT))),
+        max_width: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_WIDTH))),
+        max_height: Some(PixelUnit::Logical(LogicalUnit::new(MINI_WINDOW_HEIGHT))),
+    }
+}
+
+fn center_window_for_size(window: &Window, size: PhysicalSize<u32>) -> anyhow::Result<()> {
+    let Some(monitor) = window
+        .current_monitor()
+        .context("Failed to read current monitor")?
+    else {
+        window.center().context("Failed to center window")?;
+        return Ok(());
+    };
+
+    let monitor_position = *monitor.position();
+    let monitor_size = *monitor.size();
+    let x = monitor_position.x + ((monitor_size.width as i32 - size.width as i32) / 2);
+    let y = monitor_position.y + ((monitor_size.height as i32 - size.height as i32) / 2);
+
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+        .context("Failed to set centered window position")?;
+
+    Ok(())
 }
 
 #[tauri::command]

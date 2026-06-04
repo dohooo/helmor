@@ -13,6 +13,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import {
 	Tooltip,
 	TooltipContent,
@@ -27,37 +28,48 @@ const CAPTURE_WIDTH = 820;
 
 type ExportSessionImageButtonProps = {
 	sessionId: string | null;
+	trigger?: "button" | "menu-item";
 };
 
 export const ExportSessionImageButton = memo(function ExportSessionImageButton({
 	sessionId,
+	trigger = "button",
 }: ExportSessionImageButtonProps) {
 	const [open, setOpen] = useState(false);
 	const disabled = !sessionId;
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<DialogTrigger asChild>
-						<Button
-							aria-label="Export session as image"
-							variant="ghost"
-							size="icon-xs"
-							disabled={disabled}
-							className="-translate-x-1 text-muted-foreground hover:text-foreground"
-						>
-							<Camera className="size-4" strokeWidth={1.8} />
-						</Button>
-					</DialogTrigger>
-				</TooltipTrigger>
-				<TooltipContent
-					side="bottom"
-					className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
-				>
-					<span>Export session as image</span>
-				</TooltipContent>
-			</Tooltip>
+			{trigger === "menu-item" ? (
+				<DialogTrigger asChild>
+					<DropdownMenuItem disabled={disabled}>
+						<Camera className="shrink-0" strokeWidth={1.8} />
+						<span className="flex-1">Export image</span>
+					</DropdownMenuItem>
+				</DialogTrigger>
+			) : (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<DialogTrigger asChild>
+							<Button
+								aria-label="Export session as image"
+								variant="ghost"
+								size="icon-xs"
+								disabled={disabled}
+								className="-translate-x-1 text-muted-foreground hover:text-foreground"
+							>
+								<Camera className="size-4" strokeWidth={1.8} />
+							</Button>
+						</DialogTrigger>
+					</TooltipTrigger>
+					<TooltipContent
+						side="bottom"
+						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+					>
+						<span>Export session as image</span>
+					</TooltipContent>
+				</Tooltip>
+			)}
 			{open && sessionId ? (
 				<ExportSessionImageDialogContent sessionId={sessionId} />
 			) : null}

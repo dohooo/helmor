@@ -987,7 +987,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			/>
 			<div
 				data-slot="window-safe-top"
-				className="flex h-9 shrink-0 items-center pr-3"
+				className="flex h-9 shrink-0 items-center pr-3 max-[960px]:hidden"
 			>
 				<TrafficLightSpacer side="left" width={94} />
 				<div data-tauri-drag-region className="h-full flex-1" />

@@ -848,6 +848,18 @@ export async function exitOnboardingWindowMode(): Promise<void> {
 	await invoke("exit_onboarding_window_mode");
 }
 
+export async function enterMiniWindowMode(): Promise<void> {
+	await invoke("enter_mini_window_mode");
+}
+
+export async function exitMiniWindowMode(): Promise<void> {
+	await invoke("exit_mini_window_mode");
+}
+
+export async function toggleMiniWindowMode(): Promise<boolean> {
+	return await invoke("toggle_mini_window_mode");
+}
+
 export type AgentLoginProvider = "claude" | "codex" | "cursor";
 
 export type AgentLoginStatusResult = {

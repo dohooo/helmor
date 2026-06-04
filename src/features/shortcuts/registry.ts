@@ -210,6 +210,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		editable: true,
 	},
 	{
+		id: "window.miniMode.toggle",
+		title: "Toggle mini mode",
+		group: "System",
+		defaultHotkey: "Mod+M",
+		scopes: ["app"],
+		editable: true,
+	},
+	{
 		id: "sidebar.left.toggle",
 		title: "Toggle left sidebar",
 		group: "System",
