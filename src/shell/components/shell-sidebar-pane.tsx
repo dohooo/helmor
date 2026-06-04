@@ -2,6 +2,8 @@
 // collapse, and the settings entry button at the bottom.
 import { PanelLeftClose } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
+import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -18,13 +20,17 @@ import type { AppUpdateStatus } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
+import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 
 type Props = {
 	collapsed: boolean;
 	resizing: boolean;
 	width: number;
-	selectedWorkspaceId: string | null;
-	autoSelectEnabled: boolean;
+	// Settings-side half of the auto-select gate
+	// (`areSettingsLoaded && !restoreStartSurface`). AND'd inside with the
+	// store-subscribed `viewMode !== "start"` — neither half lives in the
+	// selection store, so AppShell still hands this in as a prop.
+	autoSelectSettingsGate: boolean;
 	busyWorkspaceIds: Set<string>;
 	interactionRequiredWorkspaceIds: Set<string>;
 	newWorkspaceShortcut: string | null;
@@ -47,8 +53,7 @@ export function ShellSidebarPane({
 	collapsed,
 	resizing,
 	width,
-	selectedWorkspaceId,
-	autoSelectEnabled,
+	autoSelectSettingsGate,
 	busyWorkspaceIds,
 	interactionRequiredWorkspaceIds,
 	newWorkspaceShortcut,
@@ -66,6 +71,29 @@ export function ShellSidebarPane({
 	onOpenSettings,
 	pushWorkspaceToast,
 }: Props) {
+	// Subscribe to the selection store directly instead of receiving these as
+	// flattened props from AppShell. Both fields come from the same store
+	// snapshot, so the `start → null` highlight derivation and the auto-select
+	// gate stay mutually consistent exactly as they were when AppShell computed
+	// them off one `selection` render. `useShallow` keeps the multi-field
+	// selector stable across renders.
+	const { selectedWorkspaceId, viewMode } = useStore(
+		useSelectionStore(),
+		useShallow((s) => ({
+			selectedWorkspaceId: s.selectedWorkspaceId,
+			viewMode: s.viewMode,
+		})),
+	);
+	// In Start mode nothing in the list is the active workspace — drop the
+	// highlight. Mirrors AppShell's old `viewMode === "start" ? null : id` prop.
+	const highlightedWorkspaceId =
+		viewMode === "start" ? null : selectedWorkspaceId;
+	// AND the settings-side gate with the live view mode: auto-select must stay
+	// off while the start surface is showing. Same expression AppShell used to
+	// flatten into the `autoSelectEnabled` prop, just split across the two
+	// delivery channels.
+	const autoSelectEnabled = autoSelectSettingsGate && viewMode !== "start";
+
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);
@@ -105,7 +133,7 @@ export function ShellSidebarPane({
 			>
 				<div className="min-h-0 flex-1">
 					<WorkspacesSidebarContainer
-						selectedWorkspaceId={selectedWorkspaceId}
+						selectedWorkspaceId={highlightedWorkspaceId}
 						autoSelectEnabled={autoSelectEnabled}
 						busyWorkspaceIds={busyWorkspaceIds}
 						interactionRequiredWorkspaceIds={interactionRequiredWorkspaceIds}

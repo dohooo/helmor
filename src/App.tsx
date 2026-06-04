@@ -1370,8 +1370,13 @@ function AppShell({
 	);
 	const restoreStartSurface =
 		areSettingsLoaded && appSettings.lastSurface === "workspace-start";
-	const workspaceSidebarAutoSelectEnabled =
-		areSettingsLoaded && workspaceViewMode !== "start" && !restoreStartSurface;
+	// Settings-side half of the sidebar auto-select gate. The `viewMode !==
+	// "start"` term now lives inside ShellSidebarPane (it subscribes to the
+	// selection store's `viewMode` and ANDs it in), so this no longer reads
+	// `workspaceViewMode` — keeping a `viewMode`-only change from re-rendering
+	// AppShell via this derived flag.
+	const workspaceSidebarAutoSelectSettingsGate =
+		areSettingsLoaded && !restoreStartSurface;
 
 	// P1-A: React Compiler bailed out on this ~1650-line AppShell, so it does
 	// NOT memoize these inline header JSX nodes — they get a fresh element
@@ -1458,12 +1463,9 @@ function AppShell({
 												collapsed={sidebarCollapsed}
 												resizing={isSidebarResizing}
 												width={sidebarWidth}
-												selectedWorkspaceId={
-													workspaceViewMode === "start"
-														? null
-														: selectedWorkspaceId
+												autoSelectSettingsGate={
+													workspaceSidebarAutoSelectSettingsGate
 												}
-												autoSelectEnabled={workspaceSidebarAutoSelectEnabled}
 												busyWorkspaceIds={effectiveBusyWorkspaceIds}
 												interactionRequiredWorkspaceIds={
 													interactionRequiredWorkspaceIds
