@@ -4,12 +4,14 @@ import { useCallback, useEffect } from "react";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
 import {
+	closeMainWindow,
 	createSession,
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
+import { isNewSession } from "@/lib/workspace-helpers";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import type { SelectionActions } from "@/shell/controllers/use-selection-controller";
 
@@ -81,6 +83,14 @@ export function useSessionActions({
 
 		const { workspaceId, sessionId, workspace, sessions, session } =
 			currentSession;
+
+		// Closing the last tab: if it's already an empty/untitled session,
+		// close (hide) the window. Otherwise fall through to the normal close,
+		// which hides this session and spawns a fresh untitled one in its place.
+		if (sessions.length === 1 && isNewSession(session)) {
+			await closeMainWindow();
+			return;
+		}
 
 		await requestCloseSession({
 			workspace,

@@ -13,8 +13,10 @@ import {
 	useCallback,
 	useState,
 } from "react";
+import { toast } from "sonner";
+import { getShortcut } from "@/features/shortcuts/registry";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
-import { openWorkspaceInEditor } from "@/lib/api";
+import { openWorkspaceInEditor, toggleMiniWindowMode } from "@/lib/api";
 import { detectedEditorsQueryOptions } from "@/lib/query-client";
 import type { AppSettings, ShortcutOverrides } from "@/lib/settings";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
@@ -94,6 +96,26 @@ export function useShellChromeState({
 	});
 	const handlePullLatest = usePullLatest({ queryClient, selectedWorkspaceId });
 
+	const [miniModePending, setMiniModePending] = useState(false);
+	const handleToggleMiniMode = useCallback(() => {
+		if (miniModePending) {
+			return;
+		}
+		setMiniModePending(true);
+		void toggleMiniWindowMode()
+			.catch((error: unknown) => {
+				console.error("[app] failed to resize window", error);
+				toast.error("Unable to resize window", {
+					description: String(error),
+				});
+			})
+			.finally(() => setMiniModePending(false));
+	}, [miniModePending]);
+	const miniModeToggleShortcut = getShortcut(
+		appSettings.shortcuts,
+		"window.miniMode.toggle",
+	);
+
 	return {
 		installedEditors,
 		preferredEditor,
@@ -110,5 +132,8 @@ export function useShellChromeState({
 		handleOpenModelPicker,
 		handleOpenReleaseChangelog,
 		handlePullLatest,
+		miniModePending,
+		handleToggleMiniMode,
+		miniModeToggleShortcut,
 	};
 }

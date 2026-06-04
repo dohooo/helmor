@@ -37,18 +37,24 @@ export function AppShell({
 	// re-rendered 11× on a single sidebar toggle. Hoist to useMemo so identity
 	// is stable except when the inputs actually change.
 	const headerLeadingNode = useMemo(
-		() =>
-			panels.sidebarCollapsed ? (
-				<WorkspaceHeaderLeading
-					appUpdateStatus={s.appUpdateStatus}
-					leftSidebarToggleShortcut={chrome.leftSidebarToggleShortcut}
-					onExpandSidebar={() => panels.setSidebarCollapsed(false)}
-				/>
-			) : undefined,
+		() => (
+			<WorkspaceHeaderLeading
+				appUpdateStatus={s.appUpdateStatus}
+				leftSidebarToggleShortcut={chrome.leftSidebarToggleShortcut}
+				miniModePending={chrome.miniModePending}
+				miniModeToggleShortcut={chrome.miniModeToggleShortcut}
+				showOnDesktop={panels.sidebarCollapsed}
+				onToggleMiniMode={chrome.handleToggleMiniMode}
+				onExpandSidebar={() => panels.setSidebarCollapsed(false)}
+			/>
+		),
 		[
 			panels.sidebarCollapsed,
 			s.appUpdateStatus,
 			chrome.leftSidebarToggleShortcut,
+			chrome.miniModePending,
+			chrome.miniModeToggleShortcut,
+			chrome.handleToggleMiniMode,
 		],
 	);
 	const headerActionsNode = useMemo(
@@ -111,11 +117,14 @@ export function AppShell({
 				leftSidebarToggleShortcut: chrome.leftSidebarToggleShortcut,
 				appUpdateStatus: s.appUpdateStatus,
 				appSettings: s.appSettings,
+				miniModePending: chrome.miniModePending,
+				miniModeToggleShortcut: chrome.miniModeToggleShortcut,
 				onSelectWorkspace: sel.handleSelectWorkspace,
 				onOpenNewWorkspace: s.handleOpenWorkspaceStart,
 				onAddRepositoryNeedsStart:
 					sel.startSurfaceActions.addRepositoryNeedsStart,
 				onMoveLocalToWorktree: sel.startSurfaceActions.moveLocalToWorktree,
+				onToggleMiniMode: chrome.handleToggleMiniMode,
 				onCollapseSidebar: () => panels.setSidebarCollapsed(true),
 				onOpenFeedback: () => s.setFeedbackOpen(true),
 				onOpenSettings: data.handleOpenSettings,

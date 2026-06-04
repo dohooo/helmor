@@ -191,6 +191,7 @@ export function useAppShellState({
 		handleEnterEditorEditMode: data.handleEnterEditorEditMode,
 		handlePullLatest: chrome.handlePullLatest,
 		handleReopenClosedSession: data.handleReopenClosedSession,
+		handleToggleMiniMode: chrome.handleToggleMiniMode,
 		handleToggleTheme: chrome.handleToggleTheme,
 		handleToggleZenMode: chrome.handleToggleZenMode,
 		preferredEditor: chrome.preferredEditor,

@@ -51,6 +51,7 @@ type Props = {
 	onRequestCloseSession: ConversationProps["onRequestCloseSession"];
 	onPendingPromptConsumed: () => void;
 	queuePendingPromptForSession: ConversationProps["onQueuePendingPromptForSession"];
+	headerLeading: React.ReactNode;
 };
 
 export function StartSurfacePane({
@@ -83,6 +84,7 @@ export function StartSurfacePane({
 	onRequestCloseSession,
 	onPendingPromptConsumed,
 	queuePendingPromptForSession,
+	headerLeading,
 }: Props) {
 	return (
 		<WorkspaceStartPage
@@ -107,6 +109,7 @@ export function StartSurfacePane({
 			}}
 			previewCard={startPreviewCard}
 			previewAppendContextTarget={startComposerInsertTarget}
+			headerLeading={headerLeading}
 			showWindowSafeTop={sidebarCollapsed}
 			onClosePreview={contextPanelActions.closeStartContextPreview}
 		>

@@ -200,6 +200,7 @@ export function WorkspacePaneSurface({
 							onRequestCloseSession={onRequestCloseSession}
 							onPendingPromptConsumed={handlePendingPromptConsumed}
 							queuePendingPromptForSession={queuePendingPromptForSession}
+							headerLeading={headerLeadingNode}
 						/>
 					) : (
 						<ShellWorkspaceConversation

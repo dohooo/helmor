@@ -5,6 +5,7 @@ import {
 	type ShortcutHandler,
 	useAppShortcuts,
 } from "@/features/shortcuts/use-app-shortcuts";
+import { closeMainWindow } from "@/lib/api";
 import type { AppSettings } from "@/lib/settings";
 import type { ContextPanelActions } from "@/shell/controllers/use-context-panel-controller";
 import { publishShellEvent } from "@/shell/event-bus";
@@ -37,6 +38,7 @@ export function useGlobalShortcutHandlers({
 	handleEnterEditorEditMode,
 	handlePullLatest,
 	handleReopenClosedSession,
+	handleToggleMiniMode,
 	handleToggleTheme,
 	handleToggleZenMode,
 	preferredEditor,
@@ -76,6 +78,7 @@ export function useGlobalShortcutHandlers({
 	handleEnterEditorEditMode: () => void;
 	handlePullLatest: () => Promise<void>;
 	handleReopenClosedSession: () => Promise<void> | void;
+	handleToggleMiniMode: () => void;
 	handleToggleTheme: () => void;
 	handleToggleZenMode: () => void;
 	preferredEditor: { id: string; name: string } | null;
@@ -173,12 +176,20 @@ export function useGlobalShortcutHandlers({
 				callback: () => void handleReopenClosedSession(),
 			},
 			{
+				id: "window.close" as const,
+				callback: () => void closeMainWindow(),
+			},
+			{
 				id: "script.run" as const,
 				callback: () => publishShellEvent({ type: "run-script" }),
 			},
 			{
 				id: "theme.toggle" as const,
 				callback: handleToggleTheme,
+			},
+			{
+				id: "window.miniMode.toggle" as const,
+				callback: handleToggleMiniMode,
 			},
 			{
 				id: "sidebar.left.toggle" as const,
@@ -276,6 +287,7 @@ export function useGlobalShortcutHandlers({
 			handleEnterEditorEditMode,
 			handlePullLatest,
 			handleReopenClosedSession,
+			handleToggleMiniMode,
 			handleToggleTheme,
 			handleToggleZenMode,
 			preferredEditor,
