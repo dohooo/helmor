@@ -1,4 +1,4 @@
-//! Forge abstraction — unifies GitHub and GitLab (pull requests / merge
+//! Forge abstraction — unifies GitHub, GitLab, and Gitea (pull requests / merge
 //! requests, CI status, CLI install + auth).
 //!
 //! Layout:
@@ -18,6 +18,7 @@
 //!   calls to the right backend once a provider is resolved.
 //! - [`github`] — GitHub SDK (CLI helpers, GraphQL).
 //! - [`gitlab`] — GitLab REST client using `glab api`.
+//! - [`gitea`] — Gitea REST client using `tea api`.
 
 pub(crate) mod accounts;
 pub(crate) mod avatar_cache;
@@ -26,6 +27,7 @@ mod bundled;
 mod cli_status;
 pub(crate) mod command;
 mod detect;
+mod gitea;
 pub mod github;
 pub mod gitlab;
 pub mod inbox;

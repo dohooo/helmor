@@ -1,6 +1,10 @@
 import { CircleAlert, Loader2 } from "lucide-react";
 import { useMemo } from "react";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
 import {
 	Tooltip,
@@ -21,6 +25,7 @@ import { gitlabHostsForRepositories } from "./cli-install-gitlab-hosts";
 
 const GITHUB_DEFAULT_HOST = "github.com";
 const GITLAB_DEFAULT_HOST = "gitlab.com";
+const GITEA_DEFAULT_HOST = "gitea.com";
 
 /// Health probe targets — one per (provider, host) we want to keep
 /// fresh on focus. Always probes GitHub + gitlab.com plus any
@@ -42,7 +47,12 @@ function buildHealthTargets(
 	];
 	for (const host of orderedGitlab) {
 		seen.set(`gitlab::${host}`, { provider: "gitlab", host });
+		seen.set(`gitea::${host}`, { provider: "gitea", host });
 	}
+	seen.set(`gitea::${GITEA_DEFAULT_HOST}`, {
+		provider: "gitea",
+		host: GITEA_DEFAULT_HOST,
+	});
 	for (const account of accounts) {
 		const key = `${account.provider}::${account.host}`;
 		if (!seen.has(key)) {
@@ -67,7 +77,7 @@ export function AccountPanel({
 	const accountsQuery = useForgeAccountsAll();
 	const accounts = accountsQuery.data ?? [];
 
-	// Stable order: GitHub first, then GitLab grouped by host, then by login.
+	// Stable order: GitHub first, then GitLab/Gitea grouped by host, then by login.
 	const sortedAccounts = useMemo(() => {
 		return [...accounts].sort((a, b) => {
 			if (a.provider !== b.provider) {
@@ -158,6 +168,8 @@ function AccountRow({ account }: { account: ForgeAccount }) {
 	const providerBadge =
 		account.provider === "gitlab" ? (
 			<GitlabBrandIcon size={11} className="text-[#FC6D26]" />
+		) : account.provider === "gitea" ? (
+			<GiteaBrandIcon size={11} className="text-[#609926]" />
 		) : (
 			<GithubBrandIcon size={11} />
 		);
@@ -166,6 +178,7 @@ function AccountRow({ account }: { account: ForgeAccount }) {
 	// self-hosted (always show the host since multiple are possible).
 	const showHostCaption =
 		account.provider === "gitlab" ||
+		account.provider === "gitea" ||
 		(account.provider === "github" && account.host !== GITHUB_DEFAULT_HOST);
 
 	return (

@@ -8,7 +8,11 @@ import {
 } from "lucide-react";
 import type { ChangeEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { TrafficLightSpacer } from "@/components/chrome/traffic-light-spacer";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,7 +57,7 @@ import {
 
 /** Forge providers that have an inbox backend implementation. Used to
  *  narrow `repository.forgeProvider` (which can also be "unknown"). */
-type ForgeFilterId = "github" | "gitlab";
+type ForgeFilterId = "github" | "gitlab" | "gitea";
 
 /** All non-forge providers stay as "Coming Soon" placeholders. */
 type ExternalFilterId = "linear" | "slack" | "mobile";
@@ -115,6 +119,11 @@ function forgeUrlToInboxKind(query: string): InboxKind | null {
 		/^(?:https?:\/\/)?[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*\/-\/(issues|merge_requests)\/\d+(?:[/?#].*)?$/i,
 	);
 	if (gl) return gl[1].toLowerCase() === "issues" ? "issues" : "prs";
+	// Gitea: <host>/owner/repo/(issues|pulls)/N
+	const gitea = trimmed.match(
+		/^(?:https?:\/\/)?[^/\s]+\/[^/\s]+\/[^/\s]+\/(issues|pulls)\/\d+(?:[/?#].*)?$/i,
+	);
+	if (gitea) return gitea[1].toLowerCase() === "issues" ? "issues" : "prs";
 	return null;
 }
 
@@ -177,6 +186,10 @@ const INBOX_KIND_ICON_SOURCE: Record<
 		issues: "gitlab_issue",
 		prs: "gitlab_mr",
 	},
+	gitea: {
+		issues: "gitea_issue",
+		prs: "gitea_pr",
+	},
 };
 
 function defaultStateForKind(
@@ -196,6 +209,7 @@ export function forgeFilterIdForRepo(
 ): ForgeFilterId {
 	const provider: ForgeProvider | null | undefined = repository?.forgeProvider;
 	if (provider === "gitlab") return "gitlab";
+	if (provider === "gitea") return "gitea";
 	return "github";
 }
 
@@ -586,6 +600,8 @@ export const InboxSidebar = memo(function InboxSidebar({
 										<GithubBrandIcon size={providerTabsCompact ? 13 : 14} />
 									) : filterId === "gitlab" ? (
 										<GitlabBrandIcon size={providerTabsCompact ? 13 : 14} />
+									) : filterId === "gitea" ? (
+										<GiteaBrandIcon size={providerTabsCompact ? 13 : 14} />
 									) : filterId === "slack" ? (
 										<SourceIcon
 											source="slack_thread"
@@ -825,6 +841,26 @@ function inboxItemToContextCard(item: InboxItemWithDetailRef): ContextCard {
 					draft: item.state?.tone === "draft",
 				},
 			};
+		case "gitea_issue":
+			return {
+				...baseFields,
+				meta: {
+					type: "gitea_issue",
+					repo,
+					number,
+					labels: [],
+				},
+			};
+		case "gitea_pr":
+			return {
+				...baseFields,
+				meta: {
+					type: "gitea_pr",
+					repo,
+					number,
+					draft: item.state?.tone === "draft",
+				},
+			};
 	}
 }
 
@@ -882,6 +918,8 @@ function ConnectForgeState({
 			<div className="flex size-8 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
 				{provider === "github" ? (
 					<GithubBrandIcon size={16} />
+				) : provider === "gitea" ? (
+					<GiteaBrandIcon size={16} />
 				) : (
 					<GitlabBrandIcon size={16} />
 				)}

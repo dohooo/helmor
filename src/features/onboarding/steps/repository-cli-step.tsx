@@ -14,7 +14,11 @@ import {
 	AccountHoverCardContent,
 	type ForgeAccountInfo,
 } from "@/components/account-hover-card-content";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
 import type { TerminalHandle } from "@/components/terminal-output";
 import { Button } from "@/components/ui/button";
@@ -45,6 +49,7 @@ import type { OnboardingStep } from "../types";
 const CLI_AUTH_POLL_INTERVAL_MS = 2000;
 const CLI_AUTH_POLL_TIMEOUT_MS = 120_000;
 const DEFAULT_GITLAB_HOST = "gitlab.com";
+const DEFAULT_GITEA_HOST = "gitea.com";
 
 type RepoCliProvider = Exclude<ForgeProvider, "unknown">;
 type GitlabPanel = "host" | null;
@@ -91,8 +96,14 @@ export function RepositoryCliStep({
 		logins: [],
 		checking: true,
 	});
+	const [gitea, setGitea] = useState<CliState>({
+		logins: [],
+		checking: true,
+	});
 	const [gitlabHost, setGitlabHost] = useState(DEFAULT_GITLAB_HOST);
 	const [gitlabStatusHost, setGitlabStatusHost] = useState(DEFAULT_GITLAB_HOST);
+	const [giteaHost, setGiteaHost] = useState(DEFAULT_GITEA_HOST);
+	const [giteaStatusHost, setGiteaStatusHost] = useState(DEFAULT_GITEA_HOST);
 	const [activeGitlabPanel, setActiveGitlabPanel] = useState<GitlabPanel>(null);
 	const [activeTerminal, setActiveTerminal] = useState<ActiveTerminal | null>(
 		null,
@@ -114,8 +125,11 @@ export function RepositoryCliStep({
 	// freshly-added login never lands in `accountsQuery.data` and the
 	// `useLayoutEffect` below can't clear the loading spinner.
 	const extraGitlabHosts = useMemo(
-		() => (gitlabStatusHost ? [gitlabStatusHost] : []),
-		[gitlabStatusHost],
+		() =>
+			[gitlabStatusHost, giteaStatusHost].filter(
+				(host): host is string => !!host,
+			),
+		[gitlabStatusHost, giteaStatusHost],
 	);
 	const accountsQuery = useForgeAccountsAll(extraGitlabHosts);
 
@@ -182,6 +196,23 @@ export function RepositoryCliStep({
 		};
 	}, [gitlabStatusHost]);
 
+	useEffect(() => {
+		let cancelled = false;
+		setGitea((prev) => ({ logins: prev.logins, checking: true }));
+		listForgeLogins("gitea", giteaStatusHost)
+			.then((logins) => {
+				if (!cancelled) setGitea({ logins, checking: false });
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setGitea((prev) => ({ logins: prev.logins, checking: false }));
+				}
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [giteaStatusHost]);
+
 	useEffect(() => clearPoll, [clearPoll]);
 
 	/// Reset the active add-flow tab to its initial sub-stage. For
@@ -242,6 +273,8 @@ export function RepositoryCliStep({
 					setAddingAccount({ provider, host, login: newLogin });
 					if (provider === "github") {
 						setGithub({ logins, checking: false });
+					} else if (provider === "gitea") {
+						setGitea({ logins, checking: false });
 					} else {
 						setGitlab({ logins, checking: false });
 					}
@@ -258,7 +291,13 @@ export function RepositoryCliStep({
 					// the user can retry from the same tab.
 					setAddingAccount(null);
 					toast(
-						`Finish ${provider === "gitlab" ? "GitLab" : "GitHub"} CLI auth, then click Set up again.`,
+						`Finish ${
+							provider === "gitlab"
+								? "GitLab"
+								: provider === "gitea"
+									? "Gitea"
+									: "GitHub"
+						} CLI auth, then click Set up again.`,
 					);
 					return;
 				}
@@ -303,7 +342,12 @@ export function RepositoryCliStep({
 				}
 			})
 			.catch(() => {});
-		const label = pending.provider === "gitlab" ? "GitLab" : "GitHub";
+		const label =
+			pending.provider === "gitlab"
+				? "GitLab"
+				: pending.provider === "gitea"
+					? "Gitea"
+					: "GitHub";
 		toast.success(`${label} connected as @${pending.login}`);
 	}, [addingAccount, accountsQuery.data, resetFlowTo, queryClient]);
 
@@ -333,7 +377,12 @@ export function RepositoryCliStep({
 		(code: number | null) => {
 			if (!activeTerminal) return;
 			const baseline = new Set(
-				(activeTerminal.provider === "github" ? github : gitlab).logins,
+				(activeTerminal.provider === "github"
+					? github
+					: activeTerminal.provider === "gitea"
+						? gitea
+						: gitlab
+				).logins,
 			);
 			if (code !== 0) {
 				// User cancelled (×, Ctrl+C, terminal kill) or the CLI
@@ -355,7 +404,7 @@ export function RepositoryCliStep({
 			});
 			pollUntilReady(activeTerminal.provider, activeTerminal.host, baseline);
 		},
-		[activeTerminal, github, gitlab, pollUntilReady],
+		[activeTerminal, github, gitea, gitlab, pollUntilReady],
 	);
 
 	const handleTerminalError = useCallback(() => {
@@ -389,6 +438,10 @@ export function RepositoryCliStep({
 		resetFlowTo("gitlab");
 	}, [resetFlowTo]);
 
+	const handleGiteaSetUp = useCallback(() => {
+		resetFlowTo("gitea");
+	}, [resetFlowTo]);
+
 	const handleGitlabHostSubmit = useCallback(() => {
 		const host = normalizeGitlabHost(gitlabHost);
 		if (!host) {
@@ -405,6 +458,18 @@ export function RepositoryCliStep({
 		clearPoll();
 		openTerminal("gitlab", host);
 	}, [clearPoll, gitlabHost, openTerminal]);
+
+	const handleGiteaHostSubmit = useCallback(() => {
+		const host = normalizeGitlabHost(giteaHost);
+		if (!host) {
+			toast.error("Enter a Gitea domain.");
+			return;
+		}
+		setGiteaHost(host);
+		setGiteaStatusHost(host);
+		clearPoll();
+		openTerminal("gitea", host);
+	}, [clearPoll, giteaHost, openTerminal]);
 
 	return (
 		<section
@@ -424,21 +489,24 @@ export function RepositoryCliStep({
 				</h2>
 				<p className="mt-4 max-w-md text-small leading-5 text-muted-foreground">
 					Each repo uses one of your accounts. Add now or skip — existing logins
-					are picked up automatically. All accounts live in your local gh/glab
-					CLI.
+					are picked up automatically. All accounts live in your local
+					gh/glab/tea CLI.
 				</p>
 
 				<div className="mt-7 grid w-full gap-3">
 					<AccountListPanel
 						githubLogins={github.logins}
 						gitlabLogins={gitlab.logins}
+						giteaLogins={gitea.logins}
 						gitlabStatusHost={gitlabStatusHost}
-						loading={github.checking || gitlab.checking}
+						giteaStatusHost={giteaStatusHost}
+						loading={github.checking || gitlab.checking || gitea.checking}
 						compact={inFlow}
 						addingAccount={addingAccount}
 						accounts={accountsQuery.data ?? []}
 						onAddGithub={handleGithubSetUp}
 						onAddGitlab={handleGitlabSetUp}
+						onAddGitea={handleGiteaSetUp}
 					/>
 
 					{/* Sequential animation orchestration:
@@ -456,6 +524,7 @@ export function RepositoryCliStep({
 						activeProvider={addFlowProvider}
 						onAddGithub={handleGithubSetUp}
 						onAddGitlab={handleGitlabSetUp}
+						onAddGitea={handleGiteaSetUp}
 					/>
 
 					{/* Terminal sits ABOVE the GitLab host slot so its top
@@ -471,12 +540,27 @@ export function RepositoryCliStep({
 					/>
 
 					<GitlabHostSlot
-						active={activeGitlabPanel === "host"}
+						active={
+							activeGitlabPanel === "host" && addFlowProvider === "gitlab"
+						}
 						flowSettled={flowSettled}
+						label="GitLab"
 						value={gitlabHost}
 						onChange={setGitlabHost}
 						onSubmit={handleGitlabHostSubmit}
 						onClose={handleAbortFlow}
+						placeholder={DEFAULT_GITLAB_HOST}
+					/>
+
+					<GitlabHostSlot
+						active={activeGitlabPanel === "host" && addFlowProvider === "gitea"}
+						flowSettled={flowSettled}
+						label="Gitea"
+						value={giteaHost}
+						onChange={setGiteaHost}
+						onSubmit={handleGiteaHostSubmit}
+						onClose={handleAbortFlow}
+						placeholder={DEFAULT_GITEA_HOST}
 					/>
 				</div>
 
@@ -514,17 +598,22 @@ export function RepositoryCliStep({
 function AccountListPanel({
 	githubLogins,
 	gitlabLogins,
+	giteaLogins,
 	gitlabStatusHost,
+	giteaStatusHost,
 	loading,
 	compact,
 	addingAccount,
 	accounts,
 	onAddGithub,
 	onAddGitlab,
+	onAddGitea,
 }: {
 	githubLogins: string[];
 	gitlabLogins: string[];
+	giteaLogins: string[];
 	gitlabStatusHost: string;
+	giteaStatusHost: string;
 	loading: boolean;
 	/** Switch to a single-row stacked-avatar view while a flow is
 	 *  open, so the panel can't push the terminal off-screen. */
@@ -535,6 +624,7 @@ function AccountListPanel({
 	accounts: ForgeAccount[];
 	onAddGithub: () => void;
 	onAddGitlab: () => void;
+	onAddGitea: () => void;
 }) {
 	const accountByLogin = new Map<string, ForgeAccount>();
 	for (const account of accounts) {
@@ -563,6 +653,14 @@ function AccountListPanel({
 			account: accountByLogin.get(`gitlab::${login}`) ?? null,
 		});
 	}
+	for (const login of giteaLogins) {
+		rows.push({
+			provider: "gitea",
+			host: giteaStatusHost,
+			login,
+			account: accountByLogin.get(`gitea::${login}`) ?? null,
+		});
+	}
 
 	// Drive panel height off the inner wrapper so list↔stack swaps
 	// animate. `useLayoutEffect` re-measures synchronously after each
@@ -572,7 +670,8 @@ function AccountListPanel({
 	// shrink and the buttons sliding up are the same motion.
 	const innerRef = useRef<HTMLDivElement>(null);
 	const [innerHeight, setInnerHeight] = useState<number | null>(null);
-	const totalRows = githubLogins.length + gitlabLogins.length;
+	const totalRows =
+		githubLogins.length + gitlabLogins.length + giteaLogins.length;
 	useLayoutEffect(() => {
 		if (innerRef.current) {
 			setInnerHeight(innerRef.current.offsetHeight);
@@ -616,6 +715,7 @@ function AccountListPanel({
 					<PickerHoverReveal
 						onAddGithub={onAddGithub}
 						onAddGitlab={onAddGitlab}
+						onAddGitea={onAddGitea}
 					/>
 				)}
 			</div>
@@ -630,9 +730,11 @@ function AccountListPanel({
 function PickerHoverReveal({
 	onAddGithub,
 	onAddGitlab,
+	onAddGitea,
 }: {
 	onAddGithub: () => void;
 	onAddGitlab: () => void;
+	onAddGitea: () => void;
 }) {
 	return (
 		<div className="group relative mt-3 h-9">
@@ -642,7 +744,7 @@ function PickerHoverReveal({
 			>
 				<Plus className="size-4" strokeWidth={2.2} />
 			</div>
-			<div className="pointer-events-none absolute inset-0 grid grid-cols-2 gap-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+			<div className="pointer-events-none absolute inset-0 grid grid-cols-3 gap-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
 				<PickerButton
 					onClick={onAddGithub}
 					muted={false}
@@ -654,6 +756,12 @@ function PickerHoverReveal({
 					muted={false}
 					icon={<GitlabBrandIcon size={14} className="text-[#FC6D26]" />}
 					label="GitLab"
+				/>
+				<PickerButton
+					onClick={onAddGitea}
+					muted={false}
+					icon={<GiteaBrandIcon size={14} className="text-[#609926]" />}
+					label="Gitea"
 				/>
 			</div>
 		</div>
@@ -673,11 +781,13 @@ function TabButtons({
 	activeProvider,
 	onAddGithub,
 	onAddGitlab,
+	onAddGitea,
 }: {
 	inFlow: boolean;
 	activeProvider: RepoCliProvider | null;
 	onAddGithub: () => void;
 	onAddGitlab: () => void;
+	onAddGitea: () => void;
 }) {
 	return (
 		<div
@@ -697,7 +807,7 @@ function TabButtons({
 					transition: inFlow ? "opacity 0ms 700ms" : "none",
 				}}
 				className={cn(
-					"grid h-9 grid-cols-2 gap-2",
+					"grid h-9 grid-cols-3 gap-2",
 					inFlow ? "opacity-100" : "pointer-events-none opacity-0",
 				)}
 			>
@@ -712,6 +822,12 @@ function TabButtons({
 					muted={inFlow && activeProvider !== "gitlab"}
 					icon={<GitlabBrandIcon size={14} className="text-[#FC6D26]" />}
 					label="GitLab"
+				/>
+				<PickerButton
+					onClick={onAddGitea}
+					muted={inFlow && activeProvider !== "gitea"}
+					icon={<GiteaBrandIcon size={14} className="text-[#609926]" />}
+					label="Gitea"
 				/>
 			</div>
 		</div>
@@ -764,7 +880,13 @@ function CompactAccountStack({
 	const addingLabel = addingAccount
 		? addingAccount.login
 			? `Adding @${addingAccount.login}…`
-			: `Adding ${addingAccount.provider === "gitlab" ? "GitLab" : "GitHub"} account…`
+			: `Adding ${
+					addingAccount.provider === "gitlab"
+						? "GitLab"
+						: addingAccount.provider === "gitea"
+							? "Gitea"
+							: "GitHub"
+				} account…`
 		: null;
 
 	if (rows.length === 0) {
@@ -894,6 +1016,8 @@ function AccountRow({
 	const providerIcon =
 		row.provider === "gitlab" ? (
 			<GitlabBrandIcon size={11} className="text-[#FC6D26]" />
+		) : row.provider === "gitea" ? (
+			<GiteaBrandIcon size={11} className="text-[#609926]" />
 		) : (
 			<GithubBrandIcon size={11} />
 		);
@@ -919,7 +1043,11 @@ function AccountRow({
 				<div className="mt-0.5 flex items-center gap-1 text-micro text-muted-foreground">
 					{providerIcon}
 					<span className="truncate">
-						{row.provider === "gitlab" ? `GitLab · ${row.host}` : "GitHub"}
+						{row.provider === "gitlab"
+							? `GitLab · ${row.host}`
+							: row.provider === "gitea"
+								? `Gitea · ${row.host}`
+								: "GitHub"}
 					</span>
 				</div>
 			</div>
@@ -982,21 +1110,26 @@ function RepositoryCliTerminalSlot({
 function GitlabHostSlot({
 	active,
 	flowSettled,
+	label,
 	value,
 	onChange,
 	onSubmit,
 	onClose,
+	placeholder,
 }: {
 	active: boolean;
 	flowSettled: boolean;
+	label: string;
 	value: string;
 	onChange: (value: string) => void;
 	onSubmit: () => void;
 	onClose: () => void;
+	placeholder: string;
 }) {
 	const openDelay = active && !flowSettled ? "700ms" : "0ms";
 	return (
 		<div
+			aria-hidden={!active}
 			className="overflow-hidden transition-[height] duration-700 ease-[cubic-bezier(.22,.82,.2,1)]"
 			style={{
 				height: active ? "168px" : "0px",
@@ -1005,6 +1138,7 @@ function GitlabHostSlot({
 		>
 			<div className="relative h-full">
 				<div
+					hidden={!active}
 					style={{
 						transitionDelay: openDelay,
 					}}
@@ -1024,10 +1158,10 @@ function GitlabHostSlot({
 						<X className="size-3.5" strokeWidth={2.4} />
 					</button>
 					<div className="text-body font-medium text-foreground">
-						GitLab domain
+						{label} domain
 					</div>
 					<p className="mt-1 text-small leading-5 text-muted-foreground">
-						Use gitlab.com or your self-hosted GitLab domain.
+						Use {placeholder} or your self-hosted {label} domain.
 					</p>
 					<form
 						className="mt-4 flex items-center gap-2"
@@ -1039,8 +1173,8 @@ function GitlabHostSlot({
 						<Input
 							value={value}
 							onChange={(event) => onChange(event.target.value)}
-							placeholder={DEFAULT_GITLAB_HOST}
-							aria-label="GitLab domain"
+							placeholder={placeholder}
+							aria-label={`${label} domain`}
 							className="h-10"
 						/>
 						<Button type="submit" className="h-10 shrink-0 gap-2 px-3">
@@ -1175,7 +1309,9 @@ function ForgeCliTerminalPreview({
 	const title =
 		terminal.provider === "gitlab"
 			? `glab auth login · ${terminal.host}`
-			: "gh auth login";
+			: terminal.provider === "gitea"
+				? `tea login add · ${terminal.host}`
+				: "gh auth login";
 
 	return (
 		<OnboardingTerminalPreview

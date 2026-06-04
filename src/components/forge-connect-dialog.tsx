@@ -21,7 +21,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import {
 	type TerminalHandle,
 	TerminalOutput,
@@ -120,12 +124,16 @@ async function detectLoginAfterClose(
 function providerLabel(provider: ForgeProvider): string {
 	if (provider === "github") return "GitHub";
 	if (provider === "gitlab") return "GitLab";
+	if (provider === "gitea") return "Gitea";
 	return "Forge";
 }
 
 function providerIcon(provider: ForgeProvider) {
 	if (provider === "gitlab") {
 		return <GitlabBrandIcon size={12} className="text-[#FC6D26]" />;
+	}
+	if (provider === "gitea") {
+		return <GiteaBrandIcon size={12} className="text-[#609926]" />;
 	}
 	return <GithubBrandIcon size={12} />;
 }
@@ -399,7 +407,7 @@ export function ForgeConnectDialog({
 					<div className="flex items-center gap-1.5 text-small font-medium text-foreground">
 						{providerIcon(provider)}
 						<span>Connect {providerLabel(provider)}</span>
-						{provider === "gitlab" ? (
+						{provider !== "github" ? (
 							<span className="ml-1 text-muted-foreground/80">· {host}</span>
 						) : null}
 					</div>

@@ -1,4 +1,8 @@
-import { GithubBrandIcon, GitlabBrandIcon } from "@/components/brand-icon";
+import {
+	GiteaBrandIcon,
+	GithubBrandIcon,
+	GitlabBrandIcon,
+} from "@/components/brand-icon";
 import { CachedAvatar } from "@/components/cached-avatar";
 import type { ForgeAccount, ForgeProvider } from "@/lib/api";
 import { initialsFor } from "@/lib/initials";
@@ -22,6 +26,8 @@ export function AccountHoverCardContent({ account }: { account: AccountInfo }) {
 	const providerBadge =
 		account.provider === "gitlab" ? (
 			<GitlabBrandIcon size={11} className="text-[#FC6D26]" />
+		) : account.provider === "gitea" ? (
+			<GiteaBrandIcon size={11} className="text-[#609926]" />
 		) : (
 			<GithubBrandIcon size={11} />
 		);
@@ -52,7 +58,7 @@ export function AccountHoverCardContent({ account }: { account: AccountInfo }) {
 						{account.email}
 					</div>
 				) : null}
-				{account.provider === "gitlab" ? (
+				{account.provider !== "github" ? (
 					<div className="mt-0.5 truncate text-mini text-muted-foreground/70">
 						{account.host}
 					</div>

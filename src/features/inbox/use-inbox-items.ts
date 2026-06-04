@@ -40,7 +40,7 @@ type ActiveInboxToggles = InboxAccountSourceToggles | InboxRepoSourceConfig;
 
 /** Forge providers the inbox can talk to. Excludes "unknown" since it
  *  has no backend implementation. */
-type InboxProvider = Extract<ForgeProvider, "github" | "gitlab">;
+type InboxProvider = Extract<ForgeProvider, "github" | "gitlab" | "gitea">;
 
 /** Resolves the accounts the inbox should fan out across for a given
  *  forge, with their per-account toggles merged from settings.
@@ -148,7 +148,9 @@ export function useInboxItems(
 	// settings/account check so disabling it doesn't render a confusing
 	// "kind disabled" empty state.
 	const providerSupportsKind =
-		provider === "gitlab" ? kind !== "discussions" : true;
+		provider === "gitlab" || provider === "gitea"
+			? kind !== "discussions"
+			: true;
 	// Honor the per-account settings toggle for THIS kind — flipping
 	// `Issues` off in Settings → Context disables this tab's fetch.
 	const settingsAllowsKind = activeToggles

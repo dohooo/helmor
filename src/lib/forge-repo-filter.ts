@@ -43,6 +43,9 @@ export function parseForgeRepoLocator(
 		// Reject GitHub hosts when provider says GitLab (data drift);
 		// otherwise accept anything (gitlab.com / self-hosted / pattern).
 		if (GITHUB_HOSTS.has(host)) return null;
+	} else if (provider === "gitea") {
+		// Same repo path shape as GitHub, but never on github.com.
+		if (GITHUB_HOSTS.has(host)) return null;
 	}
 
 	return { host: parsed.host, path: parsed.path };

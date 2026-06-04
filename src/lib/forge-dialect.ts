@@ -52,9 +52,24 @@ const GITLAB_DIALECT: ForgePromptDialect = {
 	ciJobNoun: "pipeline",
 };
 
+const GITEA_DIALECT: ForgePromptDialect = {
+	changeRequestName: "PR",
+	changeRequestFullName: "pull request",
+	cliName: "tea",
+	createCommand: (branch) => `tea pr create --base ${branch}`,
+	reopenCommand: "tea pr edit --state open",
+	commentCommand: "tea pr comment",
+	ciListCommand: "tea actions runs",
+	ciViewCommand: "tea actions logs",
+	ciSystemName: "Gitea Actions",
+	ciJobNoun: "run",
+};
+
 /** Pick the prompt dialect for the given forge. Falls back to GitHub. */
 export function forgePromptDialect(
 	forge?: ForgeDetection | null,
 ): ForgePromptDialect {
-	return forge?.provider === "gitlab" ? GITLAB_DIALECT : GITHUB_DIALECT;
+	if (forge?.provider === "gitlab") return GITLAB_DIALECT;
+	if (forge?.provider === "gitea") return GITEA_DIALECT;
+	return GITHUB_DIALECT;
 }

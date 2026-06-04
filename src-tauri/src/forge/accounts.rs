@@ -1,9 +1,9 @@
-//! Per-repo gh/glab account binding — orchestration layer.
+//! Per-repo gh/glab/tea account binding — orchestration layer.
 //!
 //! Mirrors the [`super::provider::WorkspaceForgeBackend`] pattern: a
 //! [`ForgeAccountBackend`] trait sits in the `forge::` umbrella, with
 //! provider-specific implementations living under [`super::github::accounts`]
-//! and [`super::gitlab::accounts`]. Top-level helpers in this file
+//! and [`super::gitlab::accounts`] / [`super::gitea::accounts`]. Top-level helpers in this file
 //! dispatch by provider so cross-cutting callers (the auto-bind hook,
 //! the Settings → Account panel, the right-top workspace chip) never
 //! need to branch on `ForgeProvider` themselves.
@@ -17,7 +17,7 @@ use super::remote::parse_remote;
 use super::types::ForgeProvider;
 use crate::repos;
 
-/// Public profile of a single gh/glab account, surfaced to the
+/// Public profile of a single gh/glab/tea account, surfaced to the
 /// frontend's Settings → Account panel. `active` is true for the gh
 /// account currently marked active by `gh auth switch`; for GitLab
 /// (one-account-per-host) it's always true.
@@ -73,9 +73,9 @@ pub(crate) enum RepoAccess {
 }
 
 /// Provider-agnostic account operations. Each method may interpret
-/// `host` / `login` slightly differently — GitLab ignores `login` since
-/// it has at most one account per host, while GitHub uses `(host,
-/// login)` as the full identity.
+/// `host` / `login` slightly differently — GitHub uses `(host, login)`
+/// as the full identity, while GitLab and Gitea use one account per
+/// host and ignore `login` for API execution.
 pub(crate) trait ForgeAccountBackend: Sync {
     /// Enumerate all accounts (with profile) for this forge.
     /// `hosts_hint` is ignored by GitHub (gh exposes its own host list)
@@ -112,13 +112,14 @@ pub(crate) fn backend_for(provider: ForgeProvider) -> Option<&'static dyn ForgeA
     match provider {
         ForgeProvider::Github => Some(&super::github::accounts::BACKEND),
         ForgeProvider::Gitlab => Some(&super::gitlab::accounts::BACKEND),
+        ForgeProvider::Gitea => Some(&super::gitea::accounts::BACKEND),
         ForgeProvider::Unknown => None,
     }
 }
 
 // ---------------- Top-level dispatchers ----------------
 
-/// All gh accounts plus one glab account per `gitlab_hosts` entry.
+/// All gh accounts plus one glab/tea account per known host entry.
 /// Errors from individual backends are logged and skipped so a transient
 /// problem with one CLI doesn't blank the whole panel.
 pub(crate) fn list_forge_accounts(gitlab_hosts: &[String]) -> Vec<ForgeAccount> {
@@ -141,6 +142,15 @@ pub(crate) fn list_forge_accounts(gitlab_hosts: &[String]) -> Vec<ForgeAccount> 
             ),
         }
     }
+    if let Some(backend) = backend_for(ForgeProvider::Gitea) {
+        match backend.list_accounts(gitlab_hosts) {
+            Ok(items) => accounts.extend(items),
+            Err(error) => tracing::warn!(
+                error = %format!("{error:#}"),
+                "Failed to enumerate Gitea accounts"
+            ),
+        }
+    }
     accounts
 }
 
@@ -153,6 +163,7 @@ pub(crate) fn invalidate_caches_for_host(provider: ForgeProvider, host: &str) {
     match provider {
         ForgeProvider::Github => crate::forge::github::accounts::invalidate_caches_for_host(host),
         ForgeProvider::Gitlab => crate::forge::gitlab::accounts::invalidate_caches_for_host(host),
+        ForgeProvider::Gitea => crate::forge::gitea::accounts::invalidate_caches_for_host(host),
         ForgeProvider::Unknown => {}
     }
 }

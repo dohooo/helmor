@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::forge::{github, gitlab};
+use crate::forge::{gitea, github, gitlab};
 
 use super::inbox::{
     ForgeLabelOption, InboxFilters, InboxItemDetail, InboxKind, InboxKindLabels, InboxPage,
@@ -82,6 +82,7 @@ pub(crate) trait WorkspaceForgeBackend {
 
 struct GithubBackend;
 struct GitlabBackend;
+struct GiteaBackend;
 
 impl WorkspaceForgeBackend for GithubBackend {
     fn lookup_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
@@ -323,13 +324,122 @@ impl WorkspaceForgeBackend for GitlabBackend {
     }
 }
 
+impl WorkspaceForgeBackend for GiteaBackend {
+    fn lookup_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
+        gitea::lookup_workspace_pr(workspace_id)
+    }
+
+    fn action_status(&self, workspace_id: &str) -> Result<ForgeActionStatus> {
+        gitea::lookup_workspace_pr_action_status(workspace_id)
+    }
+
+    fn check_insert_text(&self, workspace_id: &str, item_id: &str) -> Result<String> {
+        gitea::lookup_workspace_pr_check_insert_text(workspace_id, item_id)
+    }
+
+    fn merge_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
+        gitea::merge_workspace_pr(workspace_id)
+    }
+
+    fn close_change_request(&self, workspace_id: &str) -> Result<Option<ChangeRequestInfo>> {
+        gitea::close_workspace_pr(workspace_id)
+    }
+
+    fn inbox_kind_labels(&self) -> Vec<InboxKindLabels> {
+        vec![
+            InboxKindLabels {
+                kind: InboxKind::Issues,
+                short: "Issues".to_string(),
+                plural: "Issues".to_string(),
+                singular: "issue".to_string(),
+            },
+            InboxKindLabels {
+                kind: InboxKind::Prs,
+                short: "PRs".to_string(),
+                plural: "Pull requests".to_string(),
+                singular: "pull request".to_string(),
+            },
+        ]
+    }
+
+    fn list_inbox_issues(
+        &self,
+        login: &str,
+        host: Option<&str>,
+        cursor: Option<&str>,
+        limit: usize,
+        repo_filter: Option<&str>,
+        filters: Option<InboxFilters>,
+    ) -> Result<InboxPage> {
+        let toggles = InboxToggles {
+            issues: true,
+            prs: false,
+            discussions: false,
+        };
+        gitea::inbox::list_inbox_items(login, host, toggles, cursor, limit, repo_filter, filters)
+    }
+
+    fn list_inbox_prs(
+        &self,
+        login: &str,
+        host: Option<&str>,
+        cursor: Option<&str>,
+        limit: usize,
+        repo_filter: Option<&str>,
+        filters: Option<InboxFilters>,
+    ) -> Result<InboxPage> {
+        let toggles = InboxToggles {
+            issues: false,
+            prs: true,
+            discussions: false,
+        };
+        gitea::inbox::list_inbox_items(login, host, toggles, cursor, limit, repo_filter, filters)
+    }
+
+    fn list_inbox_discussions(
+        &self,
+        _login: &str,
+        _host: Option<&str>,
+        _cursor: Option<&str>,
+        _limit: usize,
+        _repo_filter: Option<&str>,
+        _filters: Option<InboxFilters>,
+    ) -> Result<InboxPage> {
+        bail!("Gitea does not support Discussions; this is a router bug")
+    }
+
+    fn get_inbox_item_detail(
+        &self,
+        login: &str,
+        host: Option<&str>,
+        source: InboxSource,
+        external_id: &str,
+    ) -> Result<Option<InboxItemDetail>> {
+        gitea::inbox::get_inbox_item_detail(login, host, source, external_id)
+    }
+
+    fn list_repo_labels(
+        &self,
+        login: &str,
+        host: Option<&str>,
+        repos: &[String],
+    ) -> Result<Vec<ForgeLabelOption>> {
+        let Some(host) = host else {
+            return Ok(Vec::new());
+        };
+        gitea::inbox::list_repo_labels(host, login, repos)
+    }
+}
+
 static GITHUB_BACKEND: GithubBackend = GithubBackend;
 static GITLAB_BACKEND: GitlabBackend = GitlabBackend;
+static GITEA_BACKEND: GiteaBackend = GiteaBackend;
 
 pub(crate) fn backend_for(provider: ForgeProvider) -> Option<&'static dyn WorkspaceForgeBackend> {
     match provider {
         ForgeProvider::Github => Some(&GITHUB_BACKEND),
         ForgeProvider::Gitlab => Some(&GITLAB_BACKEND),
+        ForgeProvider::Gitea => Some(&GITEA_BACKEND),
         ForgeProvider::Unknown => None,
     }
 }
