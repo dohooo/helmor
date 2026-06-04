@@ -34,6 +34,25 @@
 
 ---
 
+## 1.5 已锁定决策(与用户确认)
+
+1. **终态走稳定 URL**(Named Tunnel + helmor.ai 子域)。理由:用户需求是"扫一次、以后直接打开手机浏览器就连上",要求 hostname 永久不变,Quick Tunnel 的漂移 URL 不满足。
+   - **构建顺序**:本地 + Quick Tunnel 与稳定 URL 共用 ~95% 代码(axum + shim + 配对 + 二维码),差别只在"谁写 CNAME"。先用本地/Quick Tunnel 跑通整个闭环验证(**全程无需任何凭证**),最后补"委派子域 + 写 CNAME 小后端"即升级为永久稳定 URL。
+2. **每台桌面一个唯一 hostname**:`remote-<随机>.helmor.ai`(或 `<随机>.remote.helmor.ai`),各连各的电脑。这是海量动态 CNAME,每台一条。
+3. **zone 托管二选一**(决定 hostname 形状,留到公网阶段定,不阻塞前期):
+   - 整个 `helmor.ai` apex 放 CF → `remote-xxx.helmor.ai`(最干净;但动主域,影响营销站/邮件,炸毁半径大)。
+   - 只委派子区 `remote.helmor.ai` 给 CF → `xxx.remote.helmor.ai`(多一层;apex/营销/邮件全不动,token 仅 scope 子区,隔离最好)。
+4. **手机端默认 full-drive**:能做全部操作(因为看到的就是响应式桌面前端,功能本应对等)。
+   - 推论:`/rpc` dispatcher 首版**不做角色/工具白名单**(简化)。
+   - 代价:手机 = 整台电脑完整控制权,因此**凭证安全模型必须首版就做扎实**(见下三条),不能推迟到后期。
+5. **首版凭证安全三约束(不可省)**:
+   - PAT 绝不外泄:只走 TLS、只存手机 Keychain/localStorage、入库只存 SHA-256 hash。
+   - 每设备独立 PAT + 桌面一键 revoke(丢手机时单独踢)。
+   - 二维码里放**周转的配对码(pairing code,短 TTL ~60s)而非长期工作 token**(见 §3 决策三)。
+6. **环境限制**:开发容器无法真正启动 Tauri app / cloudflared 做端到端验证。代码、单测、类型可全部写绿,但"真机扫码"需在用户本地机器验证。
+
+---
+
 ## 2. 三路调查结论(事实基础)
 
 ### 2.1 前端 IPC 耦合面
@@ -98,11 +117,23 @@ companion axum server 由 Tauri app 自身 spawn,**可在 router state 里持有
 
 ### 决策三:浏览器同源,配对无需原生 App
 
-SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。配对:
+SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 
-> 桌面弹 QR,编码 `https://remote-xxx.helmor.ai/#pat=hlm_xxx` → 手机相机扫码开浏览器 → SPA 读 `location.hash` 写 `localStorage` 并抹掉 hash → shim 自动注入 Bearer。
+**配对采用"周转配对码"模型(WhatsApp Web / Tailscale 同款),区分两类凭证:**
 
-URL fragment 不发往服务器、不进访问日志(仅落浏览器历史;可用一次性 pairing code 换 PAT 加固)。
+- **配对码(pairing code)**:短 TTL(~60s)、桌面端定时周转。二维码里放的是它,**不是**长期 token。
+- **设备 PAT(工作 token)**:每设备专属、长期、可单独 revoke,存在手机 localStorage。
+
+流程:
+
+> 桌面 QR 编码 `https://remote-xxx.helmor.ai/#pair=<pairing-code>` → 手机相机扫码开浏览器 → SPA 读 hash 拿到配对码 → 用配对码向桌面握手 → 桌面**当场签发该设备专属长期 PAT** 回传 → SPA 写 localStorage、抹掉 hash → 之后 shim 自动注入 Bearer。
+
+性质:
+
+- 二维码可每 60s 安全周转(只是握手凭证,泄漏旧码很快失效)。
+- 已配对手机各持自己的长期 PAT,**不受二维码周转影响**,继续可用。
+- 丢手机 → 桌面设备列表单独 revoke 那一台。
+- URL fragment 不发往服务器、不进访问日志(仅落浏览器历史;且只含短命配对码,非长期 token)。
 
 ---
 
@@ -152,7 +183,10 @@ URL fragment 不发往服务器、不进访问日志(仅落浏览器历史;可�
 
 ---
 
-## 7. 待用户进一步输入
+## 7. 待用户进一步输入(均可延后到公网阶段,前期不阻塞)
 
-- 公网层凭证(若走 helmor.ai 默认路径):Cloudflare API token(`Zone:DNS:Edit`,限 helmor.ai)+ Zone ID;以及 device/限流存储(可先内存版本地 dev)。
-- 安全策略默认值:首版手机端是 view-only 还是 full-drive。
+- **zone 托管选型**(见 §1.5 决策 3):apex 放 CF 还是委派 `remote.helmor.ai` 子区——取决于 `helmor.ai` 当前 DNS 托管位置与是否愿动主域。
+- **公网层凭证**(仅稳定 URL 阶段需要):Cloudflare API token(`Zone:DNS:Edit`,scope 到选定 zone)+ Zone ID;device/限流存储(可先内存版本地 dev)。
+- 安全/权限默认值已定:**full-drive**(见 §1.5 决策 4)。
+
+> 注:Slice 0–2(本地 + 局域网 + Quick Tunnel 公网闭环)**无需任何上述凭证**即可开发与验证。
