@@ -361,23 +361,12 @@ function AppShell({
 		});
 	const startRepository = startSurface.startRepository;
 	const startInboxProviderTab = startSurface.startInboxProviderTab;
-	const setStartInboxProviderTab = startSurfaceActions.setInboxProviderTab;
 	const startInboxProviderSourceTab = startSurface.startInboxProviderSourceTab;
-	const setStartInboxProviderSourceTab =
-		startSurfaceActions.setInboxProviderSourceTab;
 	const startInboxStateFilterBySource =
 		startSurface.startInboxStateFilterBySource;
-	const setStartInboxStateFilterBySource =
-		startSurfaceActions.setInboxStateFilterBySource;
 	const startSourceBranch = startSurface.startSourceBranch;
 	const startMode = startSurface.startMode;
 	const startBranchIntent = startSurface.startBranchIntent;
-	const handleStartBranchIntentChange = startSurfaceActions.selectBranchIntent;
-	const handleStartSourceBranchSelect = startSurfaceActions.selectSourceBranch;
-	const handleStartRepositorySelect = startSurfaceActions.selectRepository;
-	const handleAddRepositoryNeedsStart =
-		startSurfaceActions.addRepositoryNeedsStart;
-	const handleMoveLocalToWorktree = startSurfaceActions.moveLocalToWorktree;
 	const handleStartComposerPrepare = startSurfaceActions.prepareComposer;
 	const startComposerContextKey = startSurface.startComposerContextKey;
 	const startComposerInsertTarget = startSurface.startComposerInsertTarget;
@@ -401,16 +390,8 @@ function AppShell({
 	const rightSidebarAvailable = contextPanel.rightSidebarAvailable;
 	const contextPanelOpen = contextPanel.contextPanelOpen;
 	const setInspectorCollapsed = contextPanelActions.setInspectorCollapsed;
-	const handleToggleContextPanel = contextPanelActions.toggleContextPanel;
-	const handleStartContextCardOpen = contextPanelActions.openStartContextCard;
 	const handleStartContextPreviewClose =
 		contextPanelActions.closeStartContextPreview;
-	const handleWorkspaceContextCardOpen =
-		contextPanelActions.openWorkspaceContextCard;
-	const handleWorkspaceContextPreviewSelect =
-		contextPanelActions.selectWorkspaceContextPreview;
-	const handleWorkspaceContextPreviewClose =
-		contextPanelActions.closeWorkspaceContextPreview;
 	// Mirror selection state under the legacy names used throughout AppShell.
 	// Lets the consumers stay unchanged for now; stage 7 will rename them or
 	// move them into pane components that read the controller directly.
@@ -607,11 +588,7 @@ function AppShell({
 			editorSession,
 		],
 	);
-	const handleOpenEditorFile = editorSessionActions.openFile;
-	const handleOpenFileReference = editorSessionActions.openFileReference;
 	const handleEditorSessionChange = editorSessionActions.changeSession;
-	const handleExitEditorMode = editorSessionActions.exit;
-	const handleEditorSurfaceError = editorSessionActions.reportError;
 	const canEditEditorSession =
 		(editorSession?.kind === "diff" && editorSession.fileStatus !== "D") ||
 		(editorSession?.kind === "file" &&
@@ -842,11 +819,6 @@ function AppShell({
 			appSettings.defaultFastMode,
 		],
 	);
-
-	const handleSessionCompleted = readStateActions.onSessionCompleted;
-	const handleSessionAborted = readStateActions.onSessionAborted;
-	const handleInteractionSessionsChange =
-		readStateActions.onInteractionSessionsChange;
 
 	const getCloseableCurrentSession = useCallback(() => {
 		const snapshot = selectionActions.getSnapshot();
@@ -1255,9 +1227,6 @@ function AppShell({
 		handlers: globalShortcutHandlers,
 	});
 
-	const handleResolveDisplayedSession =
-		selectionActions.resolveDisplayedSession;
-
 	const { state: pendingQueue, actions: pendingQueueActions } =
 		usePendingQueueController({
 			queryClient,
@@ -1280,9 +1249,6 @@ function AppShell({
 			queuePendingPromptForSession,
 		});
 	const pendingComposerInserts = pendingQueue.pendingComposerInserts;
-	const handleInsertIntoComposer = pendingQueueActions.insertIntoComposer;
-	const handlePendingComposerInsertsConsumed =
-		pendingQueueActions.consumeComposerInserts;
 	const handlePendingCreatedWorkspaceSubmitConsumed = useCallback(
 		(id: string) => {
 			setPendingCreatedWorkspaceSubmit((current) =>
@@ -1436,7 +1402,9 @@ function AppShell({
 			<SelectionStoreProvider value={selectionStore}>
 				<WorkspaceToastProvider value={pushWorkspaceToast}>
 					<SessionRunStatesProvider value={effectiveSessionRunStates}>
-						<ComposerInsertProvider value={handleInsertIntoComposer}>
+						<ComposerInsertProvider
+							value={pendingQueueActions.insertIntoComposer}
+						>
 							{/* Conditionally mount so closing the dialog tears the tree
 							 *  down via React directly instead of waiting on Radix
 							 *  Presence + `animationend`. In WKWebview the workspace
@@ -1480,9 +1448,11 @@ function AppShell({
 												onSelectWorkspace={handleSelectWorkspace}
 												onOpenNewWorkspace={handleOpenWorkspaceStart}
 												onAddRepositoryNeedsStart={
-													handleAddRepositoryNeedsStart
+													startSurfaceActions.addRepositoryNeedsStart
 												}
-												onMoveLocalToWorktree={handleMoveLocalToWorktree}
+												onMoveLocalToWorktree={
+													startSurfaceActions.moveLocalToWorktree
+												}
 												onCollapseSidebar={() => setSidebarCollapsed(true)}
 												onOpenFeedback={() => setFeedbackOpen(true)}
 												onOpenSettings={handleOpenSettings}
@@ -1529,8 +1499,8 @@ function AppShell({
 													shortcutOverrides={appSettings.shortcuts}
 													workspaceRootPath={workspaceRootPath}
 													onChangeSession={handleEditorSessionChange}
-													onExit={handleExitEditorMode}
-													onError={handleEditorSurfaceError}
+													onExit={editorSessionActions.exit}
+													onError={editorSessionActions.reportError}
 												/>
 											)}
 											<div
@@ -1545,18 +1515,24 @@ function AppShell({
 													<WorkspaceStartPage
 														repositories={repositories}
 														selectedRepository={startRepository}
-														onSelectRepository={handleStartRepositorySelect}
+														onSelectRepository={
+															startSurfaceActions.selectRepository
+														}
 														selectedBranch={startSourceBranch}
 														branches={startSurface.startBranches}
 														branchesLoading={startSurface.startBranchesLoading}
 														onOpenBranchPicker={
 															startSurfaceActions.refetchBranches
 														}
-														onSelectBranch={handleStartSourceBranchSelect}
+														onSelectBranch={
+															startSurfaceActions.selectSourceBranch
+														}
 														mode={startMode}
 														onModeChange={startSurfaceActions.selectMode}
 														branchIntent={startBranchIntent}
-														onBranchIntentChange={handleStartBranchIntentChange}
+														onBranchIntentChange={
+															startSurfaceActions.selectBranchIntent
+														}
 														onCreateAndCheckoutBranch={async (branch) => {
 															if (!startRepository) return;
 															// Lazy: just remember the desired name. Actual
@@ -1580,10 +1556,10 @@ function AppShell({
 															sessionSelectionHistory={[]}
 															onSelectSession={handleSelectSession}
 															onResolveDisplayedSession={
-																handleResolveDisplayedSession
+																selectionActions.resolveDisplayedSession
 															}
 															onInteractionSessionsChange={
-																handleInteractionSessionsChange
+																readStateActions.onInteractionSessionsChange
 															}
 															activeStreams={activeStreams}
 															busySessionIds={effectiveBusySessionIds}
@@ -1591,23 +1567,29 @@ function AppShell({
 															interactionRequiredSessionIds={
 																interactionRequiredSessionIds
 															}
-															onSessionCompleted={handleSessionCompleted}
+															onSessionCompleted={
+																readStateActions.onSessionCompleted
+															}
 															workspaceChangeRequest={null}
-															onSessionAborted={handleSessionAborted}
+															onSessionAborted={
+																readStateActions.onSessionAborted
+															}
 															pendingPromptForSession={null}
 															onPendingPromptConsumed={
 																handlePendingPromptConsumed
 															}
 															pendingInsertRequests={pendingComposerInserts}
 															onPendingInsertRequestsConsumed={
-																handlePendingComposerInsertsConsumed
+																pendingQueueActions.consumeComposerInserts
 															}
 															onQueuePendingPromptForSession={
 																queuePendingPromptForSession
 															}
 															onRequestCloseSession={requestCloseSession}
 															workspaceRootPath={null}
-															onOpenFileReference={handleOpenFileReference}
+															onOpenFileReference={
+																editorSessionActions.openFileReference
+															}
 															composerOnly
 															composerWrapperClassName="w-full"
 															composerForceAvailable={
@@ -1620,7 +1602,9 @@ function AppShell({
 															composerCreateContext={startCreateContext}
 															composerFocusScope="start-composer"
 															contextPanelOpen={contextPanelOpen}
-															onToggleContextPanel={handleToggleContextPanel}
+															onToggleContextPanel={
+																contextPanelActions.toggleContextPanel
+															}
 															composerStartSubmitMenu
 															composerLinkedDirectoriesController={
 																startLinkedDirectoriesController
@@ -1635,10 +1619,10 @@ function AppShell({
 														sessionSelectionHistory={sessionSelectionHistory}
 														onSelectSession={handleSelectSession}
 														onResolveDisplayedSession={
-															handleResolveDisplayedSession
+															selectionActions.resolveDisplayedSession
 														}
 														onInteractionSessionsChange={
-															handleInteractionSessionsChange
+															readStateActions.onInteractionSessionsChange
 														}
 														activeStreams={activeStreams}
 														busySessionIds={effectiveBusySessionIds}
@@ -1646,9 +1630,11 @@ function AppShell({
 														interactionRequiredSessionIds={
 															interactionRequiredSessionIds
 														}
-														onSessionCompleted={handleSessionCompleted}
+														onSessionCompleted={
+															readStateActions.onSessionCompleted
+														}
 														workspaceChangeRequest={workspaceChangeRequest}
-														onSessionAborted={handleSessionAborted}
+														onSessionAborted={readStateActions.onSessionAborted}
 														pendingPromptForSession={pendingPromptForSession}
 														pendingCreatedWorkspaceSubmit={
 															pendingCreatedWorkspaceSubmit
@@ -1661,23 +1647,27 @@ function AppShell({
 														}
 														pendingInsertRequests={pendingComposerInserts}
 														onPendingInsertRequestsConsumed={
-															handlePendingComposerInsertsConsumed
+															pendingQueueActions.consumeComposerInserts
 														}
 														onQueuePendingPromptForSession={
 															queuePendingPromptForSession
 														}
 														onRequestCloseSession={requestCloseSession}
 														workspaceRootPath={workspaceRootPath}
-														onOpenFileReference={handleOpenFileReference}
+														onOpenFileReference={
+															editorSessionActions.openFileReference
+														}
 														contextPanelOpen={contextPanelOpen}
-														onToggleContextPanel={handleToggleContextPanel}
+														onToggleContextPanel={
+															contextPanelActions.toggleContextPanel
+														}
 														contextPreviewCard={workspacePreviewCard}
 														contextPreviewActive={workspacePreviewActive}
 														onSelectContextPreview={
-															handleWorkspaceContextPreviewSelect
+															contextPanelActions.selectWorkspaceContextPreview
 														}
 														onCloseContextPreview={
-															handleWorkspaceContextPreviewClose
+															contextPanelActions.closeWorkspaceContextPreview
 														}
 														headerLeading={headerLeadingNode}
 														headerActions={headerActionsNode}
@@ -1709,28 +1699,30 @@ function AppShell({
 													}
 													startInboxProviderTab={startInboxProviderTab}
 													onStartInboxProviderTabChange={
-														setStartInboxProviderTab
+														startSurfaceActions.setInboxProviderTab
 													}
 													startInboxProviderSourceTab={
 														startInboxProviderSourceTab
 													}
 													onStartInboxProviderSourceTabChange={
-														setStartInboxProviderSourceTab
+														startSurfaceActions.setInboxProviderSourceTab
 													}
 													startInboxStateFilterBySource={
 														startInboxStateFilterBySource
 													}
 													onStartInboxStateFilterBySourceChange={
-														setStartInboxStateFilterBySource
+														startSurfaceActions.setInboxStateFilterBySource
 													}
 													startComposerInsertTarget={startComposerInsertTarget}
 													startPreviewCardId={startPreviewCard?.id ?? null}
 													workspacePreviewCardId={
 														workspacePreviewCard?.id ?? null
 													}
-													onOpenStartContextCard={handleStartContextCardOpen}
+													onOpenStartContextCard={
+														contextPanelActions.openStartContextCard
+													}
 													onOpenWorkspaceContextCard={
-														handleWorkspaceContextCardOpen
+														contextPanelActions.openWorkspaceContextCard
 													}
 													workspaceRootPath={workspaceRootPath}
 													selectedWorkspaceDetail={
@@ -1738,7 +1730,7 @@ function AppShell({
 													}
 													activeEditor={activeEditorTarget}
 													preferredEditor={preferredEditor}
-													onOpenEditorFile={handleOpenEditorFile}
+													onOpenEditorFile={editorSessionActions.openFile}
 													onCommitAction={handleCommitAction}
 													onReviewAction={() =>
 														handleInspectorReviewAction({
