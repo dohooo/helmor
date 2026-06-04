@@ -182,7 +182,7 @@ export function AppShell({
 				headerActionsNode,
 			}}
 			rightSidebarAvailable={sel.contextPanel.rightSidebarAvailable}
-			selectedWorkspaceDetail={data.selectedWorkspaceDetailQuery.data ?? null}
+			selectedWorkspaceDetail={data.selectedWorkspaceDetail}
 			inspector={{
 				collapsed: inspectorCollapsed,
 				resizing: panels.isInspectorResizing,
