@@ -1704,7 +1704,6 @@ function AppShell({
 													resizing={isInspectorResizing}
 													width={inspectorWidth}
 													rightSidebarMode={rightSidebarMode}
-													viewMode={workspaceViewMode}
 													startRepository={startRepository}
 													selectedWorkspaceRepository={
 														selectedWorkspaceRepository
@@ -1734,12 +1733,10 @@ function AppShell({
 													onOpenWorkspaceContextCard={
 														handleWorkspaceContextCardOpen
 													}
-													selectedWorkspaceId={selectedWorkspaceId}
 													workspaceRootPath={workspaceRootPath}
 													selectedWorkspaceDetail={
 														selectedWorkspaceDetailQuery.data ?? null
 													}
-													displayedSessionId={displayedSessionId}
 													activeEditor={activeEditorTarget}
 													preferredEditor={preferredEditor}
 													onOpenEditorFile={handleOpenEditorFile}

@@ -1,7 +1,10 @@
 // Right inspector pane — toggles between the workspace inspector tabs and
 // the context-cards sidebar (which serves both the start and the workspace
-// surface). Receives every piece of state it needs as props from AppShell.
+// surface). Reads its selection fields straight off the selection store;
+// everything else still arrives as props from AppShell.
 import { useLayoutEffect, useRef } from "react";
+import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type {
 	CommitButtonState,
 	WorkspaceCommitButtonMode,
@@ -20,14 +23,13 @@ import type { ActiveEditorTarget, DiffOpenOptions } from "@/lib/editor-session";
 import type { WorkspaceRightSidebarMode } from "@/lib/settings";
 import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
-import type { ShellViewMode } from "@/shell/controllers/use-selection-controller";
+import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 
 type Props = {
 	collapsed: boolean;
 	resizing: boolean;
 	width: number;
 	rightSidebarMode: WorkspaceRightSidebarMode;
-	viewMode: ShellViewMode;
 
 	// Context-sidebar props
 	startRepository: RepositoryCreateOption | null;
@@ -47,10 +49,8 @@ type Props = {
 	onOpenWorkspaceContextCard: (card: ContextCard) => void;
 
 	// Inspector-sidebar props
-	selectedWorkspaceId: string | null;
 	workspaceRootPath: string | null;
 	selectedWorkspaceDetail: WorkspaceDetail | null;
-	displayedSessionId: string | null;
 	activeEditor: ActiveEditorTarget | null;
 	preferredEditor: DetectedEditor | null;
 	onOpenEditorFile: (path: string, options?: DiffOpenOptions) => void;
@@ -69,7 +69,6 @@ export function ShellInspectorPane({
 	resizing,
 	width,
 	rightSidebarMode,
-	viewMode,
 	startRepository,
 	selectedWorkspaceRepository,
 	startInboxProviderTab,
@@ -83,10 +82,8 @@ export function ShellInspectorPane({
 	workspacePreviewCardId,
 	onOpenStartContextCard,
 	onOpenWorkspaceContextCard,
-	selectedWorkspaceId,
 	workspaceRootPath,
 	selectedWorkspaceDetail,
-	displayedSessionId,
 	activeEditor,
 	preferredEditor,
 	onOpenEditorFile,
@@ -99,6 +96,19 @@ export function ShellInspectorPane({
 	workspaceForgeIsRefreshing,
 	onOpenSettings,
 }: Props) {
+	// Subscribe to the selection store directly instead of receiving these
+	// three as flattened props from AppShell. They're the same store fields
+	// AppShell read; moving the delivery channel keeps an unrelated
+	// selection-field change from re-rendering this pane via prop churn.
+	// `useShallow` keeps the multi-field selector stable across renders.
+	const { selectedWorkspaceId, displayedSessionId, viewMode } = useStore(
+		useSelectionStore(),
+		useShallow((s) => ({
+			selectedWorkspaceId: s.selectedWorkspaceId,
+			displayedSessionId: s.displayedSessionId,
+			viewMode: s.viewMode,
+		})),
+	);
 	const editorMode = viewMode === "editor";
 	const targetBranch = (() => {
 		const target =
