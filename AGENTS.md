@@ -35,7 +35,7 @@ Single test file: `bun x vitest run src/App.test.tsx` | `cd sidecar && bun test 
 
 ### Three-process model
 
-- **Frontend** (`src/`): React 19 SPA in Tauri webview. Root state in `App.tsx` via `useState` + TanStack React Query + context providers.
+- **Frontend** (`src/`): React 19 SPA in Tauri webview. State managed by focused hooks in `shell/hooks/` (`useAppShellState`, `useSelectionController`, `useEditorEditMode`, `useGlobalShortcutHandlers`, `useAppBootstrap`) + TanStack React Query + context providers.
 - **Rust backend** (`src-tauri/src/`): Tauri host, SQLite database, spawns and supervises the sidecar.
 - **Sidecar** (`sidecar/`): Bun + TypeScript, wraps `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`. Built to `sidecar/dist/helmor-sidecar` via `bun build --compile`. JSON event stream over stdout.
 
@@ -47,7 +47,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 
 | Path | Role |
 | --- | --- |
-| `App.tsx` | Root. Owns selection state, view mode, sending status. |
+| `App.tsx` | Root (~18 lines). Composition layer that delegates to AppProviders and AppShell. |
 | `features/panel/` | Chat thread container, header, message components, thread viewport. |
 | `features/conversation/` | Conversation renderer + `use-streaming` hook. |
 | `features/composer/` | Lexical-based message input. Plugins in `editor/plugins/`. |
@@ -56,7 +56,7 @@ Feature-based layout. Each feature folder follows: `index.tsx` (main) + `contain
 | `features/navigation/` | Sidebar workspace groups. |
 | `features/commit/` | Commit button + lifecycle hook. |
 | `features/settings/` | Settings dialog + panels (CLI install, repo settings, Conductor import). |
-| `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. |
+| `shell/` | Top-level layout, GitHub identity gate, panel resize hooks. State orchestration in `hooks/`: `use-app-shell-state.tsx` (central hub), `use-selection-controllers.ts` (selection/context/start TDZ ring), `use-editor-edit-mode.ts`, `use-global-shortcut-handlers.ts`, and `use-app-bootstrap.ts` (app initialization). All <300 lines/file. |
 | `components/ai/` | AI-specific components (code block, file tree, reasoning). |
 | `components/ui/` | shadcn/ui primitives (base-nova). |
 | `lib/api.ts` | IPC bridge -- every Tauri `invoke()` call wrapped as a typed function. |
@@ -159,7 +159,7 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 
 ## 🚨 Code organization rules
 
-**Never let a single file grow into a monolith.** This codebase just went through a painful refactoring precisely because too much logic was crammed into too few files. Follow these rules strictly:
+**Never let a single file grow into a monolith.** In early 2026 the codebase went through a full refactor precisely because too much logic had been crammed into too few files (App.tsx alone was 1976 lines). The split delivered 22 focused files (all <300 lines, largest 299) that isolate re-render scopes and keep responsibilities clear. Follow these rules strictly:
 
 1. **One responsibility per file.** If a file handles two unrelated concerns, split it.
 2. **Use module directories.** When a module grows beyond ~300 lines, convert `foo.rs` to `foo/mod.rs` + sub-files, or split `foo.tsx` into a `foo/` folder with `index.tsx` + focused sub-modules. The `agents/`, `pipeline/`, `workspace/`, `commands/` directories are the reference pattern.
