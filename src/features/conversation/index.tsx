@@ -228,6 +228,15 @@ export const WorkspaceConversationContainer = memo(
 		const [composerFastModes, setComposerFastModes] = useState<
 			Record<string, boolean>
 		>({});
+		// P0-B: this file is `"use no memo"` (intentional render-phase ref
+		// mutation near the top), so the React Compiler will NOT memoize the
+		// FileLink context value for us. An inline object literal would change
+		// the context identity on every render of this container and cascade to
+		// every file-link consumer in the thread. Memoize by hand.
+		const fileLinkValue = useMemo(
+			() => ({ openInEditor: onOpenFileReference, workspaceRootPath }),
+			[onOpenFileReference, workspaceRootPath],
+		);
 		const composerContextKey =
 			composerContextKeyOverride ??
 			getComposerContextKey(displayedWorkspaceId, displayedSessionId);
@@ -553,12 +562,7 @@ export const WorkspaceConversationContainer = memo(
 		const userInputResponse: UserInputResponseHandler = handleUserInputResponse;
 
 		return (
-			<FileLinkProvider
-				value={{
-					openInEditor: onOpenFileReference,
-					workspaceRootPath,
-				}}
-			>
+			<FileLinkProvider value={fileLinkValue}>
 				{composerOnly ? null : (
 					<WorkspacePanelContainer
 						selectedWorkspaceId={selectedWorkspaceId}

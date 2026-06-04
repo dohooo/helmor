@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CircleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ForgeAccountsHealthSentinel } from "@/components/forge-accounts-health-sentinel";
@@ -28,10 +27,6 @@ import { WorkspaceEditorSurface } from "@/features/editor";
 import { FeedbackDialog } from "@/features/feedback";
 import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
 import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
-import {
-	applySidebarView,
-	regroupByRepo,
-} from "@/features/navigation/sidebar-projection";
 import { AppOnboarding } from "@/features/onboarding";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
@@ -77,28 +72,17 @@ import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import { isMarkdownPath } from "./lib/editor-session";
 import {
-	activeStreamsQueryOptions,
-	archivedWorkspacesQueryOptions,
 	createHelmorQueryClient,
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
 	helmorQueryPersister,
 	QUERY_CACHE_BUSTER,
-	repositoriesQueryOptions,
 	workspaceChangeRequestQueryOptions,
 	workspaceDetailQueryOptions,
 	workspaceForgeActionStatusQueryOptions,
 	workspaceForgeQueryOptions,
 	workspaceGitActionStatusQueryOptions,
-	workspaceGroupsQueryOptions,
 } from "./lib/query-client";
-import {
-	buildSessionRunStates,
-	deriveBusySessionIds,
-	deriveBusyWorkspaceIds,
-	deriveStoppableSessionIds,
-	type SessionRunState,
-} from "./lib/session-run-state";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
 	type AppSettings,
@@ -113,11 +97,7 @@ import {
 } from "./lib/settings";
 import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
-import { summaryToArchivedRow } from "./lib/workspace-helpers";
-import {
-	type WorkspaceToastOptions,
-	WorkspaceToastProvider,
-} from "./lib/workspace-toast-context";
+import { WorkspaceToastProvider } from "./lib/workspace-toast-context";
 import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
 import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
 import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
@@ -125,7 +105,6 @@ import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
 import { WorkspaceHeaderActions } from "./shell/components/workspace-header-actions";
 import { WorkspaceHeaderLeading } from "./shell/components/workspace-header-leading";
 import {
-	EMPTY_ACTIVE_STREAMS,
 	EMPTY_SESSION_RUN_STATES,
 	SPLASH_FADE_MS,
 	SPLASH_MIN_DURATION_MS,
@@ -138,6 +117,11 @@ import { useReadStateController } from "./shell/controllers/use-read-state-contr
 import { useSelectionController } from "./shell/controllers/use-selection-controller";
 import { useStartSurfaceController } from "./shell/controllers/use-start-surface-controller";
 import { publishShellEvent, useShellEvent } from "./shell/event-bus";
+import { useNavigationSidebar } from "./shell/hooks/use-navigation-sidebar";
+import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
+import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
+import { useSettingsOpenHandlers } from "./shell/hooks/use-settings-open-handlers";
+import { useWorkspaceToast } from "./shell/hooks/use-workspace-toast";
 
 function App() {
 	const e2eElement = resolveE2eScenarioElement();
@@ -317,108 +301,15 @@ function AppShell({
 	// Tracks which session we last persisted as "read" so the auto-read effect
 	// stays idempotent when interaction-required state churns without the
 	// displayed session changing.
-	const pushWorkspaceToast = useCallback(
-		(
-			description: string,
-			title = "Action failed",
-			variant: "default" | "destructive" = "destructive",
-			opts?: {
-				action?: WorkspaceToastOptions["action"];
-				persistent?: boolean;
-			},
-		) => {
-			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-			const action = opts?.action
-				? {
-						label: opts.action.label,
-						onClick: () => {
-							opts.action?.onClick();
-							toast.dismiss(id);
-						},
-					}
-				: undefined;
-			const cancel = opts?.action
-				? {
-						label: "Dismiss",
-						onClick: () => {
-							toast.dismiss(id);
-						},
-					}
-				: undefined;
-			const toastOptions = {
-				id,
-				description,
-				duration: opts?.persistent ? Number.POSITIVE_INFINITY : 4200,
-				action,
-				cancel,
-			};
-
-			if (variant === "destructive") {
-				// Inline the alert icon inside the title so it sits on the same
-				// line (sonner's default icon slot is hidden for the error variant
-				// via `errorToastClass` — see `components/ui/sonner.tsx`).
-				const titleNode = (
-					<span className="inline-flex items-center gap-1.5">
-						<CircleAlertIcon className="size-3.5 shrink-0" />
-						<span>{title}</span>
-					</span>
-				);
-				toast.error(titleNode, toastOptions);
-				return;
-			}
-
-			toast(title, toastOptions);
-		},
-		[],
-	);
+	const pushWorkspaceToast = useWorkspaceToast();
 	const {
 		settings: appSettings,
 		isLoaded: areSettingsLoaded,
 		updateSettings,
 	} = useSettings();
-	const navigationGroupsQuery = useQuery(workspaceGroupsQueryOptions());
-	const navigationArchivedQuery = useQuery(archivedWorkspacesQueryOptions());
-	const baseWorkspaceGroups = navigationGroupsQuery.data ?? [];
-	const repositoriesQuery = useQuery(repositoriesQueryOptions());
-	const repositories = repositoriesQuery.data ?? [];
+	const { repositories, workspaceGroups, archivedRows } =
+		useNavigationSidebar(appSettings);
 	const [feedbackOpen, setFeedbackOpen] = useState(false);
-	const availableRepoIds = useMemo(
-		() => repositories.map((repository) => repository.id),
-		[repositories],
-	);
-	const rawArchivedRows = useMemo(
-		() => (navigationArchivedQuery.data ?? []).map(summaryToArchivedRow),
-		[navigationArchivedQuery.data],
-	);
-	// Project the raw status-grouped query result through the same
-	// repo-bucketing step the sidebar applies for rendering, so callers
-	// downstream (selection controller's keyboard navigation, workspace
-	// warmup) see groups in the order the user actually sees them on
-	// screen. Without this, repo grouping mode keeps the raw status
-	// buckets and up/down keys jump in seemingly random order.
-	const navigationSidebar = useMemo(() => {
-		const groups =
-			appSettings.sidebarGrouping === "repo"
-				? regroupByRepo(baseWorkspaceGroups)
-				: baseWorkspaceGroups;
-		return applySidebarView(
-			{ groups, archivedRows: rawArchivedRows },
-			{
-				availableRepoIds,
-				repoFilterIds: appSettings.sidebarRepoFilterIds,
-				sort: appSettings.sidebarSort,
-			},
-		);
-	}, [
-		appSettings.sidebarGrouping,
-		appSettings.sidebarRepoFilterIds,
-		appSettings.sidebarSort,
-		availableRepoIds,
-		baseWorkspaceGroups,
-		rawArchivedRows,
-	]);
-	const workspaceGroups = navigationSidebar.groups;
-	const archivedRows = navigationSidebar.archivedRows;
 	// MRU stack of workspace ids — drives Ctrl+Tab quick switch order.
 	// In-memory only; resets on app restart by design.
 	const workspaceMruRef = useRef<WorkspaceMruStack>(new WorkspaceMruStack());
@@ -534,36 +425,29 @@ function AppShell({
 	// fresh by `UiMutationEvent::ActiveStreamsChanged`. We layer the
 	// StartPage's optimistic "creating workspace" marker on top so the
 	// panel can show a busy spinner before the real stream registers.
-	const activeStreamsQuery = useQuery(activeStreamsQueryOptions());
-	// Stable empty fallback so referential-equality consumers don't churn
-	// on undefined-data ticks.
-	const activeStreams = activeStreamsQuery.data ?? EMPTY_ACTIVE_STREAMS;
-	const effectiveSessionRunStates = useMemo<
-		ReadonlyMap<string, SessionRunState>
-	>(
-		() =>
-			buildSessionRunStates(
-				activeStreams,
-				pendingCreatedWorkspaceSubmit
-					? {
-							sessionId: pendingCreatedWorkspaceSubmit.sessionId,
-							workspaceId: pendingCreatedWorkspaceSubmit.workspaceId,
-						}
-					: null,
-			),
-		[activeStreams, pendingCreatedWorkspaceSubmit],
-	);
-	const effectiveBusySessionIds = useMemo(
-		() => deriveBusySessionIds(effectiveSessionRunStates),
-		[effectiveSessionRunStates],
-	);
-	const effectiveStoppableSessionIds = useMemo(
-		() => deriveStoppableSessionIds(effectiveSessionRunStates),
-		[effectiveSessionRunStates],
-	);
-	const effectiveBusyWorkspaceIds = useMemo(
-		() => deriveBusyWorkspaceIds(effectiveSessionRunStates),
-		[effectiveSessionRunStates],
+	const {
+		activeStreams,
+		effectiveSessionRunStates,
+		effectiveBusySessionIds,
+		effectiveStoppableSessionIds,
+		effectiveBusyWorkspaceIds,
+	} = useSessionRunStates(pendingCreatedWorkspaceSubmit);
+	// P0-A: cache the per-workspace session-selection history as a stable
+	// reference. `getSessionSelectionHistory` already returns a stable ref
+	// array (only swapped inside `rememberSessionSelection`), but AppShell used
+	// to spread it (`[...]`) on every render — busting
+	// WorkspaceConversationContainer's memo whenever ANY unrelated AppShell
+	// state changed (sidebar collapse, resize, settings/forge ticks). deps
+	// cover every history mutation: each `rememberSessionSelection` call runs
+	// alongside a `selectedSessionId` change.
+	const sessionSelectionHistory = useMemo(
+		() => [...selectionActions.getSessionSelectionHistory(selectedWorkspaceId)],
+		[
+			selectionActions,
+			selectedWorkspaceId,
+			selectedSessionId,
+			workspaceReselectTick,
+		],
 	);
 	const appUpdateStatus = useAppUpdater();
 	useDockUnreadBadge();
@@ -599,30 +483,14 @@ function AppShell({
 		installedEditors.find((e) => e.id === preferredEditorId) ??
 		installedEditors[0] ??
 		null;
-	const openPreferredEditorShortcut = getShortcut(
-		appSettings.shortcuts,
-		"workspace.openInEditor",
-	);
-	const newWorkspaceShortcut = getShortcut(
-		appSettings.shortcuts,
-		"workspace.new",
-	);
-	const addRepositoryShortcut = getShortcut(
-		appSettings.shortcuts,
-		"workspace.addRepository",
-	);
-	const sidebarFilterShortcut = getShortcut(
-		appSettings.shortcuts,
-		"workspace.filterSidebar",
-	);
-	const leftSidebarToggleShortcut = getShortcut(
-		appSettings.shortcuts,
-		"sidebar.left.toggle",
-	);
-	const rightSidebarToggleShortcut = getShortcut(
-		appSettings.shortcuts,
-		"sidebar.right.toggle",
-	);
+	const {
+		openPreferredEditorShortcut,
+		newWorkspaceShortcut,
+		addRepositoryShortcut,
+		sidebarFilterShortcut,
+		leftSidebarToggleShortcut,
+		rightSidebarToggleShortcut,
+	} = useResolvedShortcuts(appSettings.shortcuts);
 	const handleUpdateGlobalHotkeyShortcuts = useCallback(
 		(shortcuts: ShortcutOverrides) => updateSettings({ shortcuts }),
 		[updateSettings],
@@ -679,55 +547,12 @@ function AppShell({
 		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
 		enabled: selectedWorkspaceId !== null,
 	});
-	// Optional `initialSection` lets callers jump straight to a panel
-	// (e.g. inspector's "Add run script" → the current repo's Scripts
-	// editor). Bound directly to button onClick is still safe — React
-	// passes the click event as the first arg, which doesn't match the
-	// `SettingsSection` shape, so we coerce non-string args back to
-	// `undefined` to preserve the original zero-arg behavior.
-	const handleOpenSettings = useCallback(
-		(initialSection?: SettingsSection): void => {
-			const section =
-				typeof initialSection === "string" ? initialSection : undefined;
-			onOpenSettings(
-				selectedWorkspaceId,
-				selectedWorkspaceDetailQuery.data?.repoId ?? null,
-				section,
-			);
-		},
-		[
-			onOpenSettings,
-			selectedWorkspaceDetailQuery.data?.repoId,
+	const { handleOpenSettings, handleOpenAnnouncementSettings } =
+		useSettingsOpenHandlers({
 			selectedWorkspaceId,
-		],
-	);
-	const handleOpenAnnouncementSettings = useCallback(
-		(initialSection?: SettingsSection): void => {
-			// Sentinel: announcements written before a workspace is
-			// selected can ask for "the current repo's Scripts section"
-			// without knowing the repo id at authoring time. We resolve
-			// it here and replay the same open-then-scroll dance the
-			// inspector empty states use.
-			if (initialSection === ("repo:current" as SettingsSection)) {
-				const currentRepoId = selectedWorkspaceDetailQuery.data?.repoId;
-				if (currentRepoId) {
-					onOpenSettings(null, null, `repo:${currentRepoId}`);
-					requestAnimationFrame(() => {
-						window.dispatchEvent(
-							new CustomEvent("helmor:scroll-to-repo-scripts"),
-						);
-					});
-					return;
-				}
-				// No active repo (chat-only workspace, or none selected) —
-				// fall back to plain settings rather than a broken link.
-				onOpenSettings(null, null);
-				return;
-			}
-			onOpenSettings(null, null, initialSection);
-		},
-		[onOpenSettings, selectedWorkspaceDetailQuery.data?.repoId],
-	);
+			repoId: selectedWorkspaceDetailQuery.data?.repoId ?? null,
+			onOpenSettings,
+		});
 	const handleOpenReleaseChangelog = useCallback(() => {
 		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
 			toast.error("Unable to open GitHub changelog", {
@@ -1537,6 +1362,58 @@ function AppShell({
 	const workspaceSidebarAutoSelectEnabled =
 		areSettingsLoaded && workspaceViewMode !== "start" && !restoreStartSurface;
 
+	// P1-A: React Compiler bailed out on this ~1650-line AppShell, so it does
+	// NOT memoize these inline header JSX nodes — they get a fresh element
+	// identity on every AppShell render (sidebar/inspector resize ticks, etc.),
+	// busting WorkspaceConversationContainer's memo and cascading the whole
+	// conversation subtree. Verified via React Profiler: ConversationContainer
+	// re-rendered 11× on a single sidebar toggle. Hoist to useMemo so identity
+	// is stable except when the inputs actually change.
+	const headerLeadingNode = useMemo(
+		() =>
+			sidebarCollapsed ? (
+				<WorkspaceHeaderLeading
+					appUpdateStatus={appUpdateStatus}
+					leftSidebarToggleShortcut={leftSidebarToggleShortcut}
+					onExpandSidebar={() => setSidebarCollapsed(false)}
+				/>
+			) : undefined,
+		[sidebarCollapsed, appUpdateStatus, leftSidebarToggleShortcut],
+	);
+	const headerActionsNode = useMemo(
+		() =>
+			selectedWorkspaceId ? (
+				<WorkspaceHeaderActions
+					workspaceId={selectedWorkspaceId}
+					sessionId={selectedSessionId}
+					installedEditors={installedEditors}
+					preferredEditor={preferredEditor}
+					openPreferredEditorShortcut={openPreferredEditorShortcut}
+					rightSidebarToggleShortcut={rightSidebarToggleShortcut}
+					inspectorCollapsed={inspectorCollapsed}
+					isChatMode={selectedWorkspaceDetail?.mode === "chat"}
+					onOpenPreferredEditor={handleOpenPreferredEditor}
+					onToggleInspector={() =>
+						setInspectorCollapsed((collapsed) => !collapsed)
+					}
+					onPickEditor={setPreferredEditorId}
+					pushWorkspaceToast={pushWorkspaceToast}
+				/>
+			) : undefined,
+		[
+			selectedWorkspaceId,
+			selectedSessionId,
+			installedEditors,
+			preferredEditor,
+			openPreferredEditorShortcut,
+			rightSidebarToggleShortcut,
+			inspectorCollapsed,
+			selectedWorkspaceDetail?.mode,
+			handleOpenPreferredEditor,
+			pushWorkspaceToast,
+		],
+	);
+
 	return (
 		<TooltipProvider delayDuration={0}>
 			<WorkspaceToastProvider value={pushWorkspaceToast}>
@@ -1739,11 +1616,7 @@ function AppShell({
 													repoId={
 														selectedWorkspaceDetailQuery.data?.repoId ?? null
 													}
-													sessionSelectionHistory={[
-														...selectionActions.getSessionSelectionHistory(
-															selectedWorkspaceId,
-														),
-													]}
+													sessionSelectionHistory={sessionSelectionHistory}
 													onSelectSession={handleSelectSession}
 													onResolveDisplayedSession={
 														handleResolveDisplayedSession
@@ -1788,49 +1661,8 @@ function AppShell({
 													onCloseContextPreview={
 														handleWorkspaceContextPreviewClose
 													}
-													headerLeading={
-														sidebarCollapsed ? (
-															<WorkspaceHeaderLeading
-																appUpdateStatus={appUpdateStatus}
-																leftSidebarToggleShortcut={
-																	leftSidebarToggleShortcut
-																}
-																onExpandSidebar={() =>
-																	setSidebarCollapsed(false)
-																}
-															/>
-														) : undefined
-													}
-													headerActions={
-														selectedWorkspaceId ? (
-															<WorkspaceHeaderActions
-																workspaceId={selectedWorkspaceId}
-																sessionId={selectedSessionId}
-																installedEditors={installedEditors}
-																preferredEditor={preferredEditor}
-																openPreferredEditorShortcut={
-																	openPreferredEditorShortcut
-																}
-																rightSidebarToggleShortcut={
-																	rightSidebarToggleShortcut
-																}
-																inspectorCollapsed={inspectorCollapsed}
-																isChatMode={
-																	selectedWorkspaceDetail?.mode === "chat"
-																}
-																onOpenPreferredEditor={
-																	handleOpenPreferredEditor
-																}
-																onToggleInspector={() =>
-																	setInspectorCollapsed(
-																		(collapsed) => !collapsed,
-																	)
-																}
-																onPickEditor={setPreferredEditorId}
-																pushWorkspaceToast={pushWorkspaceToast}
-															/>
-														) : undefined
-													}
+													headerLeading={headerLeadingNode}
+													headerActions={headerActionsNode}
 												/>
 											)}
 										</div>
