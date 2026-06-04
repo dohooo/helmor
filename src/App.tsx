@@ -20,10 +20,6 @@ import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-clo
 import { QuickSwitchOverlay } from "@/features/quick-switch";
 import type { SettingsSection } from "@/features/settings";
 import { getShortcut } from "@/features/shortcuts/registry";
-import {
-	type ShortcutHandler,
-	useAppShortcuts,
-} from "@/features/shortcuts/use-app-shortcuts";
 import { useGlobalHotkeySync } from "@/features/shortcuts/use-global-hotkey-sync";
 import { useAppUpdater } from "@/features/updater/use-app-updater";
 import { WorkspaceStartPage } from "@/features/workspace-start";
@@ -33,7 +29,7 @@ import { usePullLatest } from "@/shell/hooks/use-pull-latest";
 import { useThemeApplication } from "@/shell/hooks/use-theme-application";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import { PREFERRED_EDITOR_STORAGE_KEY } from "@/shell/layout";
-import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
+import { useZoom } from "@/shell/use-zoom";
 import { openWorkspaceInEditor } from "./lib/api";
 import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
@@ -64,6 +60,7 @@ import { useStartSurfaceController } from "./shell/controllers/use-start-surface
 import { publishShellEvent } from "./shell/event-bus";
 import { useAppBootstrap } from "./shell/hooks/use-app-bootstrap";
 import { useEditorEditMode } from "./shell/hooks/use-editor-edit-mode";
+import { useGlobalShortcutHandlers } from "./shell/hooks/use-global-shortcut-handlers";
 import { useNavigationSidebar } from "./shell/hooks/use-navigation-sidebar";
 import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
 import { useSessionActions } from "./shell/hooks/use-session-actions";
@@ -501,212 +498,38 @@ function AppShell({
 		handleSelectWorkspace,
 	});
 
-	const globalShortcutHandlers = useMemo<ShortcutHandler[]>(
-		() => [
-			{
-				id: "settings.open" as const,
-				callback: handleOpenSettings,
-			},
-			{
-				id: "workspace.copyPath" as const,
-				callback: handleCopyWorkspacePath,
-				enabled: Boolean(workspaceRootPath),
-			},
-			{
-				id: "workspace.openInEditor" as const,
-				callback: handleOpenPreferredEditor,
-				enabled: Boolean(selectedWorkspaceId && preferredEditor),
-			},
-			{
-				id: "workspace.new" as const,
-				callback: () => publishShellEvent({ type: "open-new-workspace" }),
-			},
-			{
-				id: "workspace.justChat" as const,
-				callback: () =>
-					publishShellEvent({ type: "open-new-workspace", mode: "chat" }),
-			},
-			{
-				id: "workspace.addRepository" as const,
-				callback: () => publishShellEvent({ type: "open-add-repository" }),
-			},
-			{
-				id: "workspace.filterSidebar" as const,
-				callback: () => publishShellEvent({ type: "open-sidebar-filter" }),
-			},
-			{
-				id: "workspace.previous" as const,
-				callback: () => handleNavigateWorkspaces(-1),
-			},
-			{
-				id: "workspace.next" as const,
-				callback: () => handleNavigateWorkspaces(1),
-			},
-			{
-				id: "workspace.quickSwitchNext" as const,
-				callback: () => quickSwitch.open("next"),
-			},
-			{
-				id: "workspace.quickSwitchPrevious" as const,
-				callback: () => quickSwitch.open("previous"),
-			},
-			{
-				id: "session.previous" as const,
-				callback: () => handleNavigateSessions(-1),
-				enabled: workspaceViewMode === "conversation",
-			},
-			{
-				id: "session.next" as const,
-				callback: () => handleNavigateSessions(1),
-				enabled: workspaceViewMode === "conversation",
-			},
-			{
-				id: "session.close" as const,
-				callback: () => {
-					if (workspacePreviewActive && workspacePreviewCard) {
-						contextPanelActions.closeWorkspaceContextPreview();
-						return;
-					}
-					if (!getCloseableCurrentSession()) return;
-					void handleCloseSelectedSession();
-				},
-				enabled:
-					workspaceViewMode === "conversation" &&
-					(Boolean(workspacePreviewCard) ||
-						Boolean(getCloseableCurrentSession())),
-			},
-			{
-				id: "session.new" as const,
-				callback: (): void => void handleCreateSession(),
-				enabled: workspaceViewMode === "conversation",
-			},
-			{
-				id: "session.reopenClosed" as const,
-				callback: () => void handleReopenClosedSession(),
-			},
-			{
-				id: "script.run" as const,
-				callback: () => publishShellEvent({ type: "run-script" }),
-			},
-			{
-				id: "theme.toggle" as const,
-				callback: handleToggleTheme,
-			},
-			{
-				id: "sidebar.left.toggle" as const,
-				callback: () => setSidebarCollapsed((collapsed) => !collapsed),
-			},
-			{
-				id: "sidebar.right.toggle" as const,
-				callback: () => setInspectorCollapsed((collapsed) => !collapsed),
-			},
-			{
-				id: "zen.toggle" as const,
-				callback: handleToggleZenMode,
-			},
-			{
-				id: "action.createPr" as const,
-				callback: () => void handleCommitAction("create-pr"),
-			},
-			{
-				id: "action.commitAndPush" as const,
-				callback: () => void handleCommitAction("commit-and-push"),
-			},
-			{
-				id: "action.pullLatest" as const,
-				callback: () => void handlePullLatest(),
-				enabled: Boolean(selectedWorkspaceId),
-			},
-			{
-				id: "action.mergePr" as const,
-				callback: () => void handleInspectorCommitAction("merge"),
-			},
-			{
-				id: "action.fixErrors" as const,
-				callback: () => void handleInspectorCommitAction("fix"),
-			},
-			{
-				id: "action.openPullRequest" as const,
-				callback: handleOpenPullRequest,
-				enabled: Boolean(pullRequestUrl),
-			},
-			{
-				id: "composer.focus" as const,
-				callback: () => publishShellEvent({ type: "focus-composer" }),
-				enabled:
-					workspaceViewMode === "conversation" || workspaceViewMode === "start",
-			},
-			{
-				id: "composer.openModelPicker" as const,
-				callback: handleOpenModelPicker,
-				enabled: workspaceViewMode === "conversation",
-			},
-			{
-				id: "editor.edit" as const,
-				callback: handleEnterEditorEditMode,
-				enabled: workspaceViewMode === "editor" && canEditEditorSession,
-			},
-			{
-				id: "composer.toggleContextPanel" as const,
-				callback: () => publishShellEvent({ type: "toggle-context-panel" }),
-				enabled:
-					workspaceViewMode === "conversation" || workspaceViewMode === "start",
-			},
-			{
-				id: "zoom.in" as const,
-				callback: () =>
-					updateSettings({
-						zoomLevel: clampZoom(appSettings.zoomLevel + ZOOM_STEP),
-					}),
-			},
-			{
-				id: "zoom.out" as const,
-				callback: () =>
-					updateSettings({
-						zoomLevel: clampZoom(appSettings.zoomLevel - ZOOM_STEP),
-					}),
-			},
-			{
-				id: "zoom.reset" as const,
-				callback: () => updateSettings({ zoomLevel: 1.0 }),
-			},
-		],
-		[
-			appSettings.zoomLevel,
-			getCloseableCurrentSession,
-			handleCloseSelectedSession,
-			handleCopyWorkspacePath,
-			handleCreateSession,
-			handleCommitAction,
-			handleInspectorCommitAction,
-			handleNavigateSessions,
-			handleNavigateWorkspaces,
-			handleOpenModelPicker,
-			handleOpenPreferredEditor,
-			handleOpenPullRequest,
-			handleOpenSettings,
-			handleEnterEditorEditMode,
-			handlePullLatest,
-			handleReopenClosedSession,
-			handleToggleTheme,
-			handleToggleZenMode,
-			preferredEditor,
-			pullRequestUrl,
-			quickSwitch,
-			selectedWorkspaceId,
-			setInspectorCollapsed,
-			setSidebarCollapsed,
-			updateSettings,
-			workspaceRootPath,
-			workspacePreviewActive,
-			workspacePreviewCard,
-			workspaceViewMode,
-			canEditEditorSession,
-		],
-	);
-	useAppShortcuts({
-		overrides: appSettings.shortcuts,
-		handlers: globalShortcutHandlers,
+	useGlobalShortcutHandlers({
+		appSettings,
+		updateSettings,
+		contextPanelActions,
+		canEditEditorSession,
+		getCloseableCurrentSession,
+		handleCloseSelectedSession,
+		handleCopyWorkspacePath,
+		handleCreateSession,
+		handleCommitAction,
+		handleInspectorCommitAction,
+		handleNavigateSessions,
+		handleNavigateWorkspaces,
+		handleOpenModelPicker,
+		handleOpenPreferredEditor,
+		handleOpenPullRequest,
+		handleOpenSettings,
+		handleEnterEditorEditMode,
+		handlePullLatest,
+		handleReopenClosedSession,
+		handleToggleTheme,
+		handleToggleZenMode,
+		preferredEditor,
+		pullRequestUrl,
+		quickSwitch,
+		selectedWorkspaceId,
+		setInspectorCollapsed,
+		setSidebarCollapsed,
+		workspaceRootPath,
+		workspacePreviewActive,
+		workspacePreviewCard,
+		workspaceViewMode,
 	});
 
 	const { state: pendingQueue, actions: pendingQueueActions } =
