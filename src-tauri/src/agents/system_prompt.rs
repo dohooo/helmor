@@ -144,7 +144,13 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
     }
 
     out.push_str(
-        "\nIf you need a scratch directory to leave files for other agents in this workspace (or for your own future sessions), use `<workspace_root>/.agent-contexts/`. It is gitignored via the repo-local exclude file, so anything you write there stays out of every diff.\n",
+        "\nFor any agent-created temporary or supporting files that are not intended as product changes, use `<workspace_root>/.agent-contexts/<short-task-slug>/`. This includes web-research notes, plans, findings, downloaded snippets, screenshots, logs, intermediate reports, and files meant for other agents or future sessions.\n",
+    );
+    out.push_str(
+        "\nDo not create top-level scratch or research directories in the workspace root, such as `research_*`, `notes/`, `tmp/`, or `artifacts/`, unless the user explicitly asks for repo-tracked files there.\n",
+    );
+    out.push_str(
+        "\nBefore finalizing, run `git status --short`; move any accidental scratch artifacts outside `.agent-contexts/` into `.agent-contexts/`, or remove them if they are no longer needed. `.agent-contexts/` is gitignored via the repo-local exclude file, so anything you write there stays out of every diff.\n",
     );
 
     let _ = write!(
@@ -271,6 +277,9 @@ mod tests {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
         assert!(prompt.contains(".agent-contexts/"));
         assert!(prompt.contains("gitignored"));
+        assert!(prompt.contains("web-research notes"));
+        assert!(prompt.contains("Do not create top-level scratch or research directories"));
+        assert!(prompt.contains("git status --short"));
     }
 
     /// The prompt points the agent at the CLI's own `--help` instead
