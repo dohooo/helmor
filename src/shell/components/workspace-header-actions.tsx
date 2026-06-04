@@ -157,7 +157,7 @@ export function WorkspaceHeaderActions({
 				</div>
 			) : null}
 			<div className="flex -translate-x-px items-center gap-1">
-				<div className="max-[640px]:hidden">
+				<div className="flex items-center max-[640px]:hidden">
 					<ExportSessionImageButton sessionId={sessionId} />
 				</div>
 				<DropdownMenu>

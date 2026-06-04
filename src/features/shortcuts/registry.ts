@@ -221,7 +221,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: "window.miniMode.toggle",
 		title: "Toggle mini mode",
 		group: "System",
-		defaultHotkey: "Mod+M",
+		defaultHotkey: "Mod+Control+M",
 		scopes: ["app"],
 		editable: true,
 	},

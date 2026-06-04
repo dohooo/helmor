@@ -790,10 +790,13 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
 
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
+const HELMOR_ALWAYS_ON_TOP_MENU_ID: &str = "helmor-always-on-top";
 
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::menu::{
+        AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+    };
 
     let close_current_session_item = MenuItemBuilder::with_id(
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID,
@@ -801,6 +804,13 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     )
     .accelerator("Cmd+W")
     .build(app)?;
+
+    // Lets the user float the window above other apps. Decoupled from mini
+    // mode — purely a manual toggle, the check mark is the source of truth.
+    let always_on_top_item =
+        CheckMenuItemBuilder::with_id(HELMOR_ALWAYS_ON_TOP_MENU_ID, "Always on Top")
+            .checked(false)
+            .build(app)?;
 
     let quit_item = MenuItemBuilder::with_id(HELMOR_QUIT_MENU_ID, "Quit Helmor")
         .accelerator("Cmd+Q")
@@ -837,6 +847,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .minimize()
         .maximize()
         .separator()
+        .item(&always_on_top_item)
         .item(&close_current_session_item)
         .build()?;
 
@@ -850,6 +861,16 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.on_menu_event(move |_, event| match event.id().0.as_str() {
         HELMOR_QUIT_MENU_ID => emit_quit_requested(&handle),
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID => emit_close_current_session_requested(&handle),
+        HELMOR_ALWAYS_ON_TOP_MENU_ID => {
+            // muda toggles the check mark before firing, so is_checked() is
+            // already the desired post-click state.
+            let checked = always_on_top_item.is_checked().unwrap_or(false);
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Err(error) = window.set_always_on_top(checked) {
+                    tracing::warn!(error = %error, "Failed to set always-on-top from menu");
+                }
+            }
+        }
         _ => {}
     });
 

@@ -1013,6 +1013,10 @@ pub fn enter_mini_window_mode(window: Window) -> CmdResult<()> {
     window
         .set_resizable(false)
         .context("Failed to disable mini window resizing")?;
+    // Resizing/centering drops the webview's keyboard focus on macOS, which
+    // kills the JS keydown listener until the user clicks back in. Re-focus
+    // so the toggle shortcut keeps working without a manual click.
+    let _ = window.set_focus();
 
     Ok(())
 }
@@ -1048,6 +1052,9 @@ pub fn exit_mini_window_mode(window: Window) -> CmdResult<()> {
             .set_resizable(true)
             .context("Failed to restore window resizing")?;
     }
+    // See enter_mini_window_mode: restore keyboard focus after resizing so the
+    // toggle shortcut stays live.
+    let _ = window.set_focus();
 
     Ok(())
 }

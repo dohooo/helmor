@@ -1,7 +1,7 @@
 {
 	"items": [
 		{
-			"text": "Use Command+M or the header resize button to switch Helmor between desktop and mini window sizes."
+			"text": "Use Command+Control+M or the header resize button to switch Helmor between desktop and mini window sizes."
 		},
 		{
 			"text": "On narrow windows, the sidebars now peek in from the edges so the workspace stays full width."

@@ -759,7 +759,7 @@ describe("App global navigation shortcuts", () => {
 		await screen.findByRole("heading", { name: "Contexts" });
 	});
 
-	it("resizes the window on Command+M", async () => {
+	it("resizes the window on Command+Control+M", async () => {
 		const invokeMock = vi.mocked(invoke);
 		await renderAppReady();
 		invokeMock.mockClear();
@@ -768,6 +768,7 @@ describe("App global navigation shortcuts", () => {
 			key: "m",
 			code: "KeyM",
 			metaKey: true,
+			ctrlKey: true,
 		});
 
 		await waitFor(() => {
@@ -778,6 +779,7 @@ describe("App global navigation shortcuts", () => {
 			key: "m",
 			code: "KeyM",
 			metaKey: true,
+			ctrlKey: true,
 		});
 
 		await waitFor(() => {
