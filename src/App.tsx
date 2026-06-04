@@ -1,6 +1,5 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { Toaster } from "@/components/ui/sonner";
@@ -17,7 +16,6 @@ import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { FeedbackDialog } from "@/features/feedback";
 import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
-import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import { QuickSwitchOverlay } from "@/features/quick-switch";
 import type { SettingsSection } from "@/features/settings";
@@ -36,25 +34,16 @@ import { useThemeApplication } from "@/shell/hooks/use-theme-application";
 import { useUiSyncBridge } from "@/shell/hooks/use-ui-sync-bridge";
 import { PREFERRED_EDITOR_STORAGE_KEY } from "@/shell/layout";
 import { clampZoom, useZoom, ZOOM_STEP } from "@/shell/use-zoom";
-import {
-	createSession,
-	openWorkspaceInEditor,
-	type WorkspaceDetail,
-	type WorkspaceSessionSummary,
-} from "./lib/api";
+import { openWorkspaceInEditor } from "./lib/api";
 import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
-import {
-	detectedEditorsQueryOptions,
-	helmorQueryKeys,
-} from "./lib/query-client";
+import { detectedEditorsQueryOptions } from "./lib/query-client";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
 	resolveTheme,
 	type ShortcutOverrides,
 	useSettings,
 } from "./lib/settings";
-import { requestSidebarReconcile } from "./lib/sidebar-mutation-gate";
 import { useOsNotifications } from "./lib/use-os-notifications";
 import { WorkspaceToastProvider } from "./lib/workspace-toast-context";
 import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
@@ -77,6 +66,7 @@ import { useAppBootstrap } from "./shell/hooks/use-app-bootstrap";
 import { useEditorEditMode } from "./shell/hooks/use-editor-edit-mode";
 import { useNavigationSidebar } from "./shell/hooks/use-navigation-sidebar";
 import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
+import { useSessionActions } from "./shell/hooks/use-session-actions";
 import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
 import { useSettingsOpenHandlers } from "./shell/hooks/use-settings-open-handlers";
 import { useShellChromeActions } from "./shell/hooks/use-shell-chrome-actions";
@@ -470,38 +460,6 @@ function AppShell({
 		],
 	);
 
-	const getCloseableCurrentSession = useCallback(() => {
-		const snapshot = selectionActions.getSnapshot();
-		if (snapshot.viewMode !== "conversation") {
-			return null;
-		}
-
-		const workspaceId = snapshot.workspaceId;
-		const sessionId = snapshot.sessionId;
-		if (!workspaceId || !sessionId) {
-			return null;
-		}
-
-		const workspace = queryClient.getQueryData<WorkspaceDetail | null>(
-			helmorQueryKeys.workspaceDetail(workspaceId),
-		);
-		const sessions =
-			queryClient.getQueryData<WorkspaceSessionSummary[]>(
-				helmorQueryKeys.workspaceSessions(workspaceId),
-			) ?? [];
-		if (!workspace || !sessions.some((session) => session.id === sessionId)) {
-			return null;
-		}
-
-		return {
-			workspaceId,
-			sessionId,
-			workspace,
-			sessions,
-			session: sessions.find((candidate) => candidate.id === sessionId) ?? null,
-		};
-	}, [queryClient, selectionActions]);
-
 	const { requestClose: requestCloseSession, dialogNode: closeConfirmDialog } =
 		useConfirmSessionClose({
 			busySessionIds: effectiveBusySessionIds,
@@ -513,87 +471,18 @@ function AppShell({
 
 	const handleReopenClosedSession = readStateActions.reopenClosedSession;
 
-	const handleCloseSelectedSession = useCallback(async () => {
-		const currentSession = getCloseableCurrentSession();
-		if (!currentSession?.session) {
-			return;
-		}
-
-		const { workspaceId, sessionId, workspace, sessions, session } =
-			currentSession;
-
-		await requestCloseSession({
-			workspace,
-			sessions,
-			session,
-			activateAdjacent: true,
-			onSessionsChanged: () => {
-				requestSidebarReconcile(queryClient);
-				void Promise.all([
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-					}),
-					queryClient.invalidateQueries({
-						queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-					}),
-					queryClient.invalidateQueries({
-						queryKey: [...helmorQueryKeys.sessionMessages(sessionId), "thread"],
-					}),
-				]);
-			},
-		});
-	}, [getCloseableCurrentSession, queryClient, requestCloseSession]);
-
-	const handleCreateSession = useCallback(async () => {
-		const workspaceId = selectionActions.getSnapshot().workspaceId;
-		if (!workspaceId) {
-			return;
-		}
-
-		try {
-			const { sessionId } = await createSession(workspaceId);
-			const cachedWorkspace =
-				queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(workspaceId),
-				) ?? null;
-			seedNewSessionInCache({
-				queryClient,
-				workspaceId,
-				sessionId,
-				workspace: cachedWorkspace,
-				existingSessions:
-					queryClient.getQueryData<WorkspaceSessionSummary[]>(
-						helmorQueryKeys.workspaceSessions(workspaceId),
-					) ?? [],
-			});
-			handleSelectSession(sessionId);
-
-			requestSidebarReconcile(queryClient);
-			void Promise.all([
-				...(cachedWorkspace
-					? [
-							queryClient.invalidateQueries({
-								queryKey: helmorQueryKeys.repoScripts(
-									cachedWorkspace.repoId,
-									workspaceId,
-								),
-							}),
-						]
-					: []),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceDetail(workspaceId),
-				}),
-				queryClient.invalidateQueries({
-					queryKey: helmorQueryKeys.workspaceSessions(workspaceId),
-				}),
-			]);
-		} catch (error) {
-			pushWorkspaceToast(
-				error instanceof Error ? error.message : String(error),
-				"Unable to create session",
-			);
-		}
-	}, [handleSelectSession, pushWorkspaceToast, queryClient]);
+	const {
+		getCloseableCurrentSession,
+		handleCloseSelectedSession,
+		handleCreateSession,
+	} = useSessionActions({
+		queryClient,
+		selectionActions,
+		requestCloseSession,
+		handleSelectSession,
+		pushWorkspaceToast,
+		workspaceViewMode,
+	});
 
 	const { handleNavigateSessions, handleNavigateWorkspaces } =
 		useWorkspaceNavigation({
@@ -858,38 +747,6 @@ function AppShell({
 
 	// Close-confirmation is handled by <QuitConfirmDialog /> which registers
 	// its own onCloseRequested listener.  No need for a separate hook here.
-
-	useEffect(() => {
-		if (workspaceViewMode !== "conversation") {
-			return;
-		}
-
-		let disposed = false;
-		let unlisten: (() => void) | undefined;
-
-		void listen("helmor://close-current-session", () => {
-			if (!getCloseableCurrentSession()) {
-				return;
-			}
-
-			void handleCloseSelectedSession();
-		}).then((fn) => {
-			if (disposed) {
-				fn();
-				return;
-			}
-			unlisten = fn;
-		});
-
-		return () => {
-			disposed = true;
-			unlisten?.();
-		};
-	}, [
-		getCloseableCurrentSession,
-		handleCloseSelectedSession,
-		workspaceViewMode,
-	]);
 
 	const selectedWorkspaceRepository =
 		repositories.find(
