@@ -242,6 +242,19 @@ SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 
 **本机手测**:`bun run build`(填充 dist/)后 `HELMOR_COMPANION=1 bun run dev` → 浏览器开 `http://<addr>/#pair=<token>`(token 见日志)→ 应加载真实前端并渲染工作区侧栏。
 
+### 13.6 持久配对 + registry 客户端(已实现并验证)
+
+- `paired_devices` 表(`schema.rs`)+ `models/paired_devices.rs`:create(一次性返回 PAT)/ verify_and_touch / list / revoke,只存 PAT 的 SHA-256。单测 2/2(隔离 TestEnv)。跨桌面重启持久 ⇒ 满足 G5 免重扫。
+- companion auth 改为注入式 `Verifier` 闭包:production 注入 `paired_devices` 查询,集成测试注入内存 verifier ⇒ HTTP 层对 DB 无感、可测。三个 handler 均走 `dev-token 或 verifier`。
+- `companion/registry.rs`:桌面侧 registry 客户端(register/revoke,reqwest),`HELMOR_COMPANION_API_URL` 可覆盖。单测 1/1(本地 axum stub 端到端)。
+
+### 13.7 仍待实现(公网稳定 URL 的"ops + UI 层",容器内不可运行时验)
+
+- `companion/tunnel.rs`:spawn cloudflared(named tunnel run / quick tunnel)+ 生命周期。**编译可验,运行需 cloudflared 二进制 + 你的 CF 账号**。
+- `commands/companion_commands.rs`:enable/disable、pair(create_paired_device → QR payload {host, pat})、list/revoke devices、named-tunnel 分配(调 registry + 存 secret)。+ `lib/api.ts` IPC 包装 + `UiMutationEvent::PairedDevicesChanged`。
+- `sidecar/scripts/stage-vendor.ts`:staging cloudflared 二进制(SHA256 钉死)。
+- `features/settings/panels/mobile-companion.tsx`:Settings → Experimental 配对面板(`qrcode.react` QR + 设备列表 + 撤销)。
+
 ### 13.3 紧接着的下一刀
 
 - **Slice 1 — 全量 RPC + live 同步 + 鉴权**:`/rpc` 覆盖更多命令(写/变更,按需带 `AppHandle`/`State`);`/rpc-stream` + `/v1/stream` 接 `ui_sync` 广播,让 `subscribe_ui_mutations`/`listen` 真正推送;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。

@@ -20,6 +20,7 @@
 //! env var so default app behaviour is unchanged.
 
 mod auth;
+pub mod registry;
 mod rpc;
 mod server;
 mod stream;
