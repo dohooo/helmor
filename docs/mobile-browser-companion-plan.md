@@ -38,11 +38,11 @@
 
 1. **终态走稳定 URL**(Named Tunnel + helmor.ai 子域)。理由:用户需求是"扫一次、以后直接打开手机浏览器就连上",要求 hostname 永久不变,Quick Tunnel 的漂移 URL 不满足。
    - **构建顺序**:本地 + Quick Tunnel 与稳定 URL 共用 ~95% 代码(axum + shim + 配对 + 二维码),差别只在"谁写 CNAME"。先用本地/Quick Tunnel 跑通整个闭环验证(**全程无需任何凭证**),最后补"委派子域 + 写 CNAME 小后端"即升级为永久稳定 URL。
-2. **每台桌面一个唯一 hostname**:`<随机>.remote.helmor.ai`,各连各的电脑(海量动态 CNAME,每台一条)。
-3. **zone 托管(已定)**:把 `remote.helmor.ai` 建成**独立 CF zone**,API token 只 scope 到该子 zone。
-   - 理由:CF API token 最小粒度是 zone 级,无法限定到记录前缀。独立子 zone → 写 CNAME 的 token 即便泄漏/Worker 被攻陷也**碰不到 apex/营销站/邮件 MX**,炸毁半径最小。
-   - 代价:hostname 多一层(`xxx.remote.helmor.ai` 而非 `remote-xxx.helmor.ai`),用户扫码无感。
-3b. **CNAME-writer 小后端(已定)**:用 **Cloudflare Worker**(配 CF KV 存设备记录 + IP 限流),放进 monorepo **`apps/registry/`**(与 `apps/marketing` 并列)。取代旧提案的 Vercel+Upstash 方案——全在 CF 生态、不引第三方账号、token 不出 CF。职责:收 tunnel UUID → 在 `remote.helmor.ai` 写/删 CNAME → 签发并校验 device secret。
+2. **每台桌面一个唯一 hostname**:`remote-<随机>.helmor.ai`,各连各的电脑(海量动态 CNAME,每台一条)。
+3. **zone 托管(已定,2026-06 更新)**:写在 **parent zone `helmor.ai`** 里(CF 当前计划不支持把 `remote.helmor.ai` 建成独立子 zone — subdomain zone 是 Enterprise 功能)。
+   - 代价:`DNS:Edit` token 只能 scope 到整个 `helmor.ai` zone(CF token 最小粒度是 zone 级),理论上能改 apex/营销/MX。
+   - **配套缓解(Worker 纵深防御)**:Worker 只创建匹配 `^remote-[a-z0-9]{8,}\.helmor\.ai$` 的 CNAME;只删除自己 KV 记录过的 device;绝不触碰其它记录。残余风险仅"token 从 Worker secret 泄漏"(运维轮换 + 监控)。
+3b. **CNAME-writer 小后端(已定)**:**Cloudflare Worker**,monorepo `apps/registry/`,自定义域 `registry.helmor.ai`。配 CF KV(`helmor-devices`)存设备记录 + IP 限流。真实 Account/Zone/KV ID 与 token **不入公开仓库**——经环境变量/Worker secret 注入,仓库内为占位,保持可 fork/开源。职责:收 tunnel UUID → 在 `helmor.ai` 写/删 `remote-<random>` CNAME → 签发并校验 device secret。
 4. **手机端默认 full-drive**:能做全部操作(因为看到的就是响应式桌面前端,功能本应对等)。
    - 推论:`/rpc` dispatcher 首版**不做角色/工具白名单**(简化)。
    - 代价:手机 = 整台电脑完整控制权,因此**凭证安全模型必须首版就做扎实**(见下三条),不能推迟到后期。
