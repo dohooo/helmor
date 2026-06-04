@@ -110,6 +110,7 @@ import {
 	SPLASH_MIN_DURATION_MS,
 	SPLASH_POST_ONBOARDING_DELAY_MS,
 } from "./shell/constants";
+import { SelectionStoreProvider } from "./shell/controllers/selection-store-context";
 import { useContextPanelController } from "./shell/controllers/use-context-panel-controller";
 import { useEditorSessionController } from "./shell/controllers/use-editor-session-controller";
 import { usePendingQueueController } from "./shell/controllers/use-pending-queue-controller";
@@ -313,23 +314,26 @@ function AppShell({
 	// MRU stack of workspace ids — drives Ctrl+Tab quick switch order.
 	// In-memory only; resets on app restart by design.
 	const workspaceMruRef = useRef<WorkspaceMruStack>(new WorkspaceMruStack());
-	const { state: selection, actions: selectionActions } =
-		useSelectionController({
-			queryClient,
-			workspaceGroups,
-			archivedRows,
-			appSettings,
-			areSettingsLoaded,
-			updateSettings,
-			onWorkspaceSwitched: () => {
-				contextPanelActions.clearWorkspacePreview();
-			},
-			onStartOpened: () => {
-				contextPanelActions.clearWorkspacePreview();
-				startSurfaceActions.resetScratchOnReentry();
-				contextPanelActions.syncToStartMode();
-			},
-		});
+	const {
+		state: selection,
+		actions: selectionActions,
+		store: selectionStore,
+	} = useSelectionController({
+		queryClient,
+		workspaceGroups,
+		archivedRows,
+		appSettings,
+		areSettingsLoaded,
+		updateSettings,
+		onWorkspaceSwitched: () => {
+			contextPanelActions.clearWorkspacePreview();
+		},
+		onStartOpened: () => {
+			contextPanelActions.clearWorkspacePreview();
+			startSurfaceActions.resetScratchOnReentry();
+			contextPanelActions.syncToStartMode();
+		},
+	});
 	const { state: contextPanel, actions: contextPanelActions } =
 		useContextPanelController({
 			appSettings,
@@ -1416,150 +1420,214 @@ function AppShell({
 
 	return (
 		<TooltipProvider delayDuration={0}>
-			<WorkspaceToastProvider value={pushWorkspaceToast}>
-				<SessionRunStatesProvider value={effectiveSessionRunStates}>
-					<ComposerInsertProvider value={handleInsertIntoComposer}>
-						{/* Conditionally mount so closing the dialog tears the tree
-						 *  down via React directly instead of waiting on Radix
-						 *  Presence + `animationend`. In WKWebview the workspace
-						 *  switch that fires from "Send to agent" can flip
-						 *  `document.hidden` to true mid-animation, which pauses
-						 *  the exit keyframes indefinitely — `animationend`
-						 *  never fires, Presence never unmounts, and the closed
-						 *  dialog lingers as a ghost over the new conversation. */}
-						{feedbackOpen ? (
-							<FeedbackDialog
-								open={feedbackOpen}
-								onOpenChange={setFeedbackOpen}
-								onOpenSettings={handleOpenSettings}
-								onSubmitPrompt={submitFeedbackPrompt}
-							/>
-						) : null}
-						<main
-							aria-label="Application shell"
-							className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
-						>
-							<div className="relative flex h-full min-h-0 bg-background">
-								{workspaceViewMode !== "editor" && (
-									<>
-										<ShellSidebarPane
-											collapsed={sidebarCollapsed}
-											resizing={isSidebarResizing}
-											width={sidebarWidth}
-											selectedWorkspaceId={
-												workspaceViewMode === "start"
-													? null
-													: selectedWorkspaceId
-											}
-											autoSelectEnabled={workspaceSidebarAutoSelectEnabled}
-											busyWorkspaceIds={effectiveBusyWorkspaceIds}
-											interactionRequiredWorkspaceIds={
-												interactionRequiredWorkspaceIds
-											}
-											newWorkspaceShortcut={newWorkspaceShortcut}
-											addRepositoryShortcut={addRepositoryShortcut}
-											sidebarFilterShortcut={sidebarFilterShortcut}
-											leftSidebarToggleShortcut={leftSidebarToggleShortcut}
-											appUpdateStatus={appUpdateStatus}
-											appSettings={appSettings}
-											onSelectWorkspace={handleSelectWorkspace}
-											onOpenNewWorkspace={handleOpenWorkspaceStart}
-											onAddRepositoryNeedsStart={handleAddRepositoryNeedsStart}
-											onMoveLocalToWorktree={handleMoveLocalToWorktree}
-											onCollapseSidebar={() => setSidebarCollapsed(true)}
-											onOpenFeedback={() => setFeedbackOpen(true)}
-											onOpenSettings={handleOpenSettings}
-											pushWorkspaceToast={pushWorkspaceToast}
-										/>
-										<ShellResizeSeparator
-											side="sidebar"
-											collapsed={sidebarCollapsed}
-											resizing={isSidebarResizing}
-											width={sidebarWidth}
-											onPointerDown={handleResizeStart("sidebar")}
-											onKeyDown={handleResizeKeyDown("sidebar")}
-										/>
-									</>
-								)}
-
-								<section
-									aria-label="Workspace panel"
-									className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
-									// Mirror the inspector's containment: keep style/layout invalidation
-									// from sidebar/inspector resize out of the workspace subtree (which
-									// owns Monaco's ~2900 cached CSS rules after the editor opens once).
-									style={{ contain: "layout style" }}
-								>
+			<SelectionStoreProvider value={selectionStore}>
+				<WorkspaceToastProvider value={pushWorkspaceToast}>
+					<SessionRunStatesProvider value={effectiveSessionRunStates}>
+						<ComposerInsertProvider value={handleInsertIntoComposer}>
+							{/* Conditionally mount so closing the dialog tears the tree
+							 *  down via React directly instead of waiting on Radix
+							 *  Presence + `animationend`. In WKWebview the workspace
+							 *  switch that fires from "Send to agent" can flip
+							 *  `document.hidden` to true mid-animation, which pauses
+							 *  the exit keyframes indefinitely — `animationend`
+							 *  never fires, Presence never unmounts, and the closed
+							 *  dialog lingers as a ghost over the new conversation. */}
+							{feedbackOpen ? (
+								<FeedbackDialog
+									open={feedbackOpen}
+									onOpenChange={setFeedbackOpen}
+									onOpenSettings={handleOpenSettings}
+									onSubmitPrompt={submitFeedbackPrompt}
+								/>
+							) : null}
+							<main
+								aria-label="Application shell"
+								className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
+							>
+								<div className="relative flex h-full min-h-0 bg-background">
 									{workspaceViewMode !== "editor" && (
-										<div
-											aria-label="Workspace panel drag region"
-											className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
-											data-tauri-drag-region
-										/>
+										<>
+											<ShellSidebarPane
+												collapsed={sidebarCollapsed}
+												resizing={isSidebarResizing}
+												width={sidebarWidth}
+												selectedWorkspaceId={
+													workspaceViewMode === "start"
+														? null
+														: selectedWorkspaceId
+												}
+												autoSelectEnabled={workspaceSidebarAutoSelectEnabled}
+												busyWorkspaceIds={effectiveBusyWorkspaceIds}
+												interactionRequiredWorkspaceIds={
+													interactionRequiredWorkspaceIds
+												}
+												newWorkspaceShortcut={newWorkspaceShortcut}
+												addRepositoryShortcut={addRepositoryShortcut}
+												sidebarFilterShortcut={sidebarFilterShortcut}
+												leftSidebarToggleShortcut={leftSidebarToggleShortcut}
+												appUpdateStatus={appUpdateStatus}
+												appSettings={appSettings}
+												onSelectWorkspace={handleSelectWorkspace}
+												onOpenNewWorkspace={handleOpenWorkspaceStart}
+												onAddRepositoryNeedsStart={
+													handleAddRepositoryNeedsStart
+												}
+												onMoveLocalToWorktree={handleMoveLocalToWorktree}
+												onCollapseSidebar={() => setSidebarCollapsed(true)}
+												onOpenFeedback={() => setFeedbackOpen(true)}
+												onOpenSettings={handleOpenSettings}
+												pushWorkspaceToast={pushWorkspaceToast}
+											/>
+											<ShellResizeSeparator
+												side="sidebar"
+												collapsed={sidebarCollapsed}
+												resizing={isSidebarResizing}
+												width={sidebarWidth}
+												onPointerDown={handleResizeStart("sidebar")}
+												onKeyDown={handleResizeKeyDown("sidebar")}
+											/>
+										</>
 									)}
 
-									<div
-										aria-label="Workspace viewport"
-										className="flex min-h-0 flex-1 flex-col bg-background"
+									<section
+										aria-label="Workspace panel"
+										className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+										// Mirror the inspector's containment: keep style/layout invalidation
+										// from sidebar/inspector resize out of the workspace subtree (which
+										// owns Monaco's ~2900 cached CSS rules after the editor opens once).
+										style={{ contain: "layout style" }}
 									>
-										{workspaceViewMode === "editor" && editorSession && (
-											<WorkspaceEditorSurface
-												editorSession={editorSession}
-												editShortcut={getShortcut(
-													appSettings.shortcuts,
-													"editor.edit",
-												)}
-												shortcutOverrides={appSettings.shortcuts}
-												workspaceId={selectedWorkspaceId}
-												workspaceRootPath={workspaceRootPath}
-												onChangeSession={handleEditorSessionChange}
-												onExit={handleExitEditorMode}
-												onError={handleEditorSurfaceError}
+										{workspaceViewMode !== "editor" && (
+											<div
+												aria-label="Workspace panel drag region"
+												className="absolute inset-x-0 top-0 z-10 h-9 bg-transparent"
+												data-tauri-drag-region
 											/>
 										)}
+
 										<div
-											data-focus-scope="chat"
-											className={
-												workspaceViewMode === "editor"
-													? "hidden"
-													: "flex min-h-0 flex-1 flex-col"
-											}
+											aria-label="Workspace viewport"
+											className="flex min-h-0 flex-1 flex-col bg-background"
 										>
-											{workspaceViewMode === "start" ? (
-												<WorkspaceStartPage
-													repositories={repositories}
-													selectedRepository={startRepository}
-													onSelectRepository={handleStartRepositorySelect}
-													selectedBranch={startSourceBranch}
-													branches={startSurface.startBranches}
-													branchesLoading={startSurface.startBranchesLoading}
-													onOpenBranchPicker={
-														startSurfaceActions.refetchBranches
-													}
-													onSelectBranch={handleStartSourceBranchSelect}
-													mode={startMode}
-													onModeChange={startSurfaceActions.selectMode}
-													branchIntent={startBranchIntent}
-													onBranchIntentChange={handleStartBranchIntentChange}
-													onCreateAndCheckoutBranch={async (branch) => {
-														if (!startRepository) return;
-														// Lazy: just remember the desired name. Actual
-														// `git checkout -b` runs at submit time inside
-														// `startSurfaceActions.prepareComposer`.
-														startSurfaceActions.stashPendingNewBranch(branch);
-													}}
-													previewCard={startPreviewCard}
-													previewAppendContextTarget={startComposerInsertTarget}
-													showWindowSafeTop={sidebarCollapsed}
-													onClosePreview={handleStartContextPreviewClose}
-												>
+											{workspaceViewMode === "editor" && editorSession && (
+												<WorkspaceEditorSurface
+													editorSession={editorSession}
+													editShortcut={getShortcut(
+														appSettings.shortcuts,
+														"editor.edit",
+													)}
+													shortcutOverrides={appSettings.shortcuts}
+													workspaceId={selectedWorkspaceId}
+													workspaceRootPath={workspaceRootPath}
+													onChangeSession={handleEditorSessionChange}
+													onExit={handleExitEditorMode}
+													onError={handleEditorSurfaceError}
+												/>
+											)}
+											<div
+												data-focus-scope="chat"
+												className={
+													workspaceViewMode === "editor"
+														? "hidden"
+														: "flex min-h-0 flex-1 flex-col"
+												}
+											>
+												{workspaceViewMode === "start" ? (
+													<WorkspaceStartPage
+														repositories={repositories}
+														selectedRepository={startRepository}
+														onSelectRepository={handleStartRepositorySelect}
+														selectedBranch={startSourceBranch}
+														branches={startSurface.startBranches}
+														branchesLoading={startSurface.startBranchesLoading}
+														onOpenBranchPicker={
+															startSurfaceActions.refetchBranches
+														}
+														onSelectBranch={handleStartSourceBranchSelect}
+														mode={startMode}
+														onModeChange={startSurfaceActions.selectMode}
+														branchIntent={startBranchIntent}
+														onBranchIntentChange={handleStartBranchIntentChange}
+														onCreateAndCheckoutBranch={async (branch) => {
+															if (!startRepository) return;
+															// Lazy: just remember the desired name. Actual
+															// `git checkout -b` runs at submit time inside
+															// `startSurfaceActions.prepareComposer`.
+															startSurfaceActions.stashPendingNewBranch(branch);
+														}}
+														previewCard={startPreviewCard}
+														previewAppendContextTarget={
+															startComposerInsertTarget
+														}
+														showWindowSafeTop={sidebarCollapsed}
+														onClosePreview={handleStartContextPreviewClose}
+													>
+														<WorkspaceConversationContainer
+															selectedWorkspaceId={null}
+															displayedWorkspaceId={null}
+															selectedSessionId={null}
+															displayedSessionId={null}
+															repoId={startRepository?.id ?? null}
+															sessionSelectionHistory={[]}
+															onSelectSession={handleSelectSession}
+															onResolveDisplayedSession={
+																handleResolveDisplayedSession
+															}
+															onInteractionSessionsChange={
+																handleInteractionSessionsChange
+															}
+															activeStreams={activeStreams}
+															busySessionIds={effectiveBusySessionIds}
+															stoppableSessionIds={effectiveStoppableSessionIds}
+															interactionRequiredSessionIds={
+																interactionRequiredSessionIds
+															}
+															onSessionCompleted={handleSessionCompleted}
+															workspaceChangeRequest={null}
+															onSessionAborted={handleSessionAborted}
+															pendingPromptForSession={null}
+															onPendingPromptConsumed={
+																handlePendingPromptConsumed
+															}
+															pendingInsertRequests={pendingComposerInserts}
+															onPendingInsertRequestsConsumed={
+																handlePendingComposerInsertsConsumed
+															}
+															onQueuePendingPromptForSession={
+																queuePendingPromptForSession
+															}
+															onRequestCloseSession={requestCloseSession}
+															workspaceRootPath={null}
+															onOpenFileReference={handleOpenFileReference}
+															composerOnly
+															composerWrapperClassName="w-full"
+															composerForceAvailable={
+																Boolean(startRepository) || startMode === "chat"
+															}
+															composerContextKeyOverride={
+																startComposerContextKey
+															}
+															composerPlaceholder="Describe what you want to build"
+															composerCreateContext={startCreateContext}
+															composerFocusScope="start-composer"
+															contextPanelOpen={contextPanelOpen}
+															onToggleContextPanel={handleToggleContextPanel}
+															composerStartSubmitMenu
+															composerLinkedDirectoriesController={
+																startLinkedDirectoriesController
+															}
+														/>
+													</WorkspaceStartPage>
+												) : (
 													<WorkspaceConversationContainer
-														selectedWorkspaceId={null}
-														displayedWorkspaceId={null}
-														selectedSessionId={null}
-														displayedSessionId={null}
-														repoId={startRepository?.id ?? null}
-														sessionSelectionHistory={[]}
+														selectedWorkspaceId={selectedWorkspaceId}
+														displayedWorkspaceId={displayedWorkspaceId}
+														selectedSessionId={selectedSessionId}
+														displayedSessionId={displayedSessionId}
+														repoId={
+															selectedWorkspaceDetailQuery.data?.repoId ?? null
+														}
+														sessionSelectionHistory={sessionSelectionHistory}
 														onSelectSession={handleSelectSession}
 														onResolveDisplayedSession={
 															handleResolveDisplayedSession
@@ -1574,9 +1642,15 @@ function AppShell({
 															interactionRequiredSessionIds
 														}
 														onSessionCompleted={handleSessionCompleted}
-														workspaceChangeRequest={null}
+														workspaceChangeRequest={workspaceChangeRequest}
 														onSessionAborted={handleSessionAborted}
-														pendingPromptForSession={null}
+														pendingPromptForSession={pendingPromptForSession}
+														pendingCreatedWorkspaceSubmit={
+															pendingCreatedWorkspaceSubmit
+														}
+														onPendingCreatedWorkspaceSubmitConsumed={
+															handlePendingCreatedWorkspaceSubmitConsumed
+														}
 														onPendingPromptConsumed={
 															handlePendingPromptConsumed
 														}
@@ -1588,196 +1662,140 @@ function AppShell({
 															queuePendingPromptForSession
 														}
 														onRequestCloseSession={requestCloseSession}
-														workspaceRootPath={null}
+														workspaceRootPath={workspaceRootPath}
 														onOpenFileReference={handleOpenFileReference}
-														composerOnly
-														composerWrapperClassName="w-full"
-														composerForceAvailable={
-															Boolean(startRepository) || startMode === "chat"
-														}
-														composerContextKeyOverride={startComposerContextKey}
-														composerPlaceholder="Describe what you want to build"
-														composerCreateContext={startCreateContext}
-														composerFocusScope="start-composer"
 														contextPanelOpen={contextPanelOpen}
 														onToggleContextPanel={handleToggleContextPanel}
-														composerStartSubmitMenu
-														composerLinkedDirectoriesController={
-															startLinkedDirectoriesController
+														contextPreviewCard={workspacePreviewCard}
+														contextPreviewActive={workspacePreviewActive}
+														onSelectContextPreview={
+															handleWorkspaceContextPreviewSelect
 														}
+														onCloseContextPreview={
+															handleWorkspaceContextPreviewClose
+														}
+														headerLeading={headerLeadingNode}
+														headerActions={headerActionsNode}
 													/>
-												</WorkspaceStartPage>
-											) : (
-												<WorkspaceConversationContainer
+												)}
+											</div>
+										</div>
+									</section>
+
+									{rightSidebarAvailable &&
+										selectedWorkspaceDetail?.mode !== "chat" && (
+											<>
+												<ShellResizeSeparator
+													side="inspector"
+													collapsed={inspectorCollapsed}
+													resizing={isInspectorResizing}
+													width={inspectorWidth}
+													onPointerDown={handleResizeStart("inspector")}
+													onKeyDown={handleResizeKeyDown("inspector")}
+												/>
+												<ShellInspectorPane
+													collapsed={inspectorCollapsed}
+													resizing={isInspectorResizing}
+													width={inspectorWidth}
+													rightSidebarMode={rightSidebarMode}
+													viewMode={workspaceViewMode}
+													startRepository={startRepository}
+													selectedWorkspaceRepository={
+														selectedWorkspaceRepository
+													}
+													startInboxProviderTab={startInboxProviderTab}
+													onStartInboxProviderTabChange={
+														setStartInboxProviderTab
+													}
+													startInboxProviderSourceTab={
+														startInboxProviderSourceTab
+													}
+													onStartInboxProviderSourceTabChange={
+														setStartInboxProviderSourceTab
+													}
+													startInboxStateFilterBySource={
+														startInboxStateFilterBySource
+													}
+													onStartInboxStateFilterBySourceChange={
+														setStartInboxStateFilterBySource
+													}
+													startComposerInsertTarget={startComposerInsertTarget}
+													startPreviewCardId={startPreviewCard?.id ?? null}
+													workspacePreviewCardId={
+														workspacePreviewCard?.id ?? null
+													}
+													onOpenStartContextCard={handleStartContextCardOpen}
+													onOpenWorkspaceContextCard={
+														handleWorkspaceContextCardOpen
+													}
 													selectedWorkspaceId={selectedWorkspaceId}
-													displayedWorkspaceId={displayedWorkspaceId}
-													selectedSessionId={selectedSessionId}
+													workspaceRootPath={workspaceRootPath}
+													selectedWorkspaceDetail={
+														selectedWorkspaceDetailQuery.data ?? null
+													}
 													displayedSessionId={displayedSessionId}
-													repoId={
-														selectedWorkspaceDetailQuery.data?.repoId ?? null
-													}
-													sessionSelectionHistory={sessionSelectionHistory}
-													onSelectSession={handleSelectSession}
-													onResolveDisplayedSession={
-														handleResolveDisplayedSession
-													}
-													onInteractionSessionsChange={
-														handleInteractionSessionsChange
-													}
-													activeStreams={activeStreams}
-													busySessionIds={effectiveBusySessionIds}
-													stoppableSessionIds={effectiveStoppableSessionIds}
-													interactionRequiredSessionIds={
-														interactionRequiredSessionIds
-													}
-													onSessionCompleted={handleSessionCompleted}
-													workspaceChangeRequest={workspaceChangeRequest}
-													onSessionAborted={handleSessionAborted}
-													pendingPromptForSession={pendingPromptForSession}
-													pendingCreatedWorkspaceSubmit={
-														pendingCreatedWorkspaceSubmit
-													}
-													onPendingCreatedWorkspaceSubmitConsumed={
-														handlePendingCreatedWorkspaceSubmitConsumed
-													}
-													onPendingPromptConsumed={handlePendingPromptConsumed}
-													pendingInsertRequests={pendingComposerInserts}
-													onPendingInsertRequestsConsumed={
-														handlePendingComposerInsertsConsumed
+													activeEditor={activeEditorTarget}
+													preferredEditor={preferredEditor}
+													onOpenEditorFile={handleOpenEditorFile}
+													onCommitAction={handleCommitAction}
+													onReviewAction={() =>
+														handleInspectorReviewAction({
+															modelId:
+																appSettings.reviewModelId ??
+																appSettings.defaultModelId,
+															effort:
+																appSettings.reviewEffort ??
+																appSettings.defaultEffort,
+															fastMode:
+																appSettings.reviewFastMode ??
+																appSettings.defaultFastMode,
+														})
 													}
 													onQueuePendingPromptForSession={
 														queuePendingPromptForSession
 													}
-													onRequestCloseSession={requestCloseSession}
-													workspaceRootPath={workspaceRootPath}
-													onOpenFileReference={handleOpenFileReference}
-													contextPanelOpen={contextPanelOpen}
-													onToggleContextPanel={handleToggleContextPanel}
-													contextPreviewCard={workspacePreviewCard}
-													contextPreviewActive={workspacePreviewActive}
-													onSelectContextPreview={
-														handleWorkspaceContextPreviewSelect
+													commitButtonMode={commitButtonMode}
+													commitButtonState={commitButtonState}
+													workspaceChangeRequest={workspaceChangeRequest}
+													workspaceForgeIsRefreshing={
+														workspaceForgeIsRefreshing
 													}
-													onCloseContextPreview={
-														handleWorkspaceContextPreviewClose
-													}
-													headerLeading={headerLeadingNode}
-													headerActions={headerActionsNode}
+													onOpenSettings={handleOpenSettings}
 												/>
-											)}
-										</div>
-									</div>
-								</section>
-
-								{rightSidebarAvailable &&
-									selectedWorkspaceDetail?.mode !== "chat" && (
-										<>
-											<ShellResizeSeparator
-												side="inspector"
-												collapsed={inspectorCollapsed}
-												resizing={isInspectorResizing}
-												width={inspectorWidth}
-												onPointerDown={handleResizeStart("inspector")}
-												onKeyDown={handleResizeKeyDown("inspector")}
-											/>
-											<ShellInspectorPane
-												collapsed={inspectorCollapsed}
-												resizing={isInspectorResizing}
-												width={inspectorWidth}
-												rightSidebarMode={rightSidebarMode}
-												viewMode={workspaceViewMode}
-												startRepository={startRepository}
-												selectedWorkspaceRepository={
-													selectedWorkspaceRepository
-												}
-												startInboxProviderTab={startInboxProviderTab}
-												onStartInboxProviderTabChange={setStartInboxProviderTab}
-												startInboxProviderSourceTab={
-													startInboxProviderSourceTab
-												}
-												onStartInboxProviderSourceTabChange={
-													setStartInboxProviderSourceTab
-												}
-												startInboxStateFilterBySource={
-													startInboxStateFilterBySource
-												}
-												onStartInboxStateFilterBySourceChange={
-													setStartInboxStateFilterBySource
-												}
-												startComposerInsertTarget={startComposerInsertTarget}
-												startPreviewCardId={startPreviewCard?.id ?? null}
-												workspacePreviewCardId={
-													workspacePreviewCard?.id ?? null
-												}
-												onOpenStartContextCard={handleStartContextCardOpen}
-												onOpenWorkspaceContextCard={
-													handleWorkspaceContextCardOpen
-												}
-												selectedWorkspaceId={selectedWorkspaceId}
-												workspaceRootPath={workspaceRootPath}
-												selectedWorkspaceDetail={
-													selectedWorkspaceDetailQuery.data ?? null
-												}
-												displayedSessionId={displayedSessionId}
-												activeEditor={activeEditorTarget}
-												preferredEditor={preferredEditor}
-												onOpenEditorFile={handleOpenEditorFile}
-												onCommitAction={handleCommitAction}
-												onReviewAction={() =>
-													handleInspectorReviewAction({
-														modelId:
-															appSettings.reviewModelId ??
-															appSettings.defaultModelId,
-														effort:
-															appSettings.reviewEffort ??
-															appSettings.defaultEffort,
-														fastMode:
-															appSettings.reviewFastMode ??
-															appSettings.defaultFastMode,
-													})
-												}
-												onQueuePendingPromptForSession={
-													queuePendingPromptForSession
-												}
-												commitButtonMode={commitButtonMode}
-												commitButtonState={commitButtonState}
-												workspaceChangeRequest={workspaceChangeRequest}
-												workspaceForgeIsRefreshing={workspaceForgeIsRefreshing}
-												onOpenSettings={handleOpenSettings}
-											/>
-										</>
-									)}
-							</div>
-						</main>
-						<Toaster
-							theme={resolveTheme(appSettings.theme)}
-							position="bottom-right"
-							visibleToasts={6}
-						/>
-						<ReleaseAnnouncementToastHost
-							onOpenChangelog={handleOpenReleaseChangelog}
-							onOpenSettings={handleOpenAnnouncementSettings}
-							onSetRightSidebarMode={contextPanelActions.setMode}
-							onOpenStartPage={() =>
-								handleOpenWorkspaceStart({ persist: false })
-							}
-						/>
-						<QuickSwitchOverlay
-							state={quickSwitch.state}
-							getRow={(id) => liveWorkspaceRowMap.get(id) ?? null}
-							onSelectIndex={quickSwitch.selectIndex}
-							onCommitIndex={(index) => {
-								quickSwitch.selectIndex(index);
-								quickSwitch.commit();
-							}}
-						/>
-						{closeConfirmDialog}
-						{editorDiscardConfirmDialog}
-						{mergeConfirmDialogNode}
-					</ComposerInsertProvider>
-				</SessionRunStatesProvider>
-			</WorkspaceToastProvider>
-			<QuitConfirmDialog sessionRunStates={effectiveSessionRunStates} />
+											</>
+										)}
+								</div>
+							</main>
+							<Toaster
+								theme={resolveTheme(appSettings.theme)}
+								position="bottom-right"
+								visibleToasts={6}
+							/>
+							<ReleaseAnnouncementToastHost
+								onOpenChangelog={handleOpenReleaseChangelog}
+								onOpenSettings={handleOpenAnnouncementSettings}
+								onSetRightSidebarMode={contextPanelActions.setMode}
+								onOpenStartPage={() =>
+									handleOpenWorkspaceStart({ persist: false })
+								}
+							/>
+							<QuickSwitchOverlay
+								state={quickSwitch.state}
+								getRow={(id) => liveWorkspaceRowMap.get(id) ?? null}
+								onSelectIndex={quickSwitch.selectIndex}
+								onCommitIndex={(index) => {
+									quickSwitch.selectIndex(index);
+									quickSwitch.commit();
+								}}
+							/>
+							{closeConfirmDialog}
+							{editorDiscardConfirmDialog}
+							{mergeConfirmDialogNode}
+						</ComposerInsertProvider>
+					</SessionRunStatesProvider>
+				</WorkspaceToastProvider>
+				<QuitConfirmDialog sessionRunStates={effectiveSessionRunStates} />
+			</SelectionStoreProvider>
 		</TooltipProvider>
 	);
 }
