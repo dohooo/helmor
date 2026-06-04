@@ -1,6 +1,6 @@
 # Mobile Browser Companion — 设计与实现计划
 
-> **状态**:设计草案(investigation 已完成,代码未动)
+> **状态**:Slice 0a 已实现并验证(见 §13)。设计部分见下文。
 > **分支**:`claude/dreamy-gauss-qtHT2`
 > **一句话**:不做独立移动端 App,而是把桌面端那套已做过响应式的前端**原样**透传到手机浏览器,手机通过一个公网地址直接操作家里那台电脑上的 Helmor 后端。
 
@@ -191,3 +191,44 @@ SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 - 安全/权限默认值已定:**full-drive**(见 §1.5 决策 4)。
 
 > 注:Slice 0–2(本地 + 局域网 + Quick Tunnel 公网闭环)**无需任何上述凭证**即可开发与验证。
+
+---
+
+## 13. 实现进度
+
+### 13.1 Slice 0a — IPC transport seam + 后端 RPC 骨架(已实现并验证)
+
+落地了"决策一/决策二"的最小可用核心:前端把 `invoke`/`Channel`/`listen` 收口到一个 shim,后端起一个 loopback axum 服务器用相同的域函数回应 RPC。**桌面与测试行为零变化**(分叉走 companion 标记,不是"非 Tauri")。
+
+**新增文件**
+- `src/lib/ipc.ts` — transport shim。`isCompanionClient()` 用 `window.__HELMOR_COMPANION__` 标记判定;非 companion 一律委派真/被 mock 的 Tauri 原语,并**保持原始调用 arity**(否则 `toHaveBeenCalledWith("cmd")` 类断言会挂)。companion 分支:`invoke`→`POST /rpc/{cmd}`(检测 `Channel` 参数则转 `/rpc-stream/{cmd}` NDJSON);`listen`→共享 `/v1/stream` SSE,按事件名分发(fetch streaming,非 `EventSource`,以便带 `Authorization` 头)。
+- `src-tauri/src/companion/{mod,server,auth,rpc}.rs` — 服务器生命周期 + bearer 鉴权(constant-time)+ `GET /v1/health` + `POST /rpc/{cmd}`(派发 `list_workspace_groups` / `list_repositories` / `get_data_info` 三个纯读命令)+ `GET /v1/stream`(SSE keep-alive 骨架)。错误复用 `CommandError` 的 `{code,message}` 形态,浏览器侧报错与原生 IPC 一致。
+- `src-tauri/tests/companion_http.rs` — 进程内集成测试。
+
+**改动文件**
+- `src/lib/api.ts` — 仅把 `invoke`/`Channel`/`listen`/`UnlistenFn` 的 import 从 `@tauri-apps/api/*` 改到 `./ipc`(其余 4500 行未动)。
+- `src-tauri/src/lib.rs` — `pub mod companion;` + `.manage(CompanionState::new())` + setup 中 `HELMOR_COMPANION` env 门控启动 + `RunEvent::Exit` 优雅关闭。**默认行为不变**(未设 env 即完全不启)。
+- `src-tauri/Cargo.toml` — 新增 `axum 0.8`、`tower-http(cors)`、`tokio-stream`、`futures`;tokio 加 `net` feature。
+
+**验证结果**(本容器内实测)
+- 前端 `typecheck`:通过。
+- 前端测试套件:**1338/1338 通过**(import 调换零回归;曾见 1 例为已知 timing-flaky,重跑全绿)。
+- Rust `cargo check`:**0 error**;companion 模块 clippy **零警告**。
+- companion `auth` 单测:**5/5**。
+- `companion_http` 集成测试:**1/1**(真起服务器,验 `/v1/health` 200、无/错 token 401、未知命令 400 带 `{code,message}`、shutdown 清理)。
+
+> 环境备注:本容器为验证 Rust,临时安装了 Tauri 的 Linux 系统库(webkit2gtk 等),并用 `RUSTC_WRAPPER=""` 绕过未安装的 sccache、用 gitignored 占位文件满足 tauri-build 的 bundle 资源校验。这些都不入库,不影响正常构建。
+
+**本机手测(curl,无需手机)**
+1. 正常构建好 sidecar(你机器上的真实构建)。
+2. `HELMOR_COMPANION=1 bun run dev`(或 release)。启动后 `{data_dir}/logs/rust.jsonl` 会出现 `companion enabled … listening on loopback`,其中带 `addr` 与 `token`。
+3. `curl http://<addr>/v1/health` → `{"status":"ok",...}`。
+4. `curl -H "Authorization: Bearer <token>" http://<addr>/rpc/list_workspace_groups` → 工作区分组 JSON(== 桌面侧边栏数据)。
+5. 不带/错 token → 401。
+
+### 13.2 紧接着的下一刀
+
+- **Slice 0b — 把同一套 SPA 喂给浏览器**:companion server 用 Tauri `AssetResolver` 托管内嵌前端资源(release 可用,不依赖 dist/),并在 `index.html` 注入 `window.__HELMOR_COMPANION__`;前端读 `#pair=<code>` 落地配对。届时 `ipc.ts` 的浏览器分支才真正被激活,可在手机浏览器打开。
+- **Slice 1 — 全量 RPC + 事件 + 鉴权**:`/rpc` 升级为携带真 `AppHandle`/`State` 的通用 dispatcher,覆盖 48 个前端命令;`/v1/stream` 接 `ui_sync` 广播喂 `listen` 事件;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。
+- **Slice 2 — 公网可达**:cloudflared 出向隧道 + `apps/registry`(CF Worker)写 `*.remote.helmor.ai` CNAME;Settings → Experimental 配对面板(QR)。
+- **流式生产化**(Slice 1/2 之间):`send_agent_message_stream` 接 `/rpc-stream` SSE,验证 Channel→SSE 核心假设(本容器跑不了 sidecar,需在你机器上验)。

@@ -22,6 +22,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aes = "0.8"
 anyhow = "1"
+# Mobile-companion HTTP surface: a localhost-bound axum server that mirrors
+# the Tauri IPC commands over HTTP/SSE so the same responsive frontend can be
+# served to a phone browser. See `src/companion/`.
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["time"] }
+futures = "0.3"
 base64 = "0.22.1"
 cbc = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -67,6 +74,7 @@ tauri-plugin-window-state = "2"
 tokio = { version = "1", features = [
     "fs",
     "io-util",
+    "net",
     "rt",
     "rt-multi-thread",
     "sync",

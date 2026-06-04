@@ -2,6 +2,7 @@ pub mod agents;
 pub mod cli;
 pub(crate) mod codex_config;
 pub(crate) mod commands;
+pub mod companion;
 pub mod data_dir;
 pub mod downloads;
 pub mod error;
@@ -190,6 +191,7 @@ pub fn run() {
         .manage(triage::ActiveStatusStore::new())
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
+        .manage(companion::CompanionState::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -461,6 +463,31 @@ pub fn run() {
 
             // Triage: fetcher + auto-fire tick on the same 5-min thread.
             triage::fetcher::spawn_scheduler(app.handle().clone());
+
+            // Mobile browser companion (experimental, opt-in via env). Starts a
+            // loopback-bound HTTP/SSE server that mirrors the IPC surface so the
+            // same frontend can be served to a phone browser. Default app
+            // behaviour is unchanged unless `HELMOR_COMPANION` is set.
+            if std::env::var_os("HELMOR_COMPANION").is_some() {
+                let companion_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = companion_handle.state::<companion::CompanionState>();
+                    match state.start().await {
+                        // Loopback-only, opt-in dev gate: logging the token here
+                        // is what lets a same-machine `curl` / browser pair in
+                        // Slice 0. The public-tunnel slice replaces this with QR
+                        // pairing and never logs the token.
+                        Ok(info) => tracing::info!(
+                            addr = %info.addr,
+                            token = %info.token,
+                            "companion enabled (HELMOR_COMPANION) — listening on loopback",
+                        ),
+                        Err(error) => {
+                            tracing::error!(error = %format!("{error:#}"), "companion start failed")
+                        }
+                    }
+                });
+            }
 
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
@@ -768,6 +795,10 @@ pub fn run() {
         // new version. By this point `request_quit` has stopped watchers
         // and torn down the sidecar, so blocking briefly here is safe.
         tauri::RunEvent::Exit => {
+            // Best-effort graceful shutdown of the companion server (no-op
+            // when it was never started). The task also dies with the process.
+            let companion = app_handle.state::<companion::CompanionState>();
+            tauri::async_runtime::block_on(companion.shutdown());
             updater::install_pending_on_exit_blocking();
         }
         _ => {}

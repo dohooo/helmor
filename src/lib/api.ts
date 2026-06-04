@@ -1,8 +1,10 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { InspectorFileItem } from "./editor-session";
 import { type ErrorCode, extractError } from "./errors";
+// `invoke` / `Channel` / `listen` route through the transport shim so the same
+// frontend works in the desktop Tauri webview AND when served to a phone
+// browser by the companion server. See `src/lib/ipc.ts`.
+import { Channel, invoke, listen, type UnlistenFn } from "./ipc";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
