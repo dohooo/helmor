@@ -15,6 +15,9 @@ type WorkspaceDragGhostProps = {
 	selected: boolean;
 	isSending?: boolean;
 	isInteractionRequired?: boolean;
+	/** Tip-first stack chain when dragging a stack tip. When it has >1 member
+	 *  the ghost shows a count badge (total PRs in the stack) on the right. */
+	stackRows?: WorkspaceRow[] | null;
 };
 
 export function WorkspaceDragGhost({
@@ -24,7 +27,10 @@ export function WorkspaceDragGhost({
 	selected,
 	isSending,
 	isInteractionRequired,
+	stackRows,
 }: WorkspaceDragGhostProps) {
+	const stackCount =
+		stackRows && stackRows.length > 1 ? stackRows.length : null;
 	return (
 		<div
 			className="pointer-events-none fixed z-50"
@@ -35,15 +41,22 @@ export function WorkspaceDragGhost({
 				width: dragState.width,
 			}}
 		>
-			<WorkspaceRowItem
-				row={row}
-				selected={selected}
-				isSending={isSending}
-				isInteractionRequired={isInteractionRequired}
-				dragPreview
-				hideRepoAvatar={hideRepoAvatar}
-				workspaceActionsDisabled
-			/>
+			<div className="relative">
+				<WorkspaceRowItem
+					row={row}
+					selected={selected}
+					isSending={isSending}
+					isInteractionRequired={isInteractionRequired}
+					dragPreview
+					hideRepoAvatar={hideRepoAvatar}
+					workspaceActionsDisabled
+				/>
+				{stackCount ? (
+					<span className="absolute right-0 top-1/2 flex h-4 min-w-4 -translate-y-1/2 items-center justify-center rounded-full bg-primary/70 px-1 text-nano font-semibold tabular-nums text-primary-foreground">
+						{stackCount}
+					</span>
+				) : null}
+			</div>
 		</div>
 	);
 }

@@ -50,6 +50,25 @@ fn workspaces_setup_completed_at_columns(
         .unwrap()
 }
 
+fn workspaces_parent_workspace_id_columns(
+    connection: &rusqlite::Connection,
+) -> Vec<(String, String, i64, Option<String>)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT name, type, \"notnull\", dflt_value
+             FROM pragma_table_info('workspaces')
+             WHERE name = 'parent_workspace_id'",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
 fn workspaces_port_columns(
     connection: &rusqlite::Connection,
 ) -> Vec<(String, String, i64, Option<String>)> {
@@ -272,6 +291,67 @@ fn workspaces_port_range_migration_adds_columns_when_missing() {
     assert_yaml_snapshot!(
         "workspaces_port_range_migration",
         workspaces_port_columns(&connection)
+    );
+}
+
+#[test]
+fn workspaces_parent_workspace_id_migration_adds_column_when_missing() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    // Pre-existing workspaces table from before the stacked-PR parent link
+    // existed. Carry one row to prove the migration leaves legacy rows NULL
+    // (non-stacked) rather than back-filling.
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                repository_id TEXT,
+                directory_name TEXT,
+                state TEXT DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO workspaces (id, repository_id, directory_name)
+            VALUES ('w1', 'r1', 'demo');
+            "#,
+        )
+        .unwrap();
+
+    schema::ensure_schema(&connection).unwrap();
+    // Idempotency: ALTER TABLE ADD COLUMN twice would error, so the guard
+    // must short-circuit on the second pass.
+    schema::ensure_schema(&connection).unwrap();
+
+    // Existing rows are non-stacked: the new link is NULL, not "".
+    let preserved: Option<String> = connection
+        .query_row(
+            "SELECT parent_workspace_id FROM workspaces WHERE id = 'w1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(preserved.is_none());
+
+    // Round-trip: a stacked child stores and returns its parent's id.
+    connection
+        .execute(
+            "INSERT INTO workspaces (id, repository_id, directory_name, parent_workspace_id)
+             VALUES ('w2', 'r1', 'child', 'w1')",
+            [],
+        )
+        .unwrap();
+    let parent: Option<String> = connection
+        .query_row(
+            "SELECT parent_workspace_id FROM workspaces WHERE id = 'w2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent.as_deref(), Some("w1"));
+
+    assert_yaml_snapshot!(
+        "workspaces_parent_workspace_id_migration",
+        workspaces_parent_workspace_id_columns(&connection)
     );
 }
 

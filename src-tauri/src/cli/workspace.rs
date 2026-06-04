@@ -34,7 +34,8 @@ pub fn dispatch(action: &WorkspaceAction, cli: &Cli) -> Result<()> {
             cli,
         ),
         WorkspaceAction::Show { workspace_ref } => show(workspace_ref, cli),
-        WorkspaceAction::New { repo } => new(repo, cli),
+        WorkspaceAction::Stack { workspace_ref } => stack(workspace_ref, cli),
+        WorkspaceAction::New { repo, parent } => new(repo.as_deref(), parent.as_deref(), cli),
         WorkspaceAction::Delete { workspace_ref } => delete(workspace_ref, cli),
         WorkspaceAction::Archive { workspace_ref } => archive(workspace_ref, cli),
         WorkspaceAction::Restore {
@@ -268,9 +269,108 @@ fn show(workspace_ref: &str, cli: &Cli) -> Result<()> {
     })
 }
 
-fn new(repo_ref: &str, cli: &Cli) -> Result<()> {
-    let repo_id = service::resolve_repo_ref(repo_ref)?;
-    let response = service::create_workspace_from_repo_impl(&repo_id)?;
+#[derive(serde::Serialize)]
+struct StackSpecLayer {
+    pr: String,
+    title: String,
+    state: String,
+    ws: String,
+}
+
+/// JSON shape matching the stacked-pr renderer's input (layers tip → root),
+/// so `helmor workspace stack <ws> --json | render_stack.py -` draws the
+/// canonical diagram with no second source of truth.
+#[derive(serde::Serialize)]
+struct StackSpec {
+    name: String,
+    repo: String,
+    base: String,
+    layers: Vec<StackSpecLayer>,
+}
+
+/// Build the render spec from a root→tip stack chain. `None` for an empty
+/// chain (workspace not found). Pure — unit-tested below.
+fn build_stack_spec(chain: &[workspace_models::StackLayer]) -> Option<StackSpec> {
+    let root = chain.first()?;
+    Some(StackSpec {
+        name: root.directory_name.clone(),
+        repo: root.repo_name.clone(),
+        base: root
+            .intended_target_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_string()),
+        layers: chain
+            .iter()
+            .rev() // tip → root, matching the render spec
+            .map(|layer| StackSpecLayer {
+                pr: layer
+                    .pr_url
+                    .as_deref()
+                    .and_then(|url| url.rsplit('/').next())
+                    .filter(|segment| !segment.is_empty())
+                    .unwrap_or_default()
+                    .to_string(),
+                title: layer
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| layer.directory_name.clone()),
+                state: layer.pr_sync_state.as_str().to_string(),
+                ws: layer.directory_name.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn stack(workspace_ref: &str, cli: &Cli) -> Result<()> {
+    let id = service::resolve_workspace_ref(workspace_ref)?;
+    let chain = workspace_models::load_workspace_stack(&id)?; // root → tip
+    let Some(spec) = build_stack_spec(&chain) else {
+        bail!("Workspace not found: {workspace_ref}");
+    };
+
+    output::print(cli, &spec, |s| {
+        let mut out = format!(
+            "stack: {} · {} · {} PR{}\n",
+            s.name,
+            s.repo,
+            s.layers.len(),
+            if s.layers.len() == 1 { "" } else { "s" },
+        );
+        for (index, layer) in s.layers.iter().enumerate() {
+            let pr = if layer.pr.is_empty() {
+                "—".to_string()
+            } else {
+                format!("#{}", layer.pr)
+            };
+            let head = if index == 0 { "    ← HEAD" } else { "" };
+            out.push_str(&format!(
+                "  {pr}  {ws}  [{state}]  {title}{head}\n",
+                ws = layer.ws,
+                state = layer.state,
+                title = layer.title,
+            ));
+        }
+        out.push_str(&format!("  └ base: {}", s.base));
+        out
+    })
+}
+
+fn new(repo: Option<&str>, parent: Option<&str>, cli: &Cli) -> Result<()> {
+    let response = match parent {
+        Some(parent_ref) => {
+            let parent_id = service::resolve_workspace_ref(parent_ref)?;
+            service::create_stacked_workspace_impl(&parent_id)?
+        }
+        None => {
+            let repo_ref = repo.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Provide --repo <repo> or --parent <workspace> to create a workspace"
+                )
+            })?;
+            let repo_id = service::resolve_repo_ref(repo_ref)?;
+            service::create_workspace_from_repo_impl(&repo_id)?
+        }
+    };
     notify_ui_events([
         UiMutationEvent::WorkspaceListChanged,
         UiMutationEvent::WorkspaceChanged {
@@ -622,5 +722,65 @@ mod tests {
         for (cli_action, shared_action) in cases {
             assert_eq!(WorkspaceShipActionKind::from(cli_action), shared_action);
         }
+    }
+
+    #[test]
+    fn build_stack_spec_orders_tip_to_root_and_parses_pr() {
+        use crate::workspace_pr_sync::PrSyncState;
+        use crate::workspace_status::WorkspaceStatus;
+
+        let layer =
+            |id: &str, ws: &str, parent: Option<&str>, pr_url: Option<&str>, state: PrSyncState| {
+                workspace_models::StackLayer {
+                    id: id.to_string(),
+                    repo_name: "helmor".to_string(),
+                    directory_name: ws.to_string(),
+                    title: None,
+                    branch: Some(format!("demo/{ws}")),
+                    intended_target_branch: Some("main".to_string()),
+                    pr_sync_state: state,
+                    pr_url: pr_url.map(str::to_string),
+                    status: WorkspaceStatus::InProgress,
+                    parent_workspace_id: parent.map(str::to_string),
+                }
+            };
+
+        // chain is root -> tip
+        let chain = vec![
+            layer(
+                "a",
+                "theme-schema",
+                None,
+                Some("https://github.com/o/r/pull/481"),
+                PrSyncState::Merged,
+            ),
+            layer(
+                "b",
+                "theme-api",
+                Some("a"),
+                Some("https://github.com/o/r/pull/482"),
+                PrSyncState::Open,
+            ),
+            layer("c", "theme-ui", Some("b"), None, PrSyncState::None),
+        ];
+        let spec = build_stack_spec(&chain).expect("non-empty chain");
+
+        assert_eq!(spec.name, "theme-schema");
+        assert_eq!(spec.repo, "helmor");
+        assert_eq!(spec.base, "main");
+        // Rendered tip -> root.
+        let ws: Vec<&str> = spec.layers.iter().map(|layer| layer.ws.as_str()).collect();
+        assert_eq!(ws, vec!["theme-ui", "theme-api", "theme-schema"]);
+        // Tip has no PR yet; title falls back to the directory name.
+        assert_eq!(spec.layers[0].pr, "");
+        assert_eq!(spec.layers[0].state, "none");
+        assert_eq!(spec.layers[0].title, "theme-ui");
+        // PR number parsed from the URL tail; state from pr_sync_state.
+        assert_eq!(spec.layers[1].pr, "482");
+        assert_eq!(spec.layers[1].state, "open");
+        assert_eq!(spec.layers[2].pr, "481");
+        assert_eq!(spec.layers[2].state, "merged");
+
+        assert!(build_stack_spec(&[]).is_none());
     }
 }

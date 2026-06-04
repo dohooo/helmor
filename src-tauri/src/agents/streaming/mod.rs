@@ -1439,6 +1439,23 @@ pub(crate) fn build_helmor_system_prompt_for_workspace(
     let linked_directories =
         crate::agents::streaming::lookup_workspace_linked_directories(helmor_session_id);
 
+    // Stacked-PR awareness: when this workspace is part of a multi-layer stack,
+    // surface a lightweight pointer so the agent self-locates and fetches the
+    // rest with `helmor workspace stack`. Best-effort — failures just elide it.
+    let stack = crate::models::workspaces::load_workspace_stack(workspace_id)
+        .ok()
+        .filter(|chain| chain.len() > 1)
+        .and_then(|chain| {
+            let index = chain.iter().position(|layer| layer.id == workspace_id)?;
+            Some(crate::agents::system_prompt::StackContext {
+                position: index + 1,
+                total: chain.len(),
+                parent_branch: index
+                    .checked_sub(1)
+                    .and_then(|below| chain[below].branch.clone()),
+            })
+        });
+
     let ctx = HelmorSystemPromptContext {
         workspace_label,
         workspace_root_path: working_directory.display().to_string(),
@@ -1446,6 +1463,7 @@ pub(crate) fn build_helmor_system_prompt_for_workspace(
         base_branch,
         linked_directories,
         cli_command_name,
+        stack,
     };
     Some(build_helmor_system_prompt(&ctx))
 }

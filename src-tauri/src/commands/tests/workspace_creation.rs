@@ -4,6 +4,139 @@ use crate::workspace_state::{WorkspaceBranchIntent, WorkspaceMode, WorkspaceStat
 use crate::workspace_status::WorkspaceStatus;
 
 #[test]
+fn create_stacked_workspace_links_parent_and_targets_parent_branch() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // Bottom of the stack: a normal workspace off the repo default.
+    let parent = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    // Layer 2: stacked on the parent.
+    let child = workspaces::create_stacked_workspace_impl(&parent.created_workspace_id).unwrap();
+
+    assert_eq!(child.created_state, WorkspaceState::Ready);
+    // Child got its own fresh branch, distinct from the parent's.
+    assert_ne!(child.branch, parent.branch);
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (parent_id, intended_target, init_parent): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT parent_workspace_id, intended_target_branch,
+              initialization_parent_branch
+            FROM workspaces WHERE id = ?1
+            "#,
+            [&child.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    // Stack link recorded.
+    assert_eq!(
+        parent_id.as_deref(),
+        Some(parent.created_workspace_id.as_str())
+    );
+    // Dual-write invariant: the child's base IS the parent's branch, so
+    // `gh pr create --base` targets the parent (no ship-path change needed).
+    assert_eq!(intended_target.as_deref(), Some(parent.branch.as_str()));
+    assert_eq!(init_parent.as_deref(), Some(parent.branch.as_str()));
+}
+
+#[test]
+fn stack_deletion_constraint_tip_free_root_pops_middle_blocked() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // root -> mid -> tip
+    let root = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let mid = workspaces::create_stacked_workspace_impl(&root.created_workspace_id).unwrap();
+    let tip = workspaces::create_stacked_workspace_impl(&mid.created_workspace_id).unwrap();
+
+    // Middle layer (live parent below + children above): blocked.
+    let err = workspaces::permanently_delete_workspace(&mid.created_workspace_id).unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("middle"),
+        "expected a middle-layer block, got: {err}"
+    );
+
+    // Tip (has parent, no children): free delete.
+    workspaces::permanently_delete_workspace(&tip.created_workspace_id).unwrap();
+
+    // Root (no parent, has children = `mid` now that the tip is gone): pop the
+    // bottom — `mid` becomes a new root targeting the repo default.
+    workspaces::permanently_delete_workspace(&root.created_workspace_id).unwrap();
+
+    let connection = Connection::open(harness.db_path()).unwrap();
+    let (parent, target): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT parent_workspace_id, intended_target_branch FROM workspaces WHERE id = ?1",
+            [&mid.created_workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        parent, None,
+        "mid should be detached to a root after root pop"
+    );
+    let default_branch: String = connection
+        .query_row(
+            "SELECT default_branch FROM repos WHERE id = ?1",
+            [&harness.repo_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(target.as_deref(), Some(default_branch.as_str()));
+}
+
+#[test]
+fn load_workspace_stack_returns_root_to_tip_chain() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = CreateTestHarness::new();
+
+    // Build a 3-layer stack: root -> mid -> tip.
+    let root = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let mid = workspaces::create_stacked_workspace_impl(&root.created_workspace_id).unwrap();
+    let tip = workspaces::create_stacked_workspace_impl(&mid.created_workspace_id).unwrap();
+
+    // From the MIDDLE layer: walks up to root AND down to tip, ordered root→tip.
+    let chain = crate::models::workspaces::load_workspace_stack(&mid.created_workspace_id).unwrap();
+    let ids: Vec<&str> = chain.iter().map(|layer| layer.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            root.created_workspace_id.as_str(),
+            mid.created_workspace_id.as_str(),
+            tip.created_workspace_id.as_str(),
+        ],
+        "stack should be ordered root -> tip regardless of entry layer"
+    );
+    assert_eq!(
+        chain[1].parent_workspace_id.as_deref(),
+        Some(root.created_workspace_id.as_str())
+    );
+    assert_eq!(
+        chain[2].parent_workspace_id.as_deref(),
+        Some(mid.created_workspace_id.as_str())
+    );
+
+    // A standalone (non-stacked) workspace returns just itself.
+    let solo = workspaces::create_workspace_from_repo_impl(&harness.repo_id).unwrap();
+    let solo_chain =
+        crate::models::workspaces::load_workspace_stack(&solo.created_workspace_id).unwrap();
+    assert_eq!(solo_chain.len(), 1);
+    assert_eq!(solo_chain[0].id, solo.created_workspace_id);
+}
+
+#[test]
 fn create_workspace_from_repo_creates_ready_workspace_and_initial_session() {
     let _guard = TEST_LOCK
         .lock()

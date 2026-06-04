@@ -494,6 +494,20 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .context("Failed to add pr_url column")?;
     }
 
+    // Migration: stacked PRs. `parent_workspace_id` links a workspace to the
+    // one below it in a PR stack (its base). NULL = bottom of stack or a
+    // non-stacked workspace. No SQL foreign key — consistent with
+    // `repository_id` (and SQLite can't ALTER ADD CONSTRAINT); integrity is
+    // enforced in the Rust write layer. No back-fill — existing rows are
+    // non-stacked.
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "parent_workspace_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN parent_workspace_id TEXT")
+            .context("Failed to add workspaces.parent_workspace_id column")?;
+    }
+
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
     if has_table(connection, "workspaces") && !had_workspace_status {
@@ -1023,6 +1037,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,
+    parent_workspace_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
