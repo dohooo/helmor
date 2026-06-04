@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use helmor_lib::companion::{CompanionState, StreamStarter};
+use helmor_lib::companion::{CompanionState, StreamStarter, Verifier};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
@@ -20,8 +20,11 @@ async fn health_is_public_and_rpc_requires_bearer() {
     let state = CompanionState::new();
     // The streamer is never invoked here (no stream request), so a no-op is fine.
     let streamer: StreamStarter = Arc::new(|_cmd, _args, _tx| Ok(()));
+    // In-memory verifier (no DB) so the test stays isolated; only the dev token
+    // and this known PAT authenticate.
+    let verifier: Verifier = Arc::new(|bearer| bearer == "hlm_paired_test");
     let info = state
-        .start(app.handle().clone(), streamer)
+        .start(app.handle().clone(), streamer, verifier)
         .await
         .expect("companion server should start");
     let base = format!("http://{}", info.addr);
@@ -60,6 +63,16 @@ async fn health_is_public_and_rpc_requires_bearer() {
         .await
         .expect("wrong-token request");
     assert_eq!(wrong.status(), 401);
+
+    // A token accepted by the injected verifier (a "paired device") passes auth
+    // — it reaches dispatch (here an unknown command → 400, not 401).
+    let paired = client
+        .post(format!("{base}/rpc/__does_not_exist__"))
+        .bearer_auth("hlm_paired_test")
+        .send()
+        .await
+        .expect("paired-token request");
+    assert_eq!(paired.status(), 400);
 
     // Authenticated unknown command returns the `{ code, message }` error
     // shape — and never reaches the database.

@@ -1,25 +1,40 @@
 //! Bearer-token authentication for the companion HTTP surface.
 //!
-//! Slice 0 validates against a single in-memory dev token. A later slice
-//! replaces this with per-device PATs checked against the SHA-256
-//! `paired_devices` table.
+//! A request authenticates if its bearer matches the in-memory dev token (the
+//! env-gated loopback convenience) OR passes the injected verifier (in
+//! production, the per-device PATs in the `paired_devices` table). The verifier
+//! is injected so the HTTP layer stays database-agnostic and testable.
 
 use axum::http::{header::AUTHORIZATION, HeaderMap};
 
-/// True when the request carries `Authorization: Bearer <token>` matching the
-/// expected token. Comparison is constant-time to avoid leaking the token via
-/// timing.
+use super::Verifier;
+
+fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|text| text.strip_prefix("Bearer "))
+}
+
+/// Authorize a request: bearer matches the dev token (constant-time) or passes
+/// the injected verifier (paired-device PAT lookup in production).
+pub fn authorize(headers: &HeaderMap, dev_token: &str, verifier: &Verifier) -> bool {
+    let Some(bearer) = extract_bearer(headers) else {
+        return false;
+    };
+    if constant_time_eq(bearer.as_bytes(), dev_token.as_bytes()) {
+        return true;
+    }
+    verifier(bearer)
+}
+
+/// True when the request's bearer matches `expected` (constant-time). Retained
+/// for unit tests of the comparison itself.
+#[cfg(test)]
 pub fn check_bearer(headers: &HeaderMap, expected: &str) -> bool {
-    let Some(value) = headers.get(AUTHORIZATION) else {
-        return false;
-    };
-    let Ok(text) = value.to_str() else {
-        return false;
-    };
-    let Some(provided) = text.strip_prefix("Bearer ") else {
-        return false;
-    };
-    constant_time_eq(provided.as_bytes(), expected.as_bytes())
+    extract_bearer(headers)
+        .map(|provided| constant_time_eq(provided.as_bytes(), expected.as_bytes()))
+        .unwrap_or(false)
 }
 
 /// Length-checked constant-time byte comparison. The length check can leak the

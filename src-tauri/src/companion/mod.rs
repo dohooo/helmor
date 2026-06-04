@@ -34,6 +34,18 @@ use anyhow::Result;
 use base64::Engine;
 use tokio::sync::{oneshot, RwLock};
 
+/// Verifies a bearer token (beyond the dev token). Type-erased so the HTTP
+/// layer never touches the database directly.
+pub type Verifier = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Production verifier: accept any non-revoked paired-device PAT (and bump its
+/// `last_seen_at`).
+pub fn paired_device_verifier() -> Verifier {
+    Arc::new(|bearer: &str| {
+        crate::models::paired_devices::verify_and_touch(bearer).unwrap_or(false)
+    })
+}
+
 /// Public connection details for a running companion server. Returned to the
 /// Tauri layer so the dev/settings surface can render a pairing target.
 #[derive(Clone, Debug)]
@@ -75,6 +87,7 @@ impl CompanionState {
         &self,
         app: tauri::AppHandle<R>,
         streamer: StreamStarter,
+        verifier: Verifier,
     ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
         if let Some(running) = guard.as_ref() {
@@ -99,6 +112,7 @@ impl CompanionState {
             token: Arc::new(token.clone()),
             assets,
             streamer,
+            verifier,
         };
         let router = server::router(state);
 

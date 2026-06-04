@@ -1137,6 +1137,17 @@ CREATE TABLE IF NOT EXISTS triage_fetch_cursor (
     PRIMARY KEY (source, source_parent)
 );
 
+-- Mobile browser companion: paired phones. Stores only a SHA-256 of the PAT,
+-- never the plaintext. Survives desktop restarts so a phone never re-scans.
+CREATE TABLE IF NOT EXISTS paired_devices (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    pat_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT,
+    revoked_at TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_session_messages_sent_at ON session_messages(session_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace_id ON sessions(workspace_id);

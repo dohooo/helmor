@@ -20,7 +20,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
-use super::{auth, rpc};
+use super::{auth, rpc, Verifier};
 use crate::error::CommandError;
 
 /// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
@@ -45,6 +45,8 @@ pub struct AppState {
     pub assets: AssetLoader,
     /// Starts a streaming command (reuses the desktop streaming paths).
     pub streamer: StreamStarter,
+    /// Verifies bearer tokens beyond the dev token (paired-device PATs).
+    pub verifier: Verifier,
 }
 
 /// Build the router. CORS is wide-open because every route is bearer-gated and
@@ -85,7 +87,7 @@ async fn rpc_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !auth::check_bearer(&headers, state.token.as_str()) {
+    if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
 
@@ -129,7 +131,7 @@ async fn rpc_stream_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !auth::check_bearer(&headers, state.token.as_str()) {
+    if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
 
@@ -216,7 +218,7 @@ fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
 /// periodic `ping`s; the pipeline → SSE wiring replaces the body later. The
 /// named-event shape is already what `src/lib/ipc.ts` consumes.
 async fn stream_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !auth::check_bearer(&headers, state.token.as_str()) {
+    if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
     Sse::new(keepalive_stream())
