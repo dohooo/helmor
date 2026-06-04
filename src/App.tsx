@@ -102,6 +102,7 @@ import { resolveE2eScenarioElement } from "./shell/boot/e2e-routes";
 import { ShellInspectorPane } from "./shell/components/shell-inspector-pane";
 import { ShellResizeSeparator } from "./shell/components/shell-resize-separator";
 import { ShellSidebarPane } from "./shell/components/shell-sidebar-pane";
+import { ShellWorkspaceConversation } from "./shell/components/shell-workspace-conversation";
 import { WorkspaceHeaderActions } from "./shell/components/workspace-header-actions";
 import { WorkspaceHeaderLeading } from "./shell/components/workspace-header-leading";
 import {
@@ -1627,11 +1628,7 @@ function AppShell({
 														/>
 													</WorkspaceStartPage>
 												) : (
-													<WorkspaceConversationContainer
-														selectedWorkspaceId={selectedWorkspaceId}
-														displayedWorkspaceId={displayedWorkspaceId}
-														selectedSessionId={selectedSessionId}
-														displayedSessionId={displayedSessionId}
+													<ShellWorkspaceConversation
 														repoId={
 															selectedWorkspaceDetailQuery.data?.repoId ?? null
 														}

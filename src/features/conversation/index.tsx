@@ -76,7 +76,7 @@ export type PendingCreatedWorkspaceSubmit = {
 	finalized: boolean;
 };
 
-type WorkspaceConversationContainerProps = {
+export type WorkspaceConversationContainerProps = {
 	selectedWorkspaceId: string | null;
 	displayedWorkspaceId: string | null;
 	selectedSessionId: string | null;
