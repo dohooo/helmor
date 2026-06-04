@@ -417,7 +417,7 @@ describe("App", () => {
 
 		const tooltip = await screen.findByRole("tooltip");
 		expect(tooltip).toHaveTextContent("Resize window");
-		expect(tooltip).toHaveTextContent("⌘M");
+		expect(tooltip).toHaveTextContent("⌘⌃M");
 	});
 
 	it("resizes the inspector sidebar and persists the width", async () => {
