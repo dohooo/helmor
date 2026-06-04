@@ -5,7 +5,9 @@
 // is what's actually painted (waits for query cache to warm). Race-guards
 // ensure rapid switches don't reorder.
 import type { QueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useStore } from "zustand";
+import { createStore, type StoreApi } from "zustand/vanilla";
 import {
 	prewarmSlashCommandsForWorkspace,
 	triggerWorkspaceFetch,
@@ -70,9 +72,21 @@ export type SelectionActions = {
 	getSnapshot(): SelectionSnapshot;
 };
 
+export type SelectionStore = StoreApi<SelectionState>;
+
 export type SelectionController = {
 	state: SelectionState;
 	actions: SelectionActions;
+	store: SelectionStore;
+};
+
+const INITIAL_SELECTION_STATE: SelectionState = {
+	selectedWorkspaceId: null,
+	displayedWorkspaceId: null,
+	selectedSessionId: null,
+	displayedSessionId: null,
+	viewMode: "conversation",
+	reselectTick: 0,
 };
 
 export type SelectionControllerDeps = {
@@ -110,20 +124,19 @@ export function useSelectionController(
 	const onWorkspaceSwitchedRef = useLatestRef(deps.onWorkspaceSwitched);
 	const onStartOpenedRef = useLatestRef(deps.onStartOpened);
 
-	const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
-		null,
-	);
-	const [displayedWorkspaceId, setDisplayedWorkspaceId] = useState<
-		string | null
-	>(null);
-	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-		null,
-	);
-	const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(
-		null,
-	);
-	const [viewMode, setViewModeState] = useState<ShellViewMode>("conversation");
-	const [reselectTick, setReselectTick] = useState(0);
+	// Instance-level store (lazy-init via ref, one per controller — NOT a
+	// global singleton; deps like queryClient/callbacks are closed over by
+	// the actions below, so a module store can't hold them). The six fields
+	// live here so panes can subscribe to individual selectors; the
+	// `selected*` and `displayed*` tracks plus `viewMode`/`reselectTick`
+	// remain a single atomic store written in lockstep by the actions.
+	const storeRef = useRef<SelectionStore | null>(null);
+	if (storeRef.current === null) {
+		storeRef.current = createStore<SelectionState>(() => ({
+			...INITIAL_SELECTION_STATE,
+		}));
+	}
+	const store = storeRef.current;
 
 	const selectedWorkspaceIdRef = useRef<string | null>(null);
 	const selectedSessionIdRef = useRef<string | null>(null);
@@ -136,17 +149,14 @@ export function useSelectionController(
 		Record<string, string[]>
 	>({});
 
-	useEffect(() => {
-		selectedWorkspaceIdRef.current = selectedWorkspaceId;
-	}, [selectedWorkspaceId]);
-
-	useEffect(() => {
-		selectedSessionIdRef.current = selectedSessionId;
-	}, [selectedSessionId]);
-
-	useEffect(() => {
-		viewModeRef.current = viewMode;
-	}, [viewMode]);
+	// Reactive reads for the effects below. These mirror what the deleted
+	// useState values drove: the persist effect (selectedSessionId) and the
+	// prewarm/warmup effects (selectedWorkspaceId + displayedWorkspaceId).
+	// Subscribing keeps each effect's re-run cadence identical to the old
+	// state-driven version — only the source of truth moved into the store.
+	const selectedWorkspaceId = useStore(store, (s) => s.selectedWorkspaceId);
+	const displayedWorkspaceId = useStore(store, (s) => s.displayedWorkspaceId);
+	const selectedSessionId = useStore(store, (s) => s.selectedSessionId);
 
 	// Persist last session for restore-on-launch. Last workspace is written
 	// synchronously inside `selectWorkspace` so surface restore cannot race
@@ -359,7 +369,8 @@ export function useSelectionController(
 				});
 			}
 			if (viewModeRef.current === "start") {
-				setViewModeState("conversation");
+				viewModeRef.current = "conversation";
+				store.setState({ viewMode: "conversation" });
 			}
 
 			if (workspaceId === selectedWorkspaceIdRef.current) {
@@ -367,7 +378,7 @@ export function useSelectionController(
 				// effects (mark-read) re-evaluate even though the displayed
 				// session didn't change.
 				if (workspaceId !== null) {
-					setReselectTick((tick) => tick + 1);
+					store.setState({ reselectTick: store.getState().reselectTick + 1 });
 				}
 				return;
 			}
@@ -382,8 +393,10 @@ export function useSelectionController(
 				? resolvePreferredSessionId(workspaceId)
 				: null;
 			selectedSessionIdRef.current = immediateSessionId;
-			setSelectedWorkspaceId(workspaceId);
-			setSelectedSessionId(immediateSessionId);
+			store.setState({
+				selectedWorkspaceId: workspaceId,
+				selectedSessionId: immediateSessionId,
+			});
 
 			if (workspaceId) {
 				// Skip git fetch while the worktree is still initializing.
@@ -398,13 +411,17 @@ export function useSelectionController(
 
 			if (workspaceId === null) {
 				if (workspaceSelectionRequestRef.current !== requestId) return;
-				setDisplayedWorkspaceId(null);
-				setDisplayedSessionId(null);
+				store.setState({
+					displayedWorkspaceId: null,
+					displayedSessionId: null,
+				});
 				return;
 			}
 
-			setDisplayedWorkspaceId(workspaceId);
-			setDisplayedSessionId(immediateSessionId);
+			store.setState({
+				displayedWorkspaceId: workspaceId,
+				displayedSessionId: immediateSessionId,
+			});
 
 			const cached = resolveCachedWorkspaceDisplay(
 				workspaceId,
@@ -413,10 +430,12 @@ export function useSelectionController(
 			if (cached) {
 				selectedSessionIdRef.current = cached.sessionId;
 				rememberSessionSelection(workspaceId, cached.sessionId);
-				setSelectedSessionId(cached.sessionId);
+				store.setState({ selectedSessionId: cached.sessionId });
 				if (workspaceSelectionRequestRef.current !== requestId) return;
-				setDisplayedWorkspaceId(cached.workspaceId);
-				setDisplayedSessionId(cached.sessionId);
+				store.setState({
+					displayedWorkspaceId: cached.workspaceId,
+					displayedSessionId: cached.sessionId,
+				});
 				void queryClient.prefetchQuery(
 					workspaceDetailQueryOptions(workspaceId),
 				);
@@ -436,14 +455,18 @@ export function useSelectionController(
 					if (workspaceSelectionRequestRef.current !== requestId) return;
 					selectedSessionIdRef.current = sessionId;
 					rememberSessionSelection(workspaceId, sessionId);
-					setSelectedSessionId(sessionId);
-					setDisplayedWorkspaceId(workspaceId);
-					setDisplayedSessionId(sessionId);
+					store.setState({
+						selectedSessionId: sessionId,
+						displayedWorkspaceId: workspaceId,
+						displayedSessionId: sessionId,
+					});
 				})
 				.catch(() => {
 					if (workspaceSelectionRequestRef.current !== requestId) return;
-					setDisplayedWorkspaceId(workspaceId);
-					setDisplayedSessionId(null);
+					store.setState({
+						displayedWorkspaceId: workspaceId,
+						displayedSessionId: null,
+					});
 				});
 		},
 		[
@@ -452,6 +475,7 @@ export function useSelectionController(
 			rememberSessionSelection,
 			resolveCachedWorkspaceDisplay,
 			resolvePreferredSessionId,
+			store,
 			updateSettings,
 		],
 	);
@@ -464,11 +488,11 @@ export function useSelectionController(
 			sessionSelectionRequestRef.current = requestId;
 			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
-			setSelectedSessionId(sessionId);
+			store.setState({ selectedSessionId: sessionId });
 
 			if (sessionId === null) {
 				if (sessionSelectionRequestRef.current !== requestId) return;
-				setDisplayedSessionId(null);
+				store.setState({ displayedSessionId: null });
 				return;
 			}
 
@@ -479,7 +503,7 @@ export function useSelectionController(
 				]) !== undefined
 			) {
 				if (sessionSelectionRequestRef.current !== requestId) return;
-				setDisplayedSessionId(sessionId);
+				store.setState({ displayedSessionId: sessionId });
 				void queryClient.prefetchQuery(
 					sessionThreadMessagesQueryOptions(sessionId),
 				);
@@ -490,14 +514,14 @@ export function useSelectionController(
 				.ensureQueryData(sessionThreadMessagesQueryOptions(sessionId))
 				.then(() => {
 					if (sessionSelectionRequestRef.current !== requestId) return;
-					setDisplayedSessionId(sessionId);
+					store.setState({ displayedSessionId: sessionId });
 				})
 				.catch(() => {
 					if (sessionSelectionRequestRef.current !== requestId) return;
-					setDisplayedSessionId(sessionId);
+					store.setState({ displayedSessionId: sessionId });
 				});
 		},
-		[queryClient, rememberSessionSelection],
+		[queryClient, rememberSessionSelection, store],
 	);
 
 	const openStart = useCallback(
@@ -506,11 +530,14 @@ export function useSelectionController(
 			sessionSelectionRequestRef.current += 1;
 			selectedWorkspaceIdRef.current = null;
 			selectedSessionIdRef.current = null;
-			setSelectedWorkspaceId(null);
-			setSelectedSessionId(null);
-			setDisplayedWorkspaceId(null);
-			setDisplayedSessionId(null);
-			setViewModeState("start");
+			viewModeRef.current = "start";
+			store.setState({
+				selectedWorkspaceId: null,
+				selectedSessionId: null,
+				displayedWorkspaceId: null,
+				displayedSessionId: null,
+				viewMode: "start",
+			});
 
 			const persist = options?.persist !== false;
 			onStartOpenedRef.current?.({ persist });
@@ -519,12 +546,16 @@ export function useSelectionController(
 				void updateSettings({ lastSurface: "workspace-start" });
 			}
 		},
-		[updateSettings],
+		[store, updateSettings],
 	);
 
-	const setViewMode = useCallback((mode: ShellViewMode) => {
-		setViewModeState(mode);
-	}, []);
+	const setViewMode = useCallback(
+		(mode: ShellViewMode) => {
+			viewModeRef.current = mode;
+			store.setState({ viewMode: mode });
+		},
+		[store],
+	);
 
 	const navigateWorkspaces = useCallback(
 		(offset: -1 | 1) => {
@@ -563,14 +594,26 @@ export function useSelectionController(
 		(sessionId: string | null) => {
 			rememberSessionSelection(selectedWorkspaceIdRef.current, sessionId);
 			selectedSessionIdRef.current = sessionId;
-			setSelectedSessionId((current) =>
-				current === sessionId ? current : sessionId,
-			);
-			setDisplayedSessionId((current) =>
-				current === sessionId ? current : sessionId,
-			);
+			const snap = store.getState();
+			const nextSelected =
+				snap.selectedSessionId === sessionId
+					? snap.selectedSessionId
+					: sessionId;
+			const nextDisplayed =
+				snap.displayedSessionId === sessionId
+					? snap.displayedSessionId
+					: sessionId;
+			if (
+				nextSelected !== snap.selectedSessionId ||
+				nextDisplayed !== snap.displayedSessionId
+			) {
+				store.setState({
+					selectedSessionId: nextSelected,
+					displayedSessionId: nextDisplayed,
+				});
+			}
 		},
-		[rememberSessionSelection],
+		[rememberSessionSelection, store],
 	);
 
 	const getSnapshot = useCallback(
@@ -597,24 +640,11 @@ export function useSelectionController(
 		getSnapshot,
 	});
 
-	const state = useMemo<SelectionState>(
-		() => ({
-			selectedWorkspaceId,
-			displayedWorkspaceId,
-			selectedSessionId,
-			displayedSessionId,
-			viewMode,
-			reselectTick,
-		}),
-		[
-			selectedWorkspaceId,
-			displayedWorkspaceId,
-			selectedSessionId,
-			displayedSessionId,
-			viewMode,
-			reselectTick,
-		],
-	);
+	// Synthesise the legacy `state` object from the store. The store merges
+	// on every `setState`, so the snapshot reference changes exactly when a
+	// field changes — same identity cadence as the old `useMemo`-over-6-fields
+	// version, so `state.X` reads stay byte-for-byte compatible.
+	const state = useStore(store, (s) => s);
 
-	return { state, actions };
+	return { state, actions, store };
 }
