@@ -64,6 +64,25 @@ export function isCompanionClient(): boolean {
 // Resolved once at module load; the runtime never switches mid-session.
 const COMPANION = isCompanionClient();
 
+// On first companion load, a pairing link may carry the token in the URL hash
+// (`#pair=<token>`). Persist it, then strip it so the secret doesn't linger in
+// history or get shared.
+if (COMPANION && typeof window !== "undefined") {
+	seedTokenFromHash();
+}
+
+function seedTokenFromHash(): void {
+	const match = window.location.hash.match(/(?:^#|&)(?:pair|token)=([^&]+)/);
+	if (!match) return;
+	try {
+		localStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1]));
+	} catch {
+		// localStorage unavailable; the token simply won't persist.
+	}
+	const clean = window.location.pathname + window.location.search;
+	window.history.replaceState(null, "", clean);
+}
+
 function baseUrl(): string {
 	const configured = companionConfig()?.base;
 	if (configured) return configured.replace(/\/$/, "");
@@ -164,7 +183,14 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 					([, value]) => !(value instanceof CompanionChannel),
 				),
 			);
-			await companionStream(cmd, rest, channel as CompanionChannel<unknown>);
+			// Tauri's invoke resolves immediately while the channel emits
+			// asynchronously — mirror that. Failures (e.g. a streaming endpoint
+			// not wired yet) degrade to "no events" rather than rejecting.
+			void companionStream(
+				cmd,
+				rest,
+				channel as CompanionChannel<unknown>,
+			).catch(() => {});
 			return undefined as T;
 		}
 	}

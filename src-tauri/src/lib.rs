@@ -472,7 +472,7 @@ pub fn run() {
                 let companion_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = companion_handle.state::<companion::CompanionState>();
-                    match state.start().await {
+                    match state.start(companion_handle.clone()).await {
                         // Loopback-only, opt-in dev gate: logging the token here
                         // is what lets a same-machine `curl` / browser pair in
                         // Slice 0. The public-tunnel slice replaces this with QR

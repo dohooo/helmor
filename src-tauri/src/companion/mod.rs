@@ -64,8 +64,12 @@ impl CompanionState {
     }
 
     /// Start the server if it isn't already running. Idempotent: a second call
-    /// returns the existing connection details.
-    pub async fn start(&self) -> Result<CompanionInfo> {
+    /// returns the existing connection details. Generic over the Tauri runtime
+    /// so tests can drive it with a mock app.
+    pub async fn start<R: tauri::Runtime>(
+        &self,
+        app: tauri::AppHandle<R>,
+    ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
         if let Some(running) = guard.as_ref() {
             return Ok(CompanionInfo {
@@ -75,8 +79,19 @@ impl CompanionState {
         }
 
         let token = generate_token();
+        // Capture the asset resolver behind a type-erased closure so the HTTP
+        // layer never names a Tauri runtime.
+        let asset_app = app.clone();
+        let assets: server::AssetLoader = Arc::new(move |path: &str| {
+            let resolver = asset_app.asset_resolver();
+            resolver
+                .get(format!("/{path}"))
+                .or_else(|| resolver.get(path.to_string()))
+                .map(|asset| (asset.bytes, asset.mime_type))
+        });
         let state = server::AppState {
             token: Arc::new(token.clone()),
+            assets,
         };
         let router = server::router(state);
 

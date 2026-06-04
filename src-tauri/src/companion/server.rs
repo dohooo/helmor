@@ -6,7 +6,7 @@ use std::time::Duration;
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -20,11 +20,19 @@ use tower_http::cors::{Any, CorsLayer};
 
 use super::{auth, rpc};
 
+/// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
+/// the HTTP layer stays runtime-agnostic (the Tauri `AssetResolver` is captured
+/// behind this closure in [`super::CompanionState::start`]); this also lets the
+/// integration test run without a real asset bundle.
+pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
+
 /// Shared state injected into every handler.
 #[derive(Clone)]
 pub struct AppState {
     /// In-memory dev bearer token (Slice 0).
     pub token: Arc<String>,
+    /// Loads embedded SPA assets (same bundle the desktop webview serves).
+    pub assets: AssetLoader,
 }
 
 /// Build the router. CORS is wide-open because every route is bearer-gated and
@@ -40,6 +48,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .route("/rpc/{cmd}", post(rpc_handler))
         .route("/v1/stream", get(stream_handler))
+        // Everything else: serve the embedded SPA (unauthenticated — the bundle
+        // is public; data behind /rpc still requires the bearer token).
+        .fallback(serve_asset)
         .layer(cors)
         .with_state(state)
 }
@@ -85,15 +96,56 @@ async fn rpc_handler(
 
     match rpc::dispatch(&cmd, args).await {
         Ok(value) => Json(value).into_response(),
-        Err(error) => {
-            // Reuse the Tauri command error shape ({ code, message }) so the
-            // browser transport surfaces errors identically to native IPC.
-            let command_error = crate::error::CommandError::from(error);
+        Err(command_error) => {
+            // `CommandError` serialises as { code, message } — the same shape
+            // native IPC errors arrive in, so the browser transport surfaces
+            // them identically.
             let payload = serde_json::to_value(&command_error)
                 .unwrap_or_else(|_| json!({ "code": "Unknown", "message": "Internal error" }));
             (StatusCode::BAD_REQUEST, Json(payload)).into_response()
         }
     }
+}
+
+/// Serve a static asset from the app's embedded frontend bundle (the same
+/// assets the desktop webview loads; in dev the resolver falls back to the
+/// `frontendDist` directory). Unknown client-side routes fall back to
+/// `index.html` so the SPA router can take over.
+async fn serve_asset(State(state): State<AppState>, uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    let candidate = if path.is_empty() { "index.html" } else { path };
+    if let Some(response) = load_asset(&state, candidate) {
+        return response;
+    }
+    if let Some(response) = load_asset(&state, "index.html") {
+        return response;
+    }
+    (StatusCode::NOT_FOUND, "asset not found").into_response()
+}
+
+fn load_asset(state: &AppState, path: &str) -> Option<Response> {
+    let (raw, mime) = (state.assets)(path)?;
+    let bytes = if path == "index.html" {
+        inject_companion_marker(raw)
+    } else {
+        raw
+    };
+    Some(([(CONTENT_TYPE, mime)], bytes).into_response())
+}
+
+/// Inject the companion marker into `index.html` so `src/lib/ipc.ts` switches
+/// the transport onto HTTP/SSE. The bearer token is delivered separately (URL
+/// hash → localStorage), so the marker itself carries no secret.
+fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
+    const MARKER: &str = "<script>window.__HELMOR_COMPANION__={};</script>";
+    let Ok(text) = String::from_utf8(html) else {
+        return Vec::new();
+    };
+    let injected = match text.find("</head>") {
+        Some(idx) => format!("{}{MARKER}{}", &text[..idx], &text[idx..]),
+        None => format!("{MARKER}{text}"),
+    };
+    injected.into_bytes()
 }
 
 /// `GET /v1/stream` — bearer-gated SSE. Slice 0 emits a `hello` event then

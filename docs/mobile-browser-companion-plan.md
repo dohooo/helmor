@@ -226,9 +226,24 @@ SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 4. `curl -H "Authorization: Bearer <token>" http://<addr>/rpc/list_workspace_groups` → 工作区分组 JSON(== 桌面侧边栏数据)。
 5. 不带/错 token → 401。
 
-### 13.2 紧接着的下一刀
+### 13.2 Slice 0b — 把同一套 SPA 喂给浏览器(已实现并验证)
 
-- **Slice 0b — 把同一套 SPA 喂给浏览器**:companion server 用 Tauri `AssetResolver` 托管内嵌前端资源(release 可用,不依赖 dist/),并在 `index.html` 注入 `window.__HELMOR_COMPANION__`;前端读 `#pair=<code>` 落地配对。届时 `ipc.ts` 的浏览器分支才真正被激活,可在手机浏览器打开。
-- **Slice 1 — 全量 RPC + 事件 + 鉴权**:`/rpc` 升级为携带真 `AppHandle`/`State` 的通用 dispatcher,覆盖 48 个前端命令;`/v1/stream` 接 `ui_sync` 广播喂 `listen` 事件;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。
+让浏览器能真正打开并浏览工作区,严格收敛到"最小可启动",不含 QR/配对码轮转/流式/写命令。
+
+**改动**
+- `src-tauri/src/companion/server.rs` — `fallback` 路由用 Tauri `AssetResolver` 托管内嵌 SPA(dev 自动回退读 `frontendDist`),并向 `index.html` 注入 `<script>window.__HELMOR_COMPANION__={}</script>` 标记。HTTP 层不直接持有 `AppHandle`,改持一个**类型擦除的 `AssetLoader` 闭包**(`start<R>` 泛型只在边界捕获 handle)——server 模块对 Tauri runtime 无感,集成测试可用 `tauri::test::mock_app()` 驱动。
+- `src-tauri/src/companion/rpc.rs` — `/rpc` 扩到**冷启动首屏必需的读命令**:`get_app_settings`、`list_workspace_groups`、`list_archived_workspaces`、`list_repositories`、`list_agent_model_sections`、`list_provider_capabilities`、`detect_installed_editors`、`read/write/delete_query_cache`、`get_data_info`。直接调用真 `#[tauri::command]` 函数,返回 `Result<Value, CommandError>`(均无 `State`/`Channel`,无需 Tauri 上下文)。
+- `src/lib/ipc.ts` — Channel 命令改为 **fire-and-forget**(匹配 Tauri 立即 resolve 语义;未接的 `/rpc-stream` 优雅降级为无事件);首次加载从 URL `#pair=<token>` 落地 token 到 localStorage 并抹掉 hash。
+- `src/lib/settings.ts`、`src/lib/query-client.ts` — `invoke` 改走 `./ipc`(原本直连 Tauri,浏览器模式会卡死启动)。
+
+**有意不做(最小化)**:QR、配对码轮转、`paired_devices`、agent 流式、写/变更命令、live UI 同步(`subscribe_ui_mutations` 降级为无操作)、mTLS、隧道。
+
+**验证(本容器实测)**:前端 typecheck + **1338/1338** 测试 ✅(两处 import 调换零回归);Rust companion 单测 **5/5** + 集成测试 **1/1**(泛型 `start` + `mock_app`)✅;companion 模块 clippy 干净 ✅。
+
+**本机手测**:`bun run build`(填充 dist/)后 `HELMOR_COMPANION=1 bun run dev` → 浏览器开 `http://<addr>/#pair=<token>`(token 见日志)→ 应加载真实前端并渲染工作区侧栏。
+
+### 13.3 紧接着的下一刀
+
+- **Slice 1 — 全量 RPC + live 同步 + 鉴权**:`/rpc` 覆盖更多命令(写/变更,按需带 `AppHandle`/`State`);`/rpc-stream` + `/v1/stream` 接 `ui_sync` 广播,让 `subscribe_ui_mutations`/`listen` 真正推送;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。
 - **Slice 2 — 公网可达**:cloudflared 出向隧道 + `apps/registry`(CF Worker)写 `*.remote.helmor.ai` CNAME;Settings → Experimental 配对面板(QR)。
-- **流式生产化**(Slice 1/2 之间):`send_agent_message_stream` 接 `/rpc-stream` SSE,验证 Channel→SSE 核心假设(本容器跑不了 sidecar,需在你机器上验)。
+- **流式生产化**:`send_agent_message_stream` 接 `/rpc-stream` SSE,验证 Channel→SSE 核心假设(本容器跑不了 sidecar,需在你机器上验)。

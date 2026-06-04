@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext } from "react";
 import type { WorkspaceBranchIntent } from "./api";
+// Routed through the transport shim so settings load works in the mobile
+// browser companion too (not just the Tauri webview).
+import { invoke } from "./ipc";
 
 export type ThemeMode = "system" | "light" | "dark";
 

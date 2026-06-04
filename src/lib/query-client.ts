@@ -1,6 +1,5 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type { ThreadMessageLike } from "./api";
 import {
 	type ActionKind,
@@ -47,6 +46,9 @@ import {
 	type PrSyncState,
 	refreshWorkspaceChangeRequest,
 } from "./api";
+// Routed through the transport shim so query-cache persistence works in the
+// mobile browser companion too (not just the Tauri webview).
+import { invoke } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 import {
 	getSessionThreadPaginationState,

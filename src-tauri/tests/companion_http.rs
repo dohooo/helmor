@@ -12,8 +12,14 @@ use helmor_lib::companion::CompanionState;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
+    // Mock Tauri app supplies an `AppHandle` for the asset resolver; no real
+    // bundle is served, which is fine — this test only exercises health/auth.
+    let app = tauri::test::mock_app();
     let state = CompanionState::new();
-    let info = state.start().await.expect("companion server should start");
+    let info = state
+        .start(app.handle().clone())
+        .await
+        .expect("companion server should start");
     let base = format!("http://{}", info.addr);
     let client = reqwest::Client::new();
 
