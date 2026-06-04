@@ -17,7 +17,6 @@ import { useDockUnreadBadge } from "@/features/dock-badge";
 import { WorkspaceEditorSurface } from "@/features/editor";
 import { FeedbackDialog } from "@/features/feedback";
 import { useFeedbackSubmit } from "@/features/feedback/use-feedback-submit";
-import { useRefreshForgeOnWorkspaceSwitch } from "@/features/inspector/hooks/use-refresh-forge-on-switch";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import { useConfirmSessionClose } from "@/features/panel/use-confirm-session-close";
 import { QuickSwitchOverlay } from "@/features/quick-switch";
@@ -48,11 +47,6 @@ import { ComposerInsertProvider } from "./lib/composer-insert-context";
 import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
-	workspaceChangeRequestQueryOptions,
-	workspaceDetailQueryOptions,
-	workspaceForgeActionStatusQueryOptions,
-	workspaceForgeQueryOptions,
-	workspaceGitActionStatusQueryOptions,
 } from "./lib/query-client";
 import { SessionRunStatesProvider } from "./lib/session-run-state-context";
 import {
@@ -86,6 +80,7 @@ import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
 import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
 import { useSettingsOpenHandlers } from "./shell/hooks/use-settings-open-handlers";
 import { useShellChromeActions } from "./shell/hooks/use-shell-chrome-actions";
+import { useWorkspaceForgeData } from "./shell/hooks/use-workspace-forge-data";
 import { useWorkspaceLinkActions } from "./shell/hooks/use-workspace-link-actions";
 import { useWorkspaceNavigation } from "./shell/hooks/use-workspace-navigation";
 import { useWorkspaceQuickSwitch } from "./shell/hooks/use-workspace-quick-switch";
@@ -318,28 +313,23 @@ function AppShell({
 	});
 	const handlePullLatest = usePullLatest({ queryClient, selectedWorkspaceId });
 
-	const selectedWorkspaceDetailQuery = useQuery({
-		...workspaceDetailQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: selectedWorkspaceId !== null,
-	});
+	const {
+		selectedWorkspaceDetailQuery,
+		selectedWorkspaceDetail,
+		workspaceRootPath,
+		workspaceForge,
+		workspaceChangeRequest,
+		pullRequestUrl,
+		workspaceForgeActionStatus,
+		workspaceForgeIsRefreshing,
+		workspaceGitActionStatus,
+	} = useWorkspaceForgeData({ queryClient, selectedWorkspaceId });
 	const { handleOpenSettings, handleOpenAnnouncementSettings } =
 		useSettingsOpenHandlers({
 			selectedWorkspaceId,
 			repoId: selectedWorkspaceDetailQuery.data?.repoId ?? null,
 			onOpenSettings,
 		});
-	const selectedWorkspaceDetail =
-		selectedWorkspaceDetailQuery.data ??
-		(selectedWorkspaceId
-			? queryClient.getQueryData<WorkspaceDetail | null>(
-					helmorQueryKeys.workspaceDetail(selectedWorkspaceId),
-				)
-			: null) ??
-		null;
-	const workspaceRootPath =
-		selectedWorkspaceDetail?.state === "archived"
-			? null
-			: (selectedWorkspaceDetail?.rootPath ?? null);
 
 	const {
 		state: editorSessionState,
@@ -378,80 +368,12 @@ function AppShell({
 		},
 	);
 
-	const workspaceForgeQuery = useQuery({
-		...workspaceForgeQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled: selectedWorkspaceId !== null,
-	});
-	const workspaceForge = workspaceForgeQuery.data ?? null;
-	const workspaceForgeProvider = workspaceForge?.provider ?? "unknown";
-	const workspaceForgeQueriesEnabled =
-		selectedWorkspaceId !== null &&
-		selectedWorkspaceDetail?.state !== "archived" &&
-		(workspaceForgeProvider === "gitlab" ||
-			workspaceForgeProvider === "github");
-
-	// Seed the change-request query with whatever PR snapshot is already
-	// persisted on the workspace row. Lets the inspector render the PR badge
-	// optimistically on first visit, before the live forge query returns.
-	const workspaceChangeRequestSeed = useMemo(
-		() => ({
-			prSyncState: selectedWorkspaceDetail?.prSyncState,
-			prUrl: selectedWorkspaceDetail?.prUrl ?? null,
-			prTitle: selectedWorkspaceDetail?.prTitle ?? null,
-		}),
-		[
-			selectedWorkspaceDetail?.prSyncState,
-			selectedWorkspaceDetail?.prUrl,
-			selectedWorkspaceDetail?.prTitle,
-		],
-	);
-	const workspaceChangeRequestQuery = useQuery({
-		...workspaceChangeRequestQueryOptions(
-			selectedWorkspaceId ?? "__none__",
-			workspaceChangeRequestSeed,
-		),
-		enabled: workspaceForgeQueriesEnabled,
-	});
-	const workspaceChangeRequest = workspaceChangeRequestQuery.data ?? null;
-	const pullRequestUrl =
-		workspaceChangeRequest?.url || selectedWorkspaceDetail?.prUrl || null;
 	const { handleCopyWorkspacePath, handleOpenPullRequest } =
 		useWorkspaceLinkActions({
 			workspaceRootPath,
 			pullRequestUrl,
 			pushWorkspaceToast,
 		});
-
-	const workspaceForgeActionStatusQuery = useQuery({
-		...workspaceForgeActionStatusQueryOptions(
-			selectedWorkspaceId ?? "__none__",
-		),
-		enabled: workspaceForgeQueriesEnabled,
-	});
-	const workspaceForgeActionStatus =
-		workspaceForgeActionStatusQuery.data ?? null;
-
-	// Drive the inspector's git-header shimmer. Only show it on the first
-	// cold fetch — not on background refetches, and not while we're already
-	// rendering a placeholder built from the persisted PR snapshot.
-	const workspaceForgeIsRefreshing =
-		(workspaceChangeRequestQuery.isFetching &&
-			(workspaceChangeRequestQuery.data === undefined ||
-				workspaceChangeRequestQuery.isPlaceholderData)) ||
-		(workspaceForgeActionStatusQuery.isFetching &&
-			workspaceForgeActionStatusQuery.data === undefined);
-
-	const workspaceGitActionStatusQuery = useQuery({
-		...workspaceGitActionStatusQueryOptions(selectedWorkspaceId ?? "__none__"),
-		enabled:
-			selectedWorkspaceId !== null &&
-			selectedWorkspaceDetail?.state !== "archived",
-	});
-	const workspaceGitActionStatus = workspaceGitActionStatusQuery.data ?? null;
-
-	// Nudge CI-progress refetch on workspace switch — `refetchOnMount: "always"`
-	// doesn't fire on queryKey changes.
-	useRefreshForgeOnWorkspaceSwitch(selectedWorkspaceId);
 
 	useThemeApplication({
 		theme: appSettings.theme,
