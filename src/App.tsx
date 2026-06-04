@@ -1524,7 +1524,6 @@ function AppShell({
 														"editor.edit",
 													)}
 													shortcutOverrides={appSettings.shortcuts}
-													workspaceId={selectedWorkspaceId}
 													workspaceRootPath={workspaceRootPath}
 													onChangeSession={handleEditorSessionChange}
 													onExit={handleExitEditorMode}

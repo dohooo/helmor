@@ -9,8 +9,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStore } from "zustand/vanilla";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EditorSessionState } from "@/lib/editor-session";
+import { SelectionStoreProvider } from "@/shell/controllers/selection-store-context";
+import type { SelectionState } from "@/shell/controllers/use-selection-controller";
 
 const apiMocks = vi.hoisted(() => ({
 	listWorkspaceChanges: vi.fn(),
@@ -134,19 +137,34 @@ function EditorSurfaceHarness({
 				},
 			}),
 	);
+	// WorkspaceEditorSurface now reads `selectedWorkspaceId` from the selection
+	// store instead of a prop. Seed it with `null` to preserve the prior
+	// `workspaceId = null` default these tests were written against.
+	const [selectionStore] = useState(() =>
+		createStore<SelectionState>(() => ({
+			selectedWorkspaceId: null,
+			displayedWorkspaceId: null,
+			selectedSessionId: null,
+			displayedSessionId: null,
+			viewMode: "conversation",
+			reselectTick: 0,
+		})),
+	);
 
 	return (
 		<QueryClientProvider client={queryClient}>
-			<WorkspaceEditorSurface
-				editorSession={session}
-				workspaceRootPath="/tmp/helmor-workspace"
-				onChangeSession={(next) => {
-					onChangeSpy(next);
-					setSession(next);
-				}}
-				onError={onError}
-				onExit={vi.fn()}
-			/>
+			<SelectionStoreProvider value={selectionStore}>
+				<WorkspaceEditorSurface
+					editorSession={session}
+					workspaceRootPath="/tmp/helmor-workspace"
+					onChangeSession={(next) => {
+						onChangeSpy(next);
+						setSession(next);
+					}}
+					onError={onError}
+					onExit={vi.fn()}
+				/>
+			</SelectionStoreProvider>
 		</QueryClientProvider>
 	);
 }
