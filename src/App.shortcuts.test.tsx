@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
 	cleanup,
+	configure,
 	fireEvent,
 	render,
 	screen,
@@ -9,6 +10,14 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceDetail } from "./lib/api";
+
+// Heavy full-App integration suite: every test renders <App /> and awaits
+// many async queries. The default vitest 5s test-timeout and 1s waitFor
+// flake on slow/loaded CI runners (a 244s run tripped renderAppReady's
+// mount wait). Generous CI headroom -- these never slow a passing run
+// (waitFor resolves as soon as the condition holds).
+vi.setConfig({ testTimeout: 30000 });
+configure({ asyncUtilTimeout: 8000 });
 
 const apiMocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
@@ -424,7 +433,7 @@ async function renderAppReady(expectedSessionTitle = "Done session 1") {
 			expectSelectedWorkspace("Done workspace");
 			expectSelectedSession(expectedSessionTitle);
 		},
-		{ timeout: 5000 },
+		{ timeout: 15000 },
 	);
 }
 
