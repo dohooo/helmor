@@ -1349,6 +1349,10 @@ pub fn delete_repository_cascade(repo_id: &str) -> Result<()> {
         [repo_id],
     ).context("Failed to delete session messages for repository")?;
     tx.execute(
+        "DELETE FROM session_plan_state WHERE session_id IN (SELECT s.id FROM sessions s JOIN workspaces w ON s.workspace_id = w.id WHERE w.repository_id = ?1)",
+        [repo_id],
+    ).context("Failed to delete session plan state for repository")?;
+    tx.execute(
         "DELETE FROM sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE repository_id = ?1)",
         [repo_id],
     ).context("Failed to delete sessions for repository")?;

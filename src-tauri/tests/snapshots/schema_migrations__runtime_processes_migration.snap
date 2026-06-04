@@ -1,0 +1,36 @@
+---
+source: tests/schema_migrations.rs
+expression: runtime_processes_columns(&connection)
+---
+- - id
+  - TEXT
+  - 0
+  - ~
+- - repo_id
+  - TEXT
+  - 1
+  - ~
+- - workspace_id
+  - TEXT
+  - 0
+  - ~
+- - script_type
+  - TEXT
+  - 1
+  - ~
+- - pid
+  - INTEGER
+  - 1
+  - ~
+- - pgid
+  - INTEGER
+  - 1
+  - ~
+- - started_at
+  - TEXT
+  - 1
+  - "datetime('now')"
+- - ended_at
+  - TEXT
+  - 0
+  - ~

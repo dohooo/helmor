@@ -150,15 +150,28 @@ impl ImBackend for SlackBackend {
                 crate::triage::fetcher::health::record_degraded(SOURCE, reason.clone());
             }
 
-            // Group hits by channel id.
+            // Group hits by channel id. Person-centric: only a real `<@me>`
+            // mention seeds a thread to expand — a `from:me` post (I spoke,
+            // nobody asked me) is kept as context but never drives surfacing.
             let mut by_channel: BTreeMap<String, ChannelHits> = BTreeMap::new();
             for hit in involved.value {
                 let entry = by_channel.entry(hit.channel_id.clone()).or_default();
-                if let Some(t) = &hit.thread_ts {
-                    entry.thread_seeds.insert(t.clone());
+                if hit.is_mention {
+                    if let Some(t) = &hit.thread_ts {
+                        entry.thread_seeds.insert(t.clone());
+                    }
                 }
                 entry.hits.push(hit);
             }
+
+            // A conversation surfaces ONLY if it actually @-mentions me. This
+            // drops from:me-only channels and group chatter where I'm merely
+            // present — the root of "lots of Slack that isn't mine".
+            let mentioned: std::collections::HashSet<String> = by_channel
+                .iter()
+                .filter(|(_, ch)| ch.hits.iter().any(|h| h.is_mention))
+                .map(|(id, _)| id.clone())
+                .collect();
 
             // Every conversation I'm a member of (DMs/MPIMs + channels). A
             // transient failure surfaces as degraded health; auth → skip ws.
@@ -193,9 +206,11 @@ impl ImBackend for SlackBackend {
             let member_by_id: HashMap<&str, &ConversationRow> =
                 members.value.iter().map(|c| (c.id.as_str(), c)).collect();
 
-            // DMs / group-DMs: unconditional, verbatim history path.
+            // 1:1 DMs are inherently directed at me → always surface.
+            // Group-DMs (MPIM) only when they actually @-mention me — an MPIM
+            // I'm simply a member of is not, by itself, my task.
             for row in &members.value {
-                if row.is_im || row.is_mpim {
+                if row.is_im || (row.is_mpim && mentioned.contains(&row.id)) {
                     out.push(to_im_conversation(ws, row));
                 }
             }
@@ -204,6 +219,11 @@ impl ImBackend for SlackBackend {
             // the hits keyed by conv.id for the surface-aware fetch/render/trim.
             let mut map = self.hits.lock().expect("slack hits poisoned");
             for (channel_id, ch_hits) in by_channel {
+                // Person-centric: only channels that actually @-mention me.
+                // (from:me-only channels were filtered out of `mentioned`.)
+                if !mentioned.contains(&channel_id) {
+                    continue;
+                }
                 // A `<@me>` in a DM shows up here too — already covered above.
                 if let Some(row) = member_by_id.get(channel_id.as_str()) {
                     if row.is_im || row.is_mpim {

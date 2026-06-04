@@ -35,10 +35,15 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
-      - name: Build sidecar binary
-        uses: ./.github/actions/build-sidecar
-        with:
-          target-triple: aarch64-apple-darwin
+      # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
+      # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
+      # `cargo clippy --all-targets` compiles helmor-cli from source and
+      # build.rs stubs the externalBin placeholders. This skips the
+      # `cargo build --bin helmor-cli --release` the full build-sidecar action
+      # runs — ~3m16s lint never uses.
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
 
       - name: Run lint
         run: bun run lint

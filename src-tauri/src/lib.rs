@@ -286,6 +286,19 @@ pub fn run() {
                 Err(e) => tracing::warn!("Failed to clean up initializing orphans: {e:#}"),
             }
 
+            // Runtime registry crash-recovery sweep. Probes every
+            // still-open row from a prior launch via `kill(pid, 0)`,
+            // stamps dead rows ended, and logs the "maybe alive"
+            // ones. Strictly diagnostic — we never auto-kill on this
+            // path because PIDs can be reused and a free port is not
+            // proof of process identity.
+            if let Err(error) = workspace::runtime_registry::run_startup_classification() {
+                tracing::warn!(
+                    %error,
+                    "Runtime registry: startup classification sweep failed"
+                );
+            }
+
             // On macOS, GUI-launched apps only see the minimal system PATH.
             // Capture the user's login-shell PATH (Homebrew, nvm, bun, cargo,
             // etc.) so every child process — sidecar, git, workspace scripts —
@@ -461,6 +474,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agents::list_agent_model_sections,
             agents::list_cursor_models,
+            agents::list_provider_capabilities,
             agents::send_agent_message_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
@@ -512,6 +526,9 @@ pub fn run() {
             commands::system_commands::recheck_helmor_components,
             commands::system_commands::enter_onboarding_window_mode,
             commands::system_commands::exit_onboarding_window_mode,
+            commands::system_commands::enter_mini_window_mode,
+            commands::system_commands::exit_mini_window_mode,
+            commands::system_commands::toggle_mini_window_mode,
             commands::system_commands::open_agent_login_terminal,
             commands::system_commands::spawn_agent_login_terminal,
             commands::system_commands::stop_agent_login_terminal,
@@ -594,6 +611,7 @@ pub fn run() {
             commands::session_commands::get_session_context_usage,
             commands::session_commands::set_session_context_usage,
             commands::session_commands::get_session_codex_goal,
+            commands::session_commands::get_session_plan_state,
             commands::session_commands::mutate_codex_goal,
             commands::session_commands::list_session_drafts,
             commands::session_commands::set_session_draft,
@@ -677,16 +695,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Every user-initiated app-exit path is intercepted here and routed
-    // through a single `helmor://quit-requested` event. The frontend's
-    // QuitConfirmDialog listens for that event, checks for in-flight
-    // tasks, and calls back into the `request_quit` IPC command — which
-    // cleans up (stops git watchers, SIGTERM's the sidecar) and then
-    // invokes `app.exit(0)`.
+    // App-exit paths are intercepted here. On macOS, closing the window
+    // (red button, Cmd+W on the last tab, Cmd+Shift+W) does NOT quit the
+    // app — it hides the window and the app keeps running in the Dock.
+    // Clicking the Dock icon (RunEvent::Reopen) shows it again. Only true
+    // quit paths (Cmd+Q, Dock Quit) route through the single
+    // `helmor://quit-requested` event, which the frontend's
+    // QuitConfirmDialog listens for, checks for in-flight tasks, and calls
+    // back into the `request_quit` IPC command — which cleans up (stops
+    // git watchers, SIGTERM's the sidecar) and then invokes `app.exit(0)`.
     //
     //   Source                                  | Rust branch
     //   ----------------------------------------|-------------------------
-    //   Red close button / Cmd+W (main window)  | WindowEvent::CloseRequested
+    //   Red close button / close-window (macOS) | WindowEvent::CloseRequested -> hide
+    //   Red close button / close (other OS)     | WindowEvent::CloseRequested -> quit
+    //   Dock icon click (macOS)                 | RunEvent::Reopen -> show
     //   Cmd+Q, app-menu Quit (macOS)            | on_menu_event helmor-quit
     //   Dock Quit / system shutdown / SIGINT    | RunEvent::ExitRequested { code: None }
     //   Our own request_quit -> app.exit(0)     | ExitRequested { code: Some(_) }  (passthrough)
@@ -713,7 +736,26 @@ pub fn run() {
             ..
         } if label == "main" => {
             api.prevent_close();
+            // macOS: closing the window just hides it; the app stays alive
+            // in the Dock and re-shows on Dock-icon click (RunEvent::Reopen).
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            // Other platforms keep the legacy behavior: closing the main
+            // window quits the app.
+            #[cfg(not(target_os = "macos"))]
             emit_quit_requested(app_handle);
+        }
+        // macOS Dock-icon click while the window is hidden: show it again.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::ExitRequested {
@@ -748,10 +790,13 @@ fn emit_quit_requested(app_handle: &tauri::AppHandle) {
 
 const HELMOR_QUIT_MENU_ID: &str = "helmor-quit";
 const HELMOR_CLOSE_CURRENT_SESSION_MENU_ID: &str = "helmor-close-current-session";
+const HELMOR_ALWAYS_ON_TOP_MENU_ID: &str = "helmor-always-on-top";
 
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::menu::{
+        AboutMetadataBuilder, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+    };
 
     let close_current_session_item = MenuItemBuilder::with_id(
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID,
@@ -759,6 +804,13 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     )
     .accelerator("Cmd+W")
     .build(app)?;
+
+    // Lets the user float the window above other apps. Decoupled from mini
+    // mode — purely a manual toggle, the check mark is the source of truth.
+    let always_on_top_item =
+        CheckMenuItemBuilder::with_id(HELMOR_ALWAYS_ON_TOP_MENU_ID, "Always on Top")
+            .checked(false)
+            .build(app)?;
 
     let quit_item = MenuItemBuilder::with_id(HELMOR_QUIT_MENU_ID, "Quit Helmor")
         .accelerator("Cmd+Q")
@@ -795,6 +847,7 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .minimize()
         .maximize()
         .separator()
+        .item(&always_on_top_item)
         .item(&close_current_session_item)
         .build()?;
 
@@ -808,6 +861,16 @@ fn install_macos_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.on_menu_event(move |_, event| match event.id().0.as_str() {
         HELMOR_QUIT_MENU_ID => emit_quit_requested(&handle),
         HELMOR_CLOSE_CURRENT_SESSION_MENU_ID => emit_close_current_session_requested(&handle),
+        HELMOR_ALWAYS_ON_TOP_MENU_ID => {
+            // muda toggles the check mark before firing, so is_checked() is
+            // already the desired post-click state.
+            let checked = always_on_top_item.is_checked().unwrap_or(false);
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Err(error) = window.set_always_on_top(checked) {
+                    tracing::warn!(error = %error, "Failed to set always-on-top from menu");
+                }
+            }
+        }
         _ => {}
     });
 

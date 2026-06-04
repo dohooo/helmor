@@ -166,6 +166,9 @@ fn execute_tick<R: Runtime>(
     let endpoint = manager
         .endpoint()
         .ok_or_else(|| anyhow!("Local LLM is not running"))?;
+    // Real llama.cpp `-c` for the active model; lets the sidecar size its deep
+    // thinking maxTokens budget to the box instead of a hardcoded guess.
+    let context_tokens = manager.current_context_tokens();
     let store = app.state::<ActiveStatusStore>();
 
     let mut total = ExecuteOk {
@@ -204,6 +207,7 @@ fn execute_tick<R: Runtime>(
             &endpoint.url,
             &endpoint.token,
             &endpoint.api_model,
+            context_tokens,
         )?;
         total.created += batch.created;
         total.workspace_failures += batch.workspace_failures;
@@ -233,6 +237,7 @@ fn run_one_batch<R: Runtime>(
     endpoint_url: &str,
     endpoint_token: &str,
     endpoint_model: &str,
+    endpoint_context: u32,
 ) -> Result<ExecuteOk> {
     let request_id = Uuid::new_v4().to_string();
     let sidecar = app.state::<ManagedSidecar>();
@@ -252,6 +257,7 @@ fn run_one_batch<R: Runtime>(
                 "baseUrl": endpoint_url,
                 "token": endpoint_token,
                 "model": endpoint_model,
+                "contextWindow": endpoint_context,
             },
         }),
     };

@@ -67,10 +67,16 @@ jobs:
       - name: Setup Rust Tauri
         uses: ./.github/actions/setup-rust-tauri
 
-      - name: Build sidecar binary
-        uses: ./.github/actions/build-sidecar
-        with:
-          target-triple: aarch64-apple-darwin
+      # Stage the sidecar vendor tree, but NOT the release helmor-cli. The crate
+      # compile needs `sidecar/dist/vendor/` (a Tauri bundle resource) to exist;
+      # build.rs stubs the helmor-cli / helmor-sidecar externalBin placeholders,
+      # and no test spawns the real sidecar. This skips the
+      # `cargo build --bin helmor-cli --release` the full build-sidecar action
+      # runs — ~3m16s the tests never use. (`bun run build` = stage-vendor plus
+      # the ~4s bun sidecar compile.)
+      - name: Stage sidecar vendor tree
+        shell: bash
+        run: cd sidecar && bun install --frozen-lockfile && bun run build
 
       - name: Run Rust tests with nextest
         shell: bash

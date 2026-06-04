@@ -74,7 +74,7 @@ export function ShellResizeSeparator({
 			onPointerDown={onPointerDown}
 			onKeyDown={onKeyDown}
 			className={cn(
-				"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none",
+				"group absolute inset-y-0 z-30 cursor-ew-resize touch-none outline-none max-[960px]:hidden",
 				resizing
 					? "transition-none"
 					: `transition-[${transitionAxis},opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]`,

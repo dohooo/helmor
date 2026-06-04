@@ -529,6 +529,11 @@ fn delete_imported_workspace_records(workspace_id: &str) -> Result<()> {
         )
         .context("Failed to delete imported messages")?;
         conn.execute(
+            "DELETE FROM session_plan_state WHERE session_id IN (SELECT id FROM sessions WHERE workspace_id = ?1)",
+            [workspace_id],
+        )
+        .context("Failed to delete imported session plan state")?;
+        conn.execute(
             "DELETE FROM sessions WHERE workspace_id = ?1",
             [workspace_id],
         )

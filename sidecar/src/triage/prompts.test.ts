@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildSystemPrompt } from "./prompts";
+import { buildSystemPrompt, buildTickUserMessage } from "./prompts";
 import type { TriageCandidate } from "./types";
 
 function makeCandidate(
@@ -17,6 +17,7 @@ function makeCandidate(
 		title: "Sample title",
 		preview: null,
 		externalUrl: null,
+		involvementReason: null,
 		payloadPath: `${source}/1.md`,
 		payloadBytes: 100,
 		...overrides,
@@ -165,14 +166,21 @@ describe("buildSystemPrompt: source-family gating", () => {
 				candidates: [makeCandidate(src)],
 			});
 			expect(prompt).toMatch(/<skip-policy>/);
-			expect(prompt).toMatch(/LAST\s+RESORT/);
-			// Logic-driven, not pattern-driven: must articulate the
+			// Precision-first: SKIP/DEFER is the default and propose is the
+			// justified exception. (Replaces the old LAST RESORT / propose-by-
+			// default policy.)
+			expect(prompt).toMatch(/SKIP|skip/);
+			expect(prompt).toMatch(
+				/Only `propose_workspace`|when unsure, DO NOT propose/i,
+			);
+			// Logic-driven, not pattern-driven: must still articulate the
 			// INTENT-vs-COMPLETION distinction without listing phrases to match.
 			expect(prompt).toMatch(/Intent|INTENT/);
 			expect(prompt).toMatch(/completion|COMPLETION|shipped/);
-			// And must explicitly call out the cap escape hatch so the
-			// model doesn't read the cap rule as contradicting skip-policy.
-			expect(prompt).toMatch(/CAP\s+REACHED/);
+			// The cap is enforced in code (tools/helmor.ts), so the prompt must
+			// NOT couple skip-policy to a CAP REACHED / LAST RESORT escape hatch.
+			expect(prompt).not.toMatch(/LAST\s+RESORT/);
+			expect(prompt).not.toMatch(/CAP\s+REACHED/);
 		}
 	});
 
@@ -188,6 +196,21 @@ describe("buildSystemPrompt: source-family gating", () => {
 		expect(policy).toBeDefined();
 		expect(policy).not.toMatch(/我改改|我看看|我来|认领/);
 		expect(policy).not.toMatch(/I'?ll fix|I'?ll take|@me/i);
+	});
+
+	it("renders a signal line only when involvementReason is present", () => {
+		const withSignal = buildTickUserMessage(
+			[makeCandidate("github", { involvementReason: "review_requested" })],
+			[],
+		).text;
+		expect(withSignal).toMatch(/signal:/);
+		expect(withSignal).toMatch(/review_requested/);
+
+		const withoutSignal = buildTickUserMessage(
+			[makeCandidate("github", { involvementReason: null })],
+			[],
+		).text;
+		expect(withoutSignal).not.toMatch(/signal:/);
 	});
 
 	it("appends user-additions suffix when present", () => {
