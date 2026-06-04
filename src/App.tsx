@@ -1,16 +1,11 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-	GITHUB_RELEASES_URL,
-	ReleaseAnnouncementToastHost,
-} from "@/features/announcements";
+import { ReleaseAnnouncementToastHost } from "@/features/announcements";
 import type { WorkspaceCommitButtonMode } from "@/features/commit/button";
 import { useWorkspaceCommitLifecycle } from "@/features/commit/hooks/use-commit-lifecycle";
 import {
@@ -60,7 +55,6 @@ import {
 } from "./lib/api";
 import { usesActionModelOverride } from "./lib/commit-button-prompts";
 import { ComposerInsertProvider } from "./lib/composer-insert-context";
-import { isMarkdownPath } from "./lib/editor-session";
 import {
 	detectedEditorsQueryOptions,
 	helmorQueryKeys,
@@ -96,10 +90,13 @@ import { useSelectionController } from "./shell/controllers/use-selection-contro
 import { useStartSurfaceController } from "./shell/controllers/use-start-surface-controller";
 import { publishShellEvent } from "./shell/event-bus";
 import { useAppBootstrap } from "./shell/hooks/use-app-bootstrap";
+import { useEditorEditMode } from "./shell/hooks/use-editor-edit-mode";
 import { useNavigationSidebar } from "./shell/hooks/use-navigation-sidebar";
 import { useResolvedShortcuts } from "./shell/hooks/use-resolved-shortcuts";
 import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
 import { useSettingsOpenHandlers } from "./shell/hooks/use-settings-open-handlers";
+import { useShellChromeActions } from "./shell/hooks/use-shell-chrome-actions";
+import { useWorkspaceLinkActions } from "./shell/hooks/use-workspace-link-actions";
 import { useWorkspaceToast } from "./shell/hooks/use-workspace-toast";
 
 function App() {
@@ -317,19 +314,19 @@ function AppShell({
 				pushWorkspaceToast(String(e), `Failed to open ${preferredEditor.name}`),
 		);
 	}, [preferredEditor, pushWorkspaceToast, selectedWorkspaceId]);
-	const handleToggleTheme = useCallback(() => {
-		updateSettings({
-			theme: resolveTheme(appSettings.theme) === "dark" ? "light" : "dark",
-		});
-	}, [appSettings.theme, updateSettings]);
-	const handleToggleZenMode = useCallback(() => {
-		const zenActive = sidebarCollapsed && inspectorCollapsed;
-		setSidebarCollapsed(!zenActive);
-		setInspectorCollapsed(!zenActive);
-	}, [inspectorCollapsed, setSidebarCollapsed, sidebarCollapsed]);
-	const handleOpenModelPicker = useCallback(() => {
-		publishShellEvent({ type: "open-model-picker" });
-	}, []);
+	const {
+		handleToggleTheme,
+		handleToggleZenMode,
+		handleOpenModelPicker,
+		handleOpenReleaseChangelog,
+	} = useShellChromeActions({
+		theme: appSettings.theme,
+		updateSettings,
+		sidebarCollapsed,
+		inspectorCollapsed,
+		setSidebarCollapsed,
+		setInspectorCollapsed,
+	});
 	const handlePullLatest = usePullLatest({ queryClient, selectedWorkspaceId });
 
 	// Map workspace id -> live row (excluding archived). Used by the
@@ -363,13 +360,6 @@ function AppShell({
 			repoId: selectedWorkspaceDetailQuery.data?.repoId ?? null,
 			onOpenSettings,
 		});
-	const handleOpenReleaseChangelog = useCallback(() => {
-		void openUrl(GITHUB_RELEASES_URL).catch((error) => {
-			toast.error("Unable to open GitHub changelog", {
-				description: String(error),
-			});
-		});
-	}, []);
 	const selectedWorkspaceDetail =
 		selectedWorkspaceDetailQuery.data ??
 		(selectedWorkspaceId
@@ -413,62 +403,12 @@ function AppShell({
 		],
 	);
 	const handleEditorSessionChange = editorSessionActions.changeSession;
-	const canEditEditorSession =
-		(editorSession?.kind === "diff" && editorSession.fileStatus !== "D") ||
-		(editorSession?.kind === "file" &&
-			editorSession.fileStatus !== undefined &&
-			editorSession.fileStatus !== "D");
-	const handleEnterEditorEditMode = useCallback(() => {
-		if (!editorSession || editorSession.fileStatus === "D") {
-			return;
-		}
-		if (editorSession.kind === "diff") {
-			handleEditorSessionChange({
-				kind: "file",
-				path: editorSession.path,
-				line: editorSession.line,
-				column: editorSession.column,
-				dirty: false,
-				inline: editorSession.inline,
-				fileStatus: editorSession.fileStatus,
-				originalRef: editorSession.originalRef,
-				modifiedRef: editorSession.modifiedRef,
-				diffOriginalText: editorSession.originalText,
-				diffModifiedText: editorSession.modifiedText,
-				viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
-			});
-			return;
-		}
-		if (editorSession.fileStatus === undefined) return;
-		handleEditorSessionChange({
-			kind: "diff",
-			path: editorSession.path,
-			line: editorSession.line,
-			column: editorSession.column,
-			dirty: editorSession.dirty,
-			inline: editorSession.inline,
-			fileStatus: editorSession.fileStatus,
-			originalRef: editorSession.originalRef,
-			modifiedRef: editorSession.modifiedRef,
-			originalText: editorSession.diffOriginalText,
-			modifiedText: editorSession.dirty
-				? editorSession.modifiedText
-				: editorSession.diffModifiedText,
-			diffOriginalText: editorSession.diffOriginalText,
-			diffModifiedText: editorSession.diffModifiedText,
-			viewMode: isMarkdownPath(editorSession.path) ? "source" : undefined,
-		});
-	}, [editorSession, handleEditorSessionChange]);
-
-	const handleCopyWorkspacePath = useCallback(() => {
-		if (!workspaceRootPath) return;
-		void navigator.clipboard.writeText(workspaceRootPath).then(() => {
-			toast.success("Path copied", {
-				description: workspaceRootPath,
-				duration: 2000,
-			});
-		});
-	}, [workspaceRootPath]);
+	const { canEditEditorSession, handleEnterEditorEditMode } = useEditorEditMode(
+		{
+			editorSession,
+			handleEditorSessionChange,
+		},
+	);
 
 	const workspaceForgeQuery = useQuery({
 		...workspaceForgeQueryOptions(selectedWorkspaceId ?? "__none__"),
@@ -507,16 +447,12 @@ function AppShell({
 	const workspaceChangeRequest = workspaceChangeRequestQuery.data ?? null;
 	const pullRequestUrl =
 		workspaceChangeRequest?.url || selectedWorkspaceDetail?.prUrl || null;
-	const handleOpenPullRequest = useCallback(() => {
-		if (!pullRequestUrl) return;
-		void openUrl(pullRequestUrl).catch((error) => {
-			pushWorkspaceToast(
-				error instanceof Error ? error.message : String(error),
-				"Unable to open pull request",
-				"destructive",
-			);
+	const { handleCopyWorkspacePath, handleOpenPullRequest } =
+		useWorkspaceLinkActions({
+			workspaceRootPath,
+			pullRequestUrl,
+			pushWorkspaceToast,
 		});
-	}, [pullRequestUrl, pushWorkspaceToast]);
 
 	const workspaceForgeActionStatusQuery = useQuery({
 		...workspaceForgeActionStatusQueryOptions(
