@@ -113,6 +113,10 @@ export type WorkspaceRow = {
 	kind?: string;
 	/** True for an ai_triage row still awaiting the user's first send. */
 	triagePrimingUnconsumed?: boolean;
+	/** Originating triage platform for ai_triage rows: "github" | "gitlab" |
+	 *  "slack" | "lark". Absent/null for manual workspaces. Drives the
+	 *  source-logo badge shown on AI-proposed sidebar rows. */
+	triageSourceType?: string | null;
 };
 
 export type WorkspaceGroup = {
