@@ -73,6 +73,22 @@ async fn health_is_public_and_rpc_requires_bearer() {
         .unwrap_or_default()
         .contains("Unknown companion command"));
 
+    // An authenticated operate command with a missing required arg is rejected
+    // at the dispatch layer (before touching the DB) with the { code, message }
+    // shape.
+    let missing_arg = client
+        .post(format!("{base}/rpc/get_workspace"))
+        .bearer_auth(&info.token)
+        .send()
+        .await
+        .expect("missing-arg request");
+    assert_eq!(missing_arg.status(), 400);
+    let err: serde_json::Value = missing_arg.json().await.expect("error json");
+    assert!(err["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Missing required argument: workspaceId"));
+
     // Shutdown is idempotent and clears reported info.
     state.shutdown().await;
     assert!(state.info().await.is_none());

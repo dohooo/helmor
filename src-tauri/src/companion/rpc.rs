@@ -52,6 +52,61 @@ pub async fn dispatch(command: &str, args: Value) -> Result<Value, CommandError>
             to_value(cmd::system_commands::delete_query_cache(arg_string(&args, "key")?).await?)
         }
 
+        // Operate reads — opening a workspace / session (all state-free).
+        "get_workspace" => to_value(
+            cmd::workspace_commands::get_workspace(arg_string(&args, "workspaceId")?).await?,
+        ),
+        "list_workspace_sessions" => to_value(
+            cmd::session_commands::list_workspace_sessions(arg_string(&args, "workspaceId")?)
+                .await?,
+        ),
+        "list_session_thread_messages" => to_value(
+            cmd::session_commands::list_session_thread_messages(
+                arg_string(&args, "sessionId")?,
+                arg_opt_usize(&args, "tailLimit"),
+            )
+            .await?,
+        ),
+        "get_session_context_usage" => to_value(
+            cmd::session_commands::get_session_context_usage(arg_string(&args, "sessionId")?)
+                .await?,
+        ),
+        "get_session_codex_goal" => to_value(
+            cmd::session_commands::get_session_codex_goal(arg_string(&args, "sessionId")?).await?,
+        ),
+        "get_session_plan_state" => to_value(
+            cmd::session_commands::get_session_plan_state(arg_string(&args, "sessionId")?).await?,
+        ),
+        "list_session_drafts" => to_value(cmd::session_commands::list_session_drafts().await?),
+        "list_workspace_files" => to_value(
+            cmd::editor_commands::list_workspace_files(arg_string(&args, "workspaceRootPath")?)
+                .await?,
+        ),
+        "list_editor_files" => to_value(
+            cmd::editor_commands::list_editor_files(arg_string(&args, "workspaceRootPath")?)
+                .await?,
+        ),
+        "list_workspace_changes" => to_value(
+            cmd::editor_commands::list_workspace_changes(
+                arg_string(&args, "workspaceRootPath")?,
+                arg_opt_string(&args, "workspaceId"),
+            )
+            .await?,
+        ),
+        "read_editor_file" => {
+            to_value(cmd::editor_commands::read_editor_file(arg_string(&args, "path")?).await?)
+        }
+        "stat_editor_file" => {
+            to_value(cmd::editor_commands::stat_editor_file(arg_string(&args, "path")?).await?)
+        }
+        "get_workspace_git_action_status" => to_value(
+            cmd::editor_commands::get_workspace_git_action_status(arg_string(
+                &args,
+                "workspaceId",
+            )?)
+            .await?,
+        ),
+
         other => Err(anyhow::anyhow!("Unknown companion command: {other}").into()),
     }
 }
@@ -66,4 +121,14 @@ fn arg_string(args: &Value, key: &str) -> Result<String, CommandError> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| anyhow::anyhow!("Missing required argument: {key}").into())
+}
+
+/// Extract an optional string argument (absent or JSON `null` → `None`).
+fn arg_opt_string(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// Extract an optional `usize` argument.
+fn arg_opt_usize(args: &Value, key: &str) -> Option<usize> {
+    args.get(key).and_then(Value::as_u64).map(|n| n as usize)
 }
