@@ -16,15 +16,24 @@ use axum::{
 };
 use futures::{stream, Stream, StreamExt};
 use serde_json::{json, Value};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::{auth, rpc};
+use crate::error::CommandError;
 
 /// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
 /// the HTTP layer stays runtime-agnostic (the Tauri `AssetResolver` is captured
 /// behind this closure in [`super::CompanionState::start`]); this also lets the
 /// integration test run without a real asset bundle.
 pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
+
+/// Starts an agent stream: parses the request args, then feeds each event as an
+/// NDJSON line into the provided sender. Type-erased so the server stays
+/// runtime-agnostic; built from a concrete `AppHandle` in [`super::stream`].
+pub type AgentStreamer =
+    Arc<dyn Fn(Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
 
 /// Shared state injected into every handler.
 #[derive(Clone)]
@@ -33,6 +42,8 @@ pub struct AppState {
     pub token: Arc<String>,
     /// Loads embedded SPA assets (same bundle the desktop webview serves).
     pub assets: AssetLoader,
+    /// Starts an agent message stream (reuses the desktop streaming path).
+    pub streamer: AgentStreamer,
 }
 
 /// Build the router. CORS is wide-open because every route is bearer-gated and
@@ -47,6 +58,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/rpc/{cmd}", post(rpc_handler))
+        .route("/rpc-stream/{cmd}", post(rpc_stream_handler))
         .route("/v1/stream", get(stream_handler))
         // Everything else: serve the embedded SPA (unauthenticated — the bundle
         // is public; data behind /rpc still requires the bearer token).
@@ -100,6 +112,67 @@ async fn rpc_handler(
             // `CommandError` serialises as { code, message } — the same shape
             // native IPC errors arrive in, so the browser transport surfaces
             // them identically.
+            let payload = serde_json::to_value(&command_error)
+                .unwrap_or_else(|_| json!({ "code": "Unknown", "message": "Internal error" }));
+            (StatusCode::BAD_REQUEST, Json(payload)).into_response()
+        }
+    }
+}
+
+/// `POST /rpc-stream/{cmd}` — bearer-gated streaming dispatch. The response is
+/// newline-delimited JSON (one serialized event per line), which the browser
+/// shim (`src/lib/ipc.ts`) pumps into the `Channel.onmessage` handler.
+async fn rpc_stream_handler(
+    State(state): State<AppState>,
+    Path(cmd): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !auth::check_bearer(&headers, state.token.as_str()) {
+        return unauthorized();
+    }
+    if cmd != "send_agent_message_stream" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "code": "Unknown",
+                "message": format!("No companion stream for command: {cmd}"),
+            })),
+        )
+            .into_response();
+    }
+
+    let args: Value = if body.is_empty() {
+        Value::Null
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "code": "Unknown",
+                        "message": format!("Invalid JSON body: {error}"),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    match (state.streamer)(args, tx) {
+        Ok(()) => {
+            let stream = UnboundedReceiverStream::new(rx).map(|line| {
+                Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("{line}\n")))
+            });
+            (
+                [(CONTENT_TYPE, "application/x-ndjson")],
+                axum::body::Body::from_stream(stream),
+            )
+                .into_response()
+        }
+        Err(command_error) => {
             let payload = serde_json::to_value(&command_error)
                 .unwrap_or_else(|_| json!({ "code": "Unknown", "message": "Internal error" }));
             (StatusCode::BAD_REQUEST, Json(payload)).into_response()

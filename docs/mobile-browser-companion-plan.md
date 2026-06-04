@@ -246,7 +246,17 @@ SPA 与 API 同源(同一隧道 host),shim 用相对路径,**零 CORS**。
 
 - **Slice 1 — 全量 RPC + live 同步 + 鉴权**:`/rpc` 覆盖更多命令(写/变更,按需带 `AppHandle`/`State`);`/rpc-stream` + `/v1/stream` 接 `ui_sync` 广播,让 `subscribe_ui_mutations`/`listen` 真正推送;`paired_devices` 表 + 周转配对码取代内存 dev token;`platform-bridge.ts` 收掉插件降级。
 - **Slice 2 — 公网可达**:cloudflared 出向隧道 + `apps/registry`(CF Worker,**已实现**见 §13.4)写 `remote-<random>.helmor.ai` CNAME;Settings → Experimental 配对面板(QR)。
-- **流式生产化**:`send_agent_message_stream` 接 `/rpc-stream` SSE,验证 Channel→SSE 核心假设(本容器跑不了 sidecar,需在你机器上验)。
+- **流式**(**已接线,编译验证通过**):`send_agent_message_stream` 接 `/rpc-stream` NDJSON。做法见 §13.5。**运行时需你机器验**(本容器无 sidecar)。
+
+### 13.5 流式 Channel→NDJSON(已实现,编译验证)
+
+核心风险点已打通,且**不改流式核心、复用共享 ManagedSidecar(无双 sidecar)**:
+
+- 用 `tauri::ipc::Channel::new(handler)` 构造一个自定义 Channel,handler 把每个序列化 event 转成一行 NDJSON 推进 `UnboundedSender`;直接调现有 `send_agent_message_stream(app, sidecar, request, channel)`。
+- `companion/server.rs` 新增 `POST /rpc-stream/{cmd}` → `axum::body::Body::from_stream` 把 receiver 流成 `application/x-ndjson` 响应。
+- streamer 类型擦除为 `AgentStreamer`(`companion/stream.rs::build_agent_streamer`,持具体 Wry handle),server 保持运行时泛型、mock 可测;前端 `ipc.ts` 的 `companionStream`(Slice 0b 已就绪)POST 该端点并 pump NDJSON 回 `Channel.onmessage`。
+- 验证:`cargo test --test companion_http` 1/1、clippy 干净(借用跨 await / Send / Channel::new / NDJSON 响应全 type-check)。**待你机器验真实流式**。
+- 已知点:手机发起的流式走共享 sidecar,桌面前端不会"实时"看到该流(需重载或后续 broadcast 总线多订阅);手机自身实时正常。
 
 ### 13.4 `apps/registry` — CF Worker(已实现并验证)
 

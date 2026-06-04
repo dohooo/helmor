@@ -22,6 +22,10 @@
 mod auth;
 mod rpc;
 mod server;
+mod stream;
+
+pub use server::AgentStreamer;
+pub use stream::build_agent_streamer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -65,10 +69,12 @@ impl CompanionState {
 
     /// Start the server if it isn't already running. Idempotent: a second call
     /// returns the existing connection details. Generic over the Tauri runtime
-    /// so tests can drive it with a mock app.
+    /// so tests can drive it with a mock app; the `streamer` is built from the
+    /// concrete `AppHandle` by the caller (see [`build_agent_streamer`]).
     pub async fn start<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,
+        streamer: AgentStreamer,
     ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
         if let Some(running) = guard.as_ref() {
@@ -92,6 +98,7 @@ impl CompanionState {
         let state = server::AppState {
             token: Arc::new(token.clone()),
             assets,
+            streamer,
         };
         let router = server::router(state);
 

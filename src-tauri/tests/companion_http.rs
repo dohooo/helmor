@@ -8,7 +8,9 @@
 //! Endpoints that touch the database are exercised only on the pre-auth /
 //! unknown-command paths, so the test needs no DB pools.
 
-use helmor_lib::companion::CompanionState;
+use std::sync::Arc;
+
+use helmor_lib::companion::{AgentStreamer, CompanionState};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
@@ -16,8 +18,10 @@ async fn health_is_public_and_rpc_requires_bearer() {
     // bundle is served, which is fine — this test only exercises health/auth.
     let app = tauri::test::mock_app();
     let state = CompanionState::new();
+    // The streamer is never invoked here (no stream request), so a no-op is fine.
+    let streamer: AgentStreamer = Arc::new(|_args, _tx| Ok(()));
     let info = state
-        .start(app.handle().clone())
+        .start(app.handle().clone(), streamer)
         .await
         .expect("companion server should start");
     let base = format!("http://{}", info.addr);
