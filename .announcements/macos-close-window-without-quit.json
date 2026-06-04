@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "On macOS, closing the window (or Cmd+Shift+W) now keeps Helmor running in the Dock instead of quitting — click the Dock icon to bring it back. Cmd+Q still quits.",
+			"action": {
+				"label": "Open Shortcuts",
+				"value": { "type": "openSettings", "section": "shortcuts" }
+			}
+		}
+	]
+}
