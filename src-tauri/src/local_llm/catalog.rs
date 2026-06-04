@@ -1,7 +1,7 @@
 //! Curated LLM catalog driving the Local LLM settings panel. The
 //! downloads manager (via `CatalogAssetProvider`) reads this list to
 //! know what to fetch / verify; the panel renders the entries as a
-//! dropdown of pickable Qwen variants.
+//! dropdown of pickable model variants.
 //!
 //! Adding an entry = append to `catalog()`. The unit tests in this
 //! file enforce uniqueness + RAM-tier ordering so accidental catalog
@@ -66,8 +66,8 @@ impl CatalogEntry {
     }
 }
 
-/// Curated catalog. Sorted by `recommended_for_gb` ascending. Every Qwen
-/// 3.5+ row also pulls the F16 mmproj from the same repo so llama-server
+/// Curated catalog. Sorted by `recommended_for_gb` ascending. Multimodal
+/// rows also pull a projector GGUF from the same repo so llama-server
 /// boots with vision enabled.
 pub fn catalog() -> Vec<CatalogEntry> {
     vec![
@@ -84,6 +84,20 @@ pub fn catalog() -> Vec<CatalogEntry> {
             kind: ModelKind::Llm,
             mmproj_file: Some("mmproj-F16.gguf".into()),
             mmproj_bytes: 672_423_616,
+        },
+        CatalogEntry {
+            id: "gemma4-12b-q4".into(),
+            repo: "unsloth/gemma-4-12b-it-GGUF".into(),
+            files: vec!["gemma-4-12b-it-Q4_K_M.gguf".into()],
+            label: "Gemma 4 12B".into(),
+            quant: "Q4_K_M".into(),
+            bytes: 7_121_860_000,
+            min_ram_gb: 16,
+            recommended_for_gb: 24,
+            blurb: "Latest Gemma 4 unified model — reasoning, coding, multimodal input.".into(),
+            kind: ModelKind::Llm,
+            mmproj_file: Some("mmproj-F16.gguf".into()),
+            mmproj_bytes: 122_031_680,
         },
         CatalogEntry {
             id: "qwen35-9b-q4".into(),

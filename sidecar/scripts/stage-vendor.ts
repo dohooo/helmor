@@ -89,13 +89,13 @@ const CLAUDE_CODE_SHA256: Readonly<
 // the upstream zip on first run; see DEV-fallback notes in
 // `downloadAndVerifyLlama`). Wipe sidecar/.bundle-cache when bumping
 // so the new archive isn't blocked by a wrong-sha cached copy.
-const LLAMA_VERSION = "b9294";
+const LLAMA_VERSION = "b9496";
 // Leave entries blank to skip strict verification during local dev —
 // stage-vendor will warn + trust HTTPS, print the computed sha, and
 // proceed. Fill these in (and commit) to lock the build in CI.
 const LLAMA_SHA256: Readonly<{ arm64: string; x64: string }> = {
-	arm64: "8cb59947211ac84f84a3afe6db83e6b8167ef24e70ca3dde199df48ff6591e44",
-	x64: "72ba8001fe1ec75ff6d5fd0fe5be244f25d4c560c2501abbcfcbbfbac6b2d1c1",
+	arm64: "f1eff7bb49590d80706b84e82e973a21f0bedb49560fbabfea2654756aa59dca",
+	x64: "0b415c8d366eabe9ab69fe7d8e79f29b63cc1baa33714967ca8a0c123ae75797",
 };
 
 // ---------------------------------------------------------------------------

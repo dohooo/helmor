@@ -62,18 +62,6 @@ For each candidate:
      one-sentence reason. Most candidates end here.
 </workflow>`;
 
-const THINKING_CORE = `<thinking>
-Before EVERY \`propose_workspace\` or \`mark_not_actionable\` call, use
-\`think\` to lay out:
-  1. What candidate are you deciding on? (id, source, sender)
-  2. What did you read? (which tool calls)
-  3. What tasks did you identify? (list anchor ids)
-
-The \`think\` text is NOT shown to the user — it's a private scratchpad
-to keep your multi-step decisions stable. Calling \`think\` is free; the
-runtime treats it as a no-op that returns "noted".
-</thinking>`;
-
 const PLAN_FORMAT_CORE = `<plan-format>
 The \`plan_message\` becomes the first assistant message in the new
 workspace. Keep it tight, with these sections:
@@ -284,7 +272,6 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
 	if (active.forge.length > 0) sections.push(forgeSourceSection(active.forge));
 
 	sections.push(
-		THINKING_CORE,
 		PLAN_FORMAT_CORE,
 		CRITICAL_CORE,
 		SKIP_POLICY,
@@ -315,6 +302,10 @@ function renderCandidate(c: TriageCandidate, imageOffset: number): string {
 	// Unbracketed: small models otherwise copy the brackets into tool calls and never match.
 	lines.push(`id: ${c.id}`);
 	lines.push(`  source:       ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
+	const signal = c.involvementReason?.trim();
+	if (signal) {
+		lines.push(`  signal:       ${escapeXmlText(signal)}`);
+	}
 	lines.push(`  participants: ${escapeXmlText(sender)}`);
 	lines.push(`  title:        ${escapeXmlText(truncate(title, 120))}`);
 	if (c.preview && c.preview.trim().length > 0) {

@@ -10,6 +10,11 @@ export interface TriageLocalModel {
 	readonly baseUrl: string;
 	readonly token: string;
 	readonly model: string;
+	/** Active model's real llama.cpp `-c` context window (tokens), reported by
+	 *  Rust per tick. Drives the triage maxTokens budget so deep thinking has
+	 *  room without starving input. Optional / 0 when unknown → buildLocalModel
+	 *  falls back to a safe 32K default. */
+	readonly contextWindow?: number;
 }
 
 export interface TriageCandidate {
@@ -23,6 +28,11 @@ export interface TriageCandidate {
 	readonly title: string | null;
 	readonly preview: string | null;
 	readonly externalUrl: string | null;
+	/** Why this item surfaced for the user when a concrete relation exists
+	 *  (e.g. `review_requested` / `assigned` / `mentioned` / `author`).
+	 *  camelCase of the Rust `involvement_reason` serde rename; `null` for
+	 *  sources that don't stamp one. */
+	readonly involvementReason: string | null;
 	readonly payloadPath: string;
 	readonly payloadBytes: number;
 	/** Image attachments (base64) bundled by the Rust scheduler so the

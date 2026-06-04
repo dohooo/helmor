@@ -78,6 +78,9 @@ pub struct WorkspaceRecord {
     pub kind: String,
     /// False until the user sends the first message in an ai_triage workspace.
     pub ai_priming_consumed: bool,
+    /// Originating triage platform for ai_triage workspaces ("github",
+    /// "gitlab", "slack", "lark"). `None` for manual workspaces.
+    pub triage_source_type: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -188,7 +191,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.setup_completed_at,
       w.active_run_action_id,
       COALESCE(w.kind, 'manual') AS kind,
-      COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed
+      COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed,
+      w.triage_source_type
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -729,6 +733,7 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         active_run_action_id: row.get(40)?,
         kind: row.get(41)?,
         ai_priming_consumed: row.get::<_, i64>(42)? != 0,
+        triage_source_type: row.get(43)?,
     })
 }
 

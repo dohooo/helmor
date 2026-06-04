@@ -1,0 +1,11 @@
+{
+	"items": [
+		{
+			"text": "Smart Triage now reasons more deeply before suggesting tasks, so its proposed tasks are more accurate.",
+			"action": {
+				"label": "Open Experimental",
+				"value": { "type": "openSettings", "section": "experimental" }
+			}
+		}
+	]
+}
