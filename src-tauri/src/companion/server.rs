@@ -29,11 +29,12 @@ use crate::error::CommandError;
 /// integration test run without a real asset bundle.
 pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
 
-/// Starts an agent stream: parses the request args, then feeds each event as an
-/// NDJSON line into the provided sender. Type-erased so the server stays
+/// Starts a streaming command (`send_agent_message_stream` or
+/// `subscribe_ui_mutations`): given the command name + args, feeds each event as
+/// an NDJSON line into the sender. Type-erased so the server stays
 /// runtime-agnostic; built from a concrete `AppHandle` in [`super::stream`].
-pub type AgentStreamer =
-    Arc<dyn Fn(Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
+pub type StreamStarter =
+    Arc<dyn Fn(&str, Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
 
 /// Shared state injected into every handler.
 #[derive(Clone)]
@@ -42,8 +43,8 @@ pub struct AppState {
     pub token: Arc<String>,
     /// Loads embedded SPA assets (same bundle the desktop webview serves).
     pub assets: AssetLoader,
-    /// Starts an agent message stream (reuses the desktop streaming path).
-    pub streamer: AgentStreamer,
+    /// Starts a streaming command (reuses the desktop streaming paths).
+    pub streamer: StreamStarter,
 }
 
 /// Build the router. CORS is wide-open because every route is bearer-gated and
@@ -131,16 +132,6 @@ async fn rpc_stream_handler(
     if !auth::check_bearer(&headers, state.token.as_str()) {
         return unauthorized();
     }
-    if cmd != "send_agent_message_stream" {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "code": "Unknown",
-                "message": format!("No companion stream for command: {cmd}"),
-            })),
-        )
-            .into_response();
-    }
 
     let args: Value = if body.is_empty() {
         Value::Null
@@ -161,7 +152,7 @@ async fn rpc_stream_handler(
     };
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    match (state.streamer)(args, tx) {
+    match (state.streamer)(&cmd, args, tx) {
         Ok(()) => {
             let stream = UnboundedReceiverStream::new(rx).map(|line| {
                 Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("{line}\n")))

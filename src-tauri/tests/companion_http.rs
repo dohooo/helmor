@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use helmor_lib::companion::{AgentStreamer, CompanionState};
+use helmor_lib::companion::{CompanionState, StreamStarter};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
@@ -19,7 +19,7 @@ async fn health_is_public_and_rpc_requires_bearer() {
     let app = tauri::test::mock_app();
     let state = CompanionState::new();
     // The streamer is never invoked here (no stream request), so a no-op is fine.
-    let streamer: AgentStreamer = Arc::new(|_args, _tx| Ok(()));
+    let streamer: StreamStarter = Arc::new(|_cmd, _args, _tx| Ok(()));
     let info = state
         .start(app.handle().clone(), streamer)
         .await

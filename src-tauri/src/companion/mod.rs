@@ -24,8 +24,8 @@ mod rpc;
 mod server;
 mod stream;
 
-pub use server::AgentStreamer;
-pub use stream::build_agent_streamer;
+pub use server::StreamStarter;
+pub use stream::build_stream_starter;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ impl CompanionState {
     pub async fn start<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,
-        streamer: AgentStreamer,
+        streamer: StreamStarter,
     ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
         if let Some(running) = guard.as_ref() {

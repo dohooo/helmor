@@ -471,7 +471,7 @@ pub fn run() {
             if std::env::var_os("HELMOR_COMPANION").is_some() {
                 let companion_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let streamer = companion::build_agent_streamer(companion_handle.clone());
+                    let streamer = companion::build_stream_starter(companion_handle.clone());
                     let state = companion_handle.state::<companion::CompanionState>();
                     match state.start(companion_handle.clone(), streamer).await {
                         // Loopback-only, opt-in dev gate: logging the token here
