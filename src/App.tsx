@@ -1,6 +1,6 @@
 import "./App.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { QuitConfirmDialog } from "@/components/quit-confirm-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -70,6 +70,7 @@ import { useSessionActions } from "./shell/hooks/use-session-actions";
 import { useSessionRunStates } from "./shell/hooks/use-session-run-states";
 import { useSettingsOpenHandlers } from "./shell/hooks/use-settings-open-handlers";
 import { useShellChromeActions } from "./shell/hooks/use-shell-chrome-actions";
+import { useShellStartupEffects } from "./shell/hooks/use-shell-startup-effects";
 import { useWorkspaceForgeData } from "./shell/hooks/use-workspace-forge-data";
 import { useWorkspaceLinkActions } from "./shell/hooks/use-workspace-link-actions";
 import { useWorkspaceNavigation } from "./shell/hooks/use-workspace-navigation";
@@ -753,29 +754,16 @@ function AppShell({
 			(repository) => repository.id === selectedWorkspaceDetail?.repoId,
 		) ?? null;
 	const handleOpenWorkspaceStart = selectionActions.openStart;
-	useEffect(() => {
-		if (!areSettingsLoaded || appSettings.lastSurface !== "workspace-start") {
-			return;
-		}
-		if (
-			workspaceViewMode === "start" &&
-			selectedWorkspaceId === null &&
-			displayedWorkspaceId === null
-		) {
-			return;
-		}
-		handleOpenWorkspaceStart({ persist: false });
-	}, [
-		appSettings.lastSurface,
+	useShellStartupEffects({
+		lastSurface: appSettings.lastSurface,
 		areSettingsLoaded,
-		displayedWorkspaceId,
-		handleOpenWorkspaceStart,
-		selectedWorkspaceId,
 		workspaceViewMode,
-	]);
-	useEffect(() => {
-		handleStartContextPreviewClose();
-	}, [startRepository?.id, handleStartContextPreviewClose]);
+		selectedWorkspaceId,
+		displayedWorkspaceId,
+		startRepositoryId: startRepository?.id,
+		openWorkspaceStart: handleOpenWorkspaceStart,
+		closeStartContextPreview: handleStartContextPreviewClose,
+	});
 
 	const startCreateContext = useMemo<ComposerCreateContext | null>(
 		() =>
