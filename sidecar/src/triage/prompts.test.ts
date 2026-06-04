@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildSystemPrompt } from "./prompts";
+import { buildSystemPrompt, buildTickUserMessage } from "./prompts";
 import type { TriageCandidate } from "./types";
 
 function makeCandidate(
@@ -17,6 +17,7 @@ function makeCandidate(
 		title: "Sample title",
 		preview: null,
 		externalUrl: null,
+		involvementReason: null,
 		payloadPath: `${source}/1.md`,
 		payloadBytes: 100,
 		...overrides,
@@ -195,6 +196,21 @@ describe("buildSystemPrompt: source-family gating", () => {
 		expect(policy).toBeDefined();
 		expect(policy).not.toMatch(/我改改|我看看|我来|认领/);
 		expect(policy).not.toMatch(/I'?ll fix|I'?ll take|@me/i);
+	});
+
+	it("renders a signal line only when involvementReason is present", () => {
+		const withSignal = buildTickUserMessage(
+			[makeCandidate("github", { involvementReason: "review_requested" })],
+			[],
+		).text;
+		expect(withSignal).toMatch(/signal:/);
+		expect(withSignal).toMatch(/review_requested/);
+
+		const withoutSignal = buildTickUserMessage(
+			[makeCandidate("github", { involvementReason: null })],
+			[],
+		).text;
+		expect(withoutSignal).not.toMatch(/signal:/);
 	});
 
 	it("appends user-additions suffix when present", () => {

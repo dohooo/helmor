@@ -23,6 +23,11 @@ export interface TriageCandidate {
 	readonly title: string | null;
 	readonly preview: string | null;
 	readonly externalUrl: string | null;
+	/** Why this item surfaced for the user when a concrete relation exists
+	 *  (e.g. `review_requested` / `assigned` / `mentioned` / `author`).
+	 *  camelCase of the Rust `involvement_reason` serde rename; `null` for
+	 *  sources that don't stamp one. */
+	readonly involvementReason: string | null;
 	readonly payloadPath: string;
 	readonly payloadBytes: number;
 	/** Image attachments (base64) bundled by the Rust scheduler so the

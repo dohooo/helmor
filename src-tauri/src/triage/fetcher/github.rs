@@ -81,68 +81,139 @@ fn build_repo_targets() -> Result<Vec<RepoTarget>> {
     Ok(out)
 }
 
+/// One surfacing pass: a single (toggle, scope) GitHub search whose hits all
+/// carry `reason`. Passes run highest-precedence first so the dedup keeps the
+/// strongest relation when the same item matches several scopes.
+struct Pass {
+    toggles: InboxToggles,
+    scope: InboxScopeFilter,
+    reason: &'static str,
+}
+
+const ISSUES_ONLY: InboxToggles = InboxToggles {
+    issues: true,
+    prs: false,
+    discussions: false,
+};
+const PRS_ONLY: InboxToggles = InboxToggles {
+    issues: false,
+    prs: true,
+    discussions: false,
+};
+
+/// Person-relation passes for one source, highest precedence first:
+/// `review_requested > assigned > mentioned > author`. Issue and PR scopes use
+/// distinct enum variants for the same concept, so each relation runs as its
+/// own single-scope pass (a scope invalid for a toggle would otherwise degrade
+/// to an unscoped "all open" search in the backend).
+fn involvement_passes() -> Vec<Pass> {
+    vec![
+        Pass {
+            toggles: PRS_ONLY,
+            scope: InboxScopeFilter::ReviewRequested,
+            reason: "review_requested",
+        },
+        Pass {
+            toggles: PRS_ONLY,
+            scope: InboxScopeFilter::Assignee,
+            reason: "assigned",
+        },
+        Pass {
+            toggles: ISSUES_ONLY,
+            scope: InboxScopeFilter::Assigned,
+            reason: "assigned",
+        },
+        Pass {
+            toggles: PRS_ONLY,
+            scope: InboxScopeFilter::Mentions,
+            reason: "mentioned",
+        },
+        Pass {
+            toggles: ISSUES_ONLY,
+            scope: InboxScopeFilter::Mentioned,
+            reason: "mentioned",
+        },
+        Pass {
+            toggles: PRS_ONLY,
+            scope: InboxScopeFilter::Author,
+            reason: "author",
+        },
+        Pass {
+            toggles: ISSUES_ONLY,
+            scope: InboxScopeFilter::Created,
+            reason: "author",
+        },
+    ]
+}
+
+/// An inbox item paired with the relation that surfaced it.
+struct Scoped {
+    item: InboxItem,
+    reason: &'static str,
+}
+
 fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
     // Relevance scoping. Was a maintainer-wide `is:open` scan, which flooded
     // triage with teammates' routine PRs the user has no tie to (offline eval
     // on real data: 58 of 65 proposed tasks did not involve Caspian).
     //
-    // - Team repos (owner != the gh login): fetch only the involvement union
-    //   `involves:@me` (author / assignee / commenter / mentioned) ∪
-    //   `review-requested:@me` — GitHub's `involves` omits review-requests, so
-    //   both are needed. PRs and issues both go through this gate.
+    // Surface ONLY items with a concrete person-relation. The old
+    // `involves:@me` union let mere *commenters* in; instead we query the
+    // explicit relations — review-requested / assignee / mentioned / author —
+    // and stamp which one surfaced each item (highest precedence wins).
+    //
+    // - Team repos (owner != the gh login): both issues and PRs go through the
+    //   person-relation gate.
     // - Solo-owned repos (owner == the gh login, e.g. his OSS project): the
     //   open ISSUE tracker IS his triage inbox, so surface ALL open issues
-    //   (community bugs/FRs he hasn't touched yet won't match `involves:@me`);
-    //   but keep PRs on the involvement gate so contributor/automation PRs
-    //   don't flood back in.
+    //   (reason `owned_issue`); PRs still ride the person-relation gate so
+    //   contributor/automation PRs don't flood back in.
     //
     // Draft→ready bumps `updated_at`, so a PR leaving draft resurfaces.
-    let involvement = vec![
-        InboxScopeFilter::Involves,
-        InboxScopeFilter::ReviewRequested,
-    ];
     let owner = target.owner_path.split('/').next().unwrap_or("");
     let solo = owner.eq_ignore_ascii_case(&target.login);
 
-    let mut items: Vec<InboxItem> = Vec::new();
+    let mut scoped: Vec<Scoped> = Vec::new();
     if solo {
-        items.extend(list_scoped(
-            target,
-            InboxToggles {
-                issues: true,
-                prs: false,
-                discussions: false,
-            },
-            None, // maintainer issue triage: all open issues
-        ));
-        items.extend(list_scoped(
-            target,
-            InboxToggles {
-                issues: false,
-                prs: true,
-                discussions: false,
-            },
-            Some(involvement),
-        ));
+        // Maintainer issue triage: every open issue, stamped `owned_issue`.
+        for item in list_scoped(target, ISSUES_ONLY, None) {
+            scoped.push(Scoped {
+                item,
+                reason: "owned_issue",
+            });
+        }
+        for pass in involvement_passes() {
+            if !pass.toggles.prs {
+                continue; // solo issues already covered by the all-open pass
+            }
+            for item in list_scoped(target, pass.toggles, Some(vec![pass.scope])) {
+                scoped.push(Scoped {
+                    item,
+                    reason: pass.reason,
+                });
+            }
+        }
     } else {
-        items.extend(list_scoped(
-            target,
-            InboxToggles {
-                issues: true,
-                prs: true,
-                discussions: false,
-            },
-            Some(involvement),
-        ));
+        for pass in involvement_passes() {
+            for item in list_scoped(target, pass.toggles, Some(vec![pass.scope])) {
+                scoped.push(Scoped {
+                    item,
+                    reason: pass.reason,
+                });
+            }
+        }
     }
 
+    // Dedup by external_id keeping the FIRST (highest-precedence) reason.
+    let items = dedup_first_reason(scoped);
+
     let cutoff_ms = super::cold_start_cutoff_ms();
-    for item in items {
+    for (item, reason) in items {
         // Tail-only past cutoff, but skip rather than break for safety.
         if item.last_activity_at < cutoff_ms {
             continue;
         }
-        if let Err(error) = ingest_item(&target.login, &item, summary) {
+        if let Err(error) = ingest_item(&target.login, &item, reason, summary) {
             tracing::warn!(
                 login = %target.login,
                 external_id = %item.external_id,
@@ -152,6 +223,20 @@ fn fetch_repo(target: &RepoTarget, summary: &mut FetchSummary) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Merge the per-pass hits, keeping each `external_id` once with the reason
+/// from its first (highest-precedence) appearance. Input order is the pass
+/// order, so first-seen == strongest relation.
+fn dedup_first_reason(scoped: Vec<Scoped>) -> Vec<(InboxItem, &'static str)> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<(InboxItem, &'static str)> = Vec::new();
+    for s in scoped {
+        if seen.insert(s.item.external_id.clone()) {
+            out.push((s.item, s.reason));
+        }
+    }
+    out
 }
 
 /// One `list_inbox_items` call with the given toggles + optional involvement
@@ -188,7 +273,46 @@ fn list_scoped(
     }
 }
 
-fn ingest_item(login: &str, item: &InboxItem, summary: &mut FetchSummary) -> Result<()> {
+/// External ids in `owner_path` that CURRENTLY involve `login` — the exact
+/// person-relation set the fetcher proposes on (review-requested / assignee /
+/// mentioned / author; open + non-draft). The reaper uses this to retire open
+/// workspaces that no longer involve the user. Unlike [`list_scoped`], errors
+/// PROPAGATE so the caller stays conservative (never retire on a failed lookup
+/// — an empty set from a failed query must not look like "nothing is mine").
+pub fn involved_external_ids(
+    login: &str,
+    owner_path: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let mut out = std::collections::HashSet::new();
+    for pass in involvement_passes() {
+        let filters = InboxFilters {
+            state: Some(InboxStateFilter::Open),
+            draft: Some(InboxDraftFilter::Exclude),
+            scope: Some(vec![pass.scope]),
+            ..Default::default()
+        };
+        let page = gh::list_inbox_items(
+            login,
+            pass.toggles,
+            None,
+            PER_REPO_LIMIT,
+            Some(owner_path),
+            Some(filters),
+        )
+        .with_context(|| format!("involved_external_ids {owner_path} {:?}", pass.scope))?;
+        for item in page.items {
+            out.insert(item.external_id);
+        }
+    }
+    Ok(out)
+}
+
+fn ingest_item(
+    login: &str,
+    item: &InboxItem,
+    involvement_reason: &str,
+    summary: &mut FetchSummary,
+) -> Result<()> {
     let source_ref = item.external_id.clone();
     let parent = parent_from_external_id(&source_ref);
     let id = format!("github:{source_ref}");
@@ -228,6 +352,7 @@ fn ingest_item(login: &str, item: &InboxItem, summary: &mut FetchSummary) -> Res
         title: Some(item.title.clone()),
         preview: item.subtitle.clone(),
         external_url: Some(item.external_url.clone()),
+        involvement_reason: Some(involvement_reason.to_string()),
         payload_path,
         payload_bytes,
     };
@@ -402,5 +527,80 @@ mod tests {
         );
         assert!(seen.insert(first));
         assert!(!seen.insert(second));
+    }
+
+    fn item(external_id: &str) -> InboxItem {
+        InboxItem {
+            id: format!("github:{external_id}"),
+            source: InboxSource::GithubPr,
+            external_id: external_id.into(),
+            external_url: "https://example.com".into(),
+            title: "t".into(),
+            subtitle: None,
+            state: None,
+            last_activity_at: 0,
+        }
+    }
+
+    #[test]
+    fn passes_are_precedence_ordered_with_valid_source_scopes() {
+        // Precedence: review_requested > assigned > mentioned > author. Each
+        // pass must target a source the scope is actually valid for, else the
+        // backend silently degrades to an unscoped "all open" search.
+        let passes = involvement_passes();
+        let reasons: Vec<&str> = passes.iter().map(|p| p.reason).collect();
+        assert_eq!(
+            reasons,
+            vec![
+                "review_requested",
+                "assigned",
+                "assigned",
+                "mentioned",
+                "mentioned",
+                "author",
+                "author",
+            ]
+        );
+        for p in &passes {
+            let valid = matches!(
+                (p.toggles.issues, p.toggles.prs, p.scope),
+                (false, true, InboxScopeFilter::ReviewRequested)
+                    | (false, true, InboxScopeFilter::Assignee)
+                    | (false, true, InboxScopeFilter::Mentions)
+                    | (false, true, InboxScopeFilter::Author)
+                    | (true, false, InboxScopeFilter::Assigned)
+                    | (true, false, InboxScopeFilter::Mentioned)
+                    | (true, false, InboxScopeFilter::Created)
+            );
+            assert!(valid, "invalid pass: {:?}/{:?}", p.toggles, p.scope);
+        }
+    }
+
+    #[test]
+    fn dedup_keeps_first_highest_precedence_reason() {
+        // Same item surfaced as review_requested first, then author later —
+        // it must keep the stronger (first-seen) reason and appear once.
+        let scoped = vec![
+            Scoped {
+                item: item("octo/repo#1"),
+                reason: "review_requested",
+            },
+            Scoped {
+                item: item("octo/repo#1"),
+                reason: "author",
+            },
+            Scoped {
+                item: item("octo/repo#2"),
+                reason: "mentioned",
+            },
+        ];
+        let out = dedup_first_reason(scoped);
+        assert_eq!(out.len(), 2);
+        let by_id: std::collections::HashMap<&str, &str> = out
+            .iter()
+            .map(|(i, r)| (i.external_id.as_str(), *r))
+            .collect();
+        assert_eq!(by_id.get("octo/repo#1"), Some(&"review_requested"));
+        assert_eq!(by_id.get("octo/repo#2"), Some(&"mentioned"));
     }
 }

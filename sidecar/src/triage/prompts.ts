@@ -315,6 +315,10 @@ function renderCandidate(c: TriageCandidate, imageOffset: number): string {
 	// Unbracketed: small models otherwise copy the brackets into tool calls and never match.
 	lines.push(`id: ${c.id}`);
 	lines.push(`  source:       ${c.source} · ${c.sourceKind} · ${c.sourceTime}`);
+	const signal = c.involvementReason?.trim();
+	if (signal) {
+		lines.push(`  signal:       ${escapeXmlText(signal)}`);
+	}
 	lines.push(`  participants: ${escapeXmlText(sender)}`);
 	lines.push(`  title:        ${escapeXmlText(truncate(title, 120))}`);
 	if (c.preview && c.preview.trim().length > 0) {

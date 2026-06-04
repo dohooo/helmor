@@ -783,6 +783,12 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             "INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    if has_table(connection, "triage_candidate") {
+        // Why an item surfaced for the user (review_requested / assigned /
+        // mentioned / author / owned_issue). Nullable — older rows + sources
+        // that don't stamp a reason stay NULL.
+        add_column_if_missing(connection, "triage_candidate", "involvement_reason", "TEXT")?;
+    }
 
     // Per-session "active plan" projection. Provider plan/todo events
     // (Codex `turn/plan/updated`, Claude `ExitPlanMode`) are normalised
@@ -1114,6 +1120,7 @@ CREATE TABLE IF NOT EXISTS triage_candidate (
     title TEXT,
     preview TEXT,
     external_url TEXT,
+    involvement_reason TEXT,
     payload_path TEXT NOT NULL,
     payload_bytes INTEGER NOT NULL DEFAULT 0,
     decision TEXT,

@@ -45,22 +45,11 @@ impl ImBackend for LarkBackend {
             let start = (Utc::now() - Duration::days(super::COLD_START_DAYS))
                 .to_rfc3339_opts(SecondsFormat::Secs, true);
 
-            // (1) Build the "I'm involved" GROUP set: chats where I
-            // sent something OR someone @ed me, within the window.
+            // (1) Build the "I'm involved" GROUP set: person-centric — ONLY
+            // chats where someone @-mentioned me within the window. A group
+            // where I merely posted (sender=me) is not, by itself, my task,
+            // so it no longer surfaces (mirrors the Slack from:me drop).
             let mut involved_groups: BTreeSet<String> = BTreeSet::new();
-            let sent = lark::im::messages_search(lark::im::MessagesSearch {
-                query: None,
-                sender: Some(my_open_id.as_str()),
-                chat_id: None,
-                chat_type: None,
-                is_at_me: false,
-                start: Some(start.as_str()),
-                end: None,
-                page_size: DISCOVERY_PAGE_SIZE,
-            })
-            .await
-            .context("messages-search sender=me")?;
-            collect_chat_ids(&sent, &mut involved_groups);
             let mentions = lark::im::messages_search(lark::im::MessagesSearch {
                 query: None,
                 sender: None,
