@@ -24,6 +24,8 @@ import type { ContextCard } from "@/lib/sources/types";
 import { cn } from "@/lib/utils";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
+import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
+import { EdgeSwipeLayer } from "./edge-swipe-layer";
 
 type Props = {
 	collapsed: boolean;
@@ -122,7 +124,14 @@ export function ShellInspectorPane({
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);
-	const { open: peekOpen, peekHandlers } = useEdgePeek();
+	const {
+		open: peekOpen,
+		coarse,
+		peekHandlers,
+		openNow,
+		close,
+	} = useEdgePeek();
+	const swipeHandlers = useEdgeSwipe({ side: "right", onOpen: openNow });
 	useLayoutEffect(() => {
 		if (asideRef.current) {
 			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
@@ -148,6 +157,15 @@ export function ShellInspectorPane({
 			// `paint` omitted so the tabs hover-zoom can overflow.
 			style={{ contain: "layout style" }}
 		>
+			{coarse ? (
+				<EdgeSwipeLayer
+					side="right"
+					open={peekOpen}
+					label="inspector sidebar"
+					onClose={close}
+					swipeHandlers={swipeHandlers}
+				/>
+			) : null}
 			<div
 				data-shell-pane-hover="inspector"
 				{...peekHandlers}

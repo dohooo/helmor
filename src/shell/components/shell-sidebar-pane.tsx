@@ -22,6 +22,8 @@ import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
+import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
+import { EdgeSwipeLayer } from "./edge-swipe-layer";
 import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
@@ -105,7 +107,14 @@ export function ShellSidebarPane({
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);
-	const { open: peekOpen, peekHandlers } = useEdgePeek();
+	const {
+		open: peekOpen,
+		coarse,
+		peekHandlers,
+		openNow,
+		close,
+	} = useEdgePeek();
+	const swipeHandlers = useEdgeSwipe({ side: "left", onOpen: openNow });
 	useLayoutEffect(() => {
 		if (asideRef.current) {
 			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
@@ -130,6 +139,15 @@ export function ShellSidebarPane({
 				collapsed ? "pointer-events-none max-[960px]:pointer-events-auto" : "",
 			)}
 		>
+			{coarse ? (
+				<EdgeSwipeLayer
+					side="left"
+					open={peekOpen}
+					label="workspace sidebar"
+					onClose={close}
+					swipeHandlers={swipeHandlers}
+				/>
+			) : null}
 			<div
 				data-shell-pane-hover="sidebar"
 				{...peekHandlers}

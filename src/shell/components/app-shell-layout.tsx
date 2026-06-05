@@ -92,7 +92,7 @@ export function AppShellLayout({
 			) : null}
 			<main
 				aria-label="Application shell"
-				className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
+				className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 			>
 				<div className="relative flex h-full min-h-0 bg-background">
 					{workspaceViewMode !== "editor" && (

@@ -264,7 +264,7 @@ export function AppOnboarding({ onComplete }: AppOnboardingProps) {
 	return (
 		<main
 			aria-label="Helmor onboarding"
-			className="relative h-screen overflow-hidden bg-background font-sans text-foreground antialiased"
+			className="relative h-dvh overflow-hidden bg-background font-sans text-foreground antialiased"
 		>
 			<div
 				aria-label="Helmor onboarding drag region"

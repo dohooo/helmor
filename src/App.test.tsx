@@ -97,7 +97,7 @@ describe("App", () => {
 		);
 
 		expect(shell).toHaveClass("bg-background");
-		expect(shell).toHaveClass("h-screen");
+		expect(shell).toHaveClass("h-dvh");
 		expect(shell).toHaveClass("overflow-hidden");
 		expect(sidebar).toHaveClass("bg-sidebar");
 		expect(sidebar).toHaveClass("overflow-hidden");
