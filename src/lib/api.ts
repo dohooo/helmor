@@ -133,6 +133,8 @@ export type StackRowMeta = {
 	role: "tip" | "mid" | "root";
 	/** 0 at the tip, increasing toward the base of the stack. */
 	depth: number;
+	/** Total number of members in this stack — used for the "k of N" tooltip. */
+	stackSize: number;
 	/** `id` of the stack's tip — the anchor every member is grouped under. */
 	tipId: string;
 };
@@ -385,6 +387,10 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	/** Stacked-PR parent link. When set, the header renders a live
+	 * "→ <parent title>" chip (click to navigate) instead of the raw
+	 * target-branch picker. */
+	parentWorkspaceId?: string | null;
 	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;

@@ -161,6 +161,10 @@ pub struct WorkspaceDetail {
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
+    /// Stacked-PR parent link. When set, this workspace stacks on the
+    /// referenced workspace; the header renders a live "→ <parent title>"
+    /// chip instead of the raw target-branch picker.
+    pub parent_workspace_id: Option<String>,
     pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub display_order: i64,
@@ -1398,6 +1402,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         mode: record.mode,
         initialization_parent_branch: record.initialization_parent_branch,
         intended_target_branch: record.intended_target_branch,
+        parent_workspace_id: record.parent_workspace_id,
         pinned_at: record.pinned_at,
         display_order: record.display_order,
         pr_title: record.pr_title,
@@ -1719,6 +1724,73 @@ mod tests {
             workspace_state(&env, "w-archived").as_deref(),
             Some("archived")
         );
+    }
+
+    #[test]
+    fn update_workspace_branch_cascades_to_stacked_children() {
+        let env = TestEnv::new("branch-cascade");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", Some("origin"));
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "parent",
+                repo_id: "r1",
+                directory_name: "parent",
+                state: "ready",
+                branch: Some("feat/parent-old"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "child",
+                repo_id: "r1",
+                directory_name: "child",
+                state: "ready",
+                branch: Some("feat/child"),
+                intended_target_branch: Some("feat/parent-old"),
+            },
+        );
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "solo",
+                repo_id: "r1",
+                directory_name: "solo",
+                state: "ready",
+                branch: Some("feat/solo"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        conn.execute(
+            "UPDATE workspaces SET parent_workspace_id = 'parent' WHERE id = 'child'",
+            [],
+        )
+        .unwrap();
+
+        crate::models::workspaces::update_workspace_branch("parent", "feat/parent-new").unwrap();
+
+        let branch_of = |id: &str| -> String {
+            conn.query_row("SELECT branch FROM workspaces WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        let target_of = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT intended_target_branch FROM workspaces WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        // Parent's own branch is renamed; the child's cached target follows it,
+        // while an unrelated standalone workspace is left alone.
+        assert_eq!(branch_of("parent"), "feat/parent-new");
+        assert_eq!(target_of("child").as_deref(), Some("feat/parent-new"));
+        assert_eq!(target_of("solo").as_deref(), Some("main"));
     }
 
     #[test]

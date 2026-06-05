@@ -765,6 +765,39 @@ pub(crate) fn set_workspace_parent_id(
     Ok(())
 }
 
+/// Rename a workspace's own branch AND cascade the new name to every direct
+/// stacked child whose `intended_target_branch` tracks it.
+///
+/// `intended_target_branch` is a denormalized cache of the parent's branch
+/// (materialized when the child is stacked). Without this cascade a child's
+/// target goes stale the moment the parent's branch changes — via the header
+/// rename, or the LLM branch regeneration after the first message. One level
+/// suffices: each child targets only its DIRECT parent's branch.
+///
+/// Both UPDATEs run in one transaction so a child is never left pointing at a
+/// branch its parent no longer has.
+pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let tx = connection.transaction()?;
+    let updated = tx
+        .execute(
+            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+            (new_branch, workspace_id),
+        )
+        .context("Failed to update workspace branch")?;
+    if updated != 1 {
+        bail!("Cannot update branch for workspace {workspace_id}: row not found");
+    }
+    tx.execute(
+        "UPDATE workspaces SET intended_target_branch = ?1 WHERE parent_workspace_id = ?2",
+        (new_branch, workspace_id),
+    )
+    .context("Failed to cascade branch rename to stacked children")?;
+    tx.commit()
+        .context("Failed to commit workspace branch update")?;
+    Ok(())
+}
+
 /// One layer of a PR stack, ordered root → tip by [`load_workspace_stack`].
 #[derive(Debug, Clone)]
 pub struct StackLayer {
