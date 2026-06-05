@@ -718,7 +718,8 @@ html.light .dust i {
 	 * Available vertical = 100vh − rail(48) − vertical padding(24) = 100vh − 72px.
 	 * Multiply by the image aspect ratio to get the matching width cap. */
 	width: 100%;
-	max-width: calc((100vh - 72px) * 2600 / 1620);
+	/* dvh tracks the visible height on mobile; == vh on desktop. */
+	max-width: calc((100dvh - 72px) * 2600 / 1620);
 	aspect-ratio: 2600 / 1620;
 	position: relative;
 	border-radius: 12px;
