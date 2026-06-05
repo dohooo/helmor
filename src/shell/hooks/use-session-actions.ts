@@ -1,5 +1,4 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect } from "react";
 import { seedNewSessionInCache } from "@/features/panel/session-cache";
 import type { SessionCloseRequest } from "@/features/panel/use-confirm-session-close";
@@ -9,6 +8,7 @@ import {
 	type WorkspaceDetail,
 	type WorkspaceSessionSummary,
 } from "@/lib/api";
+import { listen } from "@/lib/ipc";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { isNewSession } from "@/lib/workspace-helpers";

@@ -1,9 +1,9 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ILinkProvider, type ITheme, Terminal } from "@xterm/xterm";
 import { memo, useEffect, useRef } from "react";
 import { resolveCssColor } from "@/lib/css-color";
+import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import "@xterm/xterm/css/xterm.css";
 

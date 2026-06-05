@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	ArrowUpRightIcon,
 	CheckIcon,
@@ -35,6 +34,7 @@ import {
 	type WorkspaceGitActionStatus,
 } from "@/lib/api";
 import { buildComposerPreviewPayload } from "@/lib/composer-insert";
+import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
 	workspaceForgeActionStatusQueryOptions,

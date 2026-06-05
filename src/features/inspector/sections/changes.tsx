@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	getMaterialFileIcon,
 	getMaterialFolderIcon,
@@ -57,6 +56,7 @@ import {
 	type InspectorFileItem,
 	isActiveEditorTarget,
 } from "@/lib/editor-session";
+import { openUrl } from "@/lib/platform-bridge";
 import {
 	helmorQueryKeys,
 	workspaceForgeActionStatusQueryOptions,

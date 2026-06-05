@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -10,6 +9,7 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { SettingsNotice, SettingsRow } from "../components/settings-row";
 
 function formatStatusDescription(status: AppUpdateStatus): string {

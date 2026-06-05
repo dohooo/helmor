@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { createElement, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -7,6 +6,7 @@ import {
 	installDownloadedAppUpdate,
 	listenAppUpdateStatus,
 } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 
 function toastIdForUpdate(status: AppUpdateStatus): string | null {
 	return status.update ? `app-update-${status.update.version}` : null;

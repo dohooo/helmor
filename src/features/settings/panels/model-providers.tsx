@@ -1,5 +1,4 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Box,
 	CheckCircle2,
@@ -27,6 +26,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { isMac } from "@/lib/platform";
+import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type {
 	AgentProxySettings,

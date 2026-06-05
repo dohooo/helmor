@@ -1,8 +1,8 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { GITHUB_RELEASES_URL } from "@/features/announcements";
+import { openUrl } from "@/lib/platform-bridge";
 import { type AppSettings, resolveTheme, type ThemeMode } from "@/lib/settings";
 import { publishShellEvent } from "@/shell/event-bus";
 

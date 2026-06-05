@@ -1,6 +1,6 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback } from "react";
 import { toast } from "sonner";
+import { openUrl } from "@/lib/platform-bridge";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 
 /**

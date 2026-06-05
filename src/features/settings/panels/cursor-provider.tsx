@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	ChevronDown,
 	RefreshCcw,
@@ -30,6 +29,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { listCursorModels } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import {
 	type CursorCachedModel,

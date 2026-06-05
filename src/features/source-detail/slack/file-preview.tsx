@@ -1,6 +1,6 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { FileAudio, FileText, Paperclip } from "lucide-react";
 import type { SlackFileRef } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 
 /** A grid of file thumbnails / chips rendered below the message body.

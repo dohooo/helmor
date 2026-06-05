@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	CircleStop,
 	ExternalLink,
@@ -20,6 +19,7 @@ import {
 } from "@/components/ui/hover-card";
 import { getShortcut } from "@/features/shortcuts/registry";
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
+import { openUrl } from "@/lib/platform-bridge";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { extractPort } from "../detect-urls";

@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Check,
 	ChevronLeft,
@@ -17,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { PendingUserInput } from "@/features/conversation/pending-user-input";
+import { openUrl } from "@/lib/platform-bridge";
 import { cn } from "@/lib/utils";
 import type {
 	ElicitationFormField,

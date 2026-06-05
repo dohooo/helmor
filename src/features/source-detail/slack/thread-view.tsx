@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Clock3, ExternalLink } from "lucide-react";
 import { AppendContextButton } from "@/components/append-context-button";
 import { HelmorLogoAnimated } from "@/components/helmor-logo-animated";
@@ -14,6 +13,7 @@ import { buildCardContextPayload } from "@/features/inbox/source-card";
 import { SourceIcon } from "@/features/inbox/source-icon";
 import { useSlackEmojiMap } from "@/features/inbox/use-slack-emoji-map";
 import { slackGetThreadDetail } from "@/lib/api";
+import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type { SourceDetailProps } from "../common";
 import { formatRelativeTime, RefreshButton, toRefreshControl } from "../common";

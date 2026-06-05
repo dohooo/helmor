@@ -1,5 +1,4 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Clock3, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { Suspense, useCallback, useState } from "react";
 import { AppendContextButton } from "@/components/append-context-button";
@@ -16,6 +15,7 @@ import { SourceIcon } from "@/features/inbox/source-icon";
 import { STATE_TONE_CLASS } from "@/features/inbox/state-tone";
 import { getInboxItemDetail } from "@/lib/api";
 import type { ComposerInsertTarget } from "@/lib/composer-insert";
+import { openUrl } from "@/lib/platform-bridge";
 import { helmorQueryKeys } from "@/lib/query-client";
 import type {
 	ContextCard,
