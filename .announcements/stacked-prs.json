@@ -1,7 +1,0 @@
-{
-	"items": [
-		{
-			"text": "You can now build stacked PRs — a chain of small, dependent PRs. Plan one with /helmor-cli stack, or split a change you've already written with /helmor-cli break; the sidebar groups each stack together."
-		}
-	]
-}
