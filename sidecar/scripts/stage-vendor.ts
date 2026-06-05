@@ -1,4 +1,4 @@
-// Stage claude-code + codex + gh + glab into `sidecar/dist/vendor/`
+// Stage claude-code + codex + gh + glab + cloudflared into `sidecar/dist/vendor/`
 // for Tauri to ship as bundle resources. macOS host only.
 //
 // Cross-arch staging: in CI the host is always Apple Silicon (macos-26
@@ -39,6 +39,8 @@ const BUNDLE_CACHE = join(SIDECAR_ROOT, ".bundle-cache");
 //                registry.npmjs.org/@openai/codex/-/codex-$VER-darwin-{arm64,x64}.tgz
 //   claude-code: shasum -a 256 of the npm tarballs at
 //                registry.npmjs.org/@anthropic-ai/claude-code-darwin-{arm64,x64}/-/claude-code-darwin-{arm64,x64}-$VER.tgz
+//   cloudflared: shasum -a 256 of the .tgz at
+//                github.com/cloudflare/cloudflared/releases/download/$VER/cloudflared-darwin-{arm64,amd64}.tgz
 
 const GH_VERSION = "2.91.0";
 const GH_SHA256 = {
@@ -50,6 +52,14 @@ const GLAB_VERSION = "1.93.0";
 const GLAB_SHA256 = {
 	arm64: "6d6ffa97d430b5e7ff912e64dbac14703acc57967df654be1950ae71858d5b6f",
 	amd64: "79d1a4f933919689c5fb7774feb1dd08f30b9c896dff4283b4a7387689ee0531",
+} as const;
+
+// cloudflared powers the mobile-companion tunnel. Single Go binary from
+// upstream GitHub releases — signed like gh/glab (no JIT entitlements).
+const CLOUDFLARED_VERSION = "2026.5.2";
+const CLOUDFLARED_SHA256 = {
+	arm64: "ba94054c9fd4297645093d59d51442e5e546d07bb0516120e694a13d5b216d38",
+	amd64: "7240f709506bc2c1eb9da4d89cf2555499c60280ecb854b7d80e8f17d4b7903d",
 } as const;
 
 // Codex version is whatever sidecar/package.json pulled in. The SHAs below
@@ -122,6 +132,8 @@ interface TargetInfo {
 	ghArch: "arm64" | "amd64";
 	/** `glab` release naming: `arm64` / `amd64`. */
 	glabArch: "arm64" | "amd64";
+	/** `cloudflared` release naming: `arm64` / `amd64`. */
+	cloudflaredArch: "arm64" | "amd64";
 }
 
 function infoForArch(arch: DarwinArch): TargetInfo {
@@ -135,6 +147,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 			codexNpmSuffix: "darwin-arm64",
 			ghArch: "arm64",
 			glabArch: "arm64",
+			cloudflaredArch: "arm64",
 		};
 	}
 	return {
@@ -146,6 +159,7 @@ function infoForArch(arch: DarwinArch): TargetInfo {
 		codexNpmSuffix: "darwin-x64",
 		ghArch: "amd64",
 		glabArch: "amd64",
+		cloudflaredArch: "amd64",
 	};
 }
 
@@ -354,6 +368,43 @@ function stageGlabBinary(arch: "arm64" | "amd64"): string {
 		);
 	}
 	const binDest = join(DIST_VENDOR, "glab", "glab");
+	copyFile(binSrc, binDest);
+	chmodSync(binDest, 0o755);
+	maybeSignMacBinary(binDest, false);
+	return binDest;
+}
+
+// ---------------------------------------------------------------------------
+// cloudflared — mobile-companion tunnel. Single Go binary; the `.tgz` holds
+// just `cloudflared` at the archive root. Signed without entitlements (no JIT).
+// ---------------------------------------------------------------------------
+
+function stageCloudflaredBinary(arch: "arm64" | "amd64"): string {
+	ensureCacheDir();
+	const slug = `cloudflared-darwin-${arch}`;
+	const archive = join(
+		BUNDLE_CACHE,
+		`cloudflared-${CLOUDFLARED_VERSION}-darwin-${arch}.tgz`,
+	);
+	const url = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${slug}.tgz`;
+	downloadAndVerify(url, archive, CLOUDFLARED_SHA256[arch]);
+
+	const extractDir = join(
+		BUNDLE_CACHE,
+		`cloudflared-${CLOUDFLARED_VERSION}-${arch}`,
+	);
+	freshExtractDir(extractDir);
+	execFileSync("tar", ["-xzf", archive, "-C", extractDir], {
+		stdio: "inherit",
+	});
+
+	const binSrc = join(extractDir, "cloudflared");
+	if (!existsSync(binSrc)) {
+		throw new Error(
+			`[stage-vendor] cloudflared binary missing after extract: ${binSrc}`,
+		);
+	}
+	const binDest = join(DIST_VENDOR, "cloudflared", "cloudflared");
 	copyFile(binSrc, binDest);
 	chmodSync(binDest, 0o755);
 	maybeSignMacBinary(binDest, false);
@@ -734,6 +785,9 @@ stageCodexBinary(target);
 stageGhBinary(target.ghArch);
 stageGlabBinary(target.glabArch);
 
+// ----- cloudflared (mobile-companion tunnel) -----
+stageCloudflaredBinary(target.cloudflaredArch);
+
 // ----- llama.cpp (local LLM server for auto-rename / Local AI) -----
 stageLlamaCppBinaries(target);
 
@@ -743,4 +797,5 @@ console.log(`  claude-code ${humanSize(join(DIST_VENDOR, "claude-code"))}`);
 console.log(`  codex       ${humanSize(join(DIST_VENDOR, "codex"))}`);
 console.log(`  gh          ${humanSize(join(DIST_VENDOR, "gh"))}`);
 console.log(`  glab        ${humanSize(join(DIST_VENDOR, "glab"))}`);
+console.log(`  cloudflared ${humanSize(join(DIST_VENDOR, "cloudflared"))}`);
 console.log(`  llama-cpp   ${humanSize(join(DIST_VENDOR, "llama-cpp"))}`);
