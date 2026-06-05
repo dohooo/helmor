@@ -326,18 +326,24 @@ export const WorkspaceComposerContainer = memo(
 		// workspace is a stack tip when it has a parent (is stacked on a layer
 		// below) AND no other workspace stacks on it. Reuses the cached sidebar
 		// workspace list.
-		const workspaceGroupsQuery = useQuery(workspaceGroupsQueryOptions());
-		const isStackTip = useMemo(() => {
-			if (!displayedWorkspaceId) return false;
-			const rows = (workspaceGroupsQuery.data ?? []).flatMap(
-				(group) => group.rows,
-			);
-			const current = rows.find((row) => row.id === displayedWorkspaceId);
-			if (!current?.parentWorkspaceId) return false;
-			return !rows.some(
-				(row) => row.parentWorkspaceId === displayedWorkspaceId,
-			);
-		}, [displayedWorkspaceId, workspaceGroupsQuery.data]);
+		// Narrow the cached sidebar workspace list down to the single boolean
+		// this composer needs, via `select`, so the query observer only
+		// re-renders when *that* flips — not on every workspace-list change
+		// (adds, status flips, reorders). Keeps non-stack composers free of
+		// churn-driven re-renders.
+		const isStackTip =
+			useQuery({
+				...workspaceGroupsQueryOptions(),
+				select: (groups) => {
+					if (!displayedWorkspaceId) return false;
+					const rows = groups.flatMap((group) => group.rows);
+					const current = rows.find((row) => row.id === displayedWorkspaceId);
+					if (!current?.parentWorkspaceId) return false;
+					return !rows.some(
+						(row) => row.parentWorkspaceId === displayedWorkspaceId,
+					);
+				},
+			}).data ?? false;
 		const workspaceDetailQuery = useQuery({
 			...workspaceDetailQueryOptions(displayedWorkspaceId ?? "__none__"),
 			enabled: Boolean(displayedWorkspaceId),
