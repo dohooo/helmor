@@ -35,6 +35,7 @@ import {
 import { InlineShortcutDisplay } from "@/features/shortcuts/shortcut-display";
 import type {
 	RepositoryCreateOption,
+	StackRowMeta,
 	WorkspaceGroup,
 	WorkspaceRow,
 	WorkspaceStatus,
@@ -76,7 +77,15 @@ type VirtualItem =
 			group: WorkspaceGroup;
 			canCollapse: boolean;
 	  }
-	| { kind: "row"; groupId: string; row: WorkspaceRow; isArchived: boolean }
+	| {
+			kind: "row";
+			groupId: string;
+			row: WorkspaceRow;
+			isArchived: boolean;
+			/** Stacked-PR connector metadata for this row (from `nestStacks`),
+			 *  present only when the row belongs to a multi-member stack. */
+			stackMeta?: StackRowMeta;
+	  }
 	| {
 			kind: "drop-placeholder";
 			groupId: string;
@@ -303,6 +312,36 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		}
 		return archivedRows.find((row) => row.id === activeDragWorkspaceId) ?? null;
 	}, [activeDragWorkspaceId, archivedRows, groups]);
+	// When the dragged row is a stack tip, collect its whole chain (tip-first,
+	// ordered by depth) so the drag ghost can render the stack as one pile
+	// that follows the tip — the stack moves as a unit.
+	const activeDragStackRows = useMemo(() => {
+		if (!activeDragWorkspaceId) return null;
+		for (const group of groups) {
+			const meta = group.stackMeta?.get(activeDragWorkspaceId);
+			if (!meta || meta.role !== "tip") continue;
+			const members = group.rows
+				.filter((row) => group.stackMeta?.get(row.id)?.tipId === meta.tipId)
+				.sort(
+					(a, b) =>
+						(group.stackMeta?.get(a.id)?.depth ?? 0) -
+						(group.stackMeta?.get(b.id)?.depth ?? 0),
+				);
+			return members.length > 1 ? members : null;
+		}
+		return null;
+	}, [activeDragWorkspaceId, groups]);
+	// Ids of the dragged stack's non-tip members. While the tip is dragging
+	// these rows are pulled OUT of the list (they collapse into the floating
+	// pile ghost) and restored — expanded — on drop.
+	const draggingStackMemberIds = useMemo(() => {
+		if (!activeDragStackRows) return null;
+		const ids = new Set<string>();
+		for (let i = 1; i < activeDragStackRows.length; i += 1) {
+			ids.add(activeDragStackRows[i].id);
+		}
+		return ids;
+	}, [activeDragStackRows]);
 	/** Group currently under repo-drag — rows feed the ghost. */
 	const repoDragGroup = useMemo(() => {
 		if (!activeRepoDragId) return null;
@@ -529,11 +568,17 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					if (activeDragWorkspaceId === row.id) {
 						continue;
 					}
+					// Non-tip members of the dragging stack collapse into the
+					// floating pile ghost — skip them in the list.
+					if (draggingStackMemberIds?.has(row.id)) {
+						continue;
+					}
 					items.push({
 						kind: "row",
 						groupId: group.id,
 						row,
 						isArchived: false,
+						stackMeta: group.stackMeta?.get(row.id),
 					});
 				}
 			}
@@ -602,6 +647,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 		archivedRows,
 		sectionOpenState,
 		activeDragWorkspaceId,
+		draggingStackMemberIds,
 		dropTargetGroupId,
 		dropTargetBeforeWorkspaceId,
 		pinnedSlotReady,
@@ -898,12 +944,60 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 			// kind === "row"
 			return (
 				<div
-					className="pl-2"
+					className={cn("pl-2", item.stackMeta && "relative")}
 					data-workspace-drop-group-id={item.groupId}
 					data-workspace-dnd-row="true"
 					data-workspace-dnd-row-id={item.row.id}
 					data-workspace-dnd-group-id={item.groupId}
+					data-stack-role={item.stackMeta?.role}
+					data-stack-tip-id={item.stackMeta?.tipId}
 				>
+					{item.stackMeta ? (
+						// Stack connector: a node dot per row joined by vertical
+						// line segments that stop at the dot's edge (3px radius)
+						// rather than crossing it. Upper segment connects up
+						// (mid, root); lower segment connects down and extends 2px
+						// past the row to bridge the inter-row gap (ROW_HEIGHT =
+						// 30px row + 2px) so the line stays unbroken.
+						<>
+							{item.stackMeta.role !== "tip" ? (
+								<span
+									aria-hidden
+									className="pointer-events-none absolute left-[3px] top-0 bottom-[calc(50%_+_3px)] w-px -translate-x-1/2 bg-muted-foreground/20"
+								/>
+							) : null}
+							{item.stackMeta.role !== "root" ? (
+								<span
+									aria-hidden
+									className="pointer-events-none absolute left-[3px] top-[calc(50%_+_3px)] -bottom-0.5 w-px -translate-x-1/2 bg-muted-foreground/20"
+								/>
+							) : null}
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span
+										className={cn(
+											// Base (root) layer gets a prominent solid dot
+											// (foreground = white in dark theme, black in
+											// light); other layers stay muted.
+											"pointer-events-auto absolute left-[3px] top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 cursor-default rounded-full",
+											item.stackMeta.role === "root"
+												? "bg-foreground"
+												: "bg-muted-foreground/40",
+										)}
+									/>
+								</TooltipTrigger>
+								<TooltipContent side="left" sideOffset={6}>
+									{`${
+										item.stackMeta.role === "tip"
+											? "Stack tip"
+											: item.stackMeta.role === "root"
+												? "Stack base"
+												: "Stack"
+									} · ${item.stackMeta.depth + 1} of ${item.stackMeta.stackSize}`}
+								</TooltipContent>
+							</Tooltip>
+						</>
+					) : null}
 					<WorkspaceRowItem
 						row={item.row}
 						selected={selectedWorkspaceId === item.row.id}
@@ -924,7 +1018,14 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 						onSetWorkspaceStatus={onSetWorkspaceStatus}
 						groupId={item.groupId}
 						onDragPointerDown={
-							dragReorderEnabled ? startDragGesture : undefined
+							// Stacked PRs move as a unit: only the tip (top row)
+							// initiates a drag — its stack members follow via
+							// `nestStacks` re-homing. Lock mid/root members so a
+							// single PR can't be torn out of the dependency chain.
+							dragReorderEnabled &&
+							(!item.stackMeta || item.stackMeta.role === "tip")
+								? startDragGesture
+								: undefined
 						}
 						disableHoverCard={isAnyDragging}
 						archivingWorkspaceIds={archivingWorkspaceIds}
@@ -1175,6 +1276,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 				<WorkspaceDragGhost
 					dragState={dragState}
 					row={activeDragRow}
+					stackRows={activeDragStackRows}
 					selected={selectedWorkspaceId === activeDragRow.id}
 					isSending={busyWorkspaceIds?.has(activeDragRow.id)}
 					isInteractionRequired={interactionRequiredWorkspaceIds?.has(

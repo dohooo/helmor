@@ -344,12 +344,23 @@ pub enum WorkspaceAction {
         #[arg(name = "ref")]
         workspace_ref: String,
     },
+    /// Show a workspace's PR stack (root → tip). `--json` emits a spec you can
+    /// pipe to the stacked-pr renderer.
+    Stack {
+        #[arg(name = "ref")]
+        workspace_ref: String,
+    },
     /// Create a new workspace for an existing repository.
     #[command(after_help = EXAMPLES_WORKSPACE_NEW)]
     New {
-        /// Repo name or UUID.
+        /// Repo name or UUID. Required unless `--parent` is given.
         #[arg(long)]
-        repo: String,
+        repo: Option<String>,
+        /// Stack the new workspace on top of an existing one (stacked PRs):
+        /// its branch forks off the parent's branch and its PR targets the
+        /// parent's branch. The repo is taken from the parent.
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Permanently delete a workspace (DB rows + git worktree + files).
     Delete {

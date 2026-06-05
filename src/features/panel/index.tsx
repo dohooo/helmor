@@ -41,6 +41,7 @@ type WorkspacePanelProps = {
 	contextPreviewCard?: ContextCard | null;
 	contextPreviewActive?: boolean;
 	onSelectSession?: (sessionId: string) => void;
+	onSelectWorkspace?: (workspaceId: string) => void;
 	onSelectContextPreview?: () => void;
 	onCloseContextPreview?: () => void;
 	onPrefetchSession?: (sessionId: string) => void;
@@ -72,6 +73,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 	contextPreviewCard = null,
 	contextPreviewActive = false,
 	onSelectSession,
+	onSelectWorkspace,
 	onSelectContextPreview,
 	onCloseContextPreview,
 	onPrefetchSession,
@@ -136,6 +138,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
 					headerActions={headerActions}
 					headerLeading={headerLeading}
 					onSelectSession={onSelectSession}
+					onSelectWorkspace={onSelectWorkspace}
 					onSelectContextPreview={onSelectContextPreview}
 					onCloseContextPreview={onCloseContextPreview}
 					onPrefetchSession={onPrefetchSession}

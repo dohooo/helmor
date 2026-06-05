@@ -120,6 +120,25 @@ export type WorkspaceRow = {
 	 *  "slack" | "lark". Absent/null for manual workspaces. Drives the
 	 *  source-logo badge shown on AI-proposed sidebar rows. */
 	triageSourceType?: string | null;
+	/** Stacked PRs: `id` of the workspace one layer below this in a PR stack
+	 *  (its base). Absent/null for non-stacked rows. Drives sidebar stack
+	 *  grouping — the sidebar nests a stack's members under their tip. */
+	parentWorkspaceId?: string | null;
+};
+
+/** Per-row stacked-PR connector metadata, attached by the frontend
+ *  projection (`nestStacks`) — never sent by the backend. Lets the row
+ *  renderer draw the stack-link affordance. */
+export type StackRowMeta = {
+	/** `tip` = newest member (top of the stack, keeps its natural sort slot);
+	 *  `root` = base-most visible member; `mid` = in between. */
+	role: "tip" | "mid" | "root";
+	/** 0 at the tip, increasing toward the base of the stack. */
+	depth: number;
+	/** Total number of members in this stack — used for the "k of N" tooltip. */
+	stackSize: number;
+	/** `id` of the stack's tip — the anchor every member is grouped under. */
+	tipId: string;
 };
 
 export type WorkspaceGroup = {
@@ -127,6 +146,10 @@ export type WorkspaceGroup = {
 	label: string;
 	tone: GroupTone;
 	rows: WorkspaceRow[];
+	/** Frontend-only projection annotation (populated by `nestStacks`, absent
+	 *  on backend payloads): stacked-PR connector metadata keyed by row id,
+	 *  present only for rows that belong to a multi-member stack. */
+	stackMeta?: ReadonlyMap<string, StackRowMeta>;
 };
 
 export type DataInfo = {
@@ -366,6 +389,10 @@ export type WorkspaceDetail = {
 	branch?: string | null;
 	initializationParentBranch?: string | null;
 	intendedTargetBranch?: string | null;
+	/** Stacked-PR parent link. When set, the header renders a live
+	 * "→ <parent title>" chip (click to navigate) instead of the raw
+	 * target-branch picker. */
+	parentWorkspaceId?: string | null;
 	mode: WorkspaceMode;
 	pinnedAt?: string | null;
 	prTitle?: string | null;

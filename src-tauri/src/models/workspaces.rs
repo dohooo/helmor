@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{bail, Context, Result};
 use rusqlite::Row;
 
@@ -81,6 +83,10 @@ pub struct WorkspaceRecord {
     /// Originating triage platform for ai_triage workspaces ("github",
     /// "gitlab", "slack", "lark"). `None` for manual workspaces.
     pub triage_source_type: Option<String>,
+    /// Stacked PRs: `workspaces.id` of the layer below this one (its base).
+    /// `None` = bottom of stack (base is the repo default) or a non-stacked
+    /// workspace. FK-by-convention; integrity enforced in the write layer.
+    pub parent_workspace_id: Option<String>,
 }
 
 pub const WORKSPACE_RECORD_SQL: &str = r#"
@@ -192,7 +198,8 @@ pub const WORKSPACE_RECORD_SQL: &str = r#"
       w.active_run_action_id,
       COALESCE(w.kind, 'manual') AS kind,
       COALESCE(w.ai_priming_consumed, 0) AS ai_priming_consumed,
-      w.triage_source_type
+      w.triage_source_type,
+      w.parent_workspace_id
     FROM workspaces w
     JOIN repos r ON r.id = w.repository_id
     LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -734,7 +741,175 @@ fn workspace_record_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRecord>
         kind: row.get(41)?,
         ai_priming_consumed: row.get::<_, i64>(42)? != 0,
         triage_source_type: row.get(43)?,
+        parent_workspace_id: row.get(44)?,
     })
+}
+
+/// Set (or clear) the stacked-PR parent link for a workspace. `Some(id)`
+/// records that this workspace stacks on `id` (its base); `None` clears it.
+/// Drives sidebar nesting and the future restack cascade.
+pub(crate) fn set_workspace_parent_id(
+    workspace_id: &str,
+    parent_workspace_id: Option<&str>,
+) -> Result<()> {
+    let connection = db::write_conn()?;
+    let updated = connection
+        .execute(
+            "UPDATE workspaces SET parent_workspace_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            (parent_workspace_id, workspace_id),
+        )
+        .context("Failed to update workspace parent_workspace_id")?;
+    if updated != 1 {
+        bail!("Cannot set parent for workspace {workspace_id}: row not found");
+    }
+    Ok(())
+}
+
+/// Rename a workspace's own branch AND cascade the new name to every direct
+/// stacked child whose `intended_target_branch` tracks it.
+///
+/// `intended_target_branch` is a denormalized cache of the parent's branch
+/// (materialized when the child is stacked). Without this cascade a child's
+/// target goes stale the moment the parent's branch changes — via the header
+/// rename, or the LLM branch regeneration after the first message. One level
+/// suffices: each child targets only its DIRECT parent's branch.
+///
+/// Both UPDATEs run in one transaction so a child is never left pointing at a
+/// branch its parent no longer has.
+pub(crate) fn update_workspace_branch(workspace_id: &str, new_branch: &str) -> Result<()> {
+    let mut connection = db::write_conn()?;
+    let tx = connection.transaction()?;
+    let updated = tx
+        .execute(
+            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+            (new_branch, workspace_id),
+        )
+        .context("Failed to update workspace branch")?;
+    if updated != 1 {
+        bail!("Cannot update branch for workspace {workspace_id}: row not found");
+    }
+    tx.execute(
+        "UPDATE workspaces SET intended_target_branch = ?1 WHERE parent_workspace_id = ?2",
+        (new_branch, workspace_id),
+    )
+    .context("Failed to cascade branch rename to stacked children")?;
+    tx.commit()
+        .context("Failed to commit workspace branch update")?;
+    Ok(())
+}
+
+/// One layer of a PR stack, ordered root → tip by [`load_workspace_stack`].
+#[derive(Debug, Clone)]
+pub struct StackLayer {
+    pub id: String,
+    pub repo_name: String,
+    pub directory_name: String,
+    /// Display title (primary session title); the presentation layer falls
+    /// back to `directory_name` when this is `None`.
+    pub title: Option<String>,
+    pub branch: Option<String>,
+    pub intended_target_branch: Option<String>,
+    pub pr_sync_state: PrSyncState,
+    pub pr_url: Option<String>,
+    pub status: WorkspaceStatus,
+    pub parent_workspace_id: Option<String>,
+}
+
+fn record_to_stack_layer(record: &WorkspaceRecord) -> StackLayer {
+    StackLayer {
+        id: record.id.clone(),
+        repo_name: record.repo_name.clone(),
+        directory_name: record.directory_name.clone(),
+        title: record.primary_session_title.clone(),
+        branch: record.branch.clone(),
+        intended_target_branch: record.intended_target_branch.clone(),
+        pr_sync_state: record.pr_sync_state,
+        pr_url: record.pr_url.clone(),
+        status: record.status,
+        parent_workspace_id: record.parent_workspace_id.clone(),
+    }
+}
+
+/// Cheap check: does any workspace point at `workspace_id` as its stack parent?
+fn has_stack_children(workspace_id: &str) -> Result<bool> {
+    let connection = db::read_conn()?;
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE parent_workspace_id = ?1)",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .context("Failed to check stack children")?;
+    Ok(exists)
+}
+
+/// Load the ordered PR-stack chain (root → tip) that `workspace_id` belongs to.
+///
+/// A non-stacked workspace (no parent, no children) returns a single-element
+/// vec containing itself. A stack never spans repos, so the walk is restricted
+/// to the workspace's own repo. Defensive against dangling parent ids and
+/// cycles; on a fork (a layer with multiple children) it follows the
+/// earliest-created child deterministically.
+pub fn load_workspace_stack(workspace_id: &str) -> Result<Vec<StackLayer>> {
+    let Some(start) = load_workspace_record_by_id(workspace_id)? else {
+        return Ok(Vec::new());
+    };
+    // Fast path: no parent and no children → not stacked. Skip the repo scan
+    // (this runs on every message send for the common non-stacked workspace).
+    if start.parent_workspace_id.is_none() && !has_stack_children(&start.id)? {
+        return Ok(vec![record_to_stack_layer(&start)]);
+    }
+    let repo_id = start.repo_id.clone();
+
+    let by_id: HashMap<String, WorkspaceRecord> = load_workspace_records()?
+        .into_iter()
+        .filter(|record| record.repo_id == repo_id)
+        .map(|record| (record.id.clone(), record))
+        .collect();
+
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Walk up from `start` to the root (topmost visible ancestor), then
+    // reverse so the chain reads root → start.
+    let mut chain: Vec<String> = Vec::new();
+    let mut cursor = Some(start.id.clone());
+    while let Some(id) = cursor {
+        if !seen.insert(id.clone()) {
+            break; // cycle guard
+        }
+        cursor = by_id
+            .get(&id)
+            .and_then(|record| record.parent_workspace_id.clone())
+            .filter(|parent| by_id.contains_key(parent));
+        chain.push(id);
+    }
+    chain.reverse();
+
+    // Walk down from `start` following the earliest-created child each step.
+    let child_of = |parent_id: &str| -> Option<&WorkspaceRecord> {
+        by_id
+            .values()
+            .filter(|record| record.parent_workspace_id.as_deref() == Some(parent_id))
+            .min_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            })
+    };
+    let mut cursor = child_of(&start.id).map(|record| record.id.clone());
+    while let Some(id) = cursor {
+        if !seen.insert(id.clone()) {
+            break; // cycle / already-seen guard
+        }
+        cursor = child_of(&id).map(|record| record.id.clone());
+        chain.push(id);
+    }
+
+    Ok(chain
+        .iter()
+        .filter_map(|id| by_id.get(id))
+        .map(record_to_stack_layer)
+        .collect())
 }
 
 /// Persist the user-picked active run-action id for a workspace. Passing

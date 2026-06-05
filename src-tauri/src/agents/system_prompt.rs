@@ -83,6 +83,23 @@ pub struct HelmorSystemPromptContext {
     /// `--version` etc.) because we already know it exists — it's the
     /// process the agent is talking to.
     pub cli_command_name: String,
+    /// Stacked-PR awareness for this workspace. `Some` only when the workspace
+    /// belongs to a multi-layer stack; drives the stack block in the preamble.
+    /// Computed by the caller (it needs DB access to walk the chain).
+    pub stack: Option<StackContext>,
+}
+
+/// Lightweight stacked-PR context injected into the workspace preamble so the
+/// agent knows its place in the stack and fetches the rest itself.
+#[derive(Debug, Clone)]
+pub struct StackContext {
+    /// 1-based position from the bottom of the stack (root = 1).
+    pub position: usize,
+    /// Total number of layers in the stack.
+    pub total: usize,
+    /// Branch this layer is stacked on (its parent's branch); `None` for the
+    /// bottom layer, whose base is the repo default.
+    pub parent_branch: Option<String>,
 }
 
 /// Context the chat-mode prompt template consumes. Chat sessions are
@@ -129,6 +146,22 @@ pub fn build_helmor_system_prompt(ctx: &HelmorSystemPromptContext) -> String {
                 "Target branch for this workspace is not configured — ask the user before opening a PR.\n",
             );
         }
+    }
+
+    if let Some(stack) = &ctx.stack {
+        let _ = write!(
+            out,
+            "\nStacked PR: this workspace is layer {} of {} in a PR stack",
+            stack.position, stack.total,
+        );
+        if let Some(parent) = stack.parent_branch.as_deref() {
+            let _ = write!(out, " (stacked on `{parent}`)");
+        }
+        let _ = writeln!(
+            out,
+            ". The layers below you are already in your branch — implement only THIS layer's slice, not the lower layers (already done) or the layer above (another agent's). Run `{cli} workspace stack` for the full chain; after a lower layer changes or merges, run `/helmor-cli restack` to re-sync the stack.",
+            cli = ctx.cli_command_name,
+        );
     }
 
     if !ctx.linked_directories.is_empty() {
@@ -208,6 +241,7 @@ mod tests {
             base_branch: Some("main".to_string()),
             linked_directories: Vec::new(),
             cli_command_name: "helmor".to_string(),
+            stack: None,
         }
     }
 
@@ -253,6 +287,31 @@ mod tests {
     fn linked_directories_paragraph_is_elided_when_list_empty() {
         let prompt = build_helmor_system_prompt(&ctx_with_defaults());
         assert!(!prompt.contains("linked directories"));
+    }
+
+    /// A multi-layer stack injects the stack-awareness block: position, base
+    /// pointer, and the fetch-it-yourself pointers.
+    #[test]
+    fn stacked_workspace_injects_stack_block() {
+        let mut ctx = ctx_with_defaults();
+        ctx.stack = Some(StackContext {
+            position: 2,
+            total: 3,
+            parent_branch: Some("demo/theme-schema".to_string()),
+        });
+        let prompt = build_helmor_system_prompt(&ctx);
+        assert!(prompt.contains("layer 2 of 3"));
+        assert!(prompt.contains("`demo/theme-schema`"));
+        assert!(prompt.contains("workspace stack"));
+        assert!(prompt.contains("/helmor-cli restack"));
+    }
+
+    /// A non-stacked workspace gets no stack block at all.
+    #[test]
+    fn non_stacked_workspace_has_no_stack_block() {
+        let prompt = build_helmor_system_prompt(&ctx_with_defaults());
+        assert!(!prompt.contains("Stacked PR:"));
+        assert!(!prompt.contains("/helmor-cli restack"));
     }
 
     /// Non-empty list → the paragraph appears with each entry on its

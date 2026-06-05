@@ -573,6 +573,8 @@ export function useStartSurfaceController(
 						id: pendingId,
 						workspaceId: outcome.workspaceId,
 						sessionId: outcome.sessionId,
+						// Pin the new workspace's repo (chat mode has none).
+						repoId: startRepository?.id ?? null,
 						// Local mode already has the cwd; worktree mode patches it
 						// onto the payload below once finalize materialises the
 						// worktree dir. Either way the payload is the single source

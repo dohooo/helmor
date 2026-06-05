@@ -1,11 +1,20 @@
 ---
 name: helmor-cli
-description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference.
+description: Use the Helmor CLI to remote-control Helmor from the terminal. Use when the user asks to inspect Helmor data/settings, manage repositories/workspaces/sessions/files, send prompts to agents, list models, use GitHub integration, inspect scripts, migrate from Conductor, run Helmor as an MCP server, generate shell completions, quit a running app, check/install/update the Helmor CLI beta, install/update Helmor skills through the beta app flow, or needs the Helmor command reference. Also plan and build a large change as a stack of dependent PRs (`/helmor-cli stack`), split a change you've already written into a stack (`/helmor-cli break`), and re-sync a stack after lower layers change or merge (`/helmor-cli restack`).
 ---
 
 # Helmor CLI
 
 Use this skill to guide simple terminal-first Helmor workflows. Keep the answer practical: prefer one or two concrete commands over a long CLI tutorial.
+
+## Command Routing
+
+Route by the first word after `/helmor-cli`:
+
+- `restack` — re-sync a PR stack after a lower layer changed or merged. Follow `references/restack.md`. (This is what the composer's **Restack** button sends.)
+- `stack` — plan and build a large change as a stack of dependent PRs. Follow `references/stacked-pr.md`.
+- `break` — split the change you've ALREADY written in the current workspace into a stack of smaller dependent PRs, confirming the slicing granularity with the user first. Follow `references/break.md`.
+- Anything else (or no argument) — an ordinary Helmor CLI task; use the binary-name guidance and command reference below.
 
 ## Binary Name (Release vs Dev)
 

@@ -30,13 +30,13 @@ pub use super::branching::{
 };
 pub use super::lifecycle::{
     archive_workspace_impl, cleanup_orphaned_initializing_workspaces,
-    create_workspace_from_repo_impl, execute_archive_plan, finalize_workspace_from_repo_impl,
-    move_local_workspace_to_worktree_impl, prepare_archive_plan, prepare_chat_workspace_impl,
-    prepare_local_workspace_impl, prepare_workspace_from_repo_impl, restore_workspace_impl,
-    validate_archive_workspace, validate_restore_workspace, ArchivePreparedPlan,
-    ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse, FinalizeWorkspaceResponse,
-    MoveLocalToWorktreeResponse, PrepareWorkspaceResponse, RestoreWorkspaceResponse,
-    TargetBranchConflict, ValidateRestoreResponse,
+    create_stacked_workspace_impl, create_workspace_from_repo_impl, execute_archive_plan,
+    finalize_workspace_from_repo_impl, move_local_workspace_to_worktree_impl, prepare_archive_plan,
+    prepare_chat_workspace_impl, prepare_local_workspace_impl, prepare_workspace_from_repo_impl,
+    restore_workspace_impl, validate_archive_workspace, validate_restore_workspace,
+    ArchivePreparedPlan, ArchiveWorkspaceResponse, BranchRename, CreateWorkspaceResponse,
+    FinalizeWorkspaceResponse, MoveLocalToWorktreeResponse, PrepareWorkspaceResponse,
+    RestoreWorkspaceResponse, TargetBranchConflict, ValidateRestoreResponse,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +85,9 @@ pub struct WorkspaceSidebarRow {
     /// "slack", "lark"). `None` for manual workspaces. Drives the sidebar
     /// source-logo badge on AI-proposed rows.
     pub triage_source_type: Option<String>,
+    /// Stacked PRs: `id` of the workspace one layer below this in a PR stack
+    /// (its base). `None` for non-stacked rows. Drives sidebar stack grouping.
+    pub parent_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,6 +161,10 @@ pub struct WorkspaceDetail {
     pub branch: Option<String>,
     pub initialization_parent_branch: Option<String>,
     pub intended_target_branch: Option<String>,
+    /// Stacked-PR parent link. When set, this workspace stacks on the
+    /// referenced workspace; the header renders a live "→ <parent title>"
+    /// chip instead of the raw target-branch picker.
+    pub parent_workspace_id: Option<String>,
     pub mode: WorkspaceMode,
     pub pinned_at: Option<String>,
     pub display_order: i64,
@@ -1304,6 +1311,7 @@ pub fn record_to_sidebar_row(record: WorkspaceRecord) -> WorkspaceSidebarRow {
         last_user_message_at: record.last_user_message_at,
         triage_priming_unconsumed: record.kind == "ai_triage" && !record.ai_priming_consumed,
         triage_source_type: record.triage_source_type,
+        parent_workspace_id: record.parent_workspace_id,
         kind: record.kind,
     }
 }
@@ -1394,6 +1402,7 @@ pub fn record_to_detail(record: WorkspaceRecord) -> WorkspaceDetail {
         mode: record.mode,
         initialization_parent_branch: record.initialization_parent_branch,
         intended_target_branch: record.intended_target_branch,
+        parent_workspace_id: record.parent_workspace_id,
         pinned_at: record.pinned_at,
         display_order: record.display_order,
         pr_title: record.pr_title,
@@ -1519,6 +1528,40 @@ pub fn degrade_workspace_to_archived(workspace_id: &str) -> Result<bool> {
 pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
     let mut connection = db::write_conn()?;
 
+    // --- Stacked-PR deletion guard: tip free / root = pop-bottom / middle
+    // blocked. A middle layer (a live parent below AND layers stacked above)
+    // can't be deleted — it would leave an unrebaseable hole in the stack.
+    let (parent_id, default_branch): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT w.parent_workspace_id, r.default_branch
+               FROM workspaces w JOIN repos r ON r.id = w.repository_id WHERE w.id = ?1",
+            [workspace_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or((None, None));
+    let has_children: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE parent_workspace_id = ?1)",
+            [workspace_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    let has_live_parent = match parent_id.as_deref() {
+        Some(parent) => connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?1)",
+                [parent],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false),
+        None => false,
+    };
+    if has_live_parent && has_children {
+        bail!(
+            "Cannot delete a middle layer of a PR stack — other workspaces are stacked on it. Delete from the top of the stack (the tip) downward, or restack first."
+        );
+    }
+
     // Load workspace info for filesystem cleanup. Skips the dir delete
     // step for local-mode rows (whose "dir" is the user's repo root).
     let record: Option<(
@@ -1566,6 +1609,21 @@ pub fn permanently_delete_workspace(workspace_id: &str) -> Result<()> {
 
     if deleted_rows != 1 {
         bail!("Workspace delete affected {deleted_rows} rows for {workspace_id}");
+    }
+
+    // Root pop: a deleted stack root's direct children become new roots
+    // targeting the repo default branch (they'll need a restack onto it).
+    if has_children {
+        transaction
+            .execute(
+                "UPDATE workspaces
+                   SET parent_workspace_id = NULL,
+                       intended_target_branch = ?2,
+                       updated_at = datetime('now')
+                 WHERE parent_workspace_id = ?1",
+                (workspace_id, default_branch.as_deref().unwrap_or("main")),
+            )
+            .context("Failed to reparent stack children after root delete")?;
     }
 
     transaction
@@ -1666,6 +1724,73 @@ mod tests {
             workspace_state(&env, "w-archived").as_deref(),
             Some("archived")
         );
+    }
+
+    #[test]
+    fn update_workspace_branch_cascades_to_stacked_children() {
+        let env = TestEnv::new("branch-cascade");
+        let conn = env.db_connection();
+        insert_repo(&conn, "r1", "demo", Some("origin"));
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "parent",
+                repo_id: "r1",
+                directory_name: "parent",
+                state: "ready",
+                branch: Some("feat/parent-old"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "child",
+                repo_id: "r1",
+                directory_name: "child",
+                state: "ready",
+                branch: Some("feat/child"),
+                intended_target_branch: Some("feat/parent-old"),
+            },
+        );
+        insert_workspace(
+            &conn,
+            &WorkspaceFixture {
+                id: "solo",
+                repo_id: "r1",
+                directory_name: "solo",
+                state: "ready",
+                branch: Some("feat/solo"),
+                intended_target_branch: Some("main"),
+            },
+        );
+        conn.execute(
+            "UPDATE workspaces SET parent_workspace_id = 'parent' WHERE id = 'child'",
+            [],
+        )
+        .unwrap();
+
+        crate::models::workspaces::update_workspace_branch("parent", "feat/parent-new").unwrap();
+
+        let branch_of = |id: &str| -> String {
+            conn.query_row("SELECT branch FROM workspaces WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        let target_of = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT intended_target_branch FROM workspaces WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        // Parent's own branch is renamed; the child's cached target follows it,
+        // while an unrelated standalone workspace is left alone.
+        assert_eq!(branch_of("parent"), "feat/parent-new");
+        assert_eq!(target_of("child").as_deref(), Some("feat/parent-new"));
+        assert_eq!(target_of("solo").as_deref(), Some("main"));
     }
 
     #[test]

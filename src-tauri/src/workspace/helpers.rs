@@ -938,6 +938,7 @@ mod tests {
             kind: "manual".to_string(),
             ai_priming_consumed: false,
             triage_source_type: None,
+            parent_workspace_id: None,
         }
     }
 

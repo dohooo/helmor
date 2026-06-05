@@ -458,13 +458,10 @@ pub async fn generate_session_title(
                     };
 
                     if fs_rename_ok {
-                        let write_result = crate::models::db::write_conn().and_then(|conn| {
-                            conn.execute(
-                                "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
-                                (&new_branch, &workspace_id),
-                            )
-                            .map_err(|e| anyhow::anyhow!(e))
-                        });
+                        let write_result = crate::models::workspaces::update_workspace_branch(
+                            &workspace_id,
+                            &new_branch,
+                        );
                         if let Err(error) = write_result {
                             tracing::error!(workspace_id = %workspace_id, "DB UPDATE workspaces.branch failed: {error:#}");
                             if fs_rename_attempted {

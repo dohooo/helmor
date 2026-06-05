@@ -167,6 +167,36 @@ pub fn ensure_schema(connection: &Connection) -> Result<()> {
 }
 
 /// Incremental migrations for schema changes to existing databases.
+/// Re-point every stacked child's `intended_target_branch` at its parent's
+/// current branch. Idempotent: only rows whose cached target differs from the
+/// parent's live branch are touched (dangling parents are skipped). Mirrors
+/// the write-layer cascade in `models::workspaces::update_workspace_branch`
+/// so rows that predate it self-heal on startup.
+fn backfill_stacked_target_branches(connection: &Connection) -> Result<()> {
+    if !has_table(connection, "workspaces")
+        || !has_column(connection, "workspaces", "parent_workspace_id")
+        || !has_column(connection, "workspaces", "branch")
+        || !has_column(connection, "workspaces", "intended_target_branch")
+    {
+        return Ok(());
+    }
+    connection
+        .execute(
+            "UPDATE workspaces
+             SET intended_target_branch = (
+                 SELECT p.branch FROM workspaces p WHERE p.id = workspaces.parent_workspace_id
+             )
+             WHERE parent_workspace_id IS NOT NULL
+               AND (SELECT p.branch FROM workspaces p WHERE p.id = workspaces.parent_workspace_id) IS NOT NULL
+               AND intended_target_branch IS NOT (
+                   SELECT p.branch FROM workspaces p WHERE p.id = workspaces.parent_workspace_id
+               )",
+            [],
+        )
+        .context("Failed to re-point stacked target branches")?;
+    Ok(())
+}
+
 fn run_migrations(connection: &Connection) -> Result<()> {
     // Migration: rename claude_session_id → provider_session_id (supports any agent provider)
     let has_old_column: bool = connection
@@ -493,6 +523,28 @@ fn run_migrations(connection: &Connection) -> Result<()> {
             .execute_batch("ALTER TABLE workspaces ADD COLUMN pr_url TEXT")
             .context("Failed to add pr_url column")?;
     }
+
+    // Migration: stacked PRs. `parent_workspace_id` links a workspace to the
+    // one below it in a PR stack (its base). NULL = bottom of stack or a
+    // non-stacked workspace. No SQL foreign key — consistent with
+    // `repository_id` (and SQLite can't ALTER ADD CONSTRAINT); integrity is
+    // enforced in the Rust write layer. No back-fill — existing rows are
+    // non-stacked.
+    if has_table(connection, "workspaces")
+        && !has_column(connection, "workspaces", "parent_workspace_id")
+    {
+        connection
+            .execute_batch("ALTER TABLE workspaces ADD COLUMN parent_workspace_id TEXT")
+            .context("Failed to add workspaces.parent_workspace_id column")?;
+    }
+
+    // Stacked-PR invariant: a child's `intended_target_branch` caches its
+    // parent's branch. Re-assert it so rows that predate the write-layer
+    // cascade (or drifted when a parent was renamed before the cascade
+    // existed) self-heal. Idempotent + cheap — only mismatched linked
+    // children are touched.
+    backfill_stacked_target_branches(connection)
+        .context("Failed to backfill stacked-PR target branches")?;
 
     let had_workspace_status =
         has_table(connection, "workspaces") && has_column(connection, "workspaces", "status");
@@ -1023,6 +1075,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     ai_priming_consumed INTEGER NOT NULL DEFAULT 0,
     triage_source_type TEXT,
     triage_source_ref TEXT,
+    parent_workspace_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1228,6 +1281,87 @@ mod tests {
         ensure_schema(&connection).unwrap();
         // Call again — should not error
         ensure_schema(&connection).unwrap();
+    }
+
+    fn insert_ws(
+        connection: &Connection,
+        id: &str,
+        branch: &str,
+        target: Option<&str>,
+        parent: Option<&str>,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, repository_id, directory_name, state, status, branch, intended_target_branch, parent_workspace_id, display_order)
+                 VALUES (?1, 'repo', ?1, 'ready', 'in-progress', ?2, ?3, ?4, 0)",
+                rusqlite::params![id, branch, target, parent],
+            )
+            .unwrap();
+    }
+
+    fn target_of(connection: &Connection, id: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT intended_target_branch FROM workspaces WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn backfill_repoints_stale_child_targets_at_parent_branch() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+
+        // child's target is a stale snapshot of the parent's old branch name.
+        insert_ws(&connection, "root", "feat/root", Some("main"), None);
+        insert_ws(
+            &connection,
+            "child",
+            "feat/child",
+            Some("feat/root-OLD"),
+            Some("root"),
+        );
+        insert_ws(&connection, "solo", "feat/solo", Some("main"), None);
+
+        backfill_stacked_target_branches(&connection).unwrap();
+
+        // Child now tracks the parent's LIVE branch; root + non-stacked untouched.
+        assert_eq!(
+            target_of(&connection, "child").as_deref(),
+            Some("feat/root")
+        );
+        assert_eq!(target_of(&connection, "root").as_deref(), Some("main"));
+        assert_eq!(target_of(&connection, "solo").as_deref(), Some("main"));
+
+        // Idempotent: a second pass is a no-op.
+        backfill_stacked_target_branches(&connection).unwrap();
+        assert_eq!(
+            target_of(&connection, "child").as_deref(),
+            Some("feat/root")
+        );
+    }
+
+    #[test]
+    fn backfill_leaves_dangling_parent_targets_untouched() {
+        let (connection, _dir) = open_test_db();
+        ensure_schema(&connection).unwrap();
+        // parent id 'gone' does not exist — must NOT null out the target.
+        insert_ws(
+            &connection,
+            "orphan",
+            "feat/x",
+            Some("stale-base"),
+            Some("gone"),
+        );
+
+        backfill_stacked_target_branches(&connection).unwrap();
+
+        assert_eq!(
+            target_of(&connection, "orphan").as_deref(),
+            Some("stale-base")
+        );
     }
 
     #[test]

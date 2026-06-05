@@ -1,4 +1,9 @@
-import type { WorkspaceGroup, WorkspaceRow, WorkspaceSummary } from "@/lib/api";
+import type {
+	StackRowMeta,
+	WorkspaceGroup,
+	WorkspaceRow,
+	WorkspaceSummary,
+} from "@/lib/api";
 import type { SidebarGrouping, SidebarSort } from "@/lib/settings";
 import { summaryToArchivedRow } from "@/lib/workspace-helpers";
 
@@ -175,17 +180,99 @@ export function applySidebarView(
 		compareArchivedRowsByUpdatedAtDesc,
 	);
 
-	if (sort === "custom") {
-		return {
-			groups: filteredGroups,
-			archivedRows: sortedArchivedRows,
-		};
-	}
+	const orderedGroups =
+		sort === "custom"
+			? filteredGroups
+			: sortGroupsForView(filteredGroups, sort);
 
+	// Final step: group stacked-PR members so a stack renders contiguously
+	// under its tip. Runs here — the convergence point shared by BOTH the
+	// render path and the keyboard-nav path — so the two never desync, and
+	// AFTER sorting so the tip's already-sorted position anchors the stack.
 	return {
-		groups: sortGroupsForView(filteredGroups, sort),
+		groups: nestStacks(orderedGroups),
 		archivedRows: sortedArchivedRows,
 	};
+}
+
+/**
+ * Group stacked-PR workspaces so a stack's members render contiguously.
+ *
+ * A "stack" is a chain of workspaces linked by `parentWorkspaceId`. Only the
+ * TIP (the newest member — the one nobody else stacks on) keeps its natural
+ * sorted slot; every other member is pulled out of its own status / repo
+ * group and re-inserted immediately after the tip, in stack order
+ * (tip → … → root). Per-row connector metadata is recorded on the owning
+ * group's `stackMeta` so the row renderer can draw the stack-link affordance.
+ *
+ * Singletons and non-stacked rows are left exactly where they are — no
+ * behavior change for the common case. Defensive against dangling parent
+ * links, cycles, and forks (a shared ancestor is claimed by a single stack).
+ */
+export function nestStacks(groups: WorkspaceGroup[]): WorkspaceGroup[] {
+	const located = new Map<string, WorkspaceRow>();
+	for (const group of groups) {
+		for (const row of group.rows) located.set(row.id, row);
+	}
+
+	// Ids that are some visible row's parent → cannot themselves be a tip.
+	const visibleParentIds = new Set<string>();
+	for (const row of located.values()) {
+		const parent = row.parentWorkspaceId;
+		if (parent && located.has(parent)) visibleParentIds.add(parent);
+	}
+
+	// Build each stack from its tip downward (tip → … → root). `claimed`
+	// guards a shared ancestor (a fork) from landing in two stacks.
+	const chainsByTip = new Map<string, WorkspaceRow[]>();
+	const claimed = new Set<string>();
+	for (const tip of located.values()) {
+		const parent = tip.parentWorkspaceId;
+		const isTip =
+			!!parent && located.has(parent) && !visibleParentIds.has(tip.id);
+		if (!isTip) continue;
+		const chain: WorkspaceRow[] = [tip];
+		let cursor = located.get(parent as string);
+		while (cursor && cursor.id !== tip.id && !claimed.has(cursor.id)) {
+			claimed.add(cursor.id);
+			chain.push(cursor);
+			cursor = cursor.parentWorkspaceId
+				? located.get(cursor.parentWorkspaceId)
+				: undefined;
+		}
+		if (chain.length >= 2) chainsByTip.set(tip.id, chain);
+	}
+
+	if (chainsByTip.size === 0) return groups;
+
+	const relocated = new Set<string>();
+	for (const chain of chainsByTip.values()) {
+		for (let i = 1; i < chain.length; i += 1) relocated.add(chain[i].id);
+	}
+
+	return groups.map((group) => {
+		const stackMeta = new Map<string, StackRowMeta>();
+		const rows: WorkspaceRow[] = [];
+		for (const row of group.rows) {
+			if (relocated.has(row.id)) continue; // re-homed under its tip
+			rows.push(row);
+			const chain = chainsByTip.get(row.id);
+			if (!chain) continue;
+			chain.forEach((member, depth) => {
+				if (depth > 0) rows.push(member);
+				stackMeta.set(member.id, {
+					role:
+						depth === 0 ? "tip" : depth === chain.length - 1 ? "root" : "mid",
+					depth,
+					stackSize: chain.length,
+					tipId: row.id,
+				});
+			});
+		}
+		return stackMeta.size > 0
+			? { ...group, rows, stackMeta }
+			: { ...group, rows };
+	});
 }
 
 function compareArchivedRowsByUpdatedAtDesc(

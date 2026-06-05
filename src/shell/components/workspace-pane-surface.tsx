@@ -207,6 +207,7 @@ export function WorkspacePaneSurface({
 							repoId={repoId}
 							sessionSelectionHistory={sessionSelectionHistory}
 							onSelectSession={onSelectSession}
+							onSelectWorkspace={selectionActions.selectWorkspace}
 							onResolveDisplayedSession={
 								selectionActions.resolveDisplayedSession
 							}
