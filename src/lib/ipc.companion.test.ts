@@ -15,6 +15,8 @@ describe("companion auth state", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		localStorage.clear();
+		sessionStorage.clear();
+		window.history.replaceState(null, "", "/");
 		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = {
 			base: "https://companion.test",
 		};
@@ -24,11 +26,25 @@ describe("companion auth state", () => {
 		(window as unknown as CompanionWindow).__HELMOR_COMPANION__ = undefined;
 		vi.unstubAllGlobals();
 		localStorage.clear();
+		sessionStorage.clear();
+		window.history.replaceState(null, "", "/");
 	});
 
 	it("is unauthed at boot when no pairing token is stored", async () => {
 		const ipc = await import("./ipc");
 		expect(ipc.getCompanionAuthState()).toBe("unauthed");
+	});
+
+	it("stages a scanned #pair= token without activating it", async () => {
+		window.location.hash = "#pair=hlm_scanned";
+		const ipc = await import("./ipc");
+		// The token is staged for the confirm screen...
+		expect(ipc.getPendingPairingToken()).toBe("hlm_scanned");
+		// ...but is NOT yet the active credential (no silent auto-pairing).
+		expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+		expect(ipc.getCompanionAuthState()).toBe("unauthed");
+		// And the secret is stripped from the URL.
+		expect(window.location.hash).toBe("");
 	});
 
 	it("flips to unauthed when a request returns 401", async () => {

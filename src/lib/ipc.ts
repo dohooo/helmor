@@ -50,6 +50,11 @@ interface CompanionGlobal {
 }
 
 const TOKEN_KEY = "helmor.companion.pat";
+// Staged (scanned-but-not-yet-confirmed) pairing token. Kept in sessionStorage,
+// not localStorage, so it survives the confirm-screen reload but never becomes
+// the active credential until the user explicitly confirms — and is dropped
+// when the tab closes.
+const PENDING_KEY = "helmor.companion.pending";
 
 function companionConfig(): CompanionGlobal | null {
 	if (typeof window === "undefined") return null;
@@ -69,31 +74,63 @@ const COMPANION = isCompanionClient();
 // (`#pair=<token>`). Persist it, then strip it so the secret doesn't linger in
 // history or get shared.
 if (COMPANION && typeof window !== "undefined") {
-	seedTokenFromHash();
+	stagePairingFromHash();
 	syncCompanionCookie();
-	// A pairing link opened in the *same* tab (e.g. pasted into the address bar
-	// while the pairing screen is showing) only changes the hash — the SPA never
-	// reloads, so `seedTokenFromHash` (which runs once at module load) would
-	// never see the token. Re-seed + reload on a pairing hash so every
-	// navigation mode pairs, not just a fresh tab.
+	// A pairing link opened in the *same* tab (e.g. pasted into the address bar)
+	// only changes the hash — the SPA never reloads, so `stagePairingFromHash`
+	// (which runs once at module load) would never see it. Reload on a pairing
+	// hash so module init re-runs and the confirm screen appears, for every
+	// navigation mode rather than only a fresh tab.
 	window.addEventListener("hashchange", () => {
 		if (/(?:^#|&)(?:pair|token)=/.test(window.location.hash)) {
-			seedTokenFromHash();
 			window.location.reload();
 		}
 	});
 }
 
-function seedTokenFromHash(): void {
+/**
+ * Stage a pairing token carried in the URL hash (`#pair=<token>`) WITHOUT
+ * activating it: store it as "pending" in sessionStorage and strip the hash so
+ * the secret doesn't linger in history. Scanning a code never auto-pairs — the
+ * token only becomes the live credential once the user clicks through
+ * {@link confirmCompanionPairing} on the confirm screen.
+ */
+function stagePairingFromHash(): void {
 	const match = window.location.hash.match(/(?:^#|&)(?:pair|token)=([^&]+)/);
 	if (!match) return;
 	try {
-		localStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1]));
+		sessionStorage.setItem(PENDING_KEY, decodeURIComponent(match[1]));
 	} catch {
-		// localStorage unavailable; the token simply won't persist.
+		// sessionStorage unavailable; the confirm screen just won't appear.
 	}
 	const clean = window.location.pathname + window.location.search;
 	window.history.replaceState(null, "", clean);
+}
+
+/** The scanned-but-unconfirmed pairing token, if any. */
+export function getPendingPairingToken(): string | null {
+	if (!COMPANION) return null;
+	try {
+		return sessionStorage.getItem(PENDING_KEY);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Commit the staged pairing token as the active credential and reload into the
+ * authenticated app. Invoked by the confirm screen's button.
+ */
+export function confirmCompanionPairing(): void {
+	const token = getPendingPairingToken();
+	if (!token) return;
+	try {
+		localStorage.setItem(TOKEN_KEY, token);
+		sessionStorage.removeItem(PENDING_KEY);
+	} catch {
+		// Storage unavailable — the reload below just re-prompts.
+	}
+	window.location.reload();
 }
 
 /**
