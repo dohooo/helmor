@@ -24,6 +24,7 @@ import {
 	type InvokeArgs,
 	type InvokeOptions,
 	Channel as TauriChannel,
+	convertFileSrc as tauriConvertFileSrc,
 	invoke as tauriInvoke,
 } from "@tauri-apps/api/core";
 import {
@@ -146,6 +147,22 @@ export type Channel<T = unknown> = TauriChannel<T>;
 export const Channel = (COMPANION
 	? CompanionChannel
 	: TauriChannel) as unknown as typeof TauriChannel;
+
+/**
+ * Convert a local file path to a webview-loadable asset URL.
+ *
+ * In the Tauri webview this is the real `convertFileSrc`. In the companion
+ * browser there is no Tauri asset protocol — and the real implementation reads
+ * `window.__TAURI_INTERNALS__` SYNCHRONOUSLY and THROWS when it's absent, which
+ * (called during render, e.g. avatars) tears down the whole React tree into a
+ * blank screen. So return an empty string: the `<img>` renders blank instead of
+ * crashing. (Streaming desktop files to the phone would need a companion asset
+ * endpoint; until then these images just don't load.)
+ */
+export function convertFileSrc(filePath: string, protocol?: string): string {
+	if (!COMPANION) return tauriConvertFileSrc(filePath, protocol);
+	return "";
+}
 
 // ---------------------------------------------------------------------------
 // invoke

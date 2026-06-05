@@ -1,4 +1,3 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
 	Check,
 	Circle,
@@ -23,6 +22,7 @@ import {
 	type TodoListPart,
 	type WorkflowPart,
 } from "@/lib/api";
+import { convertFileSrc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 export function TodoList({ part }: { part: TodoListPart }) {

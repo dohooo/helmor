@@ -1,7 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ai/code-block";
 import type { ComposerPreviewPayload } from "@/lib/composer-insert";
+import { convertFileSrc } from "@/lib/ipc";
 
 export type { ComposerPreviewPayload } from "@/lib/composer-insert";
 

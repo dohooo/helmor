@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { cacheForgeAvatar } from "./api";
+import { convertFileSrc } from "./ipc";
 import { PERSIST_META } from "./query-client";
 
 /** Resolves a remote avatar URL to a local `asset://` URL backed by an
