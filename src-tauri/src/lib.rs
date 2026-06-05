@@ -192,6 +192,7 @@ pub fn run() {
         .manage(global_hotkey::GlobalHotkeyState::default())
         .manage(commands::forge_commands::ForgeAuthEdgeStore::default())
         .manage(companion::CompanionState::new())
+        .manage(companion::TunnelState::new())
         .setup(|app| {
             // Ensure data directory structure exists
             data_dir::ensure_directory_structure()?;
@@ -494,6 +495,42 @@ pub fn run() {
                 });
             }
 
+            // Auto-start the companion when a stable URL has been provisioned,
+            // so a paired phone reconnects at its permanent hostname after a
+            // desktop restart. No-op when the user never allocated one.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match companion::stable_url::load() {
+                        Ok(Some(record)) => {
+                            let companion_state = handle.state::<companion::CompanionState>();
+                            let tunnel_state = handle.state::<companion::TunnelState>();
+                            match companion::start_with_tunnel(
+                                handle.clone(),
+                                &companion_state,
+                                &tunnel_state,
+                            )
+                            .await
+                            {
+                                Ok(()) => tracing::info!(
+                                    host = %record.hostname,
+                                    "companion stable URL auto-started",
+                                ),
+                                Err(error) => tracing::error!(
+                                    error = %format!("{error:#}"),
+                                    host = %record.hostname,
+                                    "companion stable-url auto-start failed",
+                                ),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(error = %error, "failed to read companion stable url")
+                        }
+                    }
+                });
+            }
+
             // On macOS, the default app-menu Quit item goes straight to
             // NSApplication.terminate:, which bypasses our event loop.
             // Install a custom menu so Cmd+Q flows through the same
@@ -722,7 +759,16 @@ pub fn run() {
             commands::slack_commands::slack_search_messages,
             commands::slack_commands::slack_get_thread_detail,
             commands::slack_commands::slack_list_emoji,
-            commands::slack_commands::slack_prepare_thread_context
+            commands::slack_commands::slack_prepare_thread_context,
+            commands::companion_commands::companion_status,
+            commands::companion_commands::companion_enable,
+            commands::companion_commands::companion_disable,
+            commands::companion_commands::companion_pair_device,
+            commands::companion_commands::companion_list_devices,
+            commands::companion_commands::companion_revoke_device,
+            commands::companion_commands::companion_sign_in_cloudflare,
+            commands::companion_commands::companion_allocate_stable_url,
+            commands::companion_commands::companion_destroy_stable_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -800,8 +846,9 @@ pub fn run() {
         // new version. By this point `request_quit` has stopped watchers
         // and torn down the sidecar, so blocking briefly here is safe.
         tauri::RunEvent::Exit => {
-            // Best-effort graceful shutdown of the companion server (no-op
-            // when it was never started). The task also dies with the process.
+            // Best-effort graceful shutdown of the companion server + tunnel
+            // (no-op when never started). The tasks also die with the process.
+            app_handle.state::<companion::TunnelState>().shutdown();
             let companion = app_handle.state::<companion::CompanionState>();
             tauri::async_runtime::block_on(companion.shutdown());
             updater::install_pending_on_exit_blocking();

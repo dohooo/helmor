@@ -23,15 +23,20 @@ mod auth;
 pub mod registry;
 mod rpc;
 mod server;
+pub mod stable_url;
 mod stream;
+mod tunnel;
 
 pub use server::StreamStarter;
 pub use stream::build_stream_starter;
+pub use tunnel::{
+    create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare, TunnelState,
+};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use base64::Engine;
 use tokio::sync::{oneshot, RwLock};
 
@@ -45,6 +50,37 @@ pub fn paired_device_verifier() -> Verifier {
     Arc::new(|bearer: &str| {
         crate::models::paired_devices::verify_and_touch(bearer).unwrap_or(false)
     })
+}
+
+/// Bring the companion fully up: start the loopback server, then a public
+/// tunnel — **named** (stable `remote-*.helmor.ai`) when a stable URL has been
+/// provisioned, otherwise a **quick** ephemeral tunnel. Idempotent on the
+/// server; replaces any running tunnel. Shared by the `companion_enable`
+/// command and launch-time auto-start. Concrete `AppHandle` (Wry) because the
+/// streaming bridge is Wry-specific; both callers are on the real runtime.
+pub async fn start_with_tunnel(
+    app: tauri::AppHandle,
+    companion: &CompanionState,
+    tunnel: &TunnelState,
+) -> Result<()> {
+    let streamer = build_stream_starter(app.clone());
+    let verifier = paired_device_verifier();
+    let info = companion.start(app, streamer, verifier).await?;
+    let port = info.addr.port();
+
+    let provisioning = tauri::async_runtime::spawn_blocking(stable_url::load)
+        .await
+        .map_err(|e| anyhow!("settings task join failed: {e}"))??;
+
+    let tunnel = tunnel.clone();
+    tauri::async_runtime::spawn_blocking(move || match provisioning {
+        Some(p) => tunnel
+            .start_named(port, &p.tunnel_uuid, &p.creds_path, &p.hostname)
+            .map(|_| ()),
+        None => tunnel.start_quick(port).map(|_| ()),
+    })
+    .await
+    .map_err(|e| anyhow!("tunnel task join failed: {e}"))?
 }
 
 /// Public connection details for a running companion server. Returned to the

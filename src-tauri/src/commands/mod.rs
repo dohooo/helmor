@@ -1,4 +1,5 @@
 mod common;
+pub(crate) mod companion_commands;
 pub(crate) mod conductor_commands;
 pub(crate) mod editor_commands;
 pub(crate) mod editors;

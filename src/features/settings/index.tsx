@@ -72,6 +72,7 @@ import { CursorProviderPanel } from "./panels/cursor-provider";
 import { DevToolsPanel } from "./panels/dev-tools";
 import { InboxSettingsPanel } from "./panels/inbox";
 import { LocalLlmPanel } from "./panels/local-llm";
+import { MobileCompanionPanel } from "./panels/mobile-companion";
 import {
 	AgentProxyPanel,
 	ClaudeCustomProvidersPanel,
@@ -601,6 +602,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 										updateSettings={updateSettings}
 									/>
 									{settings.localLlm.enabled ? <TriagePanel /> : null}
+									<MobileCompanionPanel />
 								</SettingsGroup>
 							)}
 

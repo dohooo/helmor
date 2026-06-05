@@ -163,6 +163,7 @@ export const helmorQueryKeys = {
 	slackEmojiMap: (teamId: string) => ["slackEmojiMap", teamId] as const,
 	triageConfig: ["triage", "config"] as const,
 	triageActiveStatus: ["triage", "activeStatus"] as const,
+	pairedDevices: ["pairedDevices"] as const,
 };
 
 /** Persistence is opt-in per `queryOptions` via `meta: { persist: true }`.

@@ -94,6 +94,9 @@ pub enum UiMutationEvent {
         session_id: String,
         reason: String,
     },
+    /// The mobile-companion paired-device list changed (paired or revoked).
+    /// Frontends invalidate the `pairedDevices` query.
+    PairedDevicesChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

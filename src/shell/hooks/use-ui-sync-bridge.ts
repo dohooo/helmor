@@ -242,6 +242,11 @@ function handleUiMutation(
 				queryKey: helmorQueryKeys.triageActiveStatus,
 			});
 			return;
+		case "pairedDevicesChanged":
+			void queryClient.invalidateQueries({
+				queryKey: helmorQueryKeys.pairedDevices,
+			});
+			return;
 	}
 }
 
