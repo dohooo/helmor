@@ -10,7 +10,7 @@ Helmor is a local-first desktop app built with **Tauri v2** (Rust backend) + **R
 
 ```bash
 bun install                  # Install deps (bun 1.3+). Also runs `bun install` in sidecar/ via postinstall.
-bun run dev                  # Full desktop app: Tauri + Vite (localhost:1420 in webview)
+bun run dev                  # dev:prepare + vite build + tauri dev (builds dist/ so companion serves current bundle)
 bun run dev:analyze          # Same as dev, with perf HUD (VITE_HELMOR_PERF_HUD=1)
 bun run build                # tsc + vite build (frontend bundle to dist/)
 bun run typecheck            # tsc --noEmit for frontend AND sidecar
@@ -146,12 +146,12 @@ When a snapshot drifts: look at the diff first. Only accept after confirming the
 - **Clippy**: Must pass `cargo clippy --all-targets -- -D warnings` with zero warnings.
 - **Perf**: `VITE_HELMOR_PERF_HUD=1` enables HUD + react-scan + long-frame tracker.
 - **Logging**: Dev defaults to `debug`. Override: `HELMOR_LOG=info|debug|error`. JSONL logs in `{data_dir}/logs/`.
-- **Bundled forge CLIs (`gh`, `glab`)**: Pinned + SHA256-verified in `sidecar/scripts/stage-vendor.ts`. To upgrade:
-  1. Bump `GH_VERSION` / `GLAB_VERSION`.
-  2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256`.
+- **Bundled forge CLIs (`gh`, `glab`, `cloudflared`)**: Pinned + SHA256-verified in `sidecar/scripts/stage-vendor.ts`. `cloudflared` powers the mobile-companion tunnel feature. To upgrade:
+  1. Bump `GH_VERSION` / `GLAB_VERSION` / `CLOUDFLARED_VERSION`.
+  2. Pull the new SHA256 from `…/checksums.txt` (URLs in the file's header comment) and update `GH_SHA256` / `GLAB_SHA256` / `CLOUDFLARED_SHA256`.
   3. Wipe `sidecar/.bundle-cache/` and re-run `bun run build` in `sidecar/` to force re-download + verify.
   Bump cadence: every release cycle if upstream has shipped a notable fix; immediately on security advisories. Pin so the auth-status JSON shape Helmor parses doesn't drift unexpectedly.
-- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. To upgrade:
+- **Bundled agent CLIs (`claude-code`, `codex`)**: Pulled in via `sidecar/package.json` and staged into `sidecar/dist/vendor/{claude-code,codex}/` as platform-native binaries. Both upstreams ship per-platform npm sub-packages (`@anthropic-ai/claude-code-darwin-{arm64,x64}`, `@openai/codex-darwin-{arm64,x64}`). Cross-arch CI staging downloads the tarball straight from the npm registry and verifies against `CLAUDE_CODE_SHA256` / `CODEX_SHA256` in `stage-vendor.ts`. The `stage-vendor.ts` script stages claude-code, codex, gh, glab, and cloudflared CLIs. To upgrade:
   1. Bump the version in `sidecar/package.json`, `cd sidecar && bun install`.
   2. Compute the SHA256 of both arch tarballs (`shasum -a 256` on the cached `.tgz`) and update the table in `stage-vendor.ts` (key it under the new version string).
   3. Wipe `sidecar/.bundle-cache/` and run `bun run build` in `sidecar/` to verify.
