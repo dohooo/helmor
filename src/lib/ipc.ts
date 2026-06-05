@@ -71,6 +71,17 @@ const COMPANION = isCompanionClient();
 if (COMPANION && typeof window !== "undefined") {
 	seedTokenFromHash();
 	syncCompanionCookie();
+	// A pairing link opened in the *same* tab (e.g. pasted into the address bar
+	// while the pairing screen is showing) only changes the hash — the SPA never
+	// reloads, so `seedTokenFromHash` (which runs once at module load) would
+	// never see the token. Re-seed + reload on a pairing hash so every
+	// navigation mode pairs, not just a fresh tab.
+	window.addEventListener("hashchange", () => {
+		if (/(?:^#|&)(?:pair|token)=/.test(window.location.hash)) {
+			seedTokenFromHash();
+			window.location.reload();
+		}
+	});
 }
 
 function seedTokenFromHash(): void {
@@ -123,6 +134,47 @@ function authToken(): string | null {
 function authHeaders(): Record<string, string> {
 	const token = authToken();
 	return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// ---------------------------------------------------------------------------
+// Companion auth state
+// ---------------------------------------------------------------------------
+//
+// A browser with no pairing token — or a stale/revoked one — gets 401 on every
+// `/rpc` call. Without a gate the app boots into the onboarding flow (which
+// renders demo workspaces), so an unpaired visitor sees fake data instead of a
+// reason. Track auth state here, where every request already passes, and let
+// the shell render a dedicated "pair this browser" screen instead.
+
+type CompanionAuthState = "ok" | "unknown" | "unauthed";
+
+function initialCompanionAuthState(): CompanionAuthState {
+	// Native desktop is always authed; a companion browser with no token can't
+	// be, so skip the doomed request round-trip and gate immediately.
+	if (!COMPANION) return "ok";
+	return authToken() ? "unknown" : "unauthed";
+}
+
+let companionAuthState: CompanionAuthState = initialCompanionAuthState();
+const companionAuthListeners = new Set<() => void>();
+
+function setCompanionAuthState(next: CompanionAuthState): void {
+	if (companionAuthState === next) return;
+	companionAuthState = next;
+	for (const listener of companionAuthListeners) listener();
+}
+
+/** Current companion auth state. Always `"ok"` in the native desktop runtime. */
+export function getCompanionAuthState(): CompanionAuthState {
+	return companionAuthState;
+}
+
+/** Subscribe to companion auth-state changes (for `useSyncExternalStore`). */
+export function subscribeCompanionAuth(listener: () => void): () => void {
+	companionAuthListeners.add(listener);
+	return () => {
+		companionAuthListeners.delete(listener);
+	};
 }
 
 function jsonHeaders(): Record<string, string> {
@@ -240,7 +292,11 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 		headers: jsonHeaders(),
 		body: JSON.stringify(record ?? args ?? {}),
 	});
-	if (!res.ok) throw await parseHttpError(res);
+	if (!res.ok) {
+		if (res.status === 401) setCompanionAuthState("unauthed");
+		throw await parseHttpError(res);
+	}
+	setCompanionAuthState("ok");
 	const text = await res.text();
 	return (text ? JSON.parse(text) : undefined) as T;
 }
@@ -337,7 +393,10 @@ async function runEventStream(): Promise<void> {
 			const res = await fetch(`${baseUrl()}/v1/stream`, {
 				headers: authHeaders(),
 			});
-			if (!res.ok || !res.body) throw new Error(`stream status ${res.status}`);
+			if (!res.ok || !res.body) {
+				if (res.status === 401) setCompanionAuthState("unauthed");
+				throw new Error(`stream status ${res.status}`);
+			}
 			await pumpSse(res.body, dispatchEvent);
 		} catch {
 			// Connection dropped (backgrounded tab, network blip) — reconnect.

@@ -10,6 +10,8 @@ import { helmorQueryPersister, QUERY_CACHE_BUSTER } from "@/lib/query-client";
 import { SettingsContext } from "@/lib/settings";
 import { EMPTY_SESSION_RUN_STATES } from "@/shell/constants";
 import type { AppBootstrap } from "@/shell/hooks/use-app-bootstrap";
+import { useCompanionAuthState } from "@/shell/hooks/use-companion-auth";
+import { CompanionPairingScreen } from "./companion-pairing-screen";
 
 interface AppProvidersProps extends AppBootstrap {
 	AppShell: ComponentType<{
@@ -39,6 +41,7 @@ export function AppProviders({
 	setSettingsInitialSection,
 	AppShell,
 }: AppProvidersProps) {
+	const companionAuth = useCompanionAuthState();
 	return (
 		<SettingsContext.Provider value={settingsContextValue}>
 			<PersistQueryClientProvider
@@ -48,7 +51,9 @@ export function AppProviders({
 					buster: QUERY_CACHE_BUSTER,
 				}}
 			>
-				{appSettings === null ? null : !appSettings.onboardingCompleted ? (
+				{companionAuth === "unauthed" ? (
+					<CompanionPairingScreen />
+				) : appSettings === null ? null : !appSettings.onboardingCompleted ? (
 					<>
 						<AppOnboarding onComplete={completeOnboarding} />
 						<QuitConfirmDialog sessionRunStates={EMPTY_SESSION_RUN_STATES} />
