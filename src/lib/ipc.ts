@@ -89,20 +89,61 @@ if (COMPANION && typeof window !== "undefined") {
 }
 
 /**
- * Stage a pairing token carried in the URL hash (`#pair=<token>`) WITHOUT
- * activating it: store it as "pending" in sessionStorage and strip the hash so
- * the secret doesn't linger in history. Scanning a code never auto-pairs — the
- * token only becomes the live credential once the user clicks through
- * {@link confirmCompanionPairing} on the confirm screen.
+ * Handle a pairing token carried in the URL hash (`#pair=<token>`).
+ *
+ * Token lifecycle:
+ *   scanned (in URL) ──▶ staged (sessionStorage, URL KEPT) ──▶ confirmed
+ *   (localStorage, URL consumed).  Commit happens in {@link confirmCompanionPairing}.
+ *
+ * Two deliberate choices, both important — please don't "simplify" them back:
+ *
+ * 1. We do NOT strip the hash on load. The token stays in the address bar while
+ *    the confirm screen is shown, so the user can "Add to Home Screen" right
+ *    then and the saved shortcut keeps the full `#pair=<token>` URL. Re-opening
+ *    that shortcut re-enters pairing (or goes straight in — see #2) without the
+ *    token having to survive in some other storage. The hash is consumed only
+ *    once the token is actually committed: on confirm, or here when we find
+ *    we're already paired with it.
+ *    Trade-off (intentional, user-chosen): the token then lives in that saved
+ *    URL. Fine for a personal device; the risk is only that the saved address,
+ *    if screenshotted/forwarded, lets someone else pair.
+ *
+ * 2. If localStorage already holds this exact token, there's nothing to confirm:
+ *    strip the hash and let the app boot authenticated. This is what makes a
+ *    saved home-screen shortcut tap *straight* into the app after the first
+ *    pairing, instead of re-prompting every single time.
+ *
+ * Forward-looking — the eventual native shell:
+ *   This `#pair=<token>` URL is also the intended deep-link contract for a future
+ *   native (React Native) Helmor app whose main content area is a single WebView.
+ *   The plan: scanning a code opens that app directly; the app hands the
+ *   `#pair=` URL to its WebView, which pairs through exactly this code path. In
+ *   a WebView there's only one storage context (no Safari-vs-standalone split),
+ *   so this gets simpler, not harder. Keeping the token in the URL — rather than
+ *   stripping it at load — is precisely what lets the deep link carry the token
+ *   inward. So: do NOT move the strip back to load time.
  */
 function stagePairingFromHash(): void {
 	const match = window.location.hash.match(/(?:^#|&)(?:pair|token)=([^&]+)/);
 	if (!match) return;
+	const token = decodeURIComponent(match[1]);
 	try {
-		sessionStorage.setItem(PENDING_KEY, decodeURIComponent(match[1]));
+		if (localStorage.getItem(TOKEN_KEY) === token) {
+			// Already paired with this exact token — nothing to confirm. Consume
+			// the hash and let the app boot authed from localStorage.
+			stripPairingHash();
+			return;
+		}
+		// Not yet paired: stage for the confirm screen, but leave the token in
+		// the URL so an "Add to Home Screen" now captures it (see #1 above).
+		sessionStorage.setItem(PENDING_KEY, token);
 	} catch {
-		// sessionStorage unavailable; the confirm screen just won't appear.
+		// Storage unavailable; the confirm screen just won't appear.
 	}
+}
+
+/** Remove the `#pair=`/`#token=` fragment from the live URL (keeps path + query). */
+function stripPairingHash(): void {
 	const clean = window.location.pathname + window.location.search;
 	window.history.replaceState(null, "", clean);
 }
@@ -119,7 +160,9 @@ export function getPendingPairingToken(): string | null {
 
 /**
  * Commit the staged pairing token as the active credential and reload into the
- * authenticated app. Invoked by the confirm screen's button.
+ * authenticated app. Invoked by the confirm screen's button. This is the only
+ * place the token in the URL is "consumed" for a fresh pairing — see
+ * {@link stagePairingFromHash} for why we wait until here.
  */
 export function confirmCompanionPairing(): void {
 	const token = getPendingPairingToken();
@@ -130,6 +173,11 @@ export function confirmCompanionPairing(): void {
 	} catch {
 		// Storage unavailable — the reload below just re-prompts.
 	}
+	// Consume the token from the *live* URL now that it's committed. A home-screen
+	// shortcut saved earlier keeps its own copy of the `#pair=` URL, so this only
+	// cleans the current session — re-opening the shortcut still works (and, being
+	// already paired now, skips straight in).
+	stripPairingHash();
 	window.location.reload();
 }
 

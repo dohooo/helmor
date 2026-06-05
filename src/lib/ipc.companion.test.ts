@@ -35,7 +35,7 @@ describe("companion auth state", () => {
 		expect(ipc.getCompanionAuthState()).toBe("unauthed");
 	});
 
-	it("stages a scanned #pair= token without activating it", async () => {
+	it("stages a scanned #pair= token but keeps it in the URL for Add to Home Screen", async () => {
 		window.location.hash = "#pair=hlm_scanned";
 		const ipc = await import("./ipc");
 		// The token is staged for the confirm screen...
@@ -43,7 +43,18 @@ describe("companion auth state", () => {
 		// ...but is NOT yet the active credential (no silent auto-pairing).
 		expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
 		expect(ipc.getCompanionAuthState()).toBe("unauthed");
-		// And the secret is stripped from the URL.
+		// The token stays in the URL so the user can save it to the home screen
+		// before confirming; it's consumed only on confirm.
+		expect(window.location.hash).toContain("pair=hlm_scanned");
+	});
+
+	it("skips confirm and consumes the hash when already paired with that token", async () => {
+		// Re-opening a saved home-screen shortcut whose URL carries a token we've
+		// already paired with must go straight in, not re-prompt.
+		localStorage.setItem(TOKEN_KEY, "hlm_known");
+		window.location.hash = "#pair=hlm_known";
+		const ipc = await import("./ipc");
+		expect(ipc.getPendingPairingToken()).toBeNull();
 		expect(window.location.hash).toBe("");
 	});
 
