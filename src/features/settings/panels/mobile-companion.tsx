@@ -56,6 +56,7 @@ function errorText(error: unknown): string {
 export function MobileCompanionPanel() {
 	const queryClient = useQueryClient();
 	const [pairing, setPairing] = useState<CompanionPairingPayload | null>(null);
+	const [copied, setCopied] = useState(false);
 
 	const statusQuery = useQuery({
 		queryKey: COMPANION_STATUS_KEY,
@@ -260,6 +261,27 @@ export function MobileCompanionPanel() {
 								Scan with your phone's camera. The code carries a one-time
 								device token — pair once and the phone reconnects on its own.
 							</p>
+							{/* Also expose the link as copyable text: phones that can't
+							    scan can paste it into the browser, and it's the address to
+							    add to the home screen. */}
+							<div className="flex w-full max-w-[340px] items-start gap-2">
+								<code className="min-w-0 flex-1 select-all break-all rounded-md border border-border/40 bg-muted/40 px-2 py-1.5 text-nano leading-snug text-muted-foreground">
+									{pairing.url}
+								</code>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="shrink-0 cursor-pointer"
+									onClick={() => {
+										void navigator.clipboard?.writeText(pairing.url);
+										setCopied(true);
+										window.setTimeout(() => setCopied(false), 1500);
+									}}
+								>
+									{copied ? "Copied" : "Copy"}
+								</Button>
+							</div>
 						</div>
 					) : null}
 
