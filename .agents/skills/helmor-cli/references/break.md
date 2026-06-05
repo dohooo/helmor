@@ -6,8 +6,16 @@ it into a stack of small, dependent PRs — **confirming the slicing granularity
 with the user** before committing to anything. The output is the normal stack:
 one workspace + PR per slice, nested in the sidebar.
 
-**Input**: the current workspace's full diff vs its base branch. If the working
-tree is dirty, commit a WIP snapshot first so there's a stable diff to slice.
+**Input**: the current workspace's full diff vs its base branch. The current
+workspace becomes the stack's **root**, so capture a recovery ref before you
+rewrite anything:
+```bash
+git commit -am "WIP: snapshot before break"   # only if the working tree is dirty
+ORIG=$(git rev-parse HEAD)                      # the full change you're slicing
+git branch helmor/break-backup "$ORIG"          # named recovery point
+```
+Source every slice below from `$ORIG` (not the branch name) — once the root is
+reset, the branch no longer points at the full change.
 
 ## Workflow
 
@@ -39,22 +47,34 @@ single file whose changes span concerns (e.g. `utils.ts` with both schema and UI
 helpers): keep it whole in one slice, or flag it for a manual hunk-level split
 (out of scope for v1 — see Limits).
 
-### 4. Materialize the stack (bottom-up)
+### 4. Materialize the stack (bottom-up) — your current workspace becomes the root
+The workspace you're in becomes the **bottom** layer; only the higher layers are
+new workspaces. No throwaway launchpad, nothing to delete afterward.
+
 For each slice K, from the bottom up:
 
-1. Create its workspace:
-   - bottom slice: `helmor workspace new --repo <repo>`
-   - every higher slice: `helmor workspace new --parent <slice K-1 workspace>`
+1. Get the layer's workspace:
+   - **bottom slice (root) = your current workspace** — reset it onto the base and
+     rebuild it as slice 1 only:
+     ```bash
+     git reset --hard <base>                  # e.g. origin/main — the slicing base
+     git checkout "$ORIG" -- <slice-1 added/modified files>
+     git rm <slice-1 deleted files>           # if any
+     git commit -m "<slice 1 title>"
+     ```
+   - **every higher slice**: `helmor workspace new --parent <slice K-1 workspace>`
+     (the first higher layer's `--parent` is your current workspace).
 2. Apply **only slice K's files** onto that layer (it already contains slices
-   1..K-1 because it forked off the layer below):
-   - added / modified files: `git checkout <original-branch> -- <files>`
+   1..K-1 because it forked off the layer below), sourcing from `$ORIG`:
+   - added / modified files: `git checkout "$ORIG" -- <files>`
    - deleted files: `git rm <files>`
    - then commit with the slice title.
 
-   Drive each layer with a focused dispatch so it works inside its own worktree:
+   Drive each higher layer with a focused dispatch so it works inside its own
+   worktree (pass `$ORIG`'s SHA explicitly; `helmor/break-backup` resolves it too):
    ```bash
-   helmor send --workspace <id> --plan "Apply ONLY these files from branch <original>: <list>. \
-   Added/modified: git checkout <original> -- <files>. Deleted: git rm <files>. \
+   helmor send --workspace <id> --plan "Apply ONLY these files from <ORIG-sha>: <list>. \
+   Added/modified: git checkout <ORIG-sha> -- <files>. Deleted: git rm <files>. \
    Commit as '<title>'. Do not touch anything else."
    ```
 
@@ -64,16 +84,18 @@ original change exactly.
 ### 5. Verify lossless
 The stack must reproduce the original exactly:
 ```bash
-git diff <original-branch> <top-layer-branch>
+git diff "$ORIG" <top-layer-branch>
 ```
 **This must be empty.** Empty = the top of the stack has the same tree as the
-original → nothing was dropped or duplicated. If it is not empty, report the
-difference and STOP — the slicing missed or double-counted something.
+original → nothing was dropped or duplicated. If it is **not** empty, STOP and
+report the difference — and restore the root with `git reset --hard helmor/break-backup`.
 
 ### 6. Hand off
-You now have N stacked workspaces (`helmor workspace stack <top>` shows the
-chain; the sidebar nests them). Open PRs bottom-up. The **original workspace is
-left untouched** — archive it once you've confirmed the split is faithful.
+Your current workspace is now the stack's **root**; the higher layers are the
+only new workspaces (`helmor workspace stack <top>` shows the chain; the sidebar
+nests them). Open PRs bottom-up. Consider retitling the root to its slice-1
+title. Once you've confirmed the split is faithful, the recovery branch is yours
+to keep or drop (`git branch -D helmor/break-backup`).
 
 ## Limits (v1)
 - **File-level slices only**: a file goes wholesale into one slice. Splitting a
@@ -81,4 +103,8 @@ left untouched** — archive it once you've confirmed the split is faithful.
   such files in step 3 and keep them in one slice.
 - Slices must **partition** all changed files; the step-5 lossless check
   enforces it.
-- **Non-destructive**: never delete or rewrite the original workspace's branch.
+- **Root = your current workspace**: its branch is rewritten in place to become
+  slice 1. The full change stays recoverable at `helmor/break-backup` (and is
+  reproduced at the stack tip + checked in step 5), so it's safe — but unlike a
+  fresh-stack build, the starting branch *is* rewritten. Higher layers are new
+  workspaces.

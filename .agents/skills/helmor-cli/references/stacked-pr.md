@@ -36,8 +36,8 @@ Always render through the bundled script so the diagram is byte-for-byte identic
 ### 4. Grow the stack lazily — one layer at a time
 Do **not** create every workspace up front (you'll guess the decomposition wrong before you've learned anything). Create the **bottom** layer, build it, then grow upward as each layer stabilizes:
 
-- **Bottom of the stack** (base = repo default): `helmor workspace new --repo <repo>`
-- **Each higher layer** (forks off the layer below; its PR targets the parent): `helmor workspace new --parent <lower-workspace-ref>`
+- **Bottom of the stack** = **your current workspace** (the one you're running in). It already targets the repo's default branch, so build the first layer's change directly here — do NOT spin up a separate `--repo` workspace for the base. The workspace you started from becomes the stack's root, instead of being left behind as an empty launchpad to delete later.
+- **Each higher layer** (forks off the layer below; its PR targets the parent): `helmor workspace new --parent <lower-workspace-ref>` — the first higher layer's `<lower-workspace-ref>` is your current workspace.
 
 `--parent` records `parentWorkspaceId` **and** materializes the child's target branch to the parent's branch — so the sidebar nests the stack and `gh pr create --base` targets the parent with no extra steps. The child forks off the parent's branch tip (published `origin/<branch>` if pushed, else the local tip), so you can stack before pushing.
 
