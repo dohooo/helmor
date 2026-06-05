@@ -349,6 +349,7 @@ async fn dispatch(
         "get_triage_config" => to_value(crate::commands::triage_commands::get_triage_config().await?),
         "get_triage_source_health" => to_value(crate::commands::triage_commands::get_triage_source_health().await?),
         "import_conductor_workspaces" => to_value(crate::commands::conductor_commands::import_conductor_workspaces(app.clone(), arg_json(&args, "workspaceIds")?).await?),
+        "inspect_local_llm_catalog_entry" => to_value(crate::commands::local_llm_commands::inspect_local_llm_catalog_entry(arg_string(&args, "entryId")?).await?),
         "inspect_local_llm_model" => to_value(crate::commands::local_llm_commands::inspect_local_llm_model(arg_string(&args, "path")?).await?),
         "list_conductor_repos" => to_value(crate::commands::conductor_commands::list_conductor_repos().await?),
         "list_conductor_workspaces" => to_value(crate::commands::conductor_commands::list_conductor_workspaces(arg_string(&args, "repoId")?).await?),
