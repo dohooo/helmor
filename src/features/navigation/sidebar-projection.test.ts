@@ -550,16 +550,19 @@ describe("nestStacks", () => {
 		expect(progress?.stackMeta?.get("c")).toEqual({
 			role: "tip",
 			depth: 0,
+			stackSize: 3,
 			tipId: "c",
 		});
 		expect(progress?.stackMeta?.get("b")).toEqual({
 			role: "mid",
 			depth: 1,
+			stackSize: 3,
 			tipId: "c",
 		});
 		expect(progress?.stackMeta?.get("a")).toEqual({
 			role: "root",
 			depth: 2,
+			stackSize: 3,
 			tipId: "c",
 		});
 	});

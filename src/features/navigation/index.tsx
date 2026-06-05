@@ -953,26 +953,49 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 					data-stack-tip-id={item.stackMeta?.tipId}
 				>
 					{item.stackMeta ? (
-						// Stack connector: a solid node dot per row, joined by a
-						// vertical line down the left gutter — tip connects only
-						// downward, root only upward, mid both ways.
+						// Stack connector: a node dot per row joined by vertical
+						// line segments that stop at the dot's edge (3px radius)
+						// rather than crossing it. Upper segment connects up
+						// (mid, root); lower segment connects down and extends 2px
+						// past the row to bridge the inter-row gap (ROW_HEIGHT =
+						// 30px row + 2px) so the line stays unbroken.
 						<>
-							<span
-								aria-hidden
-								className={cn(
-									// Downward segments (tip, mid) extend 2px past the
-									// row to bridge the inter-row gap (ROW_HEIGHT = 30px
-									// row + 2px) so the stack line stays unbroken.
-									"pointer-events-none absolute left-[3px] w-px -translate-x-1/2 bg-muted-foreground/20",
-									item.stackMeta.role === "tip" && "top-1/2 -bottom-0.5",
-									item.stackMeta.role === "root" && "top-0 bottom-1/2",
-									item.stackMeta.role === "mid" && "top-0 -bottom-0.5",
-								)}
-							/>
-							<span
-								aria-hidden
-								className="pointer-events-none absolute left-[3px] top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground/40"
-							/>
+							{item.stackMeta.role !== "tip" ? (
+								<span
+									aria-hidden
+									className="pointer-events-none absolute left-[3px] top-0 bottom-[calc(50%_+_3px)] w-px -translate-x-1/2 bg-muted-foreground/20"
+								/>
+							) : null}
+							{item.stackMeta.role !== "root" ? (
+								<span
+									aria-hidden
+									className="pointer-events-none absolute left-[3px] top-[calc(50%_+_3px)] -bottom-0.5 w-px -translate-x-1/2 bg-muted-foreground/20"
+								/>
+							) : null}
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span
+										className={cn(
+											// Base (root) layer gets a prominent solid dot
+											// (foreground = white in dark theme, black in
+											// light); other layers stay muted.
+											"pointer-events-auto absolute left-[3px] top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 cursor-default rounded-full",
+											item.stackMeta.role === "root"
+												? "bg-foreground"
+												: "bg-muted-foreground/40",
+										)}
+									/>
+								</TooltipTrigger>
+								<TooltipContent side="left" sideOffset={6}>
+									{`${
+										item.stackMeta.role === "tip"
+											? "Stack tip"
+											: item.stackMeta.role === "root"
+												? "Stack base"
+												: "Stack"
+									} · ${item.stackMeta.depth + 1} of ${item.stackMeta.stackSize}`}
+								</TooltipContent>
+							</Tooltip>
 						</>
 					) : null}
 					<WorkspaceRowItem

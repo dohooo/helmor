@@ -264,6 +264,7 @@ export function nestStacks(groups: WorkspaceGroup[]): WorkspaceGroup[] {
 					role:
 						depth === 0 ? "tip" : depth === chain.length - 1 ? "root" : "mid",
 					depth,
+					stackSize: chain.length,
 					tipId: row.id,
 				});
 			});
