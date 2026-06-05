@@ -68,6 +68,9 @@ function renderContainer(
 		busySessionIds?: Set<string>;
 		stoppableSessionIds?: Set<string>;
 		workspaceRootPath?: string | null;
+		displayedWorkspaceId?: string | null;
+		displayedSessionId?: string | null;
+		pendingRepoId?: string | null;
 	} = {},
 ) {
 	const queryClient = new QueryClient({
@@ -78,9 +81,9 @@ function renderContainer(
 		<QueryClientProvider client={queryClient}>
 			<WorkspaceConversationContainer
 				selectedWorkspaceId="workspace-1"
-				displayedWorkspaceId="workspace-1"
+				displayedWorkspaceId={options.displayedWorkspaceId ?? "workspace-1"}
 				selectedSessionId="session-1"
-				displayedSessionId="session-1"
+				displayedSessionId={options.displayedSessionId ?? "session-1"}
 				repoId="repo-1"
 				activeStreams={[]}
 				onSelectSession={vi.fn()}
@@ -91,6 +94,9 @@ function renderContainer(
 					sessionId: "session-1",
 					payload: pendingPayload,
 					finalized: options.finalized ?? true,
+					...(options.pendingRepoId !== undefined
+						? { repoId: options.pendingRepoId }
+						: {}),
 				}}
 				onPendingCreatedWorkspaceSubmitConsumed={onConsumed}
 				busySessionIds={options.busySessionIds}
@@ -143,6 +149,73 @@ describe("WorkspaceConversationContainer", () => {
 			);
 		});
 		expect(onConsumed).toHaveBeenCalledWith("pending-1");
+	});
+
+	it("dispatches even after the user navigated to another workspace before finalize", async () => {
+		// Regression: dispatch was gated on the pending target matching the
+		// displayed workspace, so switching away during finalize stranded the
+		// first turn. It must fire regardless of focus.
+		const onConsumed = vi.fn();
+		const pendingPayload: ComposerSubmitPayload = {
+			prompt: "Build this now",
+			imagePaths: [],
+			filePaths: [],
+			customTags: [],
+			model: MODEL,
+			workingDirectory: "/tmp/new-workspace",
+			effortLevel: "high",
+			permissionMode: "default",
+			fastMode: false,
+		};
+
+		renderContainer(pendingPayload, onConsumed, {
+			displayedWorkspaceId: "workspace-2",
+			displayedSessionId: "session-2",
+		});
+
+		await waitFor(() => {
+			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
+				pendingPayload,
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+				},
+			);
+		});
+		expect(onConsumed).toHaveBeenCalledWith("pending-1");
+	});
+
+	it("forwards the pending repoId into the override", async () => {
+		const pendingPayload: ComposerSubmitPayload = {
+			prompt: "Build this now",
+			imagePaths: [],
+			filePaths: [],
+			customTags: [],
+			model: MODEL,
+			workingDirectory: "/tmp/new-workspace",
+			effortLevel: "high",
+			permissionMode: "default",
+			fastMode: false,
+		};
+
+		renderContainer(pendingPayload, vi.fn(), {
+			displayedWorkspaceId: "workspace-2",
+			displayedSessionId: "session-2",
+			pendingRepoId: "repo-new",
+		});
+
+		await waitFor(() => {
+			expect(streamingMocks.handleComposerSubmit).toHaveBeenCalledWith(
+				pendingPayload,
+				{
+					sessionId: "session-1",
+					workspaceId: "workspace-1",
+					contextKey: "session:session-1",
+					repoId: "repo-new",
+				},
+			);
+		});
 	});
 
 	it("uses payload.workingDirectory verbatim even when workspaceRootPath is null", async () => {

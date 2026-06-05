@@ -649,12 +649,17 @@ export function useConversationStreaming({
 				sessionId: string;
 				workspaceId: string | null;
 				contextKey: string;
+				// Pin the target repo for the preference prefix; absent → use
+				// the displayed repo.
+				repoId?: string | null;
 			},
 		) => {
 			const isOverride = override !== undefined;
 			const targetSessionId = override?.sessionId ?? displayedSessionId;
 			const targetWorkspaceId = override?.workspaceId ?? displayedWorkspaceId;
 			const targetContextKey = override?.contextKey ?? composerContextKey;
+			const targetRepoId =
+				override && "repoId" in override ? override.repoId : repoId;
 
 			const trimmedPrompt = prompt.trim();
 			// `selectionPending` is a UI-only guard (user clicked a session
@@ -829,7 +834,9 @@ export function useConversationStreaming({
 			const isFirstUserMessage =
 				(currentThread ?? []).every((message) => message.role !== "user") &&
 				(currentTitle == null || currentTitle === "Untitled");
-			const repoPreferences = repoId ? await loadRepoPreferences(repoId) : null;
+			const repoPreferences = targetRepoId
+				? await loadRepoPreferences(targetRepoId)
+				: null;
 			// The general-preference preamble is prepended ONLY on the wire
 			// to the agent (Rust side stitches it onto `prompt_prefix`).
 			// `trimmedPrompt` is what the user typed — that's what we
@@ -1000,9 +1007,9 @@ export function useConversationStreaming({
 					error,
 					"Failed to send message.",
 				);
-				if (isRecoverableByPurge(code) && displayedWorkspaceId) {
+				if (isRecoverableByPurge(code) && targetWorkspaceId) {
 					showWorkspaceBrokenToast({
-						workspaceId: displayedWorkspaceId,
+						workspaceId: targetWorkspaceId,
 						pushToast,
 						queryClient,
 					});
