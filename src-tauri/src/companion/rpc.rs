@@ -22,7 +22,14 @@ use crate::error::CommandError;
 pub async fn dispatch(command: &str, args: Value) -> Result<Value, CommandError> {
     match command {
         // Cold-boot reads (no args).
-        "get_app_settings" => to_value(cmd::settings_commands::get_app_settings().await?),
+        "get_app_settings" => {
+            // Redact credential-bearing keys before handing settings to a
+            // paired phone: it can't configure them and they'd otherwise land
+            // in the browser's localStorage / query cache in plaintext.
+            let mut settings = cmd::settings_commands::get_app_settings().await?;
+            settings.retain(|key, _| !is_secret_setting_key(key));
+            to_value(settings)
+        }
         "list_workspace_groups" => {
             to_value(cmd::workspace_commands::list_workspace_groups().await?)
         }
@@ -131,4 +138,55 @@ fn arg_opt_string(args: &Value, key: &str) -> Option<String> {
 /// Extract an optional `usize` argument.
 fn arg_opt_usize(args: &Value, key: &str) -> Option<usize> {
     args.get(key).and_then(Value::as_u64).map(|n| n as usize)
+}
+
+/// Whether a `settings` key carries a credential we must never hand to a paired
+/// device. Matches an explicit list (keys whose JSON *value* embeds a secret)
+/// plus a name pattern catching future `*api_key*` / `*token*` / `*secret*`
+/// keys. Errs toward over-redaction — a paired phone configures none of these.
+fn is_secret_setting_key(key: &str) -> bool {
+    const EXPLICIT: &[&str] = &[
+        "app.cursor_provider",         // { apiKey, ... }
+        "app.claude_custom_providers", // [{ apiKey, ... }]
+        "app.agent_proxy",             // proxy credentials
+        "app.companion_stable_url",    // registry revocation secret
+    ];
+    if EXPLICIT.contains(&key) {
+        return true;
+    }
+    let lower = key.to_ascii_lowercase();
+    lower.contains("api_key") || lower.contains("token") || lower.contains("secret")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_secret_setting_key;
+
+    #[test]
+    fn redacts_credential_keys() {
+        for key in [
+            "app.openai_realtime_api_key",
+            "app.cursor_provider",
+            "app.claude_custom_providers",
+            "app.agent_proxy",
+            "app.companion_stable_url",
+            "app.some_future_token",
+            "app.x_secret",
+        ] {
+            assert!(is_secret_setting_key(key), "{key} should be redacted");
+        }
+    }
+
+    #[test]
+    fn keeps_non_secret_keys() {
+        for key in [
+            "app.default_model_id",
+            "app.onboarding_completed",
+            "app.theme",
+            "app.claude_rate_limits",
+            "app.codex_rate_limits",
+        ] {
+            assert!(!is_secret_setting_key(key), "{key} should be kept");
+        }
+    }
 }
