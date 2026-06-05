@@ -19,13 +19,20 @@ fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
 /// Authorize a request: bearer matches the dev token (constant-time) or passes
 /// the injected verifier (paired-device PAT lookup in production).
 pub fn authorize(headers: &HeaderMap, dev_token: &str, verifier: &Verifier) -> bool {
-    let Some(bearer) = extract_bearer(headers) else {
-        return false;
-    };
-    if constant_time_eq(bearer.as_bytes(), dev_token.as_bytes()) {
+    match extract_bearer(headers) {
+        Some(bearer) => authorize_token(bearer, dev_token, verifier),
+        None => false,
+    }
+}
+
+/// Core token check, independent of where the token came from. Used by the
+/// bearer path above and by the `<img>`-asset path (which authenticates via a
+/// cookie since `<img>` can't set an `Authorization` header).
+pub fn authorize_token(token: &str, dev_token: &str, verifier: &Verifier) -> bool {
+    if constant_time_eq(token.as_bytes(), dev_token.as_bytes()) {
         return true;
     }
-    verifier(bearer)
+    verifier(token)
 }
 
 /// True when the request's bearer matches `expected` (constant-time). Retained

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -63,6 +63,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rpc/{cmd}", post(rpc_handler))
         .route("/rpc-stream/{cmd}", post(rpc_stream_handler))
         .route("/v1/stream", get(stream_handler))
+        .route("/v1/asset", get(asset_handler))
         // Everything else: serve the embedded SPA (unauthenticated — the bundle
         // is public; data behind /rpc still requires the bearer token).
         .fallback(serve_asset)
@@ -245,4 +246,147 @@ fn unauthorized() -> Response {
         })),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// `<img>` asset serving (companion `convertFileSrc`)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct AssetQuery {
+    path: String,
+}
+
+/// `GET /v1/asset?path=<local file>` — serves an on-disk image so the phone can
+/// render avatars / pasted / generated images (`convertFileSrc` targets in
+/// companion mode). Auth is via the `helmor_companion_pat` cookie because an
+/// `<img>` element can't send an `Authorization` header.
+///
+/// HARD-restricted to the avatar / generated-image / paste-cache directories so
+/// a paired device can never pull `helmor.db`, logs, or arbitrary workspace
+/// files. Paths are canonicalised first, so `..` / symlink escapes are rejected.
+async fn asset_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AssetQuery>,
+) -> Response {
+    let Some(token) = cookie_token(&headers) else {
+        return unauthorized();
+    };
+    if !auth::authorize_token(&token, state.token.as_str(), &state.verifier) {
+        return unauthorized();
+    }
+    let Some(file) = resolve_allowed_image_file(&query.path) else {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    };
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => ([(CONTENT_TYPE, image_mime(&file))], bytes).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// Extract the `helmor_companion_pat` value from the `Cookie` header.
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    raw.split(';')
+        .filter_map(|pair| pair.trim().strip_prefix("helmor_companion_pat="))
+        .map(str::to_string)
+        .next()
+}
+
+/// Directories a paired device may read images from. Everything else (the
+/// SQLite DB, logs, query cache, workspace files) is off-limits.
+fn allowed_image_dirs() -> Vec<std::path::PathBuf> {
+    [
+        crate::data_dir::avatar_cache_dir(),
+        crate::data_dir::generated_images_dir(),
+        crate::data_dir::paste_cache_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Canonicalise `requested` (resolving `..` / symlinks; requires it to exist)
+/// and accept it only if it lives inside one of the allowed image dirs.
+fn resolve_allowed_image_file(requested: &str) -> Option<std::path::PathBuf> {
+    let candidate = std::fs::canonicalize(requested).ok()?;
+    let dirs: Vec<std::path::PathBuf> = allowed_image_dirs()
+        .iter()
+        .filter_map(|dir| std::fs::canonicalize(dir).ok())
+        .collect();
+    path_is_within(&candidate, &dirs).then_some(candidate)
+}
+
+fn path_is_within(candidate: &std::path::Path, dirs: &[std::path::PathBuf]) -> bool {
+    dirs.iter().any(|dir| candidate.starts_with(dir))
+}
+
+fn image_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("bmp") => "image/bmp",
+        _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
+
+    use super::{cookie_token, path_is_within, resolve_allowed_image_file};
+
+    #[test]
+    fn cookie_token_extracts_pat() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static("foo=1; helmor_companion_pat=hlm_abc; bar=2"),
+        );
+        assert_eq!(cookie_token(&headers).as_deref(), Some("hlm_abc"));
+        assert_eq!(cookie_token(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn path_is_within_prefix_logic() {
+        let dirs = vec![PathBuf::from("/data/cache/avatars")];
+        assert!(path_is_within(
+            Path::new("/data/cache/avatars/x.png"),
+            &dirs
+        ));
+        assert!(!path_is_within(Path::new("/data/helmor.db"), &dirs));
+        assert!(!path_is_within(Path::new("/etc/passwd"), &dirs));
+    }
+
+    #[test]
+    fn allows_avatar_rejects_db_and_traversal() {
+        let _env = crate::testkit::TestEnv::new("companion-asset");
+        let avatars = crate::data_dir::avatar_cache_dir().unwrap();
+        std::fs::create_dir_all(&avatars).unwrap();
+        let img = avatars.join("a.png");
+        std::fs::write(&img, b"x").unwrap();
+
+        // Allowed: a real file under the avatar cache dir.
+        assert!(resolve_allowed_image_file(img.to_str().unwrap()).is_some());
+
+        // Rejected: the SQLite DB under the data dir.
+        let db = crate::data_dir::data_dir().unwrap().join("helmor.db");
+        std::fs::write(&db, b"db").unwrap();
+        assert!(resolve_allowed_image_file(db.to_str().unwrap()).is_none());
+
+        // Rejected: a `..` escape out of the avatar dir back to the DB.
+        let traversal = format!("{}/../../helmor.db", avatars.display());
+        assert!(resolve_allowed_image_file(&traversal).is_none());
+    }
 }

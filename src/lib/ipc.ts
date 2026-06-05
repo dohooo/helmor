@@ -70,6 +70,7 @@ const COMPANION = isCompanionClient();
 // history or get shared.
 if (COMPANION && typeof window !== "undefined") {
 	seedTokenFromHash();
+	syncCompanionCookie();
 }
 
 function seedTokenFromHash(): void {
@@ -82,6 +83,23 @@ function seedTokenFromHash(): void {
 	}
 	const clean = window.location.pathname + window.location.search;
 	window.history.replaceState(null, "", clean);
+}
+
+/**
+ * Mirror the PAT into a same-origin cookie so `<img src="/v1/asset?…">` requests
+ * authenticate — an `<img>` element can't send an `Authorization` header. The
+ * PAT is `hlm_<base64url>`, which is cookie-value-safe (no `;` / `=`).
+ */
+function syncCompanionCookie(): void {
+	const token = authToken();
+	if (!token) return;
+	try {
+		// biome-ignore lint/suspicious/noDocumentCookie: Cookie Store API is unsupported in Safari (iPhone); document.cookie is the cross-browser path.
+		document.cookie = `helmor_companion_pat=${token}; path=/; SameSite=Strict`;
+	} catch {
+		// Cookies unavailable (rare embedded contexts) — `<img>` assets just
+		// won't load; everything else still works via the localStorage token.
+	}
 }
 
 function baseUrl(): string {
@@ -161,7 +179,12 @@ export const Channel = (COMPANION
  */
 export function convertFileSrc(filePath: string, protocol?: string): string {
 	if (!COMPANION) return tauriConvertFileSrc(filePath, protocol);
-	return "";
+	// Serve the file through the companion's restricted `/v1/asset` endpoint
+	// (avatar / generated-image / paste-cache dirs only). The PAT cookie set in
+	// `syncCompanionCookie` authenticates the `<img>` request. Files outside
+	// those dirs (e.g. workspace images) 403 and render blank — no crash.
+	if (!filePath) return "";
+	return `${baseUrl()}/v1/asset?path=${encodeURIComponent(filePath)}`;
 }
 
 // ---------------------------------------------------------------------------
