@@ -718,11 +718,32 @@ fn try_install_cli_silent_at(
     }
 }
 
-fn try_install_cli_silent() -> anyhow::Result<()> {
-    let source = std::env::current_exe().context("Cannot determine app executable path")?;
-    let cli_binary = bundled_cli_binary(&source)?;
-    let install_path = cli_install_target();
-    try_install_cli_silent_at(&cli_binary, &install_path)
+/// Verify the managed CLI symlink and silently re-point it if it is stale
+/// or missing. Returns the silent-install error (if any) for the panel.
+///
+/// This runs on EVERY components check — never gated by the per-version
+/// cache — because the symlink is cheap to fix (a stat + an unprivileged
+/// symlink rewrite) and can go stale WITHIN a single version whenever the
+/// dev build switches worktrees. Caching it behind the version key is
+/// exactly what used to leave a dangling `/usr/local/bin/helmor-dev`
+/// pointing at a worktree whose binary was rebuilt or removed.
+fn check_and_heal_cli_symlink(
+    install_path: &std::path::Path,
+    bundled_cli: &std::path::Path,
+) -> Option<String> {
+    match classify_cli_install(install_path, bundled_cli) {
+        CliInstallState::Managed => None,
+        CliInstallState::Missing | CliInstallState::Stale => {
+            match try_install_cli_silent_at(bundled_cli, install_path) {
+                Ok(()) => None,
+                Err(error) => {
+                    let msg = format!("{error:#}");
+                    tracing::info!(error = %msg, "Components check: silent CLI install deferred to user");
+                    Some(msg)
+                }
+            }
+        }
+    }
 }
 
 /// One pass of the silent startup check. Returns the post-check snapshot
@@ -731,55 +752,37 @@ fn try_install_cli_silent() -> anyhow::Result<()> {
 fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-    // Cache hit — skip everything. The panel still re-reads errors so
-    // a "Re-check" that clears the cache key (via `force`) shows fresh.
+    // --- CLI half: ALWAYS run, BEFORE the per-version cache gate ---------
+    // Self-heal the managed CLI symlink on every launch (see
+    // `check_and_heal_cli_symlink`): it can go stale within a single
+    // version when the dev build switches worktrees, and re-pointing it is
+    // cheap and (on a user-writable install dir) needs no sudo, so a plain
+    // restart fixes it instead of forcing a manual `ln -sfn`.
+    let install_path = cli_install_target();
+    let cli_error: Option<String> = match std::env::current_exe()
+        .context("Cannot determine app executable path")
+        .and_then(|exe| bundled_cli_binary(&exe))
+    {
+        Ok(cli_binary) => check_and_heal_cli_symlink(&install_path, &cli_binary),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), "Components check: bundled CLI lookup failed");
+            None
+        }
+    };
+    persist_error(UPDATE_CHECK_CLI_ERROR_KEY, cli_error.as_deref());
+
+    // --- Skills install is expensive (`npx skills add`): gate it behind
+    // the per-version cache. The CLI half above is independent of this.
     if !force {
         if let Ok(Some(last)) =
             crate::models::settings::load_setting_value(LAST_UPDATE_CHECK_VERSION_KEY)
         {
             if last == current_version {
-                return read_components_update_check().unwrap_or_else(|error| {
-                    tracing::warn!(
-                        error = %format!("{error:#}"),
-                        "Failed to read components-check cache; returning empty snapshot",
-                    );
-                    empty_components_check(current_version.clone())
-                });
+                return read_components_update_check()
+                    .unwrap_or_else(|_| empty_components_check(current_version));
             }
         }
     }
-
-    // --- CLI half --------------------------------------------------------
-    let install_path = cli_install_target();
-    let source = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(error = %error, "Components check: current_exe failed");
-            return read_components_update_check()
-                .unwrap_or_else(|_| empty_components_check(current_version));
-        }
-    };
-    let cli_binary = match bundled_cli_binary(&source) {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(error = %format!("{error:#}"), "Components check: bundled CLI lookup failed");
-            return read_components_update_check()
-                .unwrap_or_else(|_| empty_components_check(current_version));
-        }
-    };
-
-    let cli_state = classify_cli_install(&install_path, &cli_binary);
-    let cli_error: Option<String> = match cli_state {
-        CliInstallState::Managed => None,
-        CliInstallState::Missing | CliInstallState::Stale => match try_install_cli_silent() {
-            Ok(()) => None,
-            Err(error) => {
-                let msg = format!("{error:#}");
-                tracing::info!(error = %msg, "Components check: silent CLI install deferred to user");
-                Some(msg)
-            }
-        },
-    };
 
     // --- Skills half -----------------------------------------------------
     //
@@ -806,17 +809,13 @@ fn run_components_check_inner(force: bool) -> ComponentsUpdateCheck {
             }
         }
     };
-
-    // Persist error state unconditionally so the panel reflects reality.
-    persist_error(UPDATE_CHECK_CLI_ERROR_KEY, cli_error.as_deref());
     persist_error(UPDATE_CHECK_SKILLS_ERROR_KEY, skills_error.as_deref());
 
-    // Only advance the cache key if neither half left a real error
-    // behind. This way a transient skills failure (no network, npx not
-    // on PATH yet) auto-retries on the next launch, while a steady
-    // state ("CLI needs sudo, you have to click Retry") still only
-    // checks once per upgrade.
-    if cli_error.is_none() && skills_error.is_none() {
+    // Advance the cache key (which gates the expensive skills install) only
+    // when the skills half is clean — a transient failure (no network, npx
+    // not on PATH yet) auto-retries on the next launch. The CLI half is
+    // independent and always runs, so it no longer gates this key.
+    if skills_error.is_none() {
         if let Err(error) = crate::models::settings::upsert_setting_value(
             LAST_UPDATE_CHECK_VERSION_KEY,
             &current_version,
@@ -1962,6 +1961,39 @@ mod tests {
 
         install_cli_symlink(&bundled_cli, &install_path).unwrap();
 
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Managed
+        );
+    }
+
+    #[test]
+    fn check_and_heal_cli_symlink_repoints_a_stale_link() {
+        let tmp = tempdir().unwrap();
+        let bundled_cli = tmp.path().join("Helmor.app/Contents/MacOS/helmor-cli");
+        let old_cli = tmp.path().join("old-worktree/helmor-cli");
+        let install_path = tmp.path().join("usr/local/bin/helmor-dev");
+        fs::create_dir_all(bundled_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(old_cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(install_path.parent().unwrap()).unwrap();
+        fs::write(&bundled_cli, "#!/bin/sh\n").unwrap();
+        fs::write(&old_cli, "#!/bin/sh\n").unwrap();
+
+        // Reproduce the dev-CLI breakage: the managed symlink points at a
+        // different worktree's binary, so it reads as Stale.
+        std::os::unix::fs::symlink(&old_cli, &install_path).unwrap();
+        assert_eq!(
+            classify_cli_install(&install_path, &bundled_cli),
+            CliInstallState::Stale
+        );
+
+        // The plain (un-forced) heal a restart triggers re-points it with no
+        // error and no sudo — the whole point of moving this out of the
+        // per-version cache gate.
+        assert_eq!(
+            check_and_heal_cli_symlink(&install_path, &bundled_cli),
+            None
+        );
         assert_eq!(
             classify_cli_install(&install_path, &bundled_cli),
             CliInstallState::Managed

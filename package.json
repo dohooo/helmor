@@ -13,7 +13,9 @@
 	"scripts": {
 		"changeset": "changeset",
 		"dev": "bun run dev:prepare && tauri dev",
-		"dev:prepare": "cd sidecar && bun run dev:prepare",
+		"dev:prepare": "bun run dev:prepare:sidecar && bun run dev:prepare:cli",
+		"dev:prepare:sidecar": "cd sidecar && bun run dev:prepare",
+		"dev:prepare:cli": "node scripts/stage-dev-cli.mjs",
 		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
