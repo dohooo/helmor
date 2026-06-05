@@ -67,6 +67,9 @@ export type PendingCreatedWorkspaceSubmit = {
 	id: string;
 	workspaceId: string;
 	sessionId: string;
+	/** New workspace's repo, forwarded into the first-turn send so the
+	 *  preference prefix stays correct even after navigating away. */
+	repoId?: string | null;
 	payload: ComposerSubmitPayload;
 	/** False until `await finalizePromise` resolves. The optimistic user
 	 *  bubble is rendered as soon as the pending submit is queued, but the
@@ -489,16 +492,10 @@ export const WorkspaceConversationContainer = memo(
 				dispatchedCreatedWorkspaceSubmitRef.current = null;
 				return;
 			}
-			if (
-				pendingCreatedWorkspaceSubmit.workspaceId !== displayedWorkspaceId ||
-				pendingCreatedWorkspaceSubmit.sessionId !== displayedSessionId
-			) {
-				return;
-			}
-			// Hold off until the App-level handler has awaited finalize. The
-			// backend has already written `state=ready` / `setup_pending` by
-			// the time `finalized` flips true — no React Query round-trip
-			// needed before firing the submit.
+			// Not gated on the displayed workspace: the send targets the
+			// pending session via `override`, so it must fire even if the user
+			// navigated away during finalize. Wait for `finalized` though —
+			// the backend row is operational only once it flips true.
 			if (!pendingCreatedWorkspaceSubmit.finalized) {
 				return;
 			}
@@ -523,14 +520,15 @@ export const WorkspaceConversationContainer = memo(
 						pendingCreatedWorkspaceSubmit.workspaceId,
 						pendingCreatedWorkspaceSubmit.sessionId,
 					),
+					...(pendingCreatedWorkspaceSubmit.repoId !== undefined
+						? { repoId: pendingCreatedWorkspaceSubmit.repoId }
+						: {}),
 				});
 				onPendingCreatedWorkspaceSubmitConsumed?.(
 					pendingCreatedWorkspaceSubmit.id,
 				);
 			})();
 		}, [
-			displayedSessionId,
-			displayedWorkspaceId,
 			handleComposerSubmit,
 			onPendingCreatedWorkspaceSubmitConsumed,
 			pendingCreatedWorkspaceSubmit,
