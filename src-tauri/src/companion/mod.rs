@@ -27,7 +27,8 @@ pub mod stable_url;
 mod stream;
 mod tunnel;
 
-pub use server::StreamStarter;
+pub use rpc::build_dispatcher;
+pub use server::{Dispatcher, StreamStarter};
 pub use stream::build_stream_starter;
 pub use tunnel::{
     create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare, TunnelState,
@@ -64,8 +65,9 @@ pub async fn start_with_tunnel(
     tunnel: &TunnelState,
 ) -> Result<()> {
     let streamer = build_stream_starter(app.clone());
+    let dispatcher = build_dispatcher(app.clone());
     let verifier = paired_device_verifier();
-    let info = companion.start(app, streamer, verifier).await?;
+    let info = companion.start(app, streamer, dispatcher, verifier).await?;
     let port = info.addr.port();
 
     let provisioning = tauri::async_runtime::spawn_blocking(stable_url::load)
@@ -124,6 +126,7 @@ impl CompanionState {
         &self,
         app: tauri::AppHandle<R>,
         streamer: StreamStarter,
+        dispatcher: Dispatcher,
         verifier: Verifier,
     ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
@@ -149,6 +152,7 @@ impl CompanionState {
             token: Arc::new(token.clone()),
             assets,
             streamer,
+            dispatcher,
             verifier,
         };
         let router = server::router(state);

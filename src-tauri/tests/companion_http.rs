@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use helmor_lib::companion::{CompanionState, StreamStarter, Verifier};
+use futures::FutureExt;
+use helmor_lib::companion::{CompanionState, Dispatcher, StreamStarter, Verifier};
+use helmor_lib::error::CommandError;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
@@ -23,8 +25,26 @@ async fn health_is_public_and_rpc_requires_bearer() {
     // In-memory verifier (no DB) so the test stays isolated; only the dev token
     // and this known PAT authenticate.
     let verifier: Verifier = Arc::new(|bearer| bearer == "hlm_paired_test");
+    // Stub dispatcher replicating the two dispatch paths this test asserts
+    // (unknown command + missing required arg) without needing a real app/DB.
+    let dispatcher: Dispatcher = Arc::new(|cmd: String, args: serde_json::Value| {
+        async move {
+            match cmd.as_str() {
+                "get_workspace" => {
+                    args.get("workspaceId")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| -> CommandError {
+                            anyhow::anyhow!("Missing required argument: workspaceId").into()
+                        })?;
+                    Ok(serde_json::Value::Null)
+                }
+                other => Err(anyhow::anyhow!("Unknown companion command: {other}").into()),
+            }
+        }
+        .boxed()
+    });
     let info = state
-        .start(app.handle().clone(), streamer, verifier)
+        .start(app.handle().clone(), streamer, dispatcher, verifier)
         .await
         .expect("companion server should start");
     let base = format!("http://{}", info.addr);

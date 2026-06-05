@@ -473,10 +473,11 @@ pub fn run() {
                 let companion_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let streamer = companion::build_stream_starter(companion_handle.clone());
+                    let dispatcher = companion::build_dispatcher(companion_handle.clone());
                     let verifier = companion::paired_device_verifier();
                     let state = companion_handle.state::<companion::CompanionState>();
                     match state
-                        .start(companion_handle.clone(), streamer, verifier)
+                        .start(companion_handle.clone(), streamer, dispatcher, verifier)
                         .await
                     {
                         // Loopback-only, opt-in dev gate: logging the token here

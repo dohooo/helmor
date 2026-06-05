@@ -112,6 +112,8 @@ name = "gen_pipeline_fixture"
 path = "src/bin/gen_pipeline_fixture.rs"
 
 [dev-dependencies]
+anyhow = "1"
+futures = "0.3"
 insta = { version = "1", features = ["yaml", "glob"] }
 tempfile = "3"
 

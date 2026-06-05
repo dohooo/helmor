@@ -20,7 +20,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
-use super::{auth, rpc, Verifier};
+use super::{auth, Verifier};
 use crate::error::CommandError;
 
 /// Resolves a request path to embedded SPA bytes + MIME type. Type-erased so
@@ -36,6 +36,17 @@ pub type AssetLoader = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sy
 pub type StreamStarter =
     Arc<dyn Fn(&str, Value, UnboundedSender<String>) -> Result<(), CommandError> + Send + Sync>;
 
+/// Dispatches a non-streaming `/rpc/{cmd}` call to the real Tauri command behind
+/// the concrete `AppHandle` (so commands needing `State`/`AppHandle` work).
+/// Type-erased so the server stays runtime-agnostic; built in
+/// [`super::rpc::build_dispatcher`]. Takes owned `(cmd, args)` so the returned
+/// future is `'static`.
+pub type Dispatcher = Arc<
+    dyn Fn(String, Value) -> futures::future::BoxFuture<'static, Result<Value, CommandError>>
+        + Send
+        + Sync,
+>;
+
 /// Shared state injected into every handler.
 #[derive(Clone)]
 pub struct AppState {
@@ -45,6 +56,8 @@ pub struct AppState {
     pub assets: AssetLoader,
     /// Starts a streaming command (reuses the desktop streaming paths).
     pub streamer: StreamStarter,
+    /// Dispatches non-streaming `/rpc/{cmd}` calls to the real commands.
+    pub dispatcher: Dispatcher,
     /// Verifies bearer tokens beyond the dev token (paired-device PATs).
     pub verifier: Verifier,
 }
@@ -110,7 +123,7 @@ async fn rpc_handler(
         }
     };
 
-    match rpc::dispatch(&cmd, args).await {
+    match (state.dispatcher)(cmd, args).await {
         Ok(value) => Json(value).into_response(),
         Err(command_error) => {
             // `CommandError` serialises as { code, message } — the same shape
