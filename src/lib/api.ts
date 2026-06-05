@@ -4,7 +4,7 @@ import { type ErrorCode, extractError } from "./errors";
 // `invoke` / `Channel` / `listen` route through the transport shim so the same
 // frontend works in the desktop Tauri webview AND when served to a phone
 // browser by the companion server. See `src/lib/ipc.ts`.
-import { Channel, invoke, listen, type UnlistenFn } from "./ipc";
+import { Channel, closeChannel, invoke, listen, type UnlistenFn } from "./ipc";
 import { setSessionThreadPaginationState } from "./session-thread-pagination";
 
 export type GroupTone =
@@ -2356,6 +2356,7 @@ export async function subscribeUiMutations(
 	await invoke("subscribe_ui_mutations", { subscriptionId, onEvent });
 	return () => {
 		onEvent.onmessage = () => {};
+		closeChannel(onEvent);
 		void invoke("unsubscribe_ui_mutations", { subscriptionId });
 	};
 }
@@ -3698,6 +3699,37 @@ export async function stopAgentStream(
 	await invoke("stop_agent_stream", {
 		request: { sessionId, provider: provider ?? null },
 	});
+}
+
+/**
+ * Attach a read-only *watcher* to a session's live agent stream.
+ *
+ * The client that called `startAgentMessageStream` renders the turn from its
+ * own channel; this lets another client (a second window, or this same SPA
+ * served to a phone via the mobile companion) mirror the SAME turn live. The
+ * callback fires for every `AgentStreamEvent` the driver receives — feed them
+ * through the same render pipeline. Works identically over native Tauri and the
+ * companion HTTP/NDJSON transport. Returns an unlisten to detach.
+ */
+export async function subscribeSessionStream(
+	sessionId: string,
+	callback: (event: AgentStreamEvent) => void,
+): Promise<UnlistenFn> {
+	const subscriptionId = crypto.randomUUID();
+	const onEvent = new Channel<AgentStreamEvent>();
+	onEvent.onmessage = (event) => callback(event);
+	await invoke("subscribe_session_stream", {
+		sessionId,
+		subscriptionId,
+		onEvent,
+	});
+	return () => {
+		onEvent.onmessage = () => {};
+		// Abort the companion fetch so the server frees the watcher and the
+		// browser releases the connection slot (no-op on native Tauri).
+		closeChannel(onEvent);
+		void invoke("unsubscribe_session_stream", { sessionId, subscriptionId });
+	};
 }
 
 /** UI projection of a registered, in-flight agent stream. Mirror of

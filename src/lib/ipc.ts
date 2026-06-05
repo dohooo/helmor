@@ -294,6 +294,29 @@ async function parseHttpError(res: Response): Promise<unknown> {
  */
 class CompanionChannel<T = unknown> {
 	onmessage: ((message: T) => void) | null = null;
+	/**
+	 * Aborts the underlying streaming `fetch`, if this channel was routed to a
+	 * `/rpc-stream` endpoint. Set by {@link companionInvoke}. Closing the fetch
+	 * is what tells the server the client disconnected (so it frees the
+	 * subscription) AND releases the browser's per-origin connection slot — a
+	 * long-lived stream that is never aborted leaks a connection, and once the
+	 * ~6-connection cap is hit new streams hang forever. Native Tauri channels
+	 * don't carry this; {@link closeChannel} no-ops on them.
+	 */
+	close: (() => void) | null = null;
+}
+
+/**
+ * Tear down a streaming subscription's transport. On a companion channel this
+ * aborts the underlying `fetch` (freeing the server subscription + the browser
+ * connection slot); on a native Tauri channel it's a no-op (the matching
+ * `unsubscribe_*` command owns native teardown). Call this from any `api.ts`
+ * unlisten that opened a long-lived stream.
+ */
+export function closeChannel(channel: unknown): void {
+	if (channel instanceof CompanionChannel) {
+		channel.close?.();
+	}
 }
 
 // Mirror Tauri's `Channel`, which is both a value (constructor) and a type.
@@ -360,6 +383,11 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 					([, value]) => !(value instanceof CompanionChannel),
 				),
 			);
+			// Wire an AbortController so the subscription can close its fetch on
+			// teardown (see `closeChannel`). Without this, every stream leaks a
+			// connection until the per-origin cap stalls all new streams.
+			const controller = new AbortController();
+			(channel as CompanionChannel<unknown>).close = () => controller.abort();
 			// Tauri's invoke resolves immediately while the channel emits
 			// asynchronously — mirror that. Failures (e.g. a streaming endpoint
 			// not wired yet) degrade to "no events" rather than rejecting.
@@ -367,6 +395,7 @@ async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 				cmd,
 				rest,
 				channel as CompanionChannel<unknown>,
+				controller.signal,
 			).catch(() => {});
 			return undefined as T;
 		}
@@ -404,6 +433,7 @@ async function companionStream(
 	cmd: string,
 	args: Record<string, unknown>,
 	channel: CompanionChannel<unknown>,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const res = await fetch(
 		`${baseUrl()}/rpc-stream/${encodeURIComponent(cmd)}`,
@@ -411,6 +441,7 @@ async function companionStream(
 			method: "POST",
 			headers: jsonHeaders(),
 			body: JSON.stringify(args),
+			signal,
 		},
 	);
 	if (!res.ok || !res.body) throw await parseHttpError(res);

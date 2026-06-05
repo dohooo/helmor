@@ -176,6 +176,7 @@ pub fn run() {
     let app = builder
         .manage(sidecar::ManagedSidecar::new())
         .manage(agents::ActiveStreams::new())
+        .manage(agents::SessionStreamHub::new())
         .manage(agents::SlashCommandCache::new())
         .manage(workspace::archive::ArchiveJobManager::new())
         .manage(local_llm::Manager::default())
@@ -546,6 +547,8 @@ pub fn run() {
             agents::list_cursor_models,
             agents::list_provider_capabilities,
             agents::send_agent_message_stream,
+            agents::subscribe_session_stream,
+            agents::unsubscribe_session_stream,
             agents::stop_agent_stream,
             agents::list_active_streams,
             agents::steer_agent_stream,
