@@ -19,6 +19,7 @@ pub(crate) mod context_usage;
 mod params;
 mod session_id;
 mod state;
+mod stream_hub;
 mod workflow_persist;
 
 #[cfg(test)]
@@ -35,6 +36,7 @@ pub use params::{
     build_send_message_params, lookup_workspace_linked_directories, BuildSendMessageParamsInput,
 };
 use session_id::should_adopt_provider_session_id;
+pub use stream_hub::SessionStreamHub;
 
 use rusqlite::params;
 use serde_json::{json, Value};
@@ -346,9 +348,12 @@ pub(super) fn stream_via_sidecar(
         // are a snapshot at session-start; events that mutate them
         // (e.g., `permissionModeChanged`) mirror the change back into
         // the legacy local vars until those readers migrate too.
+        let stream_hub = app.state::<stream_hub::SessionStreamHub>();
         let apply_ctx = actions::ApplyContext {
             on_event: &on_event,
             app: &app,
+            hub: stream_hub.inner(),
+            session_id: hsid_copy.as_deref(),
         };
         let mut turn_session = state::TurnSession::new(state::TurnContext {
             provider: provider.clone(),

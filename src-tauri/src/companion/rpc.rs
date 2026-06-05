@@ -283,6 +283,20 @@ async fn dispatch(
             crate::commands::editor_commands::unstage_workspace_file(arg_string(&args, "workspaceRootPath")?, arg_string(&args, "relativePath")?).await?;
             Ok(Value::Null)
         }
+        // A watcher detaching. Deterministically drop the hub subscriber by id —
+        // do NOT rely on the `/rpc-stream` disconnect being detected (a half-open
+        // tunnel connection could otherwise keep a stale subscriber receiving
+        // fan-out). The browser also aborts the stream fetch (see `closeChannel`
+        // in ipc.ts); whichever lands first wins and the other no-ops.
+        "unsubscribe_session_stream" => {
+            crate::agents::unsubscribe_session_stream(
+                app.state::<crate::agents::SessionStreamHub>(),
+                arg_string(&args, "sessionId")?,
+                arg_string(&args, "subscriptionId")?,
+            )
+            .await?;
+            Ok(Value::Null)
+        }
         "update_app_settings" => {
             crate::commands::settings_commands::update_app_settings(app.state::<crate::sidecar::ManagedSidecar>(), arg_json(&args, "settingsMap")?).await?;
             Ok(Value::Null)

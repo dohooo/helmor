@@ -33,7 +33,7 @@ pub use self::streaming::{
     abort_all_active_streams_blocking, bridge_aborted_event, bridge_done_event, bridge_error_event,
     bridge_permission_request_event, bridge_user_input_request_event, build_send_message_params,
     lookup_workspace_linked_directories, ActiveStreamSummary, ActiveStreams,
-    BuildSendMessageParamsInput,
+    BuildSendMessageParamsInput, SessionStreamHub,
 };
 
 use self::persistence::{
@@ -343,6 +343,36 @@ pub async fn list_active_streams(
     active_streams: tauri::State<'_, ActiveStreams>,
 ) -> CmdResult<Vec<ActiveStreamSummary>> {
     Ok(active_streams.snapshot_for_ui())
+}
+
+/// Attach a *watcher* to a session's live agent stream. The initiating client
+/// renders the turn from its own `send_agent_message_stream` channel; this lets
+/// ANY other connected client (a second desktop window, or the mobile
+/// companion over HTTP/NDJSON) mirror the same turn in real time. Events arrive
+/// on `on_event` exactly like the send path — the frontend feeds them through
+/// the same render pipeline. Symmetric across desktop and mobile.
+#[tauri::command]
+pub async fn subscribe_session_stream(
+    hub: tauri::State<'_, SessionStreamHub>,
+    session_id: String,
+    subscription_id: String,
+    on_event: Channel<AgentStreamEvent>,
+) -> CmdResult<()> {
+    hub.subscribe(session_id, subscription_id, on_event);
+    Ok(())
+}
+
+/// Detach a watcher previously attached via [`subscribe_session_stream`]. Over
+/// the companion HTTP bridge this is redundant (the SSE drop auto-unsubscribes)
+/// but native clients call it explicitly on teardown.
+#[tauri::command]
+pub async fn unsubscribe_session_stream(
+    hub: tauri::State<'_, SessionStreamHub>,
+    session_id: String,
+    subscription_id: String,
+) -> CmdResult<()> {
+    hub.unsubscribe(&session_id, &subscription_id);
+    Ok(())
 }
 
 #[tauri::command]
