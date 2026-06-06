@@ -779,6 +779,7 @@ pub fn run() {
             commands::companion_commands::companion_list_devices,
             commands::companion_commands::companion_revoke_device,
             commands::companion_commands::companion_sign_in_cloudflare,
+            commands::companion_commands::companion_sign_out_cloudflare,
             commands::companion_commands::companion_allocate_stable_url,
             commands::companion_commands::companion_destroy_stable_url
         ])

@@ -32,7 +32,8 @@ pub use rpc::build_dispatcher;
 pub use server::{Dispatcher, EventStreamStarter, StreamStarter};
 pub use stream::{build_event_stream_starter, build_stream_starter};
 pub use tunnel::{
-    create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare, TunnelState,
+    create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare,
+    sign_out_cloudflare, TunnelState,
 };
 
 use std::net::SocketAddr;

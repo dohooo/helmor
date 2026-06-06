@@ -4,7 +4,6 @@ import {
 	allocateStableUrl,
 	type CompanionPairingPayload,
 	type CompanionStatus,
-	destroyStableUrl,
 	enableCompanion,
 	getCompanionStatus,
 	listPairedDevices,
@@ -12,6 +11,7 @@ import {
 	pairCompanionDevice,
 	revokePairedDevice,
 	signInCloudflare,
+	signOutCloudflare,
 } from "@/lib/api";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { SettingsGroup } from "../components/settings-row";
@@ -116,8 +116,8 @@ export function MobileCompanionPanel() {
 			void queryClient.invalidateQueries({ queryKey: COMPANION_STATUS_KEY });
 		},
 	});
-	const disconnectFixedLinkMutation = useMutation({
-		mutationFn: destroyStableUrl,
+	const signOutMutation = useMutation({
+		mutationFn: signOutCloudflare,
 		onSuccess: (status) => {
 			setPairingCode(null);
 			setStatus(status);
@@ -195,13 +195,24 @@ export function MobileCompanionPanel() {
 				: hasFixedLink
 					? "Scan with your phone's camera. This fixed link survives Helmor restarts."
 					: "Scan with your phone's camera. The current temporary link changes after Helmor or the tunnel restarts.";
-	const fixedLinkStatus = hasFixedLink
-		? "Fixed link active"
-		: signedIn
-			? "Cloudflare connected"
-			: "Not set up";
-	const fixedLinkStep = hasFixedLink ? 3 : signedIn ? 2 : 1;
 	const fixedLinkActionReady = !starting && !enableMutation.isError;
+	const fixedLinkSetupState = stableHost
+		? {
+				kind: "fixed" as const,
+				pending: signOutMutation.isPending,
+				stableHost,
+			}
+		: signedIn
+			? {
+					canAct: fixedLinkActionReady,
+					kind: "ready" as const,
+					pending: allocateMutation.isPending,
+				}
+			: {
+					canAct: fixedLinkActionReady,
+					kind: "needsSignIn" as const,
+					pending: signInMutation.isPending,
+				};
 
 	return (
 		<SettingsGroup>
@@ -239,26 +250,16 @@ export function MobileCompanionPanel() {
 				allocateError={
 					allocateMutation.isError ? errorText(allocateMutation.error) : null
 				}
-				canAct={fixedLinkActionReady}
-				disconnectError={
-					disconnectFixedLinkMutation.isError
-						? errorText(disconnectFixedLinkMutation.error)
-						: null
+				signOutError={
+					signOutMutation.isError ? errorText(signOutMutation.error) : null
 				}
-				fixedLinkStatus={fixedLinkStatus}
-				hasFixedLink={hasFixedLink}
-				isAllocating={allocateMutation.isPending}
-				isDisconnecting={disconnectFixedLinkMutation.isPending}
-				isSigningIn={signInMutation.isPending}
-				signedIn={signedIn}
 				signInError={
 					signInMutation.isError ? errorText(signInMutation.error) : null
 				}
-				stableHost={stableHost}
-				step={fixedLinkStep}
+				state={fixedLinkSetupState}
 				onCreateFixedLink={() => allocateMutation.mutate()}
-				onDisconnectFixedLink={() => disconnectFixedLinkMutation.mutate()}
 				onSignInCloudflare={() => signInMutation.mutate()}
+				onSignOutCloudflare={() => signOutMutation.mutate()}
 			/>
 
 			{enableMutation.isError ? (

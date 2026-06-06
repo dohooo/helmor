@@ -164,6 +164,19 @@ pub fn sign_in_cloudflare() -> Result<()> {
     Ok(())
 }
 
+/// Remove the Cloudflare login certificate Helmor uses for named tunnels.
+pub fn sign_out_cloudflare() -> Result<()> {
+    let Some(home) = cloudflared_home() else {
+        return Ok(());
+    };
+    let cert = home.join("cert.pem");
+    match std::fs::remove_file(&cert) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", cert.display())),
+    }
+}
+
 /// Create a named tunnel and return `(uuid, creds_path)`. Requires a prior
 /// sign-in. The credentials file is cloudflared's default
 /// `~/.cloudflared/<uuid>.json`.

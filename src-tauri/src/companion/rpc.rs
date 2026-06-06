@@ -415,6 +415,7 @@ async fn dispatch(
         |         "companion_pair_device"
         |         "companion_revoke_device"
         |         "companion_sign_in_cloudflare"
+        |         "companion_sign_out_cloudflare"
         |         "companion_status"
         // PTY control over HTTP is meaningless (no terminal on the phone); the
         // matching spawn_* commands carry a Channel and route to /rpc-stream.

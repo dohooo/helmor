@@ -4645,6 +4645,17 @@ export async function signInCloudflare(): Promise<void> {
 	}
 }
 
+/** Clear the stable URL and remove the local Cloudflare login certificate. */
+export async function signOutCloudflare(): Promise<CompanionStatus> {
+	try {
+		return await invoke<CompanionStatus>("companion_sign_out_cloudflare");
+	} catch (error) {
+		throw new Error(
+			describeInvokeError(error, "Cloudflare sign-out did not complete."),
+		);
+	}
+}
+
 /** Provision a permanent remote-*.helmor.ai URL and bring it up. */
 export async function allocateStableUrl(): Promise<CompanionStatus> {
 	try {

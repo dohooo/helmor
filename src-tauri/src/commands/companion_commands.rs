@@ -112,6 +112,34 @@ pub async fn companion_sign_in_cloudflare() -> CmdResult<()> {
     Ok(())
 }
 
+async fn clear_stable_url(companion: &CompanionState, tunnel: &TunnelState) -> CmdResult<()> {
+    if let Some(record) = run_blocking(stable_url::load).await? {
+        // Best-effort external cleanup — local state is cleared regardless.
+        let _ = companion::registry::revoke(&record.device_id, &record.secret).await;
+        let uuid = record.tunnel_uuid.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || companion::delete_named_tunnel(&uuid))
+            .await;
+        run_blocking(stable_url::clear).await?;
+    }
+    tunnel.shutdown();
+    companion.shutdown().await;
+    Ok(())
+}
+
+/// Sign out from Cloudflare for Mobile: clear the stable URL and remove the
+/// local cloudflared login certificate.
+#[tauri::command]
+pub async fn companion_sign_out_cloudflare(
+    companion: State<'_, CompanionState>,
+    tunnel: State<'_, TunnelState>,
+) -> CmdResult<CompanionStatus> {
+    clear_stable_url(&companion, &tunnel).await?;
+    tauri::async_runtime::spawn_blocking(companion::sign_out_cloudflare)
+        .await
+        .map_err(|e| anyhow::anyhow!("sign-out task join failed: {e}"))??;
+    build_status(&companion, &tunnel).await
+}
+
 /// Provision a permanent `remote-*.helmor.ai` URL: create a named tunnel,
 /// register the hostname, persist it, and bring the named tunnel up now.
 #[tauri::command]
@@ -158,16 +186,7 @@ pub async fn companion_destroy_stable_url(
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<CompanionStatus> {
-    if let Some(record) = run_blocking(stable_url::load).await? {
-        // Best-effort external cleanup — local state is cleared regardless.
-        let _ = companion::registry::revoke(&record.device_id, &record.secret).await;
-        let uuid = record.tunnel_uuid.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || companion::delete_named_tunnel(&uuid))
-            .await;
-        run_blocking(stable_url::clear).await?;
-    }
-    tunnel.shutdown();
-    companion.shutdown().await;
+    clear_stable_url(&companion, &tunnel).await?;
     build_status(&companion, &tunnel).await
 }
 
