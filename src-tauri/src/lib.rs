@@ -476,9 +476,17 @@ pub fn run() {
                     let streamer = companion::build_stream_starter(companion_handle.clone());
                     let dispatcher = companion::build_dispatcher(companion_handle.clone());
                     let verifier = companion::paired_device_verifier();
+                    let event_starter =
+                        companion::build_event_stream_starter(companion_handle.clone());
                     let state = companion_handle.state::<companion::CompanionState>();
                     match state
-                        .start(companion_handle.clone(), streamer, dispatcher, verifier)
+                        .start(
+                            companion_handle.clone(),
+                            streamer,
+                            dispatcher,
+                            verifier,
+                            event_starter,
+                        )
                         .await
                     {
                         // Loopback-only, opt-in dev gate: logging the token here

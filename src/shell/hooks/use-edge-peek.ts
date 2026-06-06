@@ -41,11 +41,10 @@ function useCoarsePointer(): boolean {
  *   immediate (snappy reveal); close runs after a short delay so pointer jitter
  *   at the drawer's edge doesn't slam it shut mid-reveal. Re-entering before the
  *   delay cancels the close — simple hover-intent hysteresis.
- * - Coarse pointer (touch): there is no hover, so `peekHandlers` is empty and
- *   the drawer is opened with `openNow` (driven by an edge-swipe gesture — see
- *   `useEdgeSwipe`) and dismissed with `close` (tap the scrim). Attaching the
- *   hover handlers here would misfire, because a tap emits pointerenter→
- *   pointerleave and would flicker the drawer.
+ * - Coarse pointer (touch): there is no hover, so `peekHandlers` is empty.
+ *   Mobile drawers are controlled by the explicit header buttons instead.
+ *   Attaching hover handlers here would misfire, because a tap emits
+ *   pointerenter→pointerleave and would flicker the drawer.
  */
 export function useEdgePeek(closeDelayMs = 120) {
 	const [open, setOpen] = useState(false);
@@ -82,20 +81,10 @@ export function useEdgePeek(closeDelayMs = 120) {
 		}, closeDelayMs);
 	}, [cancelPendingClose, closeDelayMs]);
 
-	const openNow = useCallback(() => {
-		cancelPendingClose();
-		setOpen(true);
-	}, [cancelPendingClose]);
-
-	const close = useCallback(() => {
-		cancelPendingClose();
-		setOpen(false);
-	}, [cancelPendingClose]);
-
 	const peekHandlers = useMemo(
 		() => (coarse ? {} : { onPointerEnter, onPointerLeave }),
 		[coarse, onPointerEnter, onPointerLeave],
 	);
 
-	return { open, coarse, peekHandlers, openNow, close };
+	return { open, peekHandlers };
 }

@@ -25,8 +25,9 @@ anyhow = "1"
 # Mobile-companion HTTP surface: a localhost-bound axum server that mirrors
 # the Tauri IPC commands over HTTP/SSE so the same responsive frontend can be
 # served to a phone browser. See `src/companion/`.
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
+tokio-tungstenite = "0.29"
 tokio-stream = { version = "0.1", features = ["time"] }
 futures = "0.3"
 base64 = "0.22.1"

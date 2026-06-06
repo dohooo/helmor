@@ -5,8 +5,12 @@ use std::time::Duration;
 
 use axum::{
     body::Bytes,
+    extract::ws::WebSocketUpgrade,
     extract::{Path, Query, State},
-    http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri},
+    http::{
+        header::{CONTENT_TYPE, SEC_WEBSOCKET_PROTOCOL},
+        HeaderMap, Method, StatusCode, Uri,
+    },
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -14,12 +18,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures::{stream, Stream, StreamExt};
+use futures::{stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
+use super::dev_proxy::DevFrontendProxy;
 use super::{auth, Verifier};
 use crate::error::CommandError;
 
@@ -47,6 +52,21 @@ pub type Dispatcher = Arc<
         + Sync,
 >;
 
+/// One SSE frame emitted on `/v1/stream`: the `event:` name plus its `data:`
+/// JSON line (already serialized by the source `Channel`).
+pub struct SseFrame {
+    pub event: &'static str,
+    pub data: String,
+}
+
+/// Attaches the live event feeds for one `/v1/stream` connection. Given a sender
+/// for SSE frames and the optional `?watch=<sessionId>`, it subscribes an
+/// SSE-formatting `Channel` to `UiSyncManager` (always) and `SessionStreamHub`
+/// (when watching), and arms `tx.closed()` teardown so both auto-unsubscribe on
+/// disconnect. Type-erased so the HTTP layer stays runtime-agnostic; built from a
+/// concrete `AppHandle` in [`super::stream::build_event_stream_starter`].
+pub type EventStreamStarter = Arc<dyn Fn(UnboundedSender<SseFrame>, Option<String>) + Send + Sync>;
+
 /// Shared state injected into every handler.
 #[derive(Clone)]
 pub struct AppState {
@@ -54,12 +74,17 @@ pub struct AppState {
     pub token: Arc<String>,
     /// Loads embedded SPA assets (same bundle the desktop webview serves).
     pub assets: AssetLoader,
+    /// Optional dev-only proxy to Vite so companion browsers get HMR.
+    pub dev_frontend: Option<DevFrontendProxy>,
     /// Starts a streaming command (reuses the desktop streaming paths).
     pub streamer: StreamStarter,
     /// Dispatches non-streaming `/rpc/{cmd}` calls to the real commands.
     pub dispatcher: Dispatcher,
     /// Verifies bearer tokens beyond the dev token (paired-device PATs).
     pub verifier: Verifier,
+    /// Attaches the live event feeds (ui-mutation + optional session) for
+    /// `/v1/stream`. Reuses the same shared managers as the desktop paths.
+    pub event_starter: EventStreamStarter,
 }
 
 /// Build the router. CORS is wide-open because every route is bearer-gated and
@@ -77,9 +102,10 @@ pub fn router(state: AppState) -> Router {
         .route("/rpc-stream/{cmd}", post(rpc_stream_handler))
         .route("/v1/stream", get(stream_handler))
         .route("/v1/asset", get(asset_handler))
-        // Everything else: serve the embedded SPA (unauthenticated — the bundle
-        // is public; data behind /rpc still requires the bearer token).
-        .fallback(serve_asset)
+        .route("/__vite_hmr", get(dev_hmr_handler))
+        // Everything else: in dev, proxy Vite; otherwise serve the embedded
+        // SPA bundle. The bundle is public; data behind /rpc is bearer-gated.
+        .fallback(frontend_handler)
         .layer(cors)
         .with_state(state)
 }
@@ -191,13 +217,42 @@ async fn rpc_stream_handler(
 /// assets the desktop webview loads; in dev the resolver falls back to the
 /// `frontendDist` directory). Unknown client-side routes fall back to
 /// `index.html` so the SPA router can take over.
-async fn serve_asset(State(state): State<AppState>, uri: Uri) -> Response {
+async fn frontend_handler(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Some(proxy) = state.dev_frontend.as_ref() {
+        return proxy.proxy_http(method, uri, headers, body).await;
+    }
+    serve_asset(&state, uri)
+}
+
+async fn dev_hmr_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(proxy) = state.dev_frontend.clone() else {
+        return (StatusCode::NOT_FOUND, "dev frontend proxy disabled").into_response();
+    };
+    let requested_protocol = headers
+        .get(SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    proxy.proxy_websocket_response(ws, uri, requested_protocol)
+}
+
+fn serve_asset(state: &AppState, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let candidate = if path.is_empty() { "index.html" } else { path };
-    if let Some(response) = load_asset(&state, candidate) {
+    if let Some(response) = load_asset(state, candidate) {
         return response;
     }
-    if let Some(response) = load_asset(&state, "index.html") {
+    if let Some(response) = load_asset(state, "index.html") {
         return response;
     }
     (StatusCode::NOT_FOUND, "asset not found").into_response()
@@ -216,7 +271,7 @@ fn load_asset(state: &AppState, path: &str) -> Option<Response> {
 /// Inject the companion marker into `index.html` so `src/lib/ipc.ts` switches
 /// the transport onto HTTP/SSE. The bearer token is delivered separately (URL
 /// hash → localStorage), so the marker itself carries no secret.
-fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
+pub(super) fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
     const MARKER: &str = "<script>window.__HELMOR_COMPANION__={};</script>";
     let Ok(text) = String::from_utf8(html) else {
         return Vec::new();
@@ -228,26 +283,50 @@ fn inject_companion_marker(html: Vec<u8>) -> Vec<u8> {
     injected.into_bytes()
 }
 
-/// `GET /v1/stream` — bearer-gated SSE. Slice 0 emits a `hello` event then
-/// periodic `ping`s; the pipeline → SSE wiring replaces the body later. The
-/// named-event shape is already what `src/lib/ipc.ts` consumes.
-async fn stream_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+#[derive(serde::Deserialize)]
+struct StreamQuery {
+    /// Optional session to mirror live (`subscribe_session_stream` over SSE).
+    /// Absent → only the global `ui-mutation` feed rides this connection.
+    watch: Option<String>,
+}
+
+/// `GET /v1/stream` — bearer-gated SSE carrying the live update feeds. Emits
+/// `hello` on connect (the client's reconnect/resync signal), then multiplexes
+/// `ui-mutation` frames (`UiSyncManager`, always) and — when `?watch=<sessionId>`
+/// is present — `session` frames (`SessionStreamHub`), interleaved with a 15s
+/// `ping` keep-alive. The client (`src/lib/ipc.ts`) routes by the `event:` name.
+async fn stream_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<StreamQuery>,
+) -> Response {
     if !auth::authorize(&headers, state.token.as_str(), &state.verifier) {
         return unauthorized();
     }
-    Sse::new(keepalive_stream())
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
 
-fn keepalive_stream() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    // The starter subscribes the shared managers to `tx` and arms teardown on
+    // `tx.closed()` (i.e. when this response body is dropped).
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<SseFrame>();
+    (state.event_starter)(tx, query.watch);
+
     let hello = stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().event("hello").data("{}"))
+    });
+    let live = UnboundedReceiverStream::new(rx).map(|frame| {
+        Ok::<_, std::convert::Infallible>(Event::default().event(frame.event).data(frame.data))
     });
     let interval = tokio::time::interval(Duration::from_secs(15));
     let pings = tokio_stream::wrappers::IntervalStream::new(interval)
         .map(|_| Ok::<_, std::convert::Infallible>(Event::default().event("ping").data("{}")));
-    hello.chain(pings)
+
+    // `tokio_stream::StreamExt::merge` interleaves live frames with pings as each
+    // is ready; `chain` keeps `hello` strictly first. Fully-qualified to avoid
+    // colliding with the `futures::StreamExt` already in scope.
+    let body = hello.chain(tokio_stream::StreamExt::merge(live, pings));
+
+    Sse::new(body)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 fn unauthorized() -> Response {

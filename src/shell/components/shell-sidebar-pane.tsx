@@ -22,12 +22,11 @@ import { cn } from "@/lib/utils";
 import type { PushWorkspaceToast } from "@/lib/workspace-toast-context";
 import { useSelectionStore } from "@/shell/controllers/selection-store-context";
 import { useEdgePeek } from "@/shell/hooks/use-edge-peek";
-import { useEdgeSwipe } from "@/shell/hooks/use-edge-swipe";
-import { EdgeSwipeLayer } from "./edge-swipe-layer";
 import { MiniModeToggleButton } from "./mini-mode-toggle-button";
 
 type Props = {
 	collapsed: boolean;
+	mobileOpen: boolean;
 	resizing: boolean;
 	width: number;
 	// Settings-side half of the auto-select gate
@@ -58,6 +57,7 @@ type Props = {
 
 export function ShellSidebarPane({
 	collapsed,
+	mobileOpen,
 	resizing,
 	width,
 	autoSelectSettingsGate,
@@ -107,14 +107,8 @@ export function ShellSidebarPane({
 	// Inline width written via ref so each remount re-applies it.
 	const asideRef = useRef<HTMLElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);
-	const {
-		open: peekOpen,
-		coarse,
-		peekHandlers,
-		openNow,
-		close,
-	} = useEdgePeek();
-	const swipeHandlers = useEdgeSwipe({ side: "left", onOpen: openNow });
+	const { open: peekOpen, peekHandlers } = useEdgePeek();
+	const mobileDrawerOpen = mobileOpen || peekOpen;
 	useLayoutEffect(() => {
 		if (asideRef.current) {
 			asideRef.current.style.width = collapsed ? "0px" : `${width}px`;
@@ -127,7 +121,7 @@ export function ShellSidebarPane({
 	return (
 		<aside
 			ref={asideRef}
-			aria-hidden={collapsed}
+			aria-hidden={collapsed && !mobileOpen}
 			aria-label="Workspace sidebar"
 			data-helmor-sidebar-root
 			data-shell-pane="sidebar"
@@ -139,21 +133,12 @@ export function ShellSidebarPane({
 				collapsed ? "pointer-events-none max-[960px]:pointer-events-auto" : "",
 			)}
 		>
-			{coarse ? (
-				<EdgeSwipeLayer
-					side="left"
-					open={peekOpen}
-					label="workspace sidebar"
-					onClose={close}
-					swipeHandlers={swipeHandlers}
-				/>
-			) : null}
 			<div
 				data-shell-pane-hover="sidebar"
 				{...peekHandlers}
 				className={cn(
 					"contents max-[960px]:absolute max-[960px]:inset-y-0 max-[960px]:left-0 max-[960px]:block max-[960px]:overflow-visible max-[960px]:pointer-events-auto",
-					peekOpen ? "max-[960px]:!w-[332px]" : "max-[960px]:!w-6",
+					mobileDrawerOpen ? "max-[960px]:!w-[332px]" : "max-[960px]:!w-6",
 				)}
 			>
 				<div
@@ -161,7 +146,7 @@ export function ShellSidebarPane({
 					data-shell-pane-inner="sidebar"
 					className={cn(
 						"relative flex h-full shrink-0 flex-col transition-[opacity,translate] duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none max-[960px]:ml-3 max-[960px]:!w-[320px] max-[960px]:!max-w-[calc(100vw-24px)] max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-border/70 max-[960px]:bg-sidebar max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.22)] max-[960px]:ring-1 max-[960px]:ring-background/55 max-[960px]:will-change-transform dark:max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
-						peekOpen
+						mobileDrawerOpen
 							? "max-[960px]:translate-x-0 max-[960px]:opacity-100"
 							: "max-[960px]:-translate-x-full max-[960px]:opacity-0",
 						collapsed

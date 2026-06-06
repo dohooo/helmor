@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
+const companionDevProxy = process.env.HELMOR_COMPANION_DEV_PROXY === "1";
 const WATCH_IGNORED = [
 	"**/src-tauri/**",
 	"**/.local/**",
@@ -67,13 +68,19 @@ export default defineConfig(async () => ({
 		port: 1420,
 		strictPort: true,
 		host: host || false,
-		hmr: host
+		hmr: companionDevProxy
 			? {
-					protocol: "ws",
-					host,
-					port: 1421,
+					protocol: "wss",
+					clientPort: 443,
+					path: "/__vite_hmr",
 				}
-			: undefined,
+			: host
+				? {
+						protocol: "ws",
+						host,
+						port: 1421,
+					}
+				: undefined,
 		watch: {
 			// 3. ignore app-internal local data/docs, Rust backend, editor metadata, logs, and build artifacts
 			ignored: WATCH_IGNORED,

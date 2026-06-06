@@ -12,11 +12,11 @@
 	],
 	"scripts": {
 		"changeset": "changeset",
-		"dev": "bun run dev:prepare && vite build && tauri dev",
+		"dev": "bun run dev:prepare && vite build && HELMOR_COMPANION=1 HELMOR_COMPANION_DEV_PROXY=1 tauri dev",
 		"dev:prepare": "bun run dev:prepare:sidecar && bun run dev:prepare:cli",
 		"dev:prepare:sidecar": "cd sidecar && bun run dev:prepare",
 		"dev:prepare:cli": "node scripts/stage-dev-cli.mjs",
-		"dev:analyze": "bun run dev:prepare && VITE_HELMOR_PERF_HUD=1 tauri dev",
+		"dev:analyze": "bun run dev:prepare && HELMOR_COMPANION=1 HELMOR_COMPANION_DEV_PROXY=1 VITE_HELMOR_PERF_HUD=1 tauri dev",
 		"build": "tsc && vite build",
 		"preview": "vite preview",
 		"test": "bun run test:frontend && bun run test:sidecar && bun run test:rust",

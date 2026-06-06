@@ -56,6 +56,44 @@ html.no-pointer-cursors {
 	cursor: var(--helmor-interactive-cursor) !important;
 }
 
+@media (any-pointer: coarse) {
+	:where(
+			button,
+			a[href],
+			summary,
+			label,
+			select,
+			[role="button"],
+			[role="menuitem"],
+			[role="option"],
+			.cursor-interactive,
+			.\!cursor-interactive
+		) {
+		touch-action: manipulation;
+		-webkit-tap-highlight-color: transparent;
+	}
+
+	/* iOS Safari zooms focused text-entry controls below 16px. */
+	input:not([type]),
+	input[type="date"],
+	input[type="datetime-local"],
+	input[type="email"],
+	input[type="month"],
+	input[type="number"],
+	input[type="password"],
+	input[type="search"],
+	input[type="tel"],
+	input[type="text"],
+	input[type="time"],
+	input[type="url"],
+	input[type="week"],
+	select,
+	textarea,
+	[contenteditable="true"]:not(.composer-editor) {
+		font-size: 16px;
+	}
+}
+
 html,
 body,
 #root {

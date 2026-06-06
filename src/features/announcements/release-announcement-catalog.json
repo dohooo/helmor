@@ -10,7 +10,7 @@
 						"label": "Open Mobile companion",
 						"value": {
 							"type": "openSettings",
-							"section": "experimental"
+							"section": "mobile"
 						}
 					}
 				},

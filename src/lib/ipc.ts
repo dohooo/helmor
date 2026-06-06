@@ -367,8 +367,71 @@ export function invoke<T>(
 	return companionInvoke<T>(cmd, args);
 }
 
+function findCompanionChannel(
+	record: Record<string, unknown>,
+): CompanionChannel<unknown> | null {
+	for (const value of Object.values(record)) {
+		if (value instanceof CompanionChannel) {
+			return value as CompanionChannel<unknown>;
+		}
+	}
+	return null;
+}
+
 async function companionInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
 	const record = isPlainArgs(args) ? args : undefined;
+
+	// Passive live-update subscriptions ride the shared, reconnecting /v1/stream
+	// SSE (multiplexed by event name) instead of a dedicated /rpc-stream fetch,
+	// which never reconnects — the root cause of "mobile stops updating after a
+	// background/lock". They attach a handler to the multiplexer and return
+	// immediately, mirroring Tauri's fire-and-forget Channel semantics.
+	if (
+		record &&
+		(cmd === "subscribe_ui_mutations" || cmd === "subscribe_session_stream")
+	) {
+		const channel = findCompanionChannel(record);
+		if (channel) {
+			if (cmd === "subscribe_ui_mutations") {
+				const handler: CompanionPayloadHandler = (payload) =>
+					channel.onmessage?.(payload);
+				uiMutationHandlers.add(handler);
+				channel.close = () => uiMutationHandlers.delete(handler);
+				ensureEventStream();
+				return undefined as T;
+			}
+			const sessionId =
+				typeof record.sessionId === "string" ? record.sessionId : null;
+			if (sessionId) {
+				let set = sessionHandlers.get(sessionId);
+				if (!set) {
+					set = new Set();
+					sessionHandlers.set(sessionId, set);
+				}
+				const handlerSet = set;
+				const handler: CompanionPayloadHandler = (payload) =>
+					channel.onmessage?.(payload);
+				handlerSet.add(handler);
+				channel.close = () => {
+					handlerSet.delete(handler);
+					if (handlerSet.size === 0) sessionHandlers.delete(sessionId);
+					// Last watcher gone → drop `?watch=` so the server frees the
+					// session mirror (the SSE keeps running for ui-mutation).
+					if (sessionHandlers.size === 0) setWatchedSession(null);
+				};
+				setWatchedSession(sessionId);
+				return undefined as T;
+			}
+		}
+	}
+	// The matching unsubscribes are no-ops here: teardown already ran via
+	// closeChannel(onEvent) -> channel.close. Swallow so no /rpc request fires.
+	if (
+		cmd === "unsubscribe_ui_mutations" ||
+		cmd === "unsubscribe_session_stream"
+	) {
+		return undefined as T;
+	}
 
 	// A `Channel` argument means this is a streaming command — route it to the
 	// streaming endpoint and resolve once the stream closes.
@@ -462,6 +525,32 @@ type CompanionEventHandler = (event: {
 const eventListeners = new Map<string, Set<CompanionEventHandler>>();
 let eventStreamStarted = false;
 
+// --- Companion live-update multiplexer -------------------------------------
+//
+// The single reconnecting `/v1/stream` SSE carries every passive live-update
+// feed, demultiplexed by the SSE `event:` name: `ui-mutation` (cache
+// invalidations, always), `session` (the watched session's live turn, gated by
+// `?watch=`), `hello` (each (re)connect — drives resync), `ping` (keep-alive).
+// `subscribe_ui_mutations` / `subscribe_session_stream` attach here instead of
+// opening their own non-reconnecting `/rpc-stream` fetch.
+type CompanionPayloadHandler = (payload: unknown) => void;
+const uiMutationHandlers = new Set<CompanionPayloadHandler>();
+const sessionHandlers = new Map<string, Set<CompanionPayloadHandler>>();
+const streamReconnectListeners = new Set<() => void>();
+/** Session the NEXT SSE open should request via `?watch=` (null → none). */
+let watchedSessionId: string | null = null;
+/** Watch target the CURRENTLY-OPEN SSE was opened for. `session` frames route
+ *  by this (not `watchedSessionId`), so a frame in flight during a session
+ *  switch can never be delivered to the newly-selected session's handler. */
+let activeConnectionWatch: string | null = null;
+/** Aborts the in-flight `/v1/stream` fetch to force an immediate reconnect. */
+let currentStreamAbort: AbortController | null = null;
+let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+let companionStreamListenersBound = false;
+// Server pings every 15s; missing ~2 means the link is silently dead (a frozen
+// mobile tab whose fetch never errors) — force a reconnect.
+const STREAM_WATCHDOG_MS = 35_000;
+
 export function listen<T>(
 	event: EventName,
 	handler: EventCallback<T>,
@@ -488,7 +577,42 @@ function companionListen(
 	return Promise.resolve(unlisten);
 }
 
+/**
+ * Subscribe to companion SSE (re)connects. The callback fires on every `hello`
+ * frame — i.e. each time the shared `/v1/stream` connection (re)establishes —
+ * so callers can backfill state missed while disconnected (the stream carries
+ * no `Last-Event-ID` replay). Companion-only: on the desktop Tauri runtime this
+ * returns an inert unsubscribe and never fires.
+ */
+export function onCompanionStreamReconnect(callback: () => void): () => void {
+	if (!COMPANION) return () => {};
+	streamReconnectListeners.add(callback);
+	return () => {
+		streamReconnectListeners.delete(callback);
+	};
+}
+
 function dispatchEvent(name: string, payload: unknown): void {
+	// Any frame — including `ping`/`hello` — proves the link is alive.
+	noteStreamFrame();
+	if (name === "hello") {
+		// (Re)connect handshake: backfill anything missed while disconnected.
+		for (const listener of streamReconnectListeners) listener();
+		return;
+	}
+	if (name === "ui-mutation") {
+		for (const handler of uiMutationHandlers) handler(payload);
+		return;
+	}
+	if (name === "session") {
+		const set = activeConnectionWatch
+			? sessionHandlers.get(activeConnectionWatch)
+			: undefined;
+		if (set) for (const handler of set) handler(payload);
+		return;
+	}
+	if (name === "ping") return;
+	// Legacy named-event path (e.g. the `listen()` consumers). Unchanged.
 	const set = eventListeners.get(name);
 	if (!set) return;
 	for (const handler of set) {
@@ -500,25 +624,97 @@ function dispatchEvent(name: string, payload: unknown): void {
 function ensureEventStream(): void {
 	if (eventStreamStarted) return;
 	eventStreamStarted = true;
+	bindCompanionStreamListeners();
 	void runEventStream();
+}
+
+function streamUrl(): string {
+	const base = `${baseUrl()}/v1/stream`;
+	return watchedSessionId
+		? `${base}?watch=${encodeURIComponent(watchedSessionId)}`
+		: base;
+}
+
+/** Point the SSE at a different watched session (or null to clear). */
+function setWatchedSession(sessionId: string | null): void {
+	if (watchedSessionId === sessionId) return;
+	watchedSessionId = sessionId;
+	if (eventStreamStarted) {
+		// Already streaming with the old `?watch=` — reconnect to apply the new
+		// one (the deliberate abort skips the backoff, so it reopens at once).
+		currentStreamAbort?.abort();
+	} else {
+		// Not streaming yet — open directly with the new `?watch=`.
+		ensureEventStream();
+	}
 }
 
 async function runEventStream(): Promise<void> {
 	for (;;) {
+		const abort = new AbortController();
+		currentStreamAbort = abort;
+		// Snapshot which session THIS connection serves so `session` frames route
+		// correctly even while a switch is mid-flight.
+		activeConnectionWatch = watchedSessionId;
 		try {
-			const res = await fetch(`${baseUrl()}/v1/stream`, {
+			const res = await fetch(streamUrl(), {
 				headers: authHeaders(),
+				signal: abort.signal,
 			});
 			if (!res.ok || !res.body) {
 				if (res.status === 401) setCompanionAuthState("unauthed");
 				throw new Error(`stream status ${res.status}`);
 			}
+			noteStreamFrame(); // arm the watchdog once connected
 			await pumpSse(res.body, dispatchEvent);
 		} catch {
-			// Connection dropped (backgrounded tab, network blip) — reconnect.
+			// Dropped / aborted (session switch, visibility, watchdog, network
+			// blip) — reconnect.
 		}
-		await delay(2000);
+		clearStreamWatchdog();
+		// A deliberate abort (switch / forced reconnect) skips the backoff so the
+		// new connection attaches immediately; genuine failures back off.
+		if (!abort.signal.aborted) await delay(2000);
 	}
+}
+
+// --- Reconnect robustness: watchdog + visibility/online triggers -----------
+
+function noteStreamFrame(): void {
+	if (watchdogTimer) clearTimeout(watchdogTimer);
+	watchdogTimer = setTimeout(forceStreamReconnect, STREAM_WATCHDOG_MS);
+}
+
+function clearStreamWatchdog(): void {
+	if (watchdogTimer) {
+		clearTimeout(watchdogTimer);
+		watchdogTimer = null;
+	}
+}
+
+function forceStreamReconnect(): void {
+	// Aborting the in-flight fetch makes runEventStream loop and reopen at once.
+	currentStreamAbort?.abort();
+}
+
+function reconnectStreamIfVisible(): void {
+	if (
+		typeof document === "undefined" ||
+		document.visibilityState === "visible"
+	) {
+		forceStreamReconnect();
+	}
+}
+
+/** Bind visibility/focus/online reconnect triggers once. The mobile failure
+ *  mode is a frozen tab whose fetch never errors; returning to it (or regaining
+ *  network) must proactively rebuild the stream. */
+function bindCompanionStreamListeners(): void {
+	if (companionStreamListenersBound || typeof window === "undefined") return;
+	companionStreamListenersBound = true;
+	document.addEventListener("visibilitychange", reconnectStreamIfVisible);
+	window.addEventListener("focus", reconnectStreamIfVisible);
+	window.addEventListener("online", forceStreamReconnect);
 }
 
 // ---------------------------------------------------------------------------

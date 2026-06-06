@@ -1,7 +1,7 @@
 // Left-side header strip used when the workspace sidebar is collapsed.
 // Reserves space for the macOS traffic lights and surfaces the
 // app-update button + an inline "expand sidebar" toggle.
-import { PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -20,8 +20,10 @@ type Props = {
 	miniModePending: boolean;
 	miniModeToggleShortcut: string | null;
 	showOnDesktop: boolean;
+	mobileSidebarOpen: boolean;
 	onToggleMiniMode: () => void;
 	onExpandSidebar: () => void;
+	onToggleMobileSidebar: () => void;
 };
 
 export function WorkspaceHeaderLeading({
@@ -30,9 +32,15 @@ export function WorkspaceHeaderLeading({
 	miniModePending,
 	miniModeToggleShortcut,
 	showOnDesktop,
+	mobileSidebarOpen,
 	onToggleMiniMode,
 	onExpandSidebar,
+	onToggleMobileSidebar,
 }: Props) {
+	const mobileLabel = mobileSidebarOpen
+		? "Collapse left sidebar"
+		: "Expand left sidebar";
+
 	return (
 		<div
 			className={cn(
@@ -43,6 +51,29 @@ export function WorkspaceHeaderLeading({
 			{/* Spacer to avoid macOS traffic lights */}
 			<div className="w-[62px] shrink-0 max-[960px]:hidden" />
 			<div className="flex items-center gap-[2px]">
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={mobileLabel}
+							onClick={onToggleMobileSidebar}
+							variant="ghost"
+							size="icon-sm"
+							className="hidden text-muted-foreground hover:text-foreground max-[960px]:inline-flex"
+						>
+							{mobileSidebarOpen ? (
+								<PanelLeftClose className="size-4" strokeWidth={1.8} />
+							) : (
+								<PanelLeftOpen className="size-4" strokeWidth={1.8} />
+							)}
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent
+						side="bottom"
+						className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+					>
+						<span>{mobileLabel}</span>
+					</TooltipContent>
+				</Tooltip>
 				<AppUpdateButton status={showOnDesktop ? appUpdateStatus : null} />
 				<MiniModeToggleButton
 					pending={miniModePending}

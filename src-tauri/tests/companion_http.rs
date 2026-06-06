@@ -9,10 +9,18 @@
 //! unknown-command paths, so the test needs no DB pools.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
-use helmor_lib::companion::{CompanionState, Dispatcher, StreamStarter, Verifier};
+use helmor_lib::agents::SessionStreamHub;
+use helmor_lib::companion::{
+    build_event_stream_starter, CompanionState, Dispatcher, EventStreamStarter, StreamStarter,
+    Verifier,
+};
 use helmor_lib::error::CommandError;
+use helmor_lib::ui_sync::{UiMutationEvent, UiSyncManager};
+use tauri::test::{mock_builder, mock_context, noop_assets};
+use tauri::Manager;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_rpc_requires_bearer() {
@@ -43,8 +51,16 @@ async fn health_is_public_and_rpc_requires_bearer() {
         }
         .boxed()
     });
+    // No `/v1/stream` connection is opened here, so a no-op event starter is fine.
+    let event_starter: EventStreamStarter = Arc::new(|_tx, _watch| {});
     let info = state
-        .start(app.handle().clone(), streamer, dispatcher, verifier)
+        .start(
+            app.handle().clone(),
+            streamer,
+            dispatcher,
+            verifier,
+            event_starter,
+        )
         .await
         .expect("companion server should start");
     let base = format!("http://{}", info.addr);
@@ -129,4 +145,120 @@ async fn health_is_public_and_rpc_requires_bearer() {
     // Shutdown is idempotent and clears reported info.
     state.shutdown().await;
     assert!(state.info().await.is_none());
+}
+
+/// `/v1/stream` carries the live `ui-mutation` feed and wires `?watch=` to the
+/// shared `SessionStreamHub` (subscribing on connect, unsubscribing on drop).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_carries_ui_mutations_and_session_watch() {
+    // A managed app so `build_event_stream_starter` subscribes the real shared
+    // managers — the same instances this test publishes into.
+    let app = mock_builder()
+        .manage(UiSyncManager::new())
+        .manage(SessionStreamHub::new())
+        .build(mock_context(noop_assets()))
+        .expect("mock app builds");
+    let handle = app.handle().clone();
+
+    let state = CompanionState::new();
+    let streamer: StreamStarter = Arc::new(|_cmd, _args, _tx| Ok(()));
+    let dispatcher: Dispatcher =
+        Arc::new(|_cmd, _args| async { Ok(serde_json::Value::Null) }.boxed());
+    let verifier: Verifier = Arc::new(|_| false);
+    let event_starter = build_event_stream_starter(handle.clone());
+    let info = state
+        .start(
+            handle.clone(),
+            streamer,
+            dispatcher,
+            verifier,
+            event_starter,
+        )
+        .await
+        .expect("companion server should start");
+    let base = format!("http://{}", info.addr);
+    let client = reqwest::Client::new();
+
+    // Unauthenticated stream is rejected.
+    let unauth = client
+        .get(format!("{base}/v1/stream"))
+        .send()
+        .await
+        .expect("unauth stream request");
+    assert_eq!(unauth.status(), 401);
+
+    // ui-mutation feed: connect, publish, observe the frame. By the time `send()`
+    // resolves the handler has already run `event_starter`, so the UiSyncManager
+    // subscription is registered — publishing now is race-free.
+    let mut resp = client
+        .get(format!("{base}/v1/stream"))
+        .bearer_auth(&info.token)
+        .send()
+        .await
+        .expect("stream request");
+    assert_eq!(resp.status(), 200);
+    handle
+        .state::<UiSyncManager>()
+        .publish(UiMutationEvent::WorkspaceListChanged);
+
+    let text = read_until(&mut resp, "ui-mutation", Duration::from_secs(5)).await;
+    assert!(text.contains("hello"), "missing hello frame: {text}");
+    assert!(
+        text.contains("ui-mutation") && text.contains("workspaceListChanged"),
+        "missing ui-mutation frame: {text}"
+    );
+    drop(resp);
+
+    // `?watch=` registers a session subscriber, and dropping the stream tears it
+    // down (the `tx.closed()` teardown path).
+    let watch_resp = client
+        .get(format!("{base}/v1/stream?watch=sess-1"))
+        .bearer_auth(&info.token)
+        .send()
+        .await
+        .expect("watch stream request");
+    assert_eq!(watch_resp.status(), 200);
+    let hub = handle.state::<SessionStreamHub>();
+    assert!(
+        poll_until(Duration::from_secs(2), || hub.any_subscribers()).await,
+        "watch did not register a session subscriber"
+    );
+    drop(watch_resp);
+    assert!(
+        poll_until(Duration::from_secs(2), || !hub.any_subscribers()).await,
+        "dropping the watch stream did not unsubscribe"
+    );
+
+    state.shutdown().await;
+}
+
+/// Read SSE chunks until the accumulated text contains `needle` or `timeout`.
+async fn read_until(resp: &mut reqwest::Response, needle: &str, timeout: Duration) -> String {
+    let mut text = String::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(200), resp.chunk()).await {
+            Ok(Ok(Some(bytes))) => {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+                if text.contains(needle) {
+                    break;
+                }
+            }
+            Ok(Ok(None)) | Ok(Err(_)) => break, // stream ended / transport error
+            Err(_) => {}                        // per-read timeout — wait until deadline
+        }
+    }
+    text
+}
+
+/// Poll `cond` until it returns true or `timeout` elapses.
+async fn poll_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    cond()
 }

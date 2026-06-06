@@ -607,7 +607,9 @@ export const WorkspaceConversationContainer = memo(
 
 				<div
 					className={cn(
-						composerOnly ? "w-full" : "mt-auto px-4 pb-4 pt-0",
+						composerOnly
+							? "w-full"
+							: "mt-auto px-4 pb-4 pt-0 max-[960px]:px-2 max-[960px]:pb-8",
 						composerWrapperClassName,
 					)}
 				>

@@ -25,7 +25,7 @@ export function MiniModeToggleButton({ pending, shortcut, onToggle }: Props) {
 					onClick={onToggle}
 					variant="ghost"
 					size="icon-xs"
-					className="text-muted-foreground hover:text-foreground"
+					className="text-muted-foreground hover:text-foreground max-[960px]:hidden"
 				>
 					<Smartphone
 						className="-translate-x-0.5 size-4 max-[960px]:hidden"

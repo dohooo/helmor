@@ -227,7 +227,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 		<header className="relative z-20">
 			<div
 				aria-label="Workspace header"
-				className="flex h-9 items-center justify-between gap-3 px-[18px]"
+				className="flex h-9 items-center justify-between gap-3 px-[18px] max-[960px]:px-2"
 				data-tauri-drag-region
 			>
 				<div
@@ -488,7 +488,7 @@ export const WorkspacePanelHeader = memo(function WorkspacePanelHeader({
 				) : null}
 			</div>
 
-			<div className="flex items-center px-4 pb-1">
+			<div className="flex items-center px-4 pb-1 max-[960px]:px-2">
 				<div className="group/tabs-scroll relative min-w-0 flex-1">
 					{hasRightOverflow && (
 						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent" />

@@ -706,7 +706,9 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				// Pending-interaction panels fill the shell edge-to-edge and own
 				// their own internal padding; the default composer gets the
 				// legacy px-4 pt-3 pb-3 breathing room.
-				hasPendingInteraction ? "p-0" : "px-4 pb-3 pt-3",
+				hasPendingInteraction
+					? "p-0"
+					: "px-4 pb-3 pt-3 max-[960px]:px-3 max-[960px]:pb-2.5 max-[960px]:pt-2.5",
 				inputDisabled &&
 					!hasPendingInteraction &&
 					"cursor-not-allowed opacity-60",
@@ -790,13 +792,13 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 										aria-label="Workspace input"
 										aria-multiline
 										className={cn(
-											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none",
+											"composer-editor min-h-[64px] max-h-[240px] resize-none overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-body leading-5 tracking-[-0.01em] text-foreground outline-none max-[960px]:text-ui",
 											showFocusHint && "pr-28",
 										)}
 									/>
 								}
 								placeholder={
-									<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70">
+									<div className="pointer-events-none absolute left-0 top-0 text-body leading-5 tracking-[-0.01em] text-muted-foreground/70 max-[960px]:text-ui">
 										{hasPlanReview && permissionMode === "plan"
 											? "Describe what to change, then click Request Changes"
 											: (placeholder ??
@@ -887,8 +889,8 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 						</div>
 					) : null}
 
-					<div className="mt-2.5 flex items-end justify-between gap-3">
-						<div className="flex flex-wrap items-center gap-2">
+					<div className="mt-2.5 flex items-end justify-between gap-3 max-[960px]:mt-2 max-[960px]:justify-end">
+						<div className="flex flex-wrap items-center gap-2 max-[960px]:absolute max-[960px]:left-0 max-[960px]:top-full max-[960px]:mt-1.5 max-[960px]:w-full max-[960px]:flex-nowrap max-[960px]:gap-1.5 max-[960px]:overflow-x-auto max-[960px]:pb-0.5">
 							{modelsLoading ? (
 								<ShimmerText className="px-1 py-0.5 text-ui text-muted-foreground">
 									Loading models…

@@ -4,6 +4,7 @@
 
 export type SettingsSection =
 	| "general"
+	| "mobile"
 	| "shortcuts"
 	| "appearance"
 	| "model"

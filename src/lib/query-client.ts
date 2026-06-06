@@ -48,7 +48,7 @@ import {
 } from "./api";
 // Routed through the transport shim so query-cache persistence works in the
 // mobile browser companion too (not just the Tauri webview).
-import { invoke } from "./ipc";
+import { invoke, isCompanionClient } from "./ipc";
 import { parsePrUrl } from "./pr-url";
 import {
 	getSessionThreadPaginationState,
@@ -185,6 +185,25 @@ export function createHelmorQueryClient() {
 	// always refetch on focus, while remote GitHub queries keep their
 	// staleTime: 30s to avoid hammering the API.
 	focusManager.setEventListener((handleFocus) => {
+		// Companion (mobile browser): there is no Tauri runtime, so
+		// `tauri://focus` never fires and refetch-on-focus would be dead — the
+		// safety net behind a missed SSE event. Use the browser's native
+		// visibility/focus instead. Desktop skips this branch entirely.
+		if (isCompanionClient()) {
+			const onVisibility = () =>
+				handleFocus(document.visibilityState === "visible");
+			const onFocus = () => handleFocus(true);
+			const onBlur = () => handleFocus(false);
+			document.addEventListener("visibilitychange", onVisibility);
+			window.addEventListener("focus", onFocus);
+			window.addEventListener("blur", onBlur);
+			return () => {
+				document.removeEventListener("visibilitychange", onVisibility);
+				window.removeEventListener("focus", onFocus);
+				window.removeEventListener("blur", onBlur);
+			};
+		}
+
 		let unlistenFocus: (() => void) | undefined;
 		let unlistenBlur: (() => void) | undefined;
 
@@ -207,7 +226,10 @@ export function createHelmorQueryClient() {
 		defaultOptions: {
 			queries: {
 				gcTime: PERSIST_GC_TIME,
-				refetchOnReconnect: false,
+				// Companion only: a network handover (Wi-Fi↔cellular) should
+				// re-validate. On desktop `isCompanionClient()` is false, so this
+				// is byte-for-byte the previous `false`.
+				refetchOnReconnect: isCompanionClient(),
 				refetchOnWindowFocus: true,
 				retry: 1,
 			},

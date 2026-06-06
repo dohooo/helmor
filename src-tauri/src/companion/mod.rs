@@ -20,6 +20,7 @@
 //! env var so default app behaviour is unchanged.
 
 mod auth;
+mod dev_proxy;
 pub mod registry;
 mod rpc;
 mod server;
@@ -28,8 +29,8 @@ mod stream;
 mod tunnel;
 
 pub use rpc::build_dispatcher;
-pub use server::{Dispatcher, StreamStarter};
-pub use stream::build_stream_starter;
+pub use server::{Dispatcher, EventStreamStarter, StreamStarter};
+pub use stream::{build_event_stream_starter, build_stream_starter};
 pub use tunnel::{
     create_named_tunnel, delete_named_tunnel, is_signed_in, sign_in_cloudflare, TunnelState,
 };
@@ -67,7 +68,10 @@ pub async fn start_with_tunnel(
     let streamer = build_stream_starter(app.clone());
     let dispatcher = build_dispatcher(app.clone());
     let verifier = paired_device_verifier();
-    let info = companion.start(app, streamer, dispatcher, verifier).await?;
+    let event_starter = build_event_stream_starter(app.clone());
+    let info = companion
+        .start(app, streamer, dispatcher, verifier, event_starter)
+        .await?;
     let port = info.addr.port();
 
     let provisioning = tauri::async_runtime::spawn_blocking(stable_url::load)
@@ -128,6 +132,7 @@ impl CompanionState {
         streamer: StreamStarter,
         dispatcher: Dispatcher,
         verifier: Verifier,
+        event_starter: EventStreamStarter,
     ) -> Result<CompanionInfo> {
         let mut guard = self.inner.write().await;
         if let Some(running) = guard.as_ref() {
@@ -151,9 +156,13 @@ impl CompanionState {
         let state = server::AppState {
             token: Arc::new(token.clone()),
             assets,
+            dev_frontend: dev_proxy::DevFrontendProxy::from_config(
+                app.config().build.dev_url.clone(),
+            ),
             streamer,
             dispatcher,
             verifier,
+            event_starter,
         };
         let router = server::router(state);
 

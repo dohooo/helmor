@@ -44,11 +44,13 @@ type Props = {
 	openPreferredEditorShortcut: string | null;
 	rightSidebarToggleShortcut: string | null;
 	inspectorCollapsed: boolean;
+	mobileInspectorOpen: boolean;
 	/** Chat-mode workspaces hide the editor/finder picker and the
 	 *  inspector toggle (the inspector is hidden entirely in chat). */
 	isChatMode?: boolean;
 	onOpenPreferredEditor: () => void;
 	onToggleInspector: () => void;
+	onToggleMobileInspector: () => void;
 	onPickEditor: (editorId: string) => void;
 	pushWorkspaceToast: PushWorkspaceToast;
 };
@@ -61,9 +63,11 @@ export function WorkspaceHeaderActions({
 	openPreferredEditorShortcut,
 	rightSidebarToggleShortcut,
 	inspectorCollapsed,
+	mobileInspectorOpen,
 	isChatMode = false,
 	onOpenPreferredEditor,
 	onToggleInspector,
+	onToggleMobileInspector,
 	onPickEditor,
 	pushWorkspaceToast,
 }: Props) {
@@ -156,7 +160,7 @@ export function WorkspaceHeaderActions({
 					</DropdownMenu>
 				</div>
 			) : null}
-			<div className="flex -translate-x-px items-center gap-1">
+			<div className="flex -translate-x-px items-center gap-1 max-[960px]:translate-x-0">
 				<div className="flex items-center max-[640px]:hidden">
 					<ExportSessionImageButton sessionId={sessionId} />
 				</div>
@@ -165,7 +169,7 @@ export function WorkspaceHeaderActions({
 						<Button
 							aria-label="More workspace actions"
 							variant="ghost"
-							size="icon-xs"
+							size="icon-sm"
 							className="hidden text-muted-foreground hover:text-foreground max-[640px]:inline-flex"
 						>
 							<MoreHorizontal className="size-4" strokeWidth={1.8} />
@@ -277,6 +281,39 @@ export function WorkspaceHeaderActions({
 									className="text-background/60"
 								/>
 							) : null}
+						</TooltipContent>
+					</Tooltip>
+				) : null}
+				{!isChatMode ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								aria-label={
+									mobileInspectorOpen
+										? "Collapse right sidebar"
+										: "Expand right sidebar"
+								}
+								onClick={onToggleMobileInspector}
+								variant="ghost"
+								size="icon-sm"
+								className="hidden text-muted-foreground hover:text-foreground max-[960px]:inline-flex"
+							>
+								{mobileInspectorOpen ? (
+									<PanelRightClose className="size-4" strokeWidth={1.8} />
+								) : (
+									<PanelRightOpen className="size-4" strokeWidth={1.8} />
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent
+							side="bottom"
+							className="flex h-[24px] items-center gap-2 rounded-md px-2 text-small leading-none"
+						>
+							<span>
+								{mobileInspectorOpen
+									? "Collapse right sidebar"
+									: "Expand right sidebar"}
+							</span>
 						</TooltipContent>
 					</Tooltip>
 				) : null}

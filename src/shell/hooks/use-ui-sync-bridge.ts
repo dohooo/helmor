@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { subscribeUiMutations, type UiMutationEvent } from "@/lib/api";
+import { isCompanionClient, onCompanionStreamReconnect } from "@/lib/ipc";
 import { helmorQueryKeys } from "@/lib/query-client";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 
@@ -289,5 +290,17 @@ export function useUiSyncBridge({
 			disposed = true;
 			unlisten?.();
 		};
+	}, [queryClient]);
+
+	// Companion (mobile browser) only: the SSE carrying UI mutations has no
+	// Last-Event-ID replay, so a background/lock that drops the stream loses
+	// every event until it reconnects. On each (re)connect, refetch everything
+	// to backfill what was missed. Inert on desktop (Tauri channels never drop,
+	// and `onCompanionStreamReconnect` no-ops off-companion).
+	useEffect(() => {
+		if (!isCompanionClient()) return;
+		return onCompanionStreamReconnect(() => {
+			void queryClient.invalidateQueries();
+		});
 	}, [queryClient]);
 }

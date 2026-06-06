@@ -61,6 +61,7 @@ import { useSettings, VALID_NOTIFICATION_SOUNDS } from "@/lib/settings";
 import { requestSidebarReconcile } from "@/lib/sidebar-mutation-gate";
 import { cn } from "@/lib/utils";
 import { clampEffort, findModelOption } from "@/lib/workspace-helpers";
+import { SettingsReleaseBadge } from "./components/release-marker";
 import { SettingsGroup, SettingsRow } from "./components/settings-row";
 import { SettingsSelect } from "./components/settings-select";
 import { AccountPanel } from "./panels/account";
@@ -106,6 +107,10 @@ const SECTION_TITLE_CAPTIONS: Partial<Record<SettingsSection, string>> = {
 	account: "Synced with your local gh / glab CLI.",
 	inbox: "Pick which items each connected account contributes to Contexts.",
 };
+
+function sidebarSectionReleaseMarker(section: SettingsSection) {
+	return section === "mobile" ? ({ kind: "feature" } as const) : undefined;
+}
 
 function sidebarSectionLabel(
 	section: SettingsSection,
@@ -183,6 +188,7 @@ export const SettingsDialog = memo(function SettingsDialog({
 
 	const fixedSections: SettingsSection[] = [
 		"general",
+		"mobile",
 		"appearance",
 		"model",
 		"shortcuts",
@@ -213,16 +219,25 @@ export const SettingsDialog = memo(function SettingsDialog({
 						<SidebarGroup>
 							<SidebarGroupContent>
 								<SidebarMenu>
-									{fixedSections.map((section) => (
-										<SidebarMenuItem key={section}>
-											<SidebarMenuButton
-												isActive={activeSection === section}
-												onClick={() => setActiveSection(section)}
-											>
-												{sidebarSectionLabel(section, repositories)}
-											</SidebarMenuButton>
-										</SidebarMenuItem>
-									))}
+									{fixedSections.map((section) => {
+										const releaseMarker = sidebarSectionReleaseMarker(section);
+										return (
+											<SidebarMenuItem key={section}>
+												<SidebarMenuButton
+													isActive={activeSection === section}
+													onClick={() => setActiveSection(section)}
+												>
+													<span className="min-w-0 truncate">
+														{sidebarSectionLabel(section, repositories)}
+													</span>
+													<SettingsReleaseBadge
+														marker={releaseMarker}
+														className="h-4 shrink-0 px-1.5 text-micro"
+													/>
+												</SidebarMenuButton>
+											</SidebarMenuItem>
+										);
+									})}
 								</SidebarMenu>
 							</SidebarGroupContent>
 						</SidebarGroup>
@@ -520,6 +535,8 @@ export const SettingsDialog = memo(function SettingsDialog({
 								/>
 							)}
 
+							{activeSection === "mobile" && <MobileCompanionPanel />}
+
 							{activeSection === "model" && (
 								<SettingsGroup>
 									<ModelSettingRow
@@ -602,7 +619,6 @@ export const SettingsDialog = memo(function SettingsDialog({
 										updateSettings={updateSettings}
 									/>
 									{settings.localLlm.enabled ? <TriagePanel /> : null}
-									<MobileCompanionPanel />
 								</SettingsGroup>
 							)}
 

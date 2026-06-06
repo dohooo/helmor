@@ -38,18 +38,26 @@ export function TriageQuickActions({
 					<ActionRowButton
 						aria-label="Dismiss this triage proposal"
 						disabled={disabled}
+						className="max-[960px]:h-6 max-[960px]:gap-0.5 max-[960px]:px-1.5 max-[960px]:text-ui max-[960px]:tracking-normal"
 						onClick={onDismiss}
 					>
-						<X className="size-[13px] shrink-0" strokeWidth={1.8} />
+						<X
+							className="size-[13px] shrink-0 max-[960px]:size-3"
+							strokeWidth={1.8}
+						/>
 						<span className="inline-flex items-center">Dismiss</span>
 					</ActionRowButton>
 					<ActionRowButton
 						active
 						aria-label="Start working on this triage proposal"
 						disabled={disabled}
+						className="max-[960px]:h-6 max-[960px]:gap-0.5 max-[960px]:px-1.5 max-[960px]:text-ui max-[960px]:tracking-normal"
 						onClick={onStart}
 					>
-						<Play className="size-[13px] shrink-0" strokeWidth={1.8} />
+						<Play
+							className="size-[13px] shrink-0 max-[960px]:size-3"
+							strokeWidth={1.8}
+						/>
 						<span className="inline-flex items-center">Start</span>
 					</ActionRowButton>
 				</>

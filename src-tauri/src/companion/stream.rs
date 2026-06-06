@@ -15,7 +15,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::Manager;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::server::StreamStarter;
+use super::server::{EventStreamStarter, SseFrame, StreamStarter};
 use crate::agents::{self, AgentSendRequest, AgentStreamEvent, SessionStreamHub};
 use crate::error::CommandError;
 use crate::sidecar::ManagedSidecar;
@@ -45,6 +45,22 @@ fn ndjson_channel<T>(tx: UnboundedSender<String>) -> Channel<T> {
         };
         // Receiver gone (client disconnected) just drops the line.
         let _ = tx.send(line);
+        Ok(())
+    })
+}
+
+/// A Tauri `Channel<T>` whose every message is forwarded as one [`SseFrame`]
+/// tagged with `event`. Same bridge as [`ndjson_channel`], formatted for SSE:
+/// the serialized event becomes the frame's `data:` line (compact, single-line
+/// JSON — no embedded newlines, so it survives the client's SSE parser).
+fn sse_channel<T>(event: &'static str, tx: UnboundedSender<SseFrame>) -> Channel<T> {
+    Channel::new(move |body: InvokeResponseBody| {
+        let data = match body {
+            InvokeResponseBody::Json(json) => json,
+            InvokeResponseBody::Raw(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        };
+        // Receiver gone (client disconnected) just drops the frame.
+        let _ = tx.send(SseFrame { event, data });
         Ok(())
     })
 }
@@ -129,4 +145,46 @@ fn start_session_stream_subscription(
             .unsubscribe(&session_id, &subscription_id);
     });
     Ok(())
+}
+
+/// Build the event-stream starter bound to the concrete app. For each
+/// `/v1/stream` connection it subscribes an SSE-formatting `Channel` to
+/// `UiSyncManager` (always) and, when `watch` is set, `SessionStreamHub`
+/// (`subscribe` replays the last render event so a reconnect mid-turn catches up
+/// immediately). Teardown mirrors [`start_ui_subscription`]: when the response
+/// body — and thus the receiver — is dropped, `tx.closed()` resolves and both
+/// subscriptions are released. Reuses the same shared managers as the desktop
+/// paths; no manager changes.
+pub fn build_event_stream_starter<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> EventStreamStarter {
+    Arc::new(
+        move |tx: UnboundedSender<SseFrame>, watch: Option<String>| {
+            let ui_sub_id = uuid::Uuid::new_v4().to_string();
+            let ui_channel = sse_channel::<UiMutationEvent>("ui-mutation", tx.clone());
+            app.state::<UiSyncManager>()
+                .subscribe(ui_sub_id.clone(), ui_channel);
+
+            let session_sub = watch.map(|session_id| {
+                let sub_id = uuid::Uuid::new_v4().to_string();
+                let channel = sse_channel::<AgentStreamEvent>("session", tx.clone());
+                app.state::<SessionStreamHub>().subscribe(
+                    session_id.clone(),
+                    sub_id.clone(),
+                    channel,
+                );
+                (session_id, sub_id)
+            });
+
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tx.closed().await;
+                app.state::<UiSyncManager>().unsubscribe(&ui_sub_id);
+                if let Some((session_id, sub_id)) = session_sub {
+                    app.state::<SessionStreamHub>()
+                        .unsubscribe(&session_id, &sub_id);
+                }
+            });
+        },
+    )
 }
