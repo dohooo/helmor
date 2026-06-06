@@ -59,11 +59,19 @@ use super::{
 /// frontend bridge maps to invalidating the `sessionMessages` query. Fired at
 /// the two QUIESCENT turn boundaries — right after the user prompt is durable
 /// (so the just-sent bubble surfaces live on the desktop window + the phone
-/// over the companion SSE) and after the turn finalizes (so a client that was
-/// viewing but never attached the `SessionStreamHub` watcher still pulls the
+/// over the companion WebSocket) and after the turn finalizes (so a client that
+/// was viewing but never attached the `SessionStreamHub` watcher still pulls the
 /// final assistant result from DB). The driver itself dedups by message id on
 /// refetch, so the extra invalidation is harmless.
+///
+/// Gated on the companion tunnel running: this cross-client nudge only matters
+/// when mobile access is enabled (a phone could be connected over the tunnel),
+/// so a desktop-only install — which never starts a tunnel — emits nothing and
+/// pays nothing, keeping the feature's footprint off the non-companion path.
 fn notify_session_messages_appended(app: &AppHandle, session_id: &str) {
+    if !app.state::<crate::companion::TunnelState>().is_running() {
+        return;
+    }
     crate::ui_sync::publish(
         app,
         crate::ui_sync::UiMutationEvent::SessionMessagesAppended {
