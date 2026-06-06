@@ -7,7 +7,6 @@ import {
 	enableCompanion,
 	getCompanionStatus,
 	listPairedDevices,
-	type PairedDevice,
 	pairCompanionDevice,
 	revokePairedDevice,
 	signInCloudflare,
@@ -46,16 +45,6 @@ function pairingMatchesPublicUrl(
 	}
 }
 
-function unconnectedPairingDeviceId(
-	pairing: CompanionPairingPayload | null,
-	devices: PairedDevice[],
-): string | undefined {
-	if (!pairing) return undefined;
-	const device = devices.find((item) => item.id === pairing.deviceId);
-	if (!device || device.lastSeenAt) return undefined;
-	return pairing.deviceId;
-}
-
 /// Settings → Mobile panel for the mobile browser companion. Opening this
 /// panel starts the loopback server + a cloudflared tunnel; the advanced
 /// "Keep the same link" section upgrades the ephemeral quick tunnel to a stable
@@ -81,7 +70,6 @@ export function MobileCompanionPanel() {
 		gcTime: Number.POSITIVE_INFINITY,
 	});
 
-	const running = statusQuery.data?.running ?? false;
 	const publicUrl = statusQuery.data?.publicUrl ?? null;
 	const signedIn = statusQuery.data?.signedIn ?? false;
 	const stableHost = statusQuery.data?.stableHost ?? null;
@@ -89,7 +77,7 @@ export function MobileCompanionPanel() {
 	const devices = devicesQuery.data ?? [];
 	const pairing = pairingQuery.data ?? null;
 	const pairingIsCurrent = pairingMatchesPublicUrl(pairing, publicUrl);
-	const replacePairingDeviceId = unconnectedPairingDeviceId(pairing, devices);
+	const replacePendingDeviceId = pairing?.deviceId;
 
 	const setStatus = (status: CompanionStatus) =>
 		queryClient.setQueryData(COMPANION_STATUS_KEY, status);
@@ -130,17 +118,11 @@ export function MobileCompanionPanel() {
 		}: {
 			replaceDeviceId?: string;
 		} = {}) => {
-			if (replaceDeviceId) {
-				await revokePairedDevice(replaceDeviceId);
-			}
-			return pairCompanionDevice(deviceLabel());
+			return pairCompanionDevice(deviceLabel(), replaceDeviceId);
 		},
 		onSuccess: (payload) => {
 			setCopied(false);
 			setPairingCode(payload);
-			void queryClient.invalidateQueries({
-				queryKey: helmorQueryKeys.pairedDevices,
-			});
 		},
 	});
 	const revokeMutation = useMutation({
@@ -158,13 +140,17 @@ export function MobileCompanionPanel() {
 		},
 	});
 
+	// Gate on the public URL, not `running`: the server can be up loopback-only
+	// (HELMOR_COMPANION auto-start, or a stable-URL tunnel that failed at launch)
+	// with no tunnel, and pairing needs a public origin. `companion_enable` is
+	// idempotent on the server and just brings the missing tunnel up.
 	useEffect(() => {
 		if (!statusQuery.isSuccess) return;
-		if (running || enableMutation.isPending || enableMutation.isError) return;
+		if (publicUrl || enableMutation.isPending || enableMutation.isError) return;
 		enableMutation.mutate();
 	}, [
 		statusQuery.isSuccess,
-		running,
+		publicUrl,
 		enableMutation.isPending,
 		enableMutation.isError,
 		enableMutation.mutate,
@@ -175,13 +161,13 @@ export function MobileCompanionPanel() {
 		if (!publicUrl || starting || pairingCodeMutation.isPending) return;
 		if (pairingIsCurrent) return;
 		pairingCodeMutation.mutate({
-			replaceDeviceId: replacePairingDeviceId,
+			replaceDeviceId: replacePendingDeviceId,
 		});
 	}, [
 		publicUrl,
 		starting,
 		pairingIsCurrent,
-		replacePairingDeviceId,
+		replacePendingDeviceId,
 		pairingCodeMutation.isPending,
 		pairingCodeMutation.mutate,
 	]);
@@ -240,7 +226,7 @@ export function MobileCompanionPanel() {
 				}}
 				onRefreshCode={() =>
 					pairingCodeMutation.mutate({
-						replaceDeviceId: replacePairingDeviceId,
+						replaceDeviceId: replacePendingDeviceId,
 					})
 				}
 				onRetryMobileAccess={() => enableMutation.mutate()}

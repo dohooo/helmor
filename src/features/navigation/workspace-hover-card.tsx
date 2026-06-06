@@ -632,6 +632,7 @@ export function WorkspaceHoverCard({
 		>
 			<HoverCardTrigger asChild>{children}</HoverCardTrigger>
 			<HoverCardContent
+				data-helmor-workspace-hover-card
 				side="right"
 				align="start"
 				sideOffset={sideOffset}

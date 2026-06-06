@@ -36,7 +36,6 @@ export function PairedDevicesSection({
 }) {
 	return (
 		<div className={cn("flex min-h-0 flex-col gap-2", className)}>
-			<p className="text-small font-medium text-foreground">Paired devices</p>
 			{devices.length === 0 ? (
 				<div className="flex min-h-0 flex-1 items-center rounded-lg border border-border/40 px-3 py-2">
 					<p className="text-small text-muted-foreground">

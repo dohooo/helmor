@@ -133,6 +133,49 @@ const MODEL_SECTIONS = [
 	},
 ] satisfies import("@/lib/api").AgentModelSection[];
 
+function mockMatchMedia(matches: (query: string) => boolean) {
+	const original = window.matchMedia;
+	window.matchMedia = ((query: string) => ({
+		matches: matches(query),
+		media: query,
+		onchange: null,
+		addListener: () => {},
+		removeListener: () => {},
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => false,
+	})) as typeof window.matchMedia;
+	return () => {
+		window.matchMedia = original;
+	};
+}
+
+function renderBasicComposer() {
+	const queryClient = createHelmorQueryClient();
+	return render(
+		<QueryClientProvider client={queryClient}>
+			<WorkspaceComposer
+				contextKey="session:session-1"
+				onSubmit={vi.fn()}
+				disabled={false}
+				submitDisabled={false}
+				sending={false}
+				selectedModelId="opus-1m"
+				modelSections={MODEL_SECTIONS}
+				onSelectModel={vi.fn()}
+				provider="claude"
+				effortLevel="high"
+				onSelectEffort={vi.fn()}
+				permissionMode="acceptEdits"
+				onChangePermissionMode={vi.fn()}
+				restoreImages={[]}
+				restoreFiles={[]}
+				restoreCustomTags={[]}
+			/>
+		</QueryClientProvider>,
+	);
+}
+
 function createAskUserQuestionUserInput(): PendingUserInput {
 	return {
 		provider: "claude",
@@ -247,6 +290,41 @@ function createUrlUserInput(): PendingUserInput {
 describe("WorkspaceComposer", () => {
 	afterEach(() => {
 		openerMocks.openUrl.mockReset();
+	});
+
+	it("focuses the composer from the shell focus event on desktop", async () => {
+		const restoreMatchMedia = mockMatchMedia(() => false);
+		const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+		try {
+			renderBasicComposer();
+			await screen.findByLabelText("Workspace input");
+
+			window.dispatchEvent(new CustomEvent("helmor:focus-composer"));
+
+			expect(focusSpy).toHaveBeenCalled();
+		} finally {
+			focusSpy.mockRestore();
+			restoreMatchMedia();
+		}
+	});
+
+	it("does not programmatically focus the composer on mobile", async () => {
+		const restoreMatchMedia = mockMatchMedia((query) =>
+			query.includes("pointer: coarse"),
+		);
+		const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+		try {
+			renderBasicComposer();
+			await screen.findByLabelText("Workspace input");
+			focusSpy.mockClear();
+
+			window.dispatchEvent(new CustomEvent("helmor:focus-composer"));
+
+			expect(focusSpy).not.toHaveBeenCalled();
+		} finally {
+			focusSpy.mockRestore();
+			restoreMatchMedia();
+		}
 	});
 
 	it("renders custom tag insertions as badges and expands them on submit", async () => {

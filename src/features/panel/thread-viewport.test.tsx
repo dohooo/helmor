@@ -58,8 +58,12 @@ describe("ActiveThreadViewport", () => {
 		expect(historyRow.closest(".flow-root")).not.toHaveStyle({
 			contentVisibility: "auto",
 		});
+		expect(historyRow.closest(".flow-root")).toHaveClass("max-[960px]:px-2.5");
 		expect(streamingRow.closest(".flow-root")).not.toHaveStyle({
 			contentVisibility: "auto",
 		});
+		expect(streamingRow.closest(".flow-root")).toHaveClass(
+			"max-[960px]:px-2.5",
+		);
 	});
 });

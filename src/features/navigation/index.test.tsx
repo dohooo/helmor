@@ -72,6 +72,23 @@ const repoWorkspaceGroups: WorkspaceGroup[] = [
 	},
 ];
 
+function mockMatchMedia(matches: (query: string) => boolean) {
+	const original = window.matchMedia;
+	window.matchMedia = ((query: string) => ({
+		matches: matches(query),
+		media: query,
+		onchange: null,
+		addListener: () => {},
+		removeListener: () => {},
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => false,
+	})) as typeof window.matchMedia;
+	return () => {
+		window.matchMedia = original;
+	};
+}
+
 afterEach(() => {
 	cleanup();
 	window.localStorage.clear();
@@ -351,6 +368,39 @@ describe("WorkspacesSidebar", () => {
 		fireEvent.pointerUp(window, { clientX: 10, clientY: 30, pointerId: 1 });
 
 		expect(onMoveRepositoryInSidebar).toHaveBeenCalledWith("repo-beta", null);
+	});
+
+	it("disables repo drag handles on mobile even under custom sort", () => {
+		const restoreMatchMedia = mockMatchMedia((query) =>
+			query.includes("pointer: coarse"),
+		);
+		try {
+			const { container } = render(
+				<TooltipProvider delayDuration={0}>
+					<WorkspacesSidebar
+						groups={[
+							{
+								id: "repo:repo-beta",
+								label: "Beta",
+								tone: "pinned",
+								rows: [repoWorkspaceGroups[0]!.rows[0]!],
+							},
+						]}
+						archivedRows={[]}
+						availableRepositories={repositoryOptions}
+						sidebarGrouping="repo"
+						sidebarSort="custom"
+						onMoveRepositoryInSidebar={vi.fn()}
+					/>
+				</TooltipProvider>,
+			);
+
+			expect(
+				container.querySelector("[data-repo-dnd-handle='true']"),
+			).toBeNull();
+		} finally {
+			restoreMatchMedia();
+		}
 	});
 
 	it("shows an Open in Finder action for active workspaces", async () => {

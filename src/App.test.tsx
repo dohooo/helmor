@@ -391,8 +391,12 @@ describe("App", () => {
 			"max-[960px]:opacity-0",
 		);
 		expect(inspectorInner).toHaveClass(
+			"max-[960px]:relative",
 			"max-[960px]:mr-3",
+			"max-[960px]:flex",
 			"max-[960px]:!w-[320px]",
+			"max-[960px]:flex-col",
+			"max-[960px]:overflow-hidden",
 			"max-[960px]:translate-x-full",
 			"max-[960px]:will-change-transform",
 			"max-[960px]:opacity-0",

@@ -94,6 +94,12 @@ html.no-pointer-cursors {
 	}
 }
 
+@media (max-width: 960px), (pointer: coarse) {
+	[data-helmor-workspace-hover-card] {
+		display: none;
+	}
+}
+
 html,
 body,
 #root {

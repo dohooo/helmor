@@ -32,7 +32,8 @@ pub struct CompanionStatus {
     pub signed_in: bool,
 }
 
-/// One-time payload returned when a device is paired. The phone scans `url`.
+/// One-time pending token returned for a QR code. A paired-device row is created
+/// only after the phone uses the token against the companion server.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingPayload {
@@ -193,8 +194,9 @@ pub async fn companion_destroy_stable_url(
 /// Mint a per-device PAT and return the QR pairing payload.
 #[tauri::command]
 pub async fn companion_pair_device(
-    app: AppHandle,
+    _app: AppHandle,
     label: String,
+    replace_device_id: Option<String>,
     companion: State<'_, CompanionState>,
     tunnel: State<'_, TunnelState>,
 ) -> CmdResult<PairingPayload> {
@@ -210,17 +212,19 @@ pub async fn companion_pair_device(
         },
     };
 
-    let label_for_db = label.clone();
-    let (device, pat) =
-        run_blocking(move || paired_devices::create_paired_device(&label_for_db)).await?;
+    let pairing = run_blocking(move || {
+        Ok(paired_devices::create_pending_pairing(
+            &label,
+            replace_device_id.as_deref(),
+        ))
+    })
+    .await?;
 
-    ui_sync::publish(&app, UiMutationEvent::PairedDevicesChanged);
-
-    let url = format!("{}/#pair={}", origin.trim_end_matches('/'), pat);
+    let url = format!("{}/#pair={}", origin.trim_end_matches('/'), pairing.pat);
     Ok(PairingPayload {
-        device_id: device.id,
-        label: device.label,
-        pat,
+        device_id: pairing.device_id,
+        label: pairing.label,
+        pat: pairing.pat,
         url,
     })
 }

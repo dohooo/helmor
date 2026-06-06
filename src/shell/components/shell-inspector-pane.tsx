@@ -163,7 +163,7 @@ export function ShellInspectorPane({
 					ref={innerRef}
 					data-shell-pane-inner="inspector"
 					className={cn(
-						"h-full shrink-0 transition-[opacity,translate] duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none max-[960px]:ml-auto max-[960px]:mr-3 max-[960px]:!w-[320px] max-[960px]:!max-w-[calc(100vw-24px)] max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-border/70 max-[960px]:bg-inspector max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.22)] max-[960px]:ring-1 max-[960px]:ring-background/55 max-[960px]:will-change-transform dark:max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
+						"h-full shrink-0 transition-[opacity,translate] duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none max-[960px]:relative max-[960px]:ml-auto max-[960px]:mr-3 max-[960px]:flex max-[960px]:!w-[320px] max-[960px]:!max-w-[calc(100vw-24px)] max-[960px]:flex-col max-[960px]:overflow-hidden max-[960px]:rounded-xl max-[960px]:border max-[960px]:border-border/70 max-[960px]:bg-inspector max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.22)] max-[960px]:ring-1 max-[960px]:ring-background/55 max-[960px]:will-change-transform dark:max-[960px]:shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
 						mobileDrawerOpen
 							? "max-[960px]:translate-x-0 max-[960px]:opacity-100"
 							: "max-[960px]:translate-x-full max-[960px]:opacity-0",

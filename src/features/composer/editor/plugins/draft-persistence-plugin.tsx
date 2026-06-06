@@ -1,5 +1,5 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getRoot, type SerializedEditorState } from "lexical";
+import { $getRoot, $setSelection, type SerializedEditorState } from "lexical";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	clearPersistedDraft,
@@ -28,6 +28,14 @@ type DraftPersistencePluginProps = {
 	 *  would render twice (once as text, once as a badge). */
 	restoreEditorState?: SerializedEditorState | null;
 	restoreNonce?: number;
+	/** Whether a *passive* restore — selecting another workspace/session, which
+	 *  changes `contextKey` — places the caret at the end of the restored draft.
+	 *  Placing the caret writes a DOM selection into the contenteditable, which
+	 *  focuses it; on touch devices that pops the on-screen keyboard. The composer
+	 *  passes `false` on mobile so switching workspaces doesn't steal focus. The
+	 *  active restore (`restoreNonce` bump, e.g. Edit on a queued message) always
+	 *  places the caret regardless — tapping Edit is a deliberate intent to type. */
+	focusOnRestore?: boolean;
 };
 
 function hasMeaningfulContent({
@@ -52,6 +60,7 @@ export function DraftPersistencePlugin({
 	restoreCustomTags = [],
 	restoreEditorState = null,
 	restoreNonce = 0,
+	focusOnRestore = true,
 }: DraftPersistencePluginProps) {
 	const [editor] = useLexicalComposerContext();
 	const activeContextKeyRef = useRef<string | null>(null);
@@ -108,42 +117,56 @@ export function DraftPersistencePlugin({
 		[cancelScheduledFlush, flushDraft],
 	);
 
-	const applyRestorePayload = useCallback(() => {
-		// Lossless path: a captured Lexical snapshot round-trips badges
-		// (image / file / customTag) without the ambiguity of reconstructing
-		// them from `@<path>` references inlined in the flattened prompt.
-		if (restoreEditorState) {
-			try {
-				editor.setEditorState(editor.parseEditorState(restoreEditorState));
-				editor.update(() => {
-					$getRoot().selectEnd();
-				});
-				return;
-			} catch {
-				// Snapshot couldn't be parsed (schema drift, corrupted state).
-				// Fall through to the flattened rebuild — better to render the
-				// inlined paths as text than to drop the user's draft entirely.
+	const applyRestorePayload = useCallback(
+		(placeCaret: boolean) => {
+			// Lossless path: a captured Lexical snapshot round-trips badges
+			// (image / file / customTag) without the ambiguity of reconstructing
+			// them from `@<path>` references inlined in the flattened prompt.
+			if (restoreEditorState) {
+				try {
+					editor.setEditorState(editor.parseEditorState(restoreEditorState));
+					// A parsed editor state carries no selection, so it never grabs
+					// focus on its own; only place the caret when asked to.
+					if (placeCaret) {
+						editor.update(() => {
+							$getRoot().selectEnd();
+						});
+					}
+					return;
+				} catch {
+					// Snapshot couldn't be parsed (schema drift, corrupted state).
+					// Fall through to the flattened rebuild — better to render the
+					// inlined paths as text than to drop the user's draft entirely.
+				}
 			}
-		}
-		editor.update(() => {
-			$setEditorContent(
-				restoreDraft ?? "",
-				restoreImages,
-				restoreFiles,
-				restoreCustomTags,
-			);
-			// Default Lexical caret lands at offset 0; for a restored draft
-			// the user wants to continue from the end of what they wrote.
-			$getRoot().selectEnd();
-		});
-	}, [
-		editor,
-		restoreCustomTags,
-		restoreDraft,
-		restoreEditorState,
-		restoreFiles,
-		restoreImages,
-	]);
+			editor.update(() => {
+				$setEditorContent(
+					restoreDraft ?? "",
+					restoreImages,
+					restoreFiles,
+					restoreCustomTags,
+				);
+				// Placing the caret writes a DOM selection into the contenteditable,
+				// which focuses it — popping the on-screen keyboard on touch devices.
+				// For a restored draft the user wants to continue from the end of
+				// what they wrote; when caret placement is suppressed (passive switch
+				// on mobile) clear the selection so the restore never steals focus.
+				if (placeCaret) {
+					$getRoot().selectEnd();
+				} else {
+					$setSelection(null);
+				}
+			});
+		},
+		[
+			editor,
+			restoreCustomTags,
+			restoreDraft,
+			restoreEditorState,
+			restoreFiles,
+			restoreImages,
+		],
+	);
 
 	const restorePersistedDraft = useCallback(
 		(targetContextKey: string): boolean => {
@@ -179,13 +202,17 @@ export function DraftPersistencePlugin({
 
 		initializedContextKeyRef.current = contextKey;
 		if (!restorePersistedDraft(contextKey)) {
-			applyRestorePayload();
+			// Passive restore: caret placement (and the focus it triggers) follows
+			// the surface's policy — suppressed on mobile so selecting a workspace
+			// doesn't pop the keyboard.
+			applyRestorePayload(focusOnRestore);
 		}
 	}, [
 		applyRestorePayload,
 		cancelScheduledFlush,
 		contextKey,
 		flushDraft,
+		focusOnRestore,
 		restorePersistedDraft,
 	]);
 
@@ -205,9 +232,11 @@ export function DraftPersistencePlugin({
 			return;
 		}
 
-		applyRestorePayload();
-		// Restore is triggered by a button outside the editor (e.g. Edit on a
-		// queued message). Focus so the user can type immediately.
+		applyRestorePayload(true);
+		// A nonce bump is an explicit user action outside the editor (e.g. Edit on
+		// a queued message) — a deliberate intent to type — so always place the
+		// caret and focus, including on mobile where popping the keyboard is the
+		// expected response to tapping Edit.
 		editor.focus();
 	}, [applyRestorePayload, editor, restoreNonce]);
 

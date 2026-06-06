@@ -49,9 +49,23 @@ pub type Verifier = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Production verifier: accept any non-revoked paired-device PAT (and bump its
 /// `last_seen_at`).
-pub fn paired_device_verifier() -> Verifier {
-    Arc::new(|bearer: &str| {
-        crate::models::paired_devices::verify_and_touch(bearer).unwrap_or(false)
+pub fn paired_device_verifier(app: tauri::AppHandle) -> Verifier {
+    Arc::new(move |bearer: &str| {
+        match crate::models::paired_devices::verify_or_pair_and_touch(bearer) {
+            Ok(result) => {
+                if result.promoted {
+                    crate::ui_sync::publish(
+                        &app,
+                        crate::ui_sync::UiMutationEvent::PairedDevicesChanged,
+                    );
+                }
+                result.valid
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "paired-device token verification failed");
+                false
+            }
+        }
     })
 }
 
@@ -68,7 +82,7 @@ pub async fn start_with_tunnel(
 ) -> Result<()> {
     let streamer = build_stream_starter(app.clone());
     let dispatcher = build_dispatcher(app.clone());
-    let verifier = paired_device_verifier();
+    let verifier = paired_device_verifier(app.clone());
     let event_starter = build_event_stream_starter(app.clone());
     let info = companion
         .start(app, streamer, dispatcher, verifier, event_starter)

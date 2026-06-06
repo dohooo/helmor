@@ -446,7 +446,7 @@ function ConversationViewport({
 		? sendingStartTime
 		: undefined;
 	const EmptyPlaceholder: ThreadViewportSlot = () => (
-		<div className="flex min-h-full flex-1 items-center justify-center px-8">
+		<div className="flex min-h-full flex-1 items-center justify-center px-8 max-[960px]:px-4">
 			<EmptyState
 				hasSession={hasSession}
 				missingScriptTypes={missingScriptTypes}
@@ -1109,7 +1109,7 @@ function MeasuredConversationRow({
 				right: 0,
 				top,
 			}}
-			className="flow-root px-5 pb-1.5"
+			className="flow-root px-5 pb-1.5 max-[960px]:px-2.5"
 		>
 			{children}
 		</div>
@@ -1131,7 +1131,7 @@ function ConversationRowShell({ children }: { children: ReactNode }) {
 	return (
 		<div
 			style={conversationRowIsolationStyle}
-			className="flow-root px-5 pb-1.5"
+			className="flow-root px-5 pb-1.5 max-[960px]:px-2.5"
 		>
 			{children}
 		</div>
@@ -1241,7 +1241,7 @@ function StreamingFooter({ startTime }: { startTime: number }) {
 	return (
 		<div
 			data-testid="streaming-footer"
-			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground"
+			className="flex items-center gap-1.5 px-5 py-3 text-small tabular-nums text-muted-foreground max-[960px]:px-2.5"
 		>
 			<HelmorLogoAnimated size={14} className="opacity-80" />
 			{display}

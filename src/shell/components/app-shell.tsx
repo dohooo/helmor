@@ -42,6 +42,13 @@ export function AppShell({
 		setMobileSidebarOpen(false);
 		setMobileInspectorOpen(false);
 	}, []);
+	const handleSelectWorkspaceFromSidebar = useCallback(
+		(workspaceId: string | null) => {
+			sel.handleSelectWorkspace(workspaceId);
+			setMobileSidebarOpen(false);
+		},
+		[sel.handleSelectWorkspace],
+	);
 
 	// P1-A: React Compiler bailed out on this ~1650-line AppShell, so it does
 	// NOT memoize these inline header JSX nodes — they get a fresh element
@@ -144,7 +151,7 @@ export function AppShell({
 					appSettings: s.appSettings,
 					miniModePending: chrome.miniModePending,
 					miniModeToggleShortcut: chrome.miniModeToggleShortcut,
-					onSelectWorkspace: sel.handleSelectWorkspace,
+					onSelectWorkspace: handleSelectWorkspaceFromSidebar,
 					onOpenNewWorkspace: s.handleOpenWorkspaceStart,
 					onAddRepositoryNeedsStart:
 						sel.startSurfaceActions.addRepositoryNeedsStart,

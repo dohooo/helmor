@@ -4578,11 +4578,14 @@ export type CompanionStatus = {
 	signedIn: boolean;
 };
 
-/** One-time payload returned when pairing a device. The phone scans `url`. */
+/**
+ * One-time pending pairing payload. The phone scans `url`; the device row is
+ * created on first use.
+ */
 export type CompanionPairingPayload = {
 	deviceId: string;
 	label: string;
-	/** Plaintext PAT — shown once, never persisted in plaintext. */
+	/** Plaintext pending PAT — shown once, never persisted in plaintext. */
 	pat: string;
 	/** Full pairing URL to encode as a QR: `<origin>/#pair=<pat>`. */
 	url: string;
@@ -4616,10 +4619,12 @@ export async function disableCompanion(): Promise<void> {
 
 export async function pairCompanionDevice(
 	label: string,
+	replaceDeviceId?: string,
 ): Promise<CompanionPairingPayload> {
 	try {
 		return await invoke<CompanionPairingPayload>("companion_pair_device", {
 			label,
+			replaceDeviceId: replaceDeviceId ?? null,
 		});
 	} catch (error) {
 		throw new Error(describeInvokeError(error, "Unable to pair device."));

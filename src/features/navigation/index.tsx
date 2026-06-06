@@ -108,6 +108,7 @@ const ROW_HEIGHT = 32; // 30px (h-7.5) + 2px gap
 const GROUP_GAP = 8; // tighter gap between populated groups
 const EMPTY_GROUP_GAP = 8; // tighter spacing around empty groups
 const BOTTOM_PADDING = 8;
+const MOBILE_DND_DISABLE_QUERY = "(max-width: 960px), (pointer: coarse)";
 
 function getGroupHeaderHeight(_hasRows: boolean) {
 	return HEADER_HEIGHT;
@@ -115,6 +116,14 @@ function getGroupHeaderHeight(_hasRows: boolean) {
 
 function getGroupGapSize(previousHasRows: boolean, nextHasRows: boolean) {
 	return previousHasRows && nextHasRows ? GROUP_GAP : EMPTY_GROUP_GAP;
+}
+
+function shouldDisableDndForMobile() {
+	return (
+		typeof window !== "undefined" &&
+		typeof window.matchMedia === "function" &&
+		window.matchMedia(MOBILE_DND_DISABLE_QUERY).matches
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,10 +225,27 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	markingUnreadWorkspaceId?: string | null;
 	restoringWorkspaceId?: string | null;
 }) {
+	const [mobileDragDisabled, setMobileDragDisabled] = useState(
+		shouldDisableDndForMobile,
+	);
 	const [isAddRepositoryMenuOpen, setIsAddRepositoryMenuOpen] = useState(false);
 	const [isSidebarViewPopoverOpen, setIsSidebarViewPopoverOpen] =
 		useState(false);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (
+			typeof window === "undefined" ||
+			typeof window.matchMedia !== "function"
+		)
+			return;
+		const mql = window.matchMedia(MOBILE_DND_DISABLE_QUERY);
+		const update = () => setMobileDragDisabled(mql.matches);
+		update();
+		mql.addEventListener("change", update);
+		return () => mql.removeEventListener("change", update);
+	}, []);
+
 	const dndPolicy = useMemo<WorkspaceDndPolicy>(
 		() =>
 			sidebarGrouping === "repo"
@@ -282,7 +308,7 @@ export const WorkspacesSidebar = memo(function WorkspacesSidebar({
 	// Drag-to-reorder is only meaningful under custom sort: the dragged
 	// position would otherwise be immediately overruled by the active sort
 	// key. Disable the gesture entirely instead of pretending it works.
-	const dragReorderEnabled = sidebarSort === "custom";
+	const dragReorderEnabled = sidebarSort === "custom" && !mobileDragDisabled;
 	const { dragState, dropTarget, startDragGesture } = useWorkspaceDnd({
 		onMoveWorkspace: dragReorderEnabled ? onMoveWorkspaceInSidebar : undefined,
 		policy: dndPolicy,

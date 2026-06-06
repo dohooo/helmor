@@ -118,6 +118,29 @@ describe("WorkspacePanel", () => {
 		vi.clearAllMocks();
 	});
 
+	it("uses tighter mobile padding for the workspace header rows", () => {
+		const { container } = render(
+			<TooltipProvider delayDuration={0}>
+				<QueryClientProvider client={createHelmorQueryClient()}>
+					<WorkspacePanel
+						workspace={WORKSPACE}
+						sessions={SESSIONS}
+						selectedSessionId="session-1"
+						sessionPanes={[]}
+						sending={false}
+					/>
+				</QueryClientProvider>
+			</TooltipProvider>,
+		);
+
+		expect(screen.getByLabelText("Workspace header")).toHaveClass(
+			"max-[960px]:px-0.5",
+		);
+		const header = container.querySelector("header");
+		const tabsRow = header?.children[1];
+		expect(tabsRow).toHaveClass("max-[960px]:pl-2.5", "max-[960px]:pr-0.5");
+	});
+
 	it("shows a session tab loading indicator from persisted streaming status when live sending ids are empty", () => {
 		render(
 			<TooltipProvider delayDuration={0}>
@@ -321,6 +344,7 @@ describe("WorkspacePanel", () => {
 			"items-center",
 			"justify-center",
 			"px-8",
+			"max-[960px]:px-4",
 		);
 		const heading = within(centeredContainer!).getByText("Nothing here yet");
 		expect(heading.parentElement).toHaveClass(

@@ -101,11 +101,14 @@ export function FixedLinkSetup({
 			{signOutError ? (
 				<p className="text-small text-destructive">{signOutError}</p>
 			) : null}
-			<p className="rounded-md border border-border/40 bg-muted/20 px-3 py-2 text-nano leading-snug text-muted-foreground">
-				Tip: The default temporary link changes when Helmor or the tunnel
-				restarts. A fixed link uses your Cloudflare account to create a tunnel
-				you own; Helmor only keeps the remote-*.helmor.ai alias.
-			</p>
+			<div className="rounded-md border border-border/40 bg-muted/20 px-3 py-2 text-small leading-snug text-muted-foreground">
+				<p>
+					<span className="font-medium text-foreground">Tip:</span> The default
+					temporary link changes when Helmor or the tunnel restarts. A fixed
+					link uses your Cloudflare account to create a tunnel you own; Helmor
+					only keeps the remote-*.helmor.ai alias.
+				</p>
+			</div>
 		</div>
 	);
 }

@@ -97,6 +97,16 @@ import type { UserInputResponseHandler } from "./user-input";
 import { UserInputPanel } from "./user-input-panel";
 
 const OPEN_SETTINGS_EVENT = "helmor:open-settings";
+const PROGRAMMATIC_FOCUS_DISABLE_QUERY =
+	"(max-width: 960px), (pointer: coarse)";
+
+function shouldDisableProgrammaticComposerFocus() {
+	return (
+		typeof window !== "undefined" &&
+		typeof window.matchMedia === "function" &&
+		window.matchMedia(PROGRAMMATIC_FOCUS_DISABLE_QUERY).matches
+	);
+}
 
 type WorkspaceComposerProps = {
 	contextKey: string;
@@ -334,9 +344,24 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 	const [hasContent, setHasContent] = useState(false);
 	const [isInputFocused, setIsInputFocused] = useState(false);
 	const [modelPickerOpen, setModelPickerOpen] = useState(false);
+	const [programmaticFocusDisabled, setProgrammaticFocusDisabled] = useState(
+		shouldDisableProgrammaticComposerFocus,
+	);
+	useEffect(() => {
+		if (
+			typeof window === "undefined" ||
+			typeof window.matchMedia !== "function"
+		)
+			return;
+		const mql = window.matchMedia(PROGRAMMATIC_FOCUS_DISABLE_QUERY);
+		const update = () => setProgrammaticFocusDisabled(mql.matches);
+		update();
+		mql.addEventListener("change", update);
+		return () => mql.removeEventListener("change", update);
+	}, []);
 	useEffect(() => {
 		const handleFocusComposer = () => {
-			if (disabled) return;
+			if (disabled || programmaticFocusDisabled) return;
 			composerRootRef.current
 				?.querySelector<HTMLElement>("[contenteditable='true']")
 				?.focus();
@@ -345,7 +370,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 		window.addEventListener("helmor:focus-composer", handleFocusComposer);
 		return () =>
 			window.removeEventListener("helmor:focus-composer", handleFocusComposer);
-	}, [disabled]);
+	}, [disabled, programmaticFocusDisabled]);
 
 	// Apply a one-shot composer prefill (e.g. from the Inspector's
 	// "Create run action" flow). Structure:
@@ -379,12 +404,14 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 				root.append(introPara, blankPara, rulePara, ...bodyParas);
 				introText.select(prefill.intro.length, prefill.intro.length);
 			});
-			editor.focus();
+			if (!programmaticFocusDisabled) {
+				editor.focus();
+			}
 		};
 		const queued = consumeComposerPrefill(sessionId);
 		if (queued) apply(queued);
 		return subscribeComposerPrefill(sessionId, apply);
-	}, [sessionId]);
+	}, [programmaticFocusDisabled, sessionId]);
 	const selectedModel = useMemo(() => {
 		for (const section of modelSections) {
 			for (const option of section.options) {
@@ -871,6 +898,7 @@ export const WorkspaceComposer = memo(function WorkspaceComposer({
 							restoreCustomTags={restoreCustomTags}
 							restoreEditorState={restoreEditorState}
 							restoreNonce={restoreNonce}
+							focusOnRestore={!programmaticFocusDisabled}
 						/>
 						{getInputHistory ? (
 							<HistoryRecallPlugin

@@ -475,7 +475,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let streamer = companion::build_stream_starter(companion_handle.clone());
                     let dispatcher = companion::build_dispatcher(companion_handle.clone());
-                    let verifier = companion::paired_device_verifier();
+                    let verifier = companion::paired_device_verifier(companion_handle.clone());
                     let event_starter =
                         companion::build_event_stream_starter(companion_handle.clone());
                     let state = companion_handle.state::<companion::CompanionState>();
